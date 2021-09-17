@@ -7,3 +7,4 @@ edition = "2018"
 
 [dependencies]
 id-arena = "2"
+primitive-types = "0.10"
