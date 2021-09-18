@@ -11,6 +11,7 @@ use super::{Block, Value};
 pub type Insn = Id<InsnData>;
 
 /// An instruction data definition.
+#[derive(Debug)]
 pub enum InsnData {
     /// Immediate instruction.
     Immediate { code: ImmediateOp },
@@ -39,6 +40,7 @@ pub enum InsnData {
 }
 
 /// Immidiates.
+#[derive(Debug, Clone)]
 pub enum ImmediateOp {
     I8(i8),
     I16(i16),
@@ -53,12 +55,14 @@ pub enum ImmediateOp {
 }
 
 /// Unary operations.
+#[derive(Debug, Clone, Copy)]
 pub enum UnaryOp {
     Sext,
     Zext,
 }
 
 /// Binary operations.
+#[derive(Debug, Clone, Copy)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -76,11 +80,13 @@ pub enum BinaryOp {
 }
 
 /// Unconditional jump operations.
+#[derive(Debug, Clone, Copy)]
 pub enum JumpOp {
     Jump,
 }
 
 /// Conditional jump operations.
+#[derive(Debug, Clone, Copy)]
 pub enum BranchOp {
     /// Branch if cond is zero.
     Brz,
