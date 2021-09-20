@@ -4,12 +4,13 @@ use std::collections::HashSet;
 
 use id_arena::{Arena, Id};
 
-use super::{Insn, InsnData, Value};
+use super::{Insn, InsnData, Value, ValueData};
 
 #[derive(Default, Debug)]
 pub struct DataFlowGraph {
     blocks: Arena<BlockData>,
     insns: Arena<InsnData>,
+    values: Arena<ValueData>,
 }
 
 impl DataFlowGraph {
@@ -25,6 +26,10 @@ impl DataFlowGraph {
     pub fn store_insn(&mut self, insn: InsnData) -> Insn {
         self.insns.alloc(insn)
     }
+
+    pub fn store_value(&mut self, value: ValueData) -> Value {
+        self.values.alloc(value)
+    }
 }
 
 /// An opaque reference to [`BlockData`]
@@ -33,7 +38,7 @@ pub type Block = Id<BlockData>;
 /// A block data definition.
 /// A Block data doesn't hold any information for layout of a program. It is managed by
 /// [`super::layout::Layout`].
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct BlockData {
     params: HashSet<Value>,
 }
