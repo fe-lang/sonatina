@@ -11,7 +11,7 @@ use super::{Block, Value};
 pub type Insn = Id<InsnData>;
 
 /// An instruction data definition.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum InsnData {
     /// Immediate instruction.
     Immediate { code: ImmediateOp },

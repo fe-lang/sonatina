@@ -8,6 +8,7 @@ use super::{Block, Insn, Type};
 pub type Value = Id<ValueData>;
 
 /// An value data definition.
+#[derive(Debug, Clone)]
 pub enum ValueData {
     /// The value is defined by instruction.
     Insn { insn: Insn, ty: Type },

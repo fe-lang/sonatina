@@ -1,7 +1,7 @@
 //! This module contains Sonatina IR types definitions.
 
 /// Sonatina IR types definition.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     I8,
     I16,
