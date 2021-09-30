@@ -69,10 +69,18 @@ impl Layout {
         self.insns.get(&insn).is_some()
     }
 
-    pub fn iter<'a>(&'a self) -> impl Iterator<Item = Block> + 'a {
+    pub fn iter_block(&self) -> impl Iterator<Item = Block> + '_ {
         BlockIter {
             next: self.first_block,
             blocks: &self.blocks,
+        }
+    }
+
+    pub fn iter_insn(&self, block: Block) -> impl Iterator<Item = Insn> + '_ {
+        debug_assert!(self.is_block_inserted(block));
+        InsnIter {
+            next: self.blocks[&block].first_insn,
+            insns: &self.insns,
         }
     }
 
@@ -190,6 +198,21 @@ impl<'a> Iterator for BlockIter<'a> {
     fn next(&mut self) -> Option<Block> {
         let next = self.next?;
         self.next = self.blocks[&next].next;
+        Some(next)
+    }
+}
+
+struct InsnIter<'a> {
+    next: Option<Insn>,
+    insns: &'a HashMap<Insn, InsnNode>,
+}
+
+impl<'a> Iterator for InsnIter<'a> {
+    type Item = Insn;
+
+    fn next(&mut self) -> Option<Insn> {
+        let next = self.next?;
+        self.next = self.insns[&next].next;
         Some(next)
     }
 }
