@@ -15,6 +15,7 @@ pub type Insn = Id<InsnData>;
 pub enum InsnData {
     /// Immediate instruction.
     Immediate { code: ImmediateOp },
+
     /// Unary instruction.
     Unary { code: UnaryOp, args: Value },
 

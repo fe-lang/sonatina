@@ -1,5 +1,6 @@
 pub mod dfg;
 pub mod insn;
+pub mod layout;
 pub mod types;
 pub mod value;
 
