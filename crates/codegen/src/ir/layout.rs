@@ -134,6 +134,34 @@ impl Layout {
         self.blocks.insert(block, block_node);
     }
 
+    pub fn remove_block(&mut self, block: Block) {
+        debug_assert!(self.is_block_inserted(block));
+
+        let block_node = self.blocks.get_mut(&block).unwrap();
+        let prev_block = block_node.prev;
+        let next_block = block_node.next;
+        match (prev_block, next_block) {
+            (Some(prev), Some(next)) => {
+                self.blocks.get_mut(&prev).unwrap().next = Some(next);
+                self.blocks.get_mut(&next).unwrap().prev = Some(prev);
+            }
+            (Some(prev), None) => {
+                self.blocks.get_mut(&prev).unwrap().next = None;
+                self.last_block = Some(prev);
+            }
+            (None, Some(next)) => {
+                self.blocks.get_mut(&next).unwrap().prev = None;
+                self.first_block = Some(next);
+            }
+            (None, None) => {
+                self.first_block = None;
+                self.last_block = None
+            }
+        }
+
+        self.blocks.remove(&block);
+    }
+
     pub fn append_insn(&mut self, insn: Insn, block: Block) {
         debug_assert!(self.is_block_inserted(block));
         debug_assert!(!self.is_insn_inserted(insn));
@@ -184,6 +212,36 @@ impl Layout {
         insn_node.prev = Some(after);
         after_insn_node.next = Some(insn);
         self.insns.insert(insn, insn_node);
+    }
+
+    /// Remove instruction from the layout.
+    pub fn remove_insn(&mut self, insn: Insn) {
+        debug_assert!(self.is_insn_inserted(insn));
+
+        let insn_node = &self.insns[&insn];
+        let block_node = self.blocks.get_mut(&insn_node.block).unwrap();
+        let prev_insn = insn_node.prev;
+        let next_insn = insn_node.next;
+        match (prev_insn, next_insn) {
+            (Some(prev), Some(next)) => {
+                self.insns.get_mut(&prev).unwrap().next = Some(next);
+                self.insns.get_mut(&next).unwrap().prev = Some(prev);
+            }
+            (Some(prev), None) => {
+                self.insns.get_mut(&prev).unwrap().next = None;
+                block_node.last_insn = Some(prev);
+            }
+            (None, Some(next)) => {
+                self.insns.get_mut(&next).unwrap().prev = None;
+                block_node.first_insn = Some(next);
+            }
+            (None, None) => {
+                block_node.first_insn = None;
+                block_node.last_insn = None;
+            }
+        }
+
+        self.insns.remove(&insn);
     }
 }
 
