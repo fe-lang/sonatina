@@ -40,6 +40,15 @@ pub enum InsnData {
     },
 }
 
+impl InsnData {
+    pub fn branch_dest(&self) -> Option<Block> {
+        match self {
+            Self::Jump { dest, .. } => Some(*dest),
+            _ => None,
+        }
+    }
+}
+
 /// Immidiates.
 #[derive(Debug, Clone)]
 pub enum ImmediateOp {
