@@ -5,7 +5,7 @@ pub mod layout;
 pub mod types;
 pub mod value;
 
-pub use dfg::{Block, DataFlowGraph};
+pub use dfg::{Block, BlockData, DataFlowGraph};
 pub use function::Function;
 pub use insn::{Insn, InsnData};
 pub use layout::Layout;
