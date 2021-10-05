@@ -6,7 +6,7 @@ use id_arena::{Arena, Id};
 
 use super::{Insn, InsnData, Value, ValueData};
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct DataFlowGraph {
     blocks: Arena<BlockData>,
     insns: Arena<InsnData>,
