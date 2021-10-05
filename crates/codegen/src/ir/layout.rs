@@ -193,6 +193,24 @@ impl Layout {
         self.insns.insert(insn, insn_node);
     }
 
+    pub fn prepend_insn(&mut self, insn: Insn, block: Block) {
+        debug_assert!(self.is_block_inserted(block));
+        debug_assert!(!self.is_insn_inserted(insn));
+
+        let block_node = self.blocks.get_mut(&block).unwrap();
+        let mut insn_node = InsnNode::new(block);
+
+        if let Some(first_insn) = block_node.first_insn {
+            insn_node.next = Some(first_insn);
+            self.insns.get_mut(&first_insn).unwrap().prev = Some(insn);
+        } else {
+            block_node.first_insn = Some(insn);
+        }
+
+        block_node.first_insn = Some(insn);
+        self.insns.insert(insn, insn_node);
+    }
+
     pub fn insert_insn_before(&mut self, insn: Insn, before: Insn) {
         debug_assert!(self.is_insn_inserted(before));
         debug_assert!(!self.is_insn_inserted(insn));
