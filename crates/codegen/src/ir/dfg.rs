@@ -30,6 +30,22 @@ impl DataFlowGraph {
     pub fn store_value(&mut self, value: ValueData) -> Value {
         self.values.alloc(value)
     }
+
+    pub fn insn_data(&self, insn: Insn) -> &InsnData {
+        &self.insns[insn]
+    }
+
+    pub fn insn_data_mut(&mut self, insn: Insn) -> &mut InsnData {
+        &mut self.insns[insn]
+    }
+
+    pub fn block_data(&self, block: Block) -> &BlockData {
+        &self.blocks[block]
+    }
+
+    pub fn block_data_mut(&mut self, block: Block) -> &mut BlockData {
+        &mut self.blocks[block]
+    }
 }
 
 /// An opaque reference to [`BlockData`]
