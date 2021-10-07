@@ -344,16 +344,20 @@ impl InsnNode {
 mod tests {
     use super::*;
 
-    use super::super::dfg::DataFlowGraph;
+    use super::super::{dfg::DataFlowGraph, insn::ImmediateOp, BlockData, InsnData};
 
     impl DataFlowGraph {
         /// Returns dummy instruction.
         fn make_insn(&mut self) -> Insn {
-            use super::super::insn::{ImmediateOp, InsnData};
             let insn_data = InsnData::Immediate {
                 code: ImmediateOp::I8(0),
             };
             self.store_insn(insn_data)
+        }
+
+        fn make_block(&mut self) -> Block {
+            let block_data = BlockData::default();
+            self.store_block(block_data)
         }
     }
 

@@ -10,7 +10,7 @@ pub type Value = Id<ValueData>;
 /// An value data definition.
 #[derive(Debug, Clone)]
 pub enum ValueData {
-    /// The value is defined by instruction.
+    /// The value is defined by an instruction.
     Insn { insn: Insn, ty: Type },
 
     /// The value is a block parameter.

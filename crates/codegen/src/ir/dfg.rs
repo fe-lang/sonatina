@@ -18,8 +18,7 @@ impl DataFlowGraph {
         Self::default()
     }
 
-    pub fn make_block(&mut self) -> Block {
-        let block = BlockData::default();
+    pub fn store_block(&mut self, block: BlockData) -> Block {
         self.blocks.alloc(block)
     }
 
