@@ -27,8 +27,14 @@ impl DataFlowGraph {
         self.insns.alloc(insn)
     }
 
-    pub fn make_result(&mut self, insn: Insn) -> Value {
-        todo!()
+    pub fn make_result(&mut self, insn: Insn) -> Option<Value> {
+        debug_assert!(!self.insn_results.contains_key(&insn));
+
+        let ty = self.insns[insn].result_type(self)?;
+        let result_data = ValueData::Insn { insn, ty };
+        let result = self.values.alloc(result_data);
+        self.insn_results.insert(insn, result);
+        Some(result)
     }
 
     pub fn insn_data(&self, insn: Insn) -> &InsnData {

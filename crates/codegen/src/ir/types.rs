@@ -19,4 +19,8 @@ impl Type {
             len,
         }
     }
+
+    pub fn is_integral(&self) -> bool {
+        !matches!(self, Self::Array { .. })
+    }
 }

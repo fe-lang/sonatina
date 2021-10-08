@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use id_arena::Id;
 use primitive_types::U256;
 
-use super::{Block, Value};
+use super::{Block, DataFlowGraph, Type, Value};
 
 /// An opaque reference to [`InsnData`]
 pub type Insn = Id<InsnData>;
@@ -14,13 +14,30 @@ pub type Insn = Id<InsnData>;
 #[derive(Debug, Clone)]
 pub enum InsnData {
     /// Immediate instruction.
-    Immediate { code: ImmediateOp },
-
-    /// Unary instruction.
-    Unary { code: UnaryOp, args: [Value; 1] },
+    Immediate {
+        code: ImmediateOp,
+    },
 
     /// Binary instruction.
-    Binary { code: BinaryOp, args: [Value; 2] },
+    Binary {
+        code: BinaryOp,
+        args: [Value; 2],
+    },
+
+    Cast {
+        code: CastOp,
+        args: [Value; 1],
+        ty: Type,
+    },
+
+    Load {
+        args: [Value; 1],
+        ty: Type,
+    },
+
+    Store {
+        args: [Value; 1],
+    },
 
     /// Unconditional jump operaitons.
     Jump {
@@ -50,10 +67,21 @@ impl InsnData {
 
     pub fn args(&self) -> &[Value] {
         match self {
-            Self::Unary { args, .. } => args,
             Self::Binary { args, .. } => args,
-            Self::Branch { args, .. } => args,
+            Self::Cast { args, .. }
+            | Self::Load { args, .. }
+            | Self::Store { args, .. }
+            | Self::Branch { args, .. } => args,
             _ => &[],
+        }
+    }
+
+    pub(super) fn result_type(&self, dfg: &DataFlowGraph) -> Option<Type> {
+        match self {
+            Self::Immediate { code } => Some(code.result_type()),
+            Self::Binary { args, .. } => Some(dfg.value_ty(args[0]).clone()),
+            Self::Cast { ty, .. } | Self::Load { ty, .. } => Some(ty.clone()),
+            _ => None,
         }
     }
 }
@@ -73,11 +101,17 @@ pub enum ImmediateOp {
     U256(U256),
 }
 
-/// Unary operations.
-#[derive(Debug, Clone, Copy)]
-pub enum UnaryOp {
-    Sext,
-    Zext,
+impl ImmediateOp {
+    fn result_type(&self) -> Type {
+        match self {
+            Self::I8(_) | Self::U8(_) => Type::I8,
+            Self::I16(_) | Self::U16(_) => Type::I16,
+            Self::I32(_) | Self::U32(_) => Type::I32,
+            Self::I64(_) | Self::U64(_) => Type::I64,
+            Self::U128(_) => Type::I128,
+            Self::U256(_) => Type::I256,
+        }
+    }
 }
 
 /// Binary operations.
@@ -94,8 +128,13 @@ pub enum BinaryOp {
     Eq,
     And,
     Or,
-    Load,
-    Store,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CastOp {
+    Sext,
+    Zext,
+    Trunc,
 }
 
 /// Unconditional jump operations.
