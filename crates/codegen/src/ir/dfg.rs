@@ -1,16 +1,17 @@
 //! This module contains Sonatine IR instructions definitions.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use id_arena::{Arena, Id};
 
-use super::{Insn, InsnData, Value, ValueData};
+use super::{Insn, InsnData, Type, Value, ValueData};
 
 #[derive(Default, Debug, Clone)]
 pub struct DataFlowGraph {
     blocks: Arena<BlockData>,
     insns: Arena<InsnData>,
     values: Arena<ValueData>,
+    insn_results: HashMap<Insn, Value>,
 }
 
 impl DataFlowGraph {
@@ -18,33 +19,62 @@ impl DataFlowGraph {
         Self::default()
     }
 
-    pub fn store_block(&mut self, block: BlockData) -> Block {
-        self.blocks.alloc(block)
+    pub fn make_block(&mut self) -> Block {
+        self.blocks.alloc(BlockData::default())
     }
 
-    pub fn store_insn(&mut self, insn: InsnData) -> Insn {
+    pub fn make_insn(&mut self, insn: InsnData) -> Insn {
         self.insns.alloc(insn)
     }
 
-    pub fn store_value(&mut self, value: ValueData) -> Value {
-        self.values.alloc(value)
+    pub fn make_result(&mut self, insn: Insn) -> Value {
+        todo!()
     }
 
     pub fn insn_data(&self, insn: Insn) -> &InsnData {
         &self.insns[insn]
     }
 
-    pub fn insn_data_mut(&mut self, insn: Insn) -> &mut InsnData {
-        &mut self.insns[insn]
-    }
-
     pub fn block_data(&self, block: Block) -> &BlockData {
         &self.blocks[block]
     }
 
-    pub fn block_data_mut(&mut self, block: Block) -> &mut BlockData {
-        &mut self.blocks[block]
+    pub fn append_block_param(&mut self, block: Block, ty: Type) -> Value {
+        let value = self.values.alloc(ValueData::Param { block, ty });
+        self.blocks[block].params.insert(value);
+        value
     }
+
+    pub fn remove_block_param(&mut self, block: Block, param: Value) {
+        self.blocks[block].params.remove(&param);
+    }
+
+    pub fn value_def(&self, value: Value) -> ValueDef {
+        match self.values[value] {
+            ValueData::Insn { insn, .. } => ValueDef::Insn(insn),
+            ValueData::Param { block, .. } => ValueDef::Param(block),
+        }
+    }
+
+    pub fn value_ty(&self, value: Value) -> &Type {
+        match &self.values[value] {
+            ValueData::Insn { ty, .. } | ValueData::Param { ty, .. } => ty,
+        }
+    }
+
+    pub fn insn_args(&self, insn: Insn) -> &[Value] {
+        self.insn_data(insn).args()
+    }
+
+    pub fn insn_result(&self, insn: Insn) -> Option<Value> {
+        self.insn_results.get(&insn).copied()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ValueDef {
+    Insn(Insn),
+    Param(Block),
 }
 
 /// An opaque reference to [`BlockData`]

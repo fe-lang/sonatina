@@ -348,16 +348,11 @@ mod tests {
 
     impl DataFlowGraph {
         /// Returns dummy instruction.
-        fn make_insn(&mut self) -> Insn {
+        fn make_dummy_insn(&mut self) -> Insn {
             let insn_data = InsnData::Immediate {
                 code: ImmediateOp::I8(0),
             };
-            self.store_insn(insn_data)
-        }
-
-        fn make_block(&mut self) -> Block {
-            let block_data = BlockData::default();
-            self.store_block(block_data)
+            self.make_insn(insn_data)
         }
     }
 
@@ -459,7 +454,7 @@ mod tests {
         assert_eq!(layout.last_insn_of(b1), None);
 
         // insn1.
-        let i1 = dfg.make_insn();
+        let i1 = dfg.make_dummy_insn();
         layout.append_insn(i1, b1);
         assert_eq!(layout.first_insn_of(b1), Some(i1));
         assert_eq!(layout.last_insn_of(b1), Some(i1));
@@ -468,7 +463,7 @@ mod tests {
         assert_eq!(layout.next_insn_of(i1), None);
 
         // insn1 -> insn2.
-        let i2 = dfg.make_insn();
+        let i2 = dfg.make_dummy_insn();
         layout.append_insn(i2, b1);
         assert_eq!(layout.first_insn_of(b1), Some(i1));
         assert_eq!(layout.last_insn_of(b1), Some(i2));
@@ -476,7 +471,7 @@ mod tests {
         assert_eq!(layout.next_insn_of(i1), Some(i2));
 
         // insn1 -> insn3 -> insn2.
-        let i3 = dfg.make_insn();
+        let i3 = dfg.make_dummy_insn();
         layout.insert_insn_after(i3, i1);
         assert_eq!(layout.first_insn_of(b1), Some(i1));
         assert_eq!(layout.last_insn_of(b1), Some(i2));
@@ -486,7 +481,7 @@ mod tests {
         assert_eq!(layout.next_insn_of(i3), Some(i2));
 
         // insn1 -> insn3 -> insn4 -> insn2.
-        let i4 = dfg.make_insn();
+        let i4 = dfg.make_dummy_insn();
         layout.insert_insn_before(i4, i2);
         assert_eq!(layout.first_insn_of(b1), Some(i1));
         assert_eq!(layout.last_insn_of(b1), Some(i2));
@@ -504,10 +499,10 @@ mod tests {
         layout.append_block(b1);
 
         // insn1 -> insn2 -> insn3 -> insn4.
-        let i1 = dfg.make_insn();
-        let i2 = dfg.make_insn();
-        let i3 = dfg.make_insn();
-        let i4 = dfg.make_insn();
+        let i1 = dfg.make_dummy_insn();
+        let i2 = dfg.make_dummy_insn();
+        let i3 = dfg.make_dummy_insn();
+        let i4 = dfg.make_dummy_insn();
         layout.append_insn(i1, b1);
         layout.append_insn(i2, b1);
         layout.append_insn(i3, b1);

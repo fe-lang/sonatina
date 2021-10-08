@@ -17,7 +17,7 @@ pub enum InsnData {
     Immediate { code: ImmediateOp },
 
     /// Unary instruction.
-    Unary { code: UnaryOp, args: Value },
+    Unary { code: UnaryOp, args: [Value; 1] },
 
     /// Binary instruction.
     Binary { code: BinaryOp, args: [Value; 2] },
@@ -33,7 +33,7 @@ pub enum InsnData {
     /// Conditional jump operations.
     Branch {
         code: BranchOp,
-        args: Value,
+        args: [Value; 1],
         dest: Block,
         /// Block parameters.
         params: HashSet<Value>,
@@ -45,6 +45,15 @@ impl InsnData {
         match self {
             Self::Jump { dest, .. } => Some(*dest),
             _ => None,
+        }
+    }
+
+    pub fn args(&self) -> &[Value] {
+        match self {
+            Self::Unary { args, .. } => args,
+            Self::Binary { args, .. } => args,
+            Self::Branch { args, .. } => args,
+            _ => &[],
         }
     }
 }

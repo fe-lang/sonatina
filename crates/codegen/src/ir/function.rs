@@ -1,4 +1,4 @@
-use super::{Block, BlockData, DataFlowGraph, Insn, InsnData, Layout, Type};
+use super::{Block, DataFlowGraph, Insn, InsnData, Layout, Type};
 
 #[derive(Debug, Clone)]
 pub struct Function {
@@ -38,7 +38,7 @@ impl<'a> FunctionCursor<'a> {
     }
 
     pub fn insert_insn(&mut self, data: InsnData) -> Insn {
-        let new_insn = self.func.dfg.store_insn(data);
+        let new_insn = self.func.dfg.make_insn(data);
         match self.loc {
             CursorLocation::At(insn) => self.func.layout.insert_insn_before(new_insn, insn),
             CursorLocation::BlockTop(block) => self.func.layout.prepend_insn(new_insn, block),
@@ -50,21 +50,21 @@ impl<'a> FunctionCursor<'a> {
     }
 
     pub fn append_insn(&mut self, data: InsnData) -> Insn {
-        let new_insn = self.func.dfg.store_insn(data);
+        let new_insn = self.func.dfg.make_insn(data);
         let current_block = self.block().expect("cursor loc points to `NoWhere`");
         self.func.layout.append_insn(new_insn, current_block);
         new_insn
     }
 
     pub fn prepend_insn(&mut self, data: InsnData) -> Insn {
-        let new_insn = self.func.dfg.store_insn(data);
+        let new_insn = self.func.dfg.make_insn(data);
         let current_block = self.block().expect("cursor loc points to `NoWhere`");
         self.func.layout.prepend_insn(new_insn, current_block);
         new_insn
     }
 
-    pub fn insert_block(&mut self, block_data: BlockData) -> Block {
-        let new_block = self.func.dfg.store_block(block_data);
+    pub fn insert_block(&mut self) -> Block {
+        let new_block = self.func.dfg.make_block();
         let block = self.block().expect("cursor loc points to `NoWhere`");
         self.func.layout.insert_block_before(new_block, block);
         new_block
@@ -74,7 +74,8 @@ impl<'a> FunctionCursor<'a> {
         let insn = self
             .insn()
             .expect("current cursor location doesn't point to insn");
-        self.func.layout.remove_insn(insn)
+        self.proceed();
+        self.func.layout.remove_insn(insn);
     }
 
     pub fn remove_block(&mut self) {
