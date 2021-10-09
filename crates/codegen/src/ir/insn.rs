@@ -1,5 +1,7 @@
 //! This module contains Sonatine IR instructions definitions.
 
+// TODO: Add type checker for instruction arguments.
+
 use std::collections::HashSet;
 
 use id_arena::Id;
@@ -14,30 +16,23 @@ pub type Insn = Id<InsnData>;
 #[derive(Debug, Clone)]
 pub enum InsnData {
     /// Immediate instruction.
-    Immediate {
-        code: ImmediateOp,
-    },
+    Immediate { code: ImmediateOp },
 
     /// Binary instruction.
-    Binary {
-        code: BinaryOp,
-        args: [Value; 2],
-    },
+    Binary { code: BinaryOp, args: [Value; 2] },
 
+    /// Cast operations.
     Cast {
         code: CastOp,
         args: [Value; 1],
         ty: Type,
     },
 
-    Load {
-        args: [Value; 1],
-        ty: Type,
-    },
+    /// Load a value from memory.
+    Load { args: [Value; 1], ty: Type },
 
-    Store {
-        args: [Value; 1],
-    },
+    /// Store a value to memory.
+    Store { args: [Value; 2] },
 
     /// Unconditional jump operaitons.
     Jump {
@@ -67,11 +62,8 @@ impl InsnData {
 
     pub fn args(&self) -> &[Value] {
         match self {
-            Self::Binary { args, .. } => args,
-            Self::Cast { args, .. }
-            | Self::Load { args, .. }
-            | Self::Store { args, .. }
-            | Self::Branch { args, .. } => args,
+            Self::Binary { args, .. } | Self::Store { args, .. } => args,
+            Self::Cast { args, .. } | Self::Load { args, .. } | Self::Branch { args, .. } => args,
             _ => &[],
         }
     }
