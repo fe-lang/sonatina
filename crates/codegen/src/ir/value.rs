@@ -1,5 +1,4 @@
 //! This module contains Sonatine IR value definition.
-
 use id_arena::Id;
 
 use super::{Block, Insn, Type};

@@ -45,6 +45,10 @@ impl DataFlowGraph {
         &self.blocks[block]
     }
 
+    pub fn block_params(&self, block: Block) -> impl Iterator<Item = &Value> {
+        self.block_data(block).params.iter()
+    }
+
     pub fn append_block_param(&mut self, block: Block, ty: Type) -> Value {
         let value = self.values.alloc(ValueData::Param { block, ty });
         self.blocks[block].params.insert(value);

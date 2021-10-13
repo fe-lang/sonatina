@@ -104,6 +104,21 @@ impl ImmediateOp {
             Self::U256(_) => Type::I256,
         }
     }
+
+    pub(super) fn to_string(&self) -> String {
+        match self {
+            Self::I8(value) => format!("imm.i8 {}", value.to_string()),
+            Self::I16(value) => format!("imm.i16 {}", value.to_string()),
+            Self::I32(value) => format!("imm.i32 {}", value.to_string()),
+            Self::I64(value) => format!("imm.i64 {}", value.to_string()),
+            Self::U8(value) => format!("imm.u8 {}", value.to_string()),
+            Self::U16(value) => format!("imm.u16 {}", value.to_string()),
+            Self::U32(value) => format!("imm.u32 {}", value.to_string()),
+            Self::U64(value) => format!("imm.u64 {}", value.to_string()),
+            Self::U128(value) => format!("imm.u128 {}", value.to_string()),
+            Self::U256(value) => format!("imm.u256 {}", value.to_string()),
+        }
+    }
 }
 
 /// Binary operations.
@@ -122,6 +137,24 @@ pub enum BinaryOp {
     Or,
 }
 
+impl BinaryOp {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Sub => "sub",
+            Self::Mul => "mul",
+            Self::Div => "div",
+            Self::Lt => "lt",
+            Self::Gt => "gt",
+            Self::Slt => "slt",
+            Self::Sgt => "sgt",
+            Self::Eq => "eq",
+            Self::And => "and",
+            Self::Or => "or",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum CastOp {
     Sext,
@@ -129,10 +162,30 @@ pub enum CastOp {
     Trunc,
 }
 
+impl CastOp {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Sext => "sext",
+            Self::Zext => "zext",
+            Self::Trunc => "trunc",
+        }
+    }
+}
+
 /// Unconditional jump operations.
 #[derive(Debug, Clone, Copy)]
 pub enum JumpOp {
     Jump,
+    FallThrough,
+}
+
+impl JumpOp {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Jump => "jump",
+            Self::FallThrough => "fallthrough",
+        }
+    }
 }
 
 /// Conditional jump operations.
@@ -143,4 +196,13 @@ pub enum BranchOp {
 
     /// Branch if cond is non zero.
     Brnz,
+}
+
+impl BranchOp {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Brz => "brz",
+            Self::Brnz => "brnz",
+        }
+    }
 }

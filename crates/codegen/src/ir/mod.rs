@@ -1,6 +1,7 @@
 pub mod dfg;
 pub mod function;
 pub mod insn;
+pub mod ir_writer;
 pub mod layout;
 pub mod types;
 pub mod value;
