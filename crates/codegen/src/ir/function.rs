@@ -12,7 +12,7 @@ pub struct Function {
     pub layout: Layout,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Signature {
     pub args: Vec<Type>,
     pub rets: Vec<Type>,
