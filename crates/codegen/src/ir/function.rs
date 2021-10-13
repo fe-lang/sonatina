@@ -33,6 +33,10 @@ pub enum CursorLocation {
 }
 
 impl<'a> FunctionCursor<'a> {
+    pub fn new(func: &'a mut Function, loc: CursorLocation) -> Self {
+        Self { func, loc }
+    }
+
     pub fn at(&mut self, loc: CursorLocation) {
         self.loc = loc;
     }
@@ -67,6 +71,12 @@ impl<'a> FunctionCursor<'a> {
         let new_block = self.func.dfg.make_block();
         let block = self.block().expect("cursor loc points to `NoWhere`");
         self.func.layout.insert_block_before(new_block, block);
+        new_block
+    }
+
+    pub fn append_block(&mut self) -> Block {
+        let new_block = self.func.dfg.make_block();
+        self.func.layout.append_block(new_block);
         new_block
     }
 
