@@ -1,4 +1,4 @@
-use super::{Block, DataFlowGraph, Insn, InsnData, Layout, Type};
+use super::{Block, DataFlowGraph, Insn, InsnData, Layout, Type, Value};
 
 #[derive(Debug, Clone)]
 pub struct Function {
@@ -41,7 +41,7 @@ impl<'a> FunctionCursor<'a> {
         self.loc = loc;
     }
 
-    pub fn insert_insn(&mut self, data: InsnData) -> Insn {
+    pub fn insert_insn(&mut self, data: InsnData) -> (Insn, Option<Value>) {
         let new_insn = self.func.dfg.make_insn(data);
         match self.loc {
             CursorLocation::At(insn) => self.func.layout.insert_insn_before(new_insn, insn),
@@ -50,14 +50,14 @@ impl<'a> FunctionCursor<'a> {
             CursorLocation::NoWhere => panic!("cursor loc points to `NoWhere`"),
         }
 
-        new_insn
+        (new_insn, self.func.dfg.make_result(new_insn))
     }
 
-    pub fn append_insn(&mut self, data: InsnData) -> Insn {
+    pub fn append_insn(&mut self, data: InsnData) -> (Insn, Option<Value>) {
         let new_insn = self.func.dfg.make_insn(data);
         let current_block = self.block().expect("cursor loc points to `NoWhere`");
         self.func.layout.append_insn(new_insn, current_block);
-        new_insn
+        (new_insn, self.func.dfg.make_result(new_insn))
     }
 
     pub fn prepend_insn(&mut self, data: InsnData) -> Insn {

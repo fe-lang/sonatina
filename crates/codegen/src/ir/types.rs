@@ -11,6 +11,7 @@ pub enum Type {
     I64,
     I128,
     I256,
+    Bool,
     Array { elem_ty: Box<Type>, len: usize },
 }
 
@@ -36,6 +37,7 @@ impl fmt::Display for Type {
             Self::I64 => f.write_str("i64"),
             Self::I128 => f.write_str("i128"),
             Self::I256 => f.write_str("i256"),
+            Self::Bool => f.write_str("bool"),
             Self::Array { elem_ty, len } => f.write_fmt(format_args!("[{};{}]", elem_ty, len)),
         }
     }

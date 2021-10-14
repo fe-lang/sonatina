@@ -55,7 +55,7 @@ pub enum InsnData {
 impl InsnData {
     pub fn branch_dest(&self) -> Option<Block> {
         match self {
-            Self::Jump { dest, .. } => Some(*dest),
+            Self::Jump { dest, .. } | Self::Branch { dest, .. } => Some(*dest),
             _ => None,
         }
     }
@@ -71,7 +71,7 @@ impl InsnData {
     pub(super) fn result_type(&self, dfg: &DataFlowGraph) -> Option<Type> {
         match self {
             Self::Immediate { code } => Some(code.result_type()),
-            Self::Binary { args, .. } => Some(dfg.value_ty(args[0]).clone()),
+            Self::Binary { code, args } => Some(code.result_type(dfg, args)),
             Self::Cast { ty, .. } | Self::Load { ty, .. } => Some(ty.clone()),
             _ => None,
         }
@@ -151,6 +151,13 @@ impl BinaryOp {
             Self::Eq => "eq",
             Self::And => "and",
             Self::Or => "or",
+        }
+    }
+
+    fn result_type(self, dfg: &DataFlowGraph, args: &[Value; 2]) -> Type {
+        match self {
+            Self::Add | Self::Sub | Self::Mul | Self::Div => dfg.value_ty(args[0]).clone(),
+            _ => Type::Bool,
         }
     }
 }
