@@ -15,25 +15,16 @@ impl<'a> FuncWriter<'a> {
     pub fn write(&mut self, mut w: impl io::Write) -> io::Result<()> {
         w.write_fmt(format_args!("func %{}(", self.func.name))?;
         let sig = &self.func.sig;
-        let mut args = sig.args.iter().peekable();
-        while let Some(arg) = args.next() {
-            self.write_type(arg, &mut w)?;
-            if args.peek().is_some() {
-                w.write_all(b", ")?;
-            }
-        }
+        self.write_iter_with_delim(sig.args.iter(), ", ", &mut w)?;
+
         let mut rets = sig.rets.iter().peekable();
         if rets.peek().is_some() {
             w.write_all(b") -> ")?;
         } else {
             w.write_all(b")")?;
         }
-        while let Some(ret) = rets.next() {
-            self.write_type(ret, &mut w)?;
-            if rets.peek().is_some() {
-                w.write_all(b", ")?;
-            }
-        }
+
+        self.write_iter_with_delim(rets, ", ", &mut w)?;
 
         self.enter_item(&mut w)?;
         for block in self.func.layout.iter_block() {
@@ -51,107 +42,53 @@ impl<'a> FuncWriter<'a> {
         unsafe { Ok(String::from_utf8_unchecked(s)) }
     }
 
-    fn write_value(&self, value: Value, mut w: impl io::Write) -> io::Result<()> {
-        w.write_fmt(format_args!(
-            "%v{}.{}",
-            value.index(),
-            self.func.dfg.value_ty(value),
-        ))
-    }
-
     fn write_block_with_insn(&mut self, block: Block, mut w: impl io::Write) -> io::Result<()> {
         self.indent(&mut w)?;
         let params = self.func.dfg.block_params(block).peekable();
         self.write_block(block, params, &mut w)?;
 
         self.enter_item(&mut w)?;
-        for insn in self.func.layout.iter_insn(block) {
-            self.indent(&mut w)?;
-            self.write_insn(insn, &mut w)?;
-            self.newline(&mut w)?;
-        }
+        let insns = self.func.layout.iter_insn(block);
+        self.write_iter_with_delim(insns, "\n", &mut w)?;
         self.leave_item();
 
         Ok(())
     }
 
-    fn write_insn(&self, insn: Insn, mut w: impl io::Write) -> io::Result<()> {
-        use InsnData::*;
-
-        let ret_val = self.func.dfg.insn_result(insn);
-        if let Some(ret_val) = ret_val {
-            self.write_value(ret_val, &mut w)?;
-            w.write_all(b" = ")?;
-        }
-
-        let insn_data = self.func.dfg.insn_data(insn);
-        match insn_data {
-            Immediate { code } => w.write_all(code.to_string().as_bytes())?,
-            Binary { code, args } => {
-                w.write_fmt(format_args!("{} ", code.as_str()))?;
-                self.write_insn_args(args, &mut w)?;
-            }
-            Cast { code, args, .. } => {
-                w.write_fmt(format_args!("{} ", code.as_str()))?;
-                self.write_insn_args(args, &mut w)?;
-            }
-            Load { args, .. } => {
-                w.write_all(b"load ")?;
-                self.write_insn_args(args, &mut w)?;
-            }
-            Store { args } => {
-                w.write_all(b"store ")?;
-                self.write_insn_args(args, &mut w)?;
-            }
-            Jump { code, dest, params } => {
-                w.write_fmt(format_args!("{} ", code.as_str()))?;
-                self.write_block(*dest, params.iter(), &mut w)?;
-            }
-            Branch {
-                code,
-                args,
-                dest,
-                params,
-            } => {
-                w.write_fmt(format_args!("{} ", code.as_str()))?;
-                self.write_insn_args(args, &mut w)?;
-                w.write_all(b" ")?;
-                self.write_block(*dest, params.iter(), &mut w)?;
-            }
-        }
-
-        Ok(())
-    }
-
     fn write_block<'b>(
-        &self,
+        &mut self,
         block: Block,
         params: impl Iterator<Item = &'b Value>,
         mut w: impl io::Write,
     ) -> io::Result<()> {
         w.write_fmt(format_args!("block{}(", block.index()))?;
 
-        let mut params = params.peekable();
-        while let Some(param) = params.next() {
-            self.write_value(*param, &mut w)?;
-            if params.peek().is_some() {
-                w.write_all(b", ")?;
-            }
-        }
+        self.write_iter_with_delim(params, " ", &mut w)?;
         w.write_all(b")")
     }
 
-    fn write_insn_args(&self, args: &[Value], mut w: impl io::Write) -> io::Result<()> {
-        for arg in args {
-            self.write_value(*arg, &mut w)?;
-            w.write_all(b" ")?;
+    fn write_insn_args(&mut self, args: &[Value], mut w: impl io::Write) -> io::Result<()> {
+        self.write_iter_with_delim(args.iter(), " ", &mut w)
+    }
+
+    fn write_iter_with_delim<T>(
+        &mut self,
+        iter: impl Iterator<Item = T>,
+        delim: &str,
+        mut w: impl io::Write,
+    ) -> io::Result<()>
+    where
+        T: IrWrite,
+    {
+        let mut iter = iter.peekable();
+        while let Some(item) = iter.next() {
+            item.write(self, &mut w)?;
+            if iter.peek().is_some() {
+                w.write_all(delim.as_bytes())?;
+            }
         }
 
         Ok(())
-    }
-
-    fn write_type(&self, ty: &Type, mut w: impl io::Write) -> io::Result<()> {
-        write!(w, "{}", ty)
     }
 
     fn indent(&self, mut w: impl io::Write) -> io::Result<()> {
@@ -162,6 +99,10 @@ impl<'a> FuncWriter<'a> {
         w.write_all(b"\n")
     }
 
+    fn space(&self, mut w: impl io::Write) -> io::Result<()> {
+        w.write_all(b" ")
+    }
+
     fn enter_item(&mut self, mut w: impl io::Write) -> io::Result<()> {
         self.level += 1;
         w.write_all(b":\n")
@@ -169,5 +110,85 @@ impl<'a> FuncWriter<'a> {
 
     fn leave_item(&mut self) {
         self.level -= 1;
+    }
+}
+
+trait IrWrite {
+    fn write(&self, writer: &mut FuncWriter, w: impl io::Write) -> io::Result<()>;
+}
+
+impl IrWrite for Value {
+    fn write(&self, writer: &mut FuncWriter, mut w: impl io::Write) -> io::Result<()> {
+        w.write_fmt(format_args!(
+            "%v{}.{}",
+            self.index(),
+            writer.func.dfg.value_ty(*self),
+        ))
+    }
+}
+
+impl IrWrite for Type {
+    fn write(&self, _: &mut FuncWriter, mut w: impl io::Write) -> io::Result<()> {
+        write!(w, "{}", self)
+    }
+}
+
+impl IrWrite for Insn {
+    fn write(&self, writer: &mut FuncWriter, mut w: impl io::Write) -> io::Result<()> {
+        use InsnData::*;
+
+        writer.indent(&mut w)?;
+        let ret_val = writer.func.dfg.insn_result(*self);
+        if let Some(ret_val) = ret_val {
+            ret_val.write(writer, &mut w)?;
+            w.write_all(b" = ")?;
+        }
+
+        let insn_data = writer.func.dfg.insn_data(*self);
+        match insn_data {
+            Immediate { code } => w.write_all(code.to_string().as_bytes())?,
+            Binary { code, args } => {
+                w.write_fmt(format_args!("{} ", code.as_str()))?;
+                writer.write_insn_args(args, &mut w)?;
+            }
+            Cast { code, args, .. } => {
+                w.write_fmt(format_args!("{} ", code.as_str()))?;
+                writer.write_insn_args(args, &mut w)?;
+            }
+            Load { args, .. } => {
+                w.write_all(b"load ")?;
+                writer.write_insn_args(args, &mut w)?;
+            }
+            Store { args } => {
+                w.write_all(b"store ")?;
+                writer.write_insn_args(args, &mut w)?;
+            }
+            Jump { code, dest, params } => {
+                w.write_fmt(format_args!("{} ", code.as_str()))?;
+                writer.write_block(*dest, params.iter(), &mut w)?;
+            }
+            Branch {
+                code,
+                args,
+                dest,
+                params,
+            } => {
+                w.write_fmt(format_args!("{} ", code.as_str()))?;
+                writer.write_insn_args(args, &mut w)?;
+                writer.space(&mut w)?;
+                writer.write_block(*dest, params.iter(), &mut w)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl<T> IrWrite for &T
+where
+    T: IrWrite,
+{
+    fn write(&self, f: &mut FuncWriter, w: impl io::Write) -> io::Result<()> {
+        (*self).write(f, w)
     }
 }

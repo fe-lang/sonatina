@@ -1,6 +1,6 @@
 //! This module contains Sonatine IR instructions definitions.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap};
 
 use id_arena::{Arena, Id};
 

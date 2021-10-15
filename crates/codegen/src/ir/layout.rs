@@ -344,7 +344,7 @@ impl InsnNode {
 mod tests {
     use super::*;
 
-    use super::super::{dfg::DataFlowGraph, insn::ImmediateOp, BlockData, InsnData};
+    use super::super::{dfg::DataFlowGraph, insn::ImmediateOp, InsnData};
 
     impl DataFlowGraph {
         /// Returns dummy instruction.
