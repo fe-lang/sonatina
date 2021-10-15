@@ -15,6 +15,8 @@ pub enum Type {
     Array { elem_ty: Box<Type>, len: usize },
 }
 
+pub type U256 = primitive_types::U256;
+
 impl Type {
     pub fn make_array(elem_ty: Type, len: usize) -> Self {
         Self::Array {

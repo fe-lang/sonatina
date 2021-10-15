@@ -2,12 +2,9 @@
 
 // TODO: Add type checker for instruction arguments.
 
-use std::collections::HashSet;
-
 use id_arena::Id;
-use primitive_types::U256;
 
-use super::{Block, DataFlowGraph, Type, Value};
+use super::{types::U256, Block, DataFlowGraph, Type, Value};
 
 /// An opaque reference to [`InsnData`]
 pub type Insn = Id<InsnData>;
@@ -39,7 +36,7 @@ pub enum InsnData {
         code: JumpOp,
         dest: Block,
         /// Block paramters.
-        params: HashSet<Value>,
+        params: Vec<Value>,
     },
 
     /// Conditional jump operations.
@@ -48,7 +45,7 @@ pub enum InsnData {
         args: [Value; 1],
         dest: Block,
         /// Block parameters.
-        params: HashSet<Value>,
+        params: Vec<Value>,
     },
 }
 
@@ -89,6 +86,7 @@ pub enum ImmediateOp {
     U16(u16),
     U32(u32),
     U64(u64),
+    I128(i128),
     U128(u128),
     U256(U256),
 }
@@ -100,7 +98,7 @@ impl ImmediateOp {
             Self::I16(_) | Self::U16(_) => Type::I16,
             Self::I32(_) | Self::U32(_) => Type::I32,
             Self::I64(_) | Self::U64(_) => Type::I64,
-            Self::U128(_) => Type::I128,
+            Self::I128(_) | Self::U128(_) => Type::I128,
             Self::U256(_) => Type::I256,
         }
     }
@@ -111,6 +109,7 @@ impl ImmediateOp {
             Self::I16(value) => format!("imm.i16 {}", value.to_string()),
             Self::I32(value) => format!("imm.i32 {}", value.to_string()),
             Self::I64(value) => format!("imm.i64 {}", value.to_string()),
+            Self::I128(value) => format!("imm.i128 {}", value.to_string()),
             Self::U8(value) => format!("imm.u8 {}", value.to_string()),
             Self::U16(value) => format!("imm.u16 {}", value.to_string()),
             Self::U32(value) => format!("imm.u32 {}", value.to_string()),
