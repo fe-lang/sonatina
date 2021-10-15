@@ -44,7 +44,7 @@ impl<'a> FunctionCursor<'a> {
     pub fn insert_insn(&mut self, data: InsnData) -> (Insn, Option<Value>) {
         let new_insn = self.func.dfg.make_insn(data);
         match self.loc {
-            CursorLocation::At(insn) => self.func.layout.insert_insn_before(new_insn, insn),
+            CursorLocation::At(insn) => self.func.layout.insert_insn_after(new_insn, insn),
             CursorLocation::BlockTop(block) => self.func.layout.prepend_insn(new_insn, block),
             CursorLocation::BlockBottom(block) => self.func.layout.append_insn(new_insn, block),
             CursorLocation::NoWhere => panic!("cursor loc points to `NoWhere`"),

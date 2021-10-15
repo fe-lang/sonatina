@@ -51,12 +51,14 @@ impl DataFlowGraph {
 
     pub fn append_block_param(&mut self, block: Block, ty: Type) -> Value {
         let value = self.values.alloc(ValueData::Param { block, ty });
-        self.blocks[block].params.insert(value);
+        self.blocks[block].params.push(value);
         value
     }
 
     pub fn remove_block_param(&mut self, block: Block, param: Value) {
-        self.blocks[block].params.remove(&param);
+        if let Some(idx) = self.blocks[block].params.iter().position(|x| *x == param) {
+            self.blocks[block].params.remove(idx);
+        }
     }
 
     pub fn value_def(&self, value: Value) -> ValueDef {
@@ -95,5 +97,5 @@ pub type Block = Id<BlockData>;
 /// [`super::layout::Layout`].
 #[derive(Debug, Default, Clone)]
 pub struct BlockData {
-    params: HashSet<Value>,
+    params: Vec<Value>,
 }

@@ -4,14 +4,15 @@ use super::{Block, Function, Insn, InsnData, Type, Value};
 
 pub struct FuncWriter<'a> {
     func: &'a Function,
+    level: u8,
 }
 
 impl<'a> FuncWriter<'a> {
     pub fn new(func: &'a Function) -> Self {
-        Self { func }
+        Self { func, level: 0 }
     }
 
-    pub fn write(&self, mut w: impl io::Write) -> io::Result<()> {
+    pub fn write(&mut self, mut w: impl io::Write) -> io::Result<()> {
         w.write_fmt(format_args!("func %{}(", self.func.name))?;
         let sig = &self.func.sig;
         let mut args = sig.args.iter().peekable();
@@ -21,43 +22,55 @@ impl<'a> FuncWriter<'a> {
                 w.write_all(b", ")?;
             }
         }
-        w.write_all(b") -> ")?;
         let mut rets = sig.rets.iter().peekable();
+        if rets.peek().is_some() {
+            w.write_all(b") -> ")?;
+        } else {
+            w.write_all(b")")?;
+        }
         while let Some(ret) = rets.next() {
             self.write_type(ret, &mut w)?;
             if rets.peek().is_some() {
                 w.write_all(b", ")?;
             }
         }
-        w.write_all(b":\n")?;
 
+        self.enter_item(&mut w)?;
         for block in self.func.layout.iter_block() {
-            w.write_all(b":\n")?;
             self.write_block_with_insn(block, &mut w)?;
+            self.newline(&mut w)?;
         }
+        self.leave_item();
+
         Ok(())
+    }
+
+    pub fn dump_string(&mut self) -> io::Result<String> {
+        let mut s = Vec::new();
+        self.write(&mut s)?;
+        unsafe { Ok(String::from_utf8_unchecked(s)) }
     }
 
     fn write_value(&self, value: Value, mut w: impl io::Write) -> io::Result<()> {
         w.write_fmt(format_args!(
             "%v{}.{}",
+            value.index(),
             self.func.dfg.value_ty(value),
-            value.index()
         ))
     }
 
-    fn write_block_with_insn(&self, block: Block, mut w: impl io::Write) -> io::Result<()> {
-        w.write_fmt(format_args!("block{}(", block.index()))?;
-
+    fn write_block_with_insn(&mut self, block: Block, mut w: impl io::Write) -> io::Result<()> {
+        self.indent(&mut w)?;
         let params = self.func.dfg.block_params(block).peekable();
         self.write_block(block, params, &mut w)?;
-        w.write_all(b":\n")?;
 
+        self.enter_item(&mut w)?;
         for insn in self.func.layout.iter_insn(block) {
-            w.write_all(b"\t")?;
+            self.indent(&mut w)?;
             self.write_insn(insn, &mut w)?;
-            w.write_all(b"\n")?;
+            self.newline(&mut w)?;
         }
+        self.leave_item();
 
         Ok(())
     }
@@ -130,8 +143,8 @@ impl<'a> FuncWriter<'a> {
 
     fn write_insn_args(&self, args: &[Value], mut w: impl io::Write) -> io::Result<()> {
         for arg in args {
-            w.write_all(b" ")?;
             self.write_value(*arg, &mut w)?;
+            w.write_all(b" ")?;
         }
 
         Ok(())
@@ -139,5 +152,22 @@ impl<'a> FuncWriter<'a> {
 
     fn write_type(&self, ty: &Type, mut w: impl io::Write) -> io::Result<()> {
         write!(w, "{}", ty)
+    }
+
+    fn indent(&self, mut w: impl io::Write) -> io::Result<()> {
+        w.write_all(" ".repeat(self.level as usize * 4).as_bytes())
+    }
+
+    fn newline(&self, mut w: impl io::Write) -> io::Result<()> {
+        w.write_all(b"\n")
+    }
+
+    fn enter_item(&mut self, mut w: impl io::Write) -> io::Result<()> {
+        self.level += 1;
+        w.write_all(b":\n")
+    }
+
+    fn leave_item(&mut self) {
+        self.level -= 1;
     }
 }
