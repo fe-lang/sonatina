@@ -151,12 +151,13 @@ impl<'a> FunctionCursor<'a> {
         match self.loc {
             CursorLocation::At(insn) => self.func.layout.next_insn_of(insn).map_or_else(
                 || CursorLocation::BlockBottom(self.func.layout.insn_block(insn)),
-                |next_insn| CursorLocation::At(next_insn),
+                CursorLocation::At,
             ),
-            CursorLocation::BlockTop(block) => self.func.layout.first_insn_of(block).map_or_else(
-                || CursorLocation::BlockBottom(block),
-                |insn| CursorLocation::At(insn),
-            ),
+            CursorLocation::BlockTop(block) => self
+                .func
+                .layout
+                .first_insn_of(block)
+                .map_or_else(|| CursorLocation::BlockBottom(block), CursorLocation::At),
             CursorLocation::BlockBottom(block) => self
                 .func
                 .layout
@@ -172,7 +173,7 @@ impl<'a> FunctionCursor<'a> {
         match self.loc {
             CursorLocation::At(insn) => self.func.layout.prev_insn_of(insn).map_or_else(
                 || CursorLocation::BlockTop(self.func.layout.insn_block(insn)),
-                |prev_insn| CursorLocation::At(prev_insn),
+                CursorLocation::At,
             ),
             CursorLocation::BlockTop(block) => self
                 .func
@@ -181,10 +182,11 @@ impl<'a> FunctionCursor<'a> {
                 .map_or(CursorLocation::NoWhere, |prev_block| {
                     CursorLocation::BlockBottom(prev_block)
                 }),
-            CursorLocation::BlockBottom(block) => self.func.layout.last_insn_of(block).map_or_else(
-                || CursorLocation::BlockTop(block),
-                |last_insn| CursorLocation::At(last_insn),
-            ),
+            CursorLocation::BlockBottom(block) => self
+                .func
+                .layout
+                .last_insn_of(block)
+                .map_or_else(|| CursorLocation::BlockTop(block), CursorLocation::At),
             CursorLocation::NoWhere => CursorLocation::NoWhere,
         }
     }

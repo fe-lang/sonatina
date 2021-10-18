@@ -1,6 +1,7 @@
 //! This module contains Sonatine IR instructions definitions.
 
 // TODO: Add type checker for instruction arguments.
+use std::fmt;
 
 use id_arena::Id;
 
@@ -102,20 +103,22 @@ impl ImmediateOp {
             Self::U256(_) => Type::I256,
         }
     }
+}
 
-    pub(super) fn to_string(&self) -> String {
+impl fmt::Display for ImmediateOp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::I8(value) => format!("imm.i8 {}", value.to_string()),
-            Self::I16(value) => format!("imm.i16 {}", value.to_string()),
-            Self::I32(value) => format!("imm.i32 {}", value.to_string()),
-            Self::I64(value) => format!("imm.i64 {}", value.to_string()),
-            Self::I128(value) => format!("imm.i128 {}", value.to_string()),
-            Self::U8(value) => format!("imm.u8 {}", value.to_string()),
-            Self::U16(value) => format!("imm.u16 {}", value.to_string()),
-            Self::U32(value) => format!("imm.u32 {}", value.to_string()),
-            Self::U64(value) => format!("imm.u64 {}", value.to_string()),
-            Self::U128(value) => format!("imm.u128 {}", value.to_string()),
-            Self::U256(value) => format!("imm.u256 {}", value.to_string()),
+            Self::I8(value) => write!(f, "imm.i8 {}", value),
+            Self::I16(value) => write!(f, "imm.i16 {}", value.to_string()),
+            Self::I32(value) => write!(f, "imm.i32 {}", value.to_string()),
+            Self::I64(value) => write!(f, "imm.i64 {}", value.to_string()),
+            Self::I128(value) => write!(f, "imm.i128 {}", value.to_string()),
+            Self::U8(value) => write!(f, "imm.u8 {}", value.to_string()),
+            Self::U16(value) => write!(f, "imm.u16 {}", value.to_string()),
+            Self::U32(value) => write!(f, "imm.u32 {}", value.to_string()),
+            Self::U64(value) => write!(f, "imm.u64 {}", value.to_string()),
+            Self::U128(value) => write!(f, "imm.u128 {}", value.to_string()),
+            Self::U256(value) => write!(f, "imm.u256 {}", value.to_string()),
         }
     }
 }
@@ -161,6 +164,12 @@ impl BinaryOp {
     }
 }
 
+impl fmt::Display for BinaryOp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum CastOp {
     Sext,
@@ -175,6 +184,12 @@ impl CastOp {
             Self::Zext => "zext",
             Self::Trunc => "trunc",
         }
+    }
+}
+
+impl fmt::Display for CastOp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -194,6 +209,12 @@ impl JumpOp {
     }
 }
 
+impl fmt::Display for JumpOp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Conditional jump operations.
 #[derive(Debug, Clone, Copy)]
 pub enum BranchOp {
@@ -210,5 +231,11 @@ impl BranchOp {
             Self::Brz => "brz",
             Self::Brnz => "brnz",
         }
+    }
+}
+
+impl fmt::Display for BranchOp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
