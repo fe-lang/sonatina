@@ -8,10 +8,10 @@ use sonatina_codegen::ir::{
 use super::{Block, Type, Value};
 
 pub trait Context {
-    fn hash_type(&self) -> &Type;
-    fn address_type(&self) -> &Type;
-    fn balance_type(&self) -> &Type;
-    fn gas_type(&self) -> &Type;
+    fn hash_type(&self) -> Type;
+    fn address_type(&self) -> Type;
+    fn balance_type(&self) -> Type;
+    fn gas_type(&self) -> Type;
 }
 
 pub struct FunctionBuilder<'a> {
@@ -25,8 +25,7 @@ macro_rules! impl_immediate_insn {
         pub fn $name(&mut self, value: $ty) -> Value {
             let insn_data = InsnData::Immediate { code: $code(value) };
 
-            let (_, ret_value) = self.cursor().insert_insn(insn_data);
-            ret_value.unwrap()
+            self.insert_insn(insn_data).unwrap()
         }
     };
 }
@@ -39,8 +38,7 @@ macro_rules! impl_binary_insn {
                 args: [lhs, rhs],
             };
 
-            let (_, ret_value) = self.cursor().insert_insn(insn_data);
-            ret_value.unwrap()
+            self.insert_insn(insn_data).unwrap()
         }
     };
 }
@@ -54,8 +52,7 @@ macro_rules! impl_cast_insn {
                 ty,
             };
 
-            let (_, ret_value) = self.cursor().insert_insn(insn_data);
-            ret_value.unwrap()
+            self.insert_insn(insn_data).unwrap()
         }
     };
 }
@@ -69,7 +66,7 @@ macro_rules! impl_branch_insn {
                 dest,
                 params,
             };
-            self.cursor().insert_insn(insn_data);
+            self.insert_insn(insn_data);
         }
     };
 }
@@ -90,9 +87,9 @@ impl<'a> FunctionBuilder<'a> {
         }
     }
 
-    pub fn build_entry_block(&mut self) -> (Block, Vec<Value>) {
+    pub fn make_entry_block(&mut self) -> (Block, Vec<Value>) {
         let block = self.append_block();
-        let args = &self.func.sig.args;
+        let args = self.func.sig.args();
         let mut params = Vec::with_capacity(args.len());
         for param in args {
             let param_value = self.func.dfg.append_block_param(block, param.clone());
@@ -148,13 +145,12 @@ impl<'a> FunctionBuilder<'a> {
 
     pub fn load(&mut self, addr: Value, ty: Type) -> Value {
         let insn_data = InsnData::Load { args: [addr], ty };
-        let (_, ret_value) = self.cursor().insert_insn(insn_data);
-        ret_value.unwrap()
+        self.insert_insn(insn_data).unwrap()
     }
 
     pub fn store(&mut self, addr: Value, data: Value) {
         let insn_data = InsnData::Store { args: [addr, data] };
-        self.cursor().insert_insn(insn_data);
+        self.insert_insn(insn_data);
     }
 
     pub fn jump(&mut self, dest: Block, params: Vec<Value>) {
@@ -163,37 +159,129 @@ impl<'a> FunctionBuilder<'a> {
             dest,
             params,
         };
-        self.cursor().insert_insn(insn_data);
+        self.insert_insn(insn_data);
     }
 
     impl_branch_insn!(brz, BranchOp::Brz);
     impl_branch_insn!(brnz, BranchOp::Brnz);
 
-    pub fn build_function(self) -> Function {
-        todo!();
+    pub fn build(self) -> Function {
+        self.func
     }
+
+    //TODO:
+    // pub fn build_with_verifier(self, verifier: IrVerifier) -> Self {
+    // todo!()
+    //}
 
     pub fn type_of(&self, value: Value) -> &Type {
         self.func.dfg.value_ty(value)
     }
 
-    pub fn hash_type(&self) -> &Type {
+    pub fn hash_type(&self) -> Type {
         self.ctxt.hash_type()
     }
 
-    pub fn address_type(&self) -> &Type {
+    pub fn address_type(&self) -> Type {
         self.ctxt.address_type()
     }
 
-    pub fn balance_type(&self) -> &Type {
+    pub fn balance_type(&self) -> Type {
         self.ctxt.balance_type()
     }
 
-    pub fn gas_type(&self) -> &Type {
+    pub fn gas_type(&self) -> Type {
         self.ctxt.gas_type()
     }
 
     fn cursor(&mut self) -> FunctionCursor {
         FunctionCursor::new(&mut self.func, self.loc)
+    }
+
+    fn insert_insn(&mut self, insn_data: InsnData) -> Option<Value> {
+        let (insn, value) = self.cursor().insert_insn(insn_data);
+        self.loc = CursorLocation::At(insn);
+        value
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use sonatina_codegen::ir::ir_writer::FuncWriter;
+
+    pub struct TestContext {}
+
+    impl Context for TestContext {
+        fn hash_type(&self) -> Type {
+            Type::I256
+        }
+
+        fn address_type(&self) -> Type {
+            Type::make_array(Type::I8, 20)
+        }
+
+        fn balance_type(&self) -> Type {
+            Type::I256
+        }
+
+        fn gas_type(&self) -> Type {
+            Type::I256
+        }
+    }
+
+    #[test]
+    fn entry_block() {
+        let sig = Signature::default();
+        let ctxt = TestContext {};
+        let mut builder = FunctionBuilder::new("test_func".into(), sig, &ctxt);
+
+        let (entry_block, _) = builder.make_entry_block();
+        builder.switch_to_block_top(entry_block);
+        let v0 = builder.imm_i8(1);
+        let v1 = builder.imm_i8(2);
+        let v2 = builder.add(v0, v1);
+        builder.sub(v2, v0);
+
+        let func = builder.build();
+        let mut writer = FuncWriter::new(&func);
+        let result = writer.dump_string().unwrap();
+        assert_eq!(
+            result,
+            "func %test_func():
+    block0():
+        %v0.i8 = imm.i8 1
+        %v1.i8 = imm.i8 2
+        %v2.i8 = add %v0.i8 %v1.i8
+        %v3.i8 = sub %v2.i8 %v0.i8
+"
+        );
+    }
+
+    #[test]
+    fn entry_block_with_args() {
+        let mut sig = Signature::default();
+        sig.append_arg(Type::I32);
+        sig.append_arg(Type::I64);
+        let ctxt = TestContext {};
+        let mut builder = FunctionBuilder::new("test_func".into(), sig, &ctxt);
+
+        let (entry_block, args) = builder.make_entry_block();
+        builder.switch_to_block_top(entry_block);
+        let v3 = builder.sext(args[0], Type::I64);
+        builder.mul(v3, args[1]);
+
+        let func = builder.build();
+        let mut writer = FuncWriter::new(&func);
+        let result = writer.dump_string().unwrap();
+        assert_eq!(
+            result,
+            "func %test_func(i32, i64):
+    block0(%v0.i32, %v1.i64):
+        %v2.i64 = sext %v0.i32
+        %v3.i64 = mul %v2.i64 %v1.i64
+"
+        );
     }
 }

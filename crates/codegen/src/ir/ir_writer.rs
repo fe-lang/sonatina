@@ -15,9 +15,9 @@ impl<'a> FuncWriter<'a> {
     pub fn write(&mut self, mut w: impl io::Write) -> io::Result<()> {
         w.write_fmt(format_args!("func %{}(", self.func.name))?;
         let sig = &self.func.sig;
-        self.write_iter_with_delim(sig.args.iter(), ", ", &mut w)?;
+        self.write_iter_with_delim(sig.args().iter(), ", ", &mut w)?;
 
-        let mut rets = sig.rets.iter().peekable();
+        let mut rets = sig.returns().iter().peekable();
         if rets.peek().is_some() {
             w.write_all(b") -> ")?;
         } else {
@@ -63,7 +63,7 @@ impl<'a> FuncWriter<'a> {
     ) -> io::Result<()> {
         w.write_fmt(format_args!("block{}(", block.index()))?;
 
-        self.write_iter_with_delim(params, " ", &mut w)?;
+        self.write_iter_with_delim(params, ", ", &mut w)?;
         w.write_all(b")")
     }
 

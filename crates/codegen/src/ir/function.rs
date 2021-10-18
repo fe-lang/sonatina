@@ -14,8 +14,30 @@ pub struct Function {
 
 #[derive(Debug, Clone, Default)]
 pub struct Signature {
-    pub args: Vec<Type>,
-    pub rets: Vec<Type>,
+    args: Vec<Type>,
+    rets: Vec<Type>,
+}
+
+impl Signature {
+    pub fn new(args: Vec<Type>, rets: Vec<Type>) -> Self {
+        Self { args, rets }
+    }
+
+    pub fn append_arg(&mut self, arg: Type) {
+        self.args.push(arg);
+    }
+
+    pub fn append_return(&mut self, ret: Type) {
+        self.rets.push(ret);
+    }
+
+    pub fn args(&self) -> &[Type] {
+        &self.args
+    }
+
+    pub fn returns(&self) -> &[Type] {
+        &self.rets
+    }
 }
 
 #[derive(Debug)]
