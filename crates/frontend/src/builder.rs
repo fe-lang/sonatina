@@ -84,11 +84,7 @@ impl<'a> FunctionBuilder<'a> {
         self.cursor().append_block(name)
     }
 
-    pub fn switch_to_block_top(&mut self, block: Block) {
-        self.loc = CursorLocation::BlockTop(block)
-    }
-
-    pub fn switch_to_block_bottom(&mut self, block: Block) {
+    pub fn switch_to_block(&mut self, block: Block) {
         self.loc = CursorLocation::BlockBottom(block);
     }
 
@@ -225,7 +221,7 @@ mod tests {
         let mut builder = FunctionBuilder::new("test_func".into(), sig, &ctxt);
 
         let entry_block = builder.append_block("entry");
-        builder.switch_to_block_top(entry_block);
+        builder.switch_to_block(entry_block);
         let v0 = builder.imm_i8(1);
         let v1 = builder.imm_i8(2);
         let v2 = builder.add(v0, v1);
@@ -257,7 +253,7 @@ mod tests {
         let mut builder = FunctionBuilder::new("test_func".into(), sig, &ctxt);
 
         let entry_block = builder.append_block("entry");
-        builder.switch_to_block_top(entry_block);
+        builder.switch_to_block(entry_block);
         let args = builder.args();
         let (arg0, arg1) = (args[0], args[1]);
         assert_eq!(args.len(), 2);
@@ -293,19 +289,19 @@ mod tests {
 
         let arg0 = builder.args()[0];
 
-        builder.switch_to_block_top(entry_block);
+        builder.switch_to_block(entry_block);
         builder.brz(then_block, arg0);
         builder.jump(else_block);
 
-        builder.switch_to_block_top(then_block);
+        builder.switch_to_block(then_block);
         let v1 = builder.imm_i64(1);
         builder.jump(merge_block);
 
-        builder.switch_to_block_top(else_block);
+        builder.switch_to_block(else_block);
         let v2 = builder.imm_i64(2);
         builder.jump(merge_block);
 
-        builder.switch_to_block_top(merge_block);
+        builder.switch_to_block(merge_block);
         let v3 = builder.phi(&[v1, v2]);
         builder.add(v3, arg0);
 
