@@ -1,7 +1,7 @@
 //! This module contains Sonatine IR value definition.
 use id_arena::Id;
 
-use super::{Block, Insn, Type};
+use super::{Insn, Type};
 
 /// An opaque reference to [`ValueData`].
 pub type Value = Id<ValueData>;
@@ -13,5 +13,5 @@ pub enum ValueData {
     Insn { insn: Insn, ty: Type },
 
     /// The value is a block parameter.
-    Param { block: Block, ty: Type },
+    Arg { ty: Type, idx: usize },
 }

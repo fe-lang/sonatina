@@ -7,9 +7,30 @@ pub struct Function {
 
     /// Signature of the function.
     pub sig: Signature,
+    pub arg_values: Vec<Value>,
 
     pub dfg: DataFlowGraph,
     pub layout: Layout,
+}
+
+impl Function {
+    pub fn new(name: String, sig: Signature) -> Self {
+        let mut dfg = DataFlowGraph::default();
+        let arg_values = sig
+            .args()
+            .iter()
+            .enumerate()
+            .map(|(idx, arg_ty)| dfg.make_arg_value(arg_ty, idx))
+            .collect();
+
+        Self {
+            name,
+            sig,
+            arg_values,
+            dfg,
+            layout: Layout::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -89,15 +110,15 @@ impl<'a> FunctionCursor<'a> {
         new_insn
     }
 
-    pub fn insert_block(&mut self) -> Block {
-        let new_block = self.func.dfg.make_block();
+    pub fn insert_block(&mut self, name: &str) -> Block {
+        let new_block = self.func.dfg.make_block(name);
         let block = self.block().expect("cursor loc points to `NoWhere`");
         self.func.layout.insert_block_before(new_block, block);
         new_block
     }
 
-    pub fn append_block(&mut self) -> Block {
-        let new_block = self.func.dfg.make_block();
+    pub fn append_block(&mut self, name: &str) -> Block {
+        let new_block = self.func.dfg.make_block(name);
         self.func.layout.append_block(new_block);
         new_block
     }

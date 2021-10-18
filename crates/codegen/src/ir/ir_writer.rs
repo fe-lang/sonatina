@@ -30,6 +30,7 @@ impl<'a> FuncWriter<'a> {
         for block in self.func.layout.iter_block() {
             self.write_block_with_insn(block, &mut w)?;
             self.newline(&mut w)?;
+            self.newline(&mut w)?;
         }
         self.leave_item();
 
@@ -44,8 +45,7 @@ impl<'a> FuncWriter<'a> {
 
     fn write_block_with_insn(&mut self, block: Block, mut w: impl io::Write) -> io::Result<()> {
         self.indent(&mut w)?;
-        let params = self.func.dfg.block_params(block).peekable();
-        self.write_block(block, params, &mut w)?;
+        self.write_block(block, &mut w)?;
 
         self.enter_item(&mut w)?;
         let insns = self.func.layout.iter_insn(block);
@@ -55,16 +55,8 @@ impl<'a> FuncWriter<'a> {
         Ok(())
     }
 
-    fn write_block<'b>(
-        &mut self,
-        block: Block,
-        params: impl Iterator<Item = &'b Value>,
-        mut w: impl io::Write,
-    ) -> io::Result<()> {
-        w.write_fmt(format_args!("block{}(", block.index()))?;
-
-        self.write_iter_with_delim(params, ", ", &mut w)?;
-        w.write_all(b")")
+    fn write_block<'b>(&mut self, block: Block, mut w: impl io::Write) -> io::Result<()> {
+        w.write_fmt(format_args!("{}", self.func.dfg.block_name(block)))
     }
 
     fn write_insn_args(&mut self, args: &[Value], mut w: impl io::Write) -> io::Result<()> {
@@ -163,20 +155,19 @@ impl IrWrite for Insn {
                 w.write_all(b"store ")?;
                 writer.write_insn_args(args, &mut w)?;
             }
-            Jump { code, dest, params } => {
+            Jump { code, dest } => {
                 w.write_fmt(format_args!("{} ", code.as_str()))?;
-                writer.write_block(*dest, params.iter(), &mut w)?;
+                writer.write_block(*dest, &mut w)?;
             }
-            Branch {
-                code,
-                args,
-                dest,
-                params,
-            } => {
+            Branch { code, args, dest } => {
                 w.write_fmt(format_args!("{} ", code.as_str()))?;
                 writer.write_insn_args(args, &mut w)?;
                 writer.space(&mut w)?;
-                writer.write_block(*dest, params.iter(), &mut w)?;
+                writer.write_block(*dest, &mut w)?;
+            }
+            Phi { args } => {
+                w.write_all(b"phi ")?;
+                writer.write_insn_args(args, &mut w)?;
             }
         }
 

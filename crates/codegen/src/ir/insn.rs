@@ -33,21 +33,17 @@ pub enum InsnData {
     Store { args: [Value; 2] },
 
     /// Unconditional jump operaitons.
-    Jump {
-        code: JumpOp,
-        dest: Block,
-        /// Block paramters.
-        params: Vec<Value>,
-    },
+    Jump { code: JumpOp, dest: Block },
 
     /// Conditional jump operations.
     Branch {
         code: BranchOp,
         args: [Value; 1],
         dest: Block,
-        /// Block parameters.
-        params: Vec<Value>,
     },
+
+    /// Phi funcion.
+    Phi { args: Vec<Value> },
 }
 
 impl InsnData {
@@ -62,7 +58,17 @@ impl InsnData {
         match self {
             Self::Binary { args, .. } | Self::Store { args, .. } => args,
             Self::Cast { args, .. } | Self::Load { args, .. } | Self::Branch { args, .. } => args,
+            Self::Phi { args } => args,
             _ => &[],
+        }
+    }
+
+    pub fn args_mut(&mut self) -> &mut [Value] {
+        match self {
+            Self::Binary { args, .. } | Self::Store { args, .. } => args,
+            Self::Cast { args, .. } | Self::Load { args, .. } | Self::Branch { args, .. } => args,
+            Self::Phi { args } => args,
+            _ => &mut [],
         }
     }
 
@@ -71,6 +77,7 @@ impl InsnData {
             Self::Immediate { code } => Some(code.result_type()),
             Self::Binary { code, args } => Some(code.result_type(dfg, args)),
             Self::Cast { ty, .. } | Self::Load { ty, .. } => Some(ty.clone()),
+            Self::Phi { args } => Some(dfg.value_ty(args[0]).clone()),
             _ => None,
         }
     }

@@ -2,7 +2,7 @@ use sonatina_codegen::ir::{
     function::{CursorLocation, FunctionCursor},
     insn::{BinaryOp, BranchOp, CastOp, ImmediateOp, InsnData, JumpOp},
     types::U256,
-    DataFlowGraph, Function, Layout, Signature,
+    Function, Signature,
 };
 
 use super::{Block, Type, Value};
@@ -59,12 +59,11 @@ macro_rules! impl_cast_insn {
 
 macro_rules! impl_branch_insn {
     ($name:ident, $code:path) => {
-        pub fn $name(&mut self, dest: Block, cond: Value, params: Vec<Value>) {
+        pub fn $name(&mut self, dest: Block, cond: Value) {
             let insn_data = InsnData::Branch {
                 code: $code,
                 args: [cond],
                 dest,
-                params,
             };
             self.insert_insn(insn_data);
         }
@@ -73,13 +72,7 @@ macro_rules! impl_branch_insn {
 
 impl<'a> FunctionBuilder<'a> {
     pub fn new(name: String, sig: Signature, ctxt: &'a dyn Context) -> Self {
-        let func = Function {
-            name,
-            sig,
-            dfg: DataFlowGraph::default(),
-            layout: Layout::default(),
-        };
-
+        let func = Function::new(name, sig);
         Self {
             ctxt,
             func,
@@ -87,24 +80,8 @@ impl<'a> FunctionBuilder<'a> {
         }
     }
 
-    pub fn make_entry_block(&mut self) -> (Block, Vec<Value>) {
-        let block = self.append_block();
-        let args = self.func.sig.args();
-        let mut params = Vec::with_capacity(args.len());
-        for param in args {
-            let param_value = self.func.dfg.append_block_param(block, param.clone());
-            params.push(param_value);
-        }
-
-        (block, params)
-    }
-
-    pub fn append_block(&mut self) -> Block {
-        self.cursor().append_block()
-    }
-
-    pub fn append_block_param(&mut self, block: Block, ty: Type) -> Value {
-        self.func.dfg.append_block_param(block, ty)
+    pub fn append_block(&mut self, name: &str) -> Block {
+        self.cursor().append_block(name)
     }
 
     pub fn switch_to_block_top(&mut self, block: Block) {
@@ -153,17 +130,23 @@ impl<'a> FunctionBuilder<'a> {
         self.insert_insn(insn_data);
     }
 
-    pub fn jump(&mut self, dest: Block, params: Vec<Value>) {
+    pub fn jump(&mut self, dest: Block) {
         let insn_data = InsnData::Jump {
             code: JumpOp::Jump,
             dest,
-            params,
         };
         self.insert_insn(insn_data);
     }
 
     impl_branch_insn!(brz, BranchOp::Brz);
     impl_branch_insn!(brnz, BranchOp::Brnz);
+
+    pub fn phi(&mut self, args: &[Value]) -> Value {
+        let insn_data = InsnData::Phi {
+            args: args.to_vec(),
+        };
+        self.insert_insn(insn_data).unwrap()
+    }
 
     pub fn build(self) -> Function {
         self.func
@@ -176,6 +159,10 @@ impl<'a> FunctionBuilder<'a> {
 
     pub fn type_of(&self, value: Value) -> &Type {
         self.func.dfg.value_ty(value)
+    }
+
+    pub fn args(&self) -> &[Value] {
+        &self.func.arg_values
     }
 
     pub fn hash_type(&self) -> Type {
@@ -237,7 +224,7 @@ mod tests {
         let ctxt = TestContext {};
         let mut builder = FunctionBuilder::new("test_func".into(), sig, &ctxt);
 
-        let (entry_block, _) = builder.make_entry_block();
+        let entry_block = builder.append_block("entry");
         builder.switch_to_block_top(entry_block);
         let v0 = builder.imm_i8(1);
         let v1 = builder.imm_i8(2);
@@ -247,14 +234,16 @@ mod tests {
         let func = builder.build();
         let mut writer = FuncWriter::new(&func);
         let result = writer.dump_string().unwrap();
+
         assert_eq!(
             result,
             "func %test_func():
-    block0():
+    entry:
         %v0.i8 = imm.i8 1
         %v1.i8 = imm.i8 2
         %v2.i8 = add %v0.i8 %v1.i8
         %v3.i8 = sub %v2.i8 %v0.i8
+
 "
         );
     }
@@ -267,20 +256,82 @@ mod tests {
         let ctxt = TestContext {};
         let mut builder = FunctionBuilder::new("test_func".into(), sig, &ctxt);
 
-        let (entry_block, args) = builder.make_entry_block();
+        let entry_block = builder.append_block("entry");
         builder.switch_to_block_top(entry_block);
-        let v3 = builder.sext(args[0], Type::I64);
-        builder.mul(v3, args[1]);
+        let args = builder.args();
+        let (arg0, arg1) = (args[0], args[1]);
+        assert_eq!(args.len(), 2);
+        let v3 = builder.sext(arg0, Type::I64);
+        builder.mul(v3, arg1);
 
         let func = builder.build();
         let mut writer = FuncWriter::new(&func);
         let result = writer.dump_string().unwrap();
+
         assert_eq!(
             result,
             "func %test_func(i32, i64):
-    block0(%v0.i32, %v1.i64):
+    entry:
         %v2.i64 = sext %v0.i32
         %v3.i64 = mul %v2.i64 %v1.i64
+
+"
+        );
+    }
+
+    #[test]
+    fn then_else_merge_block() {
+        let mut sig = Signature::default();
+        sig.append_arg(Type::I64);
+        let ctxt = TestContext {};
+        let mut builder = FunctionBuilder::new("test_func".into(), sig, &ctxt);
+
+        let entry_block = builder.append_block("entry");
+        let then_block = builder.append_block("then");
+        let else_block = builder.append_block("else");
+        let merge_block = builder.append_block("merge");
+
+        let arg0 = builder.args()[0];
+
+        builder.switch_to_block_top(entry_block);
+        builder.brz(then_block, arg0);
+        builder.jump(else_block);
+
+        builder.switch_to_block_top(then_block);
+        let v1 = builder.imm_i64(1);
+        builder.jump(merge_block);
+
+        builder.switch_to_block_top(else_block);
+        let v2 = builder.imm_i64(2);
+        builder.jump(merge_block);
+
+        builder.switch_to_block_top(merge_block);
+        let v3 = builder.phi(&[v1, v2]);
+        builder.add(v3, arg0);
+
+        let func = builder.build();
+        let mut writer = FuncWriter::new(&func);
+        let result = writer.dump_string().unwrap();
+
+        assert_eq!(
+            result,
+            "func %test_func(i64):
+    entry:
+        brz %v0.i64 then
+        jump else
+
+    then:
+        %v1.i64 = imm.i64 1
+        jump merge
+
+    else:
+        %v2.i64 = imm.i64 2
+        jump merge
+
+    merge:
+        %v3.i64 = phi %v1.i64 %v2.i64
+        %v4.i64 = add %v3.i64 %v0.i64
+
 "
         );
     }

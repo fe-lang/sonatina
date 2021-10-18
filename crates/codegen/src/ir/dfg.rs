@@ -1,6 +1,6 @@
 //! This module contains Sonatine IR instructions definitions.
 
-use std::collections::{HashMap};
+use std::collections::HashMap;
 
 use id_arena::{Arena, Id};
 
@@ -19,8 +19,8 @@ impl DataFlowGraph {
         Self::default()
     }
 
-    pub fn make_block(&mut self) -> Block {
-        self.blocks.alloc(BlockData::default())
+    pub fn make_block(&mut self, name: &str) -> Block {
+        self.blocks.alloc(BlockData::new(name))
     }
 
     pub fn make_insn(&mut self, insn: InsnData) -> Insn {
@@ -37,6 +37,14 @@ impl DataFlowGraph {
         Some(result)
     }
 
+    pub fn make_arg_value(&mut self, ty: &Type, idx: usize) -> Value {
+        let value_data = ValueData::Arg {
+            ty: ty.clone(),
+            idx,
+        };
+        self.values.alloc(value_data)
+    }
+
     pub fn insn_data(&self, insn: Insn) -> &InsnData {
         &self.insns[insn]
     }
@@ -45,37 +53,49 @@ impl DataFlowGraph {
         &self.blocks[block]
     }
 
-    pub fn block_params(&self, block: Block) -> impl Iterator<Item = &Value> {
-        self.block_data(block).params.iter()
-    }
-
-    pub fn append_block_param(&mut self, block: Block, ty: Type) -> Value {
-        let value = self.values.alloc(ValueData::Param { block, ty });
-        self.blocks[block].params.push(value);
-        value
-    }
-
-    pub fn remove_block_param(&mut self, block: Block, param: Value) {
-        if let Some(idx) = self.blocks[block].params.iter().position(|x| *x == param) {
-            self.blocks[block].params.remove(idx);
-        }
+    pub fn block_name(&self, block: Block) -> &str {
+        &self.block_data(block).name
     }
 
     pub fn value_def(&self, value: Value) -> ValueDef {
         match self.values[value] {
             ValueData::Insn { insn, .. } => ValueDef::Insn(insn),
-            ValueData::Param { block, .. } => ValueDef::Param(block),
+            ValueData::Arg { idx, .. } => ValueDef::Arg(idx),
         }
     }
 
     pub fn value_ty(&self, value: Value) -> &Type {
         match &self.values[value] {
-            ValueData::Insn { ty, .. } | ValueData::Param { ty, .. } => ty,
+            ValueData::Insn { ty, .. } | ValueData::Arg { ty, .. } => ty,
+        }
+    }
+
+    pub fn append_phi_arg(&mut self, insn: Insn, arg: Value) {
+        let data = &mut self.insns[insn];
+        match data {
+            InsnData::Phi { args } => args.push(arg),
+            _ => panic!("insn is not a phi function"),
+        }
+    }
+
+    pub fn remove_phi_arg(&mut self, insn: Insn, idx: usize) {
+        let data = &mut self.insns[insn];
+        match data {
+            InsnData::Phi { args } => {
+                args.remove(idx);
+            }
+            _ => panic!("insn is not a phi function"),
         }
     }
 
     pub fn insn_args(&self, insn: Insn) -> &[Value] {
         self.insn_data(insn).args()
+    }
+
+    pub fn replace_insn_arg(&mut self, insn: Insn, new_arg: Value, idx: usize) -> Value {
+        let data = &mut self.insns[insn];
+        let args = data.args_mut();
+        std::mem::replace(&mut args[idx], new_arg)
     }
 
     pub fn insn_result(&self, insn: Insn) -> Option<Value> {
@@ -86,7 +106,7 @@ impl DataFlowGraph {
 #[derive(Debug, Clone, Copy)]
 pub enum ValueDef {
     Insn(Insn),
-    Param(Block),
+    Arg(usize),
 }
 
 /// An opaque reference to [`BlockData`]
@@ -95,7 +115,15 @@ pub type Block = Id<BlockData>;
 /// A block data definition.
 /// A Block data doesn't hold any information for layout of a program. It is managed by
 /// [`super::layout::Layout`].
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct BlockData {
-    params: Vec<Value>,
+    pub name: String,
+}
+
+impl BlockData {
+    pub fn new(name: &str) -> Self {
+        BlockData {
+            name: name.to_string(),
+        }
+    }
 }
