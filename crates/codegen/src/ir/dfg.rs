@@ -12,6 +12,7 @@ pub struct DataFlowGraph {
     insns: Arena<InsnData>,
     values: Arena<ValueData>,
     insn_results: HashMap<Insn, Value>,
+    users: HashMap<Value, Vec<Insn>>,
 }
 
 impl DataFlowGraph {
@@ -24,7 +25,12 @@ impl DataFlowGraph {
     }
 
     pub fn make_insn(&mut self, insn: InsnData) -> Insn {
-        self.insns.alloc(insn)
+        let insn = self.insns.alloc(insn);
+        let data = &self.insns[insn];
+        for arg in data.args() {
+            self.users.entry(*arg).or_default().push(insn);
+        }
+        insn
     }
 
     pub fn make_result(&mut self, insn: Insn) -> Option<Value> {
@@ -49,6 +55,17 @@ impl DataFlowGraph {
         &self.insns[insn]
     }
 
+    pub fn users(&self, value: Value) -> &[Insn] {
+        self.users
+            .get(&value)
+            .map(|users| users.as_slice())
+            .unwrap_or_default()
+    }
+
+    pub fn user_of(&self, value: Value, idx: usize) -> Insn {
+        self.users(value)[idx]
+    }
+
     pub fn block_data(&self, block: Block) -> &BlockData {
         &self.blocks[block]
     }
@@ -68,6 +85,7 @@ impl DataFlowGraph {
     pub fn value_ty(&self, value: Value) -> &Type {
         match &self.values[value] {
             ValueData::Insn { ty, .. } | ValueData::Arg { ty, .. } => ty,
+            ValueData::Alias { .. } => self.value_ty(self.resolve_alias(value)),
         }
     }
 
@@ -93,6 +111,10 @@ impl DataFlowGraph {
         self.insn_data(insn).args()
     }
 
+    pub fn insn_arg(&self, insn: Insn, idx: usize) -> Value {
+        self.insn_args(insn)[idx]
+    }
+
     pub fn replace_insn_arg(&mut self, insn: Insn, new_arg: Value, idx: usize) -> Value {
         let data = &mut self.insns[insn];
         let args = data.args_mut();
@@ -104,20 +126,27 @@ impl DataFlowGraph {
     }
 
     pub fn make_alias(&mut self, from: Value, to: Value) {
-        self.values[from] = ValueData::Alias { value: to };
+        self.values[from] = ValueData::Alias {
+            value: self.resolve_alias(to),
+        };
     }
 
-    pub fn resolve_alias(&mut self, mut value: Value) -> Value {
-        let original = value;
+    pub fn resolve_alias(&self, mut value: Value) -> Value {
+        let value_len = self.values.len();
+        let alias_depth = 0;
 
         while let ValueData::Alias { value: resolved } = self.values[value] {
-            if resolved == original {
+            if alias_depth >= value_len {
                 panic!("alias cycle detected");
             }
             value = resolved;
         }
 
         value
+    }
+
+    pub fn is_phi(&self, insn: Insn) -> bool {
+        matches!(self.insn_data(insn), InsnData::Phi { .. })
     }
 }
 

@@ -5,7 +5,7 @@ use sonatina_codegen::ir::{
     Function, Signature,
 };
 
-use super::{Block, Type, Value};
+use super::{ssa::SsaBuilder, Block, Type, Value, Variable};
 
 pub trait Context {
     fn hash_type(&self) -> Type;
@@ -18,6 +18,7 @@ pub struct FunctionBuilder<'a> {
     ctxt: &'a dyn Context,
     func: Function,
     loc: CursorLocation,
+    ssa_builder: SsaBuilder,
 }
 
 macro_rules! impl_immediate_insn {
@@ -60,11 +61,15 @@ macro_rules! impl_cast_insn {
 macro_rules! impl_branch_insn {
     ($name:ident, $code:path) => {
         pub fn $name(&mut self, dest: Block, cond: Value) {
+            debug_assert!(!self.ssa_builder.is_sealed(dest));
             let insn_data = InsnData::Branch {
                 code: $code,
                 args: [cond],
                 dest,
             };
+
+            let pred = self.cursor().block();
+            self.ssa_builder.append_pred(dest, pred.unwrap());
             self.insert_insn(insn_data);
         }
     };
@@ -77,6 +82,7 @@ impl<'a> FunctionBuilder<'a> {
             ctxt,
             func,
             loc: CursorLocation::NoWhere,
+            ssa_builder: SsaBuilder::default(),
         }
     }
 
@@ -127,10 +133,14 @@ impl<'a> FunctionBuilder<'a> {
     }
 
     pub fn jump(&mut self, dest: Block) {
+        debug_assert!(!self.ssa_builder.is_sealed(dest));
         let insn_data = InsnData::Jump {
             code: JumpOp::Jump,
             dest,
         };
+
+        let pred = self.cursor().block();
+        self.ssa_builder.append_pred(dest, pred.unwrap());
         self.insert_insn(insn_data);
     }
 
@@ -142,6 +152,26 @@ impl<'a> FunctionBuilder<'a> {
             args: args.to_vec(),
         };
         self.insert_insn(insn_data).unwrap()
+    }
+
+    pub fn declare_var(&mut self, ty: Type) -> Variable {
+        self.ssa_builder.declare_var(ty)
+    }
+
+    pub fn use_var(&mut self, var: Variable) -> Value {
+        let block = self.cursor().block().unwrap();
+        self.ssa_builder.use_var(&mut self.func, var, block)
+    }
+
+    pub fn def_var(&mut self, var: Variable, value: Value) {
+        debug_assert_eq!(self.func.dfg.value_ty(value), self.ssa_builder.var_ty(var));
+
+        let block = self.cursor().block().unwrap();
+        self.ssa_builder.def_var(var, value, block);
+    }
+
+    pub fn seal_block(&mut self, block: Block) {
+        self.ssa_builder.seal_block(&mut self.func, block);
     }
 
     pub fn build(self) -> Function {
