@@ -103,11 +103,11 @@ impl<'a> FunctionCursor<'a> {
         (new_insn, self.func.dfg.make_result(new_insn))
     }
 
-    pub fn prepend_insn(&mut self, data: InsnData) -> Insn {
+    pub fn prepend_insn(&mut self, data: InsnData) -> (Insn, Option<Value>) {
         let new_insn = self.func.dfg.make_insn(data);
         let current_block = self.block().expect("cursor loc points to `NoWhere`");
         self.func.layout.prepend_insn(new_insn, current_block);
-        new_insn
+        (new_insn, self.func.dfg.make_result(new_insn))
     }
 
     pub fn insert_block(&mut self, name: &str) -> Block {

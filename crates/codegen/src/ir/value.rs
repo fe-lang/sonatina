@@ -14,4 +14,7 @@ pub enum ValueData {
 
     /// The value is a block parameter.
     Arg { ty: Type, idx: usize },
+
+    /// The Alias to an other value.
+    Alias { value: Value },
 }

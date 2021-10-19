@@ -61,6 +61,7 @@ impl DataFlowGraph {
         match self.values[value] {
             ValueData::Insn { insn, .. } => ValueDef::Insn(insn),
             ValueData::Arg { idx, .. } => ValueDef::Arg(idx),
+            ValueData::Alias { .. } => self.value_def(self.resolve_alias(value)),
         }
     }
 
@@ -100,6 +101,23 @@ impl DataFlowGraph {
 
     pub fn insn_result(&self, insn: Insn) -> Option<Value> {
         self.insn_results.get(&insn).copied()
+    }
+
+    pub fn make_alias(&mut self, from: Value, to: Value) {
+        self.values[from] = ValueData::Alias { value: to };
+    }
+
+    pub fn resolve_alias(&mut self, mut value: Value) -> Value {
+        let original = value;
+
+        while let ValueData::Alias { value: resolved } = self.values[value] {
+            if resolved == original {
+                panic!("alias cycle detected");
+            }
+            value = resolved;
+        }
+
+        value
     }
 }
 
