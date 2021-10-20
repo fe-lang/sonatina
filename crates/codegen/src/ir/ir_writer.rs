@@ -114,7 +114,7 @@ impl IrWrite for Value {
         let value = writer.func.dfg.resolve_alias(*self);
         w.write_fmt(format_args!(
             "%v{}.{}",
-            value.index(),
+            value.0,
             writer.func.dfg.value_ty(value),
         ))
     }

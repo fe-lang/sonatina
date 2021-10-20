@@ -1,8 +1,8 @@
 //! SSA construction algorighm here is based on [`Simple and Efficient Construction of Static
 //! Single Assignment Form`](https://link.springer.com/chapter/10.1007/978-3-642-37051-9_6).
-use std::collections::{HashMap, HashSet};
 
-use id_arena::{Arena, Id};
+use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap, SparseSet};
+
 use sonatina_codegen::ir::{
     function::{CursorLocation, FunctionCursor},
     Function, Insn, InsnData,
@@ -10,44 +10,95 @@ use sonatina_codegen::ir::{
 
 use super::{Block, Type, Value};
 
-pub type Variable = Id<VariableData>;
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Variable(u32);
+cranelift_entity::entity_impl!(Variable);
 
 pub struct VariableData {
     ty: Type,
 }
 
-#[derive(Default)]
 pub(super) struct SsaBuilder {
-    /// Records all predecessors of a block.
-    preds: HashMap<Block, Vec<Block>>,
+    blocks: SecondaryMap<Block, SsaBlockData>,
 
-    /// Records sealed blocks.
-    sealed: HashSet<Block>,
-
-    /// Records defined variables in an block.
-    defs: HashMap<(Block, Variable), Value>,
-
-    vars: Arena<VariableData>,
-
-    /// Records phis in an unsealed block.
-    incomplete_phis: HashMap<Block, Vec<(Variable, Insn)>>,
+    /// Records all declared variables.
+    vars: PrimaryMap<Variable, VariableData>,
 
     /// Records trivial phis.
-    trivial_phis: HashSet<Insn>,
+    trivial_phis: SparseSet<Insn>,
+}
+
+impl Default for SsaBuilder {
+    fn default() -> Self {
+        Self {
+            blocks: SecondaryMap::default(),
+            vars: PrimaryMap::new(),
+            trivial_phis: SparseSet::new(),
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+struct SsaBlockData {
+    /// Records all predecessors of a block.
+    preds: Vec<Block>,
+
+    /// Records sealed blocks.
+    is_sealed: bool,
+
+    /// Records defined variables in an block.
+    defs: SecondaryMap<Variable, PackedOption<Value>>,
+
+    /// Records phis in an unsealed block.
+    incomplete_phis: Vec<(Variable, Insn)>,
+}
+
+impl SsaBlockData {
+    fn def_var(&mut self, var: Variable, value: Value) {
+        self.defs[var] = value.into();
+    }
+
+    fn use_var_local(&self, var: Variable) -> Option<Value> {
+        self.defs[var].expand()
+    }
+
+    fn append_pred(&mut self, pred: Block) {
+        self.preds.push(pred);
+    }
+
+    fn seal(&mut self) {
+        self.is_sealed = true;
+    }
+
+    fn is_sealed(&self) -> bool {
+        self.is_sealed
+    }
+
+    fn take_incomplete_phis(&mut self) -> Vec<(Variable, Insn)> {
+        std::mem::replace(&mut self.incomplete_phis, vec![])
+    }
+
+    fn push_incomplete_phi(&mut self, var: Variable, insn: Insn) {
+        self.incomplete_phis.push((var, insn))
+    }
+
+    fn preds(&self) -> &[Block] {
+        &self.preds
+    }
 }
 
 impl SsaBuilder {
     pub(super) fn declare_var(&mut self, ty: Type) -> Variable {
-        self.vars.alloc(VariableData { ty })
+        self.vars.push(VariableData { ty })
     }
 
     pub(super) fn def_var(&mut self, var: Variable, value: Value, block: Block) {
-        self.defs.insert((block, var), value);
+        self.blocks[block].def_var(var, value);
     }
 
     pub(super) fn use_var(&mut self, func: &mut Function, var: Variable, block: Block) -> Value {
-        if let Some(value) = self.defs.get(&(block, var)) {
-            *value
+        if let Some(value) = self.blocks[block].use_var_local(var) {
+            value
         } else {
             self.use_var_recursive(func, var, block)
         }
@@ -58,7 +109,7 @@ impl SsaBuilder {
     }
 
     pub(super) fn append_pred(&mut self, block: Block, pred: Block) {
-        self.preds.entry(block).or_default().push(pred);
+        self.blocks[block].append_pred(pred);
     }
 
     pub(super) fn seal_block(&mut self, func: &mut Function, block: Block) {
@@ -66,11 +117,11 @@ impl SsaBuilder {
             return;
         }
 
-        for (var, phi) in self.incomplete_phis.remove(&block).unwrap_or_default() {
+        for (var, phi) in self.blocks[block].take_incomplete_phis() {
             self.add_phi_args(func, var, phi);
         }
 
-        self.sealed.insert(block);
+        self.blocks[block].seal();
     }
 
     pub(super) fn seal_all(&mut self, func: &mut Function) {
@@ -82,22 +133,19 @@ impl SsaBuilder {
     }
 
     pub(super) fn is_sealed(&self, block: Block) -> bool {
-        self.sealed.contains(&block)
+        self.blocks[block].is_sealed()
     }
 
     fn use_var_recursive(&mut self, func: &mut Function, var: Variable, block: Block) -> Value {
         if !self.is_sealed(block) {
             let (insn, value) = self.prepend_phi(func, var, block);
-            self.incomplete_phis
-                .entry(block)
-                .or_default()
-                .push((var, insn));
+            self.blocks[block].push_incomplete_phi(var, insn);
             self.def_var(var, value, block);
             return value;
         }
 
-        match self.preds.get(&block).map(|preds| preds.as_slice()) {
-            Some(&[pred]) => self.use_var(func, var, pred),
+        match self.blocks[block].preds() {
+            &[pred] => self.use_var(func, var, pred),
             _ => {
                 let (phi_insn, phi_value) = self.prepend_phi(func, var, block);
                 // Break potential cycles by defining operandless phi.
@@ -111,13 +159,14 @@ impl SsaBuilder {
     fn add_phi_args(&mut self, func: &mut Function, var: Variable, phi: Insn) {
         let block = func.layout.insn_block(phi);
 
-        if let Some(preds) = self.preds.remove(&block) {
-            for pred in &preds {
-                let value = self.use_var(func, var, *pred);
-                func.dfg.append_phi_arg(phi, value);
-            }
-            self.preds.insert(block, preds);
+        let mut preds = vec![];
+        std::mem::swap(&mut self.blocks[block].preds, &mut preds);
+
+        for pred in &preds {
+            let value = self.use_var(func, var, *pred);
+            func.dfg.append_phi_arg(phi, value);
         }
+        std::mem::swap(&mut self.blocks[block].preds, &mut preds);
 
         self.remove_trivial_phi(func, phi);
     }
@@ -144,7 +193,7 @@ impl SsaBuilder {
 
         for i in 0..func.dfg.users(phi_value).len() {
             let user = func.dfg.user_of(phi_value, i);
-            if func.dfg.is_phi(user) && !self.trivial_phis.contains(&user) {
+            if func.dfg.is_phi(user) && !self.trivial_phis.contains_key(user) {
                 self.remove_trivial_phi(func, user);
             }
         }

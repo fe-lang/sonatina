@@ -1,18 +1,16 @@
 //! This module contains Sonatine IR instructions definitions.
 
-use std::collections::HashMap;
-
-use id_arena::{Arena, Id};
+use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap};
 
 use super::{Insn, InsnData, Type, Value, ValueData};
 
 #[derive(Default, Debug, Clone)]
 pub struct DataFlowGraph {
-    blocks: Arena<BlockData>,
-    insns: Arena<InsnData>,
-    values: Arena<ValueData>,
-    insn_results: HashMap<Insn, Value>,
-    users: HashMap<Value, Vec<Insn>>,
+    blocks: PrimaryMap<Block, BlockData>,
+    insns: PrimaryMap<Insn, InsnData>,
+    values: PrimaryMap<Value, ValueData>,
+    insn_results: SecondaryMap<Insn, PackedOption<Value>>,
+    users: SecondaryMap<Value, Vec<Insn>>,
 }
 
 impl DataFlowGraph {
@@ -21,25 +19,23 @@ impl DataFlowGraph {
     }
 
     pub fn make_block(&mut self, name: &str) -> Block {
-        self.blocks.alloc(BlockData::new(name))
+        self.blocks.push(BlockData::new(name))
     }
 
     pub fn make_insn(&mut self, insn: InsnData) -> Insn {
-        let insn = self.insns.alloc(insn);
+        let insn = self.insns.push(insn);
         let data = &self.insns[insn];
         for arg in data.args() {
-            self.users.entry(*arg).or_default().push(insn);
+            self.users[*arg].push(insn);
         }
         insn
     }
 
     pub fn make_result(&mut self, insn: Insn) -> Option<Value> {
-        debug_assert!(!self.insn_results.contains_key(&insn));
-
         let ty = self.insns[insn].result_type(self)?;
         let result_data = ValueData::Insn { insn, ty };
-        let result = self.values.alloc(result_data);
-        self.insn_results.insert(insn, result);
+        let result = self.values.push(result_data);
+        self.insn_results[insn] = result.into();
         Some(result)
     }
 
@@ -48,7 +44,7 @@ impl DataFlowGraph {
             ty: ty.clone(),
             idx,
         };
-        self.values.alloc(value_data)
+        self.values.push(value_data)
     }
 
     pub fn insn_data(&self, insn: Insn) -> &InsnData {
@@ -56,10 +52,7 @@ impl DataFlowGraph {
     }
 
     pub fn users(&self, value: Value) -> &[Insn] {
-        self.users
-            .get(&value)
-            .map(|users| users.as_slice())
-            .unwrap_or_default()
+        &self.users[value]
     }
 
     pub fn user_of(&self, value: Value, idx: usize) -> Insn {
@@ -112,7 +105,7 @@ impl DataFlowGraph {
     }
 
     pub fn insn_result(&self, insn: Insn) -> Option<Value> {
-        self.insn_results.get(&insn).copied()
+        self.insn_results[insn].expand()
     }
 
     pub fn make_alias(&mut self, from: Value, to: Value) {
@@ -148,7 +141,9 @@ pub enum ValueDef {
 }
 
 /// An opaque reference to [`BlockData`]
-pub type Block = Id<BlockData>;
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
+pub struct Block(pub u32);
+cranelift_entity::entity_impl!(Block);
 
 /// A block data definition.
 /// A Block data doesn't hold any information for layout of a program. It is managed by

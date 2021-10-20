@@ -1,12 +1,12 @@
 //! This module contains function layout information including block order and instruction order.
-use std::collections::HashMap;
+use cranelift_entity::SecondaryMap;
 
 use super::{Block, Insn};
 
 #[derive(Debug, Clone)]
 pub struct Layout {
-    blocks: HashMap<Block, BlockNode>,
-    insns: HashMap<Insn, InsnNode>,
+    blocks: SecondaryMap<Block, BlockNode>,
+    insns: SecondaryMap<Insn, InsnNode>,
     first_block: Option<Block>,
     last_block: Option<Block>,
 }
@@ -20,8 +20,8 @@ impl Default for Layout {
 impl Layout {
     pub fn new() -> Self {
         Self {
-            blocks: HashMap::new(),
-            insns: HashMap::new(),
+            blocks: SecondaryMap::new(),
+            insns: SecondaryMap::new(),
             first_block: None,
             last_block: None,
         }
@@ -37,45 +37,45 @@ impl Layout {
 
     pub fn prev_block_of(&self, block: Block) -> Option<Block> {
         debug_assert!(self.is_block_inserted(block));
-        self.blocks[&block].prev
+        self.blocks[block].prev
     }
 
     pub fn next_block_of(&self, block: Block) -> Option<Block> {
         debug_assert!(self.is_block_inserted(block));
-        self.blocks[&block].next
+        self.blocks[block].next
     }
 
     pub fn is_block_inserted(&self, block: Block) -> bool {
-        self.blocks.get(&block).is_some()
+        self.blocks.get(block).is_some()
     }
 
     pub fn first_insn_of(&self, block: Block) -> Option<Insn> {
         debug_assert!(self.is_block_inserted(block));
-        self.blocks[&block].first_insn
+        self.blocks[block].first_insn
     }
 
     pub fn last_insn_of(&self, block: Block) -> Option<Insn> {
         debug_assert!(self.is_block_inserted(block));
-        self.blocks[&block].last_insn
+        self.blocks[block].last_insn
     }
 
     pub fn prev_insn_of(&self, insn: Insn) -> Option<Insn> {
         debug_assert!(self.is_insn_inserted(insn));
-        self.insns[&insn].prev
+        self.insns[insn].prev
     }
 
     pub fn next_insn_of(&self, insn: Insn) -> Option<Insn> {
         debug_assert!(self.is_insn_inserted(insn));
-        self.insns[&insn].next
+        self.insns[insn].next
     }
 
     pub fn insn_block(&self, insn: Insn) -> Block {
         debug_assert!(self.is_insn_inserted(insn));
-        self.insns[&insn].block
+        self.insns[insn].block.unwrap()
     }
 
     pub fn is_insn_inserted(&self, insn: Insn) -> bool {
-        self.insns.get(&insn).is_some()
+        self.insns.get(insn).is_some()
     }
 
     pub fn iter_block(&self) -> impl Iterator<Item = Block> + '_ {
@@ -88,7 +88,7 @@ impl Layout {
     pub fn iter_insn(&self, block: Block) -> impl Iterator<Item = Insn> + '_ {
         debug_assert!(self.is_block_inserted(block));
         InsnIter {
-            next: self.blocks[&block].first_insn,
+            next: self.blocks[block].first_insn,
             insns: &self.insns,
         }
     }
@@ -99,14 +99,14 @@ impl Layout {
         let mut block_node = BlockNode::default();
 
         if let Some(last_block) = self.last_block {
-            let mut last_block_node = self.blocks.get_mut(&last_block).unwrap();
+            let last_block_node = &mut self.blocks[last_block];
             last_block_node.next = Some(block);
             block_node.prev = Some(last_block);
         } else {
             self.first_block = Some(block);
         }
 
-        self.blocks.insert(block, block_node);
+        self.blocks[block] = block_node;
         self.last_block = Some(block);
     }
 
@@ -116,17 +116,17 @@ impl Layout {
 
         let mut block_node = BlockNode::default();
 
-        match self.blocks[&before].prev {
+        match self.blocks[before].prev {
             Some(prev) => {
                 block_node.prev = Some(prev);
-                self.blocks.get_mut(&prev).unwrap().next = Some(block);
+                self.blocks[prev].next = Some(block);
             }
             None => self.first_block = Some(block),
         }
 
         block_node.next = Some(before);
-        self.blocks.get_mut(&before).unwrap().prev = Some(block);
-        self.blocks.insert(block, block_node);
+        self.blocks[before].prev = Some(block);
+        self.blocks[block] = block_node;
     }
 
     pub fn insert_block_after(&mut self, block: Block, after: Block) {
@@ -135,35 +135,35 @@ impl Layout {
 
         let mut block_node = BlockNode::default();
 
-        match self.blocks[&after].next {
+        match self.blocks[after].next {
             Some(next) => {
                 block_node.next = Some(next);
-                self.blocks.get_mut(&next).unwrap().prev = Some(block);
+                self.blocks[next].prev = Some(block);
             }
             None => self.last_block = Some(block),
         }
         block_node.prev = Some(after);
-        self.blocks.get_mut(&after).unwrap().next = Some(block);
-        self.blocks.insert(block, block_node);
+        self.blocks[after].next = Some(block);
+        self.blocks[block] = block_node;
     }
 
     pub fn remove_block(&mut self, block: Block) {
         debug_assert!(self.is_block_inserted(block));
 
-        let block_node = self.blocks.get_mut(&block).unwrap();
+        let block_node = &mut self.blocks[block];
         let prev_block = block_node.prev;
         let next_block = block_node.next;
         match (prev_block, next_block) {
             (Some(prev), Some(next)) => {
-                self.blocks.get_mut(&prev).unwrap().next = Some(next);
-                self.blocks.get_mut(&next).unwrap().prev = Some(prev);
+                self.blocks[prev].next = Some(next);
+                self.blocks[next].prev = Some(prev);
             }
             (Some(prev), None) => {
-                self.blocks.get_mut(&prev).unwrap().next = None;
+                self.blocks[prev].next = None;
                 self.last_block = Some(prev);
             }
             (None, Some(next)) => {
-                self.blocks.get_mut(&next).unwrap().prev = None;
+                self.blocks[next].prev = None;
                 self.first_block = Some(next);
             }
             (None, None) => {
@@ -172,104 +172,104 @@ impl Layout {
             }
         }
 
-        self.blocks.remove(&block);
+        self.blocks[block] = BlockNode::default();
     }
 
     pub fn append_insn(&mut self, insn: Insn, block: Block) {
         debug_assert!(self.is_block_inserted(block));
         debug_assert!(!self.is_insn_inserted(insn));
 
-        let block_node = self.blocks.get_mut(&block).unwrap();
-        let mut insn_node = InsnNode::new(block);
+        let block_node = &mut self.blocks[block];
+        let mut insn_node = InsnNode::with_block(block);
 
         if let Some(last_insn) = block_node.last_insn {
             insn_node.prev = Some(last_insn);
-            self.insns.get_mut(&last_insn).unwrap().next = Some(insn);
+            self.insns[last_insn].next = Some(insn);
         } else {
             block_node.first_insn = Some(insn);
         }
 
         block_node.last_insn = Some(insn);
-        self.insns.insert(insn, insn_node);
+        self.insns[insn] = insn_node;
     }
 
     pub fn prepend_insn(&mut self, insn: Insn, block: Block) {
         debug_assert!(self.is_block_inserted(block));
         debug_assert!(!self.is_insn_inserted(insn));
 
-        let block_node = self.blocks.get_mut(&block).unwrap();
-        let mut insn_node = InsnNode::new(block);
+        let block_node = &mut self.blocks[block];
+        let mut insn_node = InsnNode::with_block(block);
 
         if let Some(first_insn) = block_node.first_insn {
             insn_node.next = Some(first_insn);
-            self.insns.get_mut(&first_insn).unwrap().prev = Some(insn);
+            self.insns[first_insn].prev = Some(insn);
         } else {
             block_node.last_insn = Some(insn);
         }
 
         block_node.first_insn = Some(insn);
-        self.insns.insert(insn, insn_node);
+        self.insns[insn] = insn_node;
     }
 
     pub fn insert_insn_before(&mut self, insn: Insn, before: Insn) {
         debug_assert!(self.is_insn_inserted(before));
         debug_assert!(!self.is_insn_inserted(insn));
 
-        let before_insn_node = &self.insns[&before];
-        let block = before_insn_node.block;
-        let mut insn_node = InsnNode::new(block);
+        let before_insn_node = &self.insns[before];
+        let block = before_insn_node.block.unwrap();
+        let mut insn_node = InsnNode::with_block(block);
 
         match before_insn_node.prev {
             Some(prev) => {
                 insn_node.prev = Some(prev);
-                self.insns.get_mut(&prev).unwrap().next = Some(insn);
+                self.insns[prev].next = Some(insn);
             }
-            None => self.blocks.get_mut(&block).unwrap().first_insn = Some(insn),
+            None => self.blocks[block].first_insn = Some(insn),
         }
         insn_node.next = Some(before);
-        self.insns.get_mut(&before).unwrap().prev = Some(insn);
-        self.insns.insert(insn, insn_node);
+        self.insns[before].prev = Some(insn);
+        self.insns[insn] = insn_node;
     }
 
     pub fn insert_insn_after(&mut self, insn: Insn, after: Insn) {
         debug_assert!(self.is_insn_inserted(after));
         debug_assert!(!self.is_insn_inserted(insn));
 
-        let after_insn_node = &self.insns[&after];
-        let block = after_insn_node.block;
-        let mut insn_node = InsnNode::new(block);
+        let after_insn_node = &self.insns[after];
+        let block = after_insn_node.block.unwrap();
+        let mut insn_node = InsnNode::with_block(block);
 
         match after_insn_node.next {
             Some(next) => {
                 insn_node.next = Some(next);
-                self.insns.get_mut(&next).unwrap().prev = Some(insn);
+                self.insns[next].prev = Some(insn);
             }
-            None => self.blocks.get_mut(&block).unwrap().last_insn = Some(insn),
+            None => self.blocks[block].last_insn = Some(insn),
         }
         insn_node.prev = Some(after);
-        self.insns.get_mut(&after).unwrap().next = Some(insn);
-        self.insns.insert(insn, insn_node);
+        self.insns[after].next = Some(insn);
+        self.insns[insn] = insn_node;
     }
 
     /// Remove instruction from the layout.
     pub fn remove_insn(&mut self, insn: Insn) {
         debug_assert!(self.is_insn_inserted(insn));
 
-        let insn_node = &self.insns[&insn];
-        let block_node = self.blocks.get_mut(&insn_node.block).unwrap();
+        let insn_node = &self.insns[insn];
+        let block_node = &mut self.blocks[insn_node.block.unwrap()];
         let prev_insn = insn_node.prev;
         let next_insn = insn_node.next;
         match (prev_insn, next_insn) {
             (Some(prev), Some(next)) => {
-                self.insns.get_mut(&prev).unwrap().next = Some(next);
-                self.insns.get_mut(&next).unwrap().prev = Some(prev);
+                self.insns[prev].next = Some(next);
+                self.insns[next].prev = Some(prev);
             }
             (Some(prev), None) => {
-                self.insns.get_mut(&prev).unwrap().next = None;
+                self.insns[prev].next = None;
                 block_node.last_insn = Some(prev);
             }
             (None, Some(next)) => {
-                self.insns.get_mut(&next).unwrap().prev = None;
+                self.insns[next].prev = None;
                 block_node.first_insn = Some(next);
             }
             (None, None) => {
@@ -278,13 +278,13 @@ impl Layout {
             }
         }
 
-        self.insns.remove(&insn);
+        self.insns[insn] = InsnNode::default();
     }
 }
 
 struct BlockIter<'a> {
     next: Option<Block>,
-    blocks: &'a HashMap<Block, BlockNode>,
+    blocks: &'a SecondaryMap<Block, BlockNode>,
 }
 
 impl<'a> Iterator for BlockIter<'a> {
@@ -292,14 +292,14 @@ impl<'a> Iterator for BlockIter<'a> {
 
     fn next(&mut self) -> Option<Block> {
         let next = self.next?;
-        self.next = self.blocks[&next].next;
+        self.next = self.blocks[next].next;
         Some(next)
     }
 }
 
 struct InsnIter<'a> {
     next: Option<Insn>,
-    insns: &'a HashMap<Insn, InsnNode>,
+    insns: &'a SecondaryMap<Insn, InsnNode>,
 }
 
 impl<'a> Iterator for InsnIter<'a> {
@@ -307,7 +307,7 @@ impl<'a> Iterator for InsnIter<'a> {
 
     fn next(&mut self) -> Option<Insn> {
         let next = self.next?;
-        self.next = self.insns[&next].next;
+        self.next = self.insns[next].next;
         Some(next)
     }
 }
@@ -320,10 +320,10 @@ struct BlockNode {
     last_insn: Option<Insn>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct InsnNode {
     /// An block in which the insn exists.
-    block: Block,
+    block: Option<Block>,
     /// A previous instruction.
     prev: Option<Insn>,
     /// A next instruction.
@@ -331,9 +331,9 @@ struct InsnNode {
 }
 
 impl InsnNode {
-    fn new(block: Block) -> Self {
+    fn with_block(block: Block) -> Self {
         Self {
-            block,
+            block: Some(block),
             prev: None,
             next: None,
         }
