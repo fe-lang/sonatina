@@ -181,6 +181,10 @@ impl FunctionBuilder {
         self.ssa_builder.seal_block(&mut self.func, block);
     }
 
+    pub fn seal_all(&mut self) {
+        self.ssa_builder.seal_all(&mut self.func);
+    }
+
     pub fn is_sealed(&self, block: Block) -> bool {
         self.ssa_builder.is_sealed(block)
     }
@@ -245,7 +249,8 @@ mod tests {
         let v1 = builder.imm_i8(2);
         let v2 = builder.add(v0, v1);
         builder.sub(v2, v0);
-        builder.seal_block();
+
+        builder.seal_all();
 
         assert_eq!(
             dump_func(builder),
@@ -271,7 +276,8 @@ mod tests {
         assert_eq!(args.len(), 2);
         let v3 = builder.sext(arg0, Type::I64);
         builder.mul(v3, arg1);
-        builder.seal_block();
+
+        builder.seal_all();
 
         assert_eq!(
             dump_func(builder),
@@ -298,22 +304,20 @@ mod tests {
         builder.switch_to_block(entry_block);
         builder.brz(then_block, arg0);
         builder.jump(else_block);
-        builder.seal_block();
 
         builder.switch_to_block(then_block);
         let v1 = builder.imm_i64(1);
         builder.jump(merge_block);
-        builder.seal_block();
 
         builder.switch_to_block(else_block);
         let v2 = builder.imm_i64(2);
         builder.jump(merge_block);
-        builder.seal_block();
 
         builder.switch_to_block(merge_block);
         let v3 = builder.phi(&[v1, v2]);
         builder.add(v3, arg0);
-        builder.seal_block();
+
+        builder.seal_all();
 
         assert_eq!(
             dump_func(builder),

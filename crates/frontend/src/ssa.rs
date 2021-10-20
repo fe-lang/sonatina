@@ -62,11 +62,23 @@ impl SsaBuilder {
     }
 
     pub(super) fn seal_block(&mut self, func: &mut Function, block: Block) {
+        if self.is_sealed(block) {
+            return;
+        }
+
         for (var, phi) in self.incomplete_phis.remove(&block).unwrap_or_default() {
             self.add_phi_args(func, var, phi);
         }
 
         self.sealed.insert(block);
+    }
+
+    pub(super) fn seal_all(&mut self, func: &mut Function) {
+        let mut next_block = func.layout.first_block();
+        while let Some(block) = next_block {
+            self.seal_block(func, block);
+            next_block = func.layout.next_block_of(block);
+        }
     }
 
     pub(super) fn is_sealed(&self, block: Block) -> bool {
@@ -344,6 +356,86 @@ mod tests {
         let val = builder.use_var(var);
         builder.add(val, val);
         builder.seal_block();
+
+        assert_eq!(
+            dump_func(builder),
+            "func %test_func():
+    b1:
+        %v0.i32 = imm.i32 1
+        jump b2
+
+    b2:
+        %v4.i32 = phi %v0.i32 %v5.i32
+        brz %v0.i32 b3
+        jump b7
+
+    b3:
+        brz %v0.i32 b4
+        jump b5
+
+    b4:
+        %v1.i32 = imm.i32 2
+        jump b6
+
+    b5:
+        jump b6
+
+    b6:
+        %v5.i32 = phi %v1.i32 %v4.i32
+        jump b2
+
+    b7:
+        %v3.i32 = add %v4.i32 %v4.i32
+
+"
+        );
+    }
+
+    #[test]
+    fn use_var_global_complex_seal_all() {
+        let mut builder = func_builder(vec![], vec![]);
+
+        let var = builder.declare_var(Type::I32);
+
+        let b1 = builder.append_block("b1");
+        let b2 = builder.append_block("b2");
+        let b3 = builder.append_block("b3");
+        let b4 = builder.append_block("b4");
+        let b5 = builder.append_block("b5");
+        let b6 = builder.append_block("b6");
+        let b7 = builder.append_block("b7");
+
+        builder.switch_to_block(b1);
+        let value1 = builder.imm_i32(1);
+        builder.def_var(var, value1);
+        builder.jump(b2);
+
+        builder.switch_to_block(b2);
+        builder.brz(b3, value1);
+        builder.jump(b7);
+
+        builder.switch_to_block(b3);
+        builder.brz(b4, value1);
+        builder.jump(b5);
+
+        builder.switch_to_block(b4);
+        let value2 = builder.imm_i32(2);
+        builder.def_var(var, value2);
+        builder.jump(b6);
+
+        builder.switch_to_block(b5);
+        builder.jump(b6);
+
+        builder.switch_to_block(b6);
+        builder.jump(b2);
+
+        builder.switch_to_block(b2);
+
+        builder.switch_to_block(b7);
+        let val = builder.use_var(var);
+        builder.add(val, val);
+
+        builder.seal_all();
 
         assert_eq!(
             dump_func(builder),
