@@ -228,9 +228,14 @@ impl FunctionBuilder {
     }
 
     fn insert_insn(&mut self, insn_data: InsnData) -> Option<Value> {
-        let (insn, value) = self.cursor().insert_insn(insn_data);
+        let mut cursor = self.cursor();
+        let insn = cursor.insert_insn(insn_data);
+        let result = cursor.make_result(insn);
+        if let Some(result) = result {
+            cursor.attach_result(insn, result);
+        }
         self.loc = CursorLocation::At(insn);
-        value
+        result
     }
 }
 

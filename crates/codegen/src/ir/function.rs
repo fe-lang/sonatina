@@ -84,7 +84,7 @@ impl<'a> FunctionCursor<'a> {
         self.loc = loc;
     }
 
-    pub fn insert_insn(&mut self, data: InsnData) -> (Insn, Option<Value>) {
+    pub fn insert_insn(&mut self, data: InsnData) -> Insn {
         let new_insn = self.func.dfg.make_insn(data);
         match self.loc {
             CursorLocation::At(insn) => self.func.layout.insert_insn_after(new_insn, insn),
@@ -93,21 +93,30 @@ impl<'a> FunctionCursor<'a> {
             CursorLocation::NoWhere => panic!("cursor loc points to `NoWhere`"),
         }
 
-        (new_insn, self.func.dfg.make_result(new_insn))
+        new_insn
     }
 
-    pub fn append_insn(&mut self, data: InsnData) -> (Insn, Option<Value>) {
+    pub fn append_insn(&mut self, data: InsnData) -> Insn {
         let new_insn = self.func.dfg.make_insn(data);
         let current_block = self.block().expect("cursor loc points to `NoWhere`");
         self.func.layout.append_insn(new_insn, current_block);
-        (new_insn, self.func.dfg.make_result(new_insn))
+        new_insn
     }
 
-    pub fn prepend_insn(&mut self, data: InsnData) -> (Insn, Option<Value>) {
+    pub fn prepend_insn(&mut self, data: InsnData) -> Insn {
         let new_insn = self.func.dfg.make_insn(data);
         let current_block = self.block().expect("cursor loc points to `NoWhere`");
         self.func.layout.prepend_insn(new_insn, current_block);
-        (new_insn, self.func.dfg.make_result(new_insn))
+        new_insn
+    }
+
+    pub fn make_result(&mut self, insn: Insn) -> Option<Value> {
+        let value_data = self.func.dfg.make_result(insn)?;
+        Some(self.func.dfg.make_value(value_data))
+    }
+
+    pub fn attach_result(&mut self, insn: Insn, value: Value) {
+        self.func.dfg.attach_result(insn, value)
     }
 
     pub fn insert_block(&mut self, name: &str) -> Block {

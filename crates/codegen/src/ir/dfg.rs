@@ -22,6 +22,10 @@ impl DataFlowGraph {
         self.blocks.push(BlockData::new(name))
     }
 
+    pub fn make_value(&mut self, value: ValueData) -> Value {
+        self.values.push(value)
+    }
+
     pub fn make_insn(&mut self, insn: InsnData) -> Insn {
         let insn = self.insns.push(insn);
         let data = &self.insns[insn];
@@ -31,12 +35,14 @@ impl DataFlowGraph {
         insn
     }
 
-    pub fn make_result(&mut self, insn: Insn) -> Option<Value> {
+    pub fn make_result(&mut self, insn: Insn) -> Option<ValueData> {
         let ty = self.insns[insn].result_type(self)?;
-        let result_data = ValueData::Insn { insn, ty };
-        let result = self.values.push(result_data);
-        self.insn_results[insn] = result.into();
-        Some(result)
+        Some(ValueData::Insn { insn, ty })
+    }
+
+    pub fn attach_result(&mut self, insn: Insn, value: Value) {
+        debug_assert!(self.insn_results[insn].is_none());
+        self.insn_results[insn] = value.into();
     }
 
     pub fn make_arg_value(&mut self, ty: &Type, idx: usize) -> Value {

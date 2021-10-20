@@ -206,7 +206,11 @@ impl SsaBuilder {
             ty,
         };
         let mut cursor = FunctionCursor::new(func, CursorLocation::BlockTop(block));
-        let (insn, value) = cursor.prepend_insn(insn_data);
+        let insn = cursor.prepend_insn(insn_data);
+        let value = cursor.make_result(insn);
+        if let Some(value) = value {
+            cursor.attach_result(insn, value);
+        }
         (insn, value.unwrap())
     }
 }
