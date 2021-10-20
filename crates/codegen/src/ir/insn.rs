@@ -43,7 +43,7 @@ pub enum InsnData {
     },
 
     /// Phi funcion.
-    Phi { args: Vec<Value> },
+    Phi { args: Vec<Value>, ty: Type },
 }
 
 impl InsnData {
@@ -58,7 +58,7 @@ impl InsnData {
         match self {
             Self::Binary { args, .. } | Self::Store { args, .. } => args,
             Self::Cast { args, .. } | Self::Load { args, .. } | Self::Branch { args, .. } => args,
-            Self::Phi { args } => args,
+            Self::Phi { args, .. } => args,
             _ => &[],
         }
     }
@@ -67,7 +67,7 @@ impl InsnData {
         match self {
             Self::Binary { args, .. } | Self::Store { args, .. } => args,
             Self::Cast { args, .. } | Self::Load { args, .. } | Self::Branch { args, .. } => args,
-            Self::Phi { args } => args,
+            Self::Phi { args, .. } => args,
             _ => &mut [],
         }
     }
@@ -77,7 +77,7 @@ impl InsnData {
             Self::Immediate { code } => Some(code.result_type()),
             Self::Binary { code, args } => Some(code.result_type(dfg, args)),
             Self::Cast { ty, .. } | Self::Load { ty, .. } => Some(ty.clone()),
-            Self::Phi { args } => Some(dfg.value_ty(args[0]).clone()),
+            Self::Phi { ty, .. } => Some(ty.clone()),
             _ => None,
         }
     }

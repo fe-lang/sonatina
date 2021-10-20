@@ -92,17 +92,7 @@ impl DataFlowGraph {
     pub fn append_phi_arg(&mut self, insn: Insn, arg: Value) {
         let data = &mut self.insns[insn];
         match data {
-            InsnData::Phi { args } => args.push(arg),
-            _ => panic!("insn is not a phi function"),
-        }
-    }
-
-    pub fn remove_phi_arg(&mut self, insn: Insn, idx: usize) {
-        let data = &mut self.insns[insn];
-        match data {
-            InsnData::Phi { args } => {
-                args.remove(idx);
-            }
+            InsnData::Phi { args, .. } => args.push(arg),
             _ => panic!("insn is not a phi function"),
         }
     }
@@ -133,13 +123,14 @@ impl DataFlowGraph {
 
     pub fn resolve_alias(&self, mut value: Value) -> Value {
         let value_len = self.values.len();
-        let alias_depth = 0;
+        let mut alias_depth = 0;
 
         while let ValueData::Alias { value: resolved } = self.values[value] {
             if alias_depth >= value_len {
                 panic!("alias cycle detected");
             }
             value = resolved;
+            alias_depth += 1;
         }
 
         value

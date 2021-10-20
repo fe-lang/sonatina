@@ -111,10 +111,11 @@ trait IrWrite {
 
 impl IrWrite for Value {
     fn write(&self, writer: &mut FuncWriter, mut w: impl io::Write) -> io::Result<()> {
+        let value = writer.func.dfg.resolve_alias(*self);
         w.write_fmt(format_args!(
             "%v{}.{}",
-            self.index(),
-            writer.func.dfg.value_ty(*self),
+            value.index(),
+            writer.func.dfg.value_ty(value),
         ))
     }
 }
@@ -165,7 +166,7 @@ impl IrWrite for Insn {
                 writer.space(&mut w)?;
                 writer.write_block(*dest, &mut w)?;
             }
-            Phi { args } => {
+            Phi { args, .. } => {
                 w.write_all(b"phi ")?;
                 writer.write_insn_args(args, &mut w)?;
             }

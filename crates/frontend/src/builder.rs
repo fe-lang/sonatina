@@ -1,3 +1,5 @@
+// TODO: verifier.
+
 use sonatina_codegen::ir::{
     function::{CursorLocation, FunctionCursor},
     insn::{BinaryOp, BranchOp, CastOp, ImmediateOp, InsnData, JumpOp},
@@ -14,8 +16,8 @@ pub trait Context {
     fn gas_type(&self) -> Type;
 }
 
-pub struct FunctionBuilder<'a> {
-    ctxt: &'a dyn Context,
+pub struct FunctionBuilder {
+    ctxt: Box<dyn Context>,
     func: Function,
     loc: CursorLocation,
     ssa_builder: SsaBuilder,
@@ -75,8 +77,8 @@ macro_rules! impl_branch_insn {
     };
 }
 
-impl<'a> FunctionBuilder<'a> {
-    pub fn new(name: String, sig: Signature, ctxt: &'a dyn Context) -> Self {
+impl FunctionBuilder {
+    pub fn new(name: String, sig: Signature, ctxt: Box<dyn Context>) -> Self {
         let func = Function::new(name, sig);
         Self {
             ctxt,
@@ -148,8 +150,12 @@ impl<'a> FunctionBuilder<'a> {
     impl_branch_insn!(brnz, BranchOp::Brnz);
 
     pub fn phi(&mut self, args: &[Value]) -> Value {
+        debug_assert!(!args.is_empty());
+
+        let ty = self.func.dfg.value_ty(args[0]).clone();
         let insn_data = InsnData::Phi {
             args: args.to_vec(),
+            ty,
         };
         self.insert_insn(insn_data).unwrap()
     }
@@ -170,18 +176,24 @@ impl<'a> FunctionBuilder<'a> {
         self.ssa_builder.def_var(var, value, block);
     }
 
-    pub fn seal_block(&mut self, block: Block) {
+    pub fn seal_block(&mut self) {
+        let block = self.cursor().block().unwrap();
         self.ssa_builder.seal_block(&mut self.func, block);
     }
 
-    pub fn build(self) -> Function {
-        self.func
+    pub fn is_sealed(&self, block: Block) -> bool {
+        self.ssa_builder.is_sealed(block)
     }
 
-    //TODO:
-    // pub fn build_with_verifier(self, verifier: IrVerifier) -> Self {
-    // todo!()
-    //}
+    pub fn build(self) -> Function {
+        if cfg!(debug_assertions) {
+            for block in self.func.layout.iter_block() {
+                debug_assert!(self.is_sealed(block), "all blocks must be sealed");
+            }
+        }
+
+        self.func
+    }
 
     pub fn type_of(&self, value: Value) -> &Type {
         self.func.dfg.value_ty(value)
@@ -221,34 +233,11 @@ impl<'a> FunctionBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use sonatina_codegen::ir::ir_writer::FuncWriter;
-
-    pub struct TestContext {}
-
-    impl Context for TestContext {
-        fn hash_type(&self) -> Type {
-            Type::I256
-        }
-
-        fn address_type(&self) -> Type {
-            Type::make_array(Type::I8, 20)
-        }
-
-        fn balance_type(&self) -> Type {
-            Type::I256
-        }
-
-        fn gas_type(&self) -> Type {
-            Type::I256
-        }
-    }
+    use crate::test_util::*;
 
     #[test]
     fn entry_block() {
-        let sig = Signature::default();
-        let ctxt = TestContext {};
-        let mut builder = FunctionBuilder::new("test_func".into(), sig, &ctxt);
+        let mut builder = func_builder(vec![], vec![]);
 
         let entry_block = builder.append_block("entry");
         builder.switch_to_block(entry_block);
@@ -256,13 +245,10 @@ mod tests {
         let v1 = builder.imm_i8(2);
         let v2 = builder.add(v0, v1);
         builder.sub(v2, v0);
-
-        let func = builder.build();
-        let mut writer = FuncWriter::new(&func);
-        let result = writer.dump_string().unwrap();
+        builder.seal_block();
 
         assert_eq!(
-            result,
+            dump_func(builder),
             "func %test_func():
     entry:
         %v0.i8 = imm.i8 1
@@ -276,11 +262,7 @@ mod tests {
 
     #[test]
     fn entry_block_with_args() {
-        let mut sig = Signature::default();
-        sig.append_arg(Type::I32);
-        sig.append_arg(Type::I64);
-        let ctxt = TestContext {};
-        let mut builder = FunctionBuilder::new("test_func".into(), sig, &ctxt);
+        let mut builder = func_builder(vec![Type::I32, Type::I64], vec![]);
 
         let entry_block = builder.append_block("entry");
         builder.switch_to_block(entry_block);
@@ -289,13 +271,10 @@ mod tests {
         assert_eq!(args.len(), 2);
         let v3 = builder.sext(arg0, Type::I64);
         builder.mul(v3, arg1);
-
-        let func = builder.build();
-        let mut writer = FuncWriter::new(&func);
-        let result = writer.dump_string().unwrap();
+        builder.seal_block();
 
         assert_eq!(
-            result,
+            dump_func(builder),
             "func %test_func(i32, i64):
     entry:
         %v2.i64 = sext %v0.i32
@@ -307,10 +286,7 @@ mod tests {
 
     #[test]
     fn then_else_merge_block() {
-        let mut sig = Signature::default();
-        sig.append_arg(Type::I64);
-        let ctxt = TestContext {};
-        let mut builder = FunctionBuilder::new("test_func".into(), sig, &ctxt);
+        let mut builder = func_builder(vec![Type::I64], vec![]);
 
         let entry_block = builder.append_block("entry");
         let then_block = builder.append_block("then");
@@ -322,25 +298,25 @@ mod tests {
         builder.switch_to_block(entry_block);
         builder.brz(then_block, arg0);
         builder.jump(else_block);
+        builder.seal_block();
 
         builder.switch_to_block(then_block);
         let v1 = builder.imm_i64(1);
         builder.jump(merge_block);
+        builder.seal_block();
 
         builder.switch_to_block(else_block);
         let v2 = builder.imm_i64(2);
         builder.jump(merge_block);
+        builder.seal_block();
 
         builder.switch_to_block(merge_block);
         let v3 = builder.phi(&[v1, v2]);
         builder.add(v3, arg0);
-
-        let func = builder.build();
-        let mut writer = FuncWriter::new(&func);
-        let result = writer.dump_string().unwrap();
+        builder.seal_block();
 
         assert_eq!(
-            result,
+            dump_func(builder),
             "func %test_func(i64):
     entry:
         brz %v0.i64 then

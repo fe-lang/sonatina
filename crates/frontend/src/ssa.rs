@@ -3,7 +3,6 @@
 use std::collections::{HashMap, HashSet};
 
 use id_arena::{Arena, Id};
-
 use sonatina_codegen::ir::{
     function::{CursorLocation, FunctionCursor},
     Function, Insn, InsnData,
@@ -70,13 +69,13 @@ impl SsaBuilder {
         self.sealed.insert(block);
     }
 
-    pub(super) fn is_sealed(&mut self, block: Block) -> bool {
+    pub(super) fn is_sealed(&self, block: Block) -> bool {
         self.sealed.contains(&block)
     }
 
     fn use_var_recursive(&mut self, func: &mut Function, var: Variable, block: Block) -> Value {
         if !self.is_sealed(block) {
-            let (insn, value) = self.prepend_phi(func, block);
+            let (insn, value) = self.prepend_phi(func, var, block);
             self.incomplete_phis
                 .entry(block)
                 .or_default()
@@ -88,7 +87,7 @@ impl SsaBuilder {
         match self.preds.get(&block).map(|preds| preds.as_slice()) {
             Some(&[pred]) => self.use_var(func, var, pred),
             _ => {
-                let (phi_insn, phi_value) = self.prepend_phi(func, block);
+                let (phi_insn, phi_value) = self.prepend_phi(func, var, block);
                 // Break potential cycles by defining operandless phi.
                 self.def_var(var, phi_value, block);
                 self.add_phi_args(func, var, phi_insn);
@@ -119,8 +118,6 @@ impl SsaBuilder {
         }
 
         let first = func.dfg.resolve_alias(phi_args[0]);
-        let mut resolved_args = Vec::with_capacity(phi_args.len());
-        resolved_args.push(first);
 
         if phi_args
             .iter()
@@ -129,26 +126,287 @@ impl SsaBuilder {
             return;
         }
 
-        let arg_len = phi_args.len();
-        for i in 0..arg_len {
-            let arg = func.dfg.insn_arg(phi, i);
-            func.dfg.make_alias(arg, first);
-        }
+        func.dfg.make_alias(phi_value, first);
         self.trivial_phis.insert(phi);
         FunctionCursor::new(func, CursorLocation::At(phi)).remove_insn();
 
         for i in 0..func.dfg.users(phi_value).len() {
             let user = func.dfg.user_of(phi_value, i);
-            if func.dfg.is_phi(user) && !self.trivial_phis.contains(&phi) {
-                self.remove_trivial_phi(func, phi);
+            if func.dfg.is_phi(user) && !self.trivial_phis.contains(&user) {
+                self.remove_trivial_phi(func, user);
             }
         }
     }
 
-    fn prepend_phi(&mut self, func: &mut Function, block: Block) -> (Insn, Value) {
-        let insn_data = InsnData::Phi { args: Vec::new() };
+    fn prepend_phi(&mut self, func: &mut Function, var: Variable, block: Block) -> (Insn, Value) {
+        let ty = self.var_ty(var).clone();
+        let insn_data = InsnData::Phi {
+            args: Vec::new(),
+            ty,
+        };
         let mut cursor = FunctionCursor::new(func, CursorLocation::BlockTop(block));
         let (insn, value) = cursor.prepend_insn(insn_data);
         (insn, value.unwrap())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_util::*;
+
+    #[test]
+    fn use_var_local() {
+        let mut builder = func_builder(vec![], vec![]);
+
+        let var = builder.declare_var(Type::I32);
+
+        let entry_block = builder.append_block("entry");
+        builder.switch_to_block(entry_block);
+        let v0 = builder.imm_i32(1);
+        builder.def_var(var, v0);
+        let v1 = builder.use_var(var);
+        builder.add(v1, v0);
+        builder.seal_block();
+
+        assert_eq!(
+            dump_func(builder),
+            "func %test_func():
+    entry:
+        %v0.i32 = imm.i32 1
+        %v1.i32 = add %v0.i32 %v0.i32
+
+"
+        );
+    }
+
+    #[test]
+    fn use_var_global_if() {
+        let mut builder = func_builder(vec![], vec![]);
+
+        let var = builder.declare_var(Type::I32);
+
+        let b1 = builder.append_block("b1");
+        let b2 = builder.append_block("b2");
+        let b3 = builder.append_block("b3");
+        let b4 = builder.append_block("b4");
+
+        builder.switch_to_block(b1);
+        let imm = builder.imm_i32(1);
+        builder.brz(b2, imm);
+        builder.jump(b3);
+        builder.seal_block();
+
+        builder.switch_to_block(b2);
+        let imm = builder.imm_i32(2);
+        builder.def_var(var, imm);
+        builder.jump(b4);
+        builder.seal_block();
+
+        builder.switch_to_block(b3);
+        let imm = builder.imm_i32(3);
+        builder.def_var(var, imm);
+        builder.jump(b4);
+        builder.seal_block();
+
+        builder.switch_to_block(b4);
+        builder.use_var(var);
+        builder.seal_block();
+
+        assert_eq!(
+            dump_func(builder),
+            "func %test_func():
+    b1:
+        %v0.i32 = imm.i32 1
+        brz %v0.i32 b2
+        jump b3
+
+    b2:
+        %v1.i32 = imm.i32 2
+        jump b4
+
+    b3:
+        %v2.i32 = imm.i32 3
+        jump b4
+
+    b4:
+        %v3.i32 = phi %v1.i32 %v2.i32
+
+"
+        );
+    }
+
+    #[test]
+    fn use_var_global_loop() {
+        let mut builder = func_builder(vec![], vec![]);
+
+        let var = builder.declare_var(Type::I32);
+
+        let b1 = builder.append_block("b1");
+        let b2 = builder.append_block("b2");
+        let b3 = builder.append_block("b3");
+        let b4 = builder.append_block("b4");
+
+        builder.switch_to_block(b1);
+        let value = builder.imm_i32(1);
+        builder.def_var(var, value);
+        builder.jump(b2);
+        builder.seal_block();
+
+        builder.switch_to_block(b2);
+        builder.brz(b4, value);
+        builder.jump(b3);
+
+        builder.switch_to_block(b3);
+        let value = builder.imm_i32(10);
+        builder.def_var(var, value);
+        builder.jump(b2);
+        builder.seal_block();
+
+        builder.switch_to_block(b2);
+        builder.seal_block();
+
+        builder.switch_to_block(b4);
+        let val = builder.use_var(var);
+        builder.add(val, val);
+        builder.seal_block();
+
+        assert_eq!(
+            dump_func(builder),
+            "func %test_func():
+    b1:
+        %v0.i32 = imm.i32 1
+        jump b2
+
+    b2:
+        %v4.i32 = phi %v0.i32 %v1.i32
+        brz %v0.i32 b4
+        jump b3
+
+    b3:
+        %v1.i32 = imm.i32 10
+        jump b2
+
+    b4:
+        %v3.i32 = add %v4.i32 %v4.i32
+
+"
+        );
+    }
+
+    #[test]
+    fn use_var_global_complex() {
+        let mut builder = func_builder(vec![], vec![]);
+
+        let var = builder.declare_var(Type::I32);
+
+        let b1 = builder.append_block("b1");
+        let b2 = builder.append_block("b2");
+        let b3 = builder.append_block("b3");
+        let b4 = builder.append_block("b4");
+        let b5 = builder.append_block("b5");
+        let b6 = builder.append_block("b6");
+        let b7 = builder.append_block("b7");
+
+        builder.switch_to_block(b1);
+        let value1 = builder.imm_i32(1);
+        builder.def_var(var, value1);
+        builder.jump(b2);
+        builder.seal_block();
+
+        builder.switch_to_block(b2);
+        builder.brz(b3, value1);
+        builder.jump(b7);
+
+        builder.switch_to_block(b3);
+        builder.brz(b4, value1);
+        builder.jump(b5);
+        builder.seal_block();
+
+        builder.switch_to_block(b4);
+        let value2 = builder.imm_i32(2);
+        builder.def_var(var, value2);
+        builder.jump(b6);
+        builder.seal_block();
+
+        builder.switch_to_block(b5);
+        builder.jump(b6);
+        builder.seal_block();
+
+        builder.switch_to_block(b6);
+        builder.jump(b2);
+        builder.seal_block();
+
+        builder.switch_to_block(b2);
+        builder.seal_block();
+
+        builder.switch_to_block(b7);
+        let val = builder.use_var(var);
+        builder.add(val, val);
+        builder.seal_block();
+
+        assert_eq!(
+            dump_func(builder),
+            "func %test_func():
+    b1:
+        %v0.i32 = imm.i32 1
+        jump b2
+
+    b2:
+        %v4.i32 = phi %v0.i32 %v5.i32
+        brz %v0.i32 b3
+        jump b7
+
+    b3:
+        brz %v0.i32 b4
+        jump b5
+
+    b4:
+        %v1.i32 = imm.i32 2
+        jump b6
+
+    b5:
+        jump b6
+
+    b6:
+        %v5.i32 = phi %v1.i32 %v4.i32
+        jump b2
+
+    b7:
+        %v3.i32 = add %v4.i32 %v4.i32
+
+"
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn undef_use() {
+        let mut builder = func_builder(vec![], vec![]);
+
+        let var = builder.declare_var(Type::I32);
+        let b1 = builder.append_block("b1");
+        builder.switch_to_block(b1);
+        builder.use_var(var);
+        builder.seal_block();
+    }
+
+    #[test]
+    #[should_panic]
+    fn unreachable_use() {
+        let mut builder = func_builder(vec![], vec![]);
+
+        let var = builder.declare_var(Type::I32);
+        let b1 = builder.append_block("b1");
+        let b2 = builder.append_block("b2");
+
+        builder.switch_to_block(b1);
+        let imm = builder.imm_i32(1);
+        builder.def_var(var, imm);
+        builder.seal_block();
+
+        builder.switch_to_block(b2);
+        builder.use_var(var);
+        builder.seal_block();
     }
 }

@@ -204,7 +204,7 @@ impl Layout {
             insn_node.next = Some(first_insn);
             self.insns.get_mut(&first_insn).unwrap().prev = Some(insn);
         } else {
-            block_node.first_insn = Some(insn);
+            block_node.last_insn = Some(insn);
         }
 
         block_node.first_insn = Some(insn);
