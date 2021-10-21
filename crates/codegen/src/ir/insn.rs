@@ -42,6 +42,9 @@ pub enum InsnData {
         dest: Block,
     },
 
+    /// Return.
+    Return { args: Vec<Value> },
+
     /// Phi funcion.
     Phi { args: Vec<Value>, ty: Type },
 }
@@ -58,7 +61,7 @@ impl InsnData {
         match self {
             Self::Binary { args, .. } | Self::Store { args, .. } => args,
             Self::Cast { args, .. } | Self::Load { args, .. } | Self::Branch { args, .. } => args,
-            Self::Phi { args, .. } => args,
+            Self::Phi { args, .. } | Self::Return { args } => args,
             _ => &[],
         }
     }
@@ -115,17 +118,17 @@ impl ImmediateOp {
 impl fmt::Display for ImmediateOp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::I8(value) => write!(f, "imm.i8 {}", value),
-            Self::I16(value) => write!(f, "imm.i16 {}", value.to_string()),
-            Self::I32(value) => write!(f, "imm.i32 {}", value.to_string()),
-            Self::I64(value) => write!(f, "imm.i64 {}", value.to_string()),
-            Self::I128(value) => write!(f, "imm.i128 {}", value.to_string()),
-            Self::U8(value) => write!(f, "imm.u8 {}", value.to_string()),
-            Self::U16(value) => write!(f, "imm.u16 {}", value.to_string()),
-            Self::U32(value) => write!(f, "imm.u32 {}", value.to_string()),
-            Self::U64(value) => write!(f, "imm.u64 {}", value.to_string()),
-            Self::U128(value) => write!(f, "imm.u128 {}", value.to_string()),
-            Self::U256(value) => write!(f, "imm.u256 {}", value.to_string()),
+            Self::I8(value) => write!(f, "imm_i8 {}", value),
+            Self::I16(value) => write!(f, "imm_i16 {}", value.to_string()),
+            Self::I32(value) => write!(f, "imm_i32 {}", value.to_string()),
+            Self::I64(value) => write!(f, "imm_i64 {}", value.to_string()),
+            Self::I128(value) => write!(f, "imm_i128 {}", value.to_string()),
+            Self::U8(value) => write!(f, "imm_u8 {}", value.to_string()),
+            Self::U16(value) => write!(f, "imm_u16 {}", value.to_string()),
+            Self::U32(value) => write!(f, "imm_u32 {}", value.to_string()),
+            Self::U64(value) => write!(f, "imm_u64 {}", value.to_string()),
+            Self::U128(value) => write!(f, "imm_u128 {}", value.to_string()),
+            Self::U256(value) => write!(f, "imm_u256 {}", value.to_string()),
         }
     }
 }

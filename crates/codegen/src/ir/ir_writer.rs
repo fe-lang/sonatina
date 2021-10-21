@@ -55,8 +55,8 @@ impl<'a> FuncWriter<'a> {
         Ok(())
     }
 
-    fn write_block<'b>(&mut self, block: Block, mut w: impl io::Write) -> io::Result<()> {
-        w.write_fmt(format_args!("%block{}", block.0))
+    fn write_block(&mut self, block: Block, mut w: impl io::Write) -> io::Result<()> {
+        w.write_fmt(format_args!("block{}", block.0))
     }
 
     fn write_insn_args(&mut self, args: &[Value], mut w: impl io::Write) -> io::Result<()> {
@@ -113,7 +113,7 @@ impl IrWrite for Value {
     fn write(&self, writer: &mut FuncWriter, mut w: impl io::Write) -> io::Result<()> {
         let value = writer.func.dfg.resolve_alias(*self);
         w.write_fmt(format_args!(
-            "%v{}.{}",
+            "v{}.{}",
             value.0,
             writer.func.dfg.value_ty(value),
         ))
@@ -141,33 +141,46 @@ impl IrWrite for Insn {
         match insn_data {
             Immediate { code } => w.write_all(code.to_string().as_bytes())?,
             Binary { code, args } => {
-                w.write_fmt(format_args!("{} ", code.as_str()))?;
+                w.write_fmt(format_args!("{}", code.as_str()))?;
+                writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
             }
             Cast { code, args, .. } => {
-                w.write_fmt(format_args!("{} ", code.as_str()))?;
+                w.write_fmt(format_args!("{}", code.as_str()))?;
+                writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
             }
             Load { args, .. } => {
-                w.write_all(b"load ")?;
+                w.write_all(b"load")?;
+                writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
             }
             Store { args } => {
-                w.write_all(b"store ")?;
+                w.write_all(b"store")?;
                 writer.write_insn_args(args, &mut w)?;
             }
             Jump { code, dest } => {
-                w.write_fmt(format_args!("{} ", code.as_str()))?;
+                w.write_fmt(format_args!("{}", code.as_str()))?;
+                writer.space(&mut w)?;
                 writer.write_block(*dest, &mut w)?;
             }
             Branch { code, args, dest } => {
-                w.write_fmt(format_args!("{} ", code.as_str()))?;
+                w.write_fmt(format_args!("{}", code.as_str()))?;
+                writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
                 writer.space(&mut w)?;
                 writer.write_block(*dest, &mut w)?;
             }
+            Return { args } => {
+                w.write_all(b"return")?;
+                if !args.is_empty() {
+                    writer.space(&mut w)?;
+                }
+                writer.write_insn_args(args, &mut w)?;
+            }
             Phi { args, .. } => {
-                w.write_all(b"phi ")?;
+                w.write_all(b"phi")?;
+                writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
             }
         }

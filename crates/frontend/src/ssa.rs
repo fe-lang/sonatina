@@ -232,14 +232,16 @@ mod tests {
         builder.def_var(var, v0);
         let v1 = builder.use_var(var);
         builder.add(v1, v0);
+        builder.ret(&[]);
         builder.seal_block();
 
         assert_eq!(
             dump_func(builder),
             "func %test_func():
-    %block0:
-        %v0.i32 = imm.i32 1
-        %v1.i32 = add %v0.i32 %v0.i32
+    block0:
+        v0.i32 = imm_i32 1
+        v1.i32 = add v0.i32 v0.i32
+        return
 
 "
         );
@@ -276,26 +278,28 @@ mod tests {
 
         builder.switch_to_block(b3);
         builder.use_var(var);
+        builder.ret(&[]);
         builder.seal_block();
 
         assert_eq!(
             dump_func(builder),
             "func %test_func():
-    %block0:
-        %v0.i32 = imm.i32 1
-        brz %v0.i32 %block1
-        jump %block2
+    block0:
+        v0.i32 = imm_i32 1
+        brz v0.i32 block1
+        jump block2
 
-    %block1:
-        %v1.i32 = imm.i32 2
-        jump %block3
+    block1:
+        v1.i32 = imm_i32 2
+        jump block3
 
-    %block2:
-        %v2.i32 = imm.i32 3
-        jump %block3
+    block2:
+        v2.i32 = imm_i32 3
+        jump block3
 
-    %block3:
-        %v3.i32 = phi %v1.i32 %v2.i32
+    block3:
+        v3.i32 = phi v1.i32 v2.i32
+        return
 
 "
         );
@@ -334,26 +338,28 @@ mod tests {
         builder.switch_to_block(b3);
         let val = builder.use_var(var);
         builder.add(val, val);
+        builder.ret(&[]);
         builder.seal_block();
 
         assert_eq!(
             dump_func(builder),
             "func %test_func():
-    %block0:
-        %v0.i32 = imm.i32 1
-        jump %block1
+    block0:
+        v0.i32 = imm_i32 1
+        jump block1
 
-    %block1:
-        %v4.i32 = phi %v0.i32 %v1.i32
-        brz %v0.i32 %block3
-        jump %block2
+    block1:
+        v4.i32 = phi v0.i32 v1.i32
+        brz v0.i32 block3
+        jump block2
 
-    %block2:
-        %v1.i32 = imm.i32 10
-        jump %block1
+    block2:
+        v1.i32 = imm_i32 10
+        jump block1
 
-    %block3:
-        %v3.i32 = add %v4.i32 %v4.i32
+    block3:
+        v3.i32 = add v4.i32 v4.i32
+        return
 
 "
         );
@@ -408,37 +414,39 @@ mod tests {
         builder.switch_to_block(b6);
         let val = builder.use_var(var);
         builder.add(val, val);
+        builder.ret(&[]);
         builder.seal_block();
 
         assert_eq!(
             dump_func(builder),
             "func %test_func():
-    %block0:
-        %v0.i32 = imm.i32 1
-        jump %block1
+    block0:
+        v0.i32 = imm_i32 1
+        jump block1
 
-    %block1:
-        %v4.i32 = phi %v0.i32 %v5.i32
-        brz %v0.i32 %block2
-        jump %block6
+    block1:
+        v4.i32 = phi v0.i32 v5.i32
+        brz v0.i32 block2
+        jump block6
 
-    %block2:
-        brz %v0.i32 %block3
-        jump %block4
+    block2:
+        brz v0.i32 block3
+        jump block4
 
-    %block3:
-        %v1.i32 = imm.i32 2
-        jump %block5
+    block3:
+        v1.i32 = imm_i32 2
+        jump block5
 
-    %block4:
-        jump %block5
+    block4:
+        jump block5
 
-    %block5:
-        %v5.i32 = phi %v1.i32 %v4.i32
-        jump %block1
+    block5:
+        v5.i32 = phi v1.i32 v4.i32
+        jump block1
 
-    %block6:
-        %v3.i32 = add %v4.i32 %v4.i32
+    block6:
+        v3.i32 = add v4.i32 v4.i32
+        return
 
 "
         );
@@ -487,38 +495,40 @@ mod tests {
         builder.switch_to_block(b6);
         let val = builder.use_var(var);
         builder.add(val, val);
+        builder.ret(&[]);
 
         builder.seal_all();
 
         assert_eq!(
             dump_func(builder),
             "func %test_func():
-    %block0:
-        %v0.i32 = imm.i32 1
-        jump %block1
+    block0:
+        v0.i32 = imm_i32 1
+        jump block1
 
-    %block1:
-        %v4.i32 = phi %v0.i32 %v5.i32
-        brz %v0.i32 %block2
-        jump %block6
+    block1:
+        v4.i32 = phi v0.i32 v5.i32
+        brz v0.i32 block2
+        jump block6
 
-    %block2:
-        brz %v0.i32 %block3
-        jump %block4
+    block2:
+        brz v0.i32 block3
+        jump block4
 
-    %block3:
-        %v1.i32 = imm.i32 2
-        jump %block5
+    block3:
+        v1.i32 = imm_i32 2
+        jump block5
 
-    %block4:
-        jump %block5
+    block4:
+        jump block5
 
-    %block5:
-        %v5.i32 = phi %v1.i32 %v4.i32
-        jump %block1
+    block5:
+        v5.i32 = phi v1.i32 v4.i32
+        jump block1
 
-    %block6:
-        %v3.i32 = add %v4.i32 %v4.i32
+    block6:
+        v3.i32 = add v4.i32 v4.i32
+        return
 
 "
         );

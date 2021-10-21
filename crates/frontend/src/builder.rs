@@ -149,6 +149,13 @@ impl FunctionBuilder {
     impl_branch_insn!(brz, BranchOp::Brz);
     impl_branch_insn!(brnz, BranchOp::Brnz);
 
+    pub fn ret(&mut self, args: &[Value]) {
+        let insn_data = InsnData::Return {
+            args: args.to_vec(),
+        };
+        self.insert_insn(insn_data);
+    }
+
     pub fn phi(&mut self, args: &[Value]) -> Value {
         debug_assert!(!args.is_empty());
 
@@ -254,17 +261,19 @@ mod tests {
         let v1 = builder.imm_i8(2);
         let v2 = builder.add(v0, v1);
         builder.sub(v2, v0);
+        builder.ret(&[]);
 
         builder.seal_all();
 
         assert_eq!(
             dump_func(builder),
             "func %test_func():
-    %block0:
-        %v0.i8 = imm.i8 1
-        %v1.i8 = imm.i8 2
-        %v2.i8 = add %v0.i8 %v1.i8
-        %v3.i8 = sub %v2.i8 %v0.i8
+    block0:
+        v0.i8 = imm_i8 1
+        v1.i8 = imm_i8 2
+        v2.i8 = add v0.i8 v1.i8
+        v3.i8 = sub v2.i8 v0.i8
+        return
 
 "
         );
@@ -281,15 +290,41 @@ mod tests {
         assert_eq!(args.len(), 2);
         let v3 = builder.sext(arg0, Type::I64);
         builder.mul(v3, arg1);
+        builder.ret(&[]);
 
         builder.seal_all();
 
         assert_eq!(
             dump_func(builder),
             "func %test_func(i32, i64):
-    %block0:
-        %v2.i64 = sext %v0.i32
-        %v3.i64 = mul %v2.i64 %v1.i64
+    block0:
+        v2.i64 = sext v0.i32
+        v3.i64 = mul v2.i64 v1.i64
+        return
+
+"
+        );
+    }
+
+    #[test]
+    fn entry_block_with_return() {
+        let mut builder = func_builder(vec![], vec![Type::I32, Type::I64]);
+
+        let entry_block = builder.append_block();
+
+        builder.switch_to_block(entry_block);
+        let v0 = builder.imm_i32(1);
+        let v1 = builder.imm_i64(1);
+        builder.ret(&[v0, v1]);
+        builder.seal_all();
+
+        assert_eq!(
+            dump_func(builder),
+            "func %test_func() -> i32, i64:
+    block0:
+        v0.i32 = imm_i32 1
+        v1.i64 = imm_i64 1
+        return v0.i32 v1.i64
 
 "
         );
@@ -321,27 +356,29 @@ mod tests {
         builder.switch_to_block(merge_block);
         let v3 = builder.phi(&[v1, v2]);
         builder.add(v3, arg0);
+        builder.ret(&[]);
 
         builder.seal_all();
 
         assert_eq!(
             dump_func(builder),
             "func %test_func(i64):
-    %block0:
-        brz %v0.i64 %block1
-        jump %block2
+    block0:
+        brz v0.i64 block1
+        jump block2
 
-    %block1:
-        %v1.i64 = imm.i64 1
-        jump %block3
+    block1:
+        v1.i64 = imm_i64 1
+        jump block3
 
-    %block2:
-        %v2.i64 = imm.i64 2
-        jump %block3
+    block2:
+        v2.i64 = imm_i64 2
+        jump block3
 
-    %block3:
-        %v3.i64 = phi %v1.i64 %v2.i64
-        %v4.i64 = add %v3.i64 %v0.i64
+    block3:
+        v3.i64 = phi v1.i64 v2.i64
+        v4.i64 = add v3.i64 v0.i64
+        return
 
 "
         );
