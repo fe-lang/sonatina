@@ -18,8 +18,8 @@ impl DataFlowGraph {
         Self::default()
     }
 
-    pub fn make_block(&mut self, name: &str) -> Block {
-        self.blocks.push(BlockData::new(name))
+    pub fn make_block(&mut self) -> Block {
+        self.blocks.push(BlockData::new())
     }
 
     pub fn make_value(&mut self, value: ValueData) -> Value {
@@ -67,10 +67,6 @@ impl DataFlowGraph {
 
     pub fn block_data(&self, block: Block) -> &BlockData {
         &self.blocks[block]
-    }
-
-    pub fn block_name(&self, block: Block) -> &str {
-        &self.block_data(block).name
     }
 
     pub fn value_def(&self, value: Value) -> ValueDef {
@@ -154,15 +150,11 @@ cranelift_entity::entity_impl!(Block);
 /// A block data definition.
 /// A Block data doesn't hold any information for layout of a program. It is managed by
 /// [`super::layout::Layout`].
-#[derive(Debug, Clone)]
-pub struct BlockData {
-    pub name: String,
-}
+#[derive(Debug, Clone, Default)]
+pub struct BlockData {}
 
 impl BlockData {
-    pub fn new(name: &str) -> Self {
-        BlockData {
-            name: name.to_string(),
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 }

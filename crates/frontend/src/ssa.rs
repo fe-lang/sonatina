@@ -226,7 +226,7 @@ mod tests {
 
         let var = builder.declare_var(Type::I32);
 
-        let entry_block = builder.append_block("entry");
+        let entry_block = builder.append_block();
         builder.switch_to_block(entry_block);
         let v0 = builder.imm_i32(1);
         builder.def_var(var, v0);
@@ -237,7 +237,7 @@ mod tests {
         assert_eq!(
             dump_func(builder),
             "func %test_func():
-    entry:
+    %block0:
         %v0.i32 = imm.i32 1
         %v1.i32 = add %v0.i32 %v0.i32
 
@@ -251,50 +251,50 @@ mod tests {
 
         let var = builder.declare_var(Type::I32);
 
-        let b1 = builder.append_block("b1");
-        let b2 = builder.append_block("b2");
-        let b3 = builder.append_block("b3");
-        let b4 = builder.append_block("b4");
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+        let b2 = builder.append_block();
+        let b3 = builder.append_block();
+
+        builder.switch_to_block(b0);
+        let imm = builder.imm_i32(1);
+        builder.brz(b1, imm);
+        builder.jump(b2);
+        builder.seal_block();
 
         builder.switch_to_block(b1);
-        let imm = builder.imm_i32(1);
-        builder.brz(b2, imm);
+        let imm = builder.imm_i32(2);
+        builder.def_var(var, imm);
         builder.jump(b3);
         builder.seal_block();
 
         builder.switch_to_block(b2);
-        let imm = builder.imm_i32(2);
+        let imm = builder.imm_i32(3);
         builder.def_var(var, imm);
-        builder.jump(b4);
+        builder.jump(b3);
         builder.seal_block();
 
         builder.switch_to_block(b3);
-        let imm = builder.imm_i32(3);
-        builder.def_var(var, imm);
-        builder.jump(b4);
-        builder.seal_block();
-
-        builder.switch_to_block(b4);
         builder.use_var(var);
         builder.seal_block();
 
         assert_eq!(
             dump_func(builder),
             "func %test_func():
-    b1:
+    %block0:
         %v0.i32 = imm.i32 1
-        brz %v0.i32 b2
-        jump b3
+        brz %v0.i32 %block1
+        jump %block2
 
-    b2:
+    %block1:
         %v1.i32 = imm.i32 2
-        jump b4
+        jump %block3
 
-    b3:
+    %block2:
         %v2.i32 = imm.i32 3
-        jump b4
+        jump %block3
 
-    b4:
+    %block3:
         %v3.i32 = phi %v1.i32 %v2.i32
 
 "
@@ -307,31 +307,31 @@ mod tests {
 
         let var = builder.declare_var(Type::I32);
 
-        let b1 = builder.append_block("b1");
-        let b2 = builder.append_block("b2");
-        let b3 = builder.append_block("b3");
-        let b4 = builder.append_block("b4");
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+        let b2 = builder.append_block();
+        let b3 = builder.append_block();
 
-        builder.switch_to_block(b1);
+        builder.switch_to_block(b0);
         let value = builder.imm_i32(1);
         builder.def_var(var, value);
-        builder.jump(b2);
+        builder.jump(b1);
         builder.seal_block();
 
-        builder.switch_to_block(b2);
-        builder.brz(b4, value);
-        builder.jump(b3);
+        builder.switch_to_block(b1);
+        builder.brz(b3, value);
+        builder.jump(b2);
 
-        builder.switch_to_block(b3);
+        builder.switch_to_block(b2);
         let value = builder.imm_i32(10);
         builder.def_var(var, value);
-        builder.jump(b2);
+        builder.jump(b1);
         builder.seal_block();
 
-        builder.switch_to_block(b2);
+        builder.switch_to_block(b1);
         builder.seal_block();
 
-        builder.switch_to_block(b4);
+        builder.switch_to_block(b3);
         let val = builder.use_var(var);
         builder.add(val, val);
         builder.seal_block();
@@ -339,20 +339,20 @@ mod tests {
         assert_eq!(
             dump_func(builder),
             "func %test_func():
-    b1:
+    %block0:
         %v0.i32 = imm.i32 1
-        jump b2
+        jump %block1
 
-    b2:
+    %block1:
         %v4.i32 = phi %v0.i32 %v1.i32
-        brz %v0.i32 b4
-        jump b3
+        brz %v0.i32 %block3
+        jump %block2
 
-    b3:
+    %block2:
         %v1.i32 = imm.i32 10
-        jump b2
+        jump %block1
 
-    b4:
+    %block3:
         %v3.i32 = add %v4.i32 %v4.i32
 
 "
@@ -365,47 +365,47 @@ mod tests {
 
         let var = builder.declare_var(Type::I32);
 
-        let b1 = builder.append_block("b1");
-        let b2 = builder.append_block("b2");
-        let b3 = builder.append_block("b3");
-        let b4 = builder.append_block("b4");
-        let b5 = builder.append_block("b5");
-        let b6 = builder.append_block("b6");
-        let b7 = builder.append_block("b7");
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+        let b2 = builder.append_block();
+        let b3 = builder.append_block();
+        let b4 = builder.append_block();
+        let b5 = builder.append_block();
+        let b6 = builder.append_block();
 
-        builder.switch_to_block(b1);
+        builder.switch_to_block(b0);
         let value1 = builder.imm_i32(1);
         builder.def_var(var, value1);
-        builder.jump(b2);
+        builder.jump(b1);
         builder.seal_block();
+
+        builder.switch_to_block(b1);
+        builder.brz(b2, value1);
+        builder.jump(b6);
 
         builder.switch_to_block(b2);
         builder.brz(b3, value1);
-        builder.jump(b7);
+        builder.jump(b4);
+        builder.seal_block();
 
         builder.switch_to_block(b3);
-        builder.brz(b4, value1);
+        let value2 = builder.imm_i32(2);
+        builder.def_var(var, value2);
         builder.jump(b5);
         builder.seal_block();
 
         builder.switch_to_block(b4);
-        let value2 = builder.imm_i32(2);
-        builder.def_var(var, value2);
-        builder.jump(b6);
+        builder.jump(b5);
         builder.seal_block();
 
         builder.switch_to_block(b5);
-        builder.jump(b6);
+        builder.jump(b1);
+        builder.seal_block();
+
+        builder.switch_to_block(b1);
         builder.seal_block();
 
         builder.switch_to_block(b6);
-        builder.jump(b2);
-        builder.seal_block();
-
-        builder.switch_to_block(b2);
-        builder.seal_block();
-
-        builder.switch_to_block(b7);
         let val = builder.use_var(var);
         builder.add(val, val);
         builder.seal_block();
@@ -413,31 +413,31 @@ mod tests {
         assert_eq!(
             dump_func(builder),
             "func %test_func():
-    b1:
+    %block0:
         %v0.i32 = imm.i32 1
-        jump b2
+        jump %block1
 
-    b2:
+    %block1:
         %v4.i32 = phi %v0.i32 %v5.i32
-        brz %v0.i32 b3
-        jump b7
+        brz %v0.i32 %block2
+        jump %block6
 
-    b3:
-        brz %v0.i32 b4
-        jump b5
+    %block2:
+        brz %v0.i32 %block3
+        jump %block4
 
-    b4:
+    %block3:
         %v1.i32 = imm.i32 2
-        jump b6
+        jump %block5
 
-    b5:
-        jump b6
+    %block4:
+        jump %block5
 
-    b6:
+    %block5:
         %v5.i32 = phi %v1.i32 %v4.i32
-        jump b2
+        jump %block1
 
-    b7:
+    %block6:
         %v3.i32 = add %v4.i32 %v4.i32
 
 "
@@ -450,41 +450,41 @@ mod tests {
 
         let var = builder.declare_var(Type::I32);
 
-        let b1 = builder.append_block("b1");
-        let b2 = builder.append_block("b2");
-        let b3 = builder.append_block("b3");
-        let b4 = builder.append_block("b4");
-        let b5 = builder.append_block("b5");
-        let b6 = builder.append_block("b6");
-        let b7 = builder.append_block("b7");
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+        let b2 = builder.append_block();
+        let b3 = builder.append_block();
+        let b4 = builder.append_block();
+        let b5 = builder.append_block();
+        let b6 = builder.append_block();
 
-        builder.switch_to_block(b1);
+        builder.switch_to_block(b0);
         let value1 = builder.imm_i32(1);
         builder.def_var(var, value1);
-        builder.jump(b2);
+        builder.jump(b1);
+
+        builder.switch_to_block(b1);
+        builder.brz(b2, value1);
+        builder.jump(b6);
 
         builder.switch_to_block(b2);
         builder.brz(b3, value1);
-        builder.jump(b7);
+        builder.jump(b4);
 
         builder.switch_to_block(b3);
-        builder.brz(b4, value1);
+        let value2 = builder.imm_i32(2);
+        builder.def_var(var, value2);
         builder.jump(b5);
 
         builder.switch_to_block(b4);
-        let value2 = builder.imm_i32(2);
-        builder.def_var(var, value2);
-        builder.jump(b6);
+        builder.jump(b5);
 
         builder.switch_to_block(b5);
-        builder.jump(b6);
+        builder.jump(b1);
+
+        builder.switch_to_block(b1);
 
         builder.switch_to_block(b6);
-        builder.jump(b2);
-
-        builder.switch_to_block(b2);
-
-        builder.switch_to_block(b7);
         let val = builder.use_var(var);
         builder.add(val, val);
 
@@ -493,31 +493,31 @@ mod tests {
         assert_eq!(
             dump_func(builder),
             "func %test_func():
-    b1:
+    %block0:
         %v0.i32 = imm.i32 1
-        jump b2
+        jump %block1
 
-    b2:
+    %block1:
         %v4.i32 = phi %v0.i32 %v5.i32
-        brz %v0.i32 b3
-        jump b7
+        brz %v0.i32 %block2
+        jump %block6
 
-    b3:
-        brz %v0.i32 b4
-        jump b5
+    %block2:
+        brz %v0.i32 %block3
+        jump %block4
 
-    b4:
+    %block3:
         %v1.i32 = imm.i32 2
-        jump b6
+        jump %block5
 
-    b5:
-        jump b6
+    %block4:
+        jump %block5
 
-    b6:
+    %block5:
         %v5.i32 = phi %v1.i32 %v4.i32
-        jump b2
+        jump %block1
 
-    b7:
+    %block6:
         %v3.i32 = add %v4.i32 %v4.i32
 
 "
@@ -530,7 +530,7 @@ mod tests {
         let mut builder = func_builder(vec![], vec![]);
 
         let var = builder.declare_var(Type::I32);
-        let b1 = builder.append_block("b1");
+        let b1 = builder.append_block();
         builder.switch_to_block(b1);
         builder.use_var(var);
         builder.seal_block();
@@ -542,8 +542,8 @@ mod tests {
         let mut builder = func_builder(vec![], vec![]);
 
         let var = builder.declare_var(Type::I32);
-        let b1 = builder.append_block("b1");
-        let b2 = builder.append_block("b2");
+        let b1 = builder.append_block();
+        let b2 = builder.append_block();
 
         builder.switch_to_block(b1);
         let imm = builder.imm_i32(1);

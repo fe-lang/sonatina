@@ -88,8 +88,8 @@ impl FunctionBuilder {
         }
     }
 
-    pub fn append_block(&mut self, name: &str) -> Block {
-        self.cursor().append_block(name)
+    pub fn append_block(&mut self) -> Block {
+        self.cursor().append_block()
     }
 
     pub fn switch_to_block(&mut self, block: Block) {
@@ -248,8 +248,8 @@ mod tests {
     fn entry_block() {
         let mut builder = func_builder(vec![], vec![]);
 
-        let entry_block = builder.append_block("entry");
-        builder.switch_to_block(entry_block);
+        let b0 = builder.append_block();
+        builder.switch_to_block(b0);
         let v0 = builder.imm_i8(1);
         let v1 = builder.imm_i8(2);
         let v2 = builder.add(v0, v1);
@@ -260,7 +260,7 @@ mod tests {
         assert_eq!(
             dump_func(builder),
             "func %test_func():
-    entry:
+    %block0:
         %v0.i8 = imm.i8 1
         %v1.i8 = imm.i8 2
         %v2.i8 = add %v0.i8 %v1.i8
@@ -274,7 +274,7 @@ mod tests {
     fn entry_block_with_args() {
         let mut builder = func_builder(vec![Type::I32, Type::I64], vec![]);
 
-        let entry_block = builder.append_block("entry");
+        let entry_block = builder.append_block();
         builder.switch_to_block(entry_block);
         let args = builder.args();
         let (arg0, arg1) = (args[0], args[1]);
@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(
             dump_func(builder),
             "func %test_func(i32, i64):
-    entry:
+    %block0:
         %v2.i64 = sext %v0.i32
         %v3.i64 = mul %v2.i64 %v1.i64
 
@@ -299,10 +299,10 @@ mod tests {
     fn then_else_merge_block() {
         let mut builder = func_builder(vec![Type::I64], vec![]);
 
-        let entry_block = builder.append_block("entry");
-        let then_block = builder.append_block("then");
-        let else_block = builder.append_block("else");
-        let merge_block = builder.append_block("merge");
+        let entry_block = builder.append_block();
+        let then_block = builder.append_block();
+        let else_block = builder.append_block();
+        let merge_block = builder.append_block();
 
         let arg0 = builder.args()[0];
 
@@ -327,19 +327,19 @@ mod tests {
         assert_eq!(
             dump_func(builder),
             "func %test_func(i64):
-    entry:
-        brz %v0.i64 then
-        jump else
+    %block0:
+        brz %v0.i64 %block1
+        jump %block2
 
-    then:
+    %block1:
         %v1.i64 = imm.i64 1
-        jump merge
+        jump %block3
 
-    else:
+    %block2:
         %v2.i64 = imm.i64 2
-        jump merge
+        jump %block3
 
-    merge:
+    %block3:
         %v3.i64 = phi %v1.i64 %v2.i64
         %v4.i64 = add %v3.i64 %v0.i64
 

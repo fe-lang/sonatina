@@ -56,7 +56,7 @@ impl<'a> FuncWriter<'a> {
     }
 
     fn write_block<'b>(&mut self, block: Block, mut w: impl io::Write) -> io::Result<()> {
-        w.write_fmt(format_args!("{}", self.func.dfg.block_name(block)))
+        w.write_fmt(format_args!("%block{}", block.0))
     }
 
     fn write_insn_args(&mut self, args: &[Value], mut w: impl io::Write) -> io::Result<()> {

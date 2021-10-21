@@ -119,15 +119,15 @@ impl<'a> FunctionCursor<'a> {
         self.func.dfg.attach_result(insn, value)
     }
 
-    pub fn insert_block(&mut self, name: &str) -> Block {
-        let new_block = self.func.dfg.make_block(name);
+    pub fn insert_block(&mut self) -> Block {
+        let new_block = self.func.dfg.make_block();
         let block = self.block().expect("cursor loc points to `NoWhere`");
         self.func.layout.insert_block_before(new_block, block);
         new_block
     }
 
-    pub fn append_block(&mut self, name: &str) -> Block {
-        let new_block = self.func.dfg.make_block(name);
+    pub fn append_block(&mut self) -> Block {
+        let new_block = self.func.dfg.make_block();
         self.func.layout.append_block(new_block);
         new_block
     }
