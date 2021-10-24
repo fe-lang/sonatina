@@ -4,28 +4,37 @@ use sonatina_codegen::ir::{
     Block, BlockData, Function, Insn, InsnData, Signature, Type, Value, ValueData,
 };
 
-use super::lexer::{Code, Lexer, Token};
+use super::lexer::{Code, Lexer};
 
 pub struct Parser {}
 
 impl Parser {
-    pub fn parse<'a>(input: &'a str) -> Module {
+    pub fn parse<'a>(input: &'a str) -> ParsedModule {
         let mut lexer = Lexer::new(input);
 
+        let mut comments = Vec::new();
+        while let Some(line) = lexer.next_module_comment() {
+            comments.push(line.to_string());
+        }
+
         let mut funcs = Vec::new();
-        while matches!(lexer.peek_token(), Some(Token::Func)) {
-            let mut func_parser = FuncParser::new(&mut lexer);
-            let func = func_parser.parse();
+        while let Some(func) = FuncParser::new(&mut lexer).parse() {
             funcs.push(func);
         }
 
-        Module { funcs }
+        ParsedModule { comments, funcs }
     }
 }
 
 // TODO: Reconsider module design when IR define module.
-pub struct Module {
-    pub funcs: Vec<Function>,
+pub struct ParsedModule {
+    pub comments: Vec<String>,
+    pub funcs: Vec<ParsedFunction>,
+}
+
+pub struct ParsedFunction {
+    pub comments: Vec<String>,
+    pub func: Function,
 }
 
 struct FuncParser<'a, 'b> {
@@ -37,7 +46,12 @@ impl<'a, 'b> FuncParser<'a, 'b> {
         Self { lexer }
     }
 
-    fn parse(&mut self) -> Function {
+    fn parse(&mut self) -> Option<ParsedFunction> {
+        if self.lexer.peek_token().is_none() {
+            return None;
+        }
+
+        let comments = self.parse_comment();
         self.lexer.next_func().unwrap();
 
         let fn_name = self.lexer.next_ident().unwrap();
@@ -66,7 +80,7 @@ impl<'a, 'b> FuncParser<'a, 'b> {
         let mut func = Function::new(fn_name.to_string(), sig);
         self.parse_body(&mut func);
 
-        func
+        Some(ParsedFunction { comments, func })
     }
 
     fn parse_body(&mut self, func: &mut Function) {
@@ -104,6 +118,14 @@ impl<'a, 'b> FuncParser<'a, 'b> {
 
     fn expect_block(&mut self) -> Block {
         Block(self.lexer.next_block().unwrap())
+    }
+
+    fn parse_comment(&mut self) -> Vec<String> {
+        let mut comments = Vec::new();
+        while let Some(line) = self.lexer.next_func_comment() {
+            comments.push(line.to_string());
+        }
+        comments
     }
 }
 
@@ -306,7 +328,7 @@ mod tests {
 
     fn test_parser(input: &str) -> bool {
         let module = Parser::parse(input);
-        let mut writer = FuncWriter::new(&module.funcs[0]);
+        let mut writer = FuncWriter::new(&module.funcs[0].func);
 
         input.trim() == writer.dump_string().unwrap().trim()
     }
@@ -381,5 +403,42 @@ mod tests {
         return;
         "
         ));
+    }
+
+    #[test]
+    fn test_with_module_comment() {
+        let input = "
+            #! Module comment 1
+            #! Module comment 2
+
+            # f1 start 1
+            # f1 start 2
+            func %f1() -> i32, i64:
+                block0:
+                    v0.i32 = imm_i32 311;
+                    v1.i64 = imm_i64 120;
+                    return v0.i32 v1.i64;
+
+            # f2 start 1
+            # f2 start 2
+            func %f2() -> i32, i64:
+                block0:
+                    v0.i32 = imm_i32 311;
+                    v1.i64 = imm_i64 120;
+                    return v0.i32 v1.i64;
+            ";
+
+        let parsed_module = Parser::parse(input);
+        let module_comments = parsed_module.comments;
+        assert_eq!(module_comments[0], " Module comment 1");
+        assert_eq!(module_comments[1], " Module comment 2");
+
+        let func1 = &parsed_module.funcs[0];
+        assert_eq!(func1.comments[0], " f1 start 1");
+        assert_eq!(func1.comments[1], " f1 start 2");
+
+        let func2 = &parsed_module.funcs[1];
+        assert_eq!(func2.comments[0], " f2 start 1");
+        assert_eq!(func2.comments[1], " f2 start 2");
     }
 }

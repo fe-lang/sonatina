@@ -90,6 +90,22 @@ impl<'a> Lexer<'a> {
             Token::RParen
         } else if self.eat_char_if(|c| c == '=').is_some() {
             Token::Eq
+        } else if self.eat_char_if(|c| c == '#').is_some() {
+            let is_module = if self.eat_char_if(|c| c == '!').is_some() {
+                true
+            } else {
+                false
+            };
+
+            let start = self.cur;
+            while self.eat_char_if(|c| c != '\n').is_some() {}
+            let end = self.cur;
+            let comment = self.from_raw_parts(start, end);
+            if is_module {
+                Token::ModuleComment(comment)
+            } else {
+                Token::FuncComment(comment)
+            }
         } else if self.eat_char_if(|c| c == '%').is_some() {
             let ident = self.try_eat_ident().unwrap();
             Token::Ident(ident)
@@ -134,6 +150,8 @@ impl<'a> Lexer<'a> {
     impl_next_token_kind!(next_lparen, Token::LParen);
     impl_next_token_kind!(next_rparen, Token::RParen);
     impl_next_token_kind!(next_eq, Token::Eq);
+    impl_next_token_kind!(next_module_comment, Token::ModuleComment, &'a str);
+    impl_next_token_kind!(next_func_comment, Token::FuncComment, &'a str);
 
     impl_next_token_kind!(next_block, Token::Block, u32);
     impl_next_token_kind!(next_value, Token::Value, ValueData);
@@ -287,6 +305,8 @@ pub(super) enum Token<'a> {
     LParen,
     RParen,
     Eq,
+    ModuleComment(&'a str),
+    FuncComment(&'a str),
     Block(u32),
     Value(ValueData),
     Ident(&'a str),
