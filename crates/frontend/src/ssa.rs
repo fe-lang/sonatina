@@ -4,7 +4,7 @@
 use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap, SparseSet};
 
 use sonatina_codegen::ir::{
-    function::{CursorLocation, FunctionCursor},
+    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     Function, Insn, InsnData,
 };
 
@@ -189,7 +189,7 @@ impl SsaBuilder {
 
         func.dfg.make_alias(phi_value, first);
         self.trivial_phis.insert(phi);
-        FunctionCursor::new(func, CursorLocation::At(phi)).remove_insn();
+        InsnInserter::new(func, CursorLocation::At(phi)).remove_insn();
 
         for i in 0..func.dfg.users(phi_value).len() {
             let user = func.dfg.user_of(phi_value, i);
@@ -205,8 +205,8 @@ impl SsaBuilder {
             args: Vec::new(),
             ty,
         };
-        let mut cursor = FunctionCursor::new(func, CursorLocation::BlockTop(block));
-        let insn = cursor.prepend_insn(insn_data);
+        let mut cursor = InsnInserter::new(func, CursorLocation::BlockTop(block));
+        let insn = cursor.prepend_insn_data(insn_data);
         let value = cursor.make_result(insn);
         if let Some(value) = value {
             cursor.attach_result(insn, value);

@@ -1,7 +1,7 @@
 // TODO: verifier.
 
 use sonatina_codegen::ir::{
-    function::{CursorLocation, FunctionCursor},
+    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     insn::{BinaryOp, BranchOp, CastOp, ImmediateOp, InsnData, JumpOp},
     types::U256,
     Function, Signature,
@@ -89,7 +89,9 @@ impl FunctionBuilder {
     }
 
     pub fn append_block(&mut self) -> Block {
-        self.cursor().append_block()
+        let block = self.cursor().make_block();
+        self.cursor().append_block(block);
+        block
     }
 
     pub fn switch_to_block(&mut self, block: Block) {
@@ -230,13 +232,13 @@ impl FunctionBuilder {
         self.ctxt.gas_type()
     }
 
-    fn cursor(&mut self) -> FunctionCursor {
-        FunctionCursor::new(&mut self.func, self.loc)
+    fn cursor(&mut self) -> InsnInserter {
+        InsnInserter::new(&mut self.func, self.loc)
     }
 
     fn insert_insn(&mut self, insn_data: InsnData) -> Option<Value> {
         let mut cursor = self.cursor();
-        let insn = cursor.insert_insn(insn_data);
+        let insn = cursor.insert_insn_data(insn_data);
         let result = cursor.make_result(insn);
         if let Some(result) = result {
             cursor.attach_result(insn, result);

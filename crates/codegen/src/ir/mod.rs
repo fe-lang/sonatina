@@ -1,4 +1,5 @@
 pub mod dfg;
+pub mod func_cursor;
 pub mod function;
 pub mod insn;
 pub mod ir_writer;
