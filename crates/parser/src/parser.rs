@@ -78,7 +78,7 @@ impl<'a, 'b> FuncParser<'a, 'b> {
     }
 
     fn parse_block_body(&mut self, inserter: &mut InsnInserter, block: Block) {
-        inserter.def_block(block);
+        inserter.def_block(block, BlockData::default());
         inserter.append_block(block);
         inserter.set_loc(CursorLocation::BlockTop(block));
 
@@ -147,16 +147,19 @@ impl<'a> InsnInserter<'a> {
         insn
     }
 
-    fn def_block(&mut self, block: Block) {
+    fn def_block(&mut self, block: Block, block_data: BlockData) {
         let block_id = block.0 as usize;
         let block_len = self.func.dfg.blocks.len();
 
         if block_len <= block_id {
             self.func.dfg.blocks.reserve(block_id);
             for _ in 0..(block_id - block_len + 1) {
+                // Make dummy block.
                 self.func.dfg.blocks.push(BlockData::default());
             }
         }
+
+        self.func.dfg.blocks[block] = block_data;
     }
 }
 
@@ -292,5 +295,91 @@ impl Code {
 
         debug_assert!(parser.lexer.next_semicolon().is_some());
         insn_data
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use sonatina_codegen::ir::ir_writer::FuncWriter;
+
+    fn test_parser(input: &str) -> bool {
+        let module = Parser::parse(input);
+        let mut writer = FuncWriter::new(&module.funcs[0]);
+
+        input.trim() == writer.dump_string().unwrap().trim()
+    }
+
+    #[test]
+    fn parser_with_return() {
+        assert!(test_parser(
+            "func %test_func() -> i32, i64:
+    block0:
+        v0.i32 = imm_i32 311;
+        v1.i64 = imm_i64 120;
+        return v0.i32 v1.i64;"
+        ));
+    }
+
+    #[test]
+    fn test_with_arg() {
+        assert!(test_parser(
+            "func %test_func(i32, i64):
+    block0:
+        v2.i64 = sext v0.i32;
+        v3.i64 = mul v2.i64 v1.i64;
+        return;
+"
+        ));
+    }
+
+    #[test]
+    fn parser_with_non_continuous_value() {
+        assert!(test_parser(
+            "func %test_func() -> i32, i64:
+    block64:
+        v32.i32 = imm_i32 311;
+        v120.i64 = imm_i64 120;
+        jump block1;
+
+    block1:
+        return v32.i32 v120.i64;"
+        ));
+    }
+
+    #[test]
+    fn parser_with_phi() {
+        assert!(test_parser(
+            "func %test_func():
+    block0:
+        v0.i32 = imm_i32 1;
+        jump block1;
+
+    block1:
+        v4.i32 = phi v0.i32 v5.i32;
+        brz v0.i32 block2;
+        jump block6;
+
+    block2:
+        brz v0.i32 block3;
+        jump block4;
+
+    block3:
+        v1.i32 = imm_i32 2;
+        jump block5;
+
+    block4:
+        jump block5;
+
+    block5:
+        v5.i32 = phi v1.i32 v4.i32;
+        jump block1;
+
+    block6:
+        v3.i32 = add v4.i32 v4.i32;
+        return;
+        "
+        ));
     }
 }

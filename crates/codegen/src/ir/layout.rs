@@ -46,7 +46,7 @@ impl Layout {
     }
 
     pub fn is_block_inserted(&self, block: Block) -> bool {
-        self.blocks.get(block).is_some()
+        Some(block) == self.first_block || self.blocks[block] != BlockNode::default()
     }
 
     pub fn first_insn_of(&self, block: Block) -> Option<Insn> {
@@ -75,7 +75,7 @@ impl Layout {
     }
 
     pub fn is_insn_inserted(&self, insn: Insn) -> bool {
-        self.insns.get(insn).is_some()
+        self.insns[insn] != InsnNode::default()
     }
 
     pub fn iter_block(&self) -> impl Iterator<Item = Block> + '_ {
@@ -312,7 +312,7 @@ impl<'a> Iterator for InsnIter<'a> {
     }
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 struct BlockNode {
     prev: Option<Block>,
     next: Option<Block>,
@@ -320,7 +320,7 @@ struct BlockNode {
     last_insn: Option<Insn>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 struct InsnNode {
     /// An block in which the insn exists.
     block: Option<Block>,
