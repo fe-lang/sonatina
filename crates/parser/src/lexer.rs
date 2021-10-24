@@ -1,6 +1,6 @@
 use sonatina_codegen::ir::Type;
 
-pub struct Lexer<'a> {
+pub(super) struct Lexer<'a> {
     input: &'a [u8],
     peek: Option<Token<'a>>,
     cur: usize,
@@ -22,8 +22,34 @@ macro_rules! try_eat_variant {
     }
 }
 
+macro_rules! impl_next_token_kind {
+    ($fn_name:ident, $variant:path, $ret_ty:ty) => {
+        pub(super) fn $fn_name(&mut self) -> Option<$ret_ty> {
+            match self.peek_token() {
+                Some($variant(data)) => match self.next_token().unwrap() {
+                    $variant(data) => Some(data),
+                    _ => unreachable!(),
+                },
+                _ => None,
+            }
+        }
+    };
+
+    ($fn_name:ident, $variant:path) => {
+        pub(super) fn $fn_name(&mut self) -> Option<()> {
+            match self.peek_token() {
+                Some($variant) => {
+                    self.next_token();
+                    Some(())
+                }
+                _ => None,
+            }
+        }
+    };
+}
+
 impl<'a> Lexer<'a> {
-    pub fn new(input: &'a str) -> Self {
+    pub(super) fn new(input: &'a str) -> Self {
         debug_assert!(input.is_ascii());
 
         Self {
@@ -33,12 +59,12 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    pub fn next_token(&mut self) -> Option<Token> {
+    pub(super) fn next_token(&mut self) -> Option<Token<'a>> {
         self.peek_token();
         self.peek.take()
     }
 
-    pub fn peek_token(&mut self) -> Option<&Token> {
+    pub(super) fn peek_token(&mut self) -> Option<&Token<'a>> {
         if self.peek.is_some() {
             return self.peek.as_ref();
         }
@@ -80,7 +106,7 @@ impl<'a> Lexer<'a> {
             let id = self.try_eat_id().unwrap();
             self.eat_char_if(|c| c == '.').unwrap();
             let ty = self.try_eat_ty().unwrap();
-            Token::Value(id, ty)
+            Token::Value(ValueData::new(id, ty))
         } else if let Some(integer) = self.try_eat_integer() {
             Token::Integer(integer)
         } else {
@@ -97,6 +123,21 @@ impl<'a> Lexer<'a> {
         self.peek = Some(token);
         self.peek.as_ref()
     }
+
+    impl_next_token_kind!(next_func, Token::Func);
+    impl_next_token_kind!(next_right_arrow, Token::RArrow);
+    impl_next_token_kind!(next_colon, Token::Colon);
+    impl_next_token_kind!(next_comma, Token::Comma);
+    impl_next_token_kind!(next_lparen, Token::LParen);
+    impl_next_token_kind!(next_rparen, Token::RParen);
+    impl_next_token_kind!(next_eq, Token::Eq);
+
+    impl_next_token_kind!(next_block, Token::Block, u32);
+    impl_next_token_kind!(next_value, Token::Value, ValueData);
+    impl_next_token_kind!(next_opcode, Token::OpCode, Code);
+    impl_next_token_kind!(next_ident, Token::Ident, &'a str);
+    impl_next_token_kind!(next_ty, Token::Ty, Type);
+    impl_next_token_kind!(next_integer, Token::Integer, &'a str);
 
     fn eat_char_if(&mut self, f: impl FnOnce(char) -> bool) -> Option<char> {
         match self.peek_char() {
@@ -234,7 +275,7 @@ impl<'a> Lexer<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub enum Token<'a> {
+pub(super) enum Token<'a> {
     Func,
     RArrow,
     Colon,
@@ -243,15 +284,27 @@ pub enum Token<'a> {
     RParen,
     Eq,
     Block(u32),
-    Value(u32, Type),
+    Value(ValueData),
     Ident(&'a str),
     OpCode(Code),
     Ty(Type),
     Integer(&'a str),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ValueData {
+    pub id: u32,
+    pub ty: Type,
+}
+
+impl ValueData {
+    fn new(id: u32, ty: Type) -> Self {
+        Self { id, ty }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
-pub enum Code {
+pub(super) enum Code {
     // Immediate ops.
     ImmI8,
     ImmI16,
@@ -327,19 +380,19 @@ mod tests {
         assert!(matches!(lexer.next_token().unwrap(), Block(0)));
         assert!(matches!(lexer.next_token().unwrap(), Colon));
 
-        assert!(matches!(lexer.next_token().unwrap(), Value(0, Type::I32)));
+        assert_eq!(lexer.next_value().unwrap(), ValueData::new(0, Type::I32));
         assert!(matches!(lexer.next_token().unwrap(), Eq));
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::ImmI32)));
         assert!(matches!(lexer.next_token().unwrap(), Integer("311")));
 
-        assert!(matches!(lexer.next_token().unwrap(), Value(1, Type::I64)));
+        assert_eq!(lexer.next_value().unwrap(), ValueData::new(1, Type::I64));
         assert!(matches!(lexer.next_token().unwrap(), Eq));
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::ImmI64)));
         assert!(matches!(lexer.next_token().unwrap(), Integer("120")));
 
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Return)));
-        assert!(matches!(lexer.next_token().unwrap(), Value(0, Type::I32)));
-        assert!(matches!(lexer.next_token().unwrap(), Value(1, Type::I64)));
+        assert_eq!(lexer.next_value().unwrap(), ValueData::new(0, Type::I32));
+        assert_eq!(lexer.next_value().unwrap(), ValueData::new(1, Type::I64));
 
         assert!(lexer.next_token().is_none());
     }
@@ -365,16 +418,16 @@ mod tests {
         assert!(matches!(lexer.next_token().unwrap(), Block(0)));
         assert!(matches!(lexer.next_token().unwrap(), Colon));
 
-        assert!(matches!(lexer.next_token().unwrap(), Value(2, Type::I64)));
+        assert_eq!(lexer.next_value().unwrap(), ValueData::new(2, Type::I64));
         assert!(matches!(lexer.next_token().unwrap(), Eq));
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Sext)));
-        assert!(matches!(lexer.next_token().unwrap(), Value(0, Type::I32)));
+        assert_eq!(lexer.next_value().unwrap(), ValueData::new(0, Type::I32));
 
-        assert!(matches!(lexer.next_token().unwrap(), Value(3, Type::I64)));
+        assert_eq!(lexer.next_value().unwrap(), ValueData::new(3, Type::I64));
         assert!(matches!(lexer.next_token().unwrap(), Eq));
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Mul)));
-        assert!(matches!(lexer.next_token().unwrap(), Value(2, Type::I64)));
-        assert!(matches!(lexer.next_token().unwrap(), Value(1, Type::I64)));
+        assert_eq!(lexer.next_value().unwrap(), ValueData::new(2, Type::I64));
+        assert_eq!(lexer.next_value().unwrap(), ValueData::new(1, Type::I64));
 
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Return)));
 
