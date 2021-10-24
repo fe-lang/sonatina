@@ -185,6 +185,8 @@ impl IrWrite for Insn {
             }
         }
 
+        w.write_all(b";")?;
+
         Ok(())
     }
 }

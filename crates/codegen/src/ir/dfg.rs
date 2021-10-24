@@ -6,9 +6,11 @@ use super::{Insn, InsnData, Type, Value, ValueData};
 
 #[derive(Default, Debug, Clone)]
 pub struct DataFlowGraph {
-    blocks: PrimaryMap<Block, BlockData>,
+    #[doc(hidden)]
+    pub blocks: PrimaryMap<Block, BlockData>,
+    #[doc(hidden)]
+    pub values: PrimaryMap<Value, ValueData>,
     insns: PrimaryMap<Insn, InsnData>,
-    values: PrimaryMap<Value, ValueData>,
     insn_results: SecondaryMap<Insn, PackedOption<Value>>,
     users: SecondaryMap<Value, Vec<Insn>>,
 }

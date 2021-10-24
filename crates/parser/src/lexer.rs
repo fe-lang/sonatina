@@ -26,7 +26,7 @@ macro_rules! impl_next_token_kind {
     ($fn_name:ident, $variant:path, $ret_ty:ty) => {
         pub(super) fn $fn_name(&mut self) -> Option<$ret_ty> {
             match self.peek_token() {
-                Some($variant(data)) => match self.next_token().unwrap() {
+                Some($variant(_)) => match self.next_token().unwrap() {
                     $variant(data) => Some(data),
                     _ => unreachable!(),
                 },
@@ -80,6 +80,8 @@ impl<'a> Lexer<'a> {
 
         let token = if self.eat_char_if(|c| c == ':').is_some() {
             Token::Colon
+        } else if self.eat_char_if(|c| c == ';').is_some() {
+            Token::SemiColon
         } else if self.eat_char_if(|c| c == ',').is_some() {
             Token::Comma
         } else if self.eat_char_if(|c| c == '(').is_some() {
@@ -127,6 +129,7 @@ impl<'a> Lexer<'a> {
     impl_next_token_kind!(next_func, Token::Func);
     impl_next_token_kind!(next_right_arrow, Token::RArrow);
     impl_next_token_kind!(next_colon, Token::Colon);
+    impl_next_token_kind!(next_semicolon, Token::SemiColon);
     impl_next_token_kind!(next_comma, Token::Comma);
     impl_next_token_kind!(next_lparen, Token::LParen);
     impl_next_token_kind!(next_rparen, Token::RParen);
@@ -279,6 +282,7 @@ pub(super) enum Token<'a> {
     Func,
     RArrow,
     Colon,
+    SemiColon,
     Comma,
     LParen,
     RParen,
@@ -362,9 +366,9 @@ mod tests {
     fn lexer_with_return() {
         let input = "func %test_func() -> i32, i64:
     block0:
-        v0.i32 = imm_i32 311
-        v1.i64 = imm_i64 120
-        return v0.i32 v1.i64";
+        v0.i32 = imm_i32 311;
+        v1.i64 = imm_i64 120;
+        return v0.i32 v1.i64;";
         let mut lexer = Lexer::new(&input);
 
         assert!(matches!(lexer.next_token().unwrap(), Func));
@@ -384,15 +388,18 @@ mod tests {
         assert!(matches!(lexer.next_token().unwrap(), Eq));
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::ImmI32)));
         assert!(matches!(lexer.next_token().unwrap(), Integer("311")));
+        assert!(matches!(lexer.next_token().unwrap(), SemiColon));
 
         assert_eq!(lexer.next_value().unwrap(), ValueData::new(1, Type::I64));
         assert!(matches!(lexer.next_token().unwrap(), Eq));
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::ImmI64)));
         assert!(matches!(lexer.next_token().unwrap(), Integer("120")));
+        assert!(matches!(lexer.next_token().unwrap(), SemiColon));
 
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Return)));
         assert_eq!(lexer.next_value().unwrap(), ValueData::new(0, Type::I32));
         assert_eq!(lexer.next_value().unwrap(), ValueData::new(1, Type::I64));
+        assert!(matches!(lexer.next_token().unwrap(), SemiColon));
 
         assert!(lexer.next_token().is_none());
     }
@@ -401,9 +408,9 @@ mod tests {
     fn lexer_with_arg() {
         let input = "func %test_func(i32, i64):
     block0:
-        v2.i64 = sext v0.i32
-        v3.i64 = mul v2.i64 v1.i64
-        return
+        v2.i64 = sext v0.i32;
+        v3.i64 = mul v2.i64 v1.i64;
+        return;
 ";
         let mut lexer = Lexer::new(&input);
         assert!(matches!(lexer.next_token().unwrap(), Func));
@@ -422,14 +429,17 @@ mod tests {
         assert!(matches!(lexer.next_token().unwrap(), Eq));
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Sext)));
         assert_eq!(lexer.next_value().unwrap(), ValueData::new(0, Type::I32));
+        assert!(matches!(lexer.next_token().unwrap(), SemiColon));
 
         assert_eq!(lexer.next_value().unwrap(), ValueData::new(3, Type::I64));
         assert!(matches!(lexer.next_token().unwrap(), Eq));
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Mul)));
         assert_eq!(lexer.next_value().unwrap(), ValueData::new(2, Type::I64));
         assert_eq!(lexer.next_value().unwrap(), ValueData::new(1, Type::I64));
+        assert!(matches!(lexer.next_token().unwrap(), SemiColon));
 
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Return)));
+        assert!(matches!(lexer.next_token().unwrap(), SemiColon));
 
         assert!(lexer.next_token().is_none());
     }
@@ -438,7 +448,7 @@ mod tests {
     fn lexer_with_array_ty() {
         let input = "func %test_func([i32;4], [[i128;3];4]):
     block0:
-        return";
+        return;";
         let mut lexer = Lexer::new(&input);
 
         assert!(matches!(lexer.next_token().unwrap(), Func));
@@ -457,6 +467,7 @@ mod tests {
         assert!(matches!(lexer.next_token().unwrap(), Block(0)));
         assert!(matches!(lexer.next_token().unwrap(), Colon));
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Return)));
+        assert!(matches!(lexer.next_token().unwrap(), SemiColon));
 
         assert!(lexer.next_token().is_none());
     }

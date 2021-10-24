@@ -239,9 +239,9 @@ mod tests {
             dump_func(builder),
             "func %test_func():
     block0:
-        v0.i32 = imm_i32 1
-        v1.i32 = add v0.i32 v0.i32
-        return
+        v0.i32 = imm_i32 1;
+        v1.i32 = add v0.i32 v0.i32;
+        return;
 
 "
         );
@@ -285,21 +285,21 @@ mod tests {
             dump_func(builder),
             "func %test_func():
     block0:
-        v0.i32 = imm_i32 1
-        brz v0.i32 block1
-        jump block2
+        v0.i32 = imm_i32 1;
+        brz v0.i32 block1;
+        jump block2;
 
     block1:
-        v1.i32 = imm_i32 2
-        jump block3
+        v1.i32 = imm_i32 2;
+        jump block3;
 
     block2:
-        v2.i32 = imm_i32 3
-        jump block3
+        v2.i32 = imm_i32 3;
+        jump block3;
 
     block3:
-        v3.i32 = phi v1.i32 v2.i32
-        return
+        v3.i32 = phi v1.i32 v2.i32;
+        return;
 
 "
         );
@@ -345,21 +345,21 @@ mod tests {
             dump_func(builder),
             "func %test_func():
     block0:
-        v0.i32 = imm_i32 1
-        jump block1
+        v0.i32 = imm_i32 1;
+        jump block1;
 
     block1:
-        v4.i32 = phi v0.i32 v1.i32
-        brz v0.i32 block3
-        jump block2
+        v4.i32 = phi v0.i32 v1.i32;
+        brz v0.i32 block3;
+        jump block2;
 
     block2:
-        v1.i32 = imm_i32 10
-        jump block1
+        v1.i32 = imm_i32 10;
+        jump block1;
 
     block3:
-        v3.i32 = add v4.i32 v4.i32
-        return
+        v3.i32 = add v4.i32 v4.i32;
+        return;
 
 "
         );
@@ -421,32 +421,32 @@ mod tests {
             dump_func(builder),
             "func %test_func():
     block0:
-        v0.i32 = imm_i32 1
-        jump block1
+        v0.i32 = imm_i32 1;
+        jump block1;
 
     block1:
-        v4.i32 = phi v0.i32 v5.i32
-        brz v0.i32 block2
-        jump block6
+        v4.i32 = phi v0.i32 v5.i32;
+        brz v0.i32 block2;
+        jump block6;
 
     block2:
-        brz v0.i32 block3
-        jump block4
+        brz v0.i32 block3;
+        jump block4;
 
     block3:
-        v1.i32 = imm_i32 2
-        jump block5
+        v1.i32 = imm_i32 2;
+        jump block5;
 
     block4:
-        jump block5
+        jump block5;
 
     block5:
-        v5.i32 = phi v1.i32 v4.i32
-        jump block1
+        v5.i32 = phi v1.i32 v4.i32;
+        jump block1;
 
     block6:
-        v3.i32 = add v4.i32 v4.i32
-        return
+        v3.i32 = add v4.i32 v4.i32;
+        return;
 
 "
         );
@@ -503,32 +503,32 @@ mod tests {
             dump_func(builder),
             "func %test_func():
     block0:
-        v0.i32 = imm_i32 1
-        jump block1
+        v0.i32 = imm_i32 1;
+        jump block1;
 
     block1:
-        v4.i32 = phi v0.i32 v5.i32
-        brz v0.i32 block2
-        jump block6
+        v4.i32 = phi v0.i32 v5.i32;
+        brz v0.i32 block2;
+        jump block6;
 
     block2:
-        brz v0.i32 block3
-        jump block4
+        brz v0.i32 block3;
+        jump block4;
 
     block3:
-        v1.i32 = imm_i32 2
-        jump block5
+        v1.i32 = imm_i32 2;
+        jump block5;
 
     block4:
-        jump block5
+        jump block5;
 
     block5:
-        v5.i32 = phi v1.i32 v4.i32
-        jump block1
+        v5.i32 = phi v1.i32 v4.i32;
+        jump block1;
 
     block6:
-        v3.i32 = add v4.i32 v4.i32
-        return
+        v3.i32 = add v4.i32 v4.i32;
+        return;
 
 "
         );
