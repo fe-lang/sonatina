@@ -74,7 +74,7 @@ impl BlockNode {
 
 pub struct CfgPostOrder<'a> {
     cfg: &'a ControlFlowGraph,
-    node_state: SecondaryMap<Block, State>,
+    node_state: SecondaryMap<Block, NodeState>,
     stack: Vec<Block>,
 }
 
@@ -120,9 +120,9 @@ impl<'a> Iterator for CfgPostOrder<'a> {
 }
 
 #[derive(Default, Debug, Clone, Copy)]
-struct State(u8);
+struct NodeState(u8);
 
-impl State {
+impl NodeState {
     fn is_unvisited(self) -> bool {
         self.0 == 0
     }
