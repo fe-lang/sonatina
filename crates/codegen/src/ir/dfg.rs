@@ -133,6 +133,10 @@ impl DataFlowGraph {
         value
     }
 
+    pub fn branch_dest(&self, insn: Insn) -> Option<Block> {
+        self.insns[insn].branch_dest()
+    }
+
     pub fn is_phi(&self, insn: Insn) -> bool {
         matches!(self.insn_data(insn), InsnData::Phi { .. })
     }
