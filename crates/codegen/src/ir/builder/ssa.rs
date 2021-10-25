@@ -3,12 +3,12 @@
 
 use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap, SparseSet};
 
-use sonatina_codegen::ir::{
+use crate::ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    Function, Insn, InsnData,
+    InsnData,
 };
 
-use super::{Block, Type, Value};
+use crate::{Block, Function, Insn, Type, Value};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Variable(u32);
@@ -217,8 +217,8 @@ impl SsaBuilder {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_util::*;
     use super::*;
-    use crate::test_util::*;
 
     #[test]
     fn use_var_local() {

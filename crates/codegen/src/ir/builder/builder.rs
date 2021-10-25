@@ -1,13 +1,14 @@
 // TODO: verifier.
 
-use sonatina_codegen::ir::{
+use crate::ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     insn::{BinaryOp, BranchOp, CastOp, ImmediateOp, InsnData, JumpOp},
     types::U256,
-    Function, Signature,
 };
 
-use super::{ssa::SsaBuilder, Block, Type, Value, Variable};
+use crate::{Block, Function, Signature, Type, Value, Variable};
+
+use super::ssa::SsaBuilder;
 
 pub trait Context {
     fn hash_type(&self) -> Type;
@@ -250,8 +251,8 @@ impl FunctionBuilder {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_util::*;
     use super::*;
-    use crate::test_util::*;
 
     #[test]
     fn entry_block() {

@@ -1,8 +1,6 @@
 pub mod builder;
 mod ssa;
 
-pub use sonatina_codegen::ir::{Block, Signature, Type, Value};
-
 pub use ssa::Variable;
 
 pub use builder::{Context, FunctionBuilder};
@@ -11,7 +9,9 @@ pub use builder::{Context, FunctionBuilder};
 pub(crate) mod test_util {
     use super::*;
 
-    use sonatina_codegen::ir::ir_writer::FuncWriter;
+    use crate::ir::ir_writer::FuncWriter;
+
+    use crate::{Signature, Type};
 
     pub struct TestContext {}
 
