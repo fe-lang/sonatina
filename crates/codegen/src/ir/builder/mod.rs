@@ -11,7 +11,7 @@ pub(crate) mod test_util {
 
     use crate::ir::ir_writer::FuncWriter;
 
-    use crate::{Signature, Type};
+    use crate::{Function, Signature, Type};
 
     pub struct TestContext {}
 
@@ -39,8 +39,7 @@ pub(crate) mod test_util {
         FunctionBuilder::new("test_func".into(), sig, Box::new(ctxt))
     }
 
-    pub(crate) fn dump_func(builder: FunctionBuilder) -> String {
-        let func = builder.build();
+    pub(crate) fn dump_func(func: &Function) -> String {
         let mut writer = FuncWriter::new(&func);
         writer.dump_string().unwrap()
     }

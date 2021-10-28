@@ -236,7 +236,7 @@ mod tests {
         builder.seal_block();
 
         assert_eq!(
-            dump_func(builder),
+            dump_func(&builder.build()),
             "func %test_func():
     block0:
         v0.i32 = imm_i32 1;
@@ -282,7 +282,7 @@ mod tests {
         builder.seal_block();
 
         assert_eq!(
-            dump_func(builder),
+            dump_func(&builder.build()),
             "func %test_func():
     block0:
         v0.i32 = imm_i32 1;
@@ -342,7 +342,7 @@ mod tests {
         builder.seal_block();
 
         assert_eq!(
-            dump_func(builder),
+            dump_func(&builder.build()),
             "func %test_func():
     block0:
         v0.i32 = imm_i32 1;
@@ -418,7 +418,7 @@ mod tests {
         builder.seal_block();
 
         assert_eq!(
-            dump_func(builder),
+            dump_func(&builder.build()),
             "func %test_func():
     block0:
         v0.i32 = imm_i32 1;
@@ -500,7 +500,7 @@ mod tests {
         builder.seal_all();
 
         assert_eq!(
-            dump_func(builder),
+            dump_func(&builder.build()),
             "func %test_func():
     block0:
         v0.i32 = imm_i32 1;

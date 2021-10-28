@@ -4,7 +4,7 @@ use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 
 use super::ir::{Block, Function, Insn};
 
-#[derive(Default)]
+#[derive(Default, Debug, PartialEq, Eq)]
 pub struct ControlFlowGraph {
     entry: PackedOption<Block>,
     blocks: SecondaryMap<Block, BlockNode>,
@@ -23,10 +23,10 @@ impl ControlFlowGraph {
         for block in func.layout.iter_block() {
             let (last_insn, penultimate_insn) = func.layout.last_two_insn_of(block);
             if let Some(last_insn) = last_insn {
-                self.maybe_add_edge(func, last_insn, block);
+                self.maybe_add_edge(func, last_insn);
             }
             if let Some(penultimate_insn) = penultimate_insn {
-                self.maybe_add_edge(func, penultimate_insn, block);
+                self.maybe_add_edge(func, penultimate_insn);
             }
         }
     }
@@ -62,11 +62,12 @@ impl ControlFlowGraph {
 
     pub fn remove_edge(&mut self, from: Block, to: Block) {
         self.blocks[to].remove_pred(from);
-        self.blocks[from].remove_succ(from);
+        self.blocks[from].remove_succ(to);
     }
 
-    fn maybe_add_edge(&mut self, func: &Function, insn: Insn, block: Block) -> bool {
+    fn maybe_add_edge(&mut self, func: &Function, insn: Insn) -> bool {
         if let Some(dest) = func.dfg.branch_dest(insn) {
+            let block = func.layout.insn_block(insn);
             self.add_edge(block, dest);
             true
         } else {
@@ -75,7 +76,7 @@ impl ControlFlowGraph {
     }
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
 struct BlockNode {
     preds: BTreeSet<Block>,
     succs: BTreeSet<Block>,

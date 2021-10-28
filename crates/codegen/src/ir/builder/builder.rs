@@ -269,7 +269,7 @@ mod tests {
         builder.seal_all();
 
         assert_eq!(
-            dump_func(builder),
+            dump_func(&builder.build()),
             "func %test_func():
     block0:
         v0.i8 = imm_i8 1;
@@ -298,7 +298,7 @@ mod tests {
         builder.seal_all();
 
         assert_eq!(
-            dump_func(builder),
+            dump_func(&builder.build()),
             "func %test_func(i32, i64):
     block0:
         v2.i64 = sext v0.i32;
@@ -322,7 +322,7 @@ mod tests {
         builder.seal_all();
 
         assert_eq!(
-            dump_func(builder),
+            dump_func(&builder.build()),
             "func %test_func() -> i32, i64:
     block0:
         v0.i32 = imm_i32 1;
@@ -364,7 +364,7 @@ mod tests {
         builder.seal_all();
 
         assert_eq!(
-            dump_func(builder),
+            dump_func(&builder.build()),
             "func %test_func(i64):
     block0:
         brz v0.i64 block1;
