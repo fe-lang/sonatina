@@ -82,6 +82,14 @@ pub trait FuncCursor {
         }
     }
 
+    fn insert_block_before(&mut self, block: Block) {
+        if let Some(current) = self.block() {
+            self.func_mut().layout.insert_block_before(block, current)
+        } else {
+            panic!("cursor loc points `NoWhere`")
+        }
+    }
+
     fn append_block(&mut self, block: Block) {
         self.func_mut().layout.append_block(block);
     }

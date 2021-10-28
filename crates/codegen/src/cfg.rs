@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 
 use super::ir::{Block, Function, Insn};
@@ -19,22 +21,30 @@ impl ControlFlowGraph {
         self.entry = func.layout.first_block().into();
 
         for block in func.layout.iter_block() {
-            if let Some(last_insn) = func.layout.last_insn_of(block) {
-                if self.maybe_add_edge(func, last_insn, block) {
-                    if let Some(penultimate_insn) = func.layout.prev_insn_of(last_insn) {
-                        self.maybe_add_edge(func, penultimate_insn, block);
-                    }
-                }
+            let (last_insn, penultimate_insn) = func.layout.last_two_insn_of(block);
+            if let Some(last_insn) = last_insn {
+                self.maybe_add_edge(func, last_insn, block);
+            }
+            if let Some(penultimate_insn) = penultimate_insn {
+                self.maybe_add_edge(func, penultimate_insn, block);
             }
         }
     }
 
-    pub fn preds_of(&self, block: Block) -> &[Block] {
-        &self.blocks[block].preds
+    pub fn preds_of(&self, block: Block) -> impl Iterator<Item = &Block> {
+        self.blocks[block].preds()
     }
 
-    pub fn succs_of(&self, block: Block) -> &[Block] {
-        &self.blocks[block].succs
+    pub fn succs_of(&self, block: Block) -> impl Iterator<Item = &Block> {
+        self.blocks[block].succs()
+    }
+
+    pub fn pred_num_of(&self, block: Block) -> usize {
+        self.blocks[block].pred_num()
+    }
+
+    pub fn succ_num_of(&self, block: Block) -> usize {
+        self.blocks[block].succ_num()
     }
 
     pub fn entry(&self) -> Option<Block> {
@@ -45,10 +55,19 @@ impl ControlFlowGraph {
         CfgPostOrder::new(self)
     }
 
+    pub fn add_edge(&mut self, from: Block, to: Block) {
+        self.blocks[to].push_pred(from);
+        self.blocks[from].push_succ(to);
+    }
+
+    pub fn remove_edge(&mut self, from: Block, to: Block) {
+        self.blocks[to].remove_pred(from);
+        self.blocks[from].remove_succ(from);
+    }
+
     fn maybe_add_edge(&mut self, func: &Function, insn: Insn, block: Block) -> bool {
         if let Some(dest) = func.dfg.branch_dest(insn) {
-            self.blocks[block].push_succ(dest);
-            self.blocks[dest].push_pred(block);
+            self.add_edge(block, dest);
             true
         } else {
             false
@@ -58,17 +77,41 @@ impl ControlFlowGraph {
 
 #[derive(Default, Clone, Debug)]
 struct BlockNode {
-    preds: Vec<Block>,
-    succs: Vec<Block>,
+    preds: BTreeSet<Block>,
+    succs: BTreeSet<Block>,
 }
 
 impl BlockNode {
     fn push_pred(&mut self, pred: Block) {
-        self.preds.push(pred)
+        self.preds.insert(pred);
     }
 
     fn push_succ(&mut self, succ: Block) {
-        self.succs.push(succ)
+        self.succs.insert(succ);
+    }
+
+    fn remove_pred(&mut self, pred: Block) {
+        self.preds.remove(&pred);
+    }
+
+    fn remove_succ(&mut self, succ: Block) {
+        self.succs.remove(&succ);
+    }
+
+    fn preds(&self) -> impl Iterator<Item = &Block> {
+        self.preds.iter()
+    }
+
+    fn succs(&self) -> impl Iterator<Item = &Block> {
+        self.succs.iter()
+    }
+
+    fn pred_num(&self) -> usize {
+        self.preds.len()
+    }
+
+    fn succ_num(&self) -> usize {
+        self.succs.len()
     }
 }
 

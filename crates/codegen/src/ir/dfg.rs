@@ -137,6 +137,10 @@ impl DataFlowGraph {
         self.insns[insn].branch_dest()
     }
 
+    pub fn branch_dest_mut(&mut self, insn: Insn) -> Option<&mut Block> {
+        self.insns[insn].branch_dest_mut()
+    }
+
     pub fn is_phi(&self, insn: Insn) -> bool {
         matches!(self.insn_data(insn), InsnData::Phi { .. })
     }
@@ -149,7 +153,7 @@ pub enum ValueDef {
 }
 
 /// An opaque reference to [`BlockData`]
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub struct Block(pub u32);
 cranelift_entity::entity_impl!(Block);
 

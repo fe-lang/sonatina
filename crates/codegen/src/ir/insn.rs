@@ -57,6 +57,13 @@ impl InsnData {
         }
     }
 
+    pub fn branch_dest_mut(&mut self) -> Option<&mut Block> {
+        match self {
+            Self::Jump { dest, .. } | Self::Branch { dest, .. } => Some(dest),
+            _ => None,
+        }
+    }
+
     pub fn args(&self) -> &[Value] {
         match self {
             Self::Binary { args, .. } | Self::Store { args, .. } => args,

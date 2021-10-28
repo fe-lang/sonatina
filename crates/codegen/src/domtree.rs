@@ -44,13 +44,14 @@ impl DomTree {
         while changed {
             changed = false;
             for &block in self.rpo.iter().skip(1) {
-                let preds = cfg.preds_of(block);
-                if preds.is_empty() {
-                    continue;
-                }
+                let mut preds = cfg.preds_of(block);
 
-                let mut new_dom = preds[0];
-                for &pred in &preds[1..] {
+                let mut new_dom = match preds.next() {
+                    Some(block) => *block,
+                    None => continue,
+                };
+
+                for &pred in preds {
                     if self.doms[pred].is_some() {
                         new_dom = self.intersect(new_dom, pred, &fingers);
                     }
