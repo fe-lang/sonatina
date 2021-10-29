@@ -79,6 +79,13 @@ impl DataFlowGraph {
         }
     }
 
+    pub fn value_insn(&self, value: Value) -> Option<Insn> {
+        match self.value_def(value) {
+            ValueDef::Insn(insn) => Some(insn),
+            _ => None,
+        }
+    }
+
     pub fn value_ty(&self, value: Value) -> &Type {
         match &self.values[value] {
             ValueData::Insn { ty, .. } | ValueData::Arg { ty, .. } => ty,
@@ -86,10 +93,21 @@ impl DataFlowGraph {
         }
     }
 
-    pub fn append_phi_arg(&mut self, insn: Insn, arg: Value) {
+    pub fn append_phi_arg(&mut self, insn: Insn, value: Value, block: Block) {
         let data = &mut self.insns[insn];
         match data {
-            InsnData::Phi { args, .. } => args.push(arg),
+            InsnData::Phi { values, blocks, .. } => {
+                values.push(value);
+                blocks.push(block);
+            }
+            _ => panic!("insn is not a phi function"),
+        }
+    }
+
+    pub fn phi_blocks_mut(&mut self, insn: Insn) -> &mut [Block] {
+        let data = &mut self.insns[insn];
+        match data {
+            InsnData::Phi { blocks, .. } => blocks,
             _ => panic!("insn is not a phi function"),
         }
     }

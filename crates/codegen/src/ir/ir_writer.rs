@@ -45,7 +45,7 @@ impl<'a> FuncWriter<'a> {
 
     fn write_block_with_insn(&mut self, block: Block, mut w: impl io::Write) -> io::Result<()> {
         self.indent(&mut w)?;
-        self.write_block(block, &mut w)?;
+        block.write(self, &mut w)?;
 
         self.enter_item(&mut w)?;
         let insns = self.func.layout.iter_insn(block);
@@ -53,10 +53,6 @@ impl<'a> FuncWriter<'a> {
         self.leave_item();
 
         Ok(())
-    }
-
-    fn write_block(&mut self, block: Block, mut w: impl io::Write) -> io::Result<()> {
-        w.write_fmt(format_args!("block{}", block.0))
     }
 
     fn write_insn_args(&mut self, args: &[Value], mut w: impl io::Write) -> io::Result<()> {
@@ -120,6 +116,12 @@ impl IrWrite for Value {
     }
 }
 
+impl IrWrite for Block {
+    fn write(&self, _: &mut FuncWriter, mut w: impl io::Write) -> io::Result<()> {
+        w.write_fmt(format_args!("block{}", self.0))
+    }
+}
+
 impl IrWrite for Type {
     fn write(&self, _: &mut FuncWriter, mut w: impl io::Write) -> io::Result<()> {
         write!(w, "{}", self)
@@ -162,14 +164,14 @@ impl IrWrite for Insn {
             Jump { code, dest } => {
                 w.write_fmt(format_args!("{}", code.as_str()))?;
                 writer.space(&mut w)?;
-                writer.write_block(*dest, &mut w)?;
+                dest.write(writer, &mut w)?;
             }
             Branch { code, args, dest } => {
                 w.write_fmt(format_args!("{}", code.as_str()))?;
                 writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
                 writer.space(&mut w)?;
-                writer.write_block(*dest, &mut w)?;
+                dest.write(writer, &mut w)?;
             }
             Return { args } => {
                 w.write_all(b"return")?;
@@ -178,10 +180,21 @@ impl IrWrite for Insn {
                 }
                 writer.write_insn_args(args, &mut w)?;
             }
-            Phi { args, .. } => {
+            Phi { values, blocks, .. } => {
                 w.write_all(b"phi")?;
                 writer.space(&mut w)?;
-                writer.write_insn_args(args, &mut w)?;
+                let mut args = vec![];
+                for (value, block) in values.iter().zip(blocks.iter()) {
+                    let mut arg = Vec::new();
+                    arg.push(b'(');
+                    value.write(writer, &mut arg)?;
+                    writer.space(&mut arg)?;
+                    block.write(writer, &mut arg)?;
+                    arg.push(b')');
+                    args.push(arg);
+                }
+
+                writer.write_iter_with_delim(args.iter(), " ", &mut w)?;
             }
         }
 
@@ -197,5 +210,11 @@ where
 {
     fn write(&self, f: &mut FuncWriter, w: impl io::Write) -> io::Result<()> {
         (*self).write(f, w)
+    }
+}
+
+impl IrWrite for Vec<u8> {
+    fn write(&self, _: &mut FuncWriter, mut w: impl io::Write) -> io::Result<()> {
+        w.write_all(&self)
     }
 }

@@ -163,15 +163,27 @@ impl FunctionBuilder {
         self.insert_insn(insn_data);
     }
 
-    pub fn phi(&mut self, args: &[Value]) -> Value {
-        debug_assert!(!args.is_empty());
-
-        let ty = self.func.dfg.value_ty(args[0]).clone();
+    pub fn phi(&mut self, args: &[(Value, Block)]) -> Value {
+        let ty = self.func.dfg.value_ty(args[0].0).clone();
         let insn_data = InsnData::Phi {
-            args: args.to_vec(),
+            values: args.iter().map(|(val, _)| *val).collect(),
+            blocks: args.iter().map(|(_, block)| *block).collect(),
             ty,
         };
         self.insert_insn(insn_data).unwrap()
+    }
+
+    pub fn append_phi_arg(&mut self, phi_value: Value, value: Value, block: Block) {
+        let insn = self
+            .func
+            .dfg
+            .value_insn(phi_value)
+            .expect("value must be the result of phi function");
+        debug_assert!(
+            self.func.dfg.is_phi(insn),
+            "value must be the result of phi function"
+        );
+        self.func.dfg.append_phi_arg(insn, value, block);
     }
 
     pub fn declare_var(&mut self, ty: Type) -> Variable {
@@ -361,7 +373,7 @@ mod tests {
         builder.jump(merge_block);
 
         builder.switch_to_block(merge_block);
-        let v3 = builder.phi(&[v1, v2]);
+        let v3 = builder.phi(&[(v1, then_block), (v2, else_block)]);
         builder.add(v3, arg0);
         builder.ret(&[]);
 
@@ -383,7 +395,7 @@ mod tests {
         jump block3;
 
     block3:
-        v3.i64 = phi v1.i64 v2.i64;
+        v3.i64 = phi (v1.i64 block1) (v2.i64 block2);
         v4.i64 = add v3.i64 v0.i64;
         return;
 

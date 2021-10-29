@@ -158,15 +158,13 @@ impl SsaBuilder {
 
     fn add_phi_args(&mut self, func: &mut Function, var: Variable, phi: Insn) {
         let block = func.layout.insn_block(phi);
-
-        let mut preds = vec![];
-        std::mem::swap(&mut self.blocks[block].preds, &mut preds);
+        let preds = std::mem::take(&mut self.blocks[block].preds);
 
         for pred in &preds {
             let value = self.use_var(func, var, *pred);
-            func.dfg.append_phi_arg(phi, value);
+            func.dfg.append_phi_arg(phi, value, *pred);
         }
-        std::mem::swap(&mut self.blocks[block].preds, &mut preds);
+        self.blocks[block].preds = preds;
 
         self.remove_trivial_phi(func, phi);
     }
@@ -202,7 +200,8 @@ impl SsaBuilder {
     fn prepend_phi(&mut self, func: &mut Function, var: Variable, block: Block) -> (Insn, Value) {
         let ty = self.var_ty(var).clone();
         let insn_data = InsnData::Phi {
-            args: Vec::new(),
+            values: Vec::new(),
+            blocks: Vec::new(),
             ty,
         };
         let mut cursor = InsnInserter::new(func, CursorLocation::BlockTop(block));
@@ -298,7 +297,7 @@ mod tests {
         jump block3;
 
     block3:
-        v3.i32 = phi v1.i32 v2.i32;
+        v3.i32 = phi (v1.i32 block1) (v2.i32 block2);
         return;
 
 "
@@ -349,7 +348,7 @@ mod tests {
         jump block1;
 
     block1:
-        v4.i32 = phi v0.i32 v1.i32;
+        v4.i32 = phi (v0.i32 block0) (v1.i32 block2);
         brz v0.i32 block3;
         jump block2;
 
@@ -425,7 +424,7 @@ mod tests {
         jump block1;
 
     block1:
-        v4.i32 = phi v0.i32 v5.i32;
+        v4.i32 = phi (v0.i32 block0) (v5.i32 block5);
         brz v0.i32 block2;
         jump block6;
 
@@ -441,7 +440,7 @@ mod tests {
         jump block5;
 
     block5:
-        v5.i32 = phi v1.i32 v4.i32;
+        v5.i32 = phi (v1.i32 block3) (v4.i32 block4);
         jump block1;
 
     block6:
@@ -507,7 +506,7 @@ mod tests {
         jump block1;
 
     block1:
-        v4.i32 = phi v0.i32 v5.i32;
+        v4.i32 = phi (v0.i32 block0) (v5.i32 block5);
         brz v0.i32 block2;
         jump block6;
 
@@ -523,7 +522,7 @@ mod tests {
         jump block5;
 
     block5:
-        v5.i32 = phi v1.i32 v4.i32;
+        v5.i32 = phi (v1.i32 block3) (v4.i32 block4);
         jump block1;
 
     block6:

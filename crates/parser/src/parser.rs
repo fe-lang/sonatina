@@ -302,12 +302,18 @@ impl Code {
                 InsnData::Return { args }
             }
             Self::Phi => {
-                let mut args = vec![];
-                while let Some(value) = parser.lexer.next_value() {
-                    args.push(Value(value.id));
+                let mut values = vec![];
+                let mut blocks = vec![];
+                while parser.lexer.next_lparen().is_some() {
+                    let value = parser.lexer.next_value().unwrap();
+                    values.push(Value(value.id));
+                    let block = parser.lexer.next_block().unwrap();
+                    blocks.push(Block(block));
+                    parser.lexer.next_rparen().unwrap();
                 }
                 InsnData::Phi {
-                    args,
+                    values,
+                    blocks,
                     ty: ret_ty.unwrap(),
                 }
             }
@@ -377,7 +383,7 @@ mod tests {
         jump block1;
 
     block1:
-        v4.i32 = phi v0.i32 v5.i32;
+        v4.i32 = phi (v0.i32 block0) (v5.i32 block5);
         brz v0.i32 block2;
         jump block6;
 
@@ -393,7 +399,7 @@ mod tests {
         jump block5;
 
     block5:
-        v5.i32 = phi v1.i32 v4.i32;
+        v5.i32 = phi (v1.i32 block3) (v4.i32 block4);
         jump block1;
 
     block6:

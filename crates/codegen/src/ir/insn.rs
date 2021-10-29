@@ -46,7 +46,11 @@ pub enum InsnData {
     Return { args: Vec<Value> },
 
     /// Phi funcion.
-    Phi { args: Vec<Value>, ty: Type },
+    Phi {
+        values: Vec<Value>,
+        blocks: Vec<Block>,
+        ty: Type,
+    },
 }
 
 impl InsnData {
@@ -68,7 +72,7 @@ impl InsnData {
         match self {
             Self::Binary { args, .. } | Self::Store { args, .. } => args,
             Self::Cast { args, .. } | Self::Load { args, .. } | Self::Branch { args, .. } => args,
-            Self::Phi { args, .. } | Self::Return { args } => args,
+            Self::Phi { values: args, .. } | Self::Return { args } => args,
             _ => &[],
         }
     }
@@ -77,7 +81,7 @@ impl InsnData {
         match self {
             Self::Binary { args, .. } | Self::Store { args, .. } => args,
             Self::Cast { args, .. } | Self::Load { args, .. } | Self::Branch { args, .. } => args,
-            Self::Phi { args, .. } => args,
+            Self::Phi { values, .. } => values,
             _ => &mut [],
         }
     }
