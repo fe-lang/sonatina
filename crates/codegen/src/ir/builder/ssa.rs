@@ -75,7 +75,7 @@ impl SsaBlockData {
     }
 
     fn take_incomplete_phis(&mut self) -> Vec<(Variable, Insn)> {
-        std::mem::replace(&mut self.incomplete_phis, vec![])
+        std::mem::take(&mut self.incomplete_phis)
     }
 
     fn push_incomplete_phi(&mut self, var: Variable, insn: Insn) {
@@ -144,8 +144,8 @@ impl SsaBuilder {
             return value;
         }
 
-        match self.blocks[block].preds() {
-            &[pred] => self.use_var(func, var, pred),
+        match *self.blocks[block].preds() {
+            [pred] => self.use_var(func, var, pred),
             _ => {
                 let (phi_insn, phi_value) = self.prepend_phi(func, var, block);
                 // Break potential cycles by defining operandless phi.

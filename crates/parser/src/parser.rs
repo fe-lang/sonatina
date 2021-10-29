@@ -9,7 +9,7 @@ use super::lexer::{Code, Lexer};
 pub struct Parser {}
 
 impl Parser {
-    pub fn parse<'a>(input: &'a str) -> ParsedModule {
+    pub fn parse(input: &str) -> ParsedModule {
         let mut lexer = Lexer::new(input);
 
         let mut comments = Vec::new();
@@ -47,9 +47,7 @@ impl<'a, 'b> FuncParser<'a, 'b> {
     }
 
     fn parse(&mut self) -> Option<ParsedFunction> {
-        if self.lexer.peek_token().is_none() {
-            return None;
-        }
+        self.lexer.peek_token()?;
 
         let comments = self.parse_comment();
         self.lexer.next_func().unwrap();
@@ -191,7 +189,7 @@ impl<'a> FuncCursor for InsnInserter<'a> {
     }
 
     fn func(&self) -> &Function {
-        &self.func
+        self.func
     }
 
     fn func_mut(&mut self) -> &mut Function {

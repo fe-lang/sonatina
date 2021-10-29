@@ -31,11 +31,11 @@ impl CriticalEdgeSplitter {
             }
         }
 
-        let mut edges = std::mem::replace(&mut self.critical_edges, vec![]);
+        let edges = std::mem::take(&mut self.critical_edges);
         for &insn in &edges {
             self.split_edge(insn, func, cfg);
         }
-        std::mem::swap(&mut self.critical_edges, &mut edges);
+        self.critical_edges = edges;
     }
 
     fn push_insn_if_critical_edge(&mut self, insn: Insn, func: &Function, cfg: &ControlFlowGraph) {

@@ -169,7 +169,7 @@ impl<'a> FuncCursor for InsnInserter<'a> {
     }
 
     fn func(&self) -> &Function {
-        &self.func
+        self.func
     }
 
     fn func_mut(&mut self) -> &mut Function {

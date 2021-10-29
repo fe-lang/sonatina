@@ -74,10 +74,7 @@ impl<'a> Lexer<'a> {
             .is_some()
         {}
 
-        if self.peek_char().is_none() {
-            return None;
-        }
-
+        self.peek_char()?;
         let token = if self.eat_char_if(|c| c == ':').is_some() {
             Token::Colon
         } else if self.eat_char_if(|c| c == ';').is_some() {
@@ -91,12 +88,7 @@ impl<'a> Lexer<'a> {
         } else if self.eat_char_if(|c| c == '=').is_some() {
             Token::Eq
         } else if self.eat_char_if(|c| c == '#').is_some() {
-            let is_module = if self.eat_char_if(|c| c == '!').is_some() {
-                true
-            } else {
-                false
-            };
-
+            let is_module = self.eat_char_if(|c| c == '!').is_some();
             let start = self.cur;
             while self.eat_char_if(|c| c != '\n').is_some() {}
             let end = self.cur;
