@@ -149,10 +149,10 @@ impl<'a> InsnInserter<'a> {
             self.func.dfg.values.reserve(value_id);
             for _ in 0..(value_id - value_len + 1) {
                 // Make dummy value.
-                self.func
-                    .dfg
-                    .values
-                    .push(ValueData::Alias { value: Value(0) });
+                self.func.dfg.values.push(ValueData::Arg {
+                    ty: Type::I8,
+                    idx: usize::MAX,
+                });
             }
         }
 

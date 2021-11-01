@@ -6,7 +6,7 @@ use std::fmt;
 use super::{types::U256, Block, DataFlowGraph, Type, Value};
 
 /// An opaque reference to [`InsnData`]
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub struct Insn(pub u32);
 cranelift_entity::entity_impl!(Insn);
 
@@ -84,6 +84,10 @@ impl InsnData {
             Self::Phi { values, .. } => values,
             _ => &mut [],
         }
+    }
+
+    pub fn replace_arg(&mut self, new_arg: Value, idx: usize) {
+        self.args_mut()[idx] = new_arg;
     }
 
     pub(super) fn result_type(&self, dfg: &DataFlowGraph) -> Option<Type> {

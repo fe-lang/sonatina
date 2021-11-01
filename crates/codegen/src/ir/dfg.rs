@@ -1,5 +1,7 @@
 //! This module contains Sonatine IR instructions definitions.
 
+use std::collections::BTreeSet;
+
 use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap};
 
 use super::{Insn, InsnData, Type, Value, ValueData};
@@ -12,7 +14,7 @@ pub struct DataFlowGraph {
     pub values: PrimaryMap<Value, ValueData>,
     insns: PrimaryMap<Insn, InsnData>,
     insn_results: SecondaryMap<Insn, PackedOption<Value>>,
-    users: SecondaryMap<Value, Vec<Insn>>,
+    users: SecondaryMap<Value, BTreeSet<Insn>>,
 }
 
 impl DataFlowGraph {
@@ -32,9 +34,22 @@ impl DataFlowGraph {
         let insn = self.insns.push(insn);
         let data = &self.insns[insn];
         for arg in data.args() {
-            self.users[*arg].push(insn);
+            self.users[*arg].insert(insn);
         }
         insn
+    }
+
+    pub fn replace_value(&mut self, old_value: Value, new_value: Value) {
+        let old_value_users = std::mem::take(&mut self.users[old_value]);
+
+        for insn in old_value_users.into_iter() {
+            for idx in 0..self.insn_args_num(insn) {
+                if self.insn_arg(insn, idx) == old_value {
+                    self.replace_insn_arg(insn, new_value, idx);
+                }
+            }
+            self.users[new_value].insert(insn);
+        }
     }
 
     pub fn make_result(&mut self, insn: Insn) -> Option<ValueData> {
@@ -59,12 +74,20 @@ impl DataFlowGraph {
         &self.insns[insn]
     }
 
-    pub fn users(&self, value: Value) -> &[Insn] {
-        &self.users[value]
+    pub fn users(&self, value: Value) -> impl Iterator<Item = &Insn> {
+        self.users[value].iter()
     }
 
-    pub fn user_of(&self, value: Value, idx: usize) -> Insn {
-        self.users(value)[idx]
+    pub fn users_num(&self, value: Value) -> usize {
+        self.users[value].len()
+    }
+
+    pub fn remove_user(&mut self, value: Value, user: Insn) {
+        self.users[value].remove(&user);
+    }
+
+    pub fn user(&self, value: Value, idx: usize) -> Insn {
+        *self.users(value).nth(idx).unwrap()
     }
 
     pub fn block_data(&self, block: Block) -> &BlockData {
@@ -75,7 +98,6 @@ impl DataFlowGraph {
         match self.values[value] {
             ValueData::Insn { insn, .. } => ValueDef::Insn(insn),
             ValueData::Arg { idx, .. } => ValueDef::Arg(idx),
-            ValueData::Alias { .. } => self.value_def(self.resolve_alias(value)),
         }
     }
 
@@ -89,7 +111,6 @@ impl DataFlowGraph {
     pub fn value_ty(&self, value: Value) -> &Type {
         match &self.values[value] {
             ValueData::Insn { ty, .. } | ValueData::Arg { ty, .. } => ty,
-            ValueData::Alias { .. } => self.value_ty(self.resolve_alias(value)),
         }
     }
 
@@ -116,6 +137,10 @@ impl DataFlowGraph {
         self.insn_data(insn).args()
     }
 
+    pub fn insn_args_num(&self, insn: Insn) -> usize {
+        self.insn_args(insn).len()
+    }
+
     pub fn insn_arg(&self, insn: Insn, idx: usize) -> Value {
         self.insn_args(insn)[idx]
     }
@@ -123,32 +148,17 @@ impl DataFlowGraph {
     pub fn replace_insn_arg(&mut self, insn: Insn, new_arg: Value, idx: usize) -> Value {
         let data = &mut self.insns[insn];
         let args = data.args_mut();
-        std::mem::replace(&mut args[idx], new_arg)
+        self.users[new_arg].insert(insn);
+        let old_arg = std::mem::replace(&mut args[idx], new_arg);
+        if args.iter().find(|arg| **arg == old_arg).is_none() {
+            self.remove_user(old_arg, insn);
+        }
+
+        old_arg
     }
 
     pub fn insn_result(&self, insn: Insn) -> Option<Value> {
         self.insn_results[insn].expand()
-    }
-
-    pub fn make_alias(&mut self, from: Value, to: Value) {
-        self.values[from] = ValueData::Alias {
-            value: self.resolve_alias(to),
-        };
-    }
-
-    pub fn resolve_alias(&self, mut value: Value) -> Value {
-        let value_len = self.values.len();
-        let mut alias_depth = 0;
-
-        while let ValueData::Alias { value: resolved } = self.values[value] {
-            if alias_depth >= value_len {
-                panic!("alias cycle detected");
-            }
-            value = resolved;
-            alias_depth += 1;
-        }
-
-        value
     }
 
     pub fn branch_dest(&self, insn: Insn) -> Option<Block> {

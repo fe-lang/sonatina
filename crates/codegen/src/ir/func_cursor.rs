@@ -37,6 +37,10 @@ pub trait FuncCursor {
         let insn = self
             .insn()
             .expect("current cursor location doesn't point to insn");
+        for idx in 0..self.func().dfg.insn_args_num(insn) {
+            let arg = self.func().dfg.insn_arg(insn, idx);
+            self.func_mut().dfg.remove_user(arg, insn);
+        }
         self.proceed();
         self.func_mut().layout.remove_insn(insn);
     }
@@ -48,14 +52,25 @@ pub trait FuncCursor {
             CursorLocation::NoWhere => panic!("cursor loc points `NoWhere`"),
         };
 
+        // Store next block of the current block for later use.
         let next_block = self.func().layout.next_block_of(block);
+
+        // Remove all insns in the current block.
+        let mut next_insn = self.func().layout.first_insn_of(block);
+        while let Some(insn) = next_insn {
+            self.set_loc(CursorLocation::At(insn));
+            self.remove_insn();
+            next_insn = self.func().layout.next_insn_of(insn);
+        }
+        // Remove current block.
+        self.func_mut().layout.remove_block(block);
+
+        // Set cursor location to next block if exists.
         if let Some(next_block) = next_block {
             self.set_loc(CursorLocation::BlockTop(next_block))
         } else {
             self.set_loc(CursorLocation::NoWhere)
         }
-
-        self.func_mut().layout.remove_block(block)
     }
 
     fn insn(&self) -> Option<Insn> {

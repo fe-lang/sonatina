@@ -176,21 +176,18 @@ impl SsaBuilder {
             panic!("variable is undefined or used in unreachable block");
         }
 
-        let first = func.dfg.resolve_alias(phi_args[0]);
+        let first = phi_args[0];
 
-        if phi_args
-            .iter()
-            .any(|arg| func.dfg.resolve_alias(*arg) != first)
-        {
+        if phi_args.iter().any(|arg| *arg != first) {
             return;
         }
 
-        func.dfg.make_alias(phi_value, first);
+        func.dfg.replace_value(phi_value, first);
         self.trivial_phis.insert(phi);
         InsnInserter::new(func, CursorLocation::At(phi)).remove_insn();
 
-        for i in 0..func.dfg.users(phi_value).len() {
-            let user = func.dfg.user_of(phi_value, i);
+        for i in 0..func.dfg.users_num(phi_value) {
+            let user = func.dfg.user(phi_value, i);
             if func.dfg.is_phi(user) && !self.trivial_phis.contains_key(user) {
                 self.remove_trivial_phi(func, user);
             }
@@ -416,8 +413,11 @@ mod tests {
         builder.ret(&[]);
         builder.seal_block();
 
+        let f = builder.build();
+        println!("{}", dump_func(&f));
+
         assert_eq!(
-            dump_func(&builder.build()),
+            dump_func(&f),
             "func %test_func():
     block0:
         v0.i32 = imm_i32 1;
