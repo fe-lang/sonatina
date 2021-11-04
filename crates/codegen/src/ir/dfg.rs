@@ -125,6 +125,14 @@ impl DataFlowGraph {
         }
     }
 
+    pub fn phi_blocks(&self, insn: Insn) -> &[Block] {
+        let data = &self.insns[insn];
+        match data {
+            InsnData::Phi { blocks, .. } => blocks,
+            _ => panic!("insn is not a phi function"),
+        }
+    }
+
     pub fn phi_blocks_mut(&mut self, insn: Insn) -> &mut [Block] {
         let data = &mut self.insns[insn];
         match data {
@@ -150,7 +158,7 @@ impl DataFlowGraph {
         let args = data.args_mut();
         self.users[new_arg].insert(insn);
         let old_arg = std::mem::replace(&mut args[idx], new_arg);
-        if args.iter().find(|arg| **arg == old_arg).is_none() {
+        if args.iter().all(|arg| *arg != old_arg) {
             self.remove_user(old_arg, insn);
         }
 
@@ -161,12 +169,12 @@ impl DataFlowGraph {
         self.insn_results[insn].expand()
     }
 
-    pub fn branch_dest(&self, insn: Insn) -> Option<Block> {
-        self.insns[insn].branch_dest()
+    pub fn branch_dests(&self, insn: Insn) -> &[Block] {
+        self.insns[insn].branch_dests()
     }
 
-    pub fn branch_dest_mut(&mut self, insn: Insn) -> Option<&mut Block> {
-        self.insns[insn].branch_dest_mut()
+    pub fn branch_dests_mut(&mut self, insn: Insn) -> &mut [Block] {
+        self.insns[insn].branch_dests_mut()
     }
 
     pub fn is_phi(&self, insn: Insn) -> bool {

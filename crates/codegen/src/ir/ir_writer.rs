@@ -160,17 +160,17 @@ impl IrWrite for Insn {
                 w.write_all(b"store")?;
                 writer.write_insn_args(args, &mut w)?;
             }
-            Jump { code, dest } => {
+            Jump { code, dests } => {
                 w.write_fmt(format_args!("{}", code.as_str()))?;
                 writer.space(&mut w)?;
-                dest.write(writer, &mut w)?;
+                writer.write_iter_with_delim(dests.iter(), " ", &mut w)?;
             }
-            Branch { code, args, dest } => {
-                w.write_fmt(format_args!("{}", code.as_str()))?;
+            Branch { args, dests } => {
+                w.write_all(b"br")?;
                 writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
                 writer.space(&mut w)?;
-                dest.write(writer, &mut w)?;
+                writer.write_iter_with_delim(dests.iter(), " ", &mut w)?;
             }
             Return { args } => {
                 w.write_all(b"return")?;
@@ -184,8 +184,7 @@ impl IrWrite for Insn {
                 writer.space(&mut w)?;
                 let mut args = vec![];
                 for (value, block) in values.iter().zip(blocks.iter()) {
-                    let mut arg = Vec::new();
-                    arg.push(b'(');
+                    let mut arg = vec![b'('];
                     value.write(writer, &mut arg)?;
                     writer.space(&mut arg)?;
                     block.write(writer, &mut arg)?;
@@ -214,6 +213,6 @@ where
 
 impl IrWrite for Vec<u8> {
     fn write(&self, _: &mut FuncWriter, mut w: impl io::Write) -> io::Result<()> {
-        w.write_all(&self)
+        w.write_all(self)
     }
 }

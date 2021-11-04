@@ -256,8 +256,7 @@ mod tests {
 
         builder.switch_to_block(b0);
         let imm = builder.imm_i32(1);
-        builder.brz(b1, imm);
-        builder.jump(b2);
+        builder.br(imm, b2, b1);
         builder.seal_block();
 
         builder.switch_to_block(b1);
@@ -282,8 +281,7 @@ mod tests {
             "func %test_func():
     block0:
         v0.i32 = imm_i32 1;
-        brz v0.i32 block1;
-        jump block2;
+        br v0.i32 block2 block1;
 
     block1:
         v1.i32 = imm_i32 2;
@@ -319,8 +317,7 @@ mod tests {
         builder.seal_block();
 
         builder.switch_to_block(b1);
-        builder.brz(b3, value);
-        builder.jump(b2);
+        builder.br(value, b2, b3);
 
         builder.switch_to_block(b2);
         let value = builder.imm_i32(10);
@@ -346,8 +343,7 @@ mod tests {
 
     block1:
         v4.i32 = phi (v0.i32 block0) (v1.i32 block2);
-        brz v0.i32 block3;
-        jump block2;
+        br v0.i32 block2 block3;
 
     block2:
         v1.i32 = imm_i32 10;
@@ -382,12 +378,10 @@ mod tests {
         builder.seal_block();
 
         builder.switch_to_block(b1);
-        builder.brz(b2, value1);
-        builder.jump(b6);
+        builder.br(value1, b6, b2);
 
         builder.switch_to_block(b2);
-        builder.brz(b3, value1);
-        builder.jump(b4);
+        builder.br(value1, b4, b3);
         builder.seal_block();
 
         builder.switch_to_block(b3);
@@ -425,12 +419,10 @@ mod tests {
 
     block1:
         v4.i32 = phi (v0.i32 block0) (v5.i32 block5);
-        brz v0.i32 block2;
-        jump block6;
+        br v0.i32 block6 block2;
 
     block2:
-        brz v0.i32 block3;
-        jump block4;
+        br v0.i32 block4 block3;
 
     block3:
         v1.i32 = imm_i32 2;
@@ -471,12 +463,10 @@ mod tests {
         builder.jump(b1);
 
         builder.switch_to_block(b1);
-        builder.brz(b2, value1);
-        builder.jump(b6);
+        builder.br(value1, b6, b2);
 
         builder.switch_to_block(b2);
-        builder.brz(b3, value1);
-        builder.jump(b4);
+        builder.br(value1, b4, b3);
 
         builder.switch_to_block(b3);
         let value2 = builder.imm_i32(2);
@@ -507,12 +497,10 @@ mod tests {
 
     block1:
         v4.i32 = phi (v0.i32 block0) (v5.i32 block5);
-        brz v0.i32 block2;
-        jump block6;
+        br v0.i32 block6 block2;
 
     block2:
-        brz v0.i32 block3;
-        jump block4;
+        br v0.i32 block4 block3;
 
     block3:
         v1.i32 = imm_i32 2;

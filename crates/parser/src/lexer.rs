@@ -194,7 +194,8 @@ impl<'a> Lexer<'a> {
             (b"add",Code::Add),
             (b"sub",Code::Sub),
             (b"mul",Code::Mul),
-            (b"div",Code::Div),
+            (b"udiv",Code::UDiv),
+            (b"sdiv",Code::SDiv),
             (b"lt",Code::Lt),
             (b"gt",Code::Gt),
             (b"slt",Code::Slt),
@@ -209,8 +210,7 @@ impl<'a> Lexer<'a> {
             (b"store", Code::Store),
             (b"jump", Code::Jump),
             (b"fallthrough", Code::FallThrough),
-            (b"brz", Code::Brz),
-            (b"brnz", Code::Brnz),
+            (b"br", Code::Br),
             (b"return", Code::Return),
             (b"phi", Code::Phi),
         }
@@ -225,7 +225,6 @@ impl<'a> Lexer<'a> {
             (b"i64", Type::I64),
             (b"i128", Type::I128),
             (b"i256", Type::I256),
-            (b"bool", Type::Bool),
         };
 
         if base.is_none() && self.eat_char_if(|c| c == '[').is_some() {
@@ -338,7 +337,8 @@ pub(super) enum Code {
     Add,
     Sub,
     Mul,
-    Div,
+    UDiv,
+    SDiv,
     Lt,
     Gt,
     Slt,
@@ -360,8 +360,7 @@ pub(super) enum Code {
     FallThrough,
 
     // Branch ops.
-    Brz,
-    Brnz,
+    Br,
 
     Return,
 

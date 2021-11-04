@@ -104,8 +104,7 @@ mod tests {
 
         builder.switch_to_block(entry_block);
         let v0 = builder.imm_u8(1);
-        builder.brz(then_block, v0);
-        builder.jump(else_block);
+        builder.br(v0, else_block, then_block);
 
         builder.switch_to_block(then_block);
         builder.jump(merge_block);
@@ -145,28 +144,22 @@ mod tests {
 
         builder.switch_to_block(a);
         let v0 = builder.imm_u8(1);
-        builder.brz(b, v0);
-        builder.jump(c);
+        builder.br(v0, c, b);
 
         builder.switch_to_block(b);
-        builder.brz(d, v0);
-        builder.jump(g);
+        builder.br(v0, g, d);
 
         builder.switch_to_block(c);
-        builder.brz(e, v0);
-        builder.jump(h);
+        builder.br(v0, h, e);
 
         builder.switch_to_block(d);
-        builder.brz(f, v0);
-        builder.jump(g);
+        builder.br(v0, g, f);
 
         builder.switch_to_block(e);
-        builder.brz(c, v0);
-        builder.jump(h);
+        builder.br(v0, h, c);
 
         builder.switch_to_block(f);
-        builder.brz(i, v0);
-        builder.jump(k);
+        builder.br(v0, k, i);
 
         builder.switch_to_block(g);
         builder.jump(j);
@@ -184,8 +177,7 @@ mod tests {
         builder.jump(l);
 
         builder.switch_to_block(l);
-        builder.brz(b, v0);
-        builder.jump(m);
+        builder.br(v0, m, b);
 
         builder.switch_to_block(m);
         builder.ret(&[]);

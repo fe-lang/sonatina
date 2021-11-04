@@ -11,7 +11,7 @@ pub struct Insn(pub u32);
 cranelift_entity::entity_impl!(Insn);
 
 /// An instruction data definition.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InsnData {
     /// Immediate instruction.
     Immediate { code: ImmediateOp },
@@ -33,14 +33,10 @@ pub enum InsnData {
     Store { args: [Value; 2] },
 
     /// Unconditional jump operaitons.
-    Jump { code: JumpOp, dest: Block },
+    Jump { code: JumpOp, dests: [Block; 1] },
 
     /// Conditional jump operations.
-    Branch {
-        code: BranchOp,
-        args: [Value; 1],
-        dest: Block,
-    },
+    Branch { args: [Value; 1], dests: [Block; 2] },
 
     /// Return.
     Return { args: Vec<Value> },
@@ -54,17 +50,19 @@ pub enum InsnData {
 }
 
 impl InsnData {
-    pub fn branch_dest(&self) -> Option<Block> {
+    pub fn branch_dests(&self) -> &[Block] {
         match self {
-            Self::Jump { dest, .. } | Self::Branch { dest, .. } => Some(*dest),
-            _ => None,
+            Self::Jump { dests, .. } => dests.as_ref(),
+            Self::Branch { dests, .. } => dests.as_ref(),
+            _ => &[],
         }
     }
 
-    pub fn branch_dest_mut(&mut self) -> Option<&mut Block> {
+    pub fn branch_dests_mut(&mut self) -> &mut [Block] {
         match self {
-            Self::Jump { dest, .. } | Self::Branch { dest, .. } => Some(dest),
-            _ => None,
+            Self::Jump { dests, .. } => dests.as_mut(),
+            Self::Branch { dests, .. } => dests.as_mut(),
+            _ => &mut [],
         }
     }
 
@@ -102,7 +100,7 @@ impl InsnData {
 }
 
 /// Immidiates.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImmediateOp {
     I8(i8),
     I16(i16),
@@ -149,12 +147,13 @@ impl fmt::Display for ImmediateOp {
 }
 
 /// Binary operations.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
     Add,
     Sub,
     Mul,
-    Div,
+    UDiv,
+    SDiv,
     Lt,
     Gt,
     Slt,
@@ -170,7 +169,8 @@ impl BinaryOp {
             Self::Add => "add",
             Self::Sub => "sub",
             Self::Mul => "mul",
-            Self::Div => "div",
+            Self::UDiv => "udiv",
+            Self::SDiv => "sdiv",
             Self::Lt => "lt",
             Self::Gt => "gt",
             Self::Slt => "slt",
@@ -182,10 +182,7 @@ impl BinaryOp {
     }
 
     fn result_type(self, dfg: &DataFlowGraph, args: &[Value; 2]) -> Type {
-        match self {
-            Self::Add | Self::Sub | Self::Mul | Self::Div => dfg.value_ty(args[0]).clone(),
-            _ => Type::Bool,
-        }
+        dfg.value_ty(args[0]).clone()
     }
 }
 
@@ -195,7 +192,7 @@ impl fmt::Display for BinaryOp {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CastOp {
     Sext,
     Zext,
@@ -219,7 +216,7 @@ impl fmt::Display for CastOp {
 }
 
 /// Unconditional jump operations.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JumpOp {
     Jump,
     FallThrough,
@@ -235,31 +232,6 @@ impl JumpOp {
 }
 
 impl fmt::Display for JumpOp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// Conditional jump operations.
-#[derive(Debug, Clone, Copy)]
-pub enum BranchOp {
-    /// Branch if cond is zero.
-    Brz,
-
-    /// Branch if cond is non zero.
-    Brnz,
-}
-
-impl BranchOp {
-    pub(super) fn as_str(self) -> &'static str {
-        match self {
-            Self::Brz => "brz",
-            Self::Brnz => "brnz",
-        }
-    }
-}
-
-impl fmt::Display for BranchOp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(self.as_str())
     }

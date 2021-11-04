@@ -59,12 +59,6 @@ impl Layout {
         self.blocks[block].last_insn
     }
 
-    pub fn last_two_insn_of(&self, block: Block) -> (Option<Insn>, Option<Insn>) {
-        self.last_insn_of(block).map_or((None, None), |last_insn| {
-            (Some(last_insn), self.prev_insn_of(last_insn))
-        })
-    }
-
     pub fn prev_insn_of(&self, insn: Insn) -> Option<Insn> {
         debug_assert!(self.is_insn_inserted(insn));
         self.insns[insn].prev

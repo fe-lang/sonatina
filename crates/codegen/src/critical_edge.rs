@@ -6,9 +6,9 @@ use super::ir::{
 };
 use super::{cfg::ControlFlowGraph, Block, Function, Insn};
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct CriticalEdgeSplitter {
-    critical_edges: Vec<Insn>,
+    critical_edges: Vec<CriticalEdge>,
     inserted_blocks_for: SecondaryMap<Block, PackedOption<Block>>,
 }
 
@@ -18,48 +18,46 @@ impl CriticalEdgeSplitter {
     }
 
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) {
-        self.critical_edges.clear();
-        self.inserted_blocks_for.clear();
+        self.clear();
 
         for block in func.layout.iter_block() {
-            let (last_insn, penultimate_insn) = func.layout.last_two_insn_of(block);
-            if let Some(last_insn) = last_insn {
-                self.push_insn_if_critical_edge(last_insn, func, cfg);
-            }
-            if let Some(penultimate_insn) = penultimate_insn {
-                self.push_insn_if_critical_edge(penultimate_insn, func, cfg);
+            if let Some(last_insn) = func.layout.last_insn_of(block) {
+                self.add_critical_edges(last_insn, func, cfg);
             }
         }
 
         let edges = std::mem::take(&mut self.critical_edges);
-        for &insn in &edges {
-            self.split_edge(insn, func, cfg);
-        }
-        self.critical_edges = edges;
-    }
-
-    fn push_insn_if_critical_edge(&mut self, insn: Insn, func: &Function, cfg: &ControlFlowGraph) {
-        if self.is_critical_edge(insn, func, cfg) {
-            self.critical_edges.push(insn);
+        for edge in edges {
+            self.split_edge(edge, func, cfg);
         }
     }
 
-    fn is_critical_edge(&self, insn: Insn, func: &Function, cfg: &ControlFlowGraph) -> bool {
-        let dest = match func.dfg.branch_dest(insn) {
-            Some(dest) => dest,
-            None => return false,
-        };
-
-        let block = func.layout.insn_block(insn);
-        cfg.succ_num_of(block) > 1 && cfg.pred_num_of(dest) > 1
+    pub fn clear(&mut self) {
+        self.critical_edges.clear();
+        self.inserted_blocks_for.clear();
     }
 
-    fn split_edge(&mut self, insn: Insn, func: &mut Function, cfg: &mut ControlFlowGraph) {
-        let original_dest = func.dfg.branch_dest(insn).unwrap();
+    fn add_critical_edges(&mut self, insn: Insn, func: &Function, cfg: &ControlFlowGraph) {
+        let dests = func.dfg.branch_dests(insn);
+        if dests.len() < 2 {
+            return;
+        }
+
+        for (i, dest) in dests.iter().enumerate() {
+            if cfg.pred_num_of(*dest) > 1 {
+                self.critical_edges.push(CriticalEdge::new(insn, i));
+            }
+        }
+    }
+
+    fn split_edge(&mut self, edge: CriticalEdge, func: &mut Function, cfg: &mut ControlFlowGraph) {
+        let insn = edge.insn;
+        let dest_idx = edge.dest_idx;
+        let original_dest = func.dfg.branch_dests(insn)[dest_idx];
         let source_block = func.layout.insn_block(insn);
 
         if let Some(inserted_dest) = self.inserted_blocks_for[original_dest].expand() {
-            *func.dfg.branch_dest_mut(insn).unwrap() = inserted_dest;
+            func.dfg.branch_dests_mut(insn)[dest_idx] = inserted_dest;
             self.modify_cfg(cfg, source_block, original_dest, inserted_dest);
             self.modify_phi_blocks(func, original_dest);
             return;
@@ -68,14 +66,14 @@ impl CriticalEdgeSplitter {
         let inserted_dest = func.dfg.make_block();
         let fallthrough = func.dfg.make_insn(InsnData::Jump {
             code: JumpOp::FallThrough,
-            dest: original_dest,
+            dests: [original_dest],
         });
         let mut cursor = InsnInserter::new(func, CursorLocation::BlockTop(original_dest));
         cursor.insert_block_before(inserted_dest);
         cursor.set_loc(CursorLocation::BlockTop(inserted_dest));
         cursor.append_insn(fallthrough);
 
-        *func.dfg.branch_dest_mut(insn).unwrap() = inserted_dest;
+        func.dfg.branch_dests_mut(insn)[dest_idx] = inserted_dest;
         self.inserted_blocks_for[original_dest] = Some(inserted_dest).into();
 
         self.modify_cfg(cfg, source_block, original_dest, inserted_dest);
@@ -109,6 +107,18 @@ impl CriticalEdgeSplitter {
     }
 }
 
+#[derive(Debug)]
+struct CriticalEdge {
+    insn: Insn,
+    dest_idx: usize,
+}
+
+impl CriticalEdge {
+    fn new(insn: Insn, dest_idx: usize) -> Self {
+        Self { insn, dest_idx }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,8 +134,7 @@ mod tests {
 
         builder.switch_to_block(a);
         let v0 = builder.imm_u8(1);
-        builder.brz(b, v0);
-        builder.jump(c);
+        builder.br(v0, c, b);
 
         builder.switch_to_block(b);
         builder.jump(c);
@@ -145,8 +154,7 @@ mod tests {
             "func %test_func():
     block0:
         v0.i8 = imm_u8 1;
-        brz v0.i8 block1;
-        jump block3;
+        br v0.i8 block3 block1;
 
     block1:
         jump block2;
@@ -177,15 +185,13 @@ mod tests {
 
         builder.switch_to_block(a);
         let v0 = builder.imm_u8(1);
-        builder.brz(b, v0);
-        builder.jump(d);
+        builder.br(v0, d, b);
 
         builder.switch_to_block(b);
         builder.jump(c);
 
         builder.switch_to_block(c);
-        builder.brz(d, v0);
-        builder.jump(e);
+        builder.br(v0, e, d);
 
         builder.switch_to_block(d);
         builder.ret(&[]);
@@ -205,15 +211,13 @@ mod tests {
             "func %test_func():
     block0:
         v0.i8 = imm_u8 1;
-        brz v0.i8 block1;
-        jump block5;
+        br v0.i8 block5 block1;
 
     block1:
         jump block2;
 
     block2:
-        brz v0.i8 block5;
-        jump block4;
+        br v0.i8 block4 block5;
 
     block5:
         fallthrough block3;
@@ -248,8 +252,7 @@ mod tests {
         let phi_value = builder.phi(&[(v1, a)]);
         let v2 = builder.add(phi_value, v1);
         builder.append_phi_arg(phi_value, v2, b);
-        builder.brz(b, phi_value);
-        builder.jump(c);
+        builder.br(phi_value, c, b);
 
         builder.switch_to_block(c);
         builder.ret(&[]);
@@ -274,8 +277,7 @@ mod tests {
     block1:
         v1.i8 = phi (v0.i8 block0) (v2.i8 block3);
         v2.i8 = add v1.i8 v0.i8;
-        brz v1.i8 block3;
-        jump block2;
+        br v1.i8 block2 block3;
 
     block2:
         return;

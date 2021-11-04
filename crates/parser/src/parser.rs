@@ -1,6 +1,6 @@
 use sonatina_codegen::ir::{
     func_cursor::{CursorLocation, FuncCursor},
-    insn::{BinaryOp, BranchOp, CastOp, ImmediateOp, JumpOp},
+    insn::{BinaryOp, CastOp, ImmediateOp, JumpOp},
     Block, BlockData, Function, Insn, InsnData, Signature, Type, Value, ValueData,
 };
 
@@ -235,18 +235,9 @@ macro_rules! make_cast {
 macro_rules! make_jump {
     ($parser:ident, $code:path) => {{
         let dest = $parser.expect_block();
-        InsnData::Jump { code: $code, dest }
-    }};
-}
-
-macro_rules! make_branch {
-    ($parser:ident, $code:path) => {{
-        let arg = $parser.expect_value();
-        let dest = $parser.expect_block();
-        InsnData::Branch {
+        InsnData::Jump {
             code: $code,
-            args: [arg],
-            dest,
+            dests: [dest],
         }
     }};
 }
@@ -269,7 +260,8 @@ impl Code {
             Self::Add => make_binary!(parser, BinaryOp::Add),
             Self::Sub => make_binary!(parser, BinaryOp::Sub),
             Self::Mul => make_binary!(parser, BinaryOp::Mul),
-            Self::Div => make_binary!(parser, BinaryOp::Div),
+            Self::UDiv => make_binary!(parser, BinaryOp::UDiv),
+            Self::SDiv => make_binary!(parser, BinaryOp::SDiv),
             Self::Lt => make_binary!(parser, BinaryOp::Lt),
             Self::Gt => make_binary!(parser, BinaryOp::Gt),
             Self::Slt => make_binary!(parser, BinaryOp::Slt),
@@ -292,8 +284,15 @@ impl Code {
             }
             Self::Jump => make_jump!(parser, JumpOp::Jump),
             Self::FallThrough => make_jump!(parser, JumpOp::FallThrough),
-            Self::Brz => make_branch!(parser, BranchOp::Brz),
-            Self::Brnz => make_branch!(parser, BranchOp::Brnz),
+            Self::Br => {
+                let cond = parser.expect_value();
+                let then = parser.expect_block();
+                let else_ = parser.expect_block();
+                InsnData::Branch {
+                    args: [cond],
+                    dests: [then, else_],
+                }
+            }
             Self::Return => {
                 let mut args = vec![];
                 while let Some(value) = parser.lexer.next_value() {
@@ -384,12 +383,10 @@ mod tests {
 
     block1:
         v4.i32 = phi (v0.i32 block0) (v5.i32 block5);
-        brz v0.i32 block2;
-        jump block6;
+        br v0.i32 block6 block2;
 
     block2:
-        brz v0.i32 block3;
-        jump block4;
+        br v0.i32 block4 block3;
 
     block3:
         v1.i32 = imm_i32 2;

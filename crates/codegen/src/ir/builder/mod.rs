@@ -6,7 +6,7 @@ pub use ssa::Variable;
 
 use crate::ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    insn::{BinaryOp, BranchOp, CastOp, ImmediateOp, InsnData, JumpOp},
+    insn::{BinaryOp, CastOp, ImmediateOp, InsnData, JumpOp},
     types::U256,
 };
 
@@ -65,23 +65,6 @@ macro_rules! impl_cast_insn {
     };
 }
 
-macro_rules! impl_branch_insn {
-    ($name:ident, $code:path) => {
-        pub fn $name(&mut self, dest: Block, cond: Value) {
-            debug_assert!(!self.ssa_builder.is_sealed(dest));
-            let insn_data = InsnData::Branch {
-                code: $code,
-                args: [cond],
-                dest,
-            };
-
-            let pred = self.cursor().block();
-            self.ssa_builder.append_pred(dest, pred.unwrap());
-            self.insert_insn(insn_data);
-        }
-    };
-}
-
 impl FunctionBuilder {
     pub fn new(name: String, sig: Signature, ctxt: Box<dyn Context>) -> Self {
         let func = Function::new(name, sig);
@@ -118,7 +101,8 @@ impl FunctionBuilder {
     impl_binary_insn!(add, BinaryOp::Add);
     impl_binary_insn!(sub, BinaryOp::Sub);
     impl_binary_insn!(mul, BinaryOp::Mul);
-    impl_binary_insn!(div, BinaryOp::Div);
+    impl_binary_insn!(udiv, BinaryOp::UDiv);
+    impl_binary_insn!(sdiv, BinaryOp::SDiv);
     impl_binary_insn!(lt, BinaryOp::Lt);
     impl_binary_insn!(gt, BinaryOp::Gt);
     impl_binary_insn!(slt, BinaryOp::Slt);
@@ -145,7 +129,7 @@ impl FunctionBuilder {
         debug_assert!(!self.ssa_builder.is_sealed(dest));
         let insn_data = InsnData::Jump {
             code: JumpOp::Jump,
-            dest,
+            dests: [dest],
         };
 
         let pred = self.cursor().block();
@@ -153,8 +137,19 @@ impl FunctionBuilder {
         self.insert_insn(insn_data);
     }
 
-    impl_branch_insn!(brz, BranchOp::Brz);
-    impl_branch_insn!(brnz, BranchOp::Brnz);
+    pub fn br(&mut self, cond: Value, then: Block, else_: Block) {
+        debug_assert!(!self.ssa_builder.is_sealed(then));
+        debug_assert!(!self.ssa_builder.is_sealed(else_));
+        let insn_data = InsnData::Branch {
+            args: [cond],
+            dests: [then, else_],
+        };
+
+        let pred = self.cursor().block();
+        self.ssa_builder.append_pred(then, pred.unwrap());
+        self.ssa_builder.append_pred(else_, pred.unwrap());
+        self.insert_insn(insn_data);
+    }
 
     pub fn ret(&mut self, args: &[Value]) {
         let insn_data = InsnData::Return {
@@ -361,8 +356,7 @@ mod tests {
         let arg0 = builder.args()[0];
 
         builder.switch_to_block(entry_block);
-        builder.brz(then_block, arg0);
-        builder.jump(else_block);
+        builder.br(arg0, then_block, else_block);
 
         builder.switch_to_block(then_block);
         let v1 = builder.imm_i64(1);
@@ -383,8 +377,7 @@ mod tests {
             dump_func(&builder.build()),
             "func %test_func(i64):
     block0:
-        brz v0.i64 block1;
-        jump block2;
+        br v0.i64 block1 block2;
 
     block1:
         v1.i64 = imm_i64 1;

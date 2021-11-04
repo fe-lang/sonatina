@@ -21,12 +21,8 @@ impl ControlFlowGraph {
         self.entry = func.layout.first_block().into();
 
         for block in func.layout.iter_block() {
-            let (last_insn, penultimate_insn) = func.layout.last_two_insn_of(block);
-            if let Some(last_insn) = last_insn {
-                self.maybe_add_edge(func, last_insn);
-            }
-            if let Some(penultimate_insn) = penultimate_insn {
-                self.maybe_add_edge(func, penultimate_insn);
+            if let Some(last_insn) = func.layout.last_insn_of(block) {
+                self.add_insn_dests(func, last_insn);
             }
         }
     }
@@ -65,13 +61,10 @@ impl ControlFlowGraph {
         self.blocks[from].remove_succ(to);
     }
 
-    fn maybe_add_edge(&mut self, func: &Function, insn: Insn) -> bool {
-        if let Some(dest) = func.dfg.branch_dest(insn) {
+    fn add_insn_dests(&mut self, func: &Function, insn: Insn) {
+        for dest in func.dfg.branch_dests(insn) {
             let block = func.layout.insn_block(insn);
-            self.add_edge(block, dest);
-            true
-        } else {
-            false
+            self.add_edge(block, *dest);
         }
     }
 }
