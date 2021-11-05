@@ -408,7 +408,6 @@ mod tests {
         builder.seal_block();
 
         let f = builder.build();
-        println!("{}", dump_func(&f));
 
         assert_eq!(
             dump_func(&f),

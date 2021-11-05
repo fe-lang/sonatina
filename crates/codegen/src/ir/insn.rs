@@ -100,7 +100,7 @@ impl InsnData {
 }
 
 /// Immidiates.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImmediateOp {
     I8(i8),
     I16(i16),

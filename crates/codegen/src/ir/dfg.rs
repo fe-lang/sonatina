@@ -32,11 +32,24 @@ impl DataFlowGraph {
 
     pub fn make_insn(&mut self, insn: InsnData) -> Insn {
         let insn = self.insns.push(insn);
+        self.attach_user(insn);
+        insn
+    }
+
+    pub fn attach_user(&mut self, insn: Insn) {
         let data = &self.insns[insn];
         for arg in data.args() {
             self.users[*arg].insert(insn);
         }
-        insn
+    }
+
+    pub fn replace_insn(&mut self, insn: Insn, insn_data: InsnData) {
+        for i in 0..self.insn_args_num(insn) {
+            let arg = self.insn_arg(insn, i);
+            self.remove_user(arg, insn);
+        }
+        self.insns[insn] = insn_data;
+        self.attach_user(insn);
     }
 
     pub fn replace_value(&mut self, old_value: Value, new_value: Value) {
