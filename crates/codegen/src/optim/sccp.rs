@@ -840,14 +840,8 @@ struct I256 {
 
 impl I256 {
     fn from_u256(val: U256) -> Self {
-        let masked = val & I256_MASK;
-
-        let is_positive = masked == val;
-        let abs = if is_positive {
-            masked
-        } else {
-            !masked + U256::one()
-        };
+        let is_positive = (val & I256_MASK) == val;
+        let abs = if is_positive { val } else { !val + U256::one() };
 
         Self { is_positive, abs }
     }
@@ -914,5 +908,101 @@ impl Ord for I256 {
 impl PartialOrd<I256> for I256 {
     fn partial_cmp(&self, other: &I256) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn i256_conversion() {
+        let v_u256 = U256::zero();
+        let v_i256 = v_u256.to_signed();
+        assert!(v_i256.is_positive);
+        assert!(v_i256.is_zero());
+        assert_eq!(v_i256.abs, v_u256);
+        assert_eq!(v_i256.to_unsigned(), v_u256);
+
+        let v_u256 = U256::one();
+        let v_i256 = v_u256.to_signed();
+        assert!(v_i256.is_positive);
+        assert_eq!(v_i256.abs, v_u256);
+        assert_eq!(v_i256.to_unsigned(), v_u256);
+
+        let v_u256 = U256::MAX;
+        let v_i256 = v_u256.to_signed();
+        assert!(!v_i256.is_positive);
+        assert_eq!(v_i256.abs, U256::from(1));
+        assert_eq!(v_i256.to_unsigned(), v_u256);
+
+        let v_u256 = U256::one() << 255;
+        let v_i256 = v_u256.to_signed();
+        assert!(!v_i256.is_positive);
+        assert_eq!(v_i256.abs, v_u256);
+        assert_eq!(v_i256.to_unsigned(), v_u256);
+    }
+
+    #[test]
+    fn i256_ord() {
+        let zero = U256::zero().to_signed();
+
+        let one = U256::one().to_signed();
+        let maximum = (!(U256::one() << 255)).to_signed();
+
+        let minus_one = U256::MAX.to_signed();
+        let minimum = (U256::one() << 255).to_signed();
+
+        assert!(zero < one);
+        assert!(zero < maximum);
+        assert!(minus_one < zero);
+        assert!(minimum < zero);
+
+        assert!(one < maximum);
+        assert!(minimum < minus_one);
+
+        assert!(minus_one < one);
+        assert!(minus_one < maximum);
+        assert!(minimum < one);
+        assert!(minimum < maximum);
+    }
+
+    #[test]
+    fn i256_div() {
+        let two = (U256::one() * U256::from(2)).to_signed();
+        let four = (U256::one() * U256::from(4)).to_signed();
+        assert_eq!(four.overflowing_div(two).0, two);
+        assert!(!four.overflowing_div(two).1);
+        assert_eq!(two.overflowing_div(four).0, U256::zero().to_signed());
+
+        let minus_two = (U256::one() * U256::from(2)).to_signed();
+        let minus_four = (U256::one() * U256::from(4)).to_signed();
+        assert_eq!(minus_four.overflowing_div(minus_two).0, two);
+        assert_eq!(
+            minus_two.overflowing_div(minus_four).0,
+            U256::zero().to_signed()
+        );
+
+        assert_eq!(four.overflowing_div(minus_two).0, minus_two);
+        assert_eq!(two.overflowing_div(minus_four).0, U256::zero().to_signed());
+        assert_eq!(minus_four.overflowing_div(two).0, minus_two);
+        assert_eq!(minus_two.overflowing_div(four).0, U256::zero().to_signed());
+    }
+
+    #[test]
+    fn i256_div_overflow() {
+        let minus_one = U256::MAX.to_signed();
+        let minimum = (U256::one() << 255).to_signed();
+        let div_res = minimum.overflowing_div(minus_one);
+        assert_eq!(div_res.0, minimum);
+        assert!(div_res.1);
+    }
+
+    #[should_panic]
+    #[test]
+    fn i256_zero_division() {
+        let one = U256::one().to_signed();
+        let zero = U256::zero().to_signed();
+        one.overflowing_div(zero);
     }
 }
