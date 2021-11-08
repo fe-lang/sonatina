@@ -432,7 +432,7 @@ pub(crate) mod test_util {
     }
 
     pub(crate) fn dump_func(func: &Function) -> String {
-        let mut writer = FuncWriter::new(&func);
+        let mut writer = FuncWriter::new(func);
         writer.dump_string().unwrap()
     }
 }

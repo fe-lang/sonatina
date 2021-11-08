@@ -174,6 +174,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::many_single_char_names)]
     fn critical_edge_dup() {
         let mut builder = func_builder(vec![], vec![]);
 

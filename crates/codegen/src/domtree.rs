@@ -125,6 +125,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::many_single_char_names)]
     fn dom_tree_complex() {
         let mut builder = func_builder(vec![], vec![]);
 

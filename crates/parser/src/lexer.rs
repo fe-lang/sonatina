@@ -380,7 +380,7 @@ mod tests {
         v0.i32 = imm_i32 311;
         v1.i64 = imm_i64 120;
         return v0.i32 v1.i64;";
-        let mut lexer = Lexer::new(&input);
+        let mut lexer = Lexer::new(input);
 
         assert!(matches!(lexer.next_token().unwrap(), Func));
         assert!(matches!(lexer.next_token().unwrap(), Ident("test_func")));
@@ -423,7 +423,7 @@ mod tests {
         v3.i64 = mul v2.i64 v1.i64;
         return;
 ";
-        let mut lexer = Lexer::new(&input);
+        let mut lexer = Lexer::new(input);
         assert!(matches!(lexer.next_token().unwrap(), Func));
         assert!(matches!(lexer.next_token().unwrap(), Ident("test_func")));
         assert!(matches!(lexer.next_token().unwrap(), LParen));
@@ -460,7 +460,7 @@ mod tests {
         let input = "func %test_func([i32;4], [[i128;3];4]):
     block0:
         return;";
-        let mut lexer = Lexer::new(&input);
+        let mut lexer = Lexer::new(input);
 
         assert!(matches!(lexer.next_token().unwrap(), Func));
         assert!(matches!(lexer.next_token().unwrap(), Ident("test_func")));
