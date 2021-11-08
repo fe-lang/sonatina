@@ -6,3 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+filecheck = "0.2.1"
+sonatina-codegen = {path = "../codegen"}
+sonatina-parser = {path = "../parser"}
+termcolor = "1.1.2"
+walkdir = "2"
