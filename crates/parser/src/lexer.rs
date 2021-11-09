@@ -1,3 +1,5 @@
+use std::fmt;
+
 use sonatina_codegen::ir::Type;
 
 use super::{Error, ErrorKind, Result};
@@ -23,41 +25,6 @@ macro_rules! try_eat_variant {
              None
         }
     }
-}
-
-macro_rules! impl_next_token_kind {
-    ($fn_name:ident, $variant:path, $ret_ty:ty) => {
-        pub(super) fn $fn_name(&mut self) -> Result<Option<WithLoc<$ret_ty>>> {
-            Ok(match self.peek_token()? {
-                Some(WithLoc {
-                    item: $variant(_),
-                    line,
-                }) => match self.next_token()?.unwrap().item {
-                    $variant(data) => Some(WithLoc {
-                        item: data,
-                        line: *line,
-                    }),
-                    _ => None,
-                },
-                _ => None,
-            })
-        }
-    };
-
-    ($fn_name:ident, $variant:path) => {
-        pub(super) fn $fn_name(&mut self) -> Result<Option<WithLoc<()>>> {
-            Ok(match self.peek_token()? {
-                Some(WithLoc { line, .. }) => {
-                    self.next_token()?;
-                    Some(WithLoc {
-                        item: (),
-                        line: *line,
-                    })
-                }
-                _ => None,
-            })
-        }
-    };
 }
 
 impl<'a> Lexer<'a> {
@@ -146,17 +113,7 @@ impl<'a> Lexer<'a> {
         } else if let Some(integer) = self.try_eat_integer() {
             Token::Integer(integer)
         } else {
-            let start = self.cur;
-            while self
-                .eat_char_if(|c| !c.is_whitespace() && !c.is_ascii_control())
-                .is_some()
-            {}
-            let end = self.cur;
-            let invalid_token = self.from_raw_parts(start, end);
-            return Err(Error::new(
-                ErrorKind::InvalidToken(invalid_token),
-                self.line,
-            ));
+            return Err(self.invalid_token());
         };
 
         self.peek = Some(WithLoc {
@@ -166,24 +123,9 @@ impl<'a> Lexer<'a> {
         Ok(self.peek.as_ref())
     }
 
-    impl_next_token_kind!(next_func, Token::Func);
-    impl_next_token_kind!(next_right_arrow, Token::RArrow);
-    impl_next_token_kind!(next_colon, Token::Colon);
-    impl_next_token_kind!(next_semicolon, Token::SemiColon);
-    impl_next_token_kind!(next_comma, Token::Comma);
-    impl_next_token_kind!(next_lparen, Token::LParen);
-    impl_next_token_kind!(next_rparen, Token::RParen);
-    impl_next_token_kind!(next_eq, Token::Eq);
-    impl_next_token_kind!(next_dot, Token::Dot);
-    impl_next_token_kind!(next_module_comment, Token::ModuleComment, &'a str);
-    impl_next_token_kind!(next_func_comment, Token::FuncComment, &'a str);
-
-    impl_next_token_kind!(next_block, Token::Block, u32);
-    impl_next_token_kind!(next_value, Token::Value, u32);
-    impl_next_token_kind!(next_opcode, Token::OpCode, Code);
-    impl_next_token_kind!(next_ident, Token::Ident, &'a str);
-    impl_next_token_kind!(next_ty, Token::Ty, Type);
-    impl_next_token_kind!(next_integer, Token::Integer, &'a str);
+    pub(super) fn line(&mut self) -> u32 {
+        self.line
+    }
 
     fn eat_char_if(&mut self, f: impl FnOnce(char) -> bool) -> Option<char> {
         match self.peek_char() {
@@ -326,7 +268,10 @@ impl<'a> Lexer<'a> {
         {}
         let end = self.cur;
         let invalid_token = self.from_raw_parts(start, end);
-        Error::new(ErrorKind::InvalidToken(invalid_token), self.line)
+        Error::new(
+            ErrorKind::InvalidToken(invalid_token.to_string()),
+            self.line,
+        )
     }
 }
 
@@ -355,6 +300,64 @@ pub(super) enum Token<'a> {
     OpCode(Code),
     Ty(Type),
     Integer(&'a str),
+}
+
+impl<'a> Token<'a> {
+    pub(super) fn id(&self) -> u32 {
+        match self {
+            Self::Block(id) | Self::Value(id) => *id,
+            _ => unreachable!(),
+        }
+    }
+
+    pub(super) fn string(&self) -> &'a str {
+        match self {
+            Self::ModuleComment(s) | Self::FuncComment(s) | Self::Ident(s) | Self::Integer(s) => s,
+            _ => unreachable!(),
+        }
+    }
+
+    pub(super) fn opcode(&self) -> Code {
+        if let Self::OpCode(code) = self {
+            *code
+        } else {
+            unreachable!()
+        }
+    }
+
+    pub(super) fn ty(&self) -> &Type {
+        if let Self::Ty(ty) = self {
+            ty
+        } else {
+            unreachable!()
+        }
+    }
+}
+
+impl<'a> fmt::Display for Token<'a> {
+    fn fmt(&self, w: &mut fmt::Formatter) -> fmt::Result {
+        use Token::*;
+
+        match self {
+            Func => w.write_str("func"),
+            RArrow => w.write_str("=>"),
+            Colon => w.write_str(":"),
+            SemiColon => w.write_str(";"),
+            Comma => w.write_str(","),
+            LParen => w.write_str("("),
+            RParen => w.write_str(")"),
+            Eq => w.write_str("="),
+            Dot => w.write_str("."),
+            ModuleComment(comment) => write!(w, "#!{}", comment),
+            FuncComment(comment) => write!(w, "#{}", comment),
+            Block(id) => write!(w, "block{}", id),
+            Value(id) => write!(w, "v{}", id),
+            Ident(ident) => write!(w, "%{}", ident),
+            OpCode(code) => write!(w, "{}", code),
+            Ty(ty) => write!(w, "{}", ty),
+            Integer(num) => w.write_str(num),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -404,6 +407,50 @@ pub(super) enum Code {
     Return,
 
     Phi,
+}
+
+impl fmt::Display for Code {
+    fn fmt(&self, w: &mut fmt::Formatter) -> fmt::Result {
+        use Code::*;
+
+        let s = match self {
+            ImmI8 => "imm_i8",
+            ImmI16 => "imm_i16",
+            ImmI32 => "imm_i32",
+            ImmI64 => "imm_i64",
+            ImmI128 => "imm_i128",
+            ImmU8 => "imm_u8",
+            ImmU16 => "imm_u16",
+            ImmU32 => "imm_u32",
+            ImmU64 => "imm_u64",
+            ImmU128 => "imm_u128",
+            ImmU256 => "imm_u256",
+            Add => "add",
+            Sub => "sub",
+            Mul => "mul",
+            UDiv => "udiv",
+            SDiv => "sdiv",
+            Lt => "lt",
+            Gt => "gt",
+            Slt => "slt",
+            Sgt => "sgt",
+            Eq => "eq",
+            And => "and",
+            Or => "or",
+            Sext => "sext",
+            Zext => "zext",
+            Trunc => "trunc",
+            Load => "load",
+            Store => "store",
+            Jump => "jump",
+            FallThrough => "fallthrough",
+            Br => "br",
+            Return => "return",
+            Phi => "phi",
+        };
+
+        w.write_str(s)
+    }
 }
 
 #[cfg(test)]

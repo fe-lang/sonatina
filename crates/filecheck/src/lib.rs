@@ -7,7 +7,10 @@ use std::{
 };
 
 use sonatina_codegen::{ir::ir_writer::FuncWriter, Function};
-use sonatina_parser::parser::{ParsedModule, Parser};
+use sonatina_parser::{
+    parser::{ParsedModule, Parser},
+    ErrorKind,
+};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use walkdir::WalkDir;
 
@@ -110,7 +113,10 @@ impl<'a> FileChecker<'a> {
     }
 
     fn check(&mut self) -> FileCheckResult {
-        let parsed_module = self.parse_file();
+        let parsed_module = match self.parse_file() {
+            Ok(module) => module,
+            Err(msg) => return FileCheckResult::new(self.file_path, Err(msg)),
+        };
         let mut funcs = parsed_module.funcs;
 
         // TODO: Relax the restraint.
@@ -139,9 +145,27 @@ impl<'a> FileChecker<'a> {
         FileCheckResult::new(self.file_path, result)
     }
 
-    fn parse_file(&self) -> ParsedModule {
+    fn parse_file(&self) -> Result<ParsedModule, String> {
         let input = fs::read_to_string(&self.file_path).unwrap();
-        Parser::parse(&input)
+        match Parser::parse(&input) {
+            Ok(module) => Ok(module),
+            Err(err) => match err.kind {
+                ErrorKind::InvalidToken(msg) => Err(format!(
+                    "failed to parse file: invalid token: {}. line: {}",
+                    msg, err.line
+                )),
+
+                ErrorKind::SyntaxError(msg) => Err(format!(
+                    "failed to parse file: invalid syntax: {}. line: {}",
+                    msg, err.line
+                )),
+
+                ErrorKind::SemanticError(msg) => Err(format!(
+                    "failed to parse file: invalid semantics: {}. line: {}",
+                    msg, err.line
+                )),
+            },
+        }
     }
 
     fn build_checker(&self, directives: &[String]) -> filecheck::Checker {

@@ -1,28 +1,36 @@
+use std::collections::HashSet;
+
 use sonatina_codegen::ir::{
     func_cursor::{CursorLocation, FuncCursor},
     insn::{BinaryOp, CastOp, ImmediateOp, JumpOp},
     Block, BlockData, Function, Insn, InsnData, Signature, Type, Value, ValueData,
 };
 
-use super::lexer::{Code, Lexer};
+use super::lexer::{Code, Lexer, Token, WithLoc};
+use super::{Error, ErrorKind, Result};
 
 pub struct Parser {}
 
 impl Parser {
-    pub fn parse(input: &str) -> ParsedModule {
+    pub fn parse(input: &str) -> Result<ParsedModule> {
         let mut lexer = Lexer::new(input);
 
         let mut comments = Vec::new();
-        while let Some(line) = lexer.next_module_comment() {
-            comments.push(line.to_string());
+        while let Some(WithLoc {
+            item: Token::ModuleComment(comment),
+            ..
+        }) = lexer.peek_token()?
+        {
+            comments.push(comment.to_string());
+            lexer.next_token()?;
         }
 
         let mut funcs = Vec::new();
-        while let Some(func) = FuncParser::new(&mut lexer).parse() {
+        while let Some(func) = FuncParser::new(&mut lexer).parse()? {
             funcs.push(func);
         }
 
-        ParsedModule { comments, funcs }
+        Ok(ParsedModule { comments, funcs })
     }
 }
 
@@ -41,97 +49,137 @@ struct FuncParser<'a, 'b> {
     lexer: &'b mut Lexer<'a>,
 }
 
+macro_rules! eat_token {
+    ($self:ident, $token:pat) => {
+        if matches!(
+            $self.lexer.peek_token()?,
+            Some(WithLoc { item: $token, .. })
+        ) {
+            Ok(Some($self.lexer.next_token()?.unwrap().item))
+        } else {
+            Ok(None)
+        }
+    };
+}
+
+macro_rules! expect_token {
+    ($self:ident, $token:pat, $expected:expr) => {
+        if let Some(tok) = eat_token!($self, $token)? {
+            Ok(tok)
+        } else {
+            let (tok, line) = match $self.lexer.next_token()? {
+                Some(tok) => ((tok.item.to_string(), tok.line)),
+                None => (("EOF".to_string(), $self.lexer.line())),
+            };
+            Err(Error::new(
+                ErrorKind::SyntaxError(format!("expected `{}`, but got `{}`", $expected, tok)),
+                line,
+            ))
+        }
+    };
+}
+
 impl<'a, 'b> FuncParser<'a, 'b> {
     fn new(lexer: &'b mut Lexer<'a>) -> Self {
         Self { lexer }
     }
 
-    fn parse(&mut self) -> Option<ParsedFunction> {
-        self.lexer.peek_token()?;
+    fn parse(&mut self) -> Result<Option<ParsedFunction>> {
+        if self.lexer.peek_token()?.is_none() {
+            return Ok(None);
+        }
 
-        let comments = self.parse_comment();
-        self.lexer.next_func().unwrap();
+        let comments = self.parse_comment()?;
+        expect_token!(self, Token::Func, "func")?;
 
-        let fn_name = self.lexer.next_ident().unwrap();
+        let fn_name = expect_token!(self, Token::Ident(..), "func name")?.string();
 
         let mut sig = Signature::default();
-        self.lexer.next_lparen().unwrap();
-        if let Some(ty) = self.lexer.next_ty() {
-            sig.append_arg(ty);
-            while self.lexer.next_comma().is_some() {
-                let ty = self.lexer.next_ty().unwrap();
-                sig.append_arg(ty);
+        expect_token!(self, Token::LParen, "(")?;
+        if let Some(ty) = eat_token!(self, Token::Ty(..))? {
+            sig.append_arg(ty.ty().clone());
+            while eat_token!(self, Token::Comma)?.is_some() {
+                let ty = expect_token!(self, Token::Ty(..), "type")?;
+                sig.append_arg(ty.ty().clone());
             }
         }
-        self.lexer.next_rparen().unwrap();
+        expect_token!(self, Token::RParen, ")")?;
 
-        if self.lexer.next_right_arrow().is_some() {
-            let ty = self.lexer.next_ty().unwrap();
-            sig.append_return(ty);
-            while self.lexer.next_comma().is_some() {
-                let ty = self.lexer.next_ty().unwrap();
-                sig.append_return(ty);
+        if eat_token!(self, Token::RArrow)?.is_some() {
+            let ty = expect_token!(self, Token::Ty(..), "type")?;
+            sig.append_return(ty.ty().clone());
+            while eat_token!(self, Token::Comma)?.is_some() {
+                let ty = expect_token!(self, Token::Ty(..), "type")?;
+                sig.append_return(ty.ty().clone());
             }
         }
-        self.lexer.next_colon().unwrap();
+        expect_token!(self, Token::Colon, ":")?;
 
         let mut func = Function::new(fn_name.to_string(), sig);
-        self.parse_body(&mut func);
+        self.parse_body(&mut func)?;
 
-        Some(ParsedFunction { comments, func })
+        Ok(Some(ParsedFunction { comments, func }))
     }
 
-    fn parse_body(&mut self, func: &mut Function) {
+    fn parse_body(&mut self, func: &mut Function) -> Result<()> {
         let mut inserter = InsnInserter::new(func);
-        while let Some(id) = self.lexer.next_block() {
-            self.lexer.next_colon().unwrap();
-            self.parse_block_body(&mut inserter, Block(id));
+        while let Some(id) = eat_token!(self, Token::Block(..))? {
+            expect_token!(self, Token::Colon, ":")?;
+            self.parse_block_body(&mut inserter, Block(id.id()))?;
         }
+
+        Ok(())
     }
 
-    fn parse_block_body(&mut self, inserter: &mut InsnInserter, block: Block) {
-        inserter.def_block(block, BlockData::default());
+    fn parse_block_body(&mut self, inserter: &mut InsnInserter, block: Block) -> Result<()> {
+        inserter.def_block(block, self.lexer.line(), BlockData::default())?;
         inserter.append_block(block);
         inserter.set_loc(CursorLocation::BlockTop(block));
 
         loop {
-            if let Some(value) = self.lexer.next_value() {
-                self.lexer.next_dot().unwrap();
-                let ty = self.lexer.next_ty().unwrap();
-                self.lexer.next_eq().unwrap();
-                let op_code = self.lexer.next_opcode().unwrap();
-                let insn_data = op_code.parse_args(self, Some(ty));
+            if let Some(value) = eat_token!(self, Token::Value(..))? {
+                expect_token!(self, Token::Dot, ".")?;
+                let ty = expect_token!(self, Token::Ty(..), "type")?.ty().clone();
+                expect_token!(self, Token::Eq, "=")?;
+                let opcode = expect_token!(self, Token::OpCode(..), "opcode")?.opcode();
+                let insn_data = opcode.parse_args(self, Some(ty))?;
                 let insn = inserter.insert_insn_data(insn_data);
-                inserter.def_value(Value(value), insn);
-            } else if let Some(op_code) = self.lexer.next_opcode() {
-                let insn_data = op_code.parse_args(self, None);
+                inserter.def_value(Value(value.id()), self.lexer.line(), insn)?;
+            } else if let Some(opcode) = eat_token!(self, Token::OpCode(..))? {
+                let insn_data = opcode.opcode().parse_args(self, None)?;
                 inserter.insert_insn_data(insn_data);
             } else {
                 break;
             }
         }
+
+        Ok(())
     }
 
-    fn expect_value(&mut self) -> Value {
-        Value(self.lexer.next_value().unwrap())
+    fn expect_value(&mut self) -> Result<Value> {
+        let id = expect_token!(self, Token::Value(..), "value")?.id();
+        Ok(Value(id))
     }
 
-    fn expect_block(&mut self) -> Block {
-        Block(self.lexer.next_block().unwrap())
+    fn expect_block(&mut self) -> Result<Block> {
+        let id = expect_token!(self, Token::Block(..), "block")?.id();
+        Ok(Block(id))
     }
 
-    fn parse_comment(&mut self) -> Vec<String> {
+    fn parse_comment(&mut self) -> Result<Vec<String>> {
         let mut comments = Vec::new();
-        while let Some(line) = self.lexer.next_func_comment() {
-            comments.push(line.to_string());
+        while let Some(line) = eat_token!(self, Token::FuncComment(..))? {
+            comments.push(line.string().to_string());
         }
-        comments
+        Ok(comments)
     }
 }
 
 struct InsnInserter<'a> {
     func: &'a mut Function,
     loc: CursorLocation,
+    defined_values: HashSet<Value>,
+    defined_blocks: HashSet<Block>,
 }
 
 impl<'a> InsnInserter<'a> {
@@ -139,10 +187,20 @@ impl<'a> InsnInserter<'a> {
         Self {
             func,
             loc: CursorLocation::NoWhere,
+            defined_values: HashSet::new(),
+            defined_blocks: HashSet::new(),
         }
     }
 
-    fn def_value(&mut self, value: Value, insn: Insn) {
+    fn def_value(&mut self, value: Value, line: u32, insn: Insn) -> Result<()> {
+        if self.defined_values.contains(&value) {
+            return Err(Error::new(
+                ErrorKind::SemanticError(format!("v{} is already defined", value.0)),
+                line,
+            ));
+        }
+        self.defined_values.insert(value);
+
         let result = self.func.dfg.make_result(insn).unwrap();
         let value_len = self.func.dfg.values.len();
         let value_id = value.0 as usize;
@@ -160,16 +218,18 @@ impl<'a> InsnInserter<'a> {
 
         self.func.dfg.values[value] = result;
         self.func.dfg.attach_result(insn, value);
+        Ok(())
     }
 
-    fn insert_insn_data(&mut self, insn_data: InsnData) -> Insn {
-        let insn = self.func.dfg.make_insn(insn_data);
-        self.insert_insn(insn);
-        self.set_loc(CursorLocation::At(insn));
-        insn
-    }
+    fn def_block(&mut self, block: Block, line: u32, block_data: BlockData) -> Result<()> {
+        if self.defined_blocks.contains(&block) {
+            return Err(Error::new(
+                ErrorKind::SemanticError(format!("block{} is already defined", block.0)),
+                line,
+            ));
+        }
+        self.defined_blocks.insert(block);
 
-    fn def_block(&mut self, block: Block, block_data: BlockData) {
         let block_id = block.0 as usize;
         let block_len = self.func.dfg.blocks.len();
 
@@ -182,6 +242,14 @@ impl<'a> InsnInserter<'a> {
         }
 
         self.func.dfg.blocks[block] = block_data;
+        Ok(())
+    }
+
+    fn insert_insn_data(&mut self, insn_data: InsnData) -> Insn {
+        let insn = self.func.dfg.make_insn(insn_data);
+        self.insert_insn(insn);
+        self.set_loc(CursorLocation::At(insn));
+        insn
     }
 }
 
@@ -205,7 +273,7 @@ impl<'a> FuncCursor for InsnInserter<'a> {
 
 macro_rules! make_immediate {
     ($parser:ident, $ty:ty, $code:path) => {{
-        let imm = $parser.lexer.next_integer().unwrap();
+        let imm = expect_token!($parser, Token::Integer(..), "integer literal")?.string();
         InsnData::Immediate {
             code: $code(imm.parse().unwrap()),
         }
@@ -214,8 +282,8 @@ macro_rules! make_immediate {
 
 macro_rules! make_binary {
     ($parser:ident, $code:path) => {{
-        let lhs = $parser.expect_value();
-        let rhs = $parser.expect_value();
+        let lhs = $parser.expect_value()?;
+        let rhs = $parser.expect_value()?;
         InsnData::Binary {
             code: $code,
             args: [lhs, rhs],
@@ -225,7 +293,7 @@ macro_rules! make_binary {
 
 macro_rules! make_cast {
     ($parser:ident, $cast_to:expr, $code:path) => {{
-        let arg = $parser.expect_value();
+        let arg = $parser.expect_value()?;
         InsnData::Cast {
             code: $code,
             args: [arg],
@@ -236,7 +304,7 @@ macro_rules! make_cast {
 
 macro_rules! make_jump {
     ($parser:ident, $code:path) => {{
-        let dest = $parser.expect_block();
+        let dest = $parser.expect_block()?;
         InsnData::Jump {
             code: $code,
             dests: [dest],
@@ -246,7 +314,7 @@ macro_rules! make_jump {
 
 impl Code {
     /// Read args and create insn data.
-    fn parse_args(self, parser: &mut FuncParser, ret_ty: Option<Type>) -> InsnData {
+    fn parse_args(self, parser: &mut FuncParser, ret_ty: Option<Type>) -> Result<InsnData> {
         let insn_data = match self {
             Self::ImmI8 => make_immediate!(parser, i8, ImmediateOp::I8),
             Self::ImmI16 => make_immediate!(parser, i16, ImmediateOp::I16),
@@ -276,20 +344,20 @@ impl Code {
             Self::Trunc => make_cast!(parser, ret_ty.unwrap(), CastOp::Trunc),
             Self::Load => {
                 let ty = ret_ty.unwrap();
-                let arg = parser.expect_value();
+                let arg = parser.expect_value()?;
                 InsnData::Load { args: [arg], ty }
             }
             Self::Store => {
-                let lhs = parser.expect_value();
-                let rhs = parser.expect_value();
+                let lhs = parser.expect_value()?;
+                let rhs = parser.expect_value()?;
                 InsnData::Store { args: [lhs, rhs] }
             }
             Self::Jump => make_jump!(parser, JumpOp::Jump),
             Self::FallThrough => make_jump!(parser, JumpOp::FallThrough),
             Self::Br => {
-                let cond = parser.expect_value();
-                let then = parser.expect_block();
-                let else_ = parser.expect_block();
+                let cond = parser.expect_value()?;
+                let then = parser.expect_block()?;
+                let else_ = parser.expect_block()?;
                 InsnData::Branch {
                     args: [cond],
                     dests: [then, else_],
@@ -297,20 +365,20 @@ impl Code {
             }
             Self::Return => {
                 let mut args = vec![];
-                while let Some(value) = parser.lexer.next_value() {
-                    args.push(Value(value));
+                while let Some(value) = eat_token!(parser, Token::Value(..))? {
+                    args.push(Value(value.id()));
                 }
                 InsnData::Return { args }
             }
             Self::Phi => {
                 let mut values = vec![];
                 let mut blocks = vec![];
-                while parser.lexer.next_lparen().is_some() {
-                    let value = parser.lexer.next_value().unwrap();
-                    values.push(Value(value));
-                    let block = parser.lexer.next_block().unwrap();
-                    blocks.push(Block(block));
-                    parser.lexer.next_rparen().unwrap();
+                while eat_token!(parser, Token::LParen)?.is_some() {
+                    let value = parser.expect_value()?;
+                    values.push(value);
+                    let block = parser.expect_block()?;
+                    blocks.push(block);
+                    expect_token!(parser, Token::RParen, ")")?;
                 }
                 InsnData::Phi {
                     values,
@@ -320,8 +388,8 @@ impl Code {
             }
         };
 
-        debug_assert!(parser.lexer.next_semicolon().is_some());
-        insn_data
+        expect_token!(parser, Token::SemiColon, ";")?;
+        Ok(insn_data)
     }
 }
 
@@ -332,7 +400,7 @@ mod tests {
     use sonatina_codegen::ir::ir_writer::FuncWriter;
 
     fn test_parser(input: &str) -> bool {
-        let module = Parser::parse(input);
+        let module = Parser::parse(input).unwrap();
         let mut writer = FuncWriter::new(&module.funcs[0].func);
 
         input.trim() == writer.dump_string().unwrap().trim()
@@ -431,7 +499,7 @@ mod tests {
                     return v0 v1;
             ";
 
-        let parsed_module = Parser::parse(input);
+        let parsed_module = Parser::parse(input).unwrap();
         let module_comments = parsed_module.comments;
         assert_eq!(module_comments[0], " Module comment 1");
         assert_eq!(module_comments[1], " Module comment 2");
