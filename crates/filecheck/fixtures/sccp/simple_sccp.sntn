@@ -10,5 +10,5 @@ func %simple_fold():
     block0:
         v0.i8 = imm_i8 10;
         v1.i8 = imm_i8 20;
-        v2.i8 = add v0.i8 v1.i8;
+        v2.i8 = add v0 v1;
         return;

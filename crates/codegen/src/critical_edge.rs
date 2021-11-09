@@ -154,7 +154,7 @@ mod tests {
             "func %test_func():
     block0:
         v0.i8 = imm_u8 1;
-        br v0.i8 block3 block1;
+        br v0 block3 block1;
 
     block1:
         jump block2;
@@ -212,13 +212,13 @@ mod tests {
             "func %test_func():
     block0:
         v0.i8 = imm_u8 1;
-        br v0.i8 block5 block1;
+        br v0 block5 block1;
 
     block1:
         jump block2;
 
     block2:
-        br v0.i8 block4 block5;
+        br v0 block4 block5;
 
     block5:
         fallthrough block3;
@@ -276,9 +276,9 @@ mod tests {
         fallthrough block1;
 
     block1:
-        v1.i8 = phi (v0.i8 block0) (v2.i8 block3);
-        v2.i8 = add v1.i8 v0.i8;
-        br v1.i8 block2 block3;
+        v1.i8 = phi (v0 block0) (v2 block3);
+        v2.i8 = add v1 v0;
+        br v1 block2 block3;
 
     block2:
         return;

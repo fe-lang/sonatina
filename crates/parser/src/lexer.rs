@@ -87,6 +87,8 @@ impl<'a> Lexer<'a> {
             Token::RParen
         } else if self.eat_char_if(|c| c == '=').is_some() {
             Token::Eq
+        } else if self.eat_char_if(|c| c == '.').is_some() {
+            Token::Dot
         } else if self.eat_char_if(|c| c == '#').is_some() {
             let is_module = self.eat_char_if(|c| c == '!').is_some();
             let start = self.cur;
@@ -114,9 +116,7 @@ impl<'a> Lexer<'a> {
             Token::Block(id)
         } else if self.eat_string_if(b"v").is_some() {
             let id = self.try_eat_id().unwrap();
-            self.eat_char_if(|c| c == '.').unwrap();
-            let ty = self.try_eat_ty().unwrap();
-            Token::Value(ValueData::new(id, ty))
+            Token::Value(id)
         } else if let Some(integer) = self.try_eat_integer() {
             Token::Integer(integer)
         } else {
@@ -142,11 +142,12 @@ impl<'a> Lexer<'a> {
     impl_next_token_kind!(next_lparen, Token::LParen);
     impl_next_token_kind!(next_rparen, Token::RParen);
     impl_next_token_kind!(next_eq, Token::Eq);
+    impl_next_token_kind!(next_dot, Token::Dot);
     impl_next_token_kind!(next_module_comment, Token::ModuleComment, &'a str);
     impl_next_token_kind!(next_func_comment, Token::FuncComment, &'a str);
 
     impl_next_token_kind!(next_block, Token::Block, u32);
-    impl_next_token_kind!(next_value, Token::Value, ValueData);
+    impl_next_token_kind!(next_value, Token::Value, u32);
     impl_next_token_kind!(next_opcode, Token::OpCode, Code);
     impl_next_token_kind!(next_ident, Token::Ident, &'a str);
     impl_next_token_kind!(next_ty, Token::Ty, Type);
@@ -296,26 +297,15 @@ pub(super) enum Token<'a> {
     LParen,
     RParen,
     Eq,
+    Dot,
     ModuleComment(&'a str),
     FuncComment(&'a str),
     Block(u32),
-    Value(ValueData),
+    Value(u32),
     Ident(&'a str),
     OpCode(Code),
     Ty(Type),
     Integer(&'a str),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ValueData {
-    pub id: u32,
-    pub ty: Type,
-}
-
-impl ValueData {
-    fn new(id: u32, ty: Type) -> Self {
-        Self { id, ty }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -379,7 +369,7 @@ mod tests {
     block0:
         v0.i32 = imm_i32 311;
         v1.i64 = imm_i64 120;
-        return v0.i32 v1.i64;";
+        return v0 v1;";
         let mut lexer = Lexer::new(input);
 
         assert!(matches!(lexer.next_token().unwrap(), Func));
@@ -395,21 +385,25 @@ mod tests {
         assert!(matches!(lexer.next_token().unwrap(), Block(0)));
         assert!(matches!(lexer.next_token().unwrap(), Colon));
 
-        assert_eq!(lexer.next_value().unwrap(), ValueData::new(0, Type::I32));
+        assert!(matches!(lexer.next_token().unwrap(), Value(0)));
+        assert!(matches!(lexer.next_token().unwrap(), Dot));
+        assert!(matches!(lexer.next_token().unwrap(), Ty(Type::I32)));
         assert!(matches!(lexer.next_token().unwrap(), Eq));
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::ImmI32)));
         assert!(matches!(lexer.next_token().unwrap(), Integer("311")));
         assert!(matches!(lexer.next_token().unwrap(), SemiColon));
 
-        assert_eq!(lexer.next_value().unwrap(), ValueData::new(1, Type::I64));
+        assert!(matches!(lexer.next_token().unwrap(), Value(1)));
+        assert!(matches!(lexer.next_token().unwrap(), Dot));
+        assert!(matches!(lexer.next_token().unwrap(), Ty(Type::I64)));
         assert!(matches!(lexer.next_token().unwrap(), Eq));
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::ImmI64)));
         assert!(matches!(lexer.next_token().unwrap(), Integer("120")));
         assert!(matches!(lexer.next_token().unwrap(), SemiColon));
 
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Return)));
-        assert_eq!(lexer.next_value().unwrap(), ValueData::new(0, Type::I32));
-        assert_eq!(lexer.next_value().unwrap(), ValueData::new(1, Type::I64));
+        assert!(matches!(lexer.next_token().unwrap(), Value(0)));
+        assert!(matches!(lexer.next_token().unwrap(), Value(1)));
         assert!(matches!(lexer.next_token().unwrap(), SemiColon));
 
         assert!(lexer.next_token().is_none());
@@ -419,8 +413,8 @@ mod tests {
     fn lexer_with_arg() {
         let input = "func %test_func(i32, i64):
     block0:
-        v2.i64 = sext v0.i32;
-        v3.i64 = mul v2.i64 v1.i64;
+        v2.i64 = sext v0;
+        v3.i64 = mul v2 v1;
         return;
 ";
         let mut lexer = Lexer::new(input);
@@ -436,17 +430,21 @@ mod tests {
         assert!(matches!(lexer.next_token().unwrap(), Block(0)));
         assert!(matches!(lexer.next_token().unwrap(), Colon));
 
-        assert_eq!(lexer.next_value().unwrap(), ValueData::new(2, Type::I64));
+        assert!(matches!(lexer.next_token().unwrap(), Value(2)));
+        assert!(matches!(lexer.next_token().unwrap(), Dot));
+        assert!(matches!(lexer.next_token().unwrap(), Ty(Type::I64)));
         assert!(matches!(lexer.next_token().unwrap(), Eq));
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Sext)));
-        assert_eq!(lexer.next_value().unwrap(), ValueData::new(0, Type::I32));
+        assert!(matches!(lexer.next_token().unwrap(), Value(0)));
         assert!(matches!(lexer.next_token().unwrap(), SemiColon));
 
-        assert_eq!(lexer.next_value().unwrap(), ValueData::new(3, Type::I64));
+        assert!(matches!(lexer.next_token().unwrap(), Value(3)));
+        assert!(matches!(lexer.next_token().unwrap(), Dot));
+        assert!(matches!(lexer.next_token().unwrap(), Ty(Type::I64)));
         assert!(matches!(lexer.next_token().unwrap(), Eq));
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Mul)));
-        assert_eq!(lexer.next_value().unwrap(), ValueData::new(2, Type::I64));
-        assert_eq!(lexer.next_value().unwrap(), ValueData::new(1, Type::I64));
+        assert!(matches!(lexer.next_token().unwrap(), Value(2)));
+        assert!(matches!(lexer.next_token().unwrap(), Value(1)));
         assert!(matches!(lexer.next_token().unwrap(), SemiColon));
 
         assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Return)));

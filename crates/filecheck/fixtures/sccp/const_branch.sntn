@@ -13,13 +13,13 @@
 # nextln: 
 # nextln:     block3:
 # nextln:         v5.i8 = imm_u8 12;
-# nextln:         return v5.i8;
+# nextln:         return v5;
 func %const_branch() -> i8:
     block0:
         v0.i8 = imm_i8 1;
         v1.i8 = imm_i8 2;
-        v2.i8 = sgt v0.i8 v1.i8;
-        br v2.i8 block1 block2;
+        v2.i8 = sgt v0 v1;
+        br v2 block1 block2;
 
     block1:
         v3.i8 = imm_i8 11;
@@ -30,5 +30,5 @@ func %const_branch() -> i8:
         jump block3;
 
     block3:
-        v5.i8 = phi (v3.i8 block1) (v4.i8 block2);
-        return v5.i8;
+        v5.i8 = phi (v3 block1) (v4 block2);
+        return v5;

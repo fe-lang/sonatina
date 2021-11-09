@@ -96,11 +96,13 @@ impl<'a, 'b> FuncParser<'a, 'b> {
 
         loop {
             if let Some(value) = self.lexer.next_value() {
+                self.lexer.next_dot().unwrap();
+                let ty = self.lexer.next_ty().unwrap();
                 self.lexer.next_eq().unwrap();
                 let op_code = self.lexer.next_opcode().unwrap();
-                let insn_data = op_code.parse_args(self, Some(value.ty));
+                let insn_data = op_code.parse_args(self, Some(ty));
                 let insn = inserter.insert_insn_data(insn_data);
-                inserter.def_value(Value(value.id), insn);
+                inserter.def_value(Value(value), insn);
             } else if let Some(op_code) = self.lexer.next_opcode() {
                 let insn_data = op_code.parse_args(self, None);
                 inserter.insert_insn_data(insn_data);
@@ -111,7 +113,7 @@ impl<'a, 'b> FuncParser<'a, 'b> {
     }
 
     fn expect_value(&mut self) -> Value {
-        Value(self.lexer.next_value().unwrap().id)
+        Value(self.lexer.next_value().unwrap())
     }
 
     fn expect_block(&mut self) -> Block {
@@ -296,7 +298,7 @@ impl Code {
             Self::Return => {
                 let mut args = vec![];
                 while let Some(value) = parser.lexer.next_value() {
-                    args.push(Value(value.id));
+                    args.push(Value(value));
                 }
                 InsnData::Return { args }
             }
@@ -305,7 +307,7 @@ impl Code {
                 let mut blocks = vec![];
                 while parser.lexer.next_lparen().is_some() {
                     let value = parser.lexer.next_value().unwrap();
-                    values.push(Value(value.id));
+                    values.push(Value(value));
                     let block = parser.lexer.next_block().unwrap();
                     blocks.push(Block(block));
                     parser.lexer.next_rparen().unwrap();
@@ -343,7 +345,7 @@ mod tests {
     block0:
         v0.i32 = imm_i32 311;
         v1.i64 = imm_i64 120;
-        return v0.i32 v1.i64;"
+        return v0 v1;"
         ));
     }
 
@@ -352,8 +354,8 @@ mod tests {
         assert!(test_parser(
             "func %test_func(i32, i64):
     block0:
-        v2.i64 = sext v0.i32;
-        v3.i64 = mul v2.i64 v1.i64;
+        v2.i64 = sext v0;
+        v3.i64 = mul v2 v1;
         return;
 "
         ));
@@ -369,7 +371,7 @@ mod tests {
         jump block1;
 
     block1:
-        return v32.i32 v120.i64;"
+        return v32 v120;"
         ));
     }
 
@@ -382,11 +384,11 @@ mod tests {
         jump block1;
 
     block1:
-        v4.i32 = phi (v0.i32 block0) (v5.i32 block5);
-        br v0.i32 block6 block2;
+        v4.i32 = phi (v0 block0) (v5 block5);
+        br v0 block6 block2;
 
     block2:
-        br v0.i32 block4 block3;
+        br v0 block4 block3;
 
     block3:
         v1.i32 = imm_i32 2;
@@ -396,11 +398,11 @@ mod tests {
         jump block5;
 
     block5:
-        v5.i32 = phi (v1.i32 block3) (v4.i32 block4);
+        v5.i32 = phi (v1 block3) (v4 block4);
         jump block1;
 
     block6:
-        v3.i32 = add v4.i32 v4.i32;
+        v3.i32 = add v4 v4;
         return;
         "
         ));
@@ -418,7 +420,7 @@ mod tests {
                 block0:
                     v0.i32 = imm_i32 311;
                     v1.i64 = imm_i64 120;
-                    return v0.i32 v1.i64;
+                    return v0 v1;
 
             # f2 start 1
             # f2 start 2
@@ -426,7 +428,7 @@ mod tests {
                 block0:
                     v0.i32 = imm_i32 311;
                     v1.i64 = imm_i64 120;
-                    return v0.i32 v1.i64;
+                    return v0 v1;
             ";
 
         let parsed_module = Parser::parse(input);

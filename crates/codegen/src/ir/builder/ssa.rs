@@ -236,7 +236,7 @@ mod tests {
             "func %test_func():
     block0:
         v0.i32 = imm_i32 1;
-        v1.i32 = add v0.i32 v0.i32;
+        v1.i32 = add v0 v0;
         return;
 
 "
@@ -281,7 +281,7 @@ mod tests {
             "func %test_func():
     block0:
         v0.i32 = imm_i32 1;
-        br v0.i32 block2 block1;
+        br v0 block2 block1;
 
     block1:
         v1.i32 = imm_i32 2;
@@ -292,7 +292,7 @@ mod tests {
         jump block3;
 
     block3:
-        v3.i32 = phi (v1.i32 block1) (v2.i32 block2);
+        v3.i32 = phi (v1 block1) (v2 block2);
         return;
 
 "
@@ -342,15 +342,15 @@ mod tests {
         jump block1;
 
     block1:
-        v4.i32 = phi (v0.i32 block0) (v1.i32 block2);
-        br v0.i32 block2 block3;
+        v4.i32 = phi (v0 block0) (v1 block2);
+        br v0 block2 block3;
 
     block2:
         v1.i32 = imm_i32 10;
         jump block1;
 
     block3:
-        v3.i32 = add v4.i32 v4.i32;
+        v3.i32 = add v4 v4;
         return;
 
 "
@@ -417,11 +417,11 @@ mod tests {
         jump block1;
 
     block1:
-        v4.i32 = phi (v0.i32 block0) (v5.i32 block5);
-        br v0.i32 block6 block2;
+        v4.i32 = phi (v0 block0) (v5 block5);
+        br v0 block6 block2;
 
     block2:
-        br v0.i32 block4 block3;
+        br v0 block4 block3;
 
     block3:
         v1.i32 = imm_i32 2;
@@ -431,11 +431,11 @@ mod tests {
         jump block5;
 
     block5:
-        v5.i32 = phi (v1.i32 block3) (v4.i32 block4);
+        v5.i32 = phi (v1 block3) (v4 block4);
         jump block1;
 
     block6:
-        v3.i32 = add v4.i32 v4.i32;
+        v3.i32 = add v4 v4;
         return;
 
 "
@@ -495,11 +495,11 @@ mod tests {
         jump block1;
 
     block1:
-        v4.i32 = phi (v0.i32 block0) (v5.i32 block5);
-        br v0.i32 block6 block2;
+        v4.i32 = phi (v0 block0) (v5 block5);
+        br v0 block6 block2;
 
     block2:
-        br v0.i32 block4 block3;
+        br v0 block4 block3;
 
     block3:
         v1.i32 = imm_i32 2;
@@ -509,11 +509,11 @@ mod tests {
         jump block5;
 
     block5:
-        v5.i32 = phi (v1.i32 block3) (v4.i32 block4);
+        v5.i32 = phi (v1 block3) (v4 block4);
         jump block1;
 
     block6:
-        v3.i32 = add v4.i32 v4.i32;
+        v3.i32 = add v4 v4;
         return;
 
 "

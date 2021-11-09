@@ -285,8 +285,8 @@ mod tests {
     block0:
         v0.i8 = imm_i8 1;
         v1.i8 = imm_i8 2;
-        v2.i8 = add v0.i8 v1.i8;
-        v3.i8 = sub v2.i8 v0.i8;
+        v2.i8 = add v0 v1;
+        v3.i8 = sub v2 v0;
         return;
 
 "
@@ -312,8 +312,8 @@ mod tests {
             dump_func(&builder.build()),
             "func %test_func(i32, i64):
     block0:
-        v2.i64 = sext v0.i32;
-        v3.i64 = mul v2.i64 v1.i64;
+        v2.i64 = sext v0;
+        v3.i64 = mul v2 v1;
         return;
 
 "
@@ -338,7 +338,7 @@ mod tests {
     block0:
         v0.i32 = imm_i32 1;
         v1.i64 = imm_i64 1;
-        return v0.i32 v1.i64;
+        return v0 v1;
 
 "
         );
@@ -377,7 +377,7 @@ mod tests {
             dump_func(&builder.build()),
             "func %test_func(i64):
     block0:
-        br v0.i64 block1 block2;
+        br v0 block1 block2;
 
     block1:
         v1.i64 = imm_i64 1;
@@ -388,8 +388,8 @@ mod tests {
         jump block3;
 
     block3:
-        v3.i64 = phi (v1.i64 block1) (v2.i64 block2);
-        v4.i64 = add v3.i64 v0.i64;
+        v3.i64 = phi (v1 block1) (v2 block2);
+        v4.i64 = add v3 v0;
         return;
 
 "

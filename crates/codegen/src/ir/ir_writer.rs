@@ -106,12 +106,8 @@ trait IrWrite {
 }
 
 impl IrWrite for Value {
-    fn write(&self, writer: &mut FuncWriter, mut w: impl io::Write) -> io::Result<()> {
-        w.write_fmt(format_args!(
-            "v{}.{}",
-            self.0,
-            writer.func.dfg.value_ty(*self),
-        ))
+    fn write(&self, _: &mut FuncWriter, mut w: impl io::Write) -> io::Result<()> {
+        w.write_fmt(format_args!("v{}", self.0,))
     }
 }
 
@@ -132,9 +128,11 @@ impl IrWrite for Insn {
         use InsnData::*;
 
         writer.indent(&mut w)?;
-        let ret_val = writer.func.dfg.insn_result(*self);
-        if let Some(ret_val) = ret_val {
-            ret_val.write(writer, &mut w)?;
+        if let Some(insn_result) = writer.func.dfg.insn_result(*self) {
+            insn_result.write(writer, &mut w)?;
+            w.write_all(b".")?;
+            let ty = writer.func.dfg.value_ty(insn_result);
+            ty.write(writer, &mut w)?;
             w.write_all(b" = ")?;
         }
 
