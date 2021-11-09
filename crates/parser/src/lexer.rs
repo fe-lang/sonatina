@@ -1,9 +1,12 @@
 use sonatina_codegen::ir::Type;
 
+use super::{Error, ErrorKind, Result};
+
 pub(super) struct Lexer<'a> {
     input: &'a [u8],
-    peek: Option<Token<'a>>,
+    peek: Option<WithLoc<Token<'a>>>,
     cur: usize,
+    line: u32,
 }
 
 macro_rules! try_eat_variant {
@@ -24,26 +27,35 @@ macro_rules! try_eat_variant {
 
 macro_rules! impl_next_token_kind {
     ($fn_name:ident, $variant:path, $ret_ty:ty) => {
-        pub(super) fn $fn_name(&mut self) -> Option<$ret_ty> {
-            match self.peek_token() {
-                Some($variant(_)) => match self.next_token().unwrap() {
-                    $variant(data) => Some(data),
-                    _ => unreachable!(),
+        pub(super) fn $fn_name(&mut self) -> Result<Option<WithLoc<$ret_ty>>> {
+            Ok(match self.peek_token()? {
+                Some(WithLoc {
+                    item: $variant(_),
+                    line,
+                }) => match self.next_token()?.unwrap().item {
+                    $variant(data) => Some(WithLoc {
+                        item: data,
+                        line: *line,
+                    }),
+                    _ => None,
                 },
                 _ => None,
-            }
+            })
         }
     };
 
     ($fn_name:ident, $variant:path) => {
-        pub(super) fn $fn_name(&mut self) -> Option<()> {
-            match self.peek_token() {
-                Some($variant) => {
-                    self.next_token();
-                    Some(())
+        pub(super) fn $fn_name(&mut self) -> Result<Option<WithLoc<()>>> {
+            Ok(match self.peek_token()? {
+                Some(WithLoc { line, .. }) => {
+                    self.next_token()?;
+                    Some(WithLoc {
+                        item: (),
+                        line: *line,
+                    })
                 }
                 _ => None,
-            }
+            })
         }
     };
 }
@@ -56,25 +68,30 @@ impl<'a> Lexer<'a> {
             input: input.as_bytes(),
             peek: None,
             cur: 0,
+            line: 1,
         }
     }
 
-    pub(super) fn next_token(&mut self) -> Option<Token<'a>> {
-        self.peek_token();
-        self.peek.take()
+    pub(super) fn next_token(&mut self) -> Result<Option<WithLoc<Token<'a>>>> {
+        self.peek_token()?;
+        Ok(self.peek.take())
     }
 
-    pub(super) fn peek_token(&mut self) -> Option<&Token<'a>> {
+    pub(super) fn peek_token(&mut self) -> Result<Option<&WithLoc<Token<'a>>>> {
         if self.peek.is_some() {
-            return self.peek.as_ref();
+            return Ok(self.peek.as_ref());
         }
 
-        while self
-            .eat_char_if(|c| c.is_whitespace() || c.is_ascii_control())
-            .is_some()
-        {}
+        while let Some(c) = self.eat_char_if(|c| c.is_whitespace() || c.is_ascii_control()) {
+            if c == '\n' {
+                self.line += 1;
+            }
+        }
 
-        self.peek_char()?;
+        if self.peek_char().is_none() {
+            return Ok(None);
+        }
+
         let token = if self.eat_char_if(|c| c == ':').is_some() {
             Token::Colon
         } else if self.eat_char_if(|c| c == ';').is_some() {
@@ -101,8 +118,11 @@ impl<'a> Lexer<'a> {
                 Token::FuncComment(comment)
             }
         } else if self.eat_char_if(|c| c == '%').is_some() {
-            let ident = self.try_eat_ident().unwrap();
-            Token::Ident(ident)
+            if let Some(ident) = self.try_eat_ident() {
+                Token::Ident(ident)
+            } else {
+                return Err(self.invalid_token());
+            }
         } else if self.eat_string_if(b"func").is_some() {
             Token::Func
         } else if self.eat_string_if(b"->").is_some() {
@@ -112,11 +132,17 @@ impl<'a> Lexer<'a> {
         } else if let Some(ty) = self.try_eat_ty() {
             Token::Ty(ty)
         } else if self.eat_string_if(b"block").is_some() {
-            let id = self.try_eat_id().unwrap();
-            Token::Block(id)
+            if let Some(id) = self.try_eat_id() {
+                Token::Block(id)
+            } else {
+                return Err(self.invalid_token());
+            }
         } else if self.eat_string_if(b"v").is_some() {
-            let id = self.try_eat_id().unwrap();
-            Token::Value(id)
+            if let Some(id) = self.try_eat_id() {
+                Token::Value(id)
+            } else {
+                return Err(self.invalid_token());
+            }
         } else if let Some(integer) = self.try_eat_integer() {
             Token::Integer(integer)
         } else {
@@ -126,12 +152,18 @@ impl<'a> Lexer<'a> {
                 .is_some()
             {}
             let end = self.cur;
-            let unexpected_token = self.from_raw_parts(start, end);
-            panic!("unexpected token: {}", unexpected_token);
+            let invalid_token = self.from_raw_parts(start, end);
+            return Err(Error::new(
+                ErrorKind::InvalidToken(invalid_token),
+                self.line,
+            ));
         };
 
-        self.peek = Some(token);
-        self.peek.as_ref()
+        self.peek = Some(WithLoc {
+            item: token,
+            line: self.line,
+        });
+        Ok(self.peek.as_ref())
     }
 
     impl_next_token_kind!(next_func, Token::Func);
@@ -285,6 +317,23 @@ impl<'a> Lexer<'a> {
     fn from_raw_parts(&self, start: usize, end: usize) -> &'a str {
         unsafe { std::str::from_utf8_unchecked(&self.input[start..end]) }
     }
+
+    fn invalid_token(&mut self) -> Error {
+        let start = self.cur;
+        while self
+            .eat_char_if(|c| !c.is_whitespace() && !c.is_ascii_control())
+            .is_some()
+        {}
+        let end = self.cur;
+        let invalid_token = self.from_raw_parts(start, end);
+        Error::new(ErrorKind::InvalidToken(invalid_token), self.line)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct WithLoc<T> {
+    pub(super) item: T,
+    pub(super) line: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -372,41 +421,128 @@ mod tests {
         return v0 v1;";
         let mut lexer = Lexer::new(input);
 
-        assert!(matches!(lexer.next_token().unwrap(), Func));
-        assert!(matches!(lexer.next_token().unwrap(), Ident("test_func")));
-        assert!(matches!(lexer.next_token().unwrap(), LParen));
-        assert!(matches!(lexer.next_token().unwrap(), RParen));
-        assert!(matches!(lexer.next_token().unwrap(), RArrow));
-        assert!(matches!(lexer.next_token().unwrap(), Ty(Type::I32)));
-        assert!(matches!(lexer.next_token().unwrap(), Comma));
-        assert!(matches!(lexer.next_token().unwrap(), Ty(Type::I64)));
-        assert!(matches!(lexer.next_token().unwrap(), Colon));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Func
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Ident("test_func")
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            LParen
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            RParen
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            RArrow
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Ty(Type::I32)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Comma
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Ty(Type::I64)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Colon
+        ));
 
-        assert!(matches!(lexer.next_token().unwrap(), Block(0)));
-        assert!(matches!(lexer.next_token().unwrap(), Colon));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Block(0)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Colon
+        ));
 
-        assert!(matches!(lexer.next_token().unwrap(), Value(0)));
-        assert!(matches!(lexer.next_token().unwrap(), Dot));
-        assert!(matches!(lexer.next_token().unwrap(), Ty(Type::I32)));
-        assert!(matches!(lexer.next_token().unwrap(), Eq));
-        assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::ImmI32)));
-        assert!(matches!(lexer.next_token().unwrap(), Integer("311")));
-        assert!(matches!(lexer.next_token().unwrap(), SemiColon));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Value(0)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Dot
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Ty(Type::I32)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Eq
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            OpCode(Code::ImmI32)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Integer("311")
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            SemiColon
+        ));
 
-        assert!(matches!(lexer.next_token().unwrap(), Value(1)));
-        assert!(matches!(lexer.next_token().unwrap(), Dot));
-        assert!(matches!(lexer.next_token().unwrap(), Ty(Type::I64)));
-        assert!(matches!(lexer.next_token().unwrap(), Eq));
-        assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::ImmI64)));
-        assert!(matches!(lexer.next_token().unwrap(), Integer("120")));
-        assert!(matches!(lexer.next_token().unwrap(), SemiColon));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Value(1)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Dot
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Ty(Type::I64)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Eq
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            OpCode(Code::ImmI64)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Integer("120")
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            SemiColon
+        ));
 
-        assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Return)));
-        assert!(matches!(lexer.next_token().unwrap(), Value(0)));
-        assert!(matches!(lexer.next_token().unwrap(), Value(1)));
-        assert!(matches!(lexer.next_token().unwrap(), SemiColon));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            OpCode(Code::Return)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Value(0)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Value(1)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            SemiColon
+        ));
 
-        assert!(lexer.next_token().is_none());
+        assert!(lexer.next_token().unwrap().is_none());
     }
 
     #[test]
@@ -418,39 +554,120 @@ mod tests {
         return;
 ";
         let mut lexer = Lexer::new(input);
-        assert!(matches!(lexer.next_token().unwrap(), Func));
-        assert!(matches!(lexer.next_token().unwrap(), Ident("test_func")));
-        assert!(matches!(lexer.next_token().unwrap(), LParen));
-        assert!(matches!(lexer.next_token().unwrap(), Ty(Type::I32)));
-        assert!(matches!(lexer.next_token().unwrap(), Comma));
-        assert!(matches!(lexer.next_token().unwrap(), Ty(Type::I64)));
-        assert!(matches!(lexer.next_token().unwrap(), RParen));
-        assert!(matches!(lexer.next_token().unwrap(), Colon));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Func
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Ident("test_func")
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            LParen
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Ty(Type::I32)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Comma
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Ty(Type::I64)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            RParen
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Colon
+        ));
 
-        assert!(matches!(lexer.next_token().unwrap(), Block(0)));
-        assert!(matches!(lexer.next_token().unwrap(), Colon));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Block(0)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Colon
+        ));
 
-        assert!(matches!(lexer.next_token().unwrap(), Value(2)));
-        assert!(matches!(lexer.next_token().unwrap(), Dot));
-        assert!(matches!(lexer.next_token().unwrap(), Ty(Type::I64)));
-        assert!(matches!(lexer.next_token().unwrap(), Eq));
-        assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Sext)));
-        assert!(matches!(lexer.next_token().unwrap(), Value(0)));
-        assert!(matches!(lexer.next_token().unwrap(), SemiColon));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Value(2)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Dot
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Ty(Type::I64)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Eq
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            OpCode(Code::Sext)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Value(0)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            SemiColon
+        ));
 
-        assert!(matches!(lexer.next_token().unwrap(), Value(3)));
-        assert!(matches!(lexer.next_token().unwrap(), Dot));
-        assert!(matches!(lexer.next_token().unwrap(), Ty(Type::I64)));
-        assert!(matches!(lexer.next_token().unwrap(), Eq));
-        assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Mul)));
-        assert!(matches!(lexer.next_token().unwrap(), Value(2)));
-        assert!(matches!(lexer.next_token().unwrap(), Value(1)));
-        assert!(matches!(lexer.next_token().unwrap(), SemiColon));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Value(3)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Dot
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Ty(Type::I64)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Eq
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            OpCode(Code::Mul)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Value(2)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Value(1)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            SemiColon
+        ));
 
-        assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Return)));
-        assert!(matches!(lexer.next_token().unwrap(), SemiColon));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            OpCode(Code::Return)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            SemiColon
+        ));
 
-        assert!(lexer.next_token().is_none());
+        assert!(lexer.next_token().unwrap().is_none());
     }
 
     #[test]
@@ -460,24 +677,54 @@ mod tests {
         return;";
         let mut lexer = Lexer::new(input);
 
-        assert!(matches!(lexer.next_token().unwrap(), Func));
-        assert!(matches!(lexer.next_token().unwrap(), Ident("test_func")));
-        assert!(matches!(lexer.next_token().unwrap(), LParen));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Func
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Ident("test_func")
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            LParen
+        ));
         assert!(
-            matches!(lexer.next_token().unwrap(), Ty(ty) if ty == Type::make_array(Type::I32, 4))
+            matches!(lexer.next_token().ok().flatten().unwrap().item, Ty(ty) if ty == Type::make_array(Type::I32, 4))
         );
-        assert!(matches!(lexer.next_token().unwrap(), Comma));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Comma
+        ));
         assert!(
-            matches!(lexer.next_token().unwrap(), Ty(ty) if ty == Type::make_array(Type::make_array(Type::I128, 3), 4))
+            matches!(lexer.next_token().ok().flatten().unwrap().item, Ty(ty) if ty == Type::make_array(Type::make_array(Type::I128, 3), 4))
         );
-        assert!(matches!(lexer.next_token().unwrap(), RParen));
-        assert!(matches!(lexer.next_token().unwrap(), Colon));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            RParen
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Colon
+        ));
 
-        assert!(matches!(lexer.next_token().unwrap(), Block(0)));
-        assert!(matches!(lexer.next_token().unwrap(), Colon));
-        assert!(matches!(lexer.next_token().unwrap(), OpCode(Code::Return)));
-        assert!(matches!(lexer.next_token().unwrap(), SemiColon));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Block(0)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Colon
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            OpCode(Code::Return)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            SemiColon
+        ));
 
-        assert!(lexer.next_token().is_none());
+        assert!(lexer.next_token().unwrap().is_none());
     }
 }
