@@ -1,0 +1,66 @@
+# sameln: func %complex_loop() -> i8:
+# nextln:     block1:
+# nextln:         v0.i8 = imm_u8 1;
+# nextln:         v1.i8 = imm_u8 1;
+# nextln:         v2.i8 = imm_u8 0;
+# nextln:         fallthrough block2;
+# nextln: 
+# nextln:     block2:
+# nextln:         v3.i8 = imm_u8 1;
+# nextln:         v4.i8 = phi (v10 block7) (v2 block1);
+# nextln:         v5.i8 = imm_u8 100;
+# nextln:         v6.i8 = lt v4 v5;
+# nextln:         br v6 block3 block4;
+# nextln: 
+# nextln:     block3:
+# nextln:         v7.i8 = imm_u8 20;
+# nextln:         jump block5;
+# nextln: 
+# nextln:     block4:
+# nextln:         return v3;
+# nextln: 
+# nextln:     block5:
+# nextln:         v8.i8 = imm_u8 1;
+# nextln:         v9.i8 = imm_u8 2;
+# nextln:         v10.i8 = add v4 v8;
+# nextln:         jump block7;
+# nextln: 
+# nextln:     block7:
+# nextln:         v13.i8 = imm_u8 1;
+# nextln:         jump block2;
+func %complex_loop() -> i8:
+    block1:
+        v0.i8 = imm_u8 1;
+        v1.i8 = imm_u8 1;
+        v2.i8 = imm_u8 0;
+        fallthrough block2;
+
+    block2:
+        v3.i8 = phi (v13 block7) (v1 block1);
+        v4.i8 = phi (v14 block7) (v2 block1);
+        v5.i8 = imm_u8 100;
+        v6.i8 = lt v4 v5;
+        br v6 block3 block4;
+
+    block3:
+        v7.i8 = imm_u8 20;
+        br v7 block5 block6;
+
+    block4:
+        return v3;
+
+    block5:
+        v8.i8 = imm_u8 1;
+        v9.i8 = add v0 v8;
+        v10.i8 = add v4 v8;
+        jump block7;
+
+    block6:
+        v11.i8 = imm_u8 2;
+        v12.i8 = add v4 v9;
+        fallthrough block7;
+
+    block7:
+        v13.i8 = phi (v8 block5) (v11 block6);
+        v14.i8 = phi (v10 block5) (v12 block6);
+        jump block2;

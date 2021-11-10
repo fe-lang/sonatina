@@ -1,6 +1,6 @@
 //! This module contains Sonatine IR instructions definitions.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap};
 
@@ -152,6 +152,24 @@ impl DataFlowGraph {
             InsnData::Phi { blocks, .. } => blocks,
             _ => panic!("insn is not a phi function"),
         }
+    }
+
+    pub fn remove_phi_arg_from_block(&mut self, insn: Insn, from: Block) {
+        let data = &mut self.insns[insn];
+        let (values, blocks) = match data {
+            InsnData::Phi { values, blocks, .. } => (values, blocks),
+            _ => panic!("insn is not a phi function"),
+        };
+
+        let mut remove_values = HashSet::new();
+        for (i, block) in blocks.iter().enumerate() {
+            if *block == from {
+                remove_values.insert(values[i]);
+            }
+        }
+
+        blocks.retain(|b| *b != from);
+        values.retain(|v| !remove_values.contains(v));
     }
 
     pub fn insn_args(&self, insn: Insn) -> &[Value] {

@@ -244,19 +244,21 @@ impl SccpSolver {
         while let Some(block) = next_block {
             let mut next_insn = func.layout.first_insn_of(block);
             while let Some(insn) = next_insn {
-                self.fold(func, insn);
                 next_insn = func.layout.next_insn_of(insn);
+                if !self.fold(func, insn) && func.dfg.is_phi(insn) {
+                    self.try_fold_phi(func, insn);
+                }
             }
 
             next_block = func.layout.next_block_of(block);
         }
     }
 
-    fn fold(&mut self, func: &mut Function, insn: Insn) {
+    fn fold(&mut self, func: &mut Function, insn: Insn) -> bool {
         let new_insn_data = if let InsnData::Branch { args, dests } = func.dfg.insn_data(insn) {
             let cell = self.lattice[args[0]];
             if cell.is_top() {
-                return;
+                return false;
             } else if cell.is_bot() {
                 unreachable!();
             } else if cell.is_zero() {
@@ -275,16 +277,35 @@ impl SccpSolver {
         } else {
             let insn_result = match func.dfg.insn_result(insn) {
                 Some(result) => result,
-                None => return,
+                None => return false,
             };
             match self.lattice[insn_result].to_imm_op() {
                 Some(op) => InsnData::Immediate { code: op },
-                None => return,
+                None => return false,
             }
         };
 
         let mut insn_inserter = InsnInserter::new(func, CursorLocation::At(insn));
         insn_inserter.replace(new_insn_data);
+        true
+    }
+
+    fn try_fold_phi(&mut self, func: &mut Function, insn: Insn) {
+        debug_assert!(func.dfg.is_phi(insn));
+
+        let mut blocks = func.dfg.phi_blocks(insn).to_vec();
+        blocks.retain(|block| !self.reachable_blocks.contains(block));
+        for block in blocks {
+            func.dfg.remove_phi_arg_from_block(insn, block);
+        }
+
+        // Remove phi function if it has just one argument.
+        if func.dfg.insn_args_num(insn) == 1 {
+            let phi_value = func.dfg.insn_result(insn).unwrap();
+            func.dfg
+                .replace_value(phi_value, func.dfg.insn_arg(insn, 0));
+            InsnInserter::new(func, CursorLocation::At(insn)).remove_insn();
+        }
     }
 
     fn is_reachable(&self, func: &Function, from: Block, to: Block) -> bool {
