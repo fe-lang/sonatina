@@ -14,10 +14,13 @@ impl<'a> FuncWriter<'a> {
 
     pub fn write(&mut self, mut w: impl io::Write) -> io::Result<()> {
         w.write_fmt(format_args!("func %{}(", self.func.name))?;
-        let sig = &self.func.sig;
-        self.write_iter_with_delim(sig.args().iter(), ", ", &mut w)?;
+        self.write_iter_with_delim(
+            self.func.arg_values.iter().map(|v| ValueWithTy(*v)),
+            ", ",
+            &mut w,
+        )?;
 
-        let mut rets = sig.returns().iter().peekable();
+        let mut rets = self.func.sig.returns().iter().peekable();
         if rets.peek().is_some() {
             w.write_all(b") -> ")?;
         } else {
@@ -26,13 +29,13 @@ impl<'a> FuncWriter<'a> {
 
         self.write_iter_with_delim(rets, ", ", &mut w)?;
 
-        self.enter_item(&mut w)?;
+        self.enter(&mut w)?;
         for block in self.func.layout.iter_block() {
             self.write_block_with_insn(block, &mut w)?;
             self.newline(&mut w)?;
             self.newline(&mut w)?;
         }
-        self.leave_item();
+        self.leave();
 
         Ok(())
     }
@@ -47,10 +50,10 @@ impl<'a> FuncWriter<'a> {
         self.indent(&mut w)?;
         block.write(self, &mut w)?;
 
-        self.enter_item(&mut w)?;
+        self.enter(&mut w)?;
         let insns = self.func.layout.iter_insn(block);
         self.write_iter_with_delim(insns, "\n", &mut w)?;
-        self.leave_item();
+        self.leave();
 
         Ok(())
     }
@@ -91,12 +94,12 @@ impl<'a> FuncWriter<'a> {
         w.write_all(b" ")
     }
 
-    fn enter_item(&mut self, mut w: impl io::Write) -> io::Result<()> {
+    fn enter(&mut self, mut w: impl io::Write) -> io::Result<()> {
         self.level += 1;
         w.write_all(b":\n")
     }
 
-    fn leave_item(&mut self) {
+    fn leave(&mut self) {
         self.level -= 1;
     }
 }
@@ -197,6 +200,17 @@ impl IrWrite for Insn {
         w.write_all(b";")?;
 
         Ok(())
+    }
+}
+#[derive(Clone)]
+struct ValueWithTy(Value);
+
+impl IrWrite for ValueWithTy {
+    fn write(&self, f: &mut FuncWriter, mut w: impl io::Write) -> io::Result<()> {
+        let ty = f.func.dfg.value_ty(self.0);
+        self.0.write(f, &mut w)?;
+        w.write_all(b".")?;
+        ty.write(f, w)
     }
 }
 

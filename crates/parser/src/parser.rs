@@ -94,38 +94,46 @@ impl<'a, 'b> FuncParser<'a, 'b> {
 
         let fn_name = expect_token!(self, Token::Ident(..), "func name")?.string();
 
-        let mut sig = Signature::default();
         expect_token!(self, Token::LParen, "(")?;
-        if let Some(ty) = eat_token!(self, Token::Ty(..))? {
-            sig.append_arg(ty.ty().clone());
+        let mut func = Function::new(fn_name.to_string(), Signature::default());
+        let mut inserter = InsnInserter::new(&mut func);
+
+        if let Some(value) = eat_token!(self, Token::Value(..))? {
+            let value = Value(value.id());
+            inserter.def_value(value, self.lexer.line())?;
+            expect_token!(self, Token::Dot, "dot")?;
+            let ty = expect_token!(self, Token::Ty(..), "type")?.ty().clone();
+            inserter.append_arg_value(value, ty);
+
             while eat_token!(self, Token::Comma)?.is_some() {
-                let ty = expect_token!(self, Token::Ty(..), "type")?;
-                sig.append_arg(ty.ty().clone());
+                let value = Value(expect_token!(self, Token::Value(..), "value")?.id());
+                inserter.def_value(value, self.lexer.line())?;
+                expect_token!(self, Token::Dot, "dot")?;
+                let ty = expect_token!(self, Token::Ty(..), "type")?.ty().clone();
+                inserter.append_arg_value(value, ty);
             }
         }
         expect_token!(self, Token::RParen, ")")?;
 
         if eat_token!(self, Token::RArrow)?.is_some() {
             let ty = expect_token!(self, Token::Ty(..), "type")?;
-            sig.append_return(ty.ty().clone());
+            inserter.func.sig.append_return(ty.ty().clone());
             while eat_token!(self, Token::Comma)?.is_some() {
                 let ty = expect_token!(self, Token::Ty(..), "type")?;
-                sig.append_return(ty.ty().clone());
+                inserter.func.sig.append_return(ty.ty().clone());
             }
         }
         expect_token!(self, Token::Colon, ":")?;
 
-        let mut func = Function::new(fn_name.to_string(), sig);
-        self.parse_body(&mut func)?;
+        self.parse_body(&mut inserter)?;
 
         Ok(Some(ParsedFunction { comments, func }))
     }
 
-    fn parse_body(&mut self, func: &mut Function) -> Result<()> {
-        let mut inserter = InsnInserter::new(func);
+    fn parse_body(&mut self, inserter: &mut InsnInserter) -> Result<()> {
         while let Some(id) = eat_token!(self, Token::Block(..))? {
             expect_token!(self, Token::Colon, ":")?;
-            self.parse_block_body(&mut inserter, Block(id.id()))?;
+            self.parse_block_body(inserter, Block(id.id()))?;
         }
 
         Ok(())
@@ -144,7 +152,11 @@ impl<'a, 'b> FuncParser<'a, 'b> {
                 let opcode = expect_token!(self, Token::OpCode(..), "opcode")?.opcode();
                 let insn_data = opcode.parse_args(self, Some(ty))?;
                 let insn = inserter.insert_insn_data(insn_data);
-                inserter.def_value(Value(value.id()), self.lexer.line(), insn)?;
+                let value = Value(value.id());
+                inserter.def_value(value, self.lexer.line())?;
+                let result = inserter.func.dfg.make_result(insn).unwrap();
+                inserter.func.dfg.values[value] = result;
+                inserter.func.dfg.attach_result(insn, value);
             } else if let Some(opcode) = eat_token!(self, Token::OpCode(..))? {
                 let insn_data = opcode.opcode().parse_args(self, None)?;
                 inserter.insert_insn_data(insn_data);
@@ -192,7 +204,7 @@ impl<'a> InsnInserter<'a> {
         }
     }
 
-    fn def_value(&mut self, value: Value, line: u32, insn: Insn) -> Result<()> {
+    fn def_value(&mut self, value: Value, line: u32) -> Result<()> {
         if self.defined_values.contains(&value) {
             return Err(Error::new(
                 ErrorKind::SemanticError(format!("v{} is already defined", value.0)),
@@ -201,7 +213,6 @@ impl<'a> InsnInserter<'a> {
         }
         self.defined_values.insert(value);
 
-        let result = self.func.dfg.make_result(insn).unwrap();
         let value_len = self.func.dfg.values.len();
         let value_id = value.0 as usize;
 
@@ -216,8 +227,6 @@ impl<'a> InsnInserter<'a> {
             }
         }
 
-        self.func.dfg.values[value] = result;
-        self.func.dfg.attach_result(insn, value);
         Ok(())
     }
 
@@ -250,6 +259,15 @@ impl<'a> InsnInserter<'a> {
         self.insert_insn(insn);
         self.set_loc(CursorLocation::At(insn));
         insn
+    }
+
+    fn append_arg_value(&mut self, value: Value, ty: Type) {
+        let idx = self.func.arg_values.len();
+
+        let value_data = self.func.dfg.make_arg_value(&ty, idx);
+        self.func.sig.append_arg(ty);
+        self.func.dfg.values[value] = value_data;
+        self.func.arg_values.push(value);
     }
 }
 
@@ -403,6 +421,7 @@ mod tests {
         let module = Parser::parse(input).unwrap();
         let mut writer = FuncWriter::new(&module.funcs[0].func);
 
+        println!("{}", writer.dump_string().unwrap());
         input.trim() == writer.dump_string().unwrap().trim()
     }
 
@@ -420,7 +439,7 @@ mod tests {
     #[test]
     fn test_with_arg() {
         assert!(test_parser(
-            "func %test_func(i32, i64):
+            "func %test_func(v0.i32, v1.i64):
     block0:
         v2.i64 = sext v0;
         v3.i64 = mul v2 v1;

@@ -310,7 +310,7 @@ mod tests {
 
         assert_eq!(
             dump_func(&builder.build()),
-            "func %test_func(i32, i64):
+            "func %test_func(v0.i32, v1.i64):
     block0:
         v2.i64 = sext v0;
         v3.i64 = mul v2 v1;
@@ -375,7 +375,7 @@ mod tests {
 
         assert_eq!(
             dump_func(&builder.build()),
-            "func %test_func(i64):
+            "func %test_func(v0.i64):
     block0:
         br v0 block1 block2;
 

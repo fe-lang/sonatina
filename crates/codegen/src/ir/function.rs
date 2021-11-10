@@ -20,7 +20,10 @@ impl Function {
             .args()
             .iter()
             .enumerate()
-            .map(|(idx, arg_ty)| dfg.make_arg_value(arg_ty, idx))
+            .map(|(idx, arg_ty)| {
+                let value = dfg.make_arg_value(arg_ty, idx);
+                dfg.make_value(value)
+            })
             .collect();
 
         Self {
