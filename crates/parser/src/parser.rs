@@ -361,8 +361,8 @@ impl Code {
             Self::Zext => make_cast!(parser, ret_ty.unwrap(), CastOp::Zext),
             Self::Trunc => make_cast!(parser, ret_ty.unwrap(), CastOp::Trunc),
             Self::Load => {
-                let ty = ret_ty.unwrap();
                 let arg = parser.expect_value()?;
+                let ty = expect_token!(parser, Token::Ty(..), "type")?.ty().clone();
                 InsnData::Load { args: [arg], ty }
             }
             Self::Store => {

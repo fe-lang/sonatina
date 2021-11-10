@@ -152,10 +152,12 @@ impl IrWrite for Insn {
                 writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
             }
-            Load { args, .. } => {
+            Load { args, ty } => {
                 w.write_all(b"load")?;
                 writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
+                writer.space(&mut w)?;
+                ty.write(writer, &mut w)?;
             }
             Store { args } => {
                 w.write_all(b"store")?;
