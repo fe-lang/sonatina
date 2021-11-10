@@ -1,3 +1,10 @@
+//! This module contains dominance tree related structs.
+//!
+//! The algorithm is based on Keith D. Cooper., Timothy J. Harvey., and Ken Kennedy.: A Simple, Fast Dominance Algorithm:  
+//! <https://www.cs.rice.edu/~keith/EMBED/dom.pdf>
+
+use std::collections::BTreeSet;
+
 use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 
 use super::cfg::ControlFlowGraph;
@@ -64,6 +71,26 @@ impl DomTree {
         }
     }
 
+    /// Compute dominance frontiers of each blocks.
+    pub fn compute_df(&self, cfg: &ControlFlowGraph) -> DFSet {
+        let mut df = DFSet::default();
+
+        for &block in &self.rpo {
+            if cfg.pred_num_of(block) < 2 {
+                continue;
+            }
+            for pred in cfg.preds_of(block) {
+                let mut runner = *pred;
+                while PackedOption::from(runner) != self.doms[block] {
+                    df.0[runner].insert(block);
+                    runner = self.doms[runner].unwrap();
+                }
+            }
+        }
+
+        df
+    }
+
     fn intersect(&self, mut b1: Block, mut b2: Block, fingers: &SecondaryMap<Block, u32>) -> Block {
         while b1 != b2 {
             while fingers[b1] < fingers[b2] {
@@ -78,6 +105,24 @@ impl DomTree {
     }
 }
 
+/// Dominance frontiers of each blocks.
+#[derive(Default)]
+pub struct DFSet(SecondaryMap<Block, BTreeSet<Block>>);
+
+impl DFSet {
+    pub fn frontier(&self, block: Block) -> impl Iterator<Item = &Block> {
+        self.0[block].iter()
+    }
+
+    pub fn in_frontier_of(&self, block: Block, of: Block) -> bool {
+        self.0[of].contains(&block)
+    }
+
+    pub fn block_num_of(&self, of: Block) -> usize {
+        self.0[of].len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,12 +130,22 @@ mod tests {
     use crate::ir::builder::test_util::func_builder;
     use crate::Function;
 
-    fn calc_dom(func: &Function) -> DomTree {
+    fn calc_dom(func: &Function) -> (DomTree, DFSet) {
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(func);
         let mut dom_tree = DomTree::default();
         dom_tree.compute(&cfg);
-        dom_tree
+        let df = dom_tree.compute_df(&cfg);
+        (dom_tree, df)
+    }
+
+    fn in_frontier_of(df: &DFSet, blocks: &[Block], of: Block) -> bool {
+        for &block in blocks {
+            if !df.in_frontier_of(block, of) {
+                return false;
+            }
+        }
+        true
     }
 
     #[test]
@@ -117,11 +172,21 @@ mod tests {
 
         builder.seal_all();
 
-        let dom_tree = calc_dom(&builder.build());
+        let (dom_tree, df) = calc_dom(&builder.build());
         assert_eq!(dom_tree.idom_of(entry_block), Some(entry_block));
         assert_eq!(dom_tree.idom_of(then_block), Some(entry_block));
         assert_eq!(dom_tree.idom_of(else_block), Some(entry_block));
         assert_eq!(dom_tree.idom_of(merge_block), Some(entry_block));
+
+        assert_eq!(df.block_num_of(entry_block), 0);
+
+        assert_eq!(df.block_num_of(then_block), 1);
+        assert!(in_frontier_of(&df, &[merge_block], then_block));
+
+        assert_eq!(df.block_num_of(else_block), 1);
+        assert!(in_frontier_of(&df, &[merge_block], else_block));
+
+        assert_eq!(df.block_num_of(merge_block), 0);
     }
 
     #[test]
@@ -185,7 +250,7 @@ mod tests {
 
         builder.seal_all();
 
-        let dom_tree = calc_dom(&builder.build());
+        let (dom_tree, df) = calc_dom(&builder.build());
         assert_eq!(dom_tree.idom_of(a), Some(a));
         assert_eq!(dom_tree.idom_of(b), Some(a));
         assert_eq!(dom_tree.idom_of(c), Some(a));
@@ -197,5 +262,42 @@ mod tests {
         assert_eq!(dom_tree.idom_of(i), Some(b));
         assert_eq!(dom_tree.idom_of(j), Some(g));
         assert_eq!(dom_tree.idom_of(k), Some(f));
+
+        assert_eq!(df.block_num_of(a), 0);
+
+        assert_eq!(df.block_num_of(b), 2);
+        assert!(in_frontier_of(&df, &[b, m], b));
+
+        assert_eq!(df.block_num_of(c), 2);
+        assert!(in_frontier_of(&df, &[c, m], c));
+
+        assert_eq!(df.block_num_of(d), 3);
+        assert!(in_frontier_of(&df, &[g, i, l], d));
+
+        assert_eq!(df.block_num_of(e), 2);
+        assert!(in_frontier_of(&df, &[c, h], e));
+
+        assert_eq!(df.block_num_of(f), 2);
+        assert!(in_frontier_of(&df, &[i, l], f));
+
+        assert_eq!(df.block_num_of(g), 1);
+        assert!(in_frontier_of(&df, &[i], g));
+
+        assert_eq!(df.block_num_of(h), 1);
+        assert!(in_frontier_of(&df, &[m], h));
+
+        assert_eq!(df.block_num_of(i), 1);
+        assert!(in_frontier_of(&df, &[l], i));
+
+        assert_eq!(df.block_num_of(j), 1);
+        assert!(in_frontier_of(&df, &[i], j));
+
+        assert_eq!(df.block_num_of(k), 1);
+        assert!(in_frontier_of(&df, &[l], k));
+
+        assert_eq!(df.block_num_of(l), 2);
+        assert!(in_frontier_of(&df, &[b, m], l));
+
+        assert_eq!(df.block_num_of(m), 0);
     }
 }
