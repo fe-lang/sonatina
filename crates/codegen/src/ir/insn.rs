@@ -3,6 +3,8 @@
 // TODO: Add type checker for instruction arguments.
 use std::fmt;
 
+use smallvec::SmallVec;
+
 use super::{types::U256, Block, DataFlowGraph, Type, Value};
 
 /// An opaque reference to [`InsnData`]
@@ -39,12 +41,12 @@ pub enum InsnData {
     Branch { args: [Value; 1], dests: [Block; 2] },
 
     /// Return.
-    Return { args: Vec<Value> },
+    Return { args: SmallVec<[Value; 8]> },
 
     /// Phi funcion.
     Phi {
-        values: Vec<Value>,
-        blocks: Vec<Block>,
+        values: SmallVec<[Value; 8]>,
+        blocks: SmallVec<[Block; 8]>,
         ty: Type,
     },
 }

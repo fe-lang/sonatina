@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn dom_tree_if_else() {
-        let mut builder = func_builder(vec![], vec![]);
+        let mut builder = func_builder(&[], &[]);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -208,7 +208,7 @@ mod tests {
     #[test]
     #[allow(clippy::many_single_char_names)]
     fn dom_tree_complex() {
-        let mut builder = func_builder(vec![], vec![]);
+        let mut builder = func_builder(&[], &[]);
 
         let a = builder.append_block();
         let b = builder.append_block();

@@ -89,7 +89,7 @@ impl ControlDependenceGragh {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{super::Type, *};
     use crate::ir::builder::test_util::func_builder;
 
     fn test_incomings(cdg: &ControlDependenceGragh, dependent: Block, incomings: &[Block]) -> bool {
@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn cdg_if_else() {
-        let mut builder = func_builder(vec![super::super::Type::I64], vec![]);
+        let mut builder = func_builder(&[Type::I64], &[]);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -147,7 +147,7 @@ mod tests {
     #[test]
     #[allow(clippy::many_single_char_names)]
     fn cdg_complex() {
-        let mut builder = func_builder(vec![], vec![]);
+        let mut builder = func_builder(&[], &[]);
 
         let a = builder.append_block();
         let b = builder.append_block();

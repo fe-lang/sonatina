@@ -8,7 +8,7 @@ use super::ir::{Block, Function, Insn};
 pub struct ControlFlowGraph {
     entry: PackedOption<Block>,
     blocks: SecondaryMap<Block, BlockNode>,
-    pub(super) exits: Vec<Block>,
+    pub(super) exits: smallvec::SmallVec<[Block; 8]>,
 }
 
 impl ControlFlowGraph {
@@ -67,7 +67,7 @@ impl ControlFlowGraph {
             node.reverse_edge();
         }
         self.entry = new_entry.into();
-        self.exits = new_exits.to_vec();
+        self.exits = new_exits.into();
     }
 
     pub fn clear(&mut self) {

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use smallvec::smallvec;
 use sonatina_codegen::ir::{
     func_cursor::{CursorLocation, FuncCursor},
     insn::{BinaryOp, CastOp, ImmediateOp, JumpOp},
@@ -382,15 +383,15 @@ impl Code {
                 }
             }
             Self::Return => {
-                let mut args = vec![];
+                let mut args = smallvec![];
                 while let Some(value) = eat_token!(parser, Token::Value(..))? {
                     args.push(Value(value.id()));
                 }
                 InsnData::Return { args }
             }
             Self::Phi => {
-                let mut values = vec![];
-                let mut blocks = vec![];
+                let mut values = smallvec![];
+                let mut blocks = smallvec![];
                 while eat_token!(parser, Token::LParen)?.is_some() {
                     let value = parser.expect_value()?;
                     values.push(value);

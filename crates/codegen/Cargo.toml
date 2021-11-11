@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 primitive-types = "0.10"
 cranelift-entity = "0.77"
+smallvec = "1.7.0"

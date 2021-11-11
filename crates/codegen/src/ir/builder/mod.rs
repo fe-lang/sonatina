@@ -152,9 +152,7 @@ impl FunctionBuilder {
     }
 
     pub fn ret(&mut self, args: &[Value]) {
-        let insn_data = InsnData::Return {
-            args: args.to_vec(),
-        };
+        let insn_data = InsnData::Return { args: args.into() };
         self.insert_insn(insn_data);
     }
 
@@ -267,7 +265,7 @@ mod tests {
 
     #[test]
     fn entry_block() {
-        let mut builder = func_builder(vec![], vec![]);
+        let mut builder = func_builder(&[], &[]);
 
         let b0 = builder.append_block();
         builder.switch_to_block(b0);
@@ -295,7 +293,7 @@ mod tests {
 
     #[test]
     fn entry_block_with_args() {
-        let mut builder = func_builder(vec![Type::I32, Type::I64], vec![]);
+        let mut builder = func_builder(&[Type::I32, Type::I64], &[]);
 
         let entry_block = builder.append_block();
         builder.switch_to_block(entry_block);
@@ -322,7 +320,7 @@ mod tests {
 
     #[test]
     fn entry_block_with_return() {
-        let mut builder = func_builder(vec![], vec![Type::I32, Type::I64]);
+        let mut builder = func_builder(&[], &[Type::I32, Type::I64]);
 
         let entry_block = builder.append_block();
 
@@ -346,7 +344,7 @@ mod tests {
 
     #[test]
     fn then_else_merge_block() {
-        let mut builder = func_builder(vec![Type::I64], vec![]);
+        let mut builder = func_builder(&[Type::I64], &[]);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -425,7 +423,7 @@ pub(crate) mod test_util {
         }
     }
 
-    pub(crate) fn func_builder(args: Vec<Type>, rets: Vec<Type>) -> FunctionBuilder {
+    pub(crate) fn func_builder(args: &[Type], rets: &[Type]) -> FunctionBuilder {
         let sig = Signature::new(args, rets);
         let ctxt = TestContext {};
         FunctionBuilder::new("test_func".into(), sig, Box::new(ctxt))

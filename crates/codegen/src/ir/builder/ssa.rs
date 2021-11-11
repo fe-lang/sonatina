@@ -2,6 +2,7 @@
 //! Single Assignment Form`](https://link.springer.com/chapter/10.1007/978-3-642-37051-9_6).
 
 use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap, SparseSet};
+use smallvec::SmallVec;
 
 use crate::ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
@@ -197,8 +198,8 @@ impl SsaBuilder {
     fn prepend_phi(&mut self, func: &mut Function, var: Variable, block: Block) -> (Insn, Value) {
         let ty = self.var_ty(var).clone();
         let insn_data = InsnData::Phi {
-            values: Vec::new(),
-            blocks: Vec::new(),
+            values: SmallVec::new(),
+            blocks: SmallVec::new(),
             ty,
         };
         let mut cursor = InsnInserter::new(func, CursorLocation::BlockTop(block));
@@ -218,7 +219,7 @@ mod tests {
 
     #[test]
     fn use_var_local() {
-        let mut builder = func_builder(vec![], vec![]);
+        let mut builder = func_builder(&[], &[]);
 
         let var = builder.declare_var(Type::I32);
 
@@ -245,7 +246,7 @@ mod tests {
 
     #[test]
     fn use_var_global_if() {
-        let mut builder = func_builder(vec![], vec![]);
+        let mut builder = func_builder(&[], &[]);
 
         let var = builder.declare_var(Type::I32);
 
@@ -301,7 +302,7 @@ mod tests {
 
     #[test]
     fn use_var_global_loop() {
-        let mut builder = func_builder(vec![], vec![]);
+        let mut builder = func_builder(&[], &[]);
 
         let var = builder.declare_var(Type::I32);
 
@@ -359,7 +360,7 @@ mod tests {
 
     #[test]
     fn use_var_global_complex() {
-        let mut builder = func_builder(vec![], vec![]);
+        let mut builder = func_builder(&[], &[]);
 
         let var = builder.declare_var(Type::I32);
 
@@ -444,7 +445,7 @@ mod tests {
 
     #[test]
     fn use_var_global_complex_seal_all() {
-        let mut builder = func_builder(vec![], vec![]);
+        let mut builder = func_builder(&[], &[]);
 
         let var = builder.declare_var(Type::I32);
 
@@ -523,7 +524,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn undef_use() {
-        let mut builder = func_builder(vec![], vec![]);
+        let mut builder = func_builder(&[], &[]);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();
@@ -535,7 +536,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn unreachable_use() {
-        let mut builder = func_builder(vec![], vec![]);
+        let mut builder = func_builder(&[], &[]);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();

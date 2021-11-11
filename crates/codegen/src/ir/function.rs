@@ -1,3 +1,5 @@
+use smallvec::SmallVec;
+
 use super::{DataFlowGraph, Layout, Type, Value};
 
 #[derive(Debug, Clone)]
@@ -7,7 +9,7 @@ pub struct Function {
 
     /// Signature of the function.
     pub sig: Signature,
-    pub arg_values: Vec<Value>,
+    pub arg_values: smallvec::SmallVec<[Value; 8]>,
 
     pub dfg: DataFlowGraph,
     pub layout: Layout,
@@ -38,13 +40,16 @@ impl Function {
 
 #[derive(Debug, Clone, Default)]
 pub struct Signature {
-    args: Vec<Type>,
-    rets: Vec<Type>,
+    args: SmallVec<[Type; 8]>,
+    rets: SmallVec<[Type; 8]>,
 }
 
 impl Signature {
-    pub fn new(args: Vec<Type>, rets: Vec<Type>) -> Self {
-        Self { args, rets }
+    pub fn new(args: &[Type], rets: &[Type]) -> Self {
+        Self {
+            args: args.into(),
+            rets: rets.into(),
+        }
     }
 
     pub fn append_arg(&mut self, arg: Type) {

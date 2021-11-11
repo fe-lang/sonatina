@@ -126,7 +126,7 @@ mod tests {
 
     #[test]
     fn critical_edge_basic() {
-        let mut builder = func_builder(vec![], vec![]);
+        let mut builder = func_builder(&[], &[]);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     #[allow(clippy::many_single_char_names)]
     fn critical_edge_dup() {
-        let mut builder = func_builder(vec![], vec![]);
+        let mut builder = func_builder(&[], &[]);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn critical_edge_phi() {
-        let mut builder = func_builder(vec![], vec![]);
+        let mut builder = func_builder(&[], &[]);
 
         let a = builder.append_block();
         let b = builder.append_block();
