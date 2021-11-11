@@ -128,7 +128,7 @@ impl DomTree {
 pub struct DFSet(SecondaryMap<Block, BTreeSet<Block>>);
 
 impl DFSet {
-    pub fn frontier(&self, block: Block) -> impl Iterator<Item = &Block> {
+    pub fn frontiers(&self, block: Block) -> impl Iterator<Item = &Block> {
         self.0[block].iter()
     }
 
@@ -136,7 +136,7 @@ impl DFSet {
         self.0[of].contains(&block)
     }
 
-    pub fn block_num_of(&self, of: Block) -> usize {
+    pub fn frontier_num_of(&self, of: Block) -> usize {
         self.0[of].len()
     }
 
@@ -147,6 +147,8 @@ impl DFSet {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::many_single_char_names)]
+
     use super::*;
 
     use crate::ir::builder::test_util::func_builder;
@@ -161,12 +163,12 @@ mod tests {
         (dom_tree, df)
     }
 
-    fn in_frontier_of(df: &DFSet, of: Block, blocks: &[Block]) -> bool {
-        if df.block_num_of(of) != blocks.len() {
+    fn test_df(df: &DFSet, of: Block, frontiers: &[Block]) -> bool {
+        if df.frontier_num_of(of) != frontiers.len() {
             return false;
         }
 
-        for &block in blocks {
+        for &block in frontiers {
             if !df.in_frontier_of(block, of) {
                 return false;
             }
@@ -204,10 +206,10 @@ mod tests {
         assert_eq!(dom_tree.idom_of(else_block), Some(entry_block));
         assert_eq!(dom_tree.idom_of(merge_block), Some(entry_block));
 
-        assert!(in_frontier_of(&df, entry_block, &[]));
-        assert!(in_frontier_of(&df, then_block, &[merge_block]));
-        assert!(in_frontier_of(&df, else_block, &[merge_block]));
-        assert!(in_frontier_of(&df, merge_block, &[]));
+        assert!(test_df(&df, entry_block, &[]));
+        assert!(test_df(&df, then_block, &[merge_block]));
+        assert!(test_df(&df, else_block, &[merge_block]));
+        assert!(test_df(&df, merge_block, &[]));
     }
 
     #[test]
@@ -246,15 +248,14 @@ mod tests {
         assert!(!dom_tree.is_reachable(d));
         assert_eq!(dom_tree.idom_of(e), Some(a));
 
-        assert!(in_frontier_of(&df, a, &[]));
-        assert!(in_frontier_of(&df, b, &[e]));
-        assert!(in_frontier_of(&df, c, &[e]));
-        assert!(in_frontier_of(&df, d, &[]));
-        assert!(in_frontier_of(&df, e, &[]));
+        assert!(test_df(&df, a, &[]));
+        assert!(test_df(&df, b, &[e]));
+        assert!(test_df(&df, c, &[e]));
+        assert!(test_df(&df, d, &[]));
+        assert!(test_df(&df, e, &[]));
     }
 
     #[test]
-    #[allow(clippy::many_single_char_names)]
     fn dom_tree_complex() {
         let mut builder = func_builder(&[], &[]);
 
@@ -327,18 +328,18 @@ mod tests {
         assert_eq!(dom_tree.idom_of(j), Some(g));
         assert_eq!(dom_tree.idom_of(k), Some(f));
 
-        assert!(in_frontier_of(&df, a, &[]));
-        assert!(in_frontier_of(&df, b, &[b, m]));
-        assert!(in_frontier_of(&df, c, &[c, m]));
-        assert!(in_frontier_of(&df, d, &[g, i, l]));
-        assert!(in_frontier_of(&df, e, &[c, h]));
-        assert!(in_frontier_of(&df, f, &[i, l]));
-        assert!(in_frontier_of(&df, g, &[i]));
-        assert!(in_frontier_of(&df, h, &[m]));
-        assert!(in_frontier_of(&df, i, &[l]));
-        assert!(in_frontier_of(&df, j, &[i]));
-        assert!(in_frontier_of(&df, k, &[l]));
-        assert!(in_frontier_of(&df, l, &[b, m]));
-        assert!(in_frontier_of(&df, m, &[]));
+        assert!(test_df(&df, a, &[]));
+        assert!(test_df(&df, b, &[b, m]));
+        assert!(test_df(&df, c, &[c, m]));
+        assert!(test_df(&df, d, &[g, i, l]));
+        assert!(test_df(&df, e, &[c, h]));
+        assert!(test_df(&df, f, &[i, l]));
+        assert!(test_df(&df, g, &[i]));
+        assert!(test_df(&df, h, &[m]));
+        assert!(test_df(&df, i, &[l]));
+        assert!(test_df(&df, j, &[i]));
+        assert!(test_df(&df, k, &[l]));
+        assert!(test_df(&df, l, &[b, m]));
+        assert!(test_df(&df, m, &[]));
     }
 }
