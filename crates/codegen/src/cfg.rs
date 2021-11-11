@@ -4,10 +4,11 @@ use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 
 use super::ir::{Block, Function, Insn};
 
-#[derive(Default, Debug, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct ControlFlowGraph {
     entry: PackedOption<Block>,
     blocks: SecondaryMap<Block, BlockNode>,
+    pub(super) exits: Vec<Block>,
 }
 
 impl ControlFlowGraph {
@@ -16,13 +17,13 @@ impl ControlFlowGraph {
     }
 
     pub fn compute(&mut self, func: &Function) {
-        self.blocks.clear();
+        self.clear();
 
         self.entry = func.layout.first_block().into();
 
         for block in func.layout.iter_block() {
             if let Some(last_insn) = func.layout.last_insn_of(block) {
-                self.add_insn_dests(func, last_insn);
+                self.analyze_insn(func, last_insn);
             }
         }
     }
@@ -61,7 +62,25 @@ impl ControlFlowGraph {
         self.blocks[from].remove_succ(to);
     }
 
-    fn add_insn_dests(&mut self, func: &Function, insn: Insn) {
+    pub(super) fn reverse_edges(&mut self, new_entry: Block, new_exits: &[Block]) {
+        for node in self.blocks.values_mut() {
+            node.reverse_edge();
+        }
+        self.entry = new_entry.into();
+        self.exits = new_exits.to_vec();
+    }
+
+    pub fn clear(&mut self) {
+        self.entry = None.into();
+        self.blocks.clear();
+    }
+
+    fn analyze_insn(&mut self, func: &Function, insn: Insn) {
+        if func.dfg.is_return(insn) {
+            let exit = func.layout.insn_block(insn);
+            self.exits.push(exit);
+        }
+
         for dest in func.dfg.branch_dests(insn) {
             let block = func.layout.insn_block(insn);
             self.add_edge(block, *dest);
@@ -106,6 +125,10 @@ impl BlockNode {
 
     fn succ_num(&self) -> usize {
         self.succs.len()
+    }
+
+    fn reverse_edge(&mut self) {
+        std::mem::swap(&mut self.preds, &mut self.succs);
     }
 }
 

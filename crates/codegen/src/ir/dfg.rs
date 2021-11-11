@@ -1,4 +1,4 @@
-//! This module contains Sonatine IR instructions definitions.
+//! This module contains Sonatine IR data flow graph.
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -209,6 +209,10 @@ impl DataFlowGraph {
 
     pub fn is_phi(&self, insn: Insn) -> bool {
         matches!(self.insn_data(insn), InsnData::Phi { .. })
+    }
+
+    pub fn is_return(&self, insn: Insn) -> bool {
+        matches!(self.insn_data(insn), InsnData::Return { .. })
     }
 }
 

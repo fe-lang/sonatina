@@ -1,5 +1,6 @@
 pub mod ir;
 
+pub mod cdg;
 pub mod cfg;
 pub mod critical_edge;
 pub mod domtree;
