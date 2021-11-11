@@ -1,4 +1,4 @@
-//! This module contains dominance tree related structs.
+//! This module contains dominantor tree related structs.
 //!
 //! The algorithm is based on Keith D. Cooper., Timothy J. Harvey., and Ken Kennedy.: A Simple, Fast Dominance Algorithm:  
 //! <https://www.cs.rice.edu/~keith/EMBED/dom.pdf>
@@ -26,6 +26,7 @@ impl DomTree {
         self.rpo.clear();
     }
 
+    /// Returns `None` if the block is unreachable from the entry block.
     pub fn idom_of(&self, block: Block) -> Option<Block> {
         self.doms[block].expand()
     }
@@ -88,7 +89,7 @@ impl DomTree {
             }
             for pred in cfg.preds_of(block) {
                 let mut runner = *pred;
-                while PackedOption::from(runner) != self.doms[block] {
+                while PackedOption::from(runner) != self.doms[block] && self.is_reachable(runner) {
                     df.0[runner].insert(block);
                     runner = self.doms[runner].unwrap();
                 }
@@ -96,6 +97,11 @@ impl DomTree {
         }
 
         df
+    }
+
+    /// Returns `true` if block is reachable from the entry block.
+    pub fn is_reachable(&self, block: Block) -> bool {
+        self.idom_of(block).is_some()
     }
 
     fn intersect(
@@ -155,7 +161,11 @@ mod tests {
         (dom_tree, df)
     }
 
-    fn in_frontier_of(df: &DFSet, blocks: &[Block], of: Block) -> bool {
+    fn in_frontier_of(df: &DFSet, of: Block, blocks: &[Block]) -> bool {
+        if df.block_num_of(of) != blocks.len() {
+            return false;
+        }
+
         for &block in blocks {
             if !df.in_frontier_of(block, of) {
                 return false;
@@ -194,15 +204,53 @@ mod tests {
         assert_eq!(dom_tree.idom_of(else_block), Some(entry_block));
         assert_eq!(dom_tree.idom_of(merge_block), Some(entry_block));
 
-        assert_eq!(df.block_num_of(entry_block), 0);
+        assert!(in_frontier_of(&df, entry_block, &[]));
+        assert!(in_frontier_of(&df, then_block, &[merge_block]));
+        assert!(in_frontier_of(&df, else_block, &[merge_block]));
+        assert!(in_frontier_of(&df, merge_block, &[]));
+    }
 
-        assert_eq!(df.block_num_of(then_block), 1);
-        assert!(in_frontier_of(&df, &[merge_block], then_block));
+    #[test]
+    fn unreachable_edge() {
+        let mut builder = func_builder(&[], &[]);
 
-        assert_eq!(df.block_num_of(else_block), 1);
-        assert!(in_frontier_of(&df, &[merge_block], else_block));
+        let a = builder.append_block();
+        let b = builder.append_block();
+        let c = builder.append_block();
+        let d = builder.append_block();
+        let e = builder.append_block();
 
-        assert_eq!(df.block_num_of(merge_block), 0);
+        builder.switch_to_block(a);
+        let v0 = builder.imm_u8(1);
+        builder.br(v0, b, c);
+
+        builder.switch_to_block(b);
+        builder.jump(e);
+
+        builder.switch_to_block(c);
+        builder.jump(e);
+
+        builder.switch_to_block(d);
+        builder.jump(e);
+
+        builder.switch_to_block(e);
+        builder.ret(&[]);
+
+        builder.seal_all();
+
+        let (dom_tree, df) = calc_dom(&builder.build());
+        assert_eq!(dom_tree.idom_of(a), Some(a));
+        assert_eq!(dom_tree.idom_of(b), Some(a));
+        assert_eq!(dom_tree.idom_of(c), Some(a));
+        assert_eq!(dom_tree.idom_of(d), None);
+        assert!(!dom_tree.is_reachable(d));
+        assert_eq!(dom_tree.idom_of(e), Some(a));
+
+        assert!(in_frontier_of(&df, a, &[]));
+        assert!(in_frontier_of(&df, b, &[e]));
+        assert!(in_frontier_of(&df, c, &[e]));
+        assert!(in_frontier_of(&df, d, &[]));
+        assert!(in_frontier_of(&df, e, &[]));
     }
 
     #[test]
@@ -279,41 +327,18 @@ mod tests {
         assert_eq!(dom_tree.idom_of(j), Some(g));
         assert_eq!(dom_tree.idom_of(k), Some(f));
 
-        assert_eq!(df.block_num_of(a), 0);
-
-        assert_eq!(df.block_num_of(b), 2);
-        assert!(in_frontier_of(&df, &[b, m], b));
-
-        assert_eq!(df.block_num_of(c), 2);
-        assert!(in_frontier_of(&df, &[c, m], c));
-
-        assert_eq!(df.block_num_of(d), 3);
-        assert!(in_frontier_of(&df, &[g, i, l], d));
-
-        assert_eq!(df.block_num_of(e), 2);
-        assert!(in_frontier_of(&df, &[c, h], e));
-
-        assert_eq!(df.block_num_of(f), 2);
-        assert!(in_frontier_of(&df, &[i, l], f));
-
-        assert_eq!(df.block_num_of(g), 1);
-        assert!(in_frontier_of(&df, &[i], g));
-
-        assert_eq!(df.block_num_of(h), 1);
-        assert!(in_frontier_of(&df, &[m], h));
-
-        assert_eq!(df.block_num_of(i), 1);
-        assert!(in_frontier_of(&df, &[l], i));
-
-        assert_eq!(df.block_num_of(j), 1);
-        assert!(in_frontier_of(&df, &[i], j));
-
-        assert_eq!(df.block_num_of(k), 1);
-        assert!(in_frontier_of(&df, &[l], k));
-
-        assert_eq!(df.block_num_of(l), 2);
-        assert!(in_frontier_of(&df, &[b, m], l));
-
-        assert_eq!(df.block_num_of(m), 0);
+        assert!(in_frontier_of(&df, a, &[]));
+        assert!(in_frontier_of(&df, b, &[b, m]));
+        assert!(in_frontier_of(&df, c, &[c, m]));
+        assert!(in_frontier_of(&df, d, &[g, i, l]));
+        assert!(in_frontier_of(&df, e, &[c, h]));
+        assert!(in_frontier_of(&df, f, &[i, l]));
+        assert!(in_frontier_of(&df, g, &[i]));
+        assert!(in_frontier_of(&df, h, &[m]));
+        assert!(in_frontier_of(&df, i, &[l]));
+        assert!(in_frontier_of(&df, j, &[i]));
+        assert!(in_frontier_of(&df, k, &[l]));
+        assert!(in_frontier_of(&df, l, &[b, m]));
+        assert!(in_frontier_of(&df, m, &[]));
     }
 }
