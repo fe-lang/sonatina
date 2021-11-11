@@ -10,7 +10,7 @@ use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 use super::cfg::ControlFlowGraph;
 use super::Block;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct DomTree {
     doms: SecondaryMap<Block, PackedOption<Block>>,
     rpo: Vec<Block>,
@@ -21,11 +21,18 @@ impl DomTree {
         Self::default()
     }
 
+    pub fn clear(&mut self) {
+        self.doms.clear();
+        self.rpo.clear();
+    }
+
     pub fn idom_of(&self, block: Block) -> Option<Block> {
         self.doms[block].expand()
     }
 
     pub fn compute(&mut self, cfg: &ControlFlowGraph) {
+        self.clear();
+
         self.rpo = cfg.post_order().collect();
         self.rpo.reverse();
 
@@ -37,9 +44,9 @@ impl DomTree {
             self.doms.clear();
         }
 
-        let mut fingers = SecondaryMap::with_capacity(block_num);
+        let mut rpo_nums = SecondaryMap::with_capacity(block_num);
         for (i, &block) in self.rpo.iter().enumerate() {
-            fingers[block] = (block_num - i) as u32;
+            rpo_nums[block] = (block_num - i) as u32;
         }
 
         match self.rpo.first() {
@@ -51,16 +58,16 @@ impl DomTree {
         while changed {
             changed = false;
             for &block in self.rpo.iter().skip(1) {
-                let mut preds = cfg.preds_of(block);
+                let processed_pred =
+                    match cfg.preds_of(block).find(|&&pred| self.doms[pred].is_some()) {
+                        Some(pred) => *pred,
+                        _ => continue,
+                    };
+                let mut new_dom = processed_pred;
 
-                let mut new_dom = match preds.next() {
-                    Some(block) => *block,
-                    None => continue,
-                };
-
-                for &pred in preds {
-                    if self.doms[pred].is_some() {
-                        new_dom = self.intersect(new_dom, pred, &fingers);
+                for &pred in cfg.preds_of(block) {
+                    if pred != processed_pred && self.doms[pred].is_some() {
+                        new_dom = self.intersect(new_dom, pred, &rpo_nums);
                     }
                 }
                 if Some(new_dom) != self.doms[block].expand() {
@@ -91,12 +98,17 @@ impl DomTree {
         df
     }
 
-    fn intersect(&self, mut b1: Block, mut b2: Block, fingers: &SecondaryMap<Block, u32>) -> Block {
+    fn intersect(
+        &self,
+        mut b1: Block,
+        mut b2: Block,
+        rpo_nums: &SecondaryMap<Block, u32>,
+    ) -> Block {
         while b1 != b2 {
-            while fingers[b1] < fingers[b2] {
+            while rpo_nums[b1] < rpo_nums[b2] {
                 b1 = self.doms[b1].unwrap();
             }
-            while fingers[b2] < fingers[b1] {
+            while rpo_nums[b2] < rpo_nums[b1] {
                 b2 = self.doms[b2].unwrap();
             }
         }
@@ -106,7 +118,7 @@ impl DomTree {
 }
 
 /// Dominance frontiers of each blocks.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct DFSet(SecondaryMap<Block, BTreeSet<Block>>);
 
 impl DFSet {
@@ -120,6 +132,10 @@ impl DFSet {
 
     pub fn block_num_of(&self, of: Block) -> usize {
         self.0[of].len()
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear()
     }
 }
 
