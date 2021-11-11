@@ -1,0 +1,28 @@
+#! Assert unreachable blocks is removed.
+
+# sameln: func %unreacable_blocks() -> i8:
+# nextln:     block0:
+# nextln:         v0.i8 = imm_u8 10;
+# nextln:         jump block3;
+# nextln: 
+# nextln:     block3:
+# nextln:         return v0;
+func %unreacable_blocks() -> i8:
+    block0:
+        v0.i8 = imm_u8 10;
+        jump block3;
+
+    block1:
+        v3.i8 = imm_u8 11;
+        jump block3;
+
+    block2:
+        v4.i8 = imm_u8 12;
+        jump block3;
+
+    block3:
+        return v0;
+
+    block4:
+        v6.i8 = imm_u8 13;
+        return v6;
