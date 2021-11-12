@@ -35,6 +35,10 @@ impl Layout {
         self.last_block
     }
 
+    pub fn is_block_empty(&self, block: Block) -> bool {
+        self.first_insn_of(block).is_none()
+    }
+
     pub fn prev_block_of(&self, block: Block) -> Option<Block> {
         debug_assert!(self.is_block_inserted(block));
         self.blocks[block].prev

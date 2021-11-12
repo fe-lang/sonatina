@@ -73,6 +73,7 @@ impl ControlFlowGraph {
     pub fn clear(&mut self) {
         self.entry = None.into();
         self.blocks.clear();
+        self.exits.clear();
     }
 
     fn analyze_insn(&mut self, func: &Function, insn: Insn) {

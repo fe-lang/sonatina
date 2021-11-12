@@ -19,8 +19,6 @@ pub struct PostDomTree {
 
     /// Dominator tree of reverse control flow graph.
     domtree: DomTree,
-    /// Dominance frontier set of reverse control flow graph.
-    df: DFSet,
 }
 
 impl Default for PostDomTree {
@@ -30,7 +28,6 @@ impl Default for PostDomTree {
             exit: Block(0),
             rcfg: ControlFlowGraph::default(),
             domtree: DomTree::default(),
-            df: DFSet::default(),
         }
     }
 }
@@ -63,15 +60,12 @@ impl PostDomTree {
         }
 
         self.rcfg.reverse_edges(self.exit, &[self.entry]);
-
         self.domtree.compute(&self.rcfg);
-        self.df = self.domtree.compute_df(&self.rcfg);
     }
 
     pub fn clear(&mut self) {
         self.rcfg.clear();
         self.domtree.clear();
-        self.df.clear();
     }
 
     /// Compute post dominance frontiers of each blocks.

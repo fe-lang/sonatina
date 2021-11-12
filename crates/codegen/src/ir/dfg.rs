@@ -86,6 +86,10 @@ impl DataFlowGraph {
         &self.insns[insn]
     }
 
+    pub fn has_side_effect(&self, insn: Insn) -> bool {
+        self.insns[insn].has_side_effect()
+    }
+
     pub fn users(&self, value: Value) -> impl Iterator<Item = &Insn> {
         self.users[value].iter()
     }

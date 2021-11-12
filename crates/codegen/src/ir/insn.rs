@@ -90,6 +90,14 @@ impl InsnData {
         self.args_mut()[idx] = new_arg;
     }
 
+    pub fn has_side_effect(&self) -> bool {
+        // We assume `Load` has side effect because it may cause trap.
+        matches!(
+            self,
+            InsnData::Load { .. } | InsnData::Store { .. } | InsnData::Return { .. }
+        )
+    }
+
     pub(super) fn result_type(&self, dfg: &DataFlowGraph) -> Option<Type> {
         match self {
             Self::Immediate { code } => Some(code.result_type()),
