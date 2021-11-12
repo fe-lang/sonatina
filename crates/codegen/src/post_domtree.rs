@@ -63,6 +63,14 @@ impl PostDomTree {
         self.domtree.compute(&self.rcfg);
     }
 
+    pub fn idom_of(&self, block: Block) -> Option<PDTIdom> {
+        match self.domtree.idom_of(block)? {
+            block if block == self.entry => Some(PDTIdom::DummyEntry(self.entry)),
+            block if block == self.exit => Some(PDTIdom::DummyExit(self.exit)),
+            other => Some(PDTIdom::Real(other)),
+        }
+    }
+
     pub fn clear(&mut self) {
         self.rcfg.clear();
         self.domtree.clear();
@@ -83,6 +91,13 @@ impl PostDomTree {
     pub fn is_reachable(&self, block: Block) -> bool {
         self.domtree.is_reachable(block)
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PDTIdom {
+    DummyEntry(Block),
+    DummyExit(Block),
+    Real(Block),
 }
 
 /// Post Dominance frontiers of each blocks.

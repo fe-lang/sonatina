@@ -52,6 +52,13 @@ pub enum InsnData {
 }
 
 impl InsnData {
+    pub fn jump(dest: Block) -> InsnData {
+        InsnData::Jump {
+            code: JumpOp::Jump,
+            dests: [dest],
+        }
+    }
+
     pub fn branch_dests(&self) -> &[Block] {
         match self {
             Self::Jump { dests, .. } => dests.as_ref(),

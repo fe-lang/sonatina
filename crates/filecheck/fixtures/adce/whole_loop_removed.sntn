@@ -1,0 +1,23 @@
+# sameln: func %whole_loop_removed() -> i8:
+# nextln:    block3:
+# nextln:        v6.i8 = imm_u8 1;
+# nextln:        return v6;
+func %whole_loop_removed() -> i8:
+    block0:
+        v0.i8 = imm_u8 1;
+        jump block2;
+
+    block1:
+        v1.i8 = phi (v0 block0) (v4 block2);
+        v2.i8 = imm_u8 100;
+        v3.i8 = sgt v2 v1;
+        br v3 block2 block3;
+
+    block2:
+        v4.i8 = imm_u8 1;
+        v5.i8 = add v1 v4;
+        jump block1;
+
+    block3:
+        v6.i8 = imm_u8 1;
+        return v6;

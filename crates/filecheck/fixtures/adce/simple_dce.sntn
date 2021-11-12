@@ -1,0 +1,10 @@
+# sameln: func %simple() -> i8:
+# nextln:     block0:
+# nextln:         v2.i8 = imm_u8 0;
+# nextln:         return v2;
+func %simple() -> i8:
+    block0:
+        v0.i8 = imm_u8 1;
+        v1.i8 = imm_u8 2;
+        v2.i8 = imm_u8 0;
+        return v2;
