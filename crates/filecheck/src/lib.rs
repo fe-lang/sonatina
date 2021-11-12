@@ -1,3 +1,4 @@
+pub mod adce;
 pub mod sccp;
 
 use std::{
@@ -33,6 +34,10 @@ impl FileCheckRunner {
             transformer: Box::new(transformer),
             results: Vec::new(),
         }
+    }
+
+    pub fn attach_transformer(&mut self, transformer: impl FuncTransform + 'static) {
+        self.transformer = Box::new(transformer);
     }
 
     pub fn run(&mut self) {

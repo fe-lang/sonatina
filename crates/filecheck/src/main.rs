@@ -1,10 +1,14 @@
-use sonatina_filecheck::{sccp::SccpTransform, FileCheckRunner};
+use sonatina_filecheck::{adce::AdceTransform, sccp::SccpTransform, FileCheckRunner};
 
 fn main() {
-    let mut sccp = FileCheckRunner::new(SccpTransform::default());
-    sccp.run();
-    sccp.print_results();
-    if !sccp.is_ok() {
+    let mut runner = FileCheckRunner::new(SccpTransform::default());
+    runner.run();
+
+    runner.attach_transformer(AdceTransform::default());
+    runner.run();
+
+    runner.print_results();
+    if !runner.is_ok() {
         std::process::exit(101);
     }
 }
