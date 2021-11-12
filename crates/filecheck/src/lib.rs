@@ -5,6 +5,7 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
+    time,
 };
 
 use sonatina_codegen::{ir::ir_writer::FuncWriter, Function};
@@ -26,6 +27,7 @@ pub trait FuncTransform {
 pub struct FileCheckRunner {
     transformer: Box<dyn FuncTransform>,
     results: Vec<FileCheckResult>,
+    timer: time::Instant,
 }
 
 impl FileCheckRunner {
@@ -33,6 +35,7 @@ impl FileCheckRunner {
         Self {
             transformer: Box::new(transformer),
             results: Vec::new(),
+            timer: time::Instant::now(),
         }
     }
 
@@ -86,11 +89,15 @@ impl FileCheckRunner {
         }
         stdout.reset().unwrap();
 
+        let elapsed = self.timer.elapsed();
+
         writeln!(
             stdout,
-            ". {} passed; {} failed\n",
+            ". {} passed; {} failed; 0 ignored; 0 measured; 0 filtered out; finished in {}.{:02}s\n",
             tests_num - failed_num,
-            failed_num
+            failed_num,
+            elapsed.as_secs(),
+            elapsed.subsec_millis() / 10,
         )
         .unwrap();
     }
