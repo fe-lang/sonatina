@@ -1,0 +1,14 @@
+#! Test infinite loop with no side effects is never removed.
+
+# sameln: func %infinite_loop() -> i8:
+# nextln:    block0:
+# nextln:        jump block1
+# nextln: 
+# nextln:    block1:
+# nextln:        jump block0
+func %infinite_loop() -> i8:
+    block0:
+        jump block1;
+
+    block1:
+        jump block0;
