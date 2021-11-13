@@ -126,7 +126,7 @@ impl SsaBuilder {
     }
 
     pub(super) fn seal_all(&mut self, func: &mut Function) {
-        let mut next_block = func.layout.first_block();
+        let mut next_block = func.layout.entry_block();
         while let Some(block) = next_block {
             self.seal_block(func, block);
             next_block = func.layout.next_block_of(block);

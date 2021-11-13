@@ -7,7 +7,7 @@ use super::{Block, Insn};
 pub struct Layout {
     blocks: SecondaryMap<Block, BlockNode>,
     insns: SecondaryMap<Insn, InsnNode>,
-    first_block: Option<Block>,
+    entry_block: Option<Block>,
     last_block: Option<Block>,
 }
 
@@ -22,13 +22,13 @@ impl Layout {
         Self {
             blocks: SecondaryMap::new(),
             insns: SecondaryMap::new(),
-            first_block: None,
+            entry_block: None,
             last_block: None,
         }
     }
 
-    pub fn first_block(&self) -> Option<Block> {
-        self.first_block
+    pub fn entry_block(&self) -> Option<Block> {
+        self.entry_block
     }
 
     pub fn last_block(&self) -> Option<Block> {
@@ -50,7 +50,7 @@ impl Layout {
     }
 
     pub fn is_block_inserted(&self, block: Block) -> bool {
-        Some(block) == self.first_block || self.blocks[block] != BlockNode::default()
+        Some(block) == self.entry_block || self.blocks[block] != BlockNode::default()
     }
 
     pub fn first_insn_of(&self, block: Block) -> Option<Insn> {
@@ -84,7 +84,7 @@ impl Layout {
 
     pub fn iter_block(&self) -> impl Iterator<Item = Block> + '_ {
         BlockIter {
-            next: self.first_block,
+            next: self.entry_block,
             blocks: &self.blocks,
         }
     }
@@ -107,7 +107,7 @@ impl Layout {
             last_block_node.next = Some(block);
             block_node.prev = Some(last_block);
         } else {
-            self.first_block = Some(block);
+            self.entry_block = Some(block);
         }
 
         self.blocks[block] = block_node;
@@ -125,7 +125,7 @@ impl Layout {
                 block_node.prev = Some(prev);
                 self.blocks[prev].next = Some(block);
             }
-            None => self.first_block = Some(block),
+            None => self.entry_block = Some(block),
         }
 
         block_node.next = Some(before);
@@ -168,10 +168,10 @@ impl Layout {
             }
             (None, Some(next)) => {
                 self.blocks[next].prev = None;
-                self.first_block = Some(next);
+                self.entry_block = Some(next);
             }
             (None, None) => {
-                self.first_block = None;
+                self.entry_block = None;
                 self.last_block = None
             }
         }
@@ -364,13 +364,13 @@ mod tests {
     fn test_block_insertion() {
         let mut layout = Layout::new();
         let mut dfg = DataFlowGraph::new();
-        assert_eq!(layout.first_block, None);
+        assert_eq!(layout.entry_block, None);
         assert_eq!(layout.last_block, None);
 
         // block1.
         let b1 = dfg.make_block();
         layout.append_block(b1);
-        assert_eq!(layout.first_block, Some(b1));
+        assert_eq!(layout.entry_block, Some(b1));
         assert_eq!(layout.last_block, Some(b1));
         assert_eq!(layout.prev_block_of(b1), None);
         assert_eq!(layout.next_block_of(b1), None);
@@ -378,7 +378,7 @@ mod tests {
         // block1 -> block2.
         let b2 = dfg.make_block();
         layout.append_block(b2);
-        assert_eq!(layout.first_block, Some(b1));
+        assert_eq!(layout.entry_block, Some(b1));
         assert_eq!(layout.last_block, Some(b2));
         assert_eq!(layout.prev_block_of(b1), None);
         assert_eq!(layout.next_block_of(b1), Some(b2));
@@ -388,7 +388,7 @@ mod tests {
         // block1 -> block3 -> block2.
         let b3 = dfg.make_block();
         layout.insert_block_after(b3, b1);
-        assert_eq!(layout.first_block, Some(b1));
+        assert_eq!(layout.entry_block, Some(b1));
         assert_eq!(layout.last_block, Some(b2));
         assert_eq!(layout.prev_block_of(b2), Some(b3));
         assert_eq!(layout.next_block_of(b1), Some(b3));
@@ -398,7 +398,7 @@ mod tests {
         // block1 -> block3 -> block4 -> block2.
         let b4 = dfg.make_block();
         layout.insert_block_before(b4, b2);
-        assert_eq!(layout.first_block, Some(b1));
+        assert_eq!(layout.entry_block, Some(b1));
         assert_eq!(layout.last_block, Some(b2));
         assert_eq!(layout.prev_block_of(b2), Some(b4));
         assert_eq!(layout.next_block_of(b3), Some(b4));
@@ -423,28 +423,28 @@ mod tests {
 
         // block1 -> block2 -> block4.
         layout.remove_block(b3);
-        assert_eq!(layout.first_block, Some(b1));
+        assert_eq!(layout.entry_block, Some(b1));
         assert_eq!(layout.last_block, Some(b4));
         assert_eq!(layout.prev_block_of(b4), Some(b2));
         assert_eq!(layout.next_block_of(b2), Some(b4));
 
         // block1 -> block2.
         layout.remove_block(b4);
-        assert_eq!(layout.first_block, Some(b1));
+        assert_eq!(layout.entry_block, Some(b1));
         assert_eq!(layout.last_block, Some(b2));
         assert_eq!(layout.prev_block_of(b2), Some(b1));
         assert_eq!(layout.next_block_of(b2), None);
 
         // block2.
         layout.remove_block(b1);
-        assert_eq!(layout.first_block, Some(b2));
+        assert_eq!(layout.entry_block, Some(b2));
         assert_eq!(layout.last_block, Some(b2));
         assert_eq!(layout.prev_block_of(b2), None);
         assert_eq!(layout.next_block_of(b2), None);
 
         // .
         layout.remove_block(b2);
-        assert_eq!(layout.first_block, None);
+        assert_eq!(layout.entry_block, None);
         assert_eq!(layout.last_block, None);
     }
 

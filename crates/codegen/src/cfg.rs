@@ -19,7 +19,7 @@ impl ControlFlowGraph {
     pub fn compute(&mut self, func: &Function) {
         self.clear();
 
-        self.entry = func.layout.first_block().into();
+        self.entry = func.layout.entry_block().into();
 
         for block in func.layout.iter_block() {
             if let Some(last_insn) = func.layout.last_insn_of(block) {

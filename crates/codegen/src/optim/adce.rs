@@ -124,7 +124,7 @@ impl AdceSolver {
     }
 
     fn eliminate_dead_code(&mut self, func: &mut Function) -> bool {
-        let loc = if let Some(entry) = func.layout.first_block() {
+        let loc = if let Some(entry) = func.layout.entry_block() {
             CursorLocation::BlockTop(entry)
         } else {
             CursorLocation::NoWhere

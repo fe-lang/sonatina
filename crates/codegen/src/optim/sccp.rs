@@ -30,7 +30,7 @@ impl SccpSolver {
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) {
         self.clear();
 
-        let entry_block = match func.layout.first_block() {
+        let entry_block = match func.layout.entry_block() {
             Some(block) => block,
             _ => return,
         };
@@ -230,7 +230,7 @@ impl SccpSolver {
     }
 
     fn remove_unreachable_blocks(&mut self, func: &mut Function) {
-        let mut next_block = func.layout.first_block();
+        let mut next_block = func.layout.entry_block();
         while let Some(block) = next_block {
             next_block = func.layout.next_block_of(block);
             if !self.reachable_blocks.contains(&block) {
@@ -240,7 +240,7 @@ impl SccpSolver {
     }
 
     fn fold_insns(&mut self, func: &mut Function) {
-        let mut next_block = func.layout.first_block();
+        let mut next_block = func.layout.entry_block();
         while let Some(block) = next_block {
             let mut next_insn = func.layout.first_insn_of(block);
             while let Some(insn) = next_insn {
