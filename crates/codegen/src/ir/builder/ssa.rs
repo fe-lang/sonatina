@@ -183,7 +183,7 @@ impl SsaBuilder {
             return;
         }
 
-        func.dfg.replace_value(phi_value, first);
+        func.dfg.change_to_alias(phi_value, first);
         self.trivial_phis.insert(phi);
         InsnInserter::new(func, CursorLocation::At(phi)).remove_insn();
 

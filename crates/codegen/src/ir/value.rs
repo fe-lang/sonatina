@@ -16,4 +16,7 @@ pub enum ValueData {
 
     /// The value is a function argument.
     Arg { ty: Type, idx: usize },
+
+    /// The value is alias to another value.
+    Alias { alias: Value },
 }

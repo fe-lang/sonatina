@@ -303,7 +303,7 @@ impl SccpSolver {
         if func.dfg.insn_args_num(insn) == 1 {
             let phi_value = func.dfg.insn_result(insn).unwrap();
             func.dfg
-                .replace_value(phi_value, func.dfg.insn_arg(insn, 0));
+                .change_to_alias(phi_value, func.dfg.insn_arg(insn, 0));
             InsnInserter::new(func, CursorLocation::At(insn)).remove_insn();
         }
     }

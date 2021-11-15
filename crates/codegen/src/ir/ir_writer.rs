@@ -109,8 +109,10 @@ trait IrWrite {
 }
 
 impl IrWrite for Value {
-    fn write(&self, _: &mut FuncWriter, mut w: impl io::Write) -> io::Result<()> {
-        w.write_fmt(format_args!("v{}", self.0,))
+    fn write(&self, writer: &mut FuncWriter, mut w: impl io::Write) -> io::Result<()> {
+        let value = writer.func.dfg.resolve_alias(*self);
+
+        w.write_fmt(format_args!("v{}", value.0))
     }
 }
 

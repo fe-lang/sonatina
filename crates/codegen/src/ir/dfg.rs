@@ -52,17 +52,21 @@ impl DataFlowGraph {
         self.attach_user(insn);
     }
 
-    pub fn replace_value(&mut self, old_value: Value, new_value: Value) {
-        let old_value_users = std::mem::take(&mut self.users[old_value]);
-
-        for insn in old_value_users.into_iter() {
-            for idx in 0..self.insn_args_num(insn) {
-                if self.insn_arg(insn, idx) == old_value {
-                    self.replace_insn_arg(insn, new_value, idx);
-                }
-            }
-            self.users[new_value].insert(insn);
+    pub fn change_to_alias(&mut self, value: Value, alias: Value) {
+        self.values[value] = ValueData::Alias {
+            alias: self.resolve_alias(alias),
         }
+    }
+
+    pub fn resolve_alias(&self, mut value: Value) -> Value {
+        for _ in 0..self.values.len() {
+            match self.values[value] {
+                ValueData::Insn { .. } | ValueData::Arg { .. } => return value,
+                ValueData::Alias { alias } => value = alias,
+            }
+        }
+
+        panic!("alias loop detected");
     }
 
     pub fn make_result(&mut self, insn: Insn) -> Option<ValueData> {
@@ -114,6 +118,7 @@ impl DataFlowGraph {
         match self.values[value] {
             ValueData::Insn { insn, .. } => ValueDef::Insn(insn),
             ValueData::Arg { idx, .. } => ValueDef::Arg(idx),
+            ValueData::Alias { alias, .. } => self.value_def(self.resolve_alias(alias)),
         }
     }
 
@@ -127,6 +132,7 @@ impl DataFlowGraph {
     pub fn value_ty(&self, value: Value) -> &Type {
         match &self.values[value] {
             ValueData::Insn { ty, .. } | ValueData::Arg { ty, .. } => ty,
+            ValueData::Alias { alias } => self.value_ty(self.resolve_alias(*alias)),
         }
     }
 
