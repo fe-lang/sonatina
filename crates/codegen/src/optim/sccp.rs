@@ -44,13 +44,15 @@ impl SccpSolver {
         self.reachable_blocks.insert(entry_block);
         self.eval_insns_in(func, entry_block);
 
-        loop {
-            let mut changed = false;
+        let mut changed = true;
+        while changed {
+            changed = false;
 
             while let Some(edge) = self.flow_work.pop() {
                 changed = true;
                 self.eval_edge(func, edge);
             }
+
             while let Some(value) = self.ssa_work.pop() {
                 changed = true;
                 for &user in func.dfg.users(value) {
@@ -63,10 +65,6 @@ impl SccpSolver {
                         }
                     }
                 }
-            }
-
-            if !changed {
-                break;
             }
         }
 
