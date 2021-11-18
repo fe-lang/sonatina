@@ -301,6 +301,101 @@ mod tests {
     }
 
     #[test]
+    fn use_var_global_many_preds() {
+        let mut builder = func_builder(&[], &[]);
+
+        let var0 = builder.declare_var(Type::I32);
+        let var1 = builder.declare_var(Type::I32);
+
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+        let b2 = builder.append_block();
+        let b3 = builder.append_block();
+        let b4 = builder.append_block();
+        let b5 = builder.append_block();
+        let b6 = builder.append_block();
+        let b7 = builder.append_block();
+
+        builder.switch_to_block(b0);
+        let v0 = builder.imm_i32(0);
+        builder.def_var(var1, v0);
+        builder.br(v0, b1, b2);
+
+        builder.switch_to_block(b1);
+        let v1 = builder.imm_i32(1);
+        builder.def_var(var0, v1);
+        builder.def_var(var1, v1);
+        builder.jump(b7);
+
+        builder.switch_to_block(b2);
+        builder.br(v0, b3, b4);
+
+        builder.switch_to_block(b3);
+        let v2 = builder.imm_i32(2);
+        builder.def_var(var0, v2);
+        builder.jump(b7);
+
+        builder.switch_to_block(b4);
+        builder.br(v0, b5, b6);
+
+        builder.switch_to_block(b5);
+        let v3 = builder.imm_i32(3);
+        builder.def_var(var0, v3);
+        builder.jump(b7);
+
+        builder.switch_to_block(b6);
+        let v4 = builder.imm_i32(4);
+        builder.def_var(var0, v4);
+        builder.jump(b7);
+
+        builder.switch_to_block(b7);
+        let v_var0 = builder.use_var(var0);
+        let v_var1 = builder.use_var(var1);
+        builder.add(v_var0, v_var1);
+        builder.ret(&[]);
+
+        builder.seal_all();
+
+        assert_eq!(
+            dump_func(&builder.build()),
+            "func %test_func():
+    block0:
+        v0.i32 = imm_i32 0;
+        br v0 block1 block2;
+
+    block1:
+        v1.i32 = imm_i32 1;
+        jump block7;
+
+    block2:
+        br v0 block3 block4;
+
+    block3:
+        v2.i32 = imm_i32 2;
+        jump block7;
+
+    block4:
+        br v0 block5 block6;
+
+    block5:
+        v3.i32 = imm_i32 3;
+        jump block7;
+
+    block6:
+        v4.i32 = imm_i32 4;
+        jump block7;
+
+    block7:
+        v6.i32 = phi (v1 block1) (v0 block3) (v0 block5) (v0 block6);
+        v5.i32 = phi (v1 block1) (v2 block3) (v3 block5) (v4 block6);
+        v7.i32 = add v5 v6;
+        return;
+
+"
+        )
+    }
+
+    #[test]
     fn use_var_global_loop() {
         let mut builder = func_builder(&[], &[]);
 
