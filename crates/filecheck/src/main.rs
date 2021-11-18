@@ -1,10 +1,15 @@
-use sonatina_filecheck::{adce::AdceTransform, sccp::SccpTransform, FileCheckRunner};
+use sonatina_filecheck::{
+    adce::AdceTransform, gvn::GvnTransform, sccp::SccpTransform, FileCheckRunner,
+};
 
 fn main() {
     let mut runner = FileCheckRunner::new(SccpTransform::default());
     runner.run();
 
     runner.attach_transformer(AdceTransform::default());
+    runner.run();
+
+    runner.attach_transformer(GvnTransform::default());
     runner.run();
 
     runner.print_results();
