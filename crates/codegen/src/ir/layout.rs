@@ -58,6 +58,11 @@ impl Layout {
         self.blocks[block].first_insn
     }
 
+    pub fn is_first_insn(&self, insn: Insn) -> bool {
+        let block = self.insn_block(insn);
+        self.first_insn_of(block) == Some(insn)
+    }
+
     pub fn last_insn_of(&self, block: Block) -> Option<Insn> {
         debug_assert!(self.is_block_inserted(block));
         self.blocks[block].last_insn

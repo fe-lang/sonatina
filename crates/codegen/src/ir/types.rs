@@ -3,7 +3,7 @@
 use std::fmt;
 
 /// Sonatina IR types definition.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     I8,
     I16,

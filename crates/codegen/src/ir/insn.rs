@@ -59,6 +59,14 @@ impl InsnData {
         }
     }
 
+    pub fn phi(ty: Type) -> InsnData {
+        InsnData::Phi {
+            values: SmallVec::new(),
+            blocks: SmallVec::new(),
+            ty,
+        }
+    }
+
     pub fn branch_dests(&self) -> &[Block] {
         match self {
             Self::Jump { dests, .. } => dests.as_ref(),
