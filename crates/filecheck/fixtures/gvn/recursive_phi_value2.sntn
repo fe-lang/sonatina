@@ -1,9 +1,8 @@
 # check:  block6:
 # nextln:     v10.i8 = phi (v2 block3) (v4 block4);
 # nextln:     v7.i8 = phi (v1 block3) (v3 block4);
-# check:  block7:
-# nextln:     v11.i8 = phi (v6 block5) (v10 block6);
-# nextln:     v8.i8 = phi (v7 block6) (v5 block5);
+# check:  block8:
+# nextln:     v11.i8 = phi (v6 block5) (v10 block7);
 # check:      return v11;
 func %recursive_phi_value(v0.i8) -> i8:
     block0:
@@ -28,13 +27,16 @@ func %recursive_phi_value(v0.i8) -> i8:
     block5:
         v5.i8 = imm_i8 5;
         v6.i8 = add v5 v0;
-        jump block7;
+        jump block8;
 
     block6:
         v7.i8 = phi (v1 block3) (v3 block4);
-        jump block7;
+        fallthrough block7;
 
     block7:
-        v8.i8 = phi (v7 block6) (v5 block5);
+        jump block8;
+
+    block8:
+        v8.i8 = phi (v7 block7) (v5 block5);
         v9.i8 = add v8 v0;
         return v9;
