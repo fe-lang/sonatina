@@ -7,9 +7,6 @@
 # nextln: v75.i8 = phi (v52 block5) (v74 block6)
 # nextln: v70.i8 = phi (v73 block6) (v50 block5)
 # nextln: return v75;
-
-
-
 func %recursive_phi_value(v0.i8, v1.i8) -> i8:
     block0:
         br v0 block1 block2;
