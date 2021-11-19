@@ -368,6 +368,7 @@ impl GvnSolver {
             2 => self.value_phi_of_binary(func, pat, expr),
             _ => unreachable!(),
         }?;
+
         let block = value_phi_data.block;
         let value_phi = self.value_phis.intern(value_phi_data);
         if self.inserted_phis[block].phi_vn(value_phi).is_none() {
@@ -642,7 +643,7 @@ impl PartitionData {
     }
 
     fn phi_of_vn(&self, vn: ValueNumber) -> Option<ValuePhi> {
-        self.cells.get(&vn).unwrap().value_phi.expand()
+        self.cells.get(&vn)?.value_phi.expand()
     }
 
     fn insert_value(&mut self, value: Value, vn: ValueNumber) {
