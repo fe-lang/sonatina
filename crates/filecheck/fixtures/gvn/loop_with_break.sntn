@@ -1,0 +1,63 @@
+# check:    block0:
+# nextln:         v0.i8 = imm_i8 0;
+# nextln:         v1.i8 = imm_i8 1;
+# nextln:         v2.i8 = add v0 v1;
+# nextln:         fallthrough block1;
+# nextln: 
+# nextln:     block1:
+# nextln:         v52.i8 = phi (v2 block0) (v31 block3);
+# nextln:         v10.i8 = phi (v0 block0) (v30 block3);
+# nextln:         fallthrough block2;
+# nextln: 
+# nextln:     block2:
+# nextln:         v20.i8 = imm_i8 20;
+# nextln:         v21.i8 = sub v52 v1;
+# nextln:         br v21 block3 block4;
+# nextln: 
+# nextln:     block3:
+# nextln:         v30.i8 = imm_i8 30;
+# nextln:         v31.i8 = add v30 v1;
+# nextln:         br v31 block5 block1;
+# nextln: 
+# nextln:     block4:
+# nextln:         v40.i8 = imm_i8 40;
+# nextln:         v41.i8 = add v40 v1;
+# nextln:         v42.i8 = sub v40 v1;
+# nextln:         jump block5;
+# nextln: 
+# nextln:     block5:
+# nextln:         v53.i8 = phi (v21 block3) (v42 block4);
+# nextln:         v50.i8 = phi (v52 block3) (v40 block4);
+# nextln:         return v53;
+func %loop_with_break() -> i8:
+    block0:
+        v0.i8 = imm_i8 0;
+        v1.i8 = imm_i8 1;
+        v2.i8 = add v0 v1;
+        fallthrough block1;
+
+    block1:
+        v10.i8 = phi (v0 block0) (v30 block3);
+        v11.i8 = add v10 v1;
+        fallthrough block2;
+
+    block2:
+        v20.i8 = imm_i8 20;
+        v21.i8 = sub v11 v1;
+        br v21 block3 block4;
+
+    block3:
+        v30.i8 = imm_i8 30;
+        v31.i8 = add v30 v1;
+        br v31 block5 block1;
+
+    block4:
+        v40.i8 = imm_i8 40;
+        v41.i8 = add v40 v1;
+        v42.i8 = sub v40 v1;
+        jump block5;
+
+    block5:
+        v50.i8 = phi (v11 block3) (v40 block4);
+        v51.i8 = sub v50 v1;
+        return v51;
