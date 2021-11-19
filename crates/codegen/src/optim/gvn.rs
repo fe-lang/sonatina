@@ -31,7 +31,7 @@ pub struct GvnSolver {
     next_vn: ValueNumber,
     partitions: PrimaryMap<Partition, PartitionData>,
     insns: SecondaryMap<Insn, InsnPartition>,
-    inserted_block_outs: SecondaryMap<Block, PartitionData>,
+    inserted_phis: SecondaryMap<Block, PartitionData>,
     value_phis: Interner<ValuePhi, ValuePhiData>,
     value_exprs: Interner<ValueExpr, ValueExprData>,
     searched: FxHashSet<Partition>,
@@ -57,7 +57,7 @@ impl GvnSolver {
         self.next_vn = 0;
         self.partitions.clear();
         self.insns.clear();
-        self.inserted_block_outs.clear();
+        self.inserted_phis.clear();
         self.value_phis.clear();
         self.value_exprs.clear();
         self.searched.clear();
@@ -108,34 +108,36 @@ impl GvnSolver {
     fn resolve_phi(&mut self, func: &mut Function, phi: ValuePhi, ty: Type) -> Value {
         let phi_data = self.value_phis.get(phi);
         let block = phi_data.block;
-        let vn = self.inserted_block_outs[block].phi_vn(phi).unwrap();
-        if let Some(rep_value) = self.inserted_block_outs[block].representative_value(vn) {
+        let vn = self.inserted_phis[block].phi_vn(phi).unwrap();
+        if let Some(rep_value) = self.inserted_phis[block].representative_value(vn) {
             return rep_value;
         }
 
         let phi_args: Vec<_> = phi_data.args().map(|arg| *arg).collect();
 
         let phi_insn = func.dfg.make_insn(InsnData::phi(ty.clone()));
-        for (pred, pred_vn) in phi_args.into_iter() {
-            let pout = self.block_pout(func, pred).unwrap();
+        for phi_arg in phi_args.into_iter() {
+            let pout = self.block_pout(func, phi_arg.pred).unwrap();
 
             let rep_value =
-                if let Some(rep_value) = self.partitions[pout].representative_value(pred_vn) {
+                if let Some(rep_value) = self.partitions[pout].representative_value(phi_arg.vn) {
                     rep_value
                 } else {
-                    let pred_phi = self.inserted_block_outs[pred].phi_of_vn(pred_vn).unwrap();
+                    let pred_phi = self.inserted_phis[phi_arg.inserted_block]
+                        .phi_of_vn(phi_arg.vn)
+                        .unwrap();
                     let rep_value = self.resolve_phi(func, pred_phi, ty.clone());
                     rep_value
                 };
 
-            func.dfg.append_phi_arg(phi_insn, rep_value, pred);
+            func.dfg.append_phi_arg(phi_insn, rep_value, phi_arg.pred);
         }
 
         let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(block));
         let result = inserter.make_result(phi_insn).unwrap();
         inserter.attach_result(phi_insn, result);
         inserter.insert_insn(phi_insn);
-        self.inserted_block_outs[block].insert_value(result, vn);
+        self.inserted_phis[block].insert_value(result, vn);
 
         result
     }
@@ -210,7 +212,7 @@ impl GvnSolver {
 
         // Try to find the redundancy beyond the phi function.
         self.searched.clear();
-        if let Some(value_phi) = self.compute_value_phi_of_expr(func, pin, value_expr) {
+        if let Some(value_phi) = self.compute_value_phi(func, pin, value_expr) {
             let vn = self.vn_for_value(func, value);
             pout_data.insert_value(value, vn);
             pout_data.insert_phi(value_phi, vn);
@@ -251,7 +253,7 @@ impl GvnSolver {
             };
             let pred_pout_data = &self.partitions[pred_pout];
             match pred_pout_data.value_vn(phi_arg) {
-                Some(vn) => value_phi_data.insert_arg(pred_block, vn),
+                Some(vn) => value_phi_data.insert_arg(ValuePhiArg::new(pred_block, pred_block, vn)),
                 None => {
                     let vn = self.vn_for_value(func, value);
                     pout_data.insert_value(value, vn);
@@ -325,7 +327,7 @@ impl GvnSolver {
             // Entry block. Pin for entry block is already set.
             self.insns[insn].pin.unwrap()
         } else if pred_num == 1 {
-            // We use reverse post order traversal, so the predecessor is already seen.
+            // We use reverse post order traversal, so the predecessor is already visited.
             let pred_block = cfg.preds_of(block).next().unwrap();
             let prev_insn = func.layout.last_insn_of(*pred_block).unwrap();
             self.insns[prev_insn].pout.unwrap()
@@ -349,7 +351,7 @@ impl GvnSolver {
         }
     }
 
-    fn compute_value_phi_of_expr(
+    fn compute_value_phi(
         &mut self,
         func: &Function,
         pat: Partition,
@@ -368,14 +370,10 @@ impl GvnSolver {
         }?;
         let block = value_phi_data.block;
         let value_phi = self.value_phis.intern(value_phi_data);
-        match self.inserted_block_outs[block].phi_vn(value_phi) {
-            Some(vn) => vn,
-            None => {
-                let vn = self.next_vn();
-                self.inserted_block_outs[block].insert_phi(value_phi, vn);
-                vn
-            }
-        };
+        if self.inserted_phis[block].phi_vn(value_phi).is_none() {
+            let vn = self.next_vn();
+            self.inserted_phis[block].insert_phi(value_phi, vn);
+        }
 
         Some(value_phi)
     }
@@ -399,10 +397,10 @@ impl GvnSolver {
         let mut new_phi_data = ValuePhiData::new(value_phi_data.block);
         let mut expr = self.value_exprs.get(expr).clone();
 
-        for (pred, arg) in phi_args.into_iter() {
-            expr.set_args(&[arg]);
-            let vn = self.search_value_phi_vn(func, &expr, pred)?;
-            new_phi_data.insert_arg(pred, vn);
+        for phi_arg in phi_args.into_iter() {
+            expr.set_args(&[phi_arg.vn]);
+            let new_arg = self.search_value_phi_arg(func, &expr, phi_arg.pred)?;
+            new_phi_data.insert_arg(new_arg);
         }
 
         Some(new_phi_data)
@@ -436,13 +434,11 @@ impl GvnSolver {
 
                 let lhs_phi_args: Vec<_> = lhs_phi_data.args().map(|arg| *arg).collect();
                 let rhs_phi_args: Vec<_> = rhs_phi_data.args().map(|arg| *arg).collect();
-                for ((lhs_pred, lhs_arg), (rhs_pred, rhs_arg)) in
-                    lhs_phi_args.into_iter().zip(rhs_phi_args.into_iter())
-                {
-                    debug_assert_eq!(lhs_pred, rhs_pred);
-                    expr_data.set_args(&[lhs_arg, rhs_arg]);
-                    let vn = self.search_value_phi_vn(func, &expr_data, lhs_pred)?;
-                    new_phi_data.insert_arg(lhs_pred, vn);
+                for (lhs_arg, rhs_arg) in lhs_phi_args.into_iter().zip(rhs_phi_args.into_iter()) {
+                    debug_assert_eq!(lhs_arg.pred, rhs_arg.pred);
+                    expr_data.set_args(&[lhs_arg.vn, rhs_arg.vn]);
+                    let new_arg = self.search_value_phi_arg(func, &expr_data, lhs_arg.pred)?;
+                    new_phi_data.insert_arg(new_arg);
                 }
                 new_phi_data
             }
@@ -452,10 +448,10 @@ impl GvnSolver {
                 let phi_args: Vec<_> = phi_data.args().map(|arg| *arg).collect();
                 let mut new_phi_data = ValuePhiData::new(phi_data.block);
 
-                for (pred, phi_arg) in phi_args.into_iter() {
-                    expr_data.set_args(&[phi_arg, rhs]);
-                    let vn = self.search_value_phi_vn(func, &expr_data, pred)?;
-                    new_phi_data.insert_arg(pred, vn);
+                for phi_arg in phi_args.into_iter() {
+                    expr_data.set_args(&[phi_arg.vn, rhs]);
+                    let new_arg = self.search_value_phi_arg(func, &expr_data, phi_arg.pred)?;
+                    new_phi_data.insert_arg(new_arg);
                 }
                 new_phi_data
             }
@@ -465,10 +461,10 @@ impl GvnSolver {
                 let phi_args: Vec<_> = phi_data.args().map(|arg| *arg).collect();
                 let mut new_phi_data = ValuePhiData::new(phi_data.block);
 
-                for (pred, phi_arg) in phi_args.into_iter() {
-                    expr_data.set_args(&[lhs, phi_arg]);
-                    let vn = self.search_value_phi_vn(func, &expr_data, pred)?;
-                    new_phi_data.insert_arg(pred, vn);
+                for phi_arg in phi_args.into_iter() {
+                    expr_data.set_args(&[lhs, phi_arg.vn]);
+                    let new_arg = self.search_value_phi_arg(func, &expr_data, phi_arg.pred)?;
+                    new_phi_data.insert_arg(new_arg);
                 }
                 new_phi_data
             }
@@ -478,21 +474,22 @@ impl GvnSolver {
         Some(new_phi_data)
     }
 
-    fn search_value_phi_vn(
+    fn search_value_phi_arg(
         &mut self,
         func: &Function,
         expr: &ValueExprData,
         pred: Block,
-    ) -> Option<ValueNumber> {
+    ) -> Option<ValuePhiArg> {
         let pred_expr = self.value_exprs.intern(expr.clone());
         let pred_pat = self.block_pout(func, pred)?;
 
-        if let Some(pred_vn) = self.partitions[pred_pat].expr_vn(pred_expr) {
-            Some(pred_vn)
+        if let Some(vn) = self.partitions[pred_pat].expr_vn(pred_expr) {
+            Some(ValuePhiArg::new(pred, pred, vn))
         } else {
-            let pred_phi = self.compute_value_phi_of_expr(func, pred_pat, pred_expr)?;
-            let pred_vn = self.inserted_block_outs[pred].phi_vn(pred_phi).unwrap();
-            Some(pred_vn)
+            let pred_phi = self.compute_value_phi(func, pred_pat, pred_expr)?;
+            let inserted_block = self.value_phis.get(pred_phi).block;
+            let vn = self.inserted_phis[inserted_block].phi_vn(pred_phi).unwrap();
+            Some(ValuePhiArg::new(pred, inserted_block, vn))
         }
     }
 
@@ -730,7 +727,7 @@ entity_impl!(ValuePhi);
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ValuePhiData {
     block: Block,
-    args: BTreeSet<(Block, ValueNumber)>,
+    args: BTreeSet<ValuePhiArg>,
 }
 
 impl ValuePhiData {
@@ -741,11 +738,11 @@ impl ValuePhiData {
         }
     }
 
-    fn insert_arg(&mut self, block: Block, vn: ValueNumber) {
-        self.args.insert((block, vn));
+    fn insert_arg(&mut self, arg: ValuePhiArg) {
+        self.args.insert(arg);
     }
 
-    fn args(&self) -> impl Iterator<Item = &(Block, ValueNumber)> {
+    fn args(&self) -> impl Iterator<Item = &ValuePhiArg> {
         self.args.iter()
     }
 }
@@ -758,6 +755,23 @@ impl Hash for ValuePhiData {
         self.block.hash(state);
         for arg in self.args.iter() {
             arg.hash(state);
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
+struct ValuePhiArg {
+    pred: Block,
+    inserted_block: Block,
+    vn: ValueNumber,
+}
+
+impl ValuePhiArg {
+    fn new(pred: Block, inserted_block: Block, vn: ValueNumber) -> Self {
+        Self {
+            pred,
+            inserted_block,
+            vn,
         }
     }
 }
