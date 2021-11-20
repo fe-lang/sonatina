@@ -13,7 +13,7 @@ pub struct GvnTransform {
 impl FuncTransform for GvnTransform {
     fn transform(&mut self, func: &mut Function) {
         self.cfg.compute(func);
-        self.solver.run(func, &mut self.cfg);
+        self.solver.run(func, &self.cfg);
     }
 
     fn test_root(&self) -> PathBuf {

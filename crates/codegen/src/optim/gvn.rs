@@ -4,10 +4,7 @@
 //! Asian Symposium on Programming Languages and Systems 2015 pp49-65:
 //! <https://link.springer.com/chapter/10.1007/978-3-319-26529-2_4>
 
-use std::{
-    collections::BTreeSet,
-    hash::{Hash, Hasher},
-};
+use std::{collections::BTreeSet, hash::Hash};
 
 use cranelift_entity::{
     entity_impl, packed_option::PackedOption, EntityRef, PrimaryMap, SecondaryMap,
@@ -113,7 +110,7 @@ impl GvnSolver {
             return rep_value;
         }
 
-        let phi_args: Vec<_> = phi_data.args().map(|arg| *arg).collect();
+        let phi_args: Vec<_> = phi_data.args().copied().collect();
 
         let phi_insn = func.dfg.make_insn(InsnData::phi(ty.clone()));
         for phi_arg in phi_args.into_iter() {
@@ -126,8 +123,7 @@ impl GvnSolver {
                     let pred_phi = self.inserted_phis[phi_arg.inserted_block]
                         .phi_of_vn(phi_arg.vn)
                         .unwrap();
-                    let rep_value = self.resolve_phi(func, pred_phi, ty.clone());
-                    rep_value
+                    self.resolve_phi(func, pred_phi, ty.clone())
                 };
 
             func.dfg.append_phi_arg(phi_insn, rep_value, phi_arg.pred);
@@ -212,15 +208,11 @@ impl GvnSolver {
 
         // Try to find the redundancy beyond the phi function.
         self.searched.clear();
+        let vn = self.vn_for_value(func, value);
+        pout_data.insert_value(value, vn);
+        pout_data.insert_expr(value_expr, vn);
         if let Some(value_phi) = self.compute_value_phi(func, pin, value_expr) {
-            let vn = self.vn_for_value(func, value);
-            pout_data.insert_value(value, vn);
             pout_data.insert_phi(value_phi, vn);
-            pout_data.insert_expr(value_expr, vn);
-        } else {
-            let vn = self.vn_for_value(func, value);
-            pout_data.insert_value(value, vn);
-            pout_data.insert_expr(value_expr, vn);
         }
 
         self.set_pout(insn, pout_data);
@@ -393,7 +385,7 @@ impl GvnSolver {
         let arg = expr_data.args[0];
         let value_phi = pat_data.phi_of_vn(arg)?;
         let value_phi_data = self.value_phis.get(value_phi);
-        let phi_args: Vec<_> = value_phi_data.args().map(|arg| *arg).collect();
+        let phi_args: Vec<_> = value_phi_data.args().copied().collect();
 
         let mut new_phi_data = ValuePhiData::new(value_phi_data.block);
         let mut expr = self.value_exprs.get(expr).clone();
@@ -433,8 +425,8 @@ impl GvnSolver {
                 }
                 let mut new_phi_data = ValuePhiData::new(lhs_phi_data.block);
 
-                let lhs_phi_args: Vec<_> = lhs_phi_data.args().map(|arg| *arg).collect();
-                let rhs_phi_args: Vec<_> = rhs_phi_data.args().map(|arg| *arg).collect();
+                let lhs_phi_args: Vec<_> = lhs_phi_data.args().copied().collect();
+                let rhs_phi_args: Vec<_> = rhs_phi_data.args().copied().collect();
                 for (lhs_arg, rhs_arg) in lhs_phi_args.into_iter().zip(rhs_phi_args.into_iter()) {
                     debug_assert_eq!(lhs_arg.pred, rhs_arg.pred);
                     expr_data.set_args(&[lhs_arg.vn, rhs_arg.vn]);
@@ -446,7 +438,7 @@ impl GvnSolver {
 
             (Some(phi), None) => {
                 let phi_data = self.value_phis.get(phi);
-                let phi_args: Vec<_> = phi_data.args().map(|arg| *arg).collect();
+                let phi_args: Vec<_> = phi_data.args().copied().collect();
                 let mut new_phi_data = ValuePhiData::new(phi_data.block);
 
                 for phi_arg in phi_args.into_iter() {
@@ -459,7 +451,7 @@ impl GvnSolver {
 
             (None, Some(phi)) => {
                 let phi_data = self.value_phis.get(phi);
-                let phi_args: Vec<_> = phi_data.args().map(|arg| *arg).collect();
+                let phi_args: Vec<_> = phi_data.args().copied().collect();
                 let mut new_phi_data = ValuePhiData::new(phi_data.block);
 
                 for phi_arg in phi_args.into_iter() {
@@ -627,7 +619,7 @@ impl PartitionData {
     }
 
     fn representative_value(&self, vn: ValueNumber) -> Option<Value> {
-        self.cells.get(&vn)?.values.iter().next().map(|v| *v)
+        self.cells.get(&vn)?.values.iter().next().copied()
     }
 
     fn value_vn(&self, value: Value) -> Option<ValueNumber> {
@@ -700,7 +692,7 @@ impl PartitionCell {
             return None;
         }
 
-        let values: FxHashSet<_> = self.values.intersection(&rhs.values).map(|v| *v).collect();
+        let values: FxHashSet<_> = self.values.intersection(&rhs.values).copied().collect();
         let value_expr = if self.value_expr == rhs.value_expr {
             self.value_expr
         } else {
@@ -725,7 +717,7 @@ impl PartitionCell {
 struct ValuePhi(u32);
 entity_impl!(ValuePhi);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ValuePhiData {
     block: Block,
     args: BTreeSet<ValuePhiArg>,
@@ -745,18 +737,6 @@ impl ValuePhiData {
 
     fn args(&self) -> impl Iterator<Item = &ValuePhiArg> {
         self.args.iter()
-    }
-}
-
-impl Hash for ValuePhiData {
-    fn hash<H>(&self, state: &mut H)
-    where
-        H: Hasher,
-    {
-        self.block.hash(state);
-        for arg in self.args.iter() {
-            arg.hash(state);
-        }
     }
 }
 
