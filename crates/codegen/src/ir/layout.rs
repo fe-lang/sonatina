@@ -353,13 +353,16 @@ impl InsnNode {
 mod tests {
     use super::*;
 
-    use super::super::{dfg::DataFlowGraph, insn::ImmediateOp, InsnData};
+    use super::super::{dfg::DataFlowGraph, insn::BinaryOp, InsnData};
 
     impl DataFlowGraph {
         /// Returns dummy instruction.
         fn make_dummy_insn(&mut self) -> Insn {
-            let insn_data = InsnData::Immediate {
-                code: ImmediateOp::I8(0),
+            let v0 = self.make_imm_value(1i32);
+            let v1 = self.make_imm_value(2i32);
+            let insn_data = InsnData::Binary {
+                code: BinaryOp::Add,
+                args: [v0, v1],
             };
             self.make_insn(insn_data)
         }

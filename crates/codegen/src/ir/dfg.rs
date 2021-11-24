@@ -3,6 +3,7 @@
 use std::collections::{BTreeSet, HashSet};
 
 use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap};
+use fxhash::FxHashMap;
 
 use super::{Immediate, Insn, InsnData, Type, Value, ValueData};
 
@@ -14,6 +15,8 @@ pub struct DataFlowGraph {
     pub values: PrimaryMap<Value, ValueData>,
     insns: PrimaryMap<Insn, InsnData>,
     insn_results: SecondaryMap<Insn, PackedOption<Value>>,
+    #[doc(hidden)]
+    pub immediates: FxHashMap<Immediate, Value>,
     users: SecondaryMap<Value, BTreeSet<Insn>>,
 }
 
@@ -34,6 +37,22 @@ impl DataFlowGraph {
         let insn = self.insns.push(insn);
         self.attach_user(insn);
         insn
+    }
+
+    pub fn make_imm_value<Imm>(&mut self, imm: Imm) -> Value
+    where
+        Imm: Into<Immediate>,
+    {
+        let imm: Immediate = imm.into();
+        if let Some(&value) = self.immediates.get(&imm) {
+            return value;
+        }
+
+        let ty = imm.ty();
+        let value_data = ValueData::Immediate { imm, ty };
+        let value = self.make_value(value_data);
+        self.immediates.insert(imm, value);
+        value
     }
 
     pub fn replace_insn(&mut self, insn: Insn, insn_data: InsnData) {

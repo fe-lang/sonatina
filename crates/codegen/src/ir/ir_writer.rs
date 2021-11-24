@@ -148,7 +148,6 @@ impl IrWrite for Insn {
 
         let insn_data = writer.func.dfg.insn_data(*self);
         match insn_data {
-            Immediate { code } => w.write_all(code.to_string().as_bytes())?,
             Binary { code, args } => {
                 w.write_fmt(format_args!("{}", code.as_str()))?;
                 writer.space(&mut w)?;

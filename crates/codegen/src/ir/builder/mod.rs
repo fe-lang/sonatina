@@ -6,8 +6,8 @@ pub use ssa::Variable;
 
 use crate::ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    insn::{BinaryOp, CastOp, ImmediateOp, InsnData, JumpOp},
-    types::U256,
+    insn::{BinaryOp, CastOp, InsnData, JumpOp},
+    Immediate, 
 };
 
 use crate::{Block, Function, Signature, Type, Value};
@@ -26,16 +26,6 @@ pub struct FunctionBuilder {
     func: Function,
     loc: CursorLocation,
     ssa_builder: SsaBuilder,
-}
-
-macro_rules! impl_immediate_insn {
-    ($name:ident, $code:path, $ty:ty) => {
-        pub fn $name(&mut self, value: $ty) -> Value {
-            let insn_data = InsnData::Immediate { code: $code(value) };
-
-            self.insert_insn(insn_data).unwrap()
-        }
-    };
 }
 
 macro_rules! impl_binary_insn {
@@ -86,17 +76,12 @@ impl FunctionBuilder {
         self.loc = CursorLocation::BlockBottom(block);
     }
 
-    impl_immediate_insn!(imm_i8, ImmediateOp::I8, i8);
-    impl_immediate_insn!(imm_i16, ImmediateOp::I16, i16);
-    impl_immediate_insn!(imm_i32, ImmediateOp::I32, i32);
-    impl_immediate_insn!(imm_i64, ImmediateOp::I64, i64);
-    impl_immediate_insn!(imm_i128, ImmediateOp::I128, i128);
-    impl_immediate_insn!(imm_u8, ImmediateOp::U8, u8);
-    impl_immediate_insn!(imm_u16, ImmediateOp::U16, u16);
-    impl_immediate_insn!(imm_u32, ImmediateOp::U32, u32);
-    impl_immediate_insn!(imm_u64, ImmediateOp::U64, u64);
-    impl_immediate_insn!(imm_u128, ImmediateOp::U128, u128);
-    impl_immediate_insn!(imm_u256, ImmediateOp::U256, U256);
+    pub fn make_imm_value<Imm>(&mut self, imm: Imm) -> Value
+    where
+        Imm: Into<Immediate>,
+    {
+        self.func.dfg.make_imm_value(imm)
+    }
 
     impl_binary_insn!(add, BinaryOp::Add);
     impl_binary_insn!(sub, BinaryOp::Sub);
@@ -269,8 +254,8 @@ mod tests {
 
         let b0 = builder.append_block();
         builder.switch_to_block(b0);
-        let v0 = builder.imm_i8(1);
-        let v1 = builder.imm_i8(2);
+        let v0 = builder.make_imm_value(1i8);
+        let v1 = builder.make_imm_value(2i8);
         let v2 = builder.add(v0, v1);
         builder.sub(v2, v0);
         builder.ret(&[]);
@@ -281,10 +266,8 @@ mod tests {
             dump_func(&builder.build()),
             "func %test_func():
     block0:
-        v0.i8 = imm_i8 1;
-        v1.i8 = imm_i8 2;
-        v2.i8 = add v0 v1;
-        v3.i8 = sub v2 v0;
+        v2.i8 = add 1.i8 2.i8;
+        v3.i8 = sub v2 1.i8;
         return;
 
 "
@@ -325,8 +308,8 @@ mod tests {
         let entry_block = builder.append_block();
 
         builder.switch_to_block(entry_block);
-        let v0 = builder.imm_i32(1);
-        let v1 = builder.imm_i64(1);
+        let v0 = builder.make_imm_value(1i32);
+        let v1 = builder.make_imm_value(2i64);
         builder.ret(&[v0, v1]);
         builder.seal_all();
 
@@ -334,9 +317,7 @@ mod tests {
             dump_func(&builder.build()),
             "func %test_func() -> i32, i64:
     block0:
-        v0.i32 = imm_i32 1;
-        v1.i64 = imm_i64 1;
-        return v0 v1;
+        return 1.i32 2.i64;
 
 "
         );
@@ -357,11 +338,11 @@ mod tests {
         builder.br(arg0, then_block, else_block);
 
         builder.switch_to_block(then_block);
-        let v1 = builder.imm_i64(1);
+        let v1 = builder.make_imm_value(1i64);
         builder.jump(merge_block);
 
         builder.switch_to_block(else_block);
-        let v2 = builder.imm_i64(2);
+        let v2 = builder.make_imm_value(2i64);
         builder.jump(merge_block);
 
         builder.switch_to_block(merge_block);
@@ -378,15 +359,13 @@ mod tests {
         br v0 block1 block2;
 
     block1:
-        v1.i64 = imm_i64 1;
         jump block3;
 
     block2:
-        v2.i64 = imm_i64 2;
         jump block3;
 
     block3:
-        v3.i64 = phi (v1 block1) (v2 block2);
+        v3.i64 = phi (1.i64 block1) (2.i64 block2);
         v4.i64 = add v3 v0;
         return;
 

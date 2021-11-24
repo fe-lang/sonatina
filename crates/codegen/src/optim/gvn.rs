@@ -16,7 +16,6 @@ use crate::{
     ir::{
         func_cursor::{CursorLocation, FuncCursor, InsnInserter},
         insn::InsnData,
-        types::U256,
     },
     Block, Function, Insn, Type, Value,
 };
@@ -515,26 +514,12 @@ impl GvnSolver {
     /// Transform insn to `ValueExpr`.
     /// We assume that verifier verifies all definitions of the insn arguments dominates the insn.
     fn value_expr(&mut self, func: &Function, pin: Partition, insn: Insn) -> Option<ValueExpr> {
-        use crate::ir::insn::{BinaryOp, CastOp, ImmediateOp};
+        use crate::ir::insn::{BinaryOp, CastOp};
         debug_assert!(!func.dfg.is_phi(insn));
 
         let pin_data = &self.partitions[pin];
 
         let value_expr_data = match func.dfg.insn_data(insn) {
-            InsnData::Immediate { code } => match *code {
-                ImmediateOp::I8(v) => ValueExprData::imm_i8(v),
-                ImmediateOp::I16(v) => ValueExprData::imm_i16(v),
-                ImmediateOp::I32(v) => ValueExprData::imm_i32(v),
-                ImmediateOp::I64(v) => ValueExprData::imm_i64(v),
-                ImmediateOp::I128(v) => ValueExprData::imm_i128(v),
-                ImmediateOp::U8(v) => ValueExprData::imm_u8(v),
-                ImmediateOp::U16(v) => ValueExprData::imm_u16(v),
-                ImmediateOp::U32(v) => ValueExprData::imm_u32(v),
-                ImmediateOp::U64(v) => ValueExprData::imm_u64(v),
-                ImmediateOp::U128(v) => ValueExprData::imm_u128(v),
-                ImmediateOp::U256(v) => ValueExprData::imm_u256(v),
-            },
-
             InsnData::Binary { code, args } => {
                 let lhs = pin_data.value_vn(args[0]).unwrap();
                 let rhs = pin_data.value_vn(args[1]).unwrap();
@@ -775,17 +760,6 @@ struct ValueExprData {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum ValueExprOpKind {
-    ImmI8(i8),
-    ImmI16(i16),
-    ImmI32(i32),
-    ImmI64(i64),
-    ImmI128(i128),
-    ImmU8(u8),
-    ImmU16(u16),
-    ImmU32(u32),
-    ImmU64(u64),
-    ImmU128(u128),
-    ImmU256(U256),
     Add,
     Sub,
     Mul,
@@ -801,22 +775,6 @@ enum ValueExprOpKind {
     Sext(Type),
     Trunc(Type),
     Zext(Type),
-}
-
-macro_rules! imm_ctor {
-    (
-        $(($name:ident, $variant:ident, $ty:ty),)*
-    ) => {
-        $(
-            fn $name(v: $ty) -> ValueExprData {
-                let kind = ValueExprOpKind::$variant(v);
-                ValueExprData {
-                    kind,
-                    args: Vec::new()
-                }
-            }
-        )*
-    };
 }
 
 macro_rules! binop_ctor{
@@ -872,20 +830,6 @@ impl ValueExprData {
             self.args.sort_unstable();
         }
     }
-
-    imm_ctor!(
-        (imm_i8, ImmI8, i8),
-        (imm_i16, ImmI16, i16),
-        (imm_i32, ImmI32, i32),
-        (imm_i64, ImmI64, i64),
-        (imm_i128, ImmI128, i128),
-        (imm_u8, ImmU8, u8),
-        (imm_u16, ImmU16, u16),
-        (imm_u32, ImmU32, u32),
-        (imm_u64, ImmU64, u64),
-        (imm_u128, ImmU128, u128),
-        (imm_u256, ImmU256, U256),
-    );
 
     binop_ctor! {
         (add, Add),

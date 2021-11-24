@@ -11,8 +11,9 @@ use cranelift_entity::SecondaryMap;
 use crate::{
     cfg::ControlFlowGraph,
     ir::func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    ir::insn::{BinaryOp, CastOp, ImmediateOp, InsnData, JumpOp},
+    ir::insn::{BinaryOp, CastOp, InsnData, JumpOp},
     ir::types::{Type, U256},
+    ir::{Immediate, ValueData},
     Block, Function, Insn, Value,
 };
 
@@ -149,15 +150,13 @@ impl SccpSolver {
 
     fn eval_insn(&mut self, func: &Function, insn: Insn) {
         debug_assert!(!func.dfg.is_phi(insn));
+        for &arg in func.dfg.insn_args(insn) {
+            if let Some(imm) = func.dfg.value_imm(arg) {
+                self.set_lattice_cell(arg, LatticeCell::Const(imm));
+            }
+        }
 
         match func.dfg.insn_data(insn) {
-            InsnData::Immediate { code } => {
-                let new_cell = LatticeCell::from_imm_op(*code);
-
-                let insn_result = func.dfg.insn_result(insn).unwrap();
-                self.set_lattice_cell(insn_result, new_cell);
-            }
-
             InsnData::Binary { code, args } => {
                 let lhs = self.lattice[args[0]];
                 let rhs = self.lattice[args[1]];
@@ -253,9 +252,9 @@ impl SccpSolver {
     }
 
     fn fold(&mut self, func: &mut Function, insn: Insn) -> bool {
-        let new_insn_data = if let InsnData::Branch { args, dests } = func.dfg.insn_data(insn) {
+        if let InsnData::Branch { args, dests } = func.dfg.insn_data(insn) {
             let cell = self.lattice[args[0]];
-            if cell.is_top() {
+            let insn_data = if cell.is_top() {
                 return false;
             } else if cell.is_bot() {
                 unreachable!();
@@ -271,21 +270,25 @@ impl SccpSolver {
                     code: JumpOp::Jump,
                     dests: [dests[0]],
                 }
-            }
+            };
+            InsnInserter::new(func, CursorLocation::At(insn)).replace(insn_data);
+            true
         } else {
             let insn_result = match func.dfg.insn_result(insn) {
                 Some(result) => result,
                 None => return false,
             };
-            match self.lattice[insn_result].to_imm_op() {
-                Some(op) => InsnData::Immediate { code: op },
-                None => return false,
-            }
-        };
 
-        let mut insn_inserter = InsnInserter::new(func, CursorLocation::At(insn));
-        insn_inserter.replace(new_insn_data);
-        true
+            let imm = match self.lattice[insn_result].to_imm() {
+                Some(imm) => imm,
+                None => return false,
+            };
+
+            InsnInserter::new(func, CursorLocation::At(insn)).remove_insn();
+            let new_value = func.dfg.make_imm_value(imm);
+            func.dfg.change_to_alias(insn_result, new_value);
+            true
+        }
     }
 
     fn try_fold_phi(&mut self, func: &mut Function, insn: Insn) {
@@ -345,7 +348,7 @@ impl FlowEdge {
 #[derive(Debug, Clone, Copy)]
 enum LatticeCell {
     Top,
-    Const(ConstValue),
+    Const(Immediate),
     Bot,
 }
 
@@ -388,34 +391,11 @@ macro_rules! impl_lattice_cast_ops {
 }
 
 impl LatticeCell {
-    fn from_imm_op(op: ImmediateOp) -> Self {
-        match op {
-            ImmediateOp::I8(value) => Self::Const(value.into()),
-            ImmediateOp::I16(value) => Self::Const(value.into()),
-            ImmediateOp::I32(value) => Self::Const(value.into()),
-            ImmediateOp::I64(value) => Self::Const(value.into()),
-            ImmediateOp::I128(value) => Self::Const(value.into()),
-            ImmediateOp::U8(value) => Self::Const(value.into()),
-            ImmediateOp::U16(value) => Self::Const(value.into()),
-            ImmediateOp::U32(value) => Self::Const(value.into()),
-            ImmediateOp::U64(value) => Self::Const(value.into()),
-            ImmediateOp::U128(value) => Self::Const(value.into()),
-            ImmediateOp::U256(value) => Self::Const(value.into()),
-        }
-    }
-
-    fn to_imm_op(self) -> Option<ImmediateOp> {
+    fn to_imm(self) -> Option<Immediate> {
         match self {
             Self::Top => None,
             Self::Bot => None,
-            Self::Const(c) => Some(match c {
-                ConstValue::U8(v) => ImmediateOp::U8(v),
-                ConstValue::U16(v) => ImmediateOp::U16(v),
-                ConstValue::U32(v) => ImmediateOp::U32(v),
-                ConstValue::U64(v) => ImmediateOp::U64(v),
-                ConstValue::U128(v) => ImmediateOp::U128(v),
-                ConstValue::U256(v) => ImmediateOp::U256(v),
-            }),
+            Self::Const(imm) => Some(imm),
         }
     }
 
@@ -475,55 +455,45 @@ impl Default for LatticeCell {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ConstValue {
-    U8(u8),
-    U16(u16),
-    U32(u32),
-    U64(u64),
-    U128(u128),
-    U256(U256),
-}
-
 macro_rules! apply_binop {
     ($lhs:expr, $rhs:expr, $op:ident) => {
         match ($lhs, $rhs) {
-            (Self::U8(lhs), Self::U8(rhs)) => lhs.$op(rhs).into(),
-            (Self::U16(lhs), Self::U16(rhs)) => lhs.$op(rhs).into(),
-            (Self::U32(lhs), Self::U32(rhs)) => lhs.$op(rhs).into(),
-            (Self::U64(lhs), Self::U64(rhs)) => lhs.$op(rhs).into(),
-            (Self::U128(lhs), Self::U128(rhs)) => lhs.$op(rhs).into(),
+            (Self::I8(lhs), Self::I8(rhs)) => lhs.$op(rhs).into(),
+            (Self::I16(lhs), Self::I16(rhs)) => lhs.$op(rhs).into(),
+            (Self::I32(lhs), Self::I32(rhs)) => lhs.$op(rhs).into(),
+            (Self::I64(lhs), Self::I64(rhs)) => lhs.$op(rhs).into(),
+            (Self::I128(lhs), Self::I128(rhs)) => lhs.$op(rhs).into(),
             (Self::U256(lhs), Self::U256(rhs)) => lhs.$op(rhs).into(),
             _ => unreachable!(),
         }
     };
 
-    ($lhs:expr, $rhs:ident, $op:ident, signed) => {
+    ($lhs:expr, $rhs:ident, $op:ident, unsigned) => {
         match ($lhs, $rhs) {
-            (Self::U8(lhs), Self::U8(rhs)) => lhs.to_signed().$op(rhs.to_signed()).into(),
-            (Self::U16(lhs), Self::U16(rhs)) => lhs.to_signed().$op(rhs.to_signed()).into(),
-            (Self::U32(lhs), Self::U32(rhs)) => lhs.to_signed().$op(rhs.to_signed()).into(),
-            (Self::U64(lhs), Self::U64(rhs)) => lhs.to_signed().$op(rhs.to_signed()).into(),
-            (Self::U128(lhs), Self::U128(rhs)) => lhs.to_signed().$op(rhs.to_signed()).into(),
-            (Self::U256(lhs), Self::U256(rhs)) => lhs.to_signed().$op(rhs.to_signed()).into(),
+            (Self::I8(lhs), Self::I8(rhs)) => lhs.to_unsigned().$op(rhs.to_unsigned()).into(),
+            (Self::I16(lhs), Self::I16(rhs)) => lhs.to_unsigned().$op(rhs.to_unsigned()).into(),
+            (Self::I32(lhs), Self::I32(rhs)) => lhs.to_unsigned().$op(rhs.to_unsigned()).into(),
+            (Self::I64(lhs), Self::I64(rhs)) => lhs.to_unsigned().$op(rhs.to_unsigned()).into(),
+            (Self::I128(lhs), Self::I128(rhs)) => lhs.to_unsigned().$op(rhs.to_unsigned()).into(),
+            (Self::U256(lhs), Self::U256(rhs)) => lhs.to_unsigned().$op(rhs.to_unsigned()).into(),
             _ => unreachable!(),
         }
     };
 
-    ($lhs:expr, &$rhs:ident, $op:ident, signed) => {
+    ($lhs:expr, &$rhs:ident, $op:ident, unsigned) => {
         match ($lhs, $rhs) {
-            (Self::U8(lhs), Self::U8(rhs)) => lhs.to_signed().$op(&rhs.to_signed()).into(),
-            (Self::U16(lhs), Self::U16(rhs)) => lhs.to_signed().$op(&rhs.to_signed()).into(),
-            (Self::U32(lhs), Self::U32(rhs)) => lhs.to_signed().$op(&rhs.to_signed()).into(),
-            (Self::U64(lhs), Self::U64(rhs)) => lhs.to_signed().$op(&rhs.to_signed()).into(),
-            (Self::U128(lhs), Self::U128(rhs)) => lhs.to_signed().$op(&rhs.to_signed()).into(),
-            (Self::U256(lhs), Self::U256(rhs)) => lhs.to_signed().$op(&rhs.to_signed()).into(),
+            (Self::I8(lhs), Self::I8(rhs)) => lhs.to_unsigned().$op(&rhs.to_unsigned()).into(),
+            (Self::I16(lhs), Self::I16(rhs)) => lhs.to_unsigned().$op(&rhs.to_unsigned()).into(),
+            (Self::I32(lhs), Self::I32(rhs)) => lhs.to_unsigned().$op(&rhs.to_unsigned()).into(),
+            (Self::I64(lhs), Self::I64(rhs)) => lhs.to_unsigned().$op(&rhs.to_unsigned()).into(),
+            (Self::I128(lhs), Self::I128(rhs)) => lhs.to_unsigned().$op(&rhs.to_unsigned()).into(),
+            (Self::U256(lhs), Self::U256(rhs)) => lhs.to_unsigned().$op(&rhs.to_unsigned()).into(),
             _ => unreachable!(),
         }
     };
 }
 
-impl ConstValue {
+impl Immediate {
     fn add(self, rhs: Self) -> Self {
         apply_binop!(self, rhs, overflowing_add)
     }
@@ -538,11 +508,24 @@ impl ConstValue {
 
     fn udiv(self, rhs: Self) -> Self {
         use std::ops::Div;
-        apply_binop!(self, rhs, div)
+        apply_binop!(self, rhs, div, unsigned)
     }
 
     fn sdiv(self, rhs: Self) -> Self {
-        apply_binop!(self, rhs, overflowing_div, signed)
+        match (self, rhs) {
+            (Self::I8(lhs), Self::I8(rhs)) => lhs.overflowing_div(rhs).into(),
+            (Self::I16(lhs), Self::I16(rhs)) => lhs.overflowing_div(rhs).into(),
+            (Self::I32(lhs), Self::I32(rhs)) => lhs.overflowing_div(rhs).into(),
+            (Self::I64(lhs), Self::I64(rhs)) => lhs.overflowing_div(rhs).into(),
+            (Self::I128(lhs), Self::I128(rhs)) => lhs.overflowing_div(rhs).into(),
+            (Self::U256(lhs), Self::U256(rhs)) => {
+                (lhs.to_signed().overflowing_div(rhs.to_signed()))
+                    .0
+                    .to_unsigned()
+                    .into()
+            }
+            _ => unreachable!(),
+        }
     }
 
     fn and(self, rhs: Self) -> Self {
@@ -556,7 +539,7 @@ impl ConstValue {
     }
 
     fn lt(self, rhs: Self) -> Self {
-        if apply_binop!(self, &rhs, lt) {
+        if apply_binop!(self, &rhs, lt, unsigned) {
             self.one()
         } else {
             self.zero()
@@ -564,7 +547,7 @@ impl ConstValue {
     }
 
     fn gt(self, rhs: Self) -> Self {
-        if apply_binop!(self, &rhs, gt) {
+        if apply_binop!(self, &rhs, gt, unsigned) {
             self.one()
         } else {
             self.zero()
@@ -580,7 +563,7 @@ impl ConstValue {
     }
 
     fn slt(self, rhs: Self) -> Self {
-        if apply_binop!(self, &rhs, lt, signed) {
+        if apply_binop!(self, &rhs, lt) {
             self.one()
         } else {
             self.zero()
@@ -588,7 +571,7 @@ impl ConstValue {
     }
 
     fn sgt(self, rhs: Self) -> Self {
-        if apply_binop!(self, &rhs, gt, signed) {
+        if apply_binop!(self, &rhs, gt) {
             self.one()
         } else {
             self.zero()
@@ -597,45 +580,46 @@ impl ConstValue {
 
     fn zero(self) -> Self {
         match self {
-            Self::U8(_) => 0u8.into(),
-            Self::U16(_) => 0u16.into(),
-            Self::U32(_) => 0u32.into(),
-            Self::U64(_) => 0u64.into(),
-            Self::U128(_) => 0u128.into(),
+            Self::I8(_) => 0i8.into(),
+            Self::I16(_) => 0i16.into(),
+            Self::I32(_) => 0i32.into(),
+            Self::I64(_) => 0i64.into(),
+            Self::I128(_) => 0i128.into(),
             Self::U256(_) => U256::zero().into(),
         }
     }
+
     fn zext(self, to: &Type) -> Self {
         let panic_msg = "attempt to zext the value to same or smaller type, or non scalar type";
         match self {
-            Self::U8(val) => match to {
-                Type::I16 => Self::U16(val.into()),
-                Type::I32 => Self::U32(val.into()),
-                Type::I64 => Self::U64(val.into()),
-                Type::I128 => Self::U128(val.into()),
-                Type::I256 => Self::U256(val.into()),
+            Self::I8(val) => match to {
+                Type::I16 => Self::I16(val.to_unsigned().into()),
+                Type::I32 => Self::I32(val.to_unsigned().into()),
+                Type::I64 => Self::I64(val.to_unsigned().into()),
+                Type::I128 => Self::I128(val.to_unsigned().into()),
+                Type::I256 => Self::U256(val.to_unsigned().into()),
                 _ => panic!("{}", panic_msg),
             },
-            Self::U16(val) => match to {
-                Type::I32 => Self::U32(val.into()),
-                Type::I64 => Self::U64(val.into()),
-                Type::I128 => Self::U128(val.into()),
-                Type::I256 => Self::U256(val.into()),
+            Self::I16(val) => match to {
+                Type::I32 => Self::I32(val.to_unsigned().into()),
+                Type::I64 => Self::I64(val.to_unsigned().into()),
+                Type::I128 => Self::I128(val.to_unsigned().into()),
+                Type::I256 => Self::U256(val.to_unsigned().into()),
                 _ => panic!("{}", panic_msg),
             },
-            Self::U32(val) => match to {
-                Type::I64 => Self::U64(val.into()),
-                Type::I128 => Self::U128(val.into()),
-                Type::I256 => Self::U256(val.into()),
+            Self::I32(val) => match to {
+                Type::I64 => Self::I64(val.to_unsigned().into()),
+                Type::I128 => Self::I128(val.to_unsigned().into()),
+                Type::I256 => Self::U256(val.to_unsigned().into()),
                 _ => panic!("{}", panic_msg),
             },
-            Self::U64(val) => match to {
-                Type::I128 => Self::U128(val.into()),
-                Type::I256 => Self::U256(val.into()),
+            Self::I64(val) => match to {
+                Type::I128 => Self::I128(val.to_unsigned().into()),
+                Type::I256 => Self::U256(val.to_unsigned().into()),
                 _ => panic!("{}", panic_msg),
             },
-            Self::U128(val) => match to {
-                Type::I256 => Self::U256(val.into()),
+            Self::I128(val) => match to {
+                Type::I256 => Self::U256(val.to_unsigned().into()),
                 _ => panic!("{}", panic_msg),
             },
             Self::U256(_) => panic!("{}", panic_msg),
@@ -645,33 +629,33 @@ impl ConstValue {
     fn sext(self, to: &Type) -> Self {
         let panic_msg = "attempt to sext the value to same or smaller type, or non scalar type";
         match self {
-            Self::U8(val) => match to {
-                Type::I16 => Self::U16((val.to_signed() as i16).to_unsigned()),
-                Type::I32 => Self::U32((val.to_signed() as i32).to_unsigned()),
-                Type::I64 => Self::U64((val.to_signed() as i64).to_unsigned()),
-                Type::I128 => Self::U128((val.to_signed() as i128).to_unsigned()),
+            Self::I8(val) => match to {
+                Type::I16 => Self::I16(val as i16),
+                Type::I32 => Self::I32(val as i32),
+                Type::I64 => Self::I64(val as i64),
+                Type::I128 => Self::I128(val as i128),
                 Type::I256 => Self::U256(val.into()),
                 _ => panic!("{}", panic_msg),
             },
-            Self::U16(val) => match to {
-                Type::I32 => Self::U32(val.into()),
-                Type::I64 => Self::U64(val.into()),
-                Type::I128 => Self::U128(val.into()),
+            Self::I16(val) => match to {
+                Type::I32 => Self::I32(val.into()),
+                Type::I64 => Self::I64(val.into()),
+                Type::I128 => Self::I128(val.into()),
                 Type::I256 => Self::U256(val.into()),
                 _ => panic!("{}", panic_msg),
             },
-            Self::U32(val) => match to {
-                Type::I64 => Self::U64(val.into()),
-                Type::I128 => Self::U128(val.into()),
+            Self::I32(val) => match to {
+                Type::I64 => Self::I64(val.into()),
+                Type::I128 => Self::I128(val.into()),
                 Type::I256 => Self::U256(val.into()),
                 _ => panic!("{}", panic_msg),
             },
-            Self::U64(val) => match to {
-                Type::I128 => Self::U128(val.into()),
+            Self::I64(val) => match to {
+                Type::I128 => Self::I128(val.into()),
                 Type::I256 => Self::U256(val.into()),
                 _ => panic!("{}", panic_msg),
             },
-            Self::U128(val) => match to {
+            Self::I128(val) => match to {
                 Type::I256 => Self::U256(val.into()),
                 _ => panic!("{}", panic_msg),
             },
@@ -683,35 +667,35 @@ impl ConstValue {
         let panic_msg = "attempt to trunc the value to same or larger type, or non scalar type";
 
         match self {
-            Self::U8(_) => panic!("{}", panic_msg),
-            Self::U16(val) => match to {
-                Type::I8 => Self::U8(val as u8),
+            Self::I8(_) => panic!("{}", panic_msg),
+            Self::I16(val) => match to {
+                Type::I8 => Self::I8(val as i8),
                 _ => panic!("{}", panic_msg),
             },
-            Self::U32(val) => match to {
-                Type::I8 => Self::U8(val as u8),
-                Type::I16 => Self::U16(val as u16),
+            Self::I32(val) => match to {
+                Type::I8 => Self::I8(val as i8),
+                Type::I16 => Self::I16(val as i16),
                 _ => panic!("{}", panic_msg),
             },
-            Self::U64(val) => match to {
-                Type::I8 => Self::U8(val as u8),
-                Type::I16 => Self::U16(val as u16),
-                Type::I32 => Self::U32(val as u32),
+            Self::I64(val) => match to {
+                Type::I8 => Self::I8(val as i8),
+                Type::I16 => Self::I16(val as i16),
+                Type::I32 => Self::I32(val as i32),
                 _ => panic!("{}", panic_msg),
             },
-            Self::U128(val) => match to {
-                Type::I8 => Self::U8(val as u8),
-                Type::I16 => Self::U16(val as u16),
-                Type::I32 => Self::U32(val as u32),
-                Type::I64 => Self::U64(val as u64),
+            Self::I128(val) => match to {
+                Type::I8 => Self::I8(val as i8),
+                Type::I16 => Self::I16(val as i16),
+                Type::I32 => Self::I32(val as i32),
+                Type::I64 => Self::I64(val as i64),
                 _ => panic!("{}", panic_msg),
             },
             Self::U256(val) => match to {
-                Type::I8 => Self::U8(val.low_u32() as u8),
-                Type::I16 => Self::U16(val.low_u32() as u16),
-                Type::I32 => Self::U32(val.low_u32()),
-                Type::I64 => Self::U64(val.low_u64()),
-                Type::I128 => Self::U128(val.low_u128()),
+                Type::I8 => Self::I8(val.low_u32() as i8),
+                Type::I16 => Self::I16(val.low_u32() as i16),
+                Type::I32 => Self::I32(val.low_u32() as i32),
+                Type::I64 => Self::I64(val.low_u64() as i64),
+                Type::I128 => Self::I128(val.low_u128() as i128),
                 _ => panic!("{}", panic_msg),
             },
         }
@@ -719,23 +703,23 @@ impl ConstValue {
 
     fn one(self) -> Self {
         match self {
-            Self::U8(_) => 1u8.into(),
-            Self::U16(_) => 1u16.into(),
-            Self::U32(_) => 1u32.into(),
-            Self::U64(_) => 1u64.into(),
-            Self::U128(_) => 1u128.into(),
+            Self::I8(_) => 1i8.into(),
+            Self::I16(_) => 1i16.into(),
+            Self::I32(_) => 1i32.into(),
+            Self::I64(_) => 1i64.into(),
+            Self::I128(_) => 1i128.into(),
             Self::U256(_) => U256::one().into(),
         }
     }
 
     fn is_zero(self) -> bool {
         match self {
-            Self::U8(val) => val == 0,
-            Self::U16(val) => val == 0,
-            Self::U32(val) => val == 0,
-            Self::U64(val) => val == 0,
-            Self::U128(val) => val == 0,
-            Self::U256(val) => val == U256::zero(),
+            Self::I8(val) => val == 0,
+            Self::I16(val) => val == 0,
+            Self::I32(val) => val == 0,
+            Self::I64(val) => val == 0,
+            Self::I128(val) => val == 0,
+            Self::U256(val) => val.is_zero(),
         }
     }
 }
@@ -743,16 +727,10 @@ impl ConstValue {
 macro_rules! impl_const_value_conversion {
     ($(($from:ty, $contr:expr),)*) => {
         $(
-            impl From<$from> for ConstValue {
-                fn from(v: $from) -> Self {
-                    $contr(v.to_unsigned())
-                }
-            }
-
             // For `overflowing_*` operation.
-            impl From<($from, bool)> for ConstValue {
+            impl From<($from, bool)> for Immediate {
                 fn from(v: ($from, bool)) -> Self {
-                    $contr(v.0.to_unsigned())
+                    v.0.into()
                 }
             }
         )*
@@ -760,18 +738,17 @@ macro_rules! impl_const_value_conversion {
 }
 
 impl_const_value_conversion! {
-    (u8, ConstValue::U8),
-    (u16, ConstValue::U16),
-    (u32, ConstValue::U32),
-    (u64, ConstValue::U64),
-    (u128, ConstValue::U128),
-    (U256, ConstValue::U256),
-    (i8, ConstValue::U8),
-    (i16, ConstValue::U16),
-    (i32, ConstValue::U32),
-    (i64, ConstValue::U64),
-    (i128, ConstValue::U128),
-    (I256, ConstValue::U256),
+    (u8, Immediate::I8),
+    (u16, Immediate::I16),
+    (u32, Immediate::I32),
+    (u64, Immediate::I64),
+    (u128, Immediate::I128),
+    (U256, Immediate::U256),
+    (i8, Immediate::I8),
+    (i16, Immediate::I16),
+    (i32, Immediate::I32),
+    (i64, Immediate::I64),
+    (i128, Immediate::I128),
 }
 
 trait SignCast {

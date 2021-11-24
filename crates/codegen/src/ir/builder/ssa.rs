@@ -225,7 +225,7 @@ mod tests {
 
         let entry_block = builder.append_block();
         builder.switch_to_block(entry_block);
-        let v0 = builder.imm_i32(1);
+        let v0 = builder.make_imm_value(1i32);
         builder.def_var(var, v0);
         let v1 = builder.use_var(var);
         builder.add(v1, v0);
@@ -236,8 +236,7 @@ mod tests {
             dump_func(&builder.build()),
             "func %test_func():
     block0:
-        v0.i32 = imm_i32 1;
-        v1.i32 = add v0 v0;
+        v1.i32 = add 1.i32 1.i32;
         return;
 
 "
@@ -256,18 +255,18 @@ mod tests {
         let b3 = builder.append_block();
 
         builder.switch_to_block(b0);
-        let imm = builder.imm_i32(1);
+        let imm = builder.make_imm_value(1i32);
         builder.br(imm, b2, b1);
         builder.seal_block();
 
         builder.switch_to_block(b1);
-        let imm = builder.imm_i32(2);
+        let imm = builder.make_imm_value(2i32);
         builder.def_var(var, imm);
         builder.jump(b3);
         builder.seal_block();
 
         builder.switch_to_block(b2);
-        let imm = builder.imm_i32(3);
+        let imm = builder.make_imm_value(3i32);
         builder.def_var(var, imm);
         builder.jump(b3);
         builder.seal_block();
@@ -281,19 +280,16 @@ mod tests {
             dump_func(&builder.build()),
             "func %test_func():
     block0:
-        v0.i32 = imm_i32 1;
-        br v0 block2 block1;
+        br 1.i32 block2 block1;
 
     block1:
-        v1.i32 = imm_i32 2;
         jump block3;
 
     block2:
-        v2.i32 = imm_i32 3;
         jump block3;
 
     block3:
-        v3.i32 = phi (v1 block1) (v2 block2);
+        v3.i32 = phi (2.i32 block1) (3.i32 block2);
         return;
 
 "
@@ -317,12 +313,12 @@ mod tests {
         let b7 = builder.append_block();
 
         builder.switch_to_block(b0);
-        let v0 = builder.imm_i32(0);
+        let v0 = builder.make_imm_value(0i32);
         builder.def_var(var1, v0);
         builder.br(v0, b1, b2);
 
         builder.switch_to_block(b1);
-        let v1 = builder.imm_i32(1);
+        let v1 = builder.make_imm_value(1i32);
         builder.def_var(var0, v1);
         builder.def_var(var1, v1);
         builder.jump(b7);
@@ -331,7 +327,7 @@ mod tests {
         builder.br(v0, b3, b4);
 
         builder.switch_to_block(b3);
-        let v2 = builder.imm_i32(2);
+        let v2 = builder.make_imm_value(2i32);
         builder.def_var(var0, v2);
         builder.jump(b7);
 
@@ -339,12 +335,12 @@ mod tests {
         builder.br(v0, b5, b6);
 
         builder.switch_to_block(b5);
-        let v3 = builder.imm_i32(3);
+        let v3 = builder.make_imm_value(3i32);
         builder.def_var(var0, v3);
         builder.jump(b7);
 
         builder.switch_to_block(b6);
-        let v4 = builder.imm_i32(4);
+        let v4 = builder.make_imm_value(4i32);
         builder.def_var(var0, v4);
         builder.jump(b7);
 
@@ -360,34 +356,29 @@ mod tests {
             dump_func(&builder.build()),
             "func %test_func():
     block0:
-        v0.i32 = imm_i32 0;
-        br v0 block1 block2;
+        br 0.i32 block1 block2;
 
     block1:
-        v1.i32 = imm_i32 1;
         jump block7;
 
     block2:
-        br v0 block3 block4;
+        br 0.i32 block3 block4;
 
     block3:
-        v2.i32 = imm_i32 2;
         jump block7;
 
     block4:
-        br v0 block5 block6;
+        br 0.i32 block5 block6;
 
     block5:
-        v3.i32 = imm_i32 3;
         jump block7;
 
     block6:
-        v4.i32 = imm_i32 4;
         jump block7;
 
     block7:
-        v6.i32 = phi (v1 block1) (v0 block3) (v0 block5) (v0 block6);
-        v5.i32 = phi (v1 block1) (v2 block3) (v3 block5) (v4 block6);
+        v6.i32 = phi (1.i32 block1) (0.i32 block3) (0.i32 block5) (0.i32 block6);
+        v5.i32 = phi (1.i32 block1) (2.i32 block3) (3.i32 block5) (4.i32 block6);
         v7.i32 = add v5 v6;
         return;
 
@@ -407,7 +398,7 @@ mod tests {
         let b3 = builder.append_block();
 
         builder.switch_to_block(b0);
-        let value = builder.imm_i32(1);
+        let value = builder.make_imm_value(1i32);
         builder.def_var(var, value);
         builder.jump(b1);
         builder.seal_block();
@@ -416,7 +407,7 @@ mod tests {
         builder.br(value, b2, b3);
 
         builder.switch_to_block(b2);
-        let value = builder.imm_i32(10);
+        let value = builder.make_imm_value(10i32);
         builder.def_var(var, value);
         builder.jump(b1);
         builder.seal_block();
@@ -434,15 +425,13 @@ mod tests {
             dump_func(&builder.build()),
             "func %test_func():
     block0:
-        v0.i32 = imm_i32 1;
         jump block1;
 
     block1:
-        v4.i32 = phi (v0 block0) (v1 block2);
-        br v0 block2 block3;
+        v4.i32 = phi (1.i32 block0) (10.i32 block2);
+        br 1.i32 block2 block3;
 
     block2:
-        v1.i32 = imm_i32 10;
         jump block1;
 
     block3:
@@ -468,7 +457,7 @@ mod tests {
         let b6 = builder.append_block();
 
         builder.switch_to_block(b0);
-        let value1 = builder.imm_i32(1);
+        let value1 = builder.make_imm_value(1i32);
         builder.def_var(var, value1);
         builder.jump(b1);
         builder.seal_block();
@@ -481,7 +470,7 @@ mod tests {
         builder.seal_block();
 
         builder.switch_to_block(b3);
-        let value2 = builder.imm_i32(2);
+        let value2 = builder.make_imm_value(2i32);
         builder.def_var(var, value2);
         builder.jump(b5);
         builder.seal_block();
@@ -509,25 +498,23 @@ mod tests {
             dump_func(&f),
             "func %test_func():
     block0:
-        v0.i32 = imm_i32 1;
         jump block1;
 
     block1:
-        v4.i32 = phi (v0 block0) (v5 block5);
-        br v0 block6 block2;
+        v4.i32 = phi (1.i32 block0) (v5 block5);
+        br 1.i32 block6 block2;
 
     block2:
-        br v0 block4 block3;
+        br 1.i32 block4 block3;
 
     block3:
-        v1.i32 = imm_i32 2;
         jump block5;
 
     block4:
         jump block5;
 
     block5:
-        v5.i32 = phi (v1 block3) (v4 block4);
+        v5.i32 = phi (2.i32 block3) (v4 block4);
         jump block1;
 
     block6:
@@ -553,7 +540,7 @@ mod tests {
         let b6 = builder.append_block();
 
         builder.switch_to_block(b0);
-        let value1 = builder.imm_i32(1);
+        let value1 = builder.make_imm_value(1i32);
         builder.def_var(var, value1);
         builder.jump(b1);
 
@@ -564,7 +551,7 @@ mod tests {
         builder.br(value1, b4, b3);
 
         builder.switch_to_block(b3);
-        let value2 = builder.imm_i32(2);
+        let value2 = builder.make_imm_value(2i32);
         builder.def_var(var, value2);
         builder.jump(b5);
 
@@ -587,25 +574,23 @@ mod tests {
             dump_func(&builder.build()),
             "func %test_func():
     block0:
-        v0.i32 = imm_i32 1;
         jump block1;
 
     block1:
-        v4.i32 = phi (v0 block0) (v5 block5);
-        br v0 block6 block2;
+        v4.i32 = phi (1.i32 block0) (v5 block5);
+        br 1.i32 block6 block2;
 
     block2:
-        br v0 block4 block3;
+        br 1.i32 block4 block3;
 
     block3:
-        v1.i32 = imm_i32 2;
         jump block5;
 
     block4:
         jump block5;
 
     block5:
-        v5.i32 = phi (v1 block3) (v4 block4);
+        v5.i32 = phi (2.i32 block3) (v4 block4);
         jump block1;
 
     block6:
@@ -638,7 +623,7 @@ mod tests {
         let b2 = builder.append_block();
 
         builder.switch_to_block(b1);
-        let imm = builder.imm_i32(1);
+        let imm = builder.make_imm_value(1i32);
         builder.def_var(var, imm);
         builder.seal_block();
 

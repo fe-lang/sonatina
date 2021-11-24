@@ -133,7 +133,7 @@ mod tests {
         let c = builder.append_block();
 
         builder.switch_to_block(a);
-        let v0 = builder.imm_u8(1);
+        let v0 = builder.make_imm_value(1i32);
         builder.br(v0, c, b);
 
         builder.switch_to_block(b);
@@ -153,8 +153,7 @@ mod tests {
             dump_func(&func),
             "func %test_func():
     block0:
-        v0.i8 = imm_u8 1;
-        br v0 block3 block1;
+        br 1.i32 block3 block1;
 
     block1:
         jump block2;
@@ -185,7 +184,7 @@ mod tests {
         let e = builder.append_block();
 
         builder.switch_to_block(a);
-        let v0 = builder.imm_u8(1);
+        let v0 = builder.make_imm_value(1i8);
         builder.br(v0, d, b);
 
         builder.switch_to_block(b);
@@ -211,14 +210,13 @@ mod tests {
             dump_func(&func),
             "func %test_func():
     block0:
-        v0.i8 = imm_u8 1;
-        br v0 block5 block1;
+        br 1.i8 block5 block1;
 
     block1:
         jump block2;
 
     block2:
-        br v0 block4 block5;
+        br 1.i8 block4 block5;
 
     block5:
         fallthrough block3;
@@ -246,7 +244,7 @@ mod tests {
         let c = builder.append_block();
 
         builder.switch_to_block(a);
-        let v1 = builder.imm_u8(1);
+        let v1 = builder.make_imm_value(1i8);
         builder.jump(b);
 
         builder.switch_to_block(b);
@@ -269,15 +267,14 @@ mod tests {
             dump_func(&func),
             "func %test_func():
     block0:
-        v0.i8 = imm_u8 1;
         jump block1;
 
     block3:
         fallthrough block1;
 
     block1:
-        v1.i8 = phi (v0 block0) (v2 block3);
-        v2.i8 = add v1 v0;
+        v1.i8 = phi (1.i8 block0) (v2 block3);
+        v2.i8 = add v1 1.i8;
         br v1 block2 block3;
 
     block2:

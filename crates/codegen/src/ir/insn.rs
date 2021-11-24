@@ -5,7 +5,7 @@ use std::fmt;
 
 use smallvec::SmallVec;
 
-use super::{types::U256, Block, DataFlowGraph, Type, Value};
+use super::{Block, DataFlowGraph, Type, Value};
 
 /// An opaque reference to [`InsnData`]
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
@@ -15,9 +15,6 @@ cranelift_entity::entity_impl!(Insn);
 /// An instruction data definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InsnData {
-    /// Immediate instruction.
-    Immediate { code: ImmediateOp },
-
     /// Binary instruction.
     Binary { code: BinaryOp, args: [Value; 2] },
 
@@ -115,58 +112,10 @@ impl InsnData {
 
     pub(super) fn result_type(&self, dfg: &DataFlowGraph) -> Option<Type> {
         match self {
-            Self::Immediate { code } => Some(code.result_type()),
             Self::Binary { code, args } => Some(code.result_type(dfg, args)),
             Self::Cast { ty, .. } | Self::Load { ty, .. } => Some(ty.clone()),
             Self::Phi { ty, .. } => Some(ty.clone()),
             _ => None,
-        }
-    }
-}
-
-/// Immidiates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImmediateOp {
-    I8(i8),
-    I16(i16),
-    I32(i32),
-    I64(i64),
-    I128(i128),
-    U8(u8),
-    U16(u16),
-    U32(u32),
-    U64(u64),
-    U128(u128),
-    U256(U256),
-}
-
-impl ImmediateOp {
-    fn result_type(&self) -> Type {
-        match self {
-            Self::I8(_) | Self::U8(_) => Type::I8,
-            Self::I16(_) | Self::U16(_) => Type::I16,
-            Self::I32(_) | Self::U32(_) => Type::I32,
-            Self::I64(_) | Self::U64(_) => Type::I64,
-            Self::I128(_) | Self::U128(_) => Type::I128,
-            Self::U256(_) => Type::I256,
-        }
-    }
-}
-
-impl fmt::Display for ImmediateOp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::I8(value) => write!(f, "imm_i8 {}", value),
-            Self::I16(value) => write!(f, "imm_i16 {}", value),
-            Self::I32(value) => write!(f, "imm_i32 {}", value),
-            Self::I64(value) => write!(f, "imm_i64 {}", value),
-            Self::I128(value) => write!(f, "imm_i128 {}", value),
-            Self::U8(value) => write!(f, "imm_u8 {}", value),
-            Self::U16(value) => write!(f, "imm_u16 {}", value),
-            Self::U32(value) => write!(f, "imm_u32 {}", value),
-            Self::U64(value) => write!(f, "imm_u64 {}", value),
-            Self::U128(value) => write!(f, "imm_u128 {}", value),
-            Self::U256(value) => write!(f, "imm_u256 {}", value),
         }
     }
 }

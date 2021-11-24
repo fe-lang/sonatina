@@ -25,7 +25,7 @@ pub enum ValueData {
     Immediate { imm: Immediate, ty: Type },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Immediate {
     I8(i8),
     I16(i16),
@@ -33,6 +33,19 @@ pub enum Immediate {
     I64(i64),
     I128(i128),
     U256(U256),
+}
+
+impl Immediate {
+    pub fn ty(&self) -> Type {
+        match self {
+            Self::I8(..) => Type::I8,
+            Self::I16(..) => Type::I16,
+            Self::I32(..) => Type::I32,
+            Self::I64(..) => Type::I64,
+            Self::I128(..) => Type::I128,
+            Self::U256(..) => Type::I256,
+        }
+    }
 }
 
 impl fmt::Display for Immediate {
@@ -48,27 +61,24 @@ impl fmt::Display for Immediate {
     }
 }
 
-macro_rules! impl_value_from_imm {
-    ($arg_ty:ty, $imm_ty:ty, $immediate_variant:expr, $value_ty:expr) => {
-        impl From<$arg_ty> for ValueData {
-            fn from(imm: $arg_ty) -> Self {
-                Self::Immediate {
-                    imm: $immediate_variant(imm as $imm_ty),
-                    ty: $value_ty,
-                }
+macro_rules! imm_from_primary {
+    ($prim_ty:ty, $inner_ty:ty, $immediate_variant:expr) => {
+        impl From<$prim_ty> for Immediate {
+            fn from(imm: $prim_ty) -> Self {
+                $immediate_variant(imm as $inner_ty)
             }
         }
     };
 }
 
-impl_value_from_imm!(i8, i8, Immediate::I8, Type::I8);
-impl_value_from_imm!(u8, i8, Immediate::I8, Type::I8);
-impl_value_from_imm!(i16, i16, Immediate::I16, Type::I16);
-impl_value_from_imm!(u16, i16, Immediate::I16, Type::I16);
-impl_value_from_imm!(i32, i32, Immediate::I32, Type::I32);
-impl_value_from_imm!(u32, i32, Immediate::I32, Type::I32);
-impl_value_from_imm!(i64, i64, Immediate::I64, Type::I64);
-impl_value_from_imm!(u64, i64, Immediate::I64, Type::I64);
-impl_value_from_imm!(i128, i128, Immediate::I128, Type::I128);
-impl_value_from_imm!(u128, i128, Immediate::I128, Type::I128);
-impl_value_from_imm!(U256, U256, Immediate::U256, Type::I256);
+imm_from_primary!(i8, i8, Immediate::I8);
+imm_from_primary!(u8, i8, Immediate::I8);
+imm_from_primary!(i16, i16, Immediate::I16);
+imm_from_primary!(u16, i16, Immediate::I16);
+imm_from_primary!(i32, i32, Immediate::I32);
+imm_from_primary!(u32, i32, Immediate::I32);
+imm_from_primary!(i64, i64, Immediate::I64);
+imm_from_primary!(u64, i64, Immediate::I64);
+imm_from_primary!(i128, i128, Immediate::I128);
+imm_from_primary!(u128, i128, Immediate::I128);
+imm_from_primary!(U256, U256, Immediate::U256);

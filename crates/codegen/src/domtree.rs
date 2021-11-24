@@ -186,7 +186,7 @@ mod tests {
         let merge_block = builder.append_block();
 
         builder.switch_to_block(entry_block);
-        let v0 = builder.imm_u8(1);
+        let v0 = builder.make_imm_value(1i8);
         builder.br(v0, else_block, then_block);
 
         builder.switch_to_block(then_block);
@@ -223,7 +223,7 @@ mod tests {
         let e = builder.append_block();
 
         builder.switch_to_block(a);
-        let v0 = builder.imm_u8(1);
+        let v0 = builder.make_imm_value(1i8);
         builder.br(v0, b, c);
 
         builder.switch_to_block(b);
@@ -274,7 +274,7 @@ mod tests {
         let m = builder.append_block();
 
         builder.switch_to_block(a);
-        let v0 = builder.imm_u8(1);
+        let v0 = builder.make_imm_value(1i8);
         builder.br(v0, c, b);
 
         builder.switch_to_block(b);
