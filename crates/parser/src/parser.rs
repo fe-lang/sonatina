@@ -4,7 +4,7 @@ use smallvec::smallvec;
 use sonatina_codegen::ir::{
     func_cursor::{CursorLocation, FuncCursor},
     insn::{BinaryOp, CastOp, ImmediateOp, JumpOp},
-    Block, BlockData, Function, Insn, InsnData, Signature, Type, Value, ValueData,
+    Block, BlockData, Function, Immediate, Insn, InsnData, Signature, Type, Value, ValueData, U256,
 };
 
 use super::lexer::{Code, Lexer, Token, WithLoc};
@@ -151,7 +151,7 @@ impl<'a, 'b> FuncParser<'a, 'b> {
                 let ty = expect_token!(self, Token::Ty(..), "type")?.ty().clone();
                 expect_token!(self, Token::Eq, "=")?;
                 let opcode = expect_token!(self, Token::OpCode(..), "opcode")?.opcode();
-                let insn_data = opcode.parse_args(self, Some(ty))?;
+                let insn_data = opcode.parse_args(self, inserter, Some(ty))?;
                 let insn = inserter.insert_insn_data(insn_data);
                 let value = Value(value.id());
                 inserter.def_value(value, self.lexer.line())?;
@@ -159,7 +159,7 @@ impl<'a, 'b> FuncParser<'a, 'b> {
                 inserter.func.dfg.values[value] = result;
                 inserter.func.dfg.attach_result(insn, value);
             } else if let Some(opcode) = eat_token!(self, Token::OpCode(..))? {
-                let insn_data = opcode.opcode().parse_args(self, None)?;
+                let insn_data = opcode.opcode().parse_args(self, inserter, None)?;
                 inserter.insert_insn_data(insn_data);
             } else {
                 break;
@@ -169,9 +169,23 @@ impl<'a, 'b> FuncParser<'a, 'b> {
         Ok(())
     }
 
-    fn expect_value(&mut self) -> Result<Value> {
-        let id = expect_token!(self, Token::Value(..), "value")?.id();
-        Ok(Value(id))
+    fn expect_insn_arg(&mut self, inserter: &mut InsnInserter) -> Result<Value> {
+        if let Some(value) = eat_token!(self, Token::Value(..))? {
+            Ok(Value(value.id()))
+        } else {
+            let number =
+                expect_token!(self, Token::Integer(..), "expected immediate or value")?.string();
+            expect_token!(self, Token::Dot, "expected type annotation for immediate")?;
+            let ty = expect_token!(
+                self,
+                Token::Ty(..),
+                "expected type annotation for immediate"
+            )?
+            .ty()
+            .clone();
+            let imm = build_imm_data(number, &ty, self.lexer.line())?;
+            Ok(inserter.def_imm(imm, ty))
+        }
     }
 
     fn expect_block(&mut self) -> Result<Block> {
@@ -193,6 +207,7 @@ struct InsnInserter<'a> {
     loc: CursorLocation,
     defined_values: HashSet<Value>,
     defined_blocks: HashSet<Block>,
+    defined_imms: HashSet<Value>,
 }
 
 impl<'a> InsnInserter<'a> {
@@ -202,6 +217,7 @@ impl<'a> InsnInserter<'a> {
             loc: CursorLocation::NoWhere,
             defined_values: HashSet::new(),
             defined_blocks: HashSet::new(),
+            defined_imms: HashSet::new(),
         }
     }
 
@@ -228,7 +244,35 @@ impl<'a> InsnInserter<'a> {
             }
         }
 
+        if self.defined_imms.contains(&value) {
+            let imm_data = self.func.dfg.value_data(value).clone();
+            let new_imm_value = self.func.dfg.values.push(imm_data);
+
+            let mut must_replace = vec![];
+            for &user in self.func.dfg.users(value) {
+                for (idx, &arg) in self.func.dfg.insn_args(user).iter().enumerate() {
+                    if arg == value {
+                        must_replace.push((user, idx));
+                    }
+                }
+            }
+
+            for (insn, idx) in must_replace {
+                self.func.dfg.replace_insn_arg(insn, new_imm_value, idx);
+            }
+
+            self.defined_imms.remove(&value);
+            self.defined_imms.insert(new_imm_value);
+        }
+
         Ok(())
+    }
+
+    fn def_imm(&mut self, imm: Immediate, ty: Type) -> Value {
+        let value_data = ValueData::Immediate { imm, ty };
+        let value = self.func.dfg.values.push(value_data);
+        self.defined_imms.insert(value);
+        value
     }
 
     fn def_block(&mut self, block: Block, line: u32, block_data: BlockData) -> Result<()> {
@@ -292,17 +336,17 @@ impl<'a> FuncCursor for InsnInserter<'a> {
 
 macro_rules! make_immediate {
     ($parser:ident, $ty:ty, $code:path) => {{
-        let imm = expect_token!($parser, Token::Integer(..), "integer literal")?.string();
-        InsnData::Immediate {
-            code: $code(imm.parse().unwrap()),
-        }
+        let number = expect_token!($parser, Token::Integer(..), "integer literal")?.string();
+        let line = $parser.lexer.line();
+        let imm = number.parse().map_err(|err| parse_imm_error(err, line))?;
+        InsnData::Immediate { code: $code(imm) }
     }};
 }
 
 macro_rules! make_binary {
-    ($parser:ident, $code:path) => {{
-        let lhs = $parser.expect_value()?;
-        let rhs = $parser.expect_value()?;
+    ($parser:ident, $inserter:ident, $code:path) => {{
+        let lhs = $parser.expect_insn_arg($inserter)?;
+        let rhs = $parser.expect_insn_arg($inserter)?;
         InsnData::Binary {
             code: $code,
             args: [lhs, rhs],
@@ -311,8 +355,8 @@ macro_rules! make_binary {
 }
 
 macro_rules! make_cast {
-    ($parser:ident, $cast_to:expr, $code:path) => {{
-        let arg = $parser.expect_value()?;
+    ($parser:ident, $inserter:ident, $cast_to:expr, $code:path) => {{
+        let arg = $parser.expect_insn_arg($inserter)?;
         InsnData::Cast {
             code: $code,
             args: [arg],
@@ -333,7 +377,12 @@ macro_rules! make_jump {
 
 impl Code {
     /// Read args and create insn data.
-    fn parse_args(self, parser: &mut FuncParser, ret_ty: Option<Type>) -> Result<InsnData> {
+    fn parse_args(
+        self,
+        parser: &mut FuncParser,
+        inserter: &mut InsnInserter,
+        ret_ty: Option<Type>,
+    ) -> Result<InsnData> {
         let insn_data = match self {
             Self::ImmI8 => make_immediate!(parser, i8, ImmediateOp::I8),
             Self::ImmI16 => make_immediate!(parser, i16, ImmediateOp::I16),
@@ -346,35 +395,35 @@ impl Code {
             Self::ImmU64 => make_immediate!(parser, u64, ImmediateOp::U64),
             Self::ImmU128 => make_immediate!(parser, u128, ImmediateOp::U128),
             Self::ImmU256 => make_immediate!(parser, u256, ImmediateOp::U256),
-            Self::Add => make_binary!(parser, BinaryOp::Add),
-            Self::Sub => make_binary!(parser, BinaryOp::Sub),
-            Self::Mul => make_binary!(parser, BinaryOp::Mul),
-            Self::UDiv => make_binary!(parser, BinaryOp::UDiv),
-            Self::SDiv => make_binary!(parser, BinaryOp::SDiv),
-            Self::Lt => make_binary!(parser, BinaryOp::Lt),
-            Self::Gt => make_binary!(parser, BinaryOp::Gt),
-            Self::Slt => make_binary!(parser, BinaryOp::Slt),
-            Self::Sgt => make_binary!(parser, BinaryOp::Sgt),
-            Self::Eq => make_binary!(parser, BinaryOp::Eq),
-            Self::And => make_binary!(parser, BinaryOp::And),
-            Self::Or => make_binary!(parser, BinaryOp::Or),
-            Self::Sext => make_cast!(parser, ret_ty.unwrap(), CastOp::Sext),
-            Self::Zext => make_cast!(parser, ret_ty.unwrap(), CastOp::Zext),
-            Self::Trunc => make_cast!(parser, ret_ty.unwrap(), CastOp::Trunc),
+            Self::Add => make_binary!(parser, inserter, BinaryOp::Add),
+            Self::Sub => make_binary!(parser, inserter, BinaryOp::Sub),
+            Self::Mul => make_binary!(parser, inserter, BinaryOp::Mul),
+            Self::UDiv => make_binary!(parser, inserter, BinaryOp::UDiv),
+            Self::SDiv => make_binary!(parser, inserter, BinaryOp::SDiv),
+            Self::Lt => make_binary!(parser, inserter, BinaryOp::Lt),
+            Self::Gt => make_binary!(parser, inserter, BinaryOp::Gt),
+            Self::Slt => make_binary!(parser, inserter, BinaryOp::Slt),
+            Self::Sgt => make_binary!(parser, inserter, BinaryOp::Sgt),
+            Self::Eq => make_binary!(parser, inserter, BinaryOp::Eq),
+            Self::And => make_binary!(parser, inserter, BinaryOp::And),
+            Self::Or => make_binary!(parser, inserter, BinaryOp::Or),
+            Self::Sext => make_cast!(parser, inserter, ret_ty.unwrap(), CastOp::Sext),
+            Self::Zext => make_cast!(parser, inserter, ret_ty.unwrap(), CastOp::Zext),
+            Self::Trunc => make_cast!(parser, inserter, ret_ty.unwrap(), CastOp::Trunc),
             Self::Load => {
-                let arg = parser.expect_value()?;
+                let arg = parser.expect_insn_arg(inserter)?;
                 let ty = expect_token!(parser, Token::Ty(..), "type")?.ty().clone();
                 InsnData::Load { args: [arg], ty }
             }
             Self::Store => {
-                let lhs = parser.expect_value()?;
-                let rhs = parser.expect_value()?;
+                let lhs = parser.expect_insn_arg(inserter)?;
+                let rhs = parser.expect_insn_arg(inserter)?;
                 InsnData::Store { args: [lhs, rhs] }
             }
             Self::Jump => make_jump!(parser, JumpOp::Jump),
             Self::FallThrough => make_jump!(parser, JumpOp::FallThrough),
             Self::Br => {
-                let cond = parser.expect_value()?;
+                let cond = parser.expect_insn_arg(inserter)?;
                 let then = parser.expect_block()?;
                 let else_ = parser.expect_block()?;
                 InsnData::Branch {
@@ -393,7 +442,7 @@ impl Code {
                 let mut values = smallvec![];
                 let mut blocks = smallvec![];
                 while eat_token!(parser, Token::LParen)?.is_some() {
-                    let value = parser.expect_value()?;
+                    let value = parser.expect_insn_arg(inserter)?;
                     values.push(value);
                     let block = parser.expect_block()?;
                     blocks.push(block);
@@ -410,6 +459,57 @@ impl Code {
         expect_token!(parser, Token::SemiColon, ";")?;
         Ok(insn_data)
     }
+}
+
+fn build_imm_data(number: &str, ty: &Type, line: u32) -> Result<Immediate> {
+    match ty {
+        Type::I8 => number
+            .parse::<i8>()
+            .or_else(|_| number.parse::<u8>().map(|v| v as i8))
+            .map(Immediate::I8)
+            .map_err(|err| parse_imm_error(err, line)),
+
+        Type::I16 => number
+            .parse::<i16>()
+            .or_else(|_| number.parse::<u16>().map(|v| v as i16))
+            .map(Immediate::I16)
+            .map_err(|err| parse_imm_error(err, line)),
+
+        Type::I32 => number
+            .parse::<i32>()
+            .or_else(|_| number.parse::<u32>().map(|v| v as i32))
+            .map(Immediate::I32)
+            .map_err(|err| parse_imm_error(err, line)),
+
+        Type::I64 => number
+            .parse::<i64>()
+            .or_else(|_| number.parse::<u64>().map(|v| v as i64))
+            .map(Immediate::I64)
+            .map_err(|err| parse_imm_error(err, line)),
+
+        Type::I128 => number
+            .parse::<i128>()
+            .or_else(|_| number.parse::<u128>().map(|v| v as i128))
+            .map(Immediate::I128)
+            .map_err(|err| parse_imm_error(err, line)),
+
+        Type::I256 => number
+            .parse::<U256>()
+            .map(Immediate::U256)
+            .map_err(|err| parse_imm_error(err, line)),
+
+        Type::Array { .. } => Err(Error::new(
+            ErrorKind::SemanticError("can't use immediate for array type".into()),
+            line,
+        )),
+    }
+}
+
+fn parse_imm_error(err: impl std::fmt::Display, line: u32) -> Error {
+    Error::new(
+        ErrorKind::SemanticError(format!("failed to parse immediate: {}", err)),
+        line,
+    )
 }
 
 #[cfg(test)]
@@ -493,6 +593,21 @@ mod tests {
         v3.i32 = add v4 v4;
         return;
         "
+        ));
+    }
+
+    #[test]
+    fn parser_with_immediate() {
+        assert!(test_parser(
+            "func %test_func() -> i8, i16:
+    block64:
+        v0.i8 = add -1.i8 127.i8;
+        v1.i8 = add v0 3.i8;
+        jump block1;
+
+    block1:
+        v2.i16 = zext -128.i8;
+        return v1 v2;"
         ));
     }
 

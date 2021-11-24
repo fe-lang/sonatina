@@ -236,6 +236,7 @@ impl<'a> Lexer<'a> {
 
     fn try_eat_integer(&mut self) -> Option<&'a str> {
         let start = self.cur;
+        self.eat_char_if(|c| c == '-');
         while self.eat_char_if(|c| c.is_digit(10)).is_some() {}
         let end = self.cur;
 

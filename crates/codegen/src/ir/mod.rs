@@ -13,5 +13,5 @@ pub use dfg::{Block, BlockData, DataFlowGraph};
 pub use function::{Function, Signature};
 pub use insn::{Insn, InsnData};
 pub use layout::Layout;
-pub use types::Type;
-pub use value::{Value, ValueData};
+pub use types::{Type, U256};
+pub use value::{Immediate, Value, ValueData};

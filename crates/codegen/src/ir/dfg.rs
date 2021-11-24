@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap};
 
-use super::{Insn, InsnData, Type, Value, ValueData};
+use super::{Immediate, Insn, InsnData, Type, Value, ValueData};
 
 #[derive(Default, Debug, Clone)]
 pub struct DataFlowGraph {
@@ -36,13 +36,6 @@ impl DataFlowGraph {
         insn
     }
 
-    pub fn attach_user(&mut self, insn: Insn) {
-        let data = &self.insns[insn];
-        for arg in data.args() {
-            self.users[*arg].insert(insn);
-        }
-    }
-
     pub fn replace_insn(&mut self, insn: Insn, insn_data: InsnData) {
         for i in 0..self.insn_args_num(insn) {
             let arg = self.insn_arg(insn, i);
@@ -61,7 +54,9 @@ impl DataFlowGraph {
     pub fn resolve_alias(&self, mut value: Value) -> Value {
         for _ in 0..self.values.len() {
             match self.values[value] {
-                ValueData::Insn { .. } | ValueData::Arg { .. } => return value,
+                ValueData::Insn { .. } | ValueData::Arg { .. } | ValueData::Immediate { .. } => {
+                    return value
+                }
                 ValueData::Alias { alias } => value = alias,
             }
         }
@@ -90,8 +85,19 @@ impl DataFlowGraph {
         &self.insns[insn]
     }
 
+    pub fn value_data(&self, value: Value) -> &ValueData {
+        &self.values[value]
+    }
+
     pub fn has_side_effect(&self, insn: Insn) -> bool {
         self.insns[insn].has_side_effect()
+    }
+
+    pub fn attach_user(&mut self, insn: Insn) {
+        let data = &self.insns[insn];
+        for arg in data.args() {
+            self.users[*arg].insert(insn);
+        }
     }
 
     pub fn users(&self, value: Value) -> impl Iterator<Item = &Insn> {
@@ -114,25 +120,27 @@ impl DataFlowGraph {
         &self.blocks[block]
     }
 
-    pub fn value_def(&self, value: Value) -> ValueDef {
-        match self.values[value] {
-            ValueData::Insn { insn, .. } => ValueDef::Insn(insn),
-            ValueData::Arg { idx, .. } => ValueDef::Arg(idx),
-            ValueData::Alias { alias, .. } => self.value_def(self.resolve_alias(alias)),
-        }
-    }
-
     pub fn value_insn(&self, value: Value) -> Option<Insn> {
-        match self.value_def(value) {
-            ValueDef::Insn(insn) => Some(insn),
+        let value = self.resolve_alias(value);
+        match self.value_data(value) {
+            ValueData::Insn { insn, .. } => Some(*insn),
             _ => None,
         }
     }
 
     pub fn value_ty(&self, value: Value) -> &Type {
         match &self.values[value] {
-            ValueData::Insn { ty, .. } | ValueData::Arg { ty, .. } => ty,
+            ValueData::Insn { ty, .. }
+            | ValueData::Arg { ty, .. }
+            | ValueData::Immediate { ty, .. } => ty,
             ValueData::Alias { alias } => self.value_ty(self.resolve_alias(*alias)),
+        }
+    }
+
+    pub fn value_imm(&self, value: Value) -> Option<Immediate> {
+        match self.value_data(value) {
+            ValueData::Immediate { imm, .. } => Some(*imm),
+            _ => None,
         }
     }
 
