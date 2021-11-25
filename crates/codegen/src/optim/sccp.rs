@@ -4,7 +4,7 @@
 //! ACM Transactions on Programming Languages and Systems Volume 13 Issue 2 April 1991 pp 181–210:  
 //! <https://doi.org/10.1145/103135.103136>
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, ops};
 
 use cranelift_entity::SecondaryMap;
 
@@ -12,7 +12,7 @@ use crate::{
     cfg::ControlFlowGraph,
     ir::func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     ir::insn::{BinaryOp, CastOp, InsnData, JumpOp},
-    ir::{Immediate, Type, I256, U256},
+    ir::{Immediate, Type},
     Block, Function, Insn, Value,
 };
 
@@ -367,39 +367,10 @@ impl PartialEq for LatticeCell {
     }
 }
 
-macro_rules! impl_lattice_binary_ops {
-    ($($name:ident,)*) => {
-        $(
-            fn $name(self, rhs: Self) -> Self {
-                match (self, rhs) {
-                    (Self::Top, _) | (_, Self::Top) => Self::Top,
-                    (Self::Const(v1), Self::Const(v2)) => Self::Const(v1.$name(v2)),
-                    (Self::Bot, _) | (_, Self::Bot) => Self::Bot,
-                }
-            }
-        )*
-    };
-}
-
-macro_rules! impl_lattice_cast_ops {
-    ($($name:ident,)*) => {
-        $(
-            fn $name(self, ty: &Type) -> Self {
-                match (self) {
-                    Self::Top  => Self::Top,
-                    Self::Const(v1) => Self::Const(v1.$name(ty)),
-                    Self::Bot => Self::Bot,
-                }
-            }
-        )*
-    };
-}
-
 impl LatticeCell {
     fn to_imm(self) -> Option<Immediate> {
         match self {
-            Self::Top => None,
-            Self::Bot => None,
+            Self::Top | Self::Bot => None,
             Self::Const(imm) => Some(imm),
         }
     }
@@ -418,6 +389,7 @@ impl LatticeCell {
     fn is_bot(self) -> bool {
         matches!(self, Self::Bot)
     }
+
     fn join(self, rhs: Self) -> Self {
         match (self, rhs) {
             (Self::Top, _) | (_, Self::Top) => Self::Top,
@@ -432,383 +404,91 @@ impl LatticeCell {
         }
     }
 
-    impl_lattice_binary_ops! {
-        add,
-        sub,
-        mul,
-        udiv,
-        sdiv,
-        lt,
-        gt,
-        slt,
-        sgt,
-        const_eq,
-        and,
-        or,
+    fn apply_unop<F>(self, f: F) -> Self
+    where
+        F: FnOnce(Immediate) -> Immediate,
+    {
+        match self {
+            Self::Top => Self::Top,
+            Self::Const(lhs) => Self::Const(f(lhs)),
+            Self::Bot => Self::Bot,
+        }
     }
 
-    impl_lattice_cast_ops! {
-        sext,
-        zext,
-        trunc,
+    fn apply_binop<F>(self, rhs: Self, f: F) -> Self
+    where
+        F: FnOnce(Immediate, Immediate) -> Immediate,
+    {
+        match (self, rhs) {
+            (Self::Top, _) | (_, Self::Top) => Self::Top,
+            (Self::Const(lhs), Self::Const(rhs)) => Self::Const(f(lhs, rhs)),
+            (Self::Bot, _) | (_, Self::Bot) => Self::Bot,
+        }
+    }
+
+    fn add(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, ops::Add::add)
+    }
+
+    fn sub(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, ops::Sub::sub)
+    }
+
+    fn mul(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, ops::Mul::mul)
+    }
+
+    fn udiv(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, Immediate::udiv)
+    }
+
+    fn sdiv(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, Immediate::sdiv)
+    }
+
+    fn lt(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, Immediate::lt)
+    }
+
+    fn gt(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, Immediate::gt)
+    }
+
+    fn slt(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, Immediate::slt)
+    }
+
+    fn sgt(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, Immediate::sgt)
+    }
+
+    fn const_eq(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, Immediate::const_eq)
+    }
+
+    fn and(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, Immediate::and)
+    }
+
+    fn or(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, Immediate::or)
+    }
+
+    fn sext(self, ty: &Type) -> Self {
+        self.apply_unop(|val| Immediate::sext(val, ty))
+    }
+
+    fn zext(self, ty: &Type) -> Self {
+        self.apply_unop(|val| Immediate::zext(val, ty))
+    }
+
+    fn trunc(self, ty: &Type) -> Self {
+        self.apply_unop(|val| Immediate::trunc(val, ty))
     }
 }
 
 impl Default for LatticeCell {
     fn default() -> Self {
         Self::Bot
-    }
-}
-
-macro_rules! apply_binop {
-    ($lhs:expr, $rhs:expr, $op:ident) => {
-        match ($lhs, $rhs) {
-            (Self::I8(lhs), Self::I8(rhs)) => lhs.$op(rhs).into(),
-            (Self::I16(lhs), Self::I16(rhs)) => lhs.$op(rhs).into(),
-            (Self::I32(lhs), Self::I32(rhs)) => lhs.$op(rhs).into(),
-            (Self::I64(lhs), Self::I64(rhs)) => lhs.$op(rhs).into(),
-            (Self::I128(lhs), Self::I128(rhs)) => lhs.$op(rhs).into(),
-            (Self::I256(lhs), Self::I256(rhs)) => lhs.$op(rhs).into(),
-            _ => unreachable!(),
-        }
-    };
-
-    ($lhs:expr, $rhs:ident, $op:ident, unsigned) => {
-        match ($lhs, $rhs) {
-            (Self::I8(lhs), Self::I8(rhs)) => lhs.to_unsigned().$op(rhs.to_unsigned()).into(),
-            (Self::I16(lhs), Self::I16(rhs)) => lhs.to_unsigned().$op(rhs.to_unsigned()).into(),
-            (Self::I32(lhs), Self::I32(rhs)) => lhs.to_unsigned().$op(rhs.to_unsigned()).into(),
-            (Self::I64(lhs), Self::I64(rhs)) => lhs.to_unsigned().$op(rhs.to_unsigned()).into(),
-            (Self::I128(lhs), Self::I128(rhs)) => lhs.to_unsigned().$op(rhs.to_unsigned()).into(),
-            (Self::I256(lhs), Self::I256(rhs)) => lhs.to_unsigned().$op(rhs.to_unsigned()).into(),
-            _ => unreachable!(),
-        }
-    };
-
-    ($lhs:expr, &$rhs:ident, $op:ident, unsigned) => {
-        match ($lhs, $rhs) {
-            (Self::I8(lhs), Self::I8(rhs)) => lhs.to_unsigned().$op(&rhs.to_unsigned()).into(),
-            (Self::I16(lhs), Self::I16(rhs)) => lhs.to_unsigned().$op(&rhs.to_unsigned()).into(),
-            (Self::I32(lhs), Self::I32(rhs)) => lhs.to_unsigned().$op(&rhs.to_unsigned()).into(),
-            (Self::I64(lhs), Self::I64(rhs)) => lhs.to_unsigned().$op(&rhs.to_unsigned()).into(),
-            (Self::I128(lhs), Self::I128(rhs)) => lhs.to_unsigned().$op(&rhs.to_unsigned()).into(),
-            (Self::I256(lhs), Self::I256(rhs)) => lhs.to_unsigned().$op(&rhs.to_unsigned()).into(),
-            _ => unreachable!(),
-        }
-    };
-}
-
-impl Immediate {
-    fn add(self, rhs: Self) -> Self {
-        apply_binop!(self, rhs, overflowing_add)
-    }
-
-    fn sub(self, rhs: Self) -> Self {
-        apply_binop!(self, rhs, overflowing_sub)
-    }
-
-    fn mul(self, rhs: Self) -> Self {
-        apply_binop!(self, rhs, overflowing_mul)
-    }
-
-    fn udiv(self, rhs: Self) -> Self {
-        use std::ops::Div;
-        apply_binop!(self, rhs, div, unsigned)
-    }
-
-    fn sdiv(self, rhs: Self) -> Self {
-        match (self, rhs) {
-            (Self::I8(lhs), Self::I8(rhs)) => lhs.overflowing_div(rhs).into(),
-            (Self::I16(lhs), Self::I16(rhs)) => lhs.overflowing_div(rhs).into(),
-            (Self::I32(lhs), Self::I32(rhs)) => lhs.overflowing_div(rhs).into(),
-            (Self::I64(lhs), Self::I64(rhs)) => lhs.overflowing_div(rhs).into(),
-            (Self::I128(lhs), Self::I128(rhs)) => lhs.overflowing_div(rhs).into(),
-            (Self::I256(lhs), Self::I256(rhs)) => {
-                (lhs.to_signed().overflowing_div(rhs.to_signed()))
-                    .0
-                    .to_unsigned()
-                    .into()
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn and(self, rhs: Self) -> Self {
-        use std::ops::BitAnd;
-        apply_binop!(self, rhs, bitand)
-    }
-
-    fn or(self, rhs: Self) -> Self {
-        use std::ops::BitOr;
-        apply_binop!(self, rhs, bitor)
-    }
-
-    fn lt(self, rhs: Self) -> Self {
-        if apply_binop!(self, &rhs, lt, unsigned) {
-            self.one()
-        } else {
-            self.zero()
-        }
-    }
-
-    fn gt(self, rhs: Self) -> Self {
-        if apply_binop!(self, &rhs, gt, unsigned) {
-            self.one()
-        } else {
-            self.zero()
-        }
-    }
-
-    fn const_eq(self, rhs: Self) -> Self {
-        if self == rhs {
-            self.one()
-        } else {
-            self.zero()
-        }
-    }
-
-    fn slt(self, rhs: Self) -> Self {
-        if apply_binop!(self, &rhs, lt) {
-            self.one()
-        } else {
-            self.zero()
-        }
-    }
-
-    fn sgt(self, rhs: Self) -> Self {
-        if apply_binop!(self, &rhs, gt) {
-            self.one()
-        } else {
-            self.zero()
-        }
-    }
-
-    fn zero(self) -> Self {
-        match self {
-            Self::I8(_) => 0i8.into(),
-            Self::I16(_) => 0i16.into(),
-            Self::I32(_) => 0i32.into(),
-            Self::I64(_) => 0i64.into(),
-            Self::I128(_) => 0i128.into(),
-            Self::I256(_) => I256::zero().into(),
-        }
-    }
-
-    fn zext(self, to: &Type) -> Self {
-        let panic_msg = "attempt to zext the value to same or smaller type, or non scalar type";
-        match self {
-            Self::I8(val) => match to {
-                Type::I16 => Self::I16(val.to_unsigned().into()),
-                Type::I32 => Self::I32(val.to_unsigned().into()),
-                Type::I64 => Self::I64(val.to_unsigned().into()),
-                Type::I128 => Self::I128(val.to_unsigned().into()),
-                Type::I256 => Self::I256(val.to_unsigned().into()),
-                _ => panic!("{}", panic_msg),
-            },
-            Self::I16(val) => match to {
-                Type::I32 => Self::I32(val.to_unsigned().into()),
-                Type::I64 => Self::I64(val.to_unsigned().into()),
-                Type::I128 => Self::I128(val.to_unsigned().into()),
-                Type::I256 => Self::I256(val.to_unsigned().into()),
-                _ => panic!("{}", panic_msg),
-            },
-            Self::I32(val) => match to {
-                Type::I64 => Self::I64(val.to_unsigned().into()),
-                Type::I128 => Self::I128(val.to_unsigned().into()),
-                Type::I256 => Self::I256(val.to_unsigned().into()),
-                _ => panic!("{}", panic_msg),
-            },
-            Self::I64(val) => match to {
-                Type::I128 => Self::I128(val.to_unsigned().into()),
-                Type::I256 => Self::I256(val.to_unsigned().into()),
-                _ => panic!("{}", panic_msg),
-            },
-            Self::I128(val) => match to {
-                Type::I256 => Self::I256(val.to_unsigned().into()),
-                _ => panic!("{}", panic_msg),
-            },
-            Self::I256(_) => panic!("{}", panic_msg),
-        }
-    }
-
-    fn sext(self, to: &Type) -> Self {
-        let panic_msg = "attempt to sext the value to same or smaller type, or non scalar type";
-        match self {
-            Self::I8(val) => match to {
-                Type::I16 => Self::I16(val as i16),
-                Type::I32 => Self::I32(val as i32),
-                Type::I64 => Self::I64(val as i64),
-                Type::I128 => Self::I128(val as i128),
-                Type::I256 => Self::I256(val.into()),
-                _ => panic!("{}", panic_msg),
-            },
-            Self::I16(val) => match to {
-                Type::I32 => Self::I32(val.into()),
-                Type::I64 => Self::I64(val.into()),
-                Type::I128 => Self::I128(val.into()),
-                Type::I256 => Self::I256(val.into()),
-                _ => panic!("{}", panic_msg),
-            },
-            Self::I32(val) => match to {
-                Type::I64 => Self::I64(val.into()),
-                Type::I128 => Self::I128(val.into()),
-                Type::I256 => Self::I256(val.into()),
-                _ => panic!("{}", panic_msg),
-            },
-            Self::I64(val) => match to {
-                Type::I128 => Self::I128(val.into()),
-                Type::I256 => Self::I256(val.into()),
-                _ => panic!("{}", panic_msg),
-            },
-            Self::I128(val) => match to {
-                Type::I256 => Self::I256(val.into()),
-                _ => panic!("{}", panic_msg),
-            },
-            Self::I256(_) => panic!("{}", panic_msg),
-        }
-    }
-
-    fn trunc(self, to: &Type) -> Self {
-        let panic_msg = "attempt to trunc the value to same or larger type, or non scalar type";
-
-        match self {
-            Self::I8(_) => panic!("{}", panic_msg),
-            Self::I16(val) => match to {
-                Type::I8 => Self::I8(val as i8),
-                _ => panic!("{}", panic_msg),
-            },
-            Self::I32(val) => match to {
-                Type::I8 => Self::I8(val as i8),
-                Type::I16 => Self::I16(val as i16),
-                _ => panic!("{}", panic_msg),
-            },
-            Self::I64(val) => match to {
-                Type::I8 => Self::I8(val as i8),
-                Type::I16 => Self::I16(val as i16),
-                Type::I32 => Self::I32(val as i32),
-                _ => panic!("{}", panic_msg),
-            },
-            Self::I128(val) => match to {
-                Type::I8 => Self::I8(val as i8),
-                Type::I16 => Self::I16(val as i16),
-                Type::I32 => Self::I32(val as i32),
-                Type::I64 => Self::I64(val as i64),
-                _ => panic!("{}", panic_msg),
-            },
-            Self::I256(val) => match to {
-                Type::I8 => Self::I8(val.trunc_to_i8()),
-                Type::I16 => Self::I16(val.trunc_to_i16()),
-                Type::I32 => Self::I32(val.trunc_to_i32()),
-                Type::I64 => Self::I64(val.trunc_to_i64()),
-                Type::I128 => Self::I128(val.trunc_to_i128()),
-                _ => panic!("{}", panic_msg),
-            },
-        }
-    }
-
-    fn one(self) -> Self {
-        match self {
-            Self::I8(_) => 1i8.into(),
-            Self::I16(_) => 1i16.into(),
-            Self::I32(_) => 1i32.into(),
-            Self::I64(_) => 1i64.into(),
-            Self::I128(_) => 1i128.into(),
-            Self::I256(_) => I256::one().into(),
-        }
-    }
-
-    fn is_zero(self) -> bool {
-        match self {
-            Self::I8(val) => val == 0,
-            Self::I16(val) => val == 0,
-            Self::I32(val) => val == 0,
-            Self::I64(val) => val == 0,
-            Self::I128(val) => val == 0,
-            Self::I256(val) => val.is_zero(),
-        }
-    }
-}
-
-macro_rules! impl_const_value_conversion {
-    ($(($from:ty, $contr:expr),)*) => {
-        $(
-            // For `overflowing_*` operation.
-            impl From<($from, bool)> for Immediate {
-                fn from(v: ($from, bool)) -> Self {
-                    v.0.into()
-                }
-            }
-        )*
-    };
-}
-
-impl_const_value_conversion! {
-    (u8, Immediate::I8),
-    (u16, Immediate::I16),
-    (u32, Immediate::I32),
-    (u64, Immediate::I64),
-    (u128, Immediate::I128),
-    (I256, Immediate::I256),
-    (i8, Immediate::I8),
-    (i16, Immediate::I16),
-    (i32, Immediate::I32),
-    (i64, Immediate::I64),
-    (i128, Immediate::I128),
-}
-
-trait SignCast {
-    type Signed;
-    type Unsigned;
-
-    fn to_signed(self) -> Self::Signed;
-    fn to_unsigned(self) -> Self::Unsigned;
-}
-
-macro_rules! impl_sign_cast {
-    ($unsigned:ty, $signed:ty) => {
-        impl SignCast for $unsigned {
-            type Signed = $signed;
-            type Unsigned = $unsigned;
-
-            fn to_signed(self) -> Self::Signed {
-                self as $signed
-            }
-
-            fn to_unsigned(self) -> Self::Unsigned {
-                self as $unsigned
-            }
-        }
-
-        impl SignCast for $signed {
-            type Signed = $signed;
-            type Unsigned = $unsigned;
-
-            fn to_signed(self) -> Self::Signed {
-                self as $signed
-            }
-
-            fn to_unsigned(self) -> Self::Unsigned {
-                self as $unsigned
-            }
-        }
-    };
-}
-
-impl_sign_cast!(u8, i8);
-impl_sign_cast!(u16, i16);
-impl_sign_cast!(u32, i32);
-impl_sign_cast!(u64, i64);
-impl_sign_cast!(u128, i128);
-
-impl SignCast for I256 {
-    type Signed = I256;
-    type Unsigned = U256;
-
-    fn to_signed(self) -> Self::Signed {
-        self
-    }
-
-    fn to_unsigned(self) -> Self::Unsigned {
-        self.to_u256()
     }
 }
