@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use super::{types::U256, Insn, Type};
+use super::{Insn, Type, I256};
 
 /// An opaque reference to [`ValueData`].
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
@@ -32,7 +32,7 @@ pub enum Immediate {
     I32(i32),
     I64(i64),
     I128(i128),
-    U256(U256),
+    I256(I256),
 }
 
 impl Immediate {
@@ -43,7 +43,7 @@ impl Immediate {
             Self::I32(..) => Type::I32,
             Self::I64(..) => Type::I64,
             Self::I128(..) => Type::I128,
-            Self::U256(..) => Type::I256,
+            Self::I256(..) => Type::I256,
         }
     }
 }
@@ -56,7 +56,7 @@ impl fmt::Display for Immediate {
             Self::I32(v) => write!(f, "{}", v),
             Self::I64(v) => write!(f, "{}", v),
             Self::I128(v) => write!(f, "{}", v),
-            Self::U256(v) => write!(f, "{}", v),
+            Self::I256(v) => write!(f, "{}", v),
         }
     }
 }
@@ -81,4 +81,4 @@ imm_from_primary!(i64, i64, Immediate::I64);
 imm_from_primary!(u64, i64, Immediate::I64);
 imm_from_primary!(i128, i128, Immediate::I128);
 imm_from_primary!(u128, i128, Immediate::I128);
-imm_from_primary!(U256, U256, Immediate::U256);
+imm_from_primary!(I256, I256, Immediate::I256);
