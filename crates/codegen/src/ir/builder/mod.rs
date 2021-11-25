@@ -7,7 +7,7 @@ pub use ssa::Variable;
 use crate::ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     insn::{BinaryOp, CastOp, InsnData, JumpOp},
-    Immediate, 
+    Immediate,
 };
 
 use crate::{Block, Function, Signature, Type, Value};

@@ -478,36 +478,35 @@ fn build_imm_data(number: &str, ty: &Type, line: u32) -> Result<Immediate> {
         Type::I8 => number
             .parse::<i8>()
             .or_else(|_| number.parse::<u8>().map(|v| v as i8))
-            .map(Immediate::I8)
+            .map(Into::into)
             .map_err(|err| parse_imm_error(err, line)),
 
         Type::I16 => number
             .parse::<i16>()
             .or_else(|_| number.parse::<u16>().map(|v| v as i16))
-            .map(Immediate::I16)
+            .map(Into::into)
             .map_err(|err| parse_imm_error(err, line)),
 
         Type::I32 => number
             .parse::<i32>()
             .or_else(|_| number.parse::<u32>().map(|v| v as i32))
-            .map(Immediate::I32)
+            .map(Into::into)
             .map_err(|err| parse_imm_error(err, line)),
 
         Type::I64 => number
             .parse::<i64>()
             .or_else(|_| number.parse::<u64>().map(|v| v as i64))
-            .map(Immediate::I64)
+            .map(Into::into)
             .map_err(|err| parse_imm_error(err, line)),
 
         Type::I128 => number
             .parse::<i128>()
             .or_else(|_| number.parse::<u128>().map(|v| v as i128))
-            .map(Immediate::I128)
+            .map(Into::into)
             .map_err(|err| parse_imm_error(err, line)),
 
-        Type::I256 => number
-            .parse::<U256>()
-            .map(Immediate::U256)
+        Type::I256 => U256::from_str_radix(number, 10)
+            .map(Into::into)
             .map_err(|err| parse_imm_error(err, line)),
 
         Type::Array { .. } => Err(Error::new(

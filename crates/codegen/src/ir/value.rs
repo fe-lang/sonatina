@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use super::{Insn, Type, I256};
+use super::{Insn, Type, I256, U256};
 
 /// An opaque reference to [`ValueData`].
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
@@ -82,3 +82,9 @@ imm_from_primary!(u64, i64, Immediate::I64);
 imm_from_primary!(i128, i128, Immediate::I128);
 imm_from_primary!(u128, i128, Immediate::I128);
 imm_from_primary!(I256, I256, Immediate::I256);
+
+impl From<U256> for Immediate {
+    fn from(imm: U256) -> Self {
+        Self::I256(imm.into())
+    }
+}

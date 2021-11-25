@@ -4,7 +4,7 @@
 //! ACM Transactions on Programming Languages and Systems Volume 13 Issue 2 April 1991 pp 181–210:  
 //! <https://doi.org/10.1145/103135.103136>
 
-use std::{cmp::Ordering, collections::BTreeSet};
+use std::collections::BTreeSet;
 
 use cranelift_entity::SecondaryMap;
 
@@ -12,8 +12,7 @@ use crate::{
     cfg::ControlFlowGraph,
     ir::func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     ir::insn::{BinaryOp, CastOp, InsnData, JumpOp},
-    ir::types::{Type, U256},
-    ir::Immediate,
+    ir::{Immediate, Type, I256, U256},
     Block, Function, Insn, Value,
 };
 
@@ -469,7 +468,7 @@ macro_rules! apply_binop {
             (Self::I32(lhs), Self::I32(rhs)) => lhs.$op(rhs).into(),
             (Self::I64(lhs), Self::I64(rhs)) => lhs.$op(rhs).into(),
             (Self::I128(lhs), Self::I128(rhs)) => lhs.$op(rhs).into(),
-            (Self::U256(lhs), Self::U256(rhs)) => lhs.$op(rhs).into(),
+            (Self::I256(lhs), Self::I256(rhs)) => lhs.$op(rhs).into(),
             _ => unreachable!(),
         }
     };
@@ -481,7 +480,7 @@ macro_rules! apply_binop {
             (Self::I32(lhs), Self::I32(rhs)) => lhs.to_unsigned().$op(rhs.to_unsigned()).into(),
             (Self::I64(lhs), Self::I64(rhs)) => lhs.to_unsigned().$op(rhs.to_unsigned()).into(),
             (Self::I128(lhs), Self::I128(rhs)) => lhs.to_unsigned().$op(rhs.to_unsigned()).into(),
-            (Self::U256(lhs), Self::U256(rhs)) => lhs.to_unsigned().$op(rhs.to_unsigned()).into(),
+            (Self::I256(lhs), Self::I256(rhs)) => lhs.to_unsigned().$op(rhs.to_unsigned()).into(),
             _ => unreachable!(),
         }
     };
@@ -493,7 +492,7 @@ macro_rules! apply_binop {
             (Self::I32(lhs), Self::I32(rhs)) => lhs.to_unsigned().$op(&rhs.to_unsigned()).into(),
             (Self::I64(lhs), Self::I64(rhs)) => lhs.to_unsigned().$op(&rhs.to_unsigned()).into(),
             (Self::I128(lhs), Self::I128(rhs)) => lhs.to_unsigned().$op(&rhs.to_unsigned()).into(),
-            (Self::U256(lhs), Self::U256(rhs)) => lhs.to_unsigned().$op(&rhs.to_unsigned()).into(),
+            (Self::I256(lhs), Self::I256(rhs)) => lhs.to_unsigned().$op(&rhs.to_unsigned()).into(),
             _ => unreachable!(),
         }
     };
@@ -524,7 +523,7 @@ impl Immediate {
             (Self::I32(lhs), Self::I32(rhs)) => lhs.overflowing_div(rhs).into(),
             (Self::I64(lhs), Self::I64(rhs)) => lhs.overflowing_div(rhs).into(),
             (Self::I128(lhs), Self::I128(rhs)) => lhs.overflowing_div(rhs).into(),
-            (Self::U256(lhs), Self::U256(rhs)) => {
+            (Self::I256(lhs), Self::I256(rhs)) => {
                 (lhs.to_signed().overflowing_div(rhs.to_signed()))
                     .0
                     .to_unsigned()
@@ -591,7 +590,7 @@ impl Immediate {
             Self::I32(_) => 0i32.into(),
             Self::I64(_) => 0i64.into(),
             Self::I128(_) => 0i128.into(),
-            Self::U256(_) => U256::zero().into(),
+            Self::I256(_) => I256::zero().into(),
         }
     }
 
@@ -603,32 +602,32 @@ impl Immediate {
                 Type::I32 => Self::I32(val.to_unsigned().into()),
                 Type::I64 => Self::I64(val.to_unsigned().into()),
                 Type::I128 => Self::I128(val.to_unsigned().into()),
-                Type::I256 => Self::U256(val.to_unsigned().into()),
+                Type::I256 => Self::I256(val.to_unsigned().into()),
                 _ => panic!("{}", panic_msg),
             },
             Self::I16(val) => match to {
                 Type::I32 => Self::I32(val.to_unsigned().into()),
                 Type::I64 => Self::I64(val.to_unsigned().into()),
                 Type::I128 => Self::I128(val.to_unsigned().into()),
-                Type::I256 => Self::U256(val.to_unsigned().into()),
+                Type::I256 => Self::I256(val.to_unsigned().into()),
                 _ => panic!("{}", panic_msg),
             },
             Self::I32(val) => match to {
                 Type::I64 => Self::I64(val.to_unsigned().into()),
                 Type::I128 => Self::I128(val.to_unsigned().into()),
-                Type::I256 => Self::U256(val.to_unsigned().into()),
+                Type::I256 => Self::I256(val.to_unsigned().into()),
                 _ => panic!("{}", panic_msg),
             },
             Self::I64(val) => match to {
                 Type::I128 => Self::I128(val.to_unsigned().into()),
-                Type::I256 => Self::U256(val.to_unsigned().into()),
+                Type::I256 => Self::I256(val.to_unsigned().into()),
                 _ => panic!("{}", panic_msg),
             },
             Self::I128(val) => match to {
-                Type::I256 => Self::U256(val.to_unsigned().into()),
+                Type::I256 => Self::I256(val.to_unsigned().into()),
                 _ => panic!("{}", panic_msg),
             },
-            Self::U256(_) => panic!("{}", panic_msg),
+            Self::I256(_) => panic!("{}", panic_msg),
         }
     }
 
@@ -640,32 +639,32 @@ impl Immediate {
                 Type::I32 => Self::I32(val as i32),
                 Type::I64 => Self::I64(val as i64),
                 Type::I128 => Self::I128(val as i128),
-                Type::I256 => Self::U256(val.into()),
+                Type::I256 => Self::I256(val.into()),
                 _ => panic!("{}", panic_msg),
             },
             Self::I16(val) => match to {
                 Type::I32 => Self::I32(val.into()),
                 Type::I64 => Self::I64(val.into()),
                 Type::I128 => Self::I128(val.into()),
-                Type::I256 => Self::U256(val.into()),
+                Type::I256 => Self::I256(val.into()),
                 _ => panic!("{}", panic_msg),
             },
             Self::I32(val) => match to {
                 Type::I64 => Self::I64(val.into()),
                 Type::I128 => Self::I128(val.into()),
-                Type::I256 => Self::U256(val.into()),
+                Type::I256 => Self::I256(val.into()),
                 _ => panic!("{}", panic_msg),
             },
             Self::I64(val) => match to {
                 Type::I128 => Self::I128(val.into()),
-                Type::I256 => Self::U256(val.into()),
+                Type::I256 => Self::I256(val.into()),
                 _ => panic!("{}", panic_msg),
             },
             Self::I128(val) => match to {
-                Type::I256 => Self::U256(val.into()),
+                Type::I256 => Self::I256(val.into()),
                 _ => panic!("{}", panic_msg),
             },
-            Self::U256(_) => panic!("{}", panic_msg),
+            Self::I256(_) => panic!("{}", panic_msg),
         }
     }
 
@@ -696,12 +695,12 @@ impl Immediate {
                 Type::I64 => Self::I64(val as i64),
                 _ => panic!("{}", panic_msg),
             },
-            Self::U256(val) => match to {
-                Type::I8 => Self::I8(val.low_u32() as i8),
-                Type::I16 => Self::I16(val.low_u32() as i16),
-                Type::I32 => Self::I32(val.low_u32() as i32),
-                Type::I64 => Self::I64(val.low_u64() as i64),
-                Type::I128 => Self::I128(val.low_u128() as i128),
+            Self::I256(val) => match to {
+                Type::I8 => Self::I8(val.trunc_to_i8()),
+                Type::I16 => Self::I16(val.trunc_to_i16()),
+                Type::I32 => Self::I32(val.trunc_to_i32()),
+                Type::I64 => Self::I64(val.trunc_to_i64()),
+                Type::I128 => Self::I128(val.trunc_to_i128()),
                 _ => panic!("{}", panic_msg),
             },
         }
@@ -714,7 +713,7 @@ impl Immediate {
             Self::I32(_) => 1i32.into(),
             Self::I64(_) => 1i64.into(),
             Self::I128(_) => 1i128.into(),
-            Self::U256(_) => U256::one().into(),
+            Self::I256(_) => I256::one().into(),
         }
     }
 
@@ -725,7 +724,7 @@ impl Immediate {
             Self::I32(val) => val == 0,
             Self::I64(val) => val == 0,
             Self::I128(val) => val == 0,
-            Self::U256(val) => val.is_zero(),
+            Self::I256(val) => val.is_zero(),
         }
     }
 }
@@ -749,7 +748,7 @@ impl_const_value_conversion! {
     (u32, Immediate::I32),
     (u64, Immediate::I64),
     (u128, Immediate::I128),
-    (U256, Immediate::U256),
+    (I256, Immediate::I256),
     (i8, Immediate::I8),
     (i16, Immediate::I16),
     (i32, Immediate::I32),
@@ -801,19 +800,6 @@ impl_sign_cast!(u32, i32);
 impl_sign_cast!(u64, i64);
 impl_sign_cast!(u128, i128);
 
-impl SignCast for U256 {
-    type Signed = I256;
-    type Unsigned = U256;
-
-    fn to_signed(self) -> Self::Signed {
-        I256::from_u256(self)
-    }
-
-    fn to_unsigned(self) -> Self::Unsigned {
-        self
-    }
-}
-
 impl SignCast for I256 {
     type Signed = I256;
     type Unsigned = U256;
@@ -824,187 +810,5 @@ impl SignCast for I256 {
 
     fn to_unsigned(self) -> Self::Unsigned {
         self.to_u256()
-    }
-}
-
-const I256_MASK: U256 = primitive_types::U256([
-    0xffff_ffff_ffff_ffff,
-    0xffff_ffff_ffff_ffff,
-    0xffff_ffff_ffff_ffff,
-    0x7fff_ffff_ffff_ffff,
-]);
-
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-struct I256 {
-    is_positive: bool,
-    abs: U256,
-}
-
-impl I256 {
-    fn from_u256(val: U256) -> Self {
-        let is_positive = (val & I256_MASK) == val;
-        let abs = if is_positive { val } else { !val + U256::one() };
-
-        Self { is_positive, abs }
-    }
-
-    fn to_u256(self) -> U256 {
-        if self.is_positive {
-            self.abs
-        } else {
-            !self.abs + U256::one()
-        }
-    }
-
-    fn make_positive(abs: U256) -> Self {
-        Self {
-            is_positive: true,
-            abs,
-        }
-    }
-
-    fn make_negative(abs: U256) -> Self {
-        Self {
-            is_positive: false,
-            abs,
-        }
-    }
-
-    fn is_zero(self) -> bool {
-        self.abs.is_zero()
-    }
-
-    fn is_minimum(self) -> bool {
-        !self.is_positive && self.abs != U256::zero() && (self.abs & I256_MASK) == U256::zero()
-    }
-
-    fn overflowing_div(self, rhs: I256) -> (I256, bool) {
-        if rhs.is_zero() {
-            panic!("attempt to divide by zero");
-        }
-
-        if self.is_minimum() && !rhs.is_positive && rhs.abs == U256::one() {
-            return (self, true);
-        }
-
-        let div_abs = self.abs / rhs.abs;
-
-        match (self.is_positive, rhs.is_positive) {
-            (true, true) | (false, false) => (I256::make_positive(div_abs), false),
-            _ => (I256::make_negative(div_abs), false),
-        }
-    }
-}
-
-impl Ord for I256 {
-    fn cmp(&self, rhs: &I256) -> Ordering {
-        match (self.is_positive, rhs.is_positive) {
-            (true, true) => self.abs.cmp(&rhs.abs),
-            (true, false) => Ordering::Greater,
-            (false, true) => Ordering::Less,
-            (false, false) => self.abs.cmp(&rhs.abs).reverse(),
-        }
-    }
-}
-
-impl PartialOrd<I256> for I256 {
-    fn partial_cmp(&self, other: &I256) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn i256_conversion() {
-        let v_u256 = U256::zero();
-        let v_i256 = v_u256.to_signed();
-        assert!(v_i256.is_positive);
-        assert!(v_i256.is_zero());
-        assert_eq!(v_i256.abs, v_u256);
-        assert_eq!(v_i256.to_unsigned(), v_u256);
-
-        let v_u256 = U256::one();
-        let v_i256 = v_u256.to_signed();
-        assert!(v_i256.is_positive);
-        assert_eq!(v_i256.abs, v_u256);
-        assert_eq!(v_i256.to_unsigned(), v_u256);
-
-        let v_u256 = U256::MAX;
-        let v_i256 = v_u256.to_signed();
-        assert!(!v_i256.is_positive);
-        assert_eq!(v_i256.abs, U256::from(1));
-        assert_eq!(v_i256.to_unsigned(), v_u256);
-
-        let v_u256 = U256::one() << 255;
-        let v_i256 = v_u256.to_signed();
-        assert!(!v_i256.is_positive);
-        assert_eq!(v_i256.abs, v_u256);
-        assert_eq!(v_i256.to_unsigned(), v_u256);
-    }
-
-    #[test]
-    fn i256_ord() {
-        let zero = U256::zero().to_signed();
-
-        let one = U256::one().to_signed();
-        let maximum = (!(U256::one() << 255)).to_signed();
-
-        let minus_one = U256::MAX.to_signed();
-        let minimum = (U256::one() << 255).to_signed();
-
-        assert!(zero < one);
-        assert!(zero < maximum);
-        assert!(minus_one < zero);
-        assert!(minimum < zero);
-
-        assert!(one < maximum);
-        assert!(minimum < minus_one);
-
-        assert!(minus_one < one);
-        assert!(minus_one < maximum);
-        assert!(minimum < one);
-        assert!(minimum < maximum);
-    }
-
-    #[test]
-    fn i256_div() {
-        let two = (U256::one() * U256::from(2)).to_signed();
-        let four = (U256::one() * U256::from(4)).to_signed();
-        assert_eq!(four.overflowing_div(two).0, two);
-        assert!(!four.overflowing_div(two).1);
-        assert_eq!(two.overflowing_div(four).0, U256::zero().to_signed());
-
-        let minus_two = (U256::one() * U256::from(2)).to_signed();
-        let minus_four = (U256::one() * U256::from(4)).to_signed();
-        assert_eq!(minus_four.overflowing_div(minus_two).0, two);
-        assert_eq!(
-            minus_two.overflowing_div(minus_four).0,
-            U256::zero().to_signed()
-        );
-
-        assert_eq!(four.overflowing_div(minus_two).0, minus_two);
-        assert_eq!(two.overflowing_div(minus_four).0, U256::zero().to_signed());
-        assert_eq!(minus_four.overflowing_div(two).0, minus_two);
-        assert_eq!(minus_two.overflowing_div(four).0, U256::zero().to_signed());
-    }
-
-    #[test]
-    fn i256_div_overflow() {
-        let minus_one = U256::MAX.to_signed();
-        let minimum = (U256::one() << 255).to_signed();
-        let div_res = minimum.overflowing_div(minus_one);
-        assert_eq!(div_res.0, minimum);
-        assert!(div_res.1);
-    }
-
-    #[should_panic]
-    #[test]
-    fn i256_zero_division() {
-        let one = U256::one().to_signed();
-        let zero = U256::zero().to_signed();
-        one.overflowing_div(zero);
     }
 }
