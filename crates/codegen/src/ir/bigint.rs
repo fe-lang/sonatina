@@ -142,8 +142,8 @@ impl Ord for I256 {
     fn cmp(&self, rhs: &I256) -> cmp::Ordering {
         match (self.is_negative, rhs.is_negative) {
             (true, true) => self.abs.cmp(&rhs.abs).reverse(),
-            (true, false) => cmp::Ordering::Greater,
-            (false, true) => cmp::Ordering::Less,
+            (true, false) => cmp::Ordering::Less,
+            (false, true) => cmp::Ordering::Greater,
             (false, false) => self.abs.cmp(&rhs.abs),
         }
     }
@@ -177,6 +177,16 @@ impl hash::Hash for I256 {
 impl From<U256> for I256 {
     fn from(val: U256) -> Self {
         Self::from_u256(val)
+    }
+}
+
+impl From<bool> for I256 {
+    fn from(val: bool) -> Self {
+        if val {
+            Self::one()
+        } else {
+            Self::zero()
+        }
     }
 }
 
