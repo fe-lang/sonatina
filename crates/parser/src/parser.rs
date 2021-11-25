@@ -412,11 +412,13 @@ impl Code {
             Self::Load => {
                 let arg = parser.expect_insn_arg(inserter, 0, &mut undefs)?;
                 let ty = expect_token!(parser, Token::Ty(..), "type")?.ty().clone();
+                expect_token!(parser, Token::SemiColon, ";")?;
                 InsnData::Load { args: [arg], ty }
             }
             Self::Store => {
                 let lhs = parser.expect_insn_arg(inserter, 0, &mut undefs)?;
                 let rhs = parser.expect_insn_arg(inserter, 1, &mut undefs)?;
+                expect_token!(parser, Token::SemiColon, ";")?;
                 InsnData::Store { args: [lhs, rhs] }
             }
             Self::Jump => make_jump!(parser, JumpOp::Jump),

@@ -13,7 +13,7 @@ use crate::{
     ir::func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     ir::insn::{BinaryOp, CastOp, InsnData, JumpOp},
     ir::types::{Type, U256},
-    ir::{Immediate, ValueData},
+    ir::Immediate,
     Block, Function, Insn, Value,
 };
 
@@ -119,6 +119,12 @@ impl SccpSolver {
         debug_assert!(self
             .reachable_blocks
             .contains(&func.layout.insn_block(insn)));
+
+        for &arg in func.dfg.insn_args(insn) {
+            if let Some(imm) = func.dfg.value_imm(arg) {
+                self.set_lattice_cell(arg, LatticeCell::Const(imm));
+            }
+        }
 
         let block = func.layout.insn_block(insn);
 

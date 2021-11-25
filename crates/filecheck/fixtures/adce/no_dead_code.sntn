@@ -1,38 +1,34 @@
 # sameln: func %no_dead_code() -> i8:
 # nextln:    block0:
-# nextln:        v0.i8 = imm_u8 1;
-# nextln:        v1.i8 = imm_u8 2;
-# nextln:        v2.i8 = sgt v0 v1;
-# nextln:        br v2 block1 block2;
+# nextln:        v0.i8 = sgt 1.i8 2.i8;
+# nextln:        br v0 block1 block2;
 # nextln: 
 # nextln:    block1:
-# nextln:        v3.i8 = imm_u8 2;
+# nextln:        v1.i8 = add v0 1.i8;
 # nextln:        jump block3;
 # nextln: 
 # nextln:    block2:
-# nextln:        v4.i8 = imm_u8 3;
-# nextln:        v5.i8 = add v4 v2;
+# nextln:        v2.i8 = sub v0 3.i8;
+# nextln:        v3.i8 = add v2 v0;
 # nextln:        jump block3;
 # nextln: 
 # nextln:    block3:
-# nextln:        v6.i8 = phi (v3 block1) (v5 block2);
-# nextln:        return v6;
+# nextln:        v4.i8 = phi (v1 block1) (v3 block2);
+# nextln:        return v4;
 func %no_dead_code() -> i8:
     block0:
-        v0.i8 = imm_u8 1;
-        v1.i8 = imm_u8 2;
-        v2.i8 = sgt v0 v1;
-        br v2 block1 block2;
+        v0.i8 = sgt 1.i8 2.i8;
+        br v0 block1 block2;
 
     block1:
-        v3.i8 = imm_u8 2;
+        v1.i8 = add v0 1.i8;
         jump block3;
 
     block2:
-        v4.i8 = imm_u8 3;
-        v5.i8 = add v4 v2;
+        v2.i8 = sub v0 3.i8;
+        v3.i8 = add v2 v0;
         jump block3;
 
     block3:
-        v6.i8 = phi (v3 block1) (v5 block2);
-        return v6;
+        v4.i8 = phi (v1 block1) (v3 block2);
+        return v4;

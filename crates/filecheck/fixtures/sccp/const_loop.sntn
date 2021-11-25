@@ -1,30 +1,23 @@
 #! Simple loop with const condition.
 
-# sameln: func %const_loop():
+# sameln: func %const_loop() -> i8:
 # nextln:     block1:
-# nextln:         v0.i8 = imm_u8 1;
 # nextln:         fallthrough block2;
 # nextln: 
 # nextln:     block2:
-# nextln:         v1.i8 = imm_u8 1;
-# nextln:         v2.i8 = imm_u8 10;
-# nextln:         v3.i8 = imm_u8 11;
-# nextln:         v4.i8 = imm_u8 1;
 # nextln:         jump block3;
 # nextln: 
 # nextln:     block3:
-# nextln:         return;
-func %const_loop():
+# nextln:         return 11.i8;
+func %const_loop() -> i8:
     block1:
-        v0.i8 = imm_u8 1;
         fallthrough block2;
 
     block2:
-        v1.i8 = phi (v0 block1) (v3 block2);
-        v2.i8 = imm_u8 10;
-        v3.i8 = add v1 v2;
-        v4.i8 = gt v3 v1;
-        br v4 block3 block2;
+        v1.i8 = phi (1.i8 block1) (v2 block2);
+        v2.i8 = add v1 10.i8;
+        v3.i8 = gt v2 v1;
+        br v3 block3 block2;
 
     block3:
-        return;
+        return v2;
