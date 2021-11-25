@@ -4,7 +4,8 @@ use smallvec::smallvec;
 use sonatina_codegen::ir::{
     func_cursor::{CursorLocation, FuncCursor},
     insn::{BinaryOp, CastOp, JumpOp},
-    Block, BlockData, Function, Immediate, Insn, InsnData, Signature, Type, Value, ValueData, U256,
+    Block, BlockData, Function, Immediate, Insn, InsnData, Signature, Type, Value, ValueData, I256,
+    U256,
 };
 
 use super::lexer::{Code, Lexer, Token, WithLoc};
@@ -505,9 +506,20 @@ fn build_imm_data(number: &str, ty: &Type, line: u32) -> Result<Immediate> {
             .map(Into::into)
             .map_err(|err| parse_imm_error(err, line)),
 
-        Type::I256 => U256::from_str_radix(number, 10)
-            .map(Into::into)
-            .map_err(|err| parse_imm_error(err, line)),
+        Type::I256 => {
+            let number = number.to_string();
+            let is_negative = number.as_bytes()[0] as char == '-';
+            let number = if is_negative { &number[1..] } else { &number };
+            let mut i256: I256 = U256::from_str_radix(number, 10)
+                .map(Into::into)
+                .map_err(|err| parse_imm_error(err, line))?;
+
+            if is_negative {
+                i256 = I256::zero().overflowing_sub(i256).0;
+            }
+
+            Ok(Immediate::I256(i256))
+        }
 
         Type::Array { .. } => Err(Error::new(
             ErrorKind::SemanticError("can't use immediate for array type".into()),
