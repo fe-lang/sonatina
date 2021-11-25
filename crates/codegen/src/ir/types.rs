@@ -1,6 +1,6 @@
 //! This module contains Sonatina IR types definitions.
 
-use std::fmt;
+use std::{cmp, fmt};
 
 /// Sonatina IR types definition.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -37,6 +37,34 @@ impl fmt::Display for Type {
             Self::I128 => f.write_str("i128"),
             Self::I256 => f.write_str("i256"),
             Self::Array { elem_ty, len } => f.write_fmt(format_args!("[{};{}]", elem_ty, len)),
+        }
+    }
+}
+
+impl cmp::PartialOrd for Type {
+    fn partial_cmp(&self, rhs: &Self) -> Option<cmp::Ordering> {
+        use Type::*;
+
+        if self == rhs {
+            return Some(cmp::Ordering::Equal);
+        }
+
+        if matches!(self, Array { .. }) | matches!(rhs, Array { .. }) {
+            return None;
+        }
+
+        match (self, rhs) {
+            (I8, _) => Some(cmp::Ordering::Less),
+            (I16, I8) => Some(cmp::Ordering::Greater),
+            (I16, _) => Some(cmp::Ordering::Less),
+            (I32, I8 | I16) => Some(cmp::Ordering::Greater),
+            (I32, _) => Some(cmp::Ordering::Less),
+            (I64, I128 | I256) => Some(cmp::Ordering::Less),
+            (I64, _) => Some(cmp::Ordering::Greater),
+            (I128, I256) => Some(cmp::Ordering::Less),
+            (I128, _) => Some(cmp::Ordering::Greater),
+            (I256, _) => Some(cmp::Ordering::Greater),
+            (_, _) => unreachable!(),
         }
     }
 }
