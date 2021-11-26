@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use smallvec::smallvec;
 use sonatina_codegen::ir::{
     func_cursor::{CursorLocation, FuncCursor},
-    insn::{BinaryOp, CastOp, JumpOp},
+    insn::{BinaryOp, CastOp, JumpOp, UnaryOp},
     Block, BlockData, Function, Immediate, Insn, InsnData, Signature, Type, Value, ValueData, I256,
     U256,
 };
@@ -344,6 +344,17 @@ impl<'a> FuncCursor for InsnInserter<'a> {
     }
 }
 
+macro_rules! make_unary {
+    ($parser:ident, $inserter:ident, $code:path, $undefs:expr) => {{
+        let lhs = $parser.expect_insn_arg($inserter, 0, $undefs)?;
+        expect_token!($parser, Token::SemiColon, ";")?;
+        InsnData::Unary {
+            code: $code,
+            args: [lhs],
+        }
+    }};
+}
+
 macro_rules! make_binary {
     ($parser:ident, $inserter:ident, $code:path, $undefs:expr) => {{
         let lhs = $parser.expect_insn_arg($inserter, 0, $undefs)?;
@@ -389,6 +400,7 @@ impl Code {
     ) -> Result<Insn> {
         let mut undefs = vec![];
         let insn_data = match self {
+            Self::Not => make_unary!(parser, inserter, UnaryOp::Not, &mut undefs),
             Self::Add => make_binary!(parser, inserter, BinaryOp::Add, &mut undefs),
             Self::Sub => make_binary!(parser, inserter, BinaryOp::Sub, &mut undefs),
             Self::Mul => make_binary!(parser, inserter, BinaryOp::Mul, &mut undefs),

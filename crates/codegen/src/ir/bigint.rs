@@ -138,6 +138,14 @@ impl ops::BitOr for I256 {
     }
 }
 
+impl ops::Not for I256 {
+    type Output = Self;
+
+    fn not(self) -> Self {
+        Self::from_u256(!self.to_u256())
+    }
+}
+
 impl Ord for I256 {
     fn cmp(&self, rhs: &I256) -> cmp::Ordering {
         match (self.is_negative, rhs.is_negative) {
@@ -236,8 +244,3 @@ impl_from!(u16, unsigned);
 impl_from!(u32, unsigned);
 impl_from!(u64, unsigned);
 impl_from!(u128, unsigned);
-
-#[cfg(test)]
-mod tests {
-    //use super::*;
-}

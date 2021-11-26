@@ -11,7 +11,7 @@ use cranelift_entity::SecondaryMap;
 use crate::{
     cfg::ControlFlowGraph,
     ir::func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    ir::insn::{BinaryOp, CastOp, InsnData, JumpOp},
+    ir::insn::{BinaryOp, CastOp, InsnData, JumpOp, UnaryOp},
     ir::{Immediate, Type},
     Block, Function, Insn, Value,
 };
@@ -161,11 +161,18 @@ impl SccpSolver {
             }
         }
 
-        match func.dfg.insn_data(insn) {
+        let cell = match func.dfg.insn_data(insn) {
+            InsnData::Unary { code, args } => {
+                let arg_cell = self.lattice[args[0]];
+                match *code {
+                    UnaryOp::Not => arg_cell.not(),
+                }
+            }
+
             InsnData::Binary { code, args } => {
                 let lhs = self.lattice[args[0]];
                 let rhs = self.lattice[args[1]];
-                let new_cell = match *code {
+                match *code {
                     BinaryOp::Add => lhs.add(rhs),
                     BinaryOp::Sub => lhs.sub(rhs),
                     BinaryOp::Mul => lhs.mul(rhs),
@@ -178,31 +185,23 @@ impl SccpSolver {
                     BinaryOp::Eq => lhs.const_eq(rhs),
                     BinaryOp::And => lhs.and(rhs),
                     BinaryOp::Or => lhs.or(rhs),
-                };
-
-                let insn_result = func.dfg.insn_result(insn).unwrap();
-                self.set_lattice_cell(insn_result, new_cell);
+                }
             }
 
             InsnData::Cast { code, args, ty } => {
                 let arg_cell = self.lattice[args[0]];
-                let new_cell = match code {
+                match code {
                     CastOp::Sext => arg_cell.sext(ty),
                     CastOp::Zext => arg_cell.zext(ty),
                     CastOp::Trunc => arg_cell.trunc(ty),
-                };
-
-                let insn_result = func.dfg.insn_result(insn).unwrap();
-                self.set_lattice_cell(insn_result, new_cell);
+                }
             }
 
-            InsnData::Load { .. } => {
-                let insn_result = func.dfg.insn_result(insn).unwrap();
-                self.set_lattice_cell(insn_result, LatticeCell::Top);
-            }
+            InsnData::Load { .. } => LatticeCell::Top,
 
             InsnData::Jump { .. } => {
                 self.flow_work.push(FlowEdge::new(insn, 0));
+                return;
             }
 
             InsnData::Branch { args, .. } => {
@@ -221,14 +220,20 @@ impl SccpSolver {
                     // Add then edge.
                     self.flow_work.push(FlowEdge::new(insn, 0));
                 }
+
+                return;
             }
 
             InsnData::Store { .. } | InsnData::Return { .. } => {
                 // No insn result. Do nothing.
+                return;
             }
 
             InsnData::Phi { .. } => unreachable!(),
-        }
+        };
+
+        let insn_result = func.dfg.insn_result(insn).unwrap();
+        self.set_lattice_cell(insn_result, cell);
     }
 
     fn remove_unreachable_blocks(&mut self, func: &mut Function) {
@@ -424,6 +429,10 @@ impl LatticeCell {
             (Self::Const(lhs), Self::Const(rhs)) => Self::Const(f(lhs, rhs)),
             (Self::Bot, _) | (_, Self::Bot) => Self::Bot,
         }
+    }
+
+    fn not(self) -> Self {
+        self.apply_unop(ops::Not::not)
     }
 
     fn add(self, rhs: Self) -> Self {

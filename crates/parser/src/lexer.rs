@@ -155,20 +155,21 @@ impl<'a> Lexer<'a> {
     fn try_eat_opcode(&mut self) -> Option<Code> {
         try_eat_variant! {
             self,
-            (b"add",Code::Add),
-            (b"sub",Code::Sub),
-            (b"mul",Code::Mul),
-            (b"udiv",Code::UDiv),
-            (b"sdiv",Code::SDiv),
-            (b"lt",Code::Lt),
-            (b"gt",Code::Gt),
-            (b"slt",Code::Slt),
-            (b"sgt",Code::Sgt),
-            (b"eq",Code::Eq),
-            (b"and",Code::And),
-            (b"or",Code::Or),
-            (b"sext",Code::Sext),
-            (b"zext",Code::Zext),
+            (b"not", Code::Not),
+            (b"add", Code::Add),
+            (b"sub", Code::Sub),
+            (b"mul", Code::Mul),
+            (b"udiv", Code::UDiv),
+            (b"sdiv", Code::SDiv),
+            (b"lt", Code::Lt),
+            (b"gt", Code::Gt),
+            (b"slt", Code::Slt),
+            (b"sgt", Code::Sgt),
+            (b"eq", Code::Eq),
+            (b"and", Code::And),
+            (b"or", Code::Or),
+            (b"sext", Code::Sext),
+            (b"zext", Code::Zext),
             (b"trunc", Code::Trunc),
             (b"load", Code::Load),
             (b"store", Code::Store),
@@ -352,6 +353,9 @@ impl<'a> fmt::Display for Token<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum Code {
+    // Unary ops.
+    Not,
+
     // Binary ops.
     Add,
     Sub,
@@ -391,6 +395,7 @@ impl fmt::Display for Code {
         use Code::*;
 
         let s = match self {
+            Not => "not",
             Add => "add",
             Sub => "sub",
             Mul => "mul",

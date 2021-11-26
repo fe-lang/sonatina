@@ -148,13 +148,18 @@ impl IrWrite for Insn {
 
         let insn_data = writer.func.dfg.insn_data(*self);
         match insn_data {
+            Unary { code, args } => {
+                write!(w, "{}", code)?;
+                writer.space(&mut w)?;
+                writer.write_insn_args(args, &mut w)?;
+            }
             Binary { code, args } => {
-                w.write_fmt(format_args!("{}", code.as_str()))?;
+                write!(w, "{}", code)?;
                 writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
             }
             Cast { code, args, .. } => {
-                w.write_fmt(format_args!("{}", code.as_str()))?;
+                write!(w, "{}", code)?;
                 writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
             }
@@ -170,7 +175,7 @@ impl IrWrite for Insn {
                 writer.write_insn_args(args, &mut w)?;
             }
             Jump { code, dests } => {
-                w.write_fmt(format_args!("{}", code.as_str()))?;
+                write!(w, "{}", code)?;
                 writer.space(&mut w)?;
                 writer.write_iter_with_delim(dests.iter(), " ", &mut w)?;
             }

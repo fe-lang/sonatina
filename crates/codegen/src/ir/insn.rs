@@ -15,7 +15,10 @@ cranelift_entity::entity_impl!(Insn);
 /// An instruction data definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InsnData {
-    /// Binary instruction.
+    /// Unary instructions.
+    Unary { code: UnaryOp, args: [Value; 1] },
+
+    /// Binary instructions.
     Binary { code: BinaryOp, args: [Value; 2] },
 
     /// Cast operations.
@@ -83,7 +86,10 @@ impl InsnData {
     pub fn args(&self) -> &[Value] {
         match self {
             Self::Binary { args, .. } | Self::Store { args, .. } => args,
-            Self::Cast { args, .. } | Self::Load { args, .. } | Self::Branch { args, .. } => args,
+            Self::Unary { args, .. }
+            | Self::Cast { args, .. }
+            | Self::Load { args, .. }
+            | Self::Branch { args, .. } => args,
             Self::Phi { values: args, .. } | Self::Return { args } => args,
             _ => &[],
         }
@@ -92,7 +98,10 @@ impl InsnData {
     pub fn args_mut(&mut self) -> &mut [Value] {
         match self {
             Self::Binary { args, .. } | Self::Store { args, .. } => args,
-            Self::Cast { args, .. } | Self::Load { args, .. } | Self::Branch { args, .. } => args,
+            Self::Unary { args, .. }
+            | Self::Cast { args, .. }
+            | Self::Load { args, .. }
+            | Self::Branch { args, .. } => args,
             Self::Phi { values, .. } => values,
             _ => &mut [],
         }
@@ -112,11 +121,32 @@ impl InsnData {
 
     pub(super) fn result_type(&self, dfg: &DataFlowGraph) -> Option<Type> {
         match self {
+            Self::Unary { args, .. } => Some(dfg.value_ty(args[0]).clone()),
             Self::Binary { code, args } => Some(code.result_type(dfg, args)),
             Self::Cast { ty, .. } | Self::Load { ty, .. } => Some(ty.clone()),
             Self::Phi { ty, .. } => Some(ty.clone()),
             _ => None,
         }
+    }
+}
+
+/// Unary operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOp {
+    Not,
+}
+
+impl UnaryOp {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Not => "not",
+        }
+    }
+}
+
+impl fmt::Display for UnaryOp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -155,6 +185,7 @@ impl BinaryOp {
         }
     }
 
+    // TODO: Add I1 type.
     fn result_type(self, dfg: &DataFlowGraph, args: &[Value; 2]) -> Type {
         dfg.value_ty(args[0]).clone()
     }

@@ -178,3 +178,11 @@ impl ops::BitOr for Immediate {
         self.apply_binop(rhs, ops::BitOr::bitor)
     }
 }
+
+impl ops::Not for Immediate {
+    type Output = Self;
+
+    fn not(self) -> Self {
+        self.apply_unop(ops::Not::not)
+    }
+}
