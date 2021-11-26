@@ -186,3 +186,11 @@ impl ops::Not for Immediate {
         self.apply_unop(ops::Not::not)
     }
 }
+
+impl ops::Neg for Immediate {
+    type Output = Self;
+
+    fn neg(self) -> Self {
+        self.apply_unop(ops::Neg::neg)
+    }
+}

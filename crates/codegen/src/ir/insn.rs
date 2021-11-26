@@ -134,12 +134,14 @@ impl InsnData {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
     Not,
+    Neg,
 }
 
 impl UnaryOp {
     pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Not => "not",
+            Self::Neg => "neg",
         }
     }
 }

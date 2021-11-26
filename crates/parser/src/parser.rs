@@ -401,6 +401,7 @@ impl Code {
         let mut undefs = vec![];
         let insn_data = match self {
             Self::Not => make_unary!(parser, inserter, UnaryOp::Not, &mut undefs),
+            Self::Neg => make_unary!(parser, inserter, UnaryOp::Neg, &mut undefs),
             Self::Add => make_binary!(parser, inserter, BinaryOp::Add, &mut undefs),
             Self::Sub => make_binary!(parser, inserter, BinaryOp::Sub, &mut undefs),
             Self::Mul => make_binary!(parser, inserter, BinaryOp::Mul, &mut undefs),

@@ -166,6 +166,7 @@ impl SccpSolver {
                 let arg_cell = self.lattice[args[0]];
                 match *code {
                     UnaryOp::Not => arg_cell.not(),
+                    UnaryOp::Neg => arg_cell.neg(),
                 }
             }
 
@@ -433,6 +434,10 @@ impl LatticeCell {
 
     fn not(self) -> Self {
         self.apply_unop(ops::Not::not)
+    }
+
+    fn neg(self) -> Self {
+        self.apply_unop(ops::Neg::neg)
     }
 
     fn add(self, rhs: Self) -> Self {

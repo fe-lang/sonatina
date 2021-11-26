@@ -146,6 +146,14 @@ impl ops::Not for I256 {
     }
 }
 
+impl ops::Neg for I256 {
+    type Output = Self;
+
+    fn neg(self) -> Self {
+        (!self).overflowing_add(Self::one()).0
+    }
+}
+
 impl Ord for I256 {
     fn cmp(&self, rhs: &I256) -> cmp::Ordering {
         match (self.is_negative, rhs.is_negative) {

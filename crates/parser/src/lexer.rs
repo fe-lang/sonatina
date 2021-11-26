@@ -156,6 +156,7 @@ impl<'a> Lexer<'a> {
         try_eat_variant! {
             self,
             (b"not", Code::Not),
+            (b"neg", Code::Neg),
             (b"add", Code::Add),
             (b"sub", Code::Sub),
             (b"mul", Code::Mul),
@@ -355,6 +356,7 @@ impl<'a> fmt::Display for Token<'a> {
 pub(super) enum Code {
     // Unary ops.
     Not,
+    Neg,
 
     // Binary ops.
     Add,
@@ -396,6 +398,7 @@ impl fmt::Display for Code {
 
         let s = match self {
             Not => "not",
+            Neg => "neg",
             Add => "add",
             Sub => "sub",
             Mul => "mul",
