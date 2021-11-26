@@ -1,0 +1,88 @@
+(type
+  UnaryOp extern
+  (enum
+    Not
+    Neg
+  )
+)
+
+(type
+  BinaryOp extern
+  (enum
+    Add
+    Sub
+    Mul
+    UDiv
+    SDiv
+    Lt
+    Gt
+    Slt
+    Sgt
+    Eq
+    And
+    Or
+  )
+)
+
+(type
+  CastOp extern
+  (enum
+    Sext
+    Zext
+    Trunc
+  )
+)
+
+(type
+  JumpOp extern
+  (enum
+    Jump
+    FallThrough
+  )
+)
+
+(type
+  InsnData extern
+  (enum
+    (Unary (code UnaryOp) (args ValueArray1))
+    (Binary (code BinaryOp) (args ValueArray2))
+    (Cast (code CastOp) (args ValueArray1) (ty Type))
+    (Load (args ValueArray1) (ty Type))
+    (Store (args ValueArray2) (ty Type))
+    (Jump (code JumpOp) (dests BlockArray1))
+    (Branch (args ValueArray1) (dests BlockArray2))
+    (Return (args ValueList))
+    (Phi (args ValueList) (blocks BlockList))
+  )
+)
+
+
+(decl extract_not (Value) Insn)
+(extractor
+  (extract_not lhs)
+  (insn_data (InsnData.Unary (UnaryOp.Not) (value_array1 lhs)))
+)
+
+(decl extract_neg (Value) Insn)
+(extractor
+  (extract_neg lhs)
+  (insn_data (InsnData.Unary (UnaryOp.Neg) (value_array1 lhs)))
+)
+
+(decl extract_add (Value Value) Insn)
+(extractor
+  (extract_add lhs rhs)
+  (insn_data (InsnData.Binary (BinaryOp.Add) (value_array2 lhs rhs)))
+)
+
+(decl extract_sub (Value Value) Insn)
+(extractor
+  (extract_sub lhs rhs)
+  (insn_data (InsnData.Binary (BinaryOp.Sub) (value_array2 lhs rhs)))
+)
+
+(decl extract_mul (Value Value) Insn)
+(extractor
+  (extract_mul lhs rhs)
+  (insn_data (InsnData.Binary (BinaryOp.Mul) (value_array2 lhs rhs)))
+)
