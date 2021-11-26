@@ -22,7 +22,7 @@ use crate::{
 
 type ValueNumber = u32;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct GvnSolver {
     next_vn: ValueNumber,
     partitions: PrimaryMap<Partition, PartitionData>,
@@ -32,6 +32,23 @@ pub struct GvnSolver {
     value_exprs: Interner<ValueExpr, ValueExprData>,
     searched: FxHashSet<Partition>,
     partition_changed: bool,
+    entry: Block,
+}
+
+impl Default for GvnSolver {
+    fn default() -> Self {
+        Self {
+            next_vn: ValueNumber::default(),
+            partitions: PrimaryMap::default(),
+            insns: SecondaryMap::default(),
+            inserted_phis: SecondaryMap::default(),
+            value_phis: Interner::default(),
+            value_exprs: Interner::default(),
+            searched: FxHashSet::default(),
+            partition_changed: true,
+            entry: Block(0),
+        }
+    }
 }
 
 impl GvnSolver {
@@ -140,8 +157,8 @@ impl GvnSolver {
     fn compute_equivalences(&mut self, func: &Function, cfg: &ControlFlowGraph, rpo: &[Block]) {
         debug_assert!(!rpo.is_empty());
 
-        let entry = rpo[0];
-        let first_insn = match func.layout.first_insn_of(entry) {
+        self.entry = rpo[0];
+        let first_insn = match func.layout.first_insn_of(self.entry) {
             Some(insn) => insn,
             None => return,
         };
@@ -297,13 +314,27 @@ impl GvnSolver {
                     self.next_vn()
                 }
             }
-            None => self.next_vn(),
+            None => {
+                if func.dfg.value_imm(value).is_some() {
+                    let entry_pin = self.entry_pin(func);
+                    self.partitions[entry_pin]
+                        .value_vn(value)
+                        .unwrap_or_else(|| self.next_vn())
+                } else {
+                    self.next_vn()
+                }
+            }
         }
     }
 
     fn block_pout(&self, func: &Function, block: Block) -> Option<Partition> {
         let last_insn = func.layout.last_insn_of(block).unwrap();
         self.insns[last_insn].pout.expand()
+    }
+
+    fn entry_pin(&self, func: &Function) -> Partition {
+        let first_insn = func.layout.first_insn_of(self.entry).unwrap();
+        self.insns[first_insn].pin.unwrap()
     }
 
     fn compute_first_insn_pin(
@@ -520,6 +551,10 @@ impl GvnSolver {
         let pin_data = &self.partitions[pin];
 
         let value_expr_data = match func.dfg.insn_data(insn) {
+            InsnData::Unary { code, args } => {
+                todo!()
+            }
+
             InsnData::Binary { code, args } => {
                 let lhs = pin_data.value_vn(args[0]).unwrap();
                 let rhs = pin_data.value_vn(args[1]).unwrap();

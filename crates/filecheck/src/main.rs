@@ -1,5 +1,8 @@
 use sonatina_filecheck::{
-    adce::AdceTransform, gvn::GvnTransform, sccp::SccpTransform, FileCheckRunner,
+    adce::AdceTransform,
+    sccp::SccpTransform,
+    FileCheckRunner,
+    //gvn::GvnTransform,
 };
 
 fn main() {
@@ -9,8 +12,8 @@ fn main() {
     runner.attach_transformer(AdceTransform::default());
     runner.run();
 
-    runner.attach_transformer(GvnTransform::default());
-    runner.run();
+    //runner.attach_transformer(GvnTransform::default());
+    //runner.run();
 
     runner.print_results();
     if !runner.is_ok() {

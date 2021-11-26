@@ -1,5 +1,5 @@
 pub mod adce;
-pub mod gvn;
+// pub mod gvn;
 pub mod sccp;
 
 use std::{
@@ -206,7 +206,7 @@ impl FileCheckResult {
 
     fn print_result(&self, stdout: &mut StandardStream) -> io::Result<()> {
         let path = self.path.strip_prefix(FIXTURE_ROOT).unwrap();
-        stdout.write_fmt(format_args!("test {} ... ", path.to_string_lossy()))?;
+        write!(stdout, "test {} ...", path.to_string_lossy())?;
         match &self.result {
             Ok(()) => {
                 stdout.set_color(ColorSpec::new().set_fg(Color::Green.into()))?;
