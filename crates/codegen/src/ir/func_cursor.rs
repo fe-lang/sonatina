@@ -1,6 +1,6 @@
 use super::{Block, Function, Insn, InsnData, Value};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CursorLocation {
     At(Insn),
     BlockTop(Block),
