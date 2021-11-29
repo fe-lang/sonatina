@@ -40,12 +40,15 @@ pub trait FuncCursor {
 
     fn remove_insn(&mut self) {
         let insn = self.expect_insn();
+        let next_loc = self.next_loc();
+
         for idx in 0..self.func().dfg.insn_args_num(insn) {
             let arg = self.func().dfg.insn_arg(insn, idx);
             self.func_mut().dfg.remove_user(arg, insn);
         }
-        self.proceed();
         self.func_mut().layout.remove_insn(insn);
+
+        self.set_loc(next_loc);
     }
 
     fn remove_block(&mut self) {

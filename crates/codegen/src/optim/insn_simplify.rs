@@ -38,6 +38,10 @@ impl InsnSimplifySolver {
         }
 
         while let Some(insn) = self.worklist.pop_front() {
+            if !inserter.func().layout.is_insn_inserted(insn) {
+                continue;
+            }
+
             inserter.set_loc(CursorLocation::At(insn));
             self.simplify(&mut inserter, insn);
         }
@@ -67,17 +71,12 @@ impl InsnSimplifySolver {
         insn: Insn,
         value: Value,
     ) {
-        let result_value = match inserter.func().dfg.insn_result(insn) {
-            Some(res) => res,
-            None => {
-                inserter.remove_insn();
-                return;
-            }
+        if let Some(insn_result) = inserter.func().dfg.insn_result(insn) {
+            self.worklist
+                .extend(inserter.func().dfg.users(insn_result).copied());
+            inserter.func_mut().dfg.change_to_alias(insn_result, value);
         };
 
-        self.worklist
-            .extend(inserter.func().dfg.users(result_value).copied());
-        inserter.func_mut().dfg.change_to_alias(result_value, value);
         inserter.remove_insn();
     }
 
@@ -87,12 +86,12 @@ impl InsnSimplifySolver {
         insn: Insn,
         data: InsnData,
     ) {
-        inserter.replace(data);
         if let Some(res) = inserter.func().dfg.insn_result(insn) {
             self.worklist
                 .extend(inserter.func().dfg.users(res).copied());
         }
 
+        inserter.replace(data);
         inserter.proceed();
     }
 }

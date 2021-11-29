@@ -67,7 +67,7 @@ impl<'a> generated_code::Context for SimplifyContext<'a> {
     }
 
     fn is_same(&mut self, arg0: Value, arg1: Value) -> bool {
-        if arg0 == arg1 {
+        if self.dfg().resolve_alias(arg0) == self.dfg().resolve_alias(arg1) {
             return true;
         }
 

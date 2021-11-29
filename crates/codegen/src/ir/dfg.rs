@@ -148,15 +148,17 @@ impl DataFlowGraph {
     }
 
     pub fn value_ty(&self, value: Value) -> &Type {
+        let value = self.resolve_alias(value);
         match &self.values[value] {
             ValueData::Insn { ty, .. }
             | ValueData::Arg { ty, .. }
             | ValueData::Immediate { ty, .. } => ty,
-            ValueData::Alias { alias } => self.value_ty(self.resolve_alias(*alias)),
+            ValueData::Alias { .. } => unreachable!(),
         }
     }
 
     pub fn value_imm(&self, value: Value) -> Option<Immediate> {
+        let value = self.resolve_alias(value);
         match self.value_data(value) {
             ValueData::Immediate { imm, .. } => Some(*imm),
             _ => None,
