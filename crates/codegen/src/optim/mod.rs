@@ -2,5 +2,5 @@ pub mod adce;
 //pub mod gvn;
 pub mod sccp;
 
-mod const_eval;
-mod insn_simplify;
+mod immediate_impl;
+mod simplify_impl;
