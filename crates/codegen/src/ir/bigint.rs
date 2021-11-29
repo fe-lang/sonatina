@@ -2,7 +2,7 @@ use std::{cmp, fmt, hash, ops};
 
 pub type U256 = primitive_types::U256;
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct I256 {
     is_negative: bool,
     abs: U256,
@@ -189,6 +189,14 @@ impl hash::Hash for I256 {
         self.to_u256().hash(state)
     }
 }
+
+impl cmp::PartialEq for I256 {
+    fn eq(&self, rhs: &Self) -> bool {
+        self.is_negative == rhs.is_negative && self.abs == rhs.abs
+    }
+}
+
+impl cmp::Eq for I256 {}
 
 impl From<U256> for I256 {
     fn from(val: U256) -> Self {
