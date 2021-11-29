@@ -91,20 +91,6 @@ impl I256 {
         self.to_u256().low_u128() as i128
     }
 
-    pub fn make_positive(abs: U256) -> Self {
-        Self {
-            is_negative: false,
-            abs,
-        }
-    }
-
-    pub fn make_negative(abs: U256) -> Self {
-        Self {
-            is_negative: true,
-            abs,
-        }
-    }
-
     pub fn is_positive(&self) -> bool {
         !self.is_negative && !self.is_zero()
     }
@@ -119,6 +105,20 @@ impl I256 {
 
     pub fn is_minimum(&self) -> bool {
         self.is_negative && self.abs != U256::zero() && (self.abs & I256_MASK) == U256::zero()
+    }
+
+    fn make_positive(abs: U256) -> Self {
+        Self {
+            is_negative: false,
+            abs,
+        }
+    }
+
+    fn make_negative(abs: U256) -> Self {
+        Self {
+            is_negative: true,
+            abs,
+        }
     }
 }
 

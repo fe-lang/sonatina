@@ -1,0 +1,175 @@
+(type
+  SimplifyResult extern
+    (enum
+      (Value (val Value))
+      (Insn (data InsnData))
+    )
+)
+
+(extern const $true bool)
+(extern const $false bool)
+
+(decl is_zero (bool) Value)
+(extern extractor infallible is_zero is_zero)
+
+(decl is_one (bool) Value)
+(extern extractor infallible is_one is_one)
+
+(decl is_two (bool) Value)
+(extern extractor infallible is_two is_two)
+
+(decl make_zero (Type) Value)
+(extern constructor make_zero make_zero)
+
+(decl make_one (Type) Value)
+(extern constructor make_one make_one)
+
+(decl make_all_one (Type) Value)
+(extern constructor make_all_one make_all_one)
+
+(decl is_same (bool Value) Value)
+(extern extractor infallible is_same is_same (out in))
+
+;; Insn Simplify rule ;;
+(decl simplify (Insn) SimplifyResult)
+
+
+;;; Rules for Binary insns ;;;
+
+;; Rules for BinaryOp.Add ;;
+; a + 0 => a
+(rule
+  (simplify
+    (extract_add a (is_zero $true)))
+  (SimplifyResult.Value a)
+)
+; 0 + a => a
+(rule
+  (simplify
+    (extract_add (is_zero $true) a))
+  (SimplifyResult.Value a)
+)
+; a + (-a) => 0
+(rule
+  (simplify
+    (extract_add a (value_insn (extract_neg (and (is_same $true <a) (value_ty ty)))))
+  )
+  (SimplifyResult.Value (make_zero ty))
+)
+; (-a) + a => 0
+(rule
+  (simplify
+    (extract_add (value_insn (extract_neg a)) (and (is_same $true <a) (value_ty ty)))
+  )
+  (SimplifyResult.Value (make_zero ty))
+)
+; a + (b - a) => b
+(rule
+  (simplify
+    (extract_add a (value_insn (extract_sub b (is_same $true <a))))
+  )
+  (SimplifyResult.Value b)
+)
+; (a - b) + b => a
+(rule
+  (simplify
+    (extract_add (value_insn (extract_sub a b)) (is_same $true <b))
+  )
+  (SimplifyResult.Value a)
+)
+; a + !a => -1
+(rule
+  (simplify
+    (extract_add a (value_insn (extract_not (and (is_same $true <a) (value_ty ty)))))
+  )
+  (SimplifyResult.Value (make_all_one ty))
+)
+
+
+;; Rules for Sub ;;
+; a - 0 => a
+(rule
+  (simplify
+    (extract_sub a (is_zero $true))
+  )
+  (SimplifyResult.Value a)
+)
+; a - a => 0
+(rule
+  (simplify
+    (extract_sub a (and (is_same $true <a) (value_ty ty)))
+  )
+  (SimplifyResult.Value (make_zero ty))
+)
+; a - (a - b) =>  b
+(rule
+  (simplify
+    (extract_sub a (value_insn (extract_sub (is_same $true <a) b)))
+  )
+  (SimplifyResult.Value b)
+)
+; (a - b) - a => -b
+(rule
+  (simplify
+    (extract_sub (value_insn (extract_sub a b)) (is_same $true <a))
+  )
+  (SimplifyResult.Insn (InsnData.Unary (UnaryOp.Neg) (value_array1 b)))
+)
+; a - (a + b) => -b
+(rule
+  (simplify
+    (extract_sub a (value_insn (extract_add (is_same $true <a) b)))
+  )
+  (SimplifyResult.Insn (InsnData.Unary (UnaryOp.Neg) (value_array1 b)))
+)
+; (a + b) - a =>  b
+(rule
+  (simplify
+    (extract_sub (value_insn (extract_add a b)) (is_same $true <a))
+  )
+  (SimplifyResult.Value b)
+)
+
+;; Rules for Mul ;;
+; _ * 0 => 0
+(rule
+  (simplify
+    (extract_mul _ (and (is_zero $true) (value_ty ty)))
+  )
+  (SimplifyResult.Value (make_zero ty))
+)
+; 0 * _ => 0
+(rule
+  (simplify
+    (extract_mul (and (is_zero $true) (value_ty ty)) _)
+  )
+  (SimplifyResult.Value (make_zero ty))
+)
+; a * 1 => a
+(rule
+  (simplify
+    (extract_mul a (is_one $true))
+  )
+  (SimplifyResult.Value a)
+)
+; 1 * a => a
+(rule
+  (simplify
+    (extract_mul (is_one $true) a)
+  )
+  (SimplifyResult.Value a)
+)
+; a * 2 => a + a
+(rule
+  (simplify
+    (extract_mul a (is_two $true))
+  )
+  (SimplifyResult.Insn (InsnData.Binary (BinaryOp.Add) (value_array2 a a)))
+)
+; 2 * a=> a + a
+(rule
+  (simplify
+    (extract_mul (is_two $true) a)
+  )
+  (SimplifyResult.Insn (InsnData.Binary (BinaryOp.Add) (value_array2 a a)))
+)

@@ -67,16 +67,31 @@ impl Immediate {
         Self::from_i256(val, &self.ty())
     }
 
-    pub(super) fn zero(self) -> Self {
-        self.apply_unop(|_| I256::zero())
+    pub(super) fn zero(ty: &Type) -> Self {
+        let val = I256::zero();
+        Self::from_i256(val, ty)
     }
 
-    pub(super) fn one(self) -> Self {
-        self.apply_unop(|_| I256::one())
+    pub(super) fn one(ty: &Type) -> Self {
+        let val = I256::one();
+        Self::from_i256(val, ty)
+    }
+
+    pub(super) fn all_one(ty: &Type) -> Self {
+        let val = I256::zero().overflowing_sub(I256::one()).0;
+        Self::from_i256(val, ty)
     }
 
     pub(super) fn is_zero(self) -> bool {
         self.apply_unop_raw(|val| val.is_zero())
+    }
+
+    pub(super) fn is_one(self) -> bool {
+        self.apply_unop_raw(|val| val == I256::one())
+    }
+
+    pub(super) fn is_two(self) -> bool {
+        self.apply_unop_raw(|val| val == I256::one().overflowing_add(I256::one()).0)
     }
 
     fn as_i256(self) -> I256 {
