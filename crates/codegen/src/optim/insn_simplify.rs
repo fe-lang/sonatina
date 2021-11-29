@@ -48,6 +48,11 @@ impl InsnSimplifySolver {
     }
 
     pub fn simplify(&mut self, inserter: &mut InsnInserter, insn: Insn) {
+        if inserter.func().dfg.is_phi(insn) {
+            self.simplify_phi(inserter, insn);
+            return;
+        }
+
         match simplify(&mut inserter.func_mut().dfg, insn) {
             Some(SimplifyResult::Value { val }) => {
                 self.simplify_insn_with_value(inserter, insn, val)
@@ -63,6 +68,24 @@ impl InsnSimplifySolver {
 
     pub fn clear(&mut self) {
         self.worklist.clear();
+    }
+
+    pub fn simplify_phi(&mut self, inserter: &mut InsnInserter, insn: Insn) {
+        debug_assert!(inserter.func().dfg.is_phi(insn));
+        let mut args = inserter.func().dfg.insn_args(insn).iter().copied();
+        let first_arg = args.next().unwrap();
+        if args.all(|arg| inserter.func().dfg.is_same_value(first_arg, arg)) {
+            let insn_result = inserter.func().dfg.insn_result(insn).unwrap();
+            self.worklist
+                .extend(inserter.func().dfg.users(insn_result).copied());
+            inserter
+                .func_mut()
+                .dfg
+                .change_to_alias(insn_result, first_arg);
+            inserter.remove_insn();
+        } else {
+            inserter.proceed();
+        }
     }
 
     pub fn simplify_insn_with_value(

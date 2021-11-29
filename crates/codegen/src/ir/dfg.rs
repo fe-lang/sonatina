@@ -253,6 +253,17 @@ impl DataFlowGraph {
     pub fn is_return(&self, insn: Insn) -> bool {
         matches!(self.insn_data(insn), InsnData::Return { .. })
     }
+
+    pub fn is_same_value(&self, v0: Value, v1: Value) -> bool {
+        if self.resolve_alias(v0) == self.resolve_alias(v1) {
+            return true;
+        }
+
+        match (self.value_imm(v0), self.value_imm(v1)) {
+            (Some(imm0), Some(imm1)) => imm0 == imm1,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
