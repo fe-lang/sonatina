@@ -169,6 +169,7 @@ impl<'a> Lexer<'a> {
             (b"eq", Code::Eq),
             (b"and", Code::And),
             (b"or", Code::Or),
+            (b"xor", Code::Xor),
             (b"sext", Code::Sext),
             (b"zext", Code::Zext),
             (b"trunc", Code::Trunc),
@@ -371,6 +372,7 @@ pub(super) enum Code {
     Eq,
     And,
     Or,
+    Xor,
 
     // Cast ops.
     Sext,
@@ -411,6 +413,7 @@ impl fmt::Display for Code {
             Eq => "eq",
             And => "and",
             Or => "or",
+            Xor => "xor",
             Sext => "sext",
             Zext => "zext",
             Trunc => "trunc",

@@ -1,9 +1,10 @@
 #! Simple constant folding without branching.
 
-# sameln: func %simple_fold() -> i8:
+# sameln: func %simple_fold() -> i8, i8:
 # nextln:     block0:
-# nextln:         return 30.i8;
-func %simple_fold() -> i8:
+# nextln:         return 30.i8 0.i8;
+func %simple_fold() -> i8, i8:
     block0:
         v0.i8 = add 10.i8 20.i8;
-        return v0;
+        v1.i8 = xor -1.i8 -1.i8;
+        return v0 v1;

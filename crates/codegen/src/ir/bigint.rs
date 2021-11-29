@@ -154,6 +154,14 @@ impl ops::Neg for I256 {
     }
 }
 
+impl ops::BitXor for I256 {
+    type Output = Self;
+
+    fn bitxor(self, rhs: Self) -> Self {
+        Self::from_u256(self.to_u256() ^ rhs.to_u256())
+    }
+}
+
 impl Ord for I256 {
     fn cmp(&self, rhs: &I256) -> cmp::Ordering {
         match (self.is_negative, rhs.is_negative) {

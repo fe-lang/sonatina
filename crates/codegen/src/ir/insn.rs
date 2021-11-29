@@ -167,6 +167,7 @@ pub enum BinaryOp {
     Eq,
     And,
     Or,
+    Xor,
 }
 
 impl BinaryOp {
@@ -184,6 +185,7 @@ impl BinaryOp {
             Self::Eq => "eq",
             Self::And => "and",
             Self::Or => "or",
+            Self::Xor => "xor",
         }
     }
 

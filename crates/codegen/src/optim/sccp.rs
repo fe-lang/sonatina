@@ -186,6 +186,7 @@ impl SccpSolver {
                     BinaryOp::Eq => lhs.const_eq(rhs),
                     BinaryOp::And => lhs.and(rhs),
                     BinaryOp::Or => lhs.or(rhs),
+                    BinaryOp::Xor => lhs.xor(rhs),
                 }
             }
 
@@ -481,11 +482,15 @@ impl LatticeCell {
     }
 
     fn and(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, Immediate::and)
+        self.apply_binop(rhs, ops::BitAnd::bitand)
     }
 
     fn or(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, Immediate::or)
+        self.apply_binop(rhs, ops::BitOr::bitor)
+    }
+
+    fn xor(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, ops::BitXor::bitxor)
     }
 
     fn sext(self, ty: &Type) -> Self {

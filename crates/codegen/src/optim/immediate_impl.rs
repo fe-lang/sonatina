@@ -11,14 +11,6 @@ impl Immediate {
         self.apply_binop(rhs, |lhs, rhs| lhs.overflowing_div(rhs).0)
     }
 
-    pub(super) fn and(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, ops::BitAnd::bitand)
-    }
-
-    pub(super) fn or(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, ops::BitOr::bitor)
-    }
-
     pub(super) fn lt(self, rhs: Self) -> Self {
         self.apply_binop(rhs, |lhs, rhs| (lhs.to_u256() < rhs.to_u256()).into())
     }
@@ -183,6 +175,14 @@ impl ops::BitAnd for Immediate {
 
     fn bitand(self, rhs: Self) -> Self {
         self.apply_binop(rhs, ops::BitAnd::bitand)
+    }
+}
+
+impl ops::BitXor for Immediate {
+    type Output = Self;
+
+    fn bitxor(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, ops::BitXor::bitxor)
     }
 }
 

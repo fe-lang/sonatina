@@ -414,6 +414,7 @@ impl Code {
             Self::Eq => make_binary!(parser, inserter, BinaryOp::Eq, &mut undefs),
             Self::And => make_binary!(parser, inserter, BinaryOp::And, &mut undefs),
             Self::Or => make_binary!(parser, inserter, BinaryOp::Or, &mut undefs),
+            Self::Xor => make_binary!(parser, inserter, BinaryOp::Xor, &mut undefs),
             Self::Sext => make_cast!(parser, inserter, ret_ty.unwrap(), CastOp::Sext, &mut undefs),
             Self::Zext => make_cast!(parser, inserter, ret_ty.unwrap(), CastOp::Zext, &mut undefs),
             Self::Trunc => make_cast!(
