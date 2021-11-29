@@ -22,10 +22,12 @@
 (type BlockArray1 extern (enum))
 (decl block_array1 (Block) BlockArray1)
 (extern extractor infallible block_array1 unpack_block_array1)
+(extern constructor block_array1 pack_block_array1)
 
 (type BlockArray2 extern (enum))
-(decl block_array2 (Block) BlockArray2)
+(decl block_array2 (Block Block) BlockArray2)
 (extern extractor infallible block_array2 unpack_block_array2)
+(extern constructor block_array2 pack_block_array2)
 
 (decl insn_data (InsnData) Insn)
 (extern extractor infallible insn_data insn_data)
@@ -35,4 +37,3 @@
 
 (decl value_insn (Insn) Value)
 (extern extractor value_insn value_insn)
-
