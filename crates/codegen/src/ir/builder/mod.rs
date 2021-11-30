@@ -86,8 +86,8 @@ impl FunctionBuilder {
     impl_binary_insn!(add, BinaryOp::Add);
     impl_binary_insn!(sub, BinaryOp::Sub);
     impl_binary_insn!(mul, BinaryOp::Mul);
-    impl_binary_insn!(udiv, BinaryOp::UDiv);
-    impl_binary_insn!(sdiv, BinaryOp::SDiv);
+    impl_binary_insn!(udiv, BinaryOp::Udiv);
+    impl_binary_insn!(sdiv, BinaryOp::Sdiv);
     impl_binary_insn!(lt, BinaryOp::Lt);
     impl_binary_insn!(gt, BinaryOp::Gt);
     impl_binary_insn!(slt, BinaryOp::Slt);
