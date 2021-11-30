@@ -60,14 +60,14 @@
 ; a + (-a) => 0
 (rule
   (simplify
-    (extract_add a (value_insn (extract_neg (and (is_same $true <a) (value_ty ty)))))
+    (extract_add a (value_insn (extract_neg (value_with_ty(is_same $true <a) ty))))
   )
   (SimplifyResult.Value (make_zero ty))
 )
 ; (-a) + a => 0
 (rule
   (simplify
-    (extract_add (value_insn (extract_neg a)) (and (is_same $true <a) (value_ty ty)))
+    (extract_add (value_insn (extract_neg a)) (value_with_ty (is_same $true <a) ty))
   )
   (SimplifyResult.Value (make_zero ty))
 )
@@ -88,7 +88,7 @@
 ; a + !a => -1
 (rule
   (simplify
-    (extract_add a (value_insn (extract_not (and (is_same $true <a) (value_ty ty)))))
+    (extract_add a (value_insn (extract_not (value_with_ty (is_same $true <a) ty))))
   )
   (SimplifyResult.Value (make_all_one ty))
 )
@@ -111,7 +111,7 @@
 ; a - a => 0
 (rule
   (simplify
-    (extract_sub a (and (is_same $true <a) (value_ty ty)))
+    (extract_sub a (value_with_ty (is_same $true <a) ty))
   )
   (SimplifyResult.Value (make_zero ty))
 )
@@ -148,14 +148,14 @@
 ; _ * 0 => 0
 (rule
   (simplify
-    (extract_mul _ (and (is_zero $true) (value_ty ty)))
+    (extract_mul _ (value_with_ty (is_zero $true) ty))
   )
   (SimplifyResult.Value (make_zero ty))
 )
 ; 0 * _ => 0
 (rule
   (simplify
-    (extract_mul (and (is_zero $true) (value_ty ty)) _)
+    (extract_mul (value_with_ty (is_zero $true) ty) _)
   )
   (SimplifyResult.Value (make_zero ty))
 )
@@ -193,7 +193,7 @@
 ; 0 / a => 0
 (rule
   (simplify
-    (extract_sdiv (and (is_zero $true) (value_ty ty)) _)
+    (extract_sdiv (value_with_ty (is_zero $true) ty) _)
   )
   (SimplifyResult.Value (make_zero ty))
 )
@@ -203,7 +203,7 @@
 ; 0 / a => 0
 (rule
   (simplify
-    (extract_udiv (and (is_zero $true) (value_ty ty)) _)
+    (extract_udiv (value_with_ty (is_zero $true) ty) _)
   )
   (SimplifyResult.Value (make_zero ty))
 )
@@ -212,7 +212,7 @@
 ; a < a => -1
 (rule
   (simplify
-    (extract_lt a (and (is_same $true <a) (value_ty ty)))
+    (extract_lt a (value_with_ty (is_same $true <a) ty))
   )
   (SimplifyResult.Value (make_all_one ty))
 )
@@ -230,7 +230,7 @@
 ; a < a => -1
 (rule
   (simplify
-    (extract_slt a (and (is_same $true <a) (value_ty ty)))
+    (extract_slt a (value_with_ty (is_same $true <a) ty))
   )
   (SimplifyResult.Value (make_all_one ty))
 )
@@ -248,7 +248,7 @@
 ; a == a => 1
 (rule
   (simplify
-    (extract_eq a (and (is_same $true <a) (value_ty ty)))
+    (extract_eq a (value_with_ty (is_same $true <a) ty))
   )
   (SimplifyResult.Value (make_all_one ty))
 )
@@ -264,7 +264,7 @@
 ; _ & 0 => 0
 (rule
   (simplify
-    (extract_and _ (and (is_zero $true) (value_ty ty)))
+    (extract_and _ (value_with_ty (is_zero $true) ty))
   )
   (SimplifyResult.Value (make_zero ty))
 )
@@ -278,7 +278,7 @@
 ; a & !a => 0
 (rule
   (simplify
-    (extract_and a (value_insn (extract_not (and (is_same $true <a) (value_ty ty)))))
+    (extract_and a (value_insn (extract_not (value_with_ty (is_same $true <a) ty))))
   )
   (SimplifyResult.Value (make_zero ty))
 )
@@ -308,7 +308,7 @@
 ; a | -1 => -1
 (rule
   (simplify
-    (extract_or a (and (is_all_one $true) (value_ty ty)))
+    (extract_or a (value_with_ty (is_all_one $true) ty))
   )
   (SimplifyResult.Value (make_all_one ty))
 )
@@ -329,7 +329,7 @@
 ; a | !a => -1
 (rule
   (simplify
-    (extract_or a (value_insn (extract_not (and (is_same $true <a) (value_ty ty)))))
+    (extract_or a (value_insn (extract_not (value_with_ty (is_same $true <a) ty))))
   )
   (SimplifyResult.Value (make_all_one ty))
 )
@@ -343,14 +343,14 @@
 ; a | !(a & _) => -1
 (rule
   (simplify
-    (extract_or a (value_insn (extract_not (value_insn (extract_and (and (is_same $true <a) (value_ty ty)) _)))))
+    (extract_or a (value_insn (extract_not (value_insn (extract_and (value_with_ty (is_same $true <a) ty) _)))))
   )
   (SimplifyResult.Value (make_all_one ty))
 )
 ; a | !(_ & a) => -1
 (rule
   (simplify
-    (extract_or a (value_insn (extract_not (value_insn (extract_and _ (and (is_same $true <a) (value_ty ty)))))))
+    (extract_or a (value_insn (extract_not (value_insn (extract_and _ (value_with_ty (is_same $true <a) ty))))))
   )
   (SimplifyResult.Value (make_all_one ty))
 )

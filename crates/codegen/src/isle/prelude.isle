@@ -37,3 +37,15 @@
 
 (decl value_insn (Insn) Value)
 (extern extractor value_insn value_insn)
+
+(decl value_with_ty (Value Type) Value)
+(extractor
+  (value_with_ty value ty)
+  (and value (value_ty ty))
+)
+
+(decl value_insn_with_ty (Insn Type) Value)
+(extractor
+  (value_insn_with_ty insn ty)
+  (and (value_insn insn) (value_ty ty))
+)
