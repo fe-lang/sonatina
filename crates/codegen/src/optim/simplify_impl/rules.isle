@@ -262,6 +262,61 @@
   )
   (SimplifyResult.Value a)
 )
+; (a | b) & (a | !b) => a
+(rule
+  (simplify
+    (extract_and
+      (value_insn (extract_or a b))
+      (value_insn
+        (extract_or (is_same $true <a) (value_insn (extract_not (is_same $true <b))))
+      )
+    )
+  )
+  (SimplifyResult.Value a)
+)
+; (a | b) & (!b | a) => a
+(rule
+  (simplify
+    (extract_and
+      (value_insn (extract_or a b))
+      (value_insn
+        (extract_or (value_insn (extract_not (is_same $true <b))) (is_same $true <a))
+      )
+    )
+  )
+  (SimplifyResult.Value a)
+)
+; (a | b) & (!a | b) => b
+(rule
+  (simplify
+    (extract_and
+      (value_insn (extract_or a b))
+      (value_insn
+        (extract_or (value_insn (extract_not (is_same $true <a))) (is_same $true <b))
+      )
+    )
+  )
+  (SimplifyResult.Value b)
+)
+; (a | b) & (b | !a) => b
+(rule
+  (simplify
+    (extract_and
+      (value_insn (extract_or a b))
+      (value_insn
+        (extract_or (is_same $true <b) (value_insn (extract_not (is_same $true <a))))
+      )
+    )
+  )
+  (SimplifyResult.Value a)
+)
+; a & (-a) => a where a: is_power_of_two.
+(rule
+  (simplify
+    (extract_and a (value_insn (extract_not (and (is_same $true <a) (is_power_of_two $true)))))
+  )
+  (SimplifyResult.Value a)
+)
 ; a & (a - 1) => 0 where a: is_power_of_two.
 (rule
   (simplify

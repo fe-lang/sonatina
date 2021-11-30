@@ -1,0 +1,9 @@
+# sameln: func %and(v0.i8, v1.i8) -> i8:
+# check:         return v0;
+func %and(v0.i8, v1.i8) -> i8:
+    block0:
+        v2.i8 = not v1;
+        v3.i8 = or v0 v1;
+        v4.i8 = or v0 v2;
+        v5.i8 = and v3 v4;
+        return v5;
