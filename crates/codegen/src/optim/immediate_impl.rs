@@ -82,8 +82,16 @@ impl Immediate {
         self.apply_unop_raw(|val| val == I256::one())
     }
 
+    pub(super) fn is_all_one(self) -> bool {
+        self == Self::all_one(&self.ty())
+    }
+
     pub(super) fn is_two(self) -> bool {
         self.apply_unop_raw(|val| val == I256::one().overflowing_add(I256::one()).0)
+    }
+
+    pub(super) fn is_power_of_two(self) -> bool {
+        (self & (self - Immediate::one(&self.ty()))).is_zero()
     }
 
     fn as_i256(self) -> I256 {

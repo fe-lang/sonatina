@@ -1,9 +1,11 @@
 # sameln: func %simple(v0.i8) -> i8:
 # nextln:     block0:
-# nextln:         return 0.i8;
+# nextln:         v4.i8 = neg v0;
+# nextln:         return v4;
 func %simple(v0.i8) -> i8:
     block0:
         v1.i8 = mul v0 0.i8;
         v2.i8 = add v0 v1;
         v3.i8 = sub v2 v0;
-        return v3;
+        v4.i8 = sub v1 v0;
+        return v4;

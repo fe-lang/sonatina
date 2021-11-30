@@ -12,8 +12,8 @@
     Add
     Sub
     Mul
-    UDiv
-    SDiv
+    Udiv
+    Sdiv
     Lt
     Gt
     Slt
@@ -85,4 +85,58 @@
 (extractor
   (extract_mul lhs rhs)
   (insn_data (InsnData.Binary (BinaryOp.Mul) (value_array2 lhs rhs)))
+)
+
+(decl extract_sdiv (Value Value) Insn)
+(extractor
+  (extract_sdiv lhs rhs)
+  (insn_data (InsnData.Binary (BinaryOp.Sdiv) (value_array2 lhs rhs)))
+)
+
+(decl extract_udiv (Value Value) Insn)
+(extractor
+  (extract_udiv lhs rhs)
+  (insn_data (InsnData.Binary (BinaryOp.Udiv) (value_array2 lhs rhs)))
+)
+
+(decl extract_lt (Value Value) Insn)
+(extractor
+  (extract_lt lhs rhs)
+  (insn_data (InsnData.Binary (BinaryOp.Lt) (value_array2 lhs rhs)))
+)
+
+(decl extract_gt (Value Value) Insn)
+(extractor
+  (extract_gt lhs rhs)
+  (insn_data (InsnData.Binary (BinaryOp.Gt) (value_array2 lhs rhs)))
+)
+
+(decl extract_slt (Value Value) Insn)
+(extractor
+  (extract_slt lhs rhs)
+  (insn_data (InsnData.Binary (BinaryOp.Slt) (value_array2 lhs rhs)))
+)
+
+(decl extract_sgt (Value Value) Insn)
+(extractor
+  (extract_sgt lhs rhs)
+  (insn_data (InsnData.Binary (BinaryOp.Sgt) (value_array2 lhs rhs)))
+)
+
+(decl extract_eq (Value Value) Insn)
+(extractor
+  (extract_eq lhs rhs)
+  (insn_data (InsnData.Binary (BinaryOp.Eq) (value_array2 lhs rhs)))
+)
+
+(decl extract_and (Value Value) Insn)
+(extractor
+  (extract_and lhs rhs)
+  (insn_data (InsnData.Binary (BinaryOp.And) (value_array2 lhs rhs)))
+)
+
+(decl extract_or (Value Value) Insn)
+(extractor
+  (extract_or lhs rhs)
+  (insn_data (InsnData.Binary (BinaryOp.Or) (value_array2 lhs rhs)))
 )

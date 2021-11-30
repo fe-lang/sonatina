@@ -44,10 +44,28 @@ impl<'a> generated_code::Context for SimplifyContext<'a> {
             .unwrap_or_default()
     }
 
+    fn is_all_one(&mut self, arg0: Value) -> bool {
+        self.dfg()
+            .value_imm(arg0)
+            .map(|imm| imm.is_all_one())
+            .unwrap_or_default()
+    }
+
+    fn is_same(&mut self, arg0: Value, arg1: Value) -> bool {
+        self.dfg().is_same_value(arg0, arg1)
+    }
+
     fn is_two(&mut self, arg0: Value) -> bool {
         self.dfg()
             .value_imm(arg0)
             .map(|imm| imm.is_two())
+            .unwrap_or_default()
+    }
+
+    fn is_power_of_two(&mut self, arg0: Value) -> bool {
+        self.dfg()
+            .value_imm(arg0)
+            .map(|imm| imm.is_power_of_two())
             .unwrap_or_default()
     }
 
@@ -64,9 +82,5 @@ impl<'a> generated_code::Context for SimplifyContext<'a> {
     fn make_all_one(&mut self, arg0: &Type) -> Value {
         let imm = Immediate::all_one(arg0);
         self.dfg().make_imm_value(imm)
-    }
-
-    fn is_same(&mut self, arg0: Value, arg1: Value) -> bool {
-        self.dfg().is_same_value(arg0, arg1)
     }
 }

@@ -29,14 +29,16 @@ pub trait Context {
     fn is_zero(&mut self, arg0: Value) -> bool;
     fn is_one(&mut self, arg0: Value) -> bool;
     fn is_two(&mut self, arg0: Value) -> bool;
+    fn is_all_one(&mut self, arg0: Value) -> bool;
+    fn is_same(&mut self, arg0: Value, arg1: Value) -> bool;
+    fn is_power_of_two(&mut self, arg0: Value) -> bool;
     fn make_zero(&mut self, arg0: &Type) -> Value;
     fn make_one(&mut self, arg0: &Type) -> Value;
     fn make_all_one(&mut self, arg0: &Type) -> Value;
-    fn is_same(&mut self, arg0: Value, arg1: Value) -> bool;
 }
 
 // Generated as internal constructor for term simplify.
-pub(crate) fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Option<SimplifyResult> {
+pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Option<SimplifyResult> {
     let pattern0_0 = arg0;
     let pattern1_0 = C::insn_data(ctx, pattern0_0);
     if let &InsnData::Binary {
@@ -49,7 +51,7 @@ pub(crate) fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Optio
                 let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
                 let pattern5_0 = C::is_zero(ctx, pattern4_0);
                 if pattern5_0 == true {
-                    // Rule at rules.isle line 48.
+                    // Rule at rules.isle line 56.
                     let expr0_0 = SimplifyResult::Value { val: pattern4_1 };
                     return Some(expr0_0);
                 }
@@ -69,7 +71,7 @@ pub(crate) fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Optio
                                     let pattern11_0 = C::is_same(ctx, pattern4_1, pattern10_0);
                                     if pattern11_0 == true {
                                         let pattern13_0 = C::value_ty(ctx, pattern4_1);
-                                        // Rule at rules.isle line 61.
+                                        // Rule at rules.isle line 69.
                                         let expr0_0 = C::make_zero(ctx, &pattern13_0);
                                         let expr1_0 = SimplifyResult::Value { val: expr0_0 };
                                         return Some(expr1_0);
@@ -90,7 +92,7 @@ pub(crate) fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Optio
                                 if let Some(pattern10_0) = closure10() {
                                     let pattern11_0 = C::is_same(ctx, pattern4_1, pattern10_0);
                                     if pattern11_0 == true {
-                                        // Rule at rules.isle line 75.
+                                        // Rule at rules.isle line 83.
                                         let expr0_0 = SimplifyResult::Value { val: pattern9_0 };
                                         return Some(expr0_0);
                                     }
@@ -102,7 +104,7 @@ pub(crate) fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Optio
                 }
                 let pattern5_0 = C::is_zero(ctx, pattern4_1);
                 if pattern5_0 == true {
-                    // Rule at rules.isle line 42.
+                    // Rule at rules.isle line 50.
                     let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
                     return Some(expr0_0);
                 }
@@ -123,7 +125,7 @@ pub(crate) fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Optio
                                         let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
                                         if pattern11_0 == true {
                                             let pattern13_0 = C::value_ty(ctx, pattern9_0);
-                                            // Rule at rules.isle line 82.
+                                            // Rule at rules.isle line 90.
                                             let expr0_0 = C::make_all_one(ctx, &pattern13_0);
                                             let expr1_0 = SimplifyResult::Value { val: expr0_0 };
                                             return Some(expr1_0);
@@ -139,7 +141,7 @@ pub(crate) fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Optio
                                         let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
                                         if pattern11_0 == true {
                                             let pattern13_0 = C::value_ty(ctx, pattern9_0);
-                                            // Rule at rules.isle line 54.
+                                            // Rule at rules.isle line 62.
                                             let expr0_0 = C::make_zero(ctx, &pattern13_0);
                                             let expr1_0 = SimplifyResult::Value { val: expr0_0 };
                                             return Some(expr1_0);
@@ -162,7 +164,7 @@ pub(crate) fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Optio
                                 if let Some(pattern10_0) = closure10() {
                                     let pattern11_0 = C::is_same(ctx, pattern9_1, pattern10_0);
                                     if pattern11_0 == true {
-                                        // Rule at rules.isle line 68.
+                                        // Rule at rules.isle line 76.
                                         let expr0_0 = SimplifyResult::Value { val: pattern9_0 };
                                         return Some(expr0_0);
                                     }
@@ -182,11 +184,23 @@ pub(crate) fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Optio
                     let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
                     if pattern6_0 == true {
                         let pattern8_0 = C::value_ty(ctx, pattern4_1);
-                        // Rule at rules.isle line 99.
+                        // Rule at rules.isle line 113.
                         let expr0_0 = C::make_zero(ctx, &pattern8_0);
                         let expr1_0 = SimplifyResult::Value { val: expr0_0 };
                         return Some(expr1_0);
                     }
+                }
+                let pattern5_0 = C::is_zero(ctx, pattern4_0);
+                if pattern5_0 == true {
+                    // Rule at rules.isle line 106.
+                    let expr0_0 = UnaryOp::Neg;
+                    let expr1_0 = C::pack_value_array1(ctx, pattern4_1);
+                    let expr2_0 = InsnData::Unary {
+                        code: expr0_0,
+                        args: expr1_0,
+                    };
+                    let expr3_0 = SimplifyResult::Insn { data: expr2_0 };
+                    return Some(expr3_0);
                 }
                 if let Some(pattern5_0) = C::value_insn(ctx, pattern4_0) {
                     let pattern6_0 = C::insn_data(ctx, pattern5_0);
@@ -205,7 +219,7 @@ pub(crate) fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Optio
                                 if let Some(pattern10_0) = closure10() {
                                     let pattern11_0 = C::is_same(ctx, pattern4_1, pattern10_0);
                                     if pattern11_0 == true {
-                                        // Rule at rules.isle line 127.
+                                        // Rule at rules.isle line 141.
                                         let expr0_0 = SimplifyResult::Value { val: pattern9_1 };
                                         return Some(expr0_0);
                                     }
@@ -220,7 +234,7 @@ pub(crate) fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Optio
                                 if let Some(pattern10_0) = closure10() {
                                     let pattern11_0 = C::is_same(ctx, pattern4_1, pattern10_0);
                                     if pattern11_0 == true {
-                                        // Rule at rules.isle line 113.
+                                        // Rule at rules.isle line 127.
                                         let expr0_0 = UnaryOp::Neg;
                                         let expr1_0 = C::pack_value_array1(ctx, pattern9_1);
                                         let expr2_0 = InsnData::Unary {
@@ -238,7 +252,7 @@ pub(crate) fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Optio
                 }
                 let pattern5_0 = C::is_zero(ctx, pattern4_1);
                 if pattern5_0 == true {
-                    // Rule at rules.isle line 92.
+                    // Rule at rules.isle line 99.
                     let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
                     return Some(expr0_0);
                 }
@@ -259,7 +273,7 @@ pub(crate) fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Optio
                                 if let Some(pattern10_0) = closure10() {
                                     let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
                                     if pattern11_0 == true {
-                                        // Rule at rules.isle line 120.
+                                        // Rule at rules.isle line 134.
                                         let expr0_0 = UnaryOp::Neg;
                                         let expr1_0 = C::pack_value_array1(ctx, pattern9_1);
                                         let expr2_0 = InsnData::Unary {
@@ -280,7 +294,7 @@ pub(crate) fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Optio
                                 if let Some(pattern10_0) = closure10() {
                                     let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
                                     if pattern11_0 == true {
-                                        // Rule at rules.isle line 106.
+                                        // Rule at rules.isle line 120.
                                         let expr0_0 = SimplifyResult::Value { val: pattern9_1 };
                                         return Some(expr0_0);
                                     }
@@ -296,20 +310,20 @@ pub(crate) fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Optio
                 let pattern5_0 = C::is_zero(ctx, pattern4_0);
                 if pattern5_0 == true {
                     let pattern7_0 = C::value_ty(ctx, pattern4_0);
-                    // Rule at rules.isle line 143.
+                    // Rule at rules.isle line 157.
                     let expr0_0 = C::make_zero(ctx, &pattern7_0);
                     let expr1_0 = SimplifyResult::Value { val: expr0_0 };
                     return Some(expr1_0);
                 }
                 let pattern5_0 = C::is_one(ctx, pattern4_0);
                 if pattern5_0 == true {
-                    // Rule at rules.isle line 157.
+                    // Rule at rules.isle line 171.
                     let expr0_0 = SimplifyResult::Value { val: pattern4_1 };
                     return Some(expr0_0);
                 }
                 let pattern5_0 = C::is_two(ctx, pattern4_0);
                 if pattern5_0 == true {
-                    // Rule at rules.isle line 171.
+                    // Rule at rules.isle line 185.
                     let expr0_0 = BinaryOp::Add;
                     let expr1_0 = C::pack_value_array2(ctx, pattern4_1, pattern4_1);
                     let expr2_0 = InsnData::Binary {
@@ -322,20 +336,20 @@ pub(crate) fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Optio
                 let pattern5_0 = C::is_zero(ctx, pattern4_1);
                 if pattern5_0 == true {
                     let pattern7_0 = C::value_ty(ctx, pattern4_1);
-                    // Rule at rules.isle line 136.
+                    // Rule at rules.isle line 150.
                     let expr0_0 = C::make_zero(ctx, &pattern7_0);
                     let expr1_0 = SimplifyResult::Value { val: expr0_0 };
                     return Some(expr1_0);
                 }
                 let pattern5_0 = C::is_one(ctx, pattern4_1);
                 if pattern5_0 == true {
-                    // Rule at rules.isle line 150.
+                    // Rule at rules.isle line 164.
                     let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
                     return Some(expr0_0);
                 }
                 let pattern5_0 = C::is_two(ctx, pattern4_1);
                 if pattern5_0 == true {
-                    // Rule at rules.isle line 164.
+                    // Rule at rules.isle line 178.
                     let expr0_0 = BinaryOp::Add;
                     let expr1_0 = C::pack_value_array2(ctx, pattern4_0, pattern4_0);
                     let expr2_0 = InsnData::Binary {
@@ -344,6 +358,323 @@ pub(crate) fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Optio
                     };
                     let expr3_0 = SimplifyResult::Insn { data: expr2_0 };
                     return Some(expr3_0);
+                }
+            }
+            &BinaryOp::Udiv => {
+                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                let pattern5_0 = C::is_zero(ctx, pattern4_0);
+                if pattern5_0 == true {
+                    let pattern7_0 = C::value_ty(ctx, pattern4_0);
+                    // Rule at rules.isle line 205.
+                    let expr0_0 = C::make_zero(ctx, &pattern7_0);
+                    let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                    return Some(expr1_0);
+                }
+            }
+            &BinaryOp::Sdiv => {
+                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                let pattern5_0 = C::is_zero(ctx, pattern4_0);
+                if pattern5_0 == true {
+                    let pattern7_0 = C::value_ty(ctx, pattern4_0);
+                    // Rule at rules.isle line 195.
+                    let expr0_0 = C::make_zero(ctx, &pattern7_0);
+                    let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                    return Some(expr1_0);
+                }
+            }
+            &BinaryOp::Lt => {
+                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                let closure5 = || {
+                    return Some(pattern4_0);
+                };
+                if let Some(pattern5_0) = closure5() {
+                    let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                    if pattern6_0 == true {
+                        let pattern8_0 = C::value_ty(ctx, pattern4_1);
+                        // Rule at rules.isle line 214.
+                        let expr0_0 = C::make_all_one(ctx, &pattern8_0);
+                        let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                        return Some(expr1_0);
+                    }
+                }
+            }
+            &BinaryOp::Gt => {
+                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                // Rule at rules.isle line 223.
+                let expr0_0 = BinaryOp::Lt;
+                let expr1_0 = C::pack_value_array2(ctx, pattern4_1, pattern4_0);
+                let expr2_0 = InsnData::Binary {
+                    code: expr0_0,
+                    args: expr1_0,
+                };
+                let expr3_0 = SimplifyResult::Insn { data: expr2_0 };
+                return Some(expr3_0);
+            }
+            &BinaryOp::Slt => {
+                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                let closure5 = || {
+                    return Some(pattern4_0);
+                };
+                if let Some(pattern5_0) = closure5() {
+                    let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                    if pattern6_0 == true {
+                        let pattern8_0 = C::value_ty(ctx, pattern4_1);
+                        // Rule at rules.isle line 232.
+                        let expr0_0 = C::make_all_one(ctx, &pattern8_0);
+                        let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                        return Some(expr1_0);
+                    }
+                }
+            }
+            &BinaryOp::Sgt => {
+                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                // Rule at rules.isle line 241.
+                let expr0_0 = BinaryOp::Slt;
+                let expr1_0 = C::pack_value_array2(ctx, pattern4_1, pattern4_0);
+                let expr2_0 = InsnData::Binary {
+                    code: expr0_0,
+                    args: expr1_0,
+                };
+                let expr3_0 = SimplifyResult::Insn { data: expr2_0 };
+                return Some(expr3_0);
+            }
+            &BinaryOp::Eq => {
+                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                let closure5 = || {
+                    return Some(pattern4_0);
+                };
+                if let Some(pattern5_0) = closure5() {
+                    let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                    if pattern6_0 == true {
+                        let pattern8_0 = C::value_ty(ctx, pattern4_1);
+                        // Rule at rules.isle line 250.
+                        let expr0_0 = C::make_all_one(ctx, &pattern8_0);
+                        let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                        return Some(expr1_0);
+                    }
+                }
+            }
+            &BinaryOp::And => {
+                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                let closure5 = || {
+                    return Some(pattern4_0);
+                };
+                if let Some(pattern5_0) = closure5() {
+                    let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                    if pattern6_0 == true {
+                        // Rule at rules.isle line 259.
+                        let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
+                        return Some(expr0_0);
+                    }
+                }
+                let pattern5_0 = C::is_zero(ctx, pattern4_1);
+                if pattern5_0 == true {
+                    let pattern7_0 = C::value_ty(ctx, pattern4_1);
+                    // Rule at rules.isle line 266.
+                    let expr0_0 = C::make_zero(ctx, &pattern7_0);
+                    let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                    return Some(expr1_0);
+                }
+                let pattern5_0 = C::is_all_one(ctx, pattern4_1);
+                if pattern5_0 == true {
+                    // Rule at rules.isle line 273.
+                    let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
+                    return Some(expr0_0);
+                }
+                if let Some(pattern5_0) = C::value_insn(ctx, pattern4_1) {
+                    let pattern6_0 = C::insn_data(ctx, pattern5_0);
+                    match &pattern6_0 {
+                        &InsnData::Unary {
+                            code: ref pattern7_0,
+                            args: ref pattern7_1,
+                        } => {
+                            if let &UnaryOp::Not = &pattern7_0 {
+                                let pattern9_0 = C::unpack_value_array1(ctx, &pattern7_1);
+                                let closure10 = || {
+                                    return Some(pattern4_0);
+                                };
+                                if let Some(pattern10_0) = closure10() {
+                                    let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                    if pattern11_0 == true {
+                                        let pattern13_0 = C::value_ty(ctx, pattern9_0);
+                                        // Rule at rules.isle line 280.
+                                        let expr0_0 = C::make_zero(ctx, &pattern13_0);
+                                        let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                                        return Some(expr1_0);
+                                    }
+                                }
+                            }
+                        }
+                        &InsnData::Binary {
+                            code: ref pattern7_0,
+                            args: ref pattern7_1,
+                        } => {
+                            match &pattern7_0 {
+                                &BinaryOp::Sub => {
+                                    let (pattern9_0, pattern9_1) =
+                                        C::unpack_value_array2(ctx, &pattern7_1);
+                                    let closure10 = || {
+                                        return Some(pattern4_0);
+                                    };
+                                    if let Some(pattern10_0) = closure10() {
+                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                        if pattern11_0 == true {
+                                            let pattern13_0 = C::is_power_of_two(ctx, pattern9_0);
+                                            if pattern13_0 == true {
+                                                let pattern15_0 = C::value_ty(ctx, pattern9_0);
+                                                let pattern16_0 = C::is_one(ctx, pattern9_1);
+                                                if pattern16_0 == true {
+                                                    // Rule at rules.isle line 301.
+                                                    let expr0_0 = C::make_zero(ctx, &pattern15_0);
+                                                    let expr1_0 =
+                                                        SimplifyResult::Value { val: expr0_0 };
+                                                    return Some(expr1_0);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                &BinaryOp::Or => {
+                                    let (pattern9_0, pattern9_1) =
+                                        C::unpack_value_array2(ctx, &pattern7_1);
+                                    let closure10 = || {
+                                        return Some(pattern4_0);
+                                    };
+                                    if let Some(pattern10_0) = closure10() {
+                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                        if pattern11_0 == true {
+                                            // Rule at rules.isle line 287.
+                                            let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
+                                            return Some(expr0_0);
+                                        }
+                                        let pattern11_0 = C::is_same(ctx, pattern9_1, pattern10_0);
+                                        if pattern11_0 == true {
+                                            // Rule at rules.isle line 294.
+                                            let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
+                                            return Some(expr0_0);
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            &BinaryOp::Or => {
+                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                let closure5 = || {
+                    return Some(pattern4_0);
+                };
+                if let Some(pattern5_0) = closure5() {
+                    let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                    if pattern6_0 == true {
+                        // Rule at rules.isle line 317.
+                        let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
+                        return Some(expr0_0);
+                    }
+                }
+                let pattern5_0 = C::is_zero(ctx, pattern4_1);
+                if pattern5_0 == true {
+                    // Rule at rules.isle line 324.
+                    let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
+                    return Some(expr0_0);
+                }
+                let pattern5_0 = C::is_all_one(ctx, pattern4_1);
+                if pattern5_0 == true {
+                    let pattern7_0 = C::value_ty(ctx, pattern4_1);
+                    // Rule at rules.isle line 310.
+                    let expr0_0 = C::make_all_one(ctx, &pattern7_0);
+                    let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                    return Some(expr1_0);
+                }
+                if let Some(pattern5_0) = C::value_insn(ctx, pattern4_1) {
+                    let pattern6_0 = C::insn_data(ctx, pattern5_0);
+                    match &pattern6_0 {
+                        &InsnData::Unary {
+                            code: ref pattern7_0,
+                            args: ref pattern7_1,
+                        } => {
+                            if let &UnaryOp::Not = &pattern7_0 {
+                                let pattern9_0 = C::unpack_value_array1(ctx, &pattern7_1);
+                                let closure10 = || {
+                                    return Some(pattern4_0);
+                                };
+                                if let Some(pattern10_0) = closure10() {
+                                    let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                    if pattern11_0 == true {
+                                        let pattern13_0 = C::value_ty(ctx, pattern9_0);
+                                        // Rule at rules.isle line 331.
+                                        let expr0_0 = C::make_all_one(ctx, &pattern13_0);
+                                        let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                                        return Some(expr1_0);
+                                    }
+                                }
+                                if let Some(pattern10_0) = C::value_insn(ctx, pattern9_0) {
+                                    let pattern11_0 = C::insn_data(ctx, pattern10_0);
+                                    if let &InsnData::Binary {
+                                        code: ref pattern12_0,
+                                        args: ref pattern12_1,
+                                    } = &pattern11_0
+                                    {
+                                        if let &BinaryOp::And = &pattern12_0 {
+                                            let (pattern14_0, pattern14_1) =
+                                                C::unpack_value_array2(ctx, &pattern12_1);
+                                            let closure15 = || {
+                                                return Some(pattern4_0);
+                                            };
+                                            if let Some(pattern15_0) = closure15() {
+                                                let pattern16_0 =
+                                                    C::is_same(ctx, pattern14_0, pattern15_0);
+                                                if pattern16_0 == true {
+                                                    let pattern18_0 = C::value_ty(ctx, pattern14_0);
+                                                    // Rule at rules.isle line 345.
+                                                    let expr0_0 =
+                                                        C::make_all_one(ctx, &pattern18_0);
+                                                    let expr1_0 =
+                                                        SimplifyResult::Value { val: expr0_0 };
+                                                    return Some(expr1_0);
+                                                }
+                                                let pattern16_0 =
+                                                    C::is_same(ctx, pattern14_1, pattern15_0);
+                                                if pattern16_0 == true {
+                                                    let pattern18_0 = C::value_ty(ctx, pattern14_1);
+                                                    // Rule at rules.isle line 352.
+                                                    let expr0_0 =
+                                                        C::make_all_one(ctx, &pattern18_0);
+                                                    let expr1_0 =
+                                                        SimplifyResult::Value { val: expr0_0 };
+                                                    return Some(expr1_0);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        &InsnData::Binary {
+                            code: ref pattern7_0,
+                            args: ref pattern7_1,
+                        } => {
+                            if let &BinaryOp::And = &pattern7_0 {
+                                let (pattern9_0, pattern9_1) =
+                                    C::unpack_value_array2(ctx, &pattern7_1);
+                                let closure10 = || {
+                                    return Some(pattern4_0);
+                                };
+                                if let Some(pattern10_0) = closure10() {
+                                    let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                    if pattern11_0 == true {
+                                        // Rule at rules.isle line 338.
+                                        let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
+                                        return Some(expr0_0);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
             _ => {}

@@ -18,6 +18,15 @@
 (decl is_two (bool) Value)
 (extern extractor infallible is_two is_two)
 
+(decl is_all_one (bool) Value)
+(extern extractor infallible is_all_one is_all_one)
+
+(decl is_same (bool Value) Value)
+(extern extractor infallible is_same is_same (out in))
+
+(decl is_power_of_two (bool) Value)
+(extern extractor infallible is_power_of_two is_power_of_two)
+
 (decl make_zero (Type) Value)
 (extern constructor make_zero make_zero)
 
@@ -27,8 +36,7 @@
 (decl make_all_one (Type) Value)
 (extern constructor make_all_one make_all_one)
 
-(decl is_same (bool Value) Value)
-(extern extractor infallible is_same is_same (out in))
+
 
 ;; Insn Simplify rule ;;
 (decl simplify (Insn) SimplifyResult)
@@ -85,14 +93,20 @@
   (SimplifyResult.Value (make_all_one ty))
 )
 
-
-;; Rules for Sub ;;
+;; Rules for BinaryOp.Sub ;;
 ; a - 0 => a
 (rule
   (simplify
     (extract_sub a (is_zero $true))
   )
   (SimplifyResult.Value a)
+)
+; 0 - a => -a
+(rule
+  (simplify
+    (extract_sub (is_zero $true) a)
+  )
+  (SimplifyResult.Insn (InsnData.Unary (UnaryOp.Neg) (value_array1 a)))
 )
 ; a - a => 0
 (rule
@@ -130,7 +144,7 @@
   (SimplifyResult.Value b)
 )
 
-;; Rules for Mul ;;
+;; Rules for BinaryOp.Mul ;;
 ; _ * 0 => 0
 (rule
   (simplify
@@ -172,4 +186,171 @@
     (extract_mul (is_two $true) a)
   )
   (SimplifyResult.Insn (InsnData.Binary (BinaryOp.Add) (value_array2 a a)))
+)
+
+;; Rules for BinaryOp.Sdiv ;;
+;; We don't simplify patterns where a divisor is a value not to change semantics. ;;
+; 0 / a => 0
+(rule
+  (simplify
+    (extract_sdiv (and (is_zero $true) (value_ty ty)) _)
+  )
+  (SimplifyResult.Value (make_zero ty))
+)
+
+;; Rules for BinaryOp.Udiv ;;
+;; We don't simplify patterns where a divisor is a value not to change semantics. ;;
+; 0 / a => 0
+(rule
+  (simplify
+    (extract_udiv (and (is_zero $true) (value_ty ty)) _)
+  )
+  (SimplifyResult.Value (make_zero ty))
+)
+
+;; Rules for BinaryOp.Lt
+; a < a => -1
+(rule
+  (simplify
+    (extract_lt a (and (is_same $true <a) (value_ty ty)))
+  )
+  (SimplifyResult.Value (make_all_one ty))
+)
+
+;; Rules for BinaryOp.Gt
+; a > b => b < a
+(rule
+  (simplify
+    (extract_gt a b)
+  )
+  (SimplifyResult.Insn (InsnData.Binary (BinaryOp.Lt) (value_array2 b a)))
+)
+
+;; Rules for BinaryOp.Slt
+; a < a => -1
+(rule
+  (simplify
+    (extract_slt a (and (is_same $true <a) (value_ty ty)))
+  )
+  (SimplifyResult.Value (make_all_one ty))
+)
+
+;; Rules for BinaryOp.Sgt
+; a > b => b < a
+(rule
+  (simplify
+    (extract_sgt a b)
+  )
+  (SimplifyResult.Insn (InsnData.Binary (BinaryOp.Slt) (value_array2 b a)))
+)
+
+;; Rules for BinaryOp.Eq
+; a == a => 1
+(rule
+  (simplify
+    (extract_eq a (and (is_same $true <a) (value_ty ty)))
+  )
+  (SimplifyResult.Value (make_all_one ty))
+)
+
+;; Rules for BinaryOp.And
+; a & a => a
+(rule
+  (simplify
+    (extract_and a (is_same $true <a))
+  )
+  (SimplifyResult.Value a)
+)
+; _ & 0 => 0
+(rule
+  (simplify
+    (extract_and _ (and (is_zero $true) (value_ty ty)))
+  )
+  (SimplifyResult.Value (make_zero ty))
+)
+; a & -1 => a
+(rule
+  (simplify
+    (extract_and a (is_all_one $true))
+  )
+  (SimplifyResult.Value a)
+)
+; a & !a => 0
+(rule
+  (simplify
+    (extract_and a (value_insn (extract_not (and (is_same $true <a) (value_ty ty)))))
+  )
+  (SimplifyResult.Value (make_zero ty))
+)
+; a & (a | _) => a
+(rule
+  (simplify
+    (extract_and a (value_insn (extract_or (is_same $true <a) _)))
+  )
+  (SimplifyResult.Value a)
+)
+; a & (_ | a) => a
+(rule
+  (simplify
+    (extract_and a (value_insn (extract_or _ (is_same $true <a))))
+  )
+  (SimplifyResult.Value a)
+)
+; a & (a - 1) => 0 where a: is_power_of_two.
+(rule
+  (simplify
+    (extract_and a (value_insn (extract_sub (and (is_same $true <a) (is_power_of_two $true) (value_ty ty)) (is_one $true))))
+  )
+  (SimplifyResult.Value (make_zero ty))
+)
+
+;; Rules for BinaryOp.Or
+; a | -1 => -1
+(rule
+  (simplify
+    (extract_or a (and (is_all_one $true) (value_ty ty)))
+  )
+  (SimplifyResult.Value (make_all_one ty))
+)
+; a | a => a
+(rule
+  (simplify
+    (extract_or a (is_same $true <a))
+  )
+  (SimplifyResult.Value a)
+)
+; a | 0 => a
+(rule
+  (simplify
+    (extract_or a (is_zero $true))
+  )
+  (SimplifyResult.Value a)
+)
+; a | !a => -1
+(rule
+  (simplify
+    (extract_or a (value_insn (extract_not (and (is_same $true <a) (value_ty ty)))))
+  )
+  (SimplifyResult.Value (make_all_one ty))
+)
+; a | (a & _) => a
+(rule
+  (simplify
+    (extract_or a (value_insn (extract_and (is_same $true <a) _)))
+  )
+  (SimplifyResult.Value a)
+)
+; a | !(a & _) => -1
+(rule
+  (simplify
+    (extract_or a (value_insn (extract_not (value_insn (extract_and (and (is_same $true <a) (value_ty ty)) _)))))
+  )
+  (SimplifyResult.Value (make_all_one ty))
+)
+; a | !(_ & a) => -1
+(rule
+  (simplify
+    (extract_or a (value_insn (extract_not (value_insn (extract_and _ (and (is_same $true <a) (value_ty ty)))))))
+  )
+  (SimplifyResult.Value (make_all_one ty))
 )
