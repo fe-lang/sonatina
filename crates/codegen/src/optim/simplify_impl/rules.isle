@@ -51,23 +51,10 @@
     (extract_add a (is_zero $true)))
   (SimplifyResult.Value a)
 )
-; 0 + a => a
-(rule
-  (simplify
-    (extract_add (is_zero $true) a))
-  (SimplifyResult.Value a)
-)
 ; a + (-a) => 0
 (rule
   (simplify
     (extract_add a (value_insn (extract_neg (value_with_ty(is_same $true <a) ty))))
-  )
-  (SimplifyResult.Value (make_zero ty))
-)
-; (-a) + a => 0
-(rule
-  (simplify
-    (extract_add (value_insn (extract_neg a)) (value_with_ty (is_same $true <a) ty))
   )
   (SimplifyResult.Value (make_zero ty))
 )
@@ -152,13 +139,6 @@
   )
   (SimplifyResult.Value (make_zero ty))
 )
-; 0 * _ => 0
-(rule
-  (simplify
-    (extract_mul (value_with_ty (is_zero $true) ty) _)
-  )
-  (SimplifyResult.Value (make_zero ty))
-)
 ; a * 1 => a
 (rule
   (simplify
@@ -166,24 +146,10 @@
   )
   (SimplifyResult.Value a)
 )
-; 1 * a => a
-(rule
-  (simplify
-    (extract_mul (is_one $true) a)
-  )
-  (SimplifyResult.Value a)
-)
 ; a * 2 => a + a
 (rule
   (simplify
     (extract_mul a (is_two $true))
-  )
-  (SimplifyResult.Insn (InsnData.Binary (BinaryOp.Add) (value_array2 a a)))
-)
-; 2 * a=> a + a
-(rule
-  (simplify
-    (extract_mul (is_two $true) a)
   )
   (SimplifyResult.Insn (InsnData.Binary (BinaryOp.Add) (value_array2 a a)))
 )

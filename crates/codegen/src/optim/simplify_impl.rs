@@ -9,12 +9,45 @@ use crate::isle::prelude::*;
 mod generated_code;
 
 pub fn simplify(dfg: &mut DataFlowGraph, insn: Insn) -> Option<SimplifyResult> {
-    generated_code::constructor_simplify(&mut SimplifyContext { dfg }, insn)
+    if let Some(res) = generated_code::constructor_simplify(&mut SimplifyContext { dfg }, insn) {
+        Some(res)
+    } else {
+        let insn = try_swap_arg(dfg, insn)?;
+        generated_code::constructor_simplify(&mut SimplifyContext { dfg }, insn)
+    }
 }
 
 pub enum SimplifyResult {
     Value { val: Value },
     Insn { data: InsnData },
+}
+
+fn try_swap_arg(dfg: &mut DataFlowGraph, insn: Insn) -> Option<Insn> {
+    match *dfg.insn_data(insn) {
+        InsnData::Binary {
+            code,
+            args: [lhs, rhs],
+        } => {
+            if code.is_commutative() {
+                let data = InsnData::Binary {
+                    code,
+                    args: [rhs, lhs],
+                };
+                Some(dfg.make_insn(data))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+impl BinaryOp {
+    fn is_commutative(self) -> bool {
+        use BinaryOp::*;
+
+        matches!(self, Add | Mul | And | Or | Xor)
+    }
 }
 
 struct SimplifyContext<'a> {
