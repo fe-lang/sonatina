@@ -4,7 +4,7 @@
 # nextln: 
 # nextln:     block2:
 # nextln:         v4.i8 = phi (v7 block7) (0.i8 block1);
-# nextln:         v5.i8 = lt v4 100.i8;
+# nextln:         v5.i1 = lt v4 100.i8;
 # nextln:         br v5 block3 block4;
 # nextln: 
 # nextln:     block3:
@@ -29,11 +29,11 @@ func %complex_loop() -> i8:
     block2:
         v3.i8 = phi (v9 block7) (v0 block1);
         v4.i8 = phi (v10 block7) (v2 block1);
-        v5.i8 = lt v4 100.i8;
+        v5.i1 = lt v4 100.i8;
         br v5 block3 block4;
 
     block3:
-        v6.i8 = lt v3 20.i8;
+        v6.i1 = lt v3 20.i8;
         br v6 block5 block6;
 
     block4:

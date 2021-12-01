@@ -192,6 +192,7 @@ impl<'a> Lexer<'a> {
             (b"i64", Type::I64),
             (b"i128", Type::I128),
             (b"i256", Type::I256),
+            (b"i1", Type::I1),
         };
 
         if base.is_none() && self.eat_char_if(|c| c == '[').is_some() {

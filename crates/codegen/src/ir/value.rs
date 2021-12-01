@@ -27,6 +27,7 @@ pub enum ValueData {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Immediate {
+    I1(bool),
     I8(i8),
     I16(i16),
     I32(i32),
@@ -38,6 +39,7 @@ pub enum Immediate {
 impl Immediate {
     pub fn ty(&self) -> Type {
         match self {
+            Self::I1(..) => Type::I1,
             Self::I8(..) => Type::I8,
             Self::I16(..) => Type::I16,
             Self::I32(..) => Type::I32,
@@ -51,6 +53,13 @@ impl Immediate {
 impl fmt::Display for Immediate {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Self::I1(v) => {
+                if *v {
+                    write!(f, "-1")
+                } else {
+                    write!(f, "0")
+                }
+            }
             Self::I8(v) => write!(f, "{}", v),
             Self::I16(v) => write!(f, "{}", v),
             Self::I32(v) => write!(f, "{}", v),
@@ -71,6 +80,7 @@ macro_rules! imm_from_primary {
     };
 }
 
+imm_from_primary!(bool, bool, Immediate::I1);
 imm_from_primary!(i8, i8, Immediate::I8);
 imm_from_primary!(u8, i8, Immediate::I8);
 imm_from_primary!(i16, i16, Immediate::I16);

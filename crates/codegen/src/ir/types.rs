@@ -5,6 +5,7 @@ use std::{cmp, fmt};
 /// Sonatina IR types definition.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
+    I1,
     I8,
     I16,
     I32,
@@ -30,6 +31,7 @@ impl Type {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Self::I1 => f.write_str("i1"),
             Self::I8 => f.write_str("i8"),
             Self::I16 => f.write_str("i16"),
             Self::I32 => f.write_str("i32"),

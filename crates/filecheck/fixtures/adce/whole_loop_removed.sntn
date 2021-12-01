@@ -3,18 +3,19 @@
 # nextln:        return 1.i8;
 func %whole_loop_removed() -> i8:
     block0:
-        v0.i8 = or 1.i8 0.i8;
+        v0.i1 = or 1.i8 0.i8;
+        v1.i8 = sext v0;
         jump block2;
 
     block1:
-        v1.i8 = phi (v0 block0) (v4 block2);
-        v2.i8 = add v0 99.i8;
-        v3.i8 = sgt v2 v1;
-        br v3 block2 block3;
+        v2.i8 = phi (v1 block0) (v5 block2);
+        v3.i8 = add v1 99.i8;
+        v4.i1 = sgt v3 v2;
+        br v4 block2 block3;
 
     block2:
-        v4.i8 = and 1.i8 1.i8;
-        v5.i8 = add v1 v4;
+        v5.i8 = and 1.i8 1.i8;
+        v6.i8 = add v2 v5;
         jump block1;
 
     block3:

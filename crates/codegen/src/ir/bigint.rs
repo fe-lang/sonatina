@@ -75,6 +75,10 @@ impl I256 {
         }
     }
 
+    pub fn trunc_to_i1(self) -> bool {
+        (self.to_u256().low_u32() & 0x1) != 0
+    }
+
     pub fn trunc_to_i8(self) -> i8 {
         self.to_u256().low_u32() as i8
     }

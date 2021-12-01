@@ -16,7 +16,7 @@ func %const_loop() -> i8:
     block2:
         v1.i8 = phi (1.i8 block1) (v2 block2);
         v2.i8 = add v1 10.i8;
-        v3.i8 = gt v2 v1;
+        v3.i1 = gt v2 v1;
         br v3 block3 block2;
 
     block3:

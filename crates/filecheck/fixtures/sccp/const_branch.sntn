@@ -11,7 +11,7 @@
 # nextln:         return 12.i8;
 func %const_branch() -> i8:
     block0:
-        v0.i8 = sgt -1.i8 0.i8;
+        v0.i1 = sgt -1.i8 0.i8;
         br v0 block1 block2;
 
     block1:

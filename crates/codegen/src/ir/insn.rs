@@ -189,9 +189,16 @@ impl BinaryOp {
         }
     }
 
-    // TODO: Add I1 type.
     fn result_type(self, dfg: &DataFlowGraph, args: &[Value; 2]) -> Type {
-        dfg.value_ty(args[0]).clone()
+        if self.is_cmp() {
+            Type::I1
+        } else {
+            dfg.value_ty(args[0]).clone()
+        }
+    }
+
+    fn is_cmp(self) -> bool {
+        matches!(self, Self::Lt | Self::Gt | Self::Slt | Self::Sgt | Self::Eq)
     }
 }
 

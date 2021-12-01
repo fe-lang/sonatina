@@ -35,6 +35,7 @@ impl Immediate {
     pub(super) fn zext(self, ty: &Type) -> Self {
         debug_assert!(&self.ty() < ty);
         let i256: I256 = match self {
+            Self::I1(val) => val.into(),
             Self::I8(val) => (val as u8).into(),
             Self::I16(val) => (val as u16).into(),
             Self::I32(val) => (val as u32).into(),
@@ -95,6 +96,7 @@ impl Immediate {
 
     fn as_i256(self) -> I256 {
         match self {
+            Self::I1(val) => val.into(),
             Self::I8(val) => val.into(),
             Self::I16(val) => val.into(),
             Self::I32(val) => val.into(),
@@ -106,6 +108,7 @@ impl Immediate {
 
     fn from_i256(val: I256, ty: &Type) -> Self {
         match ty {
+            Type::I1 => Self::I1(val.trunc_to_i1()),
             Type::I8 => Self::I8(val.trunc_to_i8()),
             Type::I16 => Self::I16(val.trunc_to_i16()),
             Type::I32 => Self::I32(val.trunc_to_i32()),
