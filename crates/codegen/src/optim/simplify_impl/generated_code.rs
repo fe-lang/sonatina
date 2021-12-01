@@ -41,630 +41,303 @@ pub trait Context {
 pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Option<SimplifyResult> {
     let pattern0_0 = arg0;
     let pattern1_0 = C::insn_data(ctx, pattern0_0);
-    if let &InsnData::Binary {
-        code: ref pattern2_0,
-        args: ref pattern2_1,
-    } = &pattern1_0
-    {
-        match &pattern2_0 {
-            &BinaryOp::Add => {
-                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
-                if let Some(pattern5_0) = C::value_insn(ctx, pattern4_0) {
-                    let pattern6_0 = C::insn_data(ctx, pattern5_0);
-                    if let &InsnData::Binary {
-                        code: ref pattern7_0,
-                        args: ref pattern7_1,
-                    } = &pattern6_0
-                    {
-                        if let &BinaryOp::Sub = &pattern7_0 {
-                            let (pattern9_0, pattern9_1) = C::unpack_value_array2(ctx, &pattern7_1);
-                            let closure10 = || {
-                                return Some(pattern9_1);
-                            };
-                            if let Some(pattern10_0) = closure10() {
-                                let pattern11_0 = C::is_same(ctx, pattern4_1, pattern10_0);
-                                if pattern11_0 == true {
-                                    // Rule at rules.isle line 70.
-                                    let expr0_0 = SimplifyResult::Value { val: pattern9_0 };
-                                    return Some(expr0_0);
-                                }
-                            }
-                        }
-                    }
-                }
-                let pattern5_0 = C::is_zero(ctx, pattern4_1);
-                if pattern5_0 == true {
-                    // Rule at rules.isle line 50.
-                    let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
-                    return Some(expr0_0);
-                }
-                if let Some(pattern5_0) = C::value_insn(ctx, pattern4_1) {
-                    let pattern6_0 = C::insn_data(ctx, pattern5_0);
-                    match &pattern6_0 {
-                        &InsnData::Unary {
+    match &pattern1_0 {
+        &InsnData::Unary {
+            code: ref pattern2_0,
+            args: ref pattern2_1,
+        } => {
+            match &pattern2_0 {
+                &UnaryOp::Not => {
+                    let pattern4_0 = C::unpack_value_array1(ctx, &pattern2_1);
+                    if let Some(pattern5_0) = C::value_insn(ctx, pattern4_0) {
+                        let pattern6_0 = C::insn_data(ctx, pattern5_0);
+                        if let &InsnData::Unary {
                             code: ref pattern7_0,
                             args: ref pattern7_1,
-                        } => {
+                        } = &pattern6_0
+                        {
                             match &pattern7_0 {
                                 &UnaryOp::Not => {
                                     let pattern9_0 = C::unpack_value_array1(ctx, &pattern7_1);
-                                    let closure10 = || {
-                                        return Some(pattern4_0);
-                                    };
-                                    if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
-                                        if pattern11_0 == true {
-                                            let pattern13_0 = C::value_ty(ctx, pattern9_0);
-                                            // Rule at rules.isle line 77.
-                                            let expr0_0 = C::make_all_one(ctx, &pattern13_0);
-                                            let expr1_0 = SimplifyResult::Value { val: expr0_0 };
-                                            return Some(expr1_0);
-                                        }
-                                    }
+                                    // Rule at rules.isle line 667.
+                                    let expr0_0 = SimplifyResult::Value { val: pattern9_0 };
+                                    return Some(expr0_0);
                                 }
                                 &UnaryOp::Neg => {
                                     let pattern9_0 = C::unpack_value_array1(ctx, &pattern7_1);
-                                    let closure10 = || {
-                                        return Some(pattern4_0);
+                                    let pattern10_0 = C::value_ty(ctx, pattern9_0);
+                                    // Rule at rules.isle line 674.
+                                    let expr0_0 = BinaryOp::Sub;
+                                    let expr1_0 = C::make_one(ctx, &pattern10_0);
+                                    let expr2_0 = C::pack_value_array2(ctx, pattern9_0, expr1_0);
+                                    let expr3_0 = InsnData::Binary {
+                                        code: expr0_0,
+                                        args: expr2_0,
                                     };
-                                    if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
-                                        if pattern11_0 == true {
-                                            let pattern13_0 = C::value_ty(ctx, pattern9_0);
-                                            // Rule at rules.isle line 56.
-                                            let expr0_0 = C::make_zero(ctx, &pattern13_0);
-                                            let expr1_0 = SimplifyResult::Value { val: expr0_0 };
-                                            return Some(expr1_0);
-                                        }
-                                    }
+                                    let expr4_0 = SimplifyResult::Insn { data: expr3_0 };
+                                    return Some(expr4_0);
                                 }
                                 _ => {}
                             }
                         }
-                        &InsnData::Binary {
+                    }
+                }
+                &UnaryOp::Neg => {
+                    let pattern4_0 = C::unpack_value_array1(ctx, &pattern2_1);
+                    if let Some(pattern5_0) = C::value_insn(ctx, pattern4_0) {
+                        let pattern6_0 = C::insn_data(ctx, pattern5_0);
+                        if let &InsnData::Unary {
                             code: ref pattern7_0,
                             args: ref pattern7_1,
-                        } => {
+                        } = &pattern6_0
+                        {
+                            match &pattern7_0 {
+                                &UnaryOp::Not => {
+                                    let pattern9_0 = C::unpack_value_array1(ctx, &pattern7_1);
+                                    let pattern10_0 = C::value_ty(ctx, pattern9_0);
+                                    // Rule at rules.isle line 690.
+                                    let expr0_0 = BinaryOp::Add;
+                                    let expr1_0 = C::make_one(ctx, &pattern10_0);
+                                    let expr2_0 = C::pack_value_array2(ctx, pattern9_0, expr1_0);
+                                    let expr3_0 = InsnData::Binary {
+                                        code: expr0_0,
+                                        args: expr2_0,
+                                    };
+                                    let expr4_0 = SimplifyResult::Insn { data: expr3_0 };
+                                    return Some(expr4_0);
+                                }
+                                &UnaryOp::Neg => {
+                                    let pattern9_0 = C::unpack_value_array1(ctx, &pattern7_1);
+                                    // Rule at rules.isle line 683.
+                                    let expr0_0 = SimplifyResult::Value { val: pattern9_0 };
+                                    return Some(expr0_0);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        &InsnData::Binary {
+            code: ref pattern2_0,
+            args: ref pattern2_1,
+        } => {
+            match &pattern2_0 {
+                &BinaryOp::Add => {
+                    let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                    if let Some(pattern5_0) = C::value_insn(ctx, pattern4_0) {
+                        let pattern6_0 = C::insn_data(ctx, pattern5_0);
+                        if let &InsnData::Binary {
+                            code: ref pattern7_0,
+                            args: ref pattern7_1,
+                        } = &pattern6_0
+                        {
                             if let &BinaryOp::Sub = &pattern7_0 {
                                 let (pattern9_0, pattern9_1) =
                                     C::unpack_value_array2(ctx, &pattern7_1);
                                 let closure10 = || {
-                                    return Some(pattern4_0);
+                                    return Some(pattern9_1);
                                 };
                                 if let Some(pattern10_0) = closure10() {
-                                    let pattern11_0 = C::is_same(ctx, pattern9_1, pattern10_0);
+                                    let pattern11_0 = C::is_same(ctx, pattern4_1, pattern10_0);
                                     if pattern11_0 == true {
-                                        // Rule at rules.isle line 63.
+                                        // Rule at rules.isle line 70.
                                         let expr0_0 = SimplifyResult::Value { val: pattern9_0 };
                                         return Some(expr0_0);
                                     }
                                 }
                             }
                         }
-                        _ => {}
                     }
-                }
-            }
-            &BinaryOp::Sub => {
-                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
-                let closure5 = || {
-                    return Some(pattern4_0);
-                };
-                if let Some(pattern5_0) = closure5() {
-                    let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
-                    if pattern6_0 == true {
-                        let pattern8_0 = C::value_ty(ctx, pattern4_1);
-                        // Rule at rules.isle line 100.
-                        let expr0_0 = C::make_zero(ctx, &pattern8_0);
-                        let expr1_0 = SimplifyResult::Value { val: expr0_0 };
-                        return Some(expr1_0);
-                    }
-                }
-                let pattern5_0 = C::is_zero(ctx, pattern4_0);
-                if pattern5_0 == true {
-                    // Rule at rules.isle line 93.
-                    let expr0_0 = UnaryOp::Neg;
-                    let expr1_0 = C::pack_value_array1(ctx, pattern4_1);
-                    let expr2_0 = InsnData::Unary {
-                        code: expr0_0,
-                        args: expr1_0,
-                    };
-                    let expr3_0 = SimplifyResult::Insn { data: expr2_0 };
-                    return Some(expr3_0);
-                }
-                if let Some(pattern5_0) = C::value_insn(ctx, pattern4_0) {
-                    let pattern6_0 = C::insn_data(ctx, pattern5_0);
-                    if let &InsnData::Binary {
-                        code: ref pattern7_0,
-                        args: ref pattern7_1,
-                    } = &pattern6_0
-                    {
-                        match &pattern7_0 {
-                            &BinaryOp::Add => {
-                                let (pattern9_0, pattern9_1) =
-                                    C::unpack_value_array2(ctx, &pattern7_1);
-                                let closure10 = || {
-                                    return Some(pattern9_0);
-                                };
-                                if let Some(pattern10_0) = closure10() {
-                                    let pattern11_0 = C::is_same(ctx, pattern4_1, pattern10_0);
-                                    if pattern11_0 == true {
-                                        // Rule at rules.isle line 128.
-                                        let expr0_0 = SimplifyResult::Value { val: pattern9_1 };
-                                        return Some(expr0_0);
-                                    }
-                                }
-                            }
-                            &BinaryOp::Sub => {
-                                let (pattern9_0, pattern9_1) =
-                                    C::unpack_value_array2(ctx, &pattern7_1);
-                                let closure10 = || {
-                                    return Some(pattern9_0);
-                                };
-                                if let Some(pattern10_0) = closure10() {
-                                    let pattern11_0 = C::is_same(ctx, pattern4_1, pattern10_0);
-                                    if pattern11_0 == true {
-                                        // Rule at rules.isle line 114.
-                                        let expr0_0 = UnaryOp::Neg;
-                                        let expr1_0 = C::pack_value_array1(ctx, pattern9_1);
-                                        let expr2_0 = InsnData::Unary {
-                                            code: expr0_0,
-                                            args: expr1_0,
-                                        };
-                                        let expr3_0 = SimplifyResult::Insn { data: expr2_0 };
-                                        return Some(expr3_0);
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                let pattern5_0 = C::is_zero(ctx, pattern4_1);
-                if pattern5_0 == true {
-                    // Rule at rules.isle line 86.
-                    let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
-                    return Some(expr0_0);
-                }
-                if let Some(pattern5_0) = C::value_insn(ctx, pattern4_1) {
-                    let pattern6_0 = C::insn_data(ctx, pattern5_0);
-                    if let &InsnData::Binary {
-                        code: ref pattern7_0,
-                        args: ref pattern7_1,
-                    } = &pattern6_0
-                    {
-                        match &pattern7_0 {
-                            &BinaryOp::Add => {
-                                let (pattern9_0, pattern9_1) =
-                                    C::unpack_value_array2(ctx, &pattern7_1);
-                                let closure10 = || {
-                                    return Some(pattern4_0);
-                                };
-                                if let Some(pattern10_0) = closure10() {
-                                    let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
-                                    if pattern11_0 == true {
-                                        // Rule at rules.isle line 121.
-                                        let expr0_0 = UnaryOp::Neg;
-                                        let expr1_0 = C::pack_value_array1(ctx, pattern9_1);
-                                        let expr2_0 = InsnData::Unary {
-                                            code: expr0_0,
-                                            args: expr1_0,
-                                        };
-                                        let expr3_0 = SimplifyResult::Insn { data: expr2_0 };
-                                        return Some(expr3_0);
-                                    }
-                                }
-                            }
-                            &BinaryOp::Sub => {
-                                let (pattern9_0, pattern9_1) =
-                                    C::unpack_value_array2(ctx, &pattern7_1);
-                                let closure10 = || {
-                                    return Some(pattern4_0);
-                                };
-                                if let Some(pattern10_0) = closure10() {
-                                    let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
-                                    if pattern11_0 == true {
-                                        // Rule at rules.isle line 107.
-                                        let expr0_0 = SimplifyResult::Value { val: pattern9_1 };
-                                        return Some(expr0_0);
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            &BinaryOp::Mul => {
-                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
-                let pattern5_0 = C::is_zero(ctx, pattern4_1);
-                if pattern5_0 == true {
-                    let pattern7_0 = C::value_ty(ctx, pattern4_1);
-                    // Rule at rules.isle line 137.
-                    let expr0_0 = C::make_zero(ctx, &pattern7_0);
-                    let expr1_0 = SimplifyResult::Value { val: expr0_0 };
-                    return Some(expr1_0);
-                }
-                let pattern5_0 = C::is_one(ctx, pattern4_1);
-                if pattern5_0 == true {
-                    // Rule at rules.isle line 144.
-                    let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
-                    return Some(expr0_0);
-                }
-                let pattern5_0 = C::is_two(ctx, pattern4_1);
-                if pattern5_0 == true {
-                    // Rule at rules.isle line 151.
-                    let expr0_0 = BinaryOp::Add;
-                    let expr1_0 = C::pack_value_array2(ctx, pattern4_0, pattern4_0);
-                    let expr2_0 = InsnData::Binary {
-                        code: expr0_0,
-                        args: expr1_0,
-                    };
-                    let expr3_0 = SimplifyResult::Insn { data: expr2_0 };
-                    return Some(expr3_0);
-                }
-            }
-            &BinaryOp::Udiv => {
-                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
-                let pattern5_0 = C::is_zero(ctx, pattern4_0);
-                if pattern5_0 == true {
-                    let pattern7_0 = C::value_ty(ctx, pattern4_0);
-                    // Rule at rules.isle line 171.
-                    let expr0_0 = C::make_zero(ctx, &pattern7_0);
-                    let expr1_0 = SimplifyResult::Value { val: expr0_0 };
-                    return Some(expr1_0);
-                }
-            }
-            &BinaryOp::Sdiv => {
-                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
-                let pattern5_0 = C::is_zero(ctx, pattern4_0);
-                if pattern5_0 == true {
-                    let pattern7_0 = C::value_ty(ctx, pattern4_0);
-                    // Rule at rules.isle line 161.
-                    let expr0_0 = C::make_zero(ctx, &pattern7_0);
-                    let expr1_0 = SimplifyResult::Value { val: expr0_0 };
-                    return Some(expr1_0);
-                }
-            }
-            &BinaryOp::Lt => {
-                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
-                let closure5 = || {
-                    return Some(pattern4_0);
-                };
-                if let Some(pattern5_0) = closure5() {
-                    let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
-                    if pattern6_0 == true {
-                        let pattern8_0 = C::value_ty(ctx, pattern4_1);
-                        // Rule at rules.isle line 180.
-                        let expr0_0 = C::make_all_one(ctx, &pattern8_0);
-                        let expr1_0 = SimplifyResult::Value { val: expr0_0 };
-                        return Some(expr1_0);
-                    }
-                }
-            }
-            &BinaryOp::Gt => {
-                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
-                // Rule at rules.isle line 189.
-                let expr0_0 = BinaryOp::Lt;
-                let expr1_0 = C::pack_value_array2(ctx, pattern4_1, pattern4_0);
-                let expr2_0 = InsnData::Binary {
-                    code: expr0_0,
-                    args: expr1_0,
-                };
-                let expr3_0 = SimplifyResult::Insn { data: expr2_0 };
-                return Some(expr3_0);
-            }
-            &BinaryOp::Slt => {
-                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
-                let closure5 = || {
-                    return Some(pattern4_0);
-                };
-                if let Some(pattern5_0) = closure5() {
-                    let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
-                    if pattern6_0 == true {
-                        let pattern8_0 = C::value_ty(ctx, pattern4_1);
-                        // Rule at rules.isle line 198.
-                        let expr0_0 = C::make_all_one(ctx, &pattern8_0);
-                        let expr1_0 = SimplifyResult::Value { val: expr0_0 };
-                        return Some(expr1_0);
-                    }
-                }
-            }
-            &BinaryOp::Sgt => {
-                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
-                // Rule at rules.isle line 207.
-                let expr0_0 = BinaryOp::Slt;
-                let expr1_0 = C::pack_value_array2(ctx, pattern4_1, pattern4_0);
-                let expr2_0 = InsnData::Binary {
-                    code: expr0_0,
-                    args: expr1_0,
-                };
-                let expr3_0 = SimplifyResult::Insn { data: expr2_0 };
-                return Some(expr3_0);
-            }
-            &BinaryOp::Eq => {
-                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
-                let closure5 = || {
-                    return Some(pattern4_0);
-                };
-                if let Some(pattern5_0) = closure5() {
-                    let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
-                    if pattern6_0 == true {
-                        let pattern8_0 = C::value_ty(ctx, pattern4_1);
-                        // Rule at rules.isle line 216.
-                        let expr0_0 = C::make_all_one(ctx, &pattern8_0);
-                        let expr1_0 = SimplifyResult::Value { val: expr0_0 };
-                        return Some(expr1_0);
-                    }
-                }
-            }
-            &BinaryOp::And => {
-                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
-                let closure5 = || {
-                    return Some(pattern4_0);
-                };
-                if let Some(pattern5_0) = closure5() {
-                    let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
-                    if pattern6_0 == true {
-                        // Rule at rules.isle line 225.
+                    let pattern5_0 = C::is_zero(ctx, pattern4_1);
+                    if pattern5_0 == true {
+                        // Rule at rules.isle line 50.
                         let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
                         return Some(expr0_0);
                     }
-                }
-                if let Some(pattern5_0) = C::value_insn(ctx, pattern4_0) {
-                    let pattern6_0 = C::insn_data(ctx, pattern5_0);
-                    if let &InsnData::Binary {
-                        code: ref pattern7_0,
-                        args: ref pattern7_1,
-                    } = &pattern6_0
-                    {
-                        if let &BinaryOp::Or = &pattern7_0 {
-                            let (pattern9_0, pattern9_1) = C::unpack_value_array2(ctx, &pattern7_1);
-                            if let Some(pattern10_0) = C::value_insn(ctx, pattern4_1) {
-                                let pattern11_0 = C::insn_data(ctx, pattern10_0);
-                                if let &InsnData::Binary {
-                                    code: ref pattern12_0,
-                                    args: ref pattern12_1,
-                                } = &pattern11_0
-                                {
-                                    if let &BinaryOp::Or = &pattern12_0 {
-                                        let (pattern14_0, pattern14_1) =
-                                            C::unpack_value_array2(ctx, &pattern12_1);
-                                        let closure15 = || {
-                                            return Some(pattern9_0);
+                    if let Some(pattern5_0) = C::value_insn(ctx, pattern4_1) {
+                        let pattern6_0 = C::insn_data(ctx, pattern5_0);
+                        match &pattern6_0 {
+                            &InsnData::Unary {
+                                code: ref pattern7_0,
+                                args: ref pattern7_1,
+                            } => {
+                                match &pattern7_0 {
+                                    &UnaryOp::Not => {
+                                        let pattern9_0 = C::unpack_value_array1(ctx, &pattern7_1);
+                                        let closure10 = || {
+                                            return Some(pattern4_0);
                                         };
-                                        if let Some(pattern15_0) = closure15() {
-                                            let pattern16_0 =
-                                                C::is_same(ctx, pattern14_0, pattern15_0);
-                                            if pattern16_0 == true {
-                                                if let Some(pattern18_0) =
-                                                    C::value_insn(ctx, pattern14_1)
-                                                {
-                                                    let pattern19_0 =
-                                                        C::insn_data(ctx, pattern18_0);
-                                                    if let &InsnData::Unary {
-                                                        code: ref pattern20_0,
-                                                        args: ref pattern20_1,
-                                                    } = &pattern19_0
-                                                    {
-                                                        if let &UnaryOp::Not = &pattern20_0 {
-                                                            let pattern22_0 =
-                                                                C::unpack_value_array1(
-                                                                    ctx,
-                                                                    &pattern20_1,
-                                                                );
-                                                            let closure23 = || {
-                                                                return Some(pattern9_1);
-                                                            };
-                                                            if let Some(pattern23_0) = closure23() {
-                                                                let pattern24_0 = C::is_same(
-                                                                    ctx,
-                                                                    pattern22_0,
-                                                                    pattern23_0,
-                                                                );
-                                                                if pattern24_0 == true {
-                                                                    // Rule at rules.isle line 267.
-                                                                    let expr0_0 =
-                                                                        SimplifyResult::Value {
-                                                                            val: pattern9_0,
-                                                                        };
-                                                                    return Some(expr0_0);
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
+                                        if let Some(pattern10_0) = closure10() {
+                                            let pattern11_0 =
+                                                C::is_same(ctx, pattern9_0, pattern10_0);
+                                            if pattern11_0 == true {
+                                                let pattern13_0 = C::value_ty(ctx, pattern9_0);
+                                                // Rule at rules.isle line 77.
+                                                let expr0_0 = C::make_all_one(ctx, &pattern13_0);
+                                                let expr1_0 =
+                                                    SimplifyResult::Value { val: expr0_0 };
+                                                return Some(expr1_0);
                                             }
                                         }
-                                        let closure15 = || {
-                                            return Some(pattern9_1);
+                                    }
+                                    &UnaryOp::Neg => {
+                                        let pattern9_0 = C::unpack_value_array1(ctx, &pattern7_1);
+                                        let closure10 = || {
+                                            return Some(pattern4_0);
                                         };
-                                        if let Some(pattern15_0) = closure15() {
-                                            let pattern16_0 =
-                                                C::is_same(ctx, pattern14_0, pattern15_0);
-                                            if pattern16_0 == true {
-                                                if let Some(pattern18_0) =
-                                                    C::value_insn(ctx, pattern14_1)
-                                                {
-                                                    let pattern19_0 =
-                                                        C::insn_data(ctx, pattern18_0);
-                                                    if let &InsnData::Unary {
-                                                        code: ref pattern20_0,
-                                                        args: ref pattern20_1,
-                                                    } = &pattern19_0
-                                                    {
-                                                        if let &UnaryOp::Not = &pattern20_0 {
-                                                            let pattern22_0 =
-                                                                C::unpack_value_array1(
-                                                                    ctx,
-                                                                    &pattern20_1,
-                                                                );
-                                                            let closure23 = || {
-                                                                return Some(pattern9_0);
-                                                            };
-                                                            if let Some(pattern23_0) = closure23() {
-                                                                let pattern24_0 = C::is_same(
-                                                                    ctx,
-                                                                    pattern22_0,
-                                                                    pattern23_0,
-                                                                );
-                                                                if pattern24_0 == true {
-                                                                    // Rule at rules.isle line 303.
-                                                                    let expr0_0 =
-                                                                        SimplifyResult::Value {
-                                                                            val: pattern9_1,
-                                                                        };
-                                                                    return Some(expr0_0);
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
+                                        if let Some(pattern10_0) = closure10() {
+                                            let pattern11_0 =
+                                                C::is_same(ctx, pattern9_0, pattern10_0);
+                                            if pattern11_0 == true {
+                                                let pattern13_0 = C::value_ty(ctx, pattern9_0);
+                                                // Rule at rules.isle line 56.
+                                                let expr0_0 = C::make_zero(ctx, &pattern13_0);
+                                                let expr1_0 =
+                                                    SimplifyResult::Value { val: expr0_0 };
+                                                return Some(expr1_0);
                                             }
                                         }
-                                        if let Some(pattern15_0) = C::value_insn(ctx, pattern14_0) {
-                                            let pattern16_0 = C::insn_data(ctx, pattern15_0);
-                                            if let &InsnData::Unary {
-                                                code: ref pattern17_0,
-                                                args: ref pattern17_1,
-                                            } = &pattern16_0
-                                            {
-                                                if let &UnaryOp::Not = &pattern17_0 {
-                                                    let pattern19_0 =
-                                                        C::unpack_value_array1(ctx, &pattern17_1);
-                                                    let closure20 = || {
-                                                        return Some(pattern9_0);
-                                                    };
-                                                    if let Some(pattern20_0) = closure20() {
-                                                        let pattern21_0 = C::is_same(
-                                                            ctx,
-                                                            pattern19_0,
-                                                            pattern20_0,
-                                                        );
-                                                        if pattern21_0 == true {
-                                                            let closure23 = || {
-                                                                return Some(pattern9_1);
-                                                            };
-                                                            if let Some(pattern23_0) = closure23() {
-                                                                let pattern24_0 = C::is_same(
-                                                                    ctx,
-                                                                    pattern14_1,
-                                                                    pattern23_0,
-                                                                );
-                                                                if pattern24_0 == true {
-                                                                    // Rule at rules.isle line 291.
-                                                                    let expr0_0 =
-                                                                        SimplifyResult::Value {
-                                                                            val: pattern9_1,
-                                                                        };
-                                                                    return Some(expr0_0);
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                    let closure20 = || {
-                                                        return Some(pattern9_1);
-                                                    };
-                                                    if let Some(pattern20_0) = closure20() {
-                                                        let pattern21_0 = C::is_same(
-                                                            ctx,
-                                                            pattern19_0,
-                                                            pattern20_0,
-                                                        );
-                                                        if pattern21_0 == true {
-                                                            let closure23 = || {
-                                                                return Some(pattern9_0);
-                                                            };
-                                                            if let Some(pattern23_0) = closure23() {
-                                                                let pattern24_0 = C::is_same(
-                                                                    ctx,
-                                                                    pattern14_1,
-                                                                    pattern23_0,
-                                                                );
-                                                                if pattern24_0 == true {
-                                                                    // Rule at rules.isle line 279.
-                                                                    let expr0_0 =
-                                                                        SimplifyResult::Value {
-                                                                            val: pattern9_0,
-                                                                        };
-                                                                    return Some(expr0_0);
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            &InsnData::Binary {
+                                code: ref pattern7_0,
+                                args: ref pattern7_1,
+                            } => {
+                                if let &BinaryOp::Sub = &pattern7_0 {
+                                    let (pattern9_0, pattern9_1) =
+                                        C::unpack_value_array2(ctx, &pattern7_1);
+                                    let closure10 = || {
+                                        return Some(pattern4_0);
+                                    };
+                                    if let Some(pattern10_0) = closure10() {
+                                        let pattern11_0 = C::is_same(ctx, pattern9_1, pattern10_0);
+                                        if pattern11_0 == true {
+                                            // Rule at rules.isle line 63.
+                                            let expr0_0 = SimplifyResult::Value { val: pattern9_0 };
+                                            return Some(expr0_0);
                                         }
                                     }
                                 }
                             }
+                            _ => {}
                         }
                     }
                 }
-                let pattern5_0 = C::is_zero(ctx, pattern4_1);
-                if pattern5_0 == true {
-                    let pattern7_0 = C::value_ty(ctx, pattern4_1);
-                    // Rule at rules.isle line 232.
-                    let expr0_0 = C::make_zero(ctx, &pattern7_0);
-                    let expr1_0 = SimplifyResult::Value { val: expr0_0 };
-                    return Some(expr1_0);
-                }
-                let pattern5_0 = C::is_all_one(ctx, pattern4_1);
-                if pattern5_0 == true {
-                    // Rule at rules.isle line 239.
-                    let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
-                    return Some(expr0_0);
-                }
-                if let Some(pattern5_0) = C::value_insn(ctx, pattern4_1) {
-                    let pattern6_0 = C::insn_data(ctx, pattern5_0);
-                    match &pattern6_0 {
-                        &InsnData::Unary {
+                &BinaryOp::Sub => {
+                    let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                    let closure5 = || {
+                        return Some(pattern4_0);
+                    };
+                    if let Some(pattern5_0) = closure5() {
+                        let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                        if pattern6_0 == true {
+                            let pattern8_0 = C::value_ty(ctx, pattern4_1);
+                            // Rule at rules.isle line 100.
+                            let expr0_0 = C::make_zero(ctx, &pattern8_0);
+                            let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                            return Some(expr1_0);
+                        }
+                    }
+                    let pattern5_0 = C::is_zero(ctx, pattern4_0);
+                    if pattern5_0 == true {
+                        // Rule at rules.isle line 93.
+                        let expr0_0 = UnaryOp::Neg;
+                        let expr1_0 = C::pack_value_array1(ctx, pattern4_1);
+                        let expr2_0 = InsnData::Unary {
+                            code: expr0_0,
+                            args: expr1_0,
+                        };
+                        let expr3_0 = SimplifyResult::Insn { data: expr2_0 };
+                        return Some(expr3_0);
+                    }
+                    if let Some(pattern5_0) = C::value_insn(ctx, pattern4_0) {
+                        let pattern6_0 = C::insn_data(ctx, pattern5_0);
+                        if let &InsnData::Binary {
                             code: ref pattern7_0,
                             args: ref pattern7_1,
-                        } => {
+                        } = &pattern6_0
+                        {
                             match &pattern7_0 {
-                                &UnaryOp::Not => {
-                                    let pattern9_0 = C::unpack_value_array1(ctx, &pattern7_1);
+                                &BinaryOp::Add => {
+                                    let (pattern9_0, pattern9_1) =
+                                        C::unpack_value_array2(ctx, &pattern7_1);
                                     let closure10 = || {
-                                        return Some(pattern4_0);
+                                        return Some(pattern9_0);
                                     };
                                     if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                        let pattern11_0 = C::is_same(ctx, pattern4_1, pattern10_0);
                                         if pattern11_0 == true {
-                                            let pattern13_0 = C::value_ty(ctx, pattern9_0);
-                                            // Rule at rules.isle line 246.
-                                            let expr0_0 = C::make_zero(ctx, &pattern13_0);
-                                            let expr1_0 = SimplifyResult::Value { val: expr0_0 };
-                                            return Some(expr1_0);
+                                            // Rule at rules.isle line 128.
+                                            let expr0_0 = SimplifyResult::Value { val: pattern9_1 };
+                                            return Some(expr0_0);
                                         }
                                     }
                                 }
-                                &UnaryOp::Neg => {
-                                    let pattern9_0 = C::unpack_value_array1(ctx, &pattern7_1);
+                                &BinaryOp::Sub => {
+                                    let (pattern9_0, pattern9_1) =
+                                        C::unpack_value_array2(ctx, &pattern7_1);
                                     let closure10 = || {
-                                        return Some(pattern4_0);
+                                        return Some(pattern9_0);
                                     };
                                     if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                        let pattern11_0 = C::is_same(ctx, pattern4_1, pattern10_0);
                                         if pattern11_0 == true {
-                                            let pattern13_0 = C::is_power_of_two(ctx, pattern9_0);
-                                            if pattern13_0 == true {
-                                                // Rule at rules.isle line 315.
-                                                let expr0_0 =
-                                                    SimplifyResult::Value { val: pattern4_0 };
-                                                return Some(expr0_0);
-                                            }
+                                            // Rule at rules.isle line 114.
+                                            let expr0_0 = UnaryOp::Neg;
+                                            let expr1_0 = C::pack_value_array1(ctx, pattern9_1);
+                                            let expr2_0 = InsnData::Unary {
+                                                code: expr0_0,
+                                                args: expr1_0,
+                                            };
+                                            let expr3_0 = SimplifyResult::Insn { data: expr2_0 };
+                                            return Some(expr3_0);
                                         }
                                     }
                                 }
                                 _ => {}
                             }
                         }
-                        &InsnData::Binary {
+                    }
+                    let pattern5_0 = C::is_zero(ctx, pattern4_1);
+                    if pattern5_0 == true {
+                        // Rule at rules.isle line 86.
+                        let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
+                        return Some(expr0_0);
+                    }
+                    if let Some(pattern5_0) = C::value_insn(ctx, pattern4_1) {
+                        let pattern6_0 = C::insn_data(ctx, pattern5_0);
+                        if let &InsnData::Binary {
                             code: ref pattern7_0,
                             args: ref pattern7_1,
-                        } => {
+                        } = &pattern6_0
+                        {
                             match &pattern7_0 {
+                                &BinaryOp::Add => {
+                                    let (pattern9_0, pattern9_1) =
+                                        C::unpack_value_array2(ctx, &pattern7_1);
+                                    let closure10 = || {
+                                        return Some(pattern4_0);
+                                    };
+                                    if let Some(pattern10_0) = closure10() {
+                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                        if pattern11_0 == true {
+                                            // Rule at rules.isle line 121.
+                                            let expr0_0 = UnaryOp::Neg;
+                                            let expr1_0 = C::pack_value_array1(ctx, pattern9_1);
+                                            let expr2_0 = InsnData::Unary {
+                                                code: expr0_0,
+                                                args: expr1_0,
+                                            };
+                                            let expr3_0 = SimplifyResult::Insn { data: expr2_0 };
+                                            return Some(expr3_0);
+                                        }
+                                    }
+                                }
                                 &BinaryOp::Sub => {
                                     let (pattern9_0, pattern9_1) =
                                         C::unpack_value_array2(ctx, &pattern7_1);
@@ -674,38 +347,8 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Option<Simpl
                                     if let Some(pattern10_0) = closure10() {
                                         let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
                                         if pattern11_0 == true {
-                                            let pattern13_0 = C::is_power_of_two(ctx, pattern9_0);
-                                            if pattern13_0 == true {
-                                                let pattern15_0 = C::value_ty(ctx, pattern9_0);
-                                                let pattern16_0 = C::is_one(ctx, pattern9_1);
-                                                if pattern16_0 == true {
-                                                    // Rule at rules.isle line 322.
-                                                    let expr0_0 = C::make_zero(ctx, &pattern15_0);
-                                                    let expr1_0 =
-                                                        SimplifyResult::Value { val: expr0_0 };
-                                                    return Some(expr1_0);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                &BinaryOp::Or => {
-                                    let (pattern9_0, pattern9_1) =
-                                        C::unpack_value_array2(ctx, &pattern7_1);
-                                    let closure10 = || {
-                                        return Some(pattern4_0);
-                                    };
-                                    if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
-                                        if pattern11_0 == true {
-                                            // Rule at rules.isle line 253.
-                                            let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
-                                            return Some(expr0_0);
-                                        }
-                                        let pattern11_0 = C::is_same(ctx, pattern9_1, pattern10_0);
-                                        if pattern11_0 == true {
-                                            // Rule at rules.isle line 260.
-                                            let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
+                                            // Rule at rules.isle line 107.
+                                            let expr0_0 = SimplifyResult::Value { val: pattern9_1 };
                                             return Some(expr0_0);
                                         }
                                     }
@@ -713,892 +356,152 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Option<Simpl
                                 _ => {}
                             }
                         }
-                        _ => {}
                     }
                 }
-            }
-            &BinaryOp::Or => {
-                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
-                let closure5 = || {
-                    return Some(pattern4_0);
-                };
-                if let Some(pattern5_0) = closure5() {
-                    let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
-                    if pattern6_0 == true {
-                        // Rule at rules.isle line 338.
+                &BinaryOp::Mul => {
+                    let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                    let pattern5_0 = C::is_zero(ctx, pattern4_1);
+                    if pattern5_0 == true {
+                        let pattern7_0 = C::value_ty(ctx, pattern4_1);
+                        // Rule at rules.isle line 137.
+                        let expr0_0 = C::make_zero(ctx, &pattern7_0);
+                        let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                        return Some(expr1_0);
+                    }
+                    let pattern5_0 = C::is_one(ctx, pattern4_1);
+                    if pattern5_0 == true {
+                        // Rule at rules.isle line 144.
                         let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
                         return Some(expr0_0);
                     }
-                }
-                if let Some(pattern5_0) = C::value_insn(ctx, pattern4_0) {
-                    let pattern6_0 = C::insn_data(ctx, pattern5_0);
-                    if let &InsnData::Binary {
-                        code: ref pattern7_0,
-                        args: ref pattern7_1,
-                    } = &pattern6_0
-                    {
-                        match &pattern7_0 {
-                            &BinaryOp::And => {
-                                let (pattern9_0, pattern9_1) =
-                                    C::unpack_value_array2(ctx, &pattern7_1);
-                                if let Some(pattern10_0) = C::value_insn(ctx, pattern9_0) {
-                                    let pattern11_0 = C::insn_data(ctx, pattern10_0);
-                                    if let &InsnData::Unary {
-                                        code: ref pattern12_0,
-                                        args: ref pattern12_1,
-                                    } = &pattern11_0
-                                    {
-                                        if let &UnaryOp::Not = &pattern12_0 {
-                                            let pattern14_0 =
-                                                C::unpack_value_array1(ctx, &pattern12_1);
-                                            if let Some(pattern15_0) =
-                                                C::value_insn(ctx, pattern4_1)
-                                            {
-                                                let pattern16_0 = C::insn_data(ctx, pattern15_0);
-                                                if let &InsnData::Unary {
-                                                    code: ref pattern17_0,
-                                                    args: ref pattern17_1,
-                                                } = &pattern16_0
-                                                {
-                                                    if let &UnaryOp::Not = &pattern17_0 {
-                                                        let pattern19_0 = C::unpack_value_array1(
-                                                            ctx,
-                                                            &pattern17_1,
-                                                        );
-                                                        if let Some(pattern20_0) =
-                                                            C::value_insn(ctx, pattern19_0)
-                                                        {
-                                                            let pattern21_0 =
-                                                                C::insn_data(ctx, pattern20_0);
-                                                            if let &InsnData::Binary {
-                                                                code: ref pattern22_0,
-                                                                args: ref pattern22_1,
-                                                            } = &pattern21_0
-                                                            {
-                                                                if let &BinaryOp::Or = &pattern22_0
-                                                                {
-                                                                    let (pattern24_0, pattern24_1) =
-                                                                        C::unpack_value_array2(
-                                                                            ctx,
-                                                                            &pattern22_1,
-                                                                        );
-                                                                    let closure25 = || {
-                                                                        return Some(pattern9_1);
-                                                                    };
-                                                                    if let Some(pattern25_0) =
-                                                                        closure25()
-                                                                    {
-                                                                        let pattern26_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern24_0,
-                                                                                pattern25_0,
-                                                                            );
-                                                                        if pattern26_0 == true {
-                                                                            let closure28 = || {
-                                                                                return Some(
-                                                                                    pattern14_0,
-                                                                                );
-                                                                            };
-                                                                            if let Some(
-                                                                                pattern28_0,
-                                                                            ) = closure28()
-                                                                            {
-                                                                                let pattern29_0 =
-                                                                                    C::is_same(
-                                                                                        ctx,
-                                                                                        pattern24_1,
-                                                                                        pattern28_0,
-                                                                                    );
-                                                                                if pattern29_0
-                                                                                    == true
-                                                                                {
-                                                                                    // Rule at rules.isle line 517.
-                                                                                    let expr0_0 = SimplifyResult::Value {
-                                                                                        val: pattern9_0,
-                                                                                    };
-                                                                                    return Some(
-                                                                                        expr0_0,
-                                                                                    );
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                    let closure25 = || {
-                                                                        return Some(pattern14_0);
-                                                                    };
-                                                                    if let Some(pattern25_0) =
-                                                                        closure25()
-                                                                    {
-                                                                        let pattern26_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern24_0,
-                                                                                pattern25_0,
-                                                                            );
-                                                                        if pattern26_0 == true {
-                                                                            let closure28 = || {
-                                                                                return Some(
-                                                                                    pattern9_1,
-                                                                                );
-                                                                            };
-                                                                            if let Some(
-                                                                                pattern28_0,
-                                                                            ) = closure28()
-                                                                            {
-                                                                                let pattern29_0 =
-                                                                                    C::is_same(
-                                                                                        ctx,
-                                                                                        pattern24_1,
-                                                                                        pattern28_0,
-                                                                                    );
-                                                                                if pattern29_0
-                                                                                    == true
-                                                                                {
-                                                                                    // Rule at rules.isle line 507.
-                                                                                    let expr0_0 = SimplifyResult::Value {
-                                                                                        val: pattern9_0,
-                                                                                    };
-                                                                                    return Some(
-                                                                                        expr0_0,
-                                                                                    );
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                if let Some(pattern10_0) = C::value_insn(ctx, pattern9_1) {
-                                    let pattern11_0 = C::insn_data(ctx, pattern10_0);
-                                    if let &InsnData::Unary {
-                                        code: ref pattern12_0,
-                                        args: ref pattern12_1,
-                                    } = &pattern11_0
-                                    {
-                                        if let &UnaryOp::Not = &pattern12_0 {
-                                            let pattern14_0 =
-                                                C::unpack_value_array1(ctx, &pattern12_1);
-                                            if let Some(pattern15_0) =
-                                                C::value_insn(ctx, pattern4_1)
-                                            {
-                                                let pattern16_0 = C::insn_data(ctx, pattern15_0);
-                                                if let &InsnData::Unary {
-                                                    code: ref pattern17_0,
-                                                    args: ref pattern17_1,
-                                                } = &pattern16_0
-                                                {
-                                                    if let &UnaryOp::Not = &pattern17_0 {
-                                                        let pattern19_0 = C::unpack_value_array1(
-                                                            ctx,
-                                                            &pattern17_1,
-                                                        );
-                                                        if let Some(pattern20_0) =
-                                                            C::value_insn(ctx, pattern19_0)
-                                                        {
-                                                            let pattern21_0 =
-                                                                C::insn_data(ctx, pattern20_0);
-                                                            if let &InsnData::Binary {
-                                                                code: ref pattern22_0,
-                                                                args: ref pattern22_1,
-                                                            } = &pattern21_0
-                                                            {
-                                                                if let &BinaryOp::Or = &pattern22_0
-                                                                {
-                                                                    let (pattern24_0, pattern24_1) =
-                                                                        C::unpack_value_array2(
-                                                                            ctx,
-                                                                            &pattern22_1,
-                                                                        );
-                                                                    let closure25 = || {
-                                                                        return Some(pattern9_0);
-                                                                    };
-                                                                    if let Some(pattern25_0) =
-                                                                        closure25()
-                                                                    {
-                                                                        let pattern26_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern24_0,
-                                                                                pattern25_0,
-                                                                            );
-                                                                        if pattern26_0 == true {
-                                                                            let closure28 = || {
-                                                                                return Some(
-                                                                                    pattern14_0,
-                                                                                );
-                                                                            };
-                                                                            if let Some(
-                                                                                pattern28_0,
-                                                                            ) = closure28()
-                                                                            {
-                                                                                let pattern29_0 =
-                                                                                    C::is_same(
-                                                                                        ctx,
-                                                                                        pattern24_1,
-                                                                                        pattern28_0,
-                                                                                    );
-                                                                                if pattern29_0
-                                                                                    == true
-                                                                                {
-                                                                                    // Rule at rules.isle line 527.
-                                                                                    let expr0_0 = SimplifyResult::Value {
-                                                                                        val: pattern9_1,
-                                                                                    };
-                                                                                    return Some(
-                                                                                        expr0_0,
-                                                                                    );
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                    let closure25 = || {
-                                                                        return Some(pattern14_0);
-                                                                    };
-                                                                    if let Some(pattern25_0) =
-                                                                        closure25()
-                                                                    {
-                                                                        let pattern26_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern24_0,
-                                                                                pattern25_0,
-                                                                            );
-                                                                        if pattern26_0 == true {
-                                                                            let closure28 = || {
-                                                                                return Some(
-                                                                                    pattern9_0,
-                                                                                );
-                                                                            };
-                                                                            if let Some(
-                                                                                pattern28_0,
-                                                                            ) = closure28()
-                                                                            {
-                                                                                let pattern29_0 =
-                                                                                    C::is_same(
-                                                                                        ctx,
-                                                                                        pattern24_1,
-                                                                                        pattern28_0,
-                                                                                    );
-                                                                                if pattern29_0
-                                                                                    == true
-                                                                                {
-                                                                                    // Rule at rules.isle line 537.
-                                                                                    let expr0_0 = SimplifyResult::Value {
-                                                                                        val: pattern9_1,
-                                                                                    };
-                                                                                    return Some(
-                                                                                        expr0_0,
-                                                                                    );
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            &BinaryOp::Or => {
-                                let (pattern9_0, pattern9_1) =
-                                    C::unpack_value_array2(ctx, &pattern7_1);
-                                if let Some(pattern10_0) = C::value_insn(ctx, pattern4_1) {
-                                    let pattern11_0 = C::insn_data(ctx, pattern10_0);
-                                    if let &InsnData::Binary {
-                                        code: ref pattern12_0,
-                                        args: ref pattern12_1,
-                                    } = &pattern11_0
-                                    {
-                                        if let &BinaryOp::Xor = &pattern12_0 {
-                                            let (pattern14_0, pattern14_1) =
-                                                C::unpack_value_array2(ctx, &pattern12_1);
-                                            let closure15 = || {
-                                                return Some(pattern9_0);
-                                            };
-                                            if let Some(pattern15_0) = closure15() {
-                                                let pattern16_0 =
-                                                    C::is_same(ctx, pattern14_0, pattern15_0);
-                                                if pattern16_0 == true {
-                                                    let closure18 = || {
-                                                        return Some(pattern9_1);
-                                                    };
-                                                    if let Some(pattern18_0) = closure18() {
-                                                        let pattern19_0 = C::is_same(
-                                                            ctx,
-                                                            pattern14_1,
-                                                            pattern18_0,
-                                                        );
-                                                        if pattern19_0 == true {
-                                                            // Rule at rules.isle line 483.
-                                                            let expr0_0 = SimplifyResult::Value {
-                                                                val: pattern4_0,
-                                                            };
-                                                            return Some(expr0_0);
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            let closure15 = || {
-                                                return Some(pattern9_1);
-                                            };
-                                            if let Some(pattern15_0) = closure15() {
-                                                let pattern16_0 =
-                                                    C::is_same(ctx, pattern14_0, pattern15_0);
-                                                if pattern16_0 == true {
-                                                    let closure18 = || {
-                                                        return Some(pattern9_0);
-                                                    };
-                                                    if let Some(pattern18_0) = closure18() {
-                                                        let pattern19_0 = C::is_same(
-                                                            ctx,
-                                                            pattern14_1,
-                                                            pattern18_0,
-                                                        );
-                                                        if pattern19_0 == true {
-                                                            // Rule at rules.isle line 495.
-                                                            let expr0_0 = SimplifyResult::Value {
-                                                                val: pattern4_0,
-                                                            };
-                                                            return Some(expr0_0);
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            &BinaryOp::Xor => {
-                                let (pattern9_0, pattern9_1) =
-                                    C::unpack_value_array2(ctx, &pattern7_1);
-                                if let Some(pattern10_0) = C::value_insn(ctx, pattern4_1) {
-                                    let pattern11_0 = C::insn_data(ctx, pattern10_0);
-                                    if let &InsnData::Binary {
-                                        code: ref pattern12_0,
-                                        args: ref pattern12_1,
-                                    } = &pattern11_0
-                                    {
-                                        if let &BinaryOp::And = &pattern12_0 {
-                                            let (pattern14_0, pattern14_1) =
-                                                C::unpack_value_array2(ctx, &pattern12_1);
-                                            let closure15 = || {
-                                                return Some(pattern9_0);
-                                            };
-                                            if let Some(pattern15_0) = closure15() {
-                                                let pattern16_0 =
-                                                    C::is_same(ctx, pattern14_0, pattern15_0);
-                                                if pattern16_0 == true {
-                                                    if let Some(pattern18_0) =
-                                                        C::value_insn(ctx, pattern14_1)
-                                                    {
-                                                        let pattern19_0 =
-                                                            C::insn_data(ctx, pattern18_0);
-                                                        if let &InsnData::Unary {
-                                                            code: ref pattern20_0,
-                                                            args: ref pattern20_1,
-                                                        } = &pattern19_0
-                                                        {
-                                                            if let &UnaryOp::Not = &pattern20_0 {
-                                                                let pattern22_0 =
-                                                                    C::unpack_value_array1(
-                                                                        ctx,
-                                                                        &pattern20_1,
-                                                                    );
-                                                                let closure23 = || {
-                                                                    return Some(pattern9_1);
-                                                                };
-                                                                if let Some(pattern23_0) =
-                                                                    closure23()
-                                                                {
-                                                                    let pattern24_0 = C::is_same(
-                                                                        ctx,
-                                                                        pattern22_0,
-                                                                        pattern23_0,
-                                                                    );
-                                                                    if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 387.
-                                                                        let expr0_0 =
-                                                                            SimplifyResult::Value {
-                                                                                val: pattern4_0,
-                                                                            };
-                                                                        return Some(expr0_0);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            let closure15 = || {
-                                                return Some(pattern9_1);
-                                            };
-                                            if let Some(pattern15_0) = closure15() {
-                                                let pattern16_0 =
-                                                    C::is_same(ctx, pattern14_0, pattern15_0);
-                                                if pattern16_0 == true {
-                                                    if let Some(pattern18_0) =
-                                                        C::value_insn(ctx, pattern14_1)
-                                                    {
-                                                        let pattern19_0 =
-                                                            C::insn_data(ctx, pattern18_0);
-                                                        if let &InsnData::Unary {
-                                                            code: ref pattern20_0,
-                                                            args: ref pattern20_1,
-                                                        } = &pattern19_0
-                                                        {
-                                                            if let &UnaryOp::Not = &pattern20_0 {
-                                                                let pattern22_0 =
-                                                                    C::unpack_value_array1(
-                                                                        ctx,
-                                                                        &pattern20_1,
-                                                                    );
-                                                                let closure23 = || {
-                                                                    return Some(pattern9_0);
-                                                                };
-                                                                if let Some(pattern23_0) =
-                                                                    closure23()
-                                                                {
-                                                                    let pattern24_0 = C::is_same(
-                                                                        ctx,
-                                                                        pattern22_0,
-                                                                        pattern23_0,
-                                                                    );
-                                                                    if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 423.
-                                                                        let expr0_0 =
-                                                                            SimplifyResult::Value {
-                                                                                val: pattern4_0,
-                                                                            };
-                                                                        return Some(expr0_0);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            if let Some(pattern15_0) =
-                                                C::value_insn(ctx, pattern14_0)
-                                            {
-                                                let pattern16_0 = C::insn_data(ctx, pattern15_0);
-                                                if let &InsnData::Unary {
-                                                    code: ref pattern17_0,
-                                                    args: ref pattern17_1,
-                                                } = &pattern16_0
-                                                {
-                                                    if let &UnaryOp::Not = &pattern17_0 {
-                                                        let pattern19_0 = C::unpack_value_array1(
-                                                            ctx,
-                                                            &pattern17_1,
-                                                        );
-                                                        let closure20 = || {
-                                                            return Some(pattern9_0);
-                                                        };
-                                                        if let Some(pattern20_0) = closure20() {
-                                                            let pattern21_0 = C::is_same(
-                                                                ctx,
-                                                                pattern19_0,
-                                                                pattern20_0,
-                                                            );
-                                                            if pattern21_0 == true {
-                                                                let closure23 = || {
-                                                                    return Some(pattern9_1);
-                                                                };
-                                                                if let Some(pattern23_0) =
-                                                                    closure23()
-                                                                {
-                                                                    let pattern24_0 = C::is_same(
-                                                                        ctx,
-                                                                        pattern14_1,
-                                                                        pattern23_0,
-                                                                    );
-                                                                    if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 411.
-                                                                        let expr0_0 =
-                                                                            SimplifyResult::Value {
-                                                                                val: pattern4_0,
-                                                                            };
-                                                                        return Some(expr0_0);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                        let closure20 = || {
-                                                            return Some(pattern9_1);
-                                                        };
-                                                        if let Some(pattern20_0) = closure20() {
-                                                            let pattern21_0 = C::is_same(
-                                                                ctx,
-                                                                pattern19_0,
-                                                                pattern20_0,
-                                                            );
-                                                            if pattern21_0 == true {
-                                                                let closure23 = || {
-                                                                    return Some(pattern9_0);
-                                                                };
-                                                                if let Some(pattern23_0) =
-                                                                    closure23()
-                                                                {
-                                                                    let pattern24_0 = C::is_same(
-                                                                        ctx,
-                                                                        pattern14_1,
-                                                                        pattern23_0,
-                                                                    );
-                                                                    if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 399.
-                                                                        let expr0_0 =
-                                                                            SimplifyResult::Value {
-                                                                                val: pattern4_0,
-                                                                            };
-                                                                        return Some(expr0_0);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                if let Some(pattern10_0) = C::value_insn(ctx, pattern9_0) {
-                                    let pattern11_0 = C::insn_data(ctx, pattern10_0);
-                                    if let &InsnData::Unary {
-                                        code: ref pattern12_0,
-                                        args: ref pattern12_1,
-                                    } = &pattern11_0
-                                    {
-                                        if let &UnaryOp::Not = &pattern12_0 {
-                                            let pattern14_0 =
-                                                C::unpack_value_array1(ctx, &pattern12_1);
-                                            if let Some(pattern15_0) =
-                                                C::value_insn(ctx, pattern4_1)
-                                            {
-                                                let pattern16_0 = C::insn_data(ctx, pattern15_0);
-                                                if let &InsnData::Binary {
-                                                    code: ref pattern17_0,
-                                                    args: ref pattern17_1,
-                                                } = &pattern16_0
-                                                {
-                                                    if let &BinaryOp::And = &pattern17_0 {
-                                                        let (pattern19_0, pattern19_1) =
-                                                            C::unpack_value_array2(
-                                                                ctx,
-                                                                &pattern17_1,
-                                                            );
-                                                        let closure20 = || {
-                                                            return Some(pattern9_1);
-                                                        };
-                                                        if let Some(pattern20_0) = closure20() {
-                                                            let pattern21_0 = C::is_same(
-                                                                ctx,
-                                                                pattern19_0,
-                                                                pattern20_0,
-                                                            );
-                                                            if pattern21_0 == true {
-                                                                let closure23 = || {
-                                                                    return Some(pattern14_0);
-                                                                };
-                                                                if let Some(pattern23_0) =
-                                                                    closure23()
-                                                                {
-                                                                    let pattern24_0 = C::is_same(
-                                                                        ctx,
-                                                                        pattern19_1,
-                                                                        pattern23_0,
-                                                                    );
-                                                                    if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 447.
-                                                                        let expr0_0 =
-                                                                            SimplifyResult::Value {
-                                                                                val: pattern4_0,
-                                                                            };
-                                                                        return Some(expr0_0);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                        let closure20 = || {
-                                                            return Some(pattern14_0);
-                                                        };
-                                                        if let Some(pattern20_0) = closure20() {
-                                                            let pattern21_0 = C::is_same(
-                                                                ctx,
-                                                                pattern19_0,
-                                                                pattern20_0,
-                                                            );
-                                                            if pattern21_0 == true {
-                                                                let closure23 = || {
-                                                                    return Some(pattern9_1);
-                                                                };
-                                                                if let Some(pattern23_0) =
-                                                                    closure23()
-                                                                {
-                                                                    let pattern24_0 = C::is_same(
-                                                                        ctx,
-                                                                        pattern19_1,
-                                                                        pattern23_0,
-                                                                    );
-                                                                    if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 435.
-                                                                        let expr0_0 =
-                                                                            SimplifyResult::Value {
-                                                                                val: pattern4_0,
-                                                                            };
-                                                                        return Some(expr0_0);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                if let Some(pattern10_0) = C::value_insn(ctx, pattern9_1) {
-                                    let pattern11_0 = C::insn_data(ctx, pattern10_0);
-                                    if let &InsnData::Unary {
-                                        code: ref pattern12_0,
-                                        args: ref pattern12_1,
-                                    } = &pattern11_0
-                                    {
-                                        if let &UnaryOp::Not = &pattern12_0 {
-                                            let pattern14_0 =
-                                                C::unpack_value_array1(ctx, &pattern12_1);
-                                            if let Some(pattern15_0) =
-                                                C::value_insn(ctx, pattern4_1)
-                                            {
-                                                let pattern16_0 = C::insn_data(ctx, pattern15_0);
-                                                if let &InsnData::Binary {
-                                                    code: ref pattern17_0,
-                                                    args: ref pattern17_1,
-                                                } = &pattern16_0
-                                                {
-                                                    if let &BinaryOp::And = &pattern17_0 {
-                                                        let (pattern19_0, pattern19_1) =
-                                                            C::unpack_value_array2(
-                                                                ctx,
-                                                                &pattern17_1,
-                                                            );
-                                                        let closure20 = || {
-                                                            return Some(pattern9_0);
-                                                        };
-                                                        if let Some(pattern20_0) = closure20() {
-                                                            let pattern21_0 = C::is_same(
-                                                                ctx,
-                                                                pattern19_0,
-                                                                pattern20_0,
-                                                            );
-                                                            if pattern21_0 == true {
-                                                                let closure23 = || {
-                                                                    return Some(pattern14_0);
-                                                                };
-                                                                if let Some(pattern23_0) =
-                                                                    closure23()
-                                                                {
-                                                                    let pattern24_0 = C::is_same(
-                                                                        ctx,
-                                                                        pattern19_1,
-                                                                        pattern23_0,
-                                                                    );
-                                                                    if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 459.
-                                                                        let expr0_0 =
-                                                                            SimplifyResult::Value {
-                                                                                val: pattern4_0,
-                                                                            };
-                                                                        return Some(expr0_0);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                        let closure20 = || {
-                                                            return Some(pattern14_0);
-                                                        };
-                                                        if let Some(pattern20_0) = closure20() {
-                                                            let pattern21_0 = C::is_same(
-                                                                ctx,
-                                                                pattern19_0,
-                                                                pattern20_0,
-                                                            );
-                                                            if pattern21_0 == true {
-                                                                let closure23 = || {
-                                                                    return Some(pattern9_0);
-                                                                };
-                                                                if let Some(pattern23_0) =
-                                                                    closure23()
-                                                                {
-                                                                    let pattern24_0 = C::is_same(
-                                                                        ctx,
-                                                                        pattern19_1,
-                                                                        pattern23_0,
-                                                                    );
-                                                                    if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 471.
-                                                                        let expr0_0 =
-                                                                            SimplifyResult::Value {
-                                                                                val: pattern4_0,
-                                                                            };
-                                                                        return Some(expr0_0);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
+                    let pattern5_0 = C::is_two(ctx, pattern4_1);
+                    if pattern5_0 == true {
+                        // Rule at rules.isle line 151.
+                        let expr0_0 = BinaryOp::Add;
+                        let expr1_0 = C::pack_value_array2(ctx, pattern4_0, pattern4_0);
+                        let expr2_0 = InsnData::Binary {
+                            code: expr0_0,
+                            args: expr1_0,
+                        };
+                        let expr3_0 = SimplifyResult::Insn { data: expr2_0 };
+                        return Some(expr3_0);
                     }
                 }
-                let pattern5_0 = C::is_zero(ctx, pattern4_1);
-                if pattern5_0 == true {
-                    // Rule at rules.isle line 345.
-                    let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
-                    return Some(expr0_0);
-                }
-                let pattern5_0 = C::is_all_one(ctx, pattern4_1);
-                if pattern5_0 == true {
-                    let pattern7_0 = C::value_ty(ctx, pattern4_1);
-                    // Rule at rules.isle line 331.
-                    let expr0_0 = C::make_all_one(ctx, &pattern7_0);
-                    let expr1_0 = SimplifyResult::Value { val: expr0_0 };
-                    return Some(expr1_0);
-                }
-                if let Some(pattern5_0) = C::value_insn(ctx, pattern4_1) {
-                    let pattern6_0 = C::insn_data(ctx, pattern5_0);
-                    match &pattern6_0 {
-                        &InsnData::Unary {
-                            code: ref pattern7_0,
-                            args: ref pattern7_1,
-                        } => {
-                            if let &UnaryOp::Not = &pattern7_0 {
-                                let pattern9_0 = C::unpack_value_array1(ctx, &pattern7_1);
-                                let closure10 = || {
-                                    return Some(pattern4_0);
-                                };
-                                if let Some(pattern10_0) = closure10() {
-                                    let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
-                                    if pattern11_0 == true {
-                                        let pattern13_0 = C::value_ty(ctx, pattern9_0);
-                                        // Rule at rules.isle line 352.
-                                        let expr0_0 = C::make_all_one(ctx, &pattern13_0);
-                                        let expr1_0 = SimplifyResult::Value { val: expr0_0 };
-                                        return Some(expr1_0);
-                                    }
-                                }
-                                if let Some(pattern10_0) = C::value_insn(ctx, pattern9_0) {
-                                    let pattern11_0 = C::insn_data(ctx, pattern10_0);
-                                    if let &InsnData::Binary {
-                                        code: ref pattern12_0,
-                                        args: ref pattern12_1,
-                                    } = &pattern11_0
-                                    {
-                                        if let &BinaryOp::And = &pattern12_0 {
-                                            let (pattern14_0, pattern14_1) =
-                                                C::unpack_value_array2(ctx, &pattern12_1);
-                                            let closure15 = || {
-                                                return Some(pattern4_0);
-                                            };
-                                            if let Some(pattern15_0) = closure15() {
-                                                let pattern16_0 =
-                                                    C::is_same(ctx, pattern14_0, pattern15_0);
-                                                if pattern16_0 == true {
-                                                    let pattern18_0 = C::value_ty(ctx, pattern14_0);
-                                                    // Rule at rules.isle line 373.
-                                                    let expr0_0 =
-                                                        C::make_all_one(ctx, &pattern18_0);
-                                                    let expr1_0 =
-                                                        SimplifyResult::Value { val: expr0_0 };
-                                                    return Some(expr1_0);
-                                                }
-                                                let pattern16_0 =
-                                                    C::is_same(ctx, pattern14_1, pattern15_0);
-                                                if pattern16_0 == true {
-                                                    let pattern18_0 = C::value_ty(ctx, pattern14_1);
-                                                    // Rule at rules.isle line 380.
-                                                    let expr0_0 =
-                                                        C::make_all_one(ctx, &pattern18_0);
-                                                    let expr1_0 =
-                                                        SimplifyResult::Value { val: expr0_0 };
-                                                    return Some(expr1_0);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        &InsnData::Binary {
-                            code: ref pattern7_0,
-                            args: ref pattern7_1,
-                        } => {
-                            if let &BinaryOp::And = &pattern7_0 {
-                                let (pattern9_0, pattern9_1) =
-                                    C::unpack_value_array2(ctx, &pattern7_1);
-                                let closure10 = || {
-                                    return Some(pattern4_0);
-                                };
-                                if let Some(pattern10_0) = closure10() {
-                                    let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
-                                    if pattern11_0 == true {
-                                        // Rule at rules.isle line 359.
-                                        let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
-                                        return Some(expr0_0);
-                                    }
-                                    let pattern11_0 = C::is_same(ctx, pattern9_1, pattern10_0);
-                                    if pattern11_0 == true {
-                                        // Rule at rules.isle line 366.
-                                        let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
-                                        return Some(expr0_0);
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            &BinaryOp::Xor => {
-                let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
-                let closure5 = || {
-                    return Some(pattern4_0);
-                };
-                if let Some(pattern5_0) = closure5() {
-                    let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
-                    if pattern6_0 == true {
-                        let pattern8_0 = C::value_ty(ctx, pattern4_1);
-                        // Rule at rules.isle line 556.
-                        let expr0_0 = C::make_zero(ctx, &pattern8_0);
+                &BinaryOp::Udiv => {
+                    let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                    let pattern5_0 = C::is_zero(ctx, pattern4_0);
+                    if pattern5_0 == true {
+                        let pattern7_0 = C::value_ty(ctx, pattern4_0);
+                        // Rule at rules.isle line 171.
+                        let expr0_0 = C::make_zero(ctx, &pattern7_0);
                         let expr1_0 = SimplifyResult::Value { val: expr0_0 };
                         return Some(expr1_0);
                     }
                 }
-                if let Some(pattern5_0) = C::value_insn(ctx, pattern4_0) {
-                    let pattern6_0 = C::insn_data(ctx, pattern5_0);
-                    if let &InsnData::Binary {
-                        code: ref pattern7_0,
-                        args: ref pattern7_1,
-                    } = &pattern6_0
-                    {
-                        match &pattern7_0 {
-                            &BinaryOp::And => {
+                &BinaryOp::Sdiv => {
+                    let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                    let pattern5_0 = C::is_zero(ctx, pattern4_0);
+                    if pattern5_0 == true {
+                        let pattern7_0 = C::value_ty(ctx, pattern4_0);
+                        // Rule at rules.isle line 161.
+                        let expr0_0 = C::make_zero(ctx, &pattern7_0);
+                        let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                        return Some(expr1_0);
+                    }
+                }
+                &BinaryOp::Lt => {
+                    let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                    let closure5 = || {
+                        return Some(pattern4_0);
+                    };
+                    if let Some(pattern5_0) = closure5() {
+                        let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                        if pattern6_0 == true {
+                            let pattern8_0 = C::value_ty(ctx, pattern4_1);
+                            // Rule at rules.isle line 180.
+                            let expr0_0 = C::make_all_one(ctx, &pattern8_0);
+                            let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                            return Some(expr1_0);
+                        }
+                    }
+                }
+                &BinaryOp::Gt => {
+                    let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                    // Rule at rules.isle line 189.
+                    let expr0_0 = BinaryOp::Lt;
+                    let expr1_0 = C::pack_value_array2(ctx, pattern4_1, pattern4_0);
+                    let expr2_0 = InsnData::Binary {
+                        code: expr0_0,
+                        args: expr1_0,
+                    };
+                    let expr3_0 = SimplifyResult::Insn { data: expr2_0 };
+                    return Some(expr3_0);
+                }
+                &BinaryOp::Slt => {
+                    let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                    let closure5 = || {
+                        return Some(pattern4_0);
+                    };
+                    if let Some(pattern5_0) = closure5() {
+                        let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                        if pattern6_0 == true {
+                            let pattern8_0 = C::value_ty(ctx, pattern4_1);
+                            // Rule at rules.isle line 198.
+                            let expr0_0 = C::make_all_one(ctx, &pattern8_0);
+                            let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                            return Some(expr1_0);
+                        }
+                    }
+                }
+                &BinaryOp::Sgt => {
+                    let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                    // Rule at rules.isle line 207.
+                    let expr0_0 = BinaryOp::Slt;
+                    let expr1_0 = C::pack_value_array2(ctx, pattern4_1, pattern4_0);
+                    let expr2_0 = InsnData::Binary {
+                        code: expr0_0,
+                        args: expr1_0,
+                    };
+                    let expr3_0 = SimplifyResult::Insn { data: expr2_0 };
+                    return Some(expr3_0);
+                }
+                &BinaryOp::Eq => {
+                    let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                    let closure5 = || {
+                        return Some(pattern4_0);
+                    };
+                    if let Some(pattern5_0) = closure5() {
+                        let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                        if pattern6_0 == true {
+                            let pattern8_0 = C::value_ty(ctx, pattern4_1);
+                            // Rule at rules.isle line 216.
+                            let expr0_0 = C::make_all_one(ctx, &pattern8_0);
+                            let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                            return Some(expr1_0);
+                        }
+                    }
+                }
+                &BinaryOp::And => {
+                    let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                    let closure5 = || {
+                        return Some(pattern4_0);
+                    };
+                    if let Some(pattern5_0) = closure5() {
+                        let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                        if pattern6_0 == true {
+                            // Rule at rules.isle line 225.
+                            let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
+                            return Some(expr0_0);
+                        }
+                    }
+                    if let Some(pattern5_0) = C::value_insn(ctx, pattern4_0) {
+                        let pattern6_0 = C::insn_data(ctx, pattern5_0);
+                        if let &InsnData::Binary {
+                            code: ref pattern7_0,
+                            args: ref pattern7_1,
+                        } = &pattern6_0
+                        {
+                            if let &BinaryOp::Or = &pattern7_0 {
                                 let (pattern9_0, pattern9_1) =
                                     C::unpack_value_array2(ctx, &pattern7_1);
                                 if let Some(pattern10_0) = C::value_insn(ctx, pattern4_1) {
@@ -1646,10 +549,10 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Option<Simpl
                                                                         pattern23_0,
                                                                     );
                                                                     if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 645.
+                                                                        // Rule at rules.isle line 267.
                                                                         let expr0_0 =
                                                                             SimplifyResult::Value {
-                                                                                val: pattern14_1,
+                                                                                val: pattern9_0,
                                                                             };
                                                                         return Some(expr0_0);
                                                                     }
@@ -1694,10 +597,10 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Option<Simpl
                                                                         pattern23_0,
                                                                     );
                                                                     if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 635.
+                                                                        // Rule at rules.isle line 303.
                                                                         let expr0_0 =
                                                                             SimplifyResult::Value {
-                                                                                val: pattern14_1,
+                                                                                val: pattern9_1,
                                                                             };
                                                                         return Some(expr0_0);
                                                                     }
@@ -1743,10 +646,10 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Option<Simpl
                                                                         pattern23_0,
                                                                     );
                                                                     if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 625.
+                                                                        // Rule at rules.isle line 291.
                                                                         let expr0_0 =
                                                                             SimplifyResult::Value {
-                                                                                val: pattern14_0,
+                                                                                val: pattern9_1,
                                                                             };
                                                                         return Some(expr0_0);
                                                                     }
@@ -1775,10 +678,10 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Option<Simpl
                                                                         pattern23_0,
                                                                     );
                                                                     if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 655.
+                                                                        // Rule at rules.isle line 279.
                                                                         let expr0_0 =
                                                                             SimplifyResult::Value {
-                                                                                val: pattern14_0,
+                                                                                val: pattern9_0,
                                                                             };
                                                                         return Some(expr0_0);
                                                                     }
@@ -1792,189 +695,673 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Option<Simpl
                                     }
                                 }
                             }
-                            &BinaryOp::Or => {
-                                let (pattern9_0, pattern9_1) =
-                                    C::unpack_value_array2(ctx, &pattern7_1);
-                                if let Some(pattern10_0) = C::value_insn(ctx, pattern4_1) {
-                                    let pattern11_0 = C::insn_data(ctx, pattern10_0);
-                                    if let &InsnData::Binary {
-                                        code: ref pattern12_0,
-                                        args: ref pattern12_1,
-                                    } = &pattern11_0
-                                    {
-                                        if let &BinaryOp::And = &pattern12_0 {
-                                            let (pattern14_0, pattern14_1) =
-                                                C::unpack_value_array2(ctx, &pattern12_1);
-                                            let closure15 = || {
-                                                return Some(pattern9_0);
-                                            };
-                                            if let Some(pattern15_0) = closure15() {
-                                                let pattern16_0 =
-                                                    C::is_same(ctx, pattern14_0, pattern15_0);
-                                                if pattern16_0 == true {
-                                                    if let Some(pattern18_0) =
-                                                        C::value_insn(ctx, pattern14_1)
-                                                    {
-                                                        let pattern19_0 =
-                                                            C::insn_data(ctx, pattern18_0);
-                                                        if let &InsnData::Unary {
-                                                            code: ref pattern20_0,
-                                                            args: ref pattern20_1,
-                                                        } = &pattern19_0
-                                                        {
-                                                            if let &UnaryOp::Not = &pattern20_0 {
-                                                                let pattern22_0 =
-                                                                    C::unpack_value_array1(
-                                                                        ctx,
-                                                                        &pattern20_1,
-                                                                    );
-                                                                let closure23 = || {
-                                                                    return Some(pattern9_1);
-                                                                };
-                                                                if let Some(pattern23_0) =
-                                                                    closure23()
-                                                                {
-                                                                    let pattern24_0 = C::is_same(
-                                                                        ctx,
-                                                                        pattern22_0,
-                                                                        pattern23_0,
-                                                                    );
-                                                                    if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 604.
-                                                                        let expr0_0 =
-                                                                            SimplifyResult::Value {
-                                                                                val: pattern9_1,
-                                                                            };
-                                                                        return Some(expr0_0);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
+                        }
+                    }
+                    let pattern5_0 = C::is_zero(ctx, pattern4_1);
+                    if pattern5_0 == true {
+                        let pattern7_0 = C::value_ty(ctx, pattern4_1);
+                        // Rule at rules.isle line 232.
+                        let expr0_0 = C::make_zero(ctx, &pattern7_0);
+                        let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                        return Some(expr1_0);
+                    }
+                    let pattern5_0 = C::is_all_one(ctx, pattern4_1);
+                    if pattern5_0 == true {
+                        // Rule at rules.isle line 239.
+                        let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
+                        return Some(expr0_0);
+                    }
+                    if let Some(pattern5_0) = C::value_insn(ctx, pattern4_1) {
+                        let pattern6_0 = C::insn_data(ctx, pattern5_0);
+                        match &pattern6_0 {
+                            &InsnData::Unary {
+                                code: ref pattern7_0,
+                                args: ref pattern7_1,
+                            } => {
+                                match &pattern7_0 {
+                                    &UnaryOp::Not => {
+                                        let pattern9_0 = C::unpack_value_array1(ctx, &pattern7_1);
+                                        let closure10 = || {
+                                            return Some(pattern4_0);
+                                        };
+                                        if let Some(pattern10_0) = closure10() {
+                                            let pattern11_0 =
+                                                C::is_same(ctx, pattern9_0, pattern10_0);
+                                            if pattern11_0 == true {
+                                                let pattern13_0 = C::value_ty(ctx, pattern9_0);
+                                                // Rule at rules.isle line 246.
+                                                let expr0_0 = C::make_zero(ctx, &pattern13_0);
+                                                let expr1_0 =
+                                                    SimplifyResult::Value { val: expr0_0 };
+                                                return Some(expr1_0);
+                                            }
+                                        }
+                                    }
+                                    &UnaryOp::Neg => {
+                                        let pattern9_0 = C::unpack_value_array1(ctx, &pattern7_1);
+                                        let closure10 = || {
+                                            return Some(pattern4_0);
+                                        };
+                                        if let Some(pattern10_0) = closure10() {
+                                            let pattern11_0 =
+                                                C::is_same(ctx, pattern9_0, pattern10_0);
+                                            if pattern11_0 == true {
+                                                let pattern13_0 =
+                                                    C::is_power_of_two(ctx, pattern9_0);
+                                                if pattern13_0 == true {
+                                                    // Rule at rules.isle line 315.
+                                                    let expr0_0 =
+                                                        SimplifyResult::Value { val: pattern4_0 };
+                                                    return Some(expr0_0);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            &InsnData::Binary {
+                                code: ref pattern7_0,
+                                args: ref pattern7_1,
+                            } => {
+                                match &pattern7_0 {
+                                    &BinaryOp::Sub => {
+                                        let (pattern9_0, pattern9_1) =
+                                            C::unpack_value_array2(ctx, &pattern7_1);
+                                        let closure10 = || {
+                                            return Some(pattern4_0);
+                                        };
+                                        if let Some(pattern10_0) = closure10() {
+                                            let pattern11_0 =
+                                                C::is_same(ctx, pattern9_0, pattern10_0);
+                                            if pattern11_0 == true {
+                                                let pattern13_0 =
+                                                    C::is_power_of_two(ctx, pattern9_0);
+                                                if pattern13_0 == true {
+                                                    let pattern15_0 = C::value_ty(ctx, pattern9_0);
+                                                    let pattern16_0 = C::is_one(ctx, pattern9_1);
+                                                    if pattern16_0 == true {
+                                                        // Rule at rules.isle line 322.
+                                                        let expr0_0 =
+                                                            C::make_zero(ctx, &pattern15_0);
+                                                        let expr1_0 =
+                                                            SimplifyResult::Value { val: expr0_0 };
+                                                        return Some(expr1_0);
                                                     }
                                                 }
                                             }
-                                            let closure15 = || {
-                                                return Some(pattern9_1);
-                                            };
-                                            if let Some(pattern15_0) = closure15() {
-                                                let pattern16_0 =
-                                                    C::is_same(ctx, pattern14_0, pattern15_0);
-                                                if pattern16_0 == true {
-                                                    if let Some(pattern18_0) =
-                                                        C::value_insn(ctx, pattern14_1)
-                                                    {
-                                                        let pattern19_0 =
-                                                            C::insn_data(ctx, pattern18_0);
-                                                        if let &InsnData::Unary {
-                                                            code: ref pattern20_0,
-                                                            args: ref pattern20_1,
-                                                        } = &pattern19_0
-                                                        {
-                                                            if let &UnaryOp::Not = &pattern20_0 {
-                                                                let pattern22_0 =
-                                                                    C::unpack_value_array1(
-                                                                        ctx,
-                                                                        &pattern20_1,
-                                                                    );
-                                                                let closure23 = || {
-                                                                    return Some(pattern9_0);
-                                                                };
-                                                                if let Some(pattern23_0) =
-                                                                    closure23()
-                                                                {
-                                                                    let pattern24_0 = C::is_same(
-                                                                        ctx,
-                                                                        pattern22_0,
-                                                                        pattern23_0,
-                                                                    );
-                                                                    if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 594.
-                                                                        let expr0_0 =
-                                                                            SimplifyResult::Value {
-                                                                                val: pattern9_0,
-                                                                            };
-                                                                        return Some(expr0_0);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
+                                        }
+                                    }
+                                    &BinaryOp::Or => {
+                                        let (pattern9_0, pattern9_1) =
+                                            C::unpack_value_array2(ctx, &pattern7_1);
+                                        let closure10 = || {
+                                            return Some(pattern4_0);
+                                        };
+                                        if let Some(pattern10_0) = closure10() {
+                                            let pattern11_0 =
+                                                C::is_same(ctx, pattern9_0, pattern10_0);
+                                            if pattern11_0 == true {
+                                                // Rule at rules.isle line 253.
+                                                let expr0_0 =
+                                                    SimplifyResult::Value { val: pattern4_0 };
+                                                return Some(expr0_0);
                                             }
-                                            if let Some(pattern15_0) =
-                                                C::value_insn(ctx, pattern14_0)
-                                            {
-                                                let pattern16_0 = C::insn_data(ctx, pattern15_0);
-                                                if let &InsnData::Unary {
-                                                    code: ref pattern17_0,
-                                                    args: ref pattern17_1,
-                                                } = &pattern16_0
+                                            let pattern11_0 =
+                                                C::is_same(ctx, pattern9_1, pattern10_0);
+                                            if pattern11_0 == true {
+                                                // Rule at rules.isle line 260.
+                                                let expr0_0 =
+                                                    SimplifyResult::Value { val: pattern4_0 };
+                                                return Some(expr0_0);
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                &BinaryOp::Or => {
+                    let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                    let closure5 = || {
+                        return Some(pattern4_0);
+                    };
+                    if let Some(pattern5_0) = closure5() {
+                        let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                        if pattern6_0 == true {
+                            // Rule at rules.isle line 338.
+                            let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
+                            return Some(expr0_0);
+                        }
+                    }
+                    if let Some(pattern5_0) = C::value_insn(ctx, pattern4_0) {
+                        let pattern6_0 = C::insn_data(ctx, pattern5_0);
+                        if let &InsnData::Binary {
+                            code: ref pattern7_0,
+                            args: ref pattern7_1,
+                        } = &pattern6_0
+                        {
+                            match &pattern7_0 {
+                                &BinaryOp::And => {
+                                    let (pattern9_0, pattern9_1) =
+                                        C::unpack_value_array2(ctx, &pattern7_1);
+                                    if let Some(pattern10_0) = C::value_insn(ctx, pattern9_0) {
+                                        let pattern11_0 = C::insn_data(ctx, pattern10_0);
+                                        if let &InsnData::Unary {
+                                            code: ref pattern12_0,
+                                            args: ref pattern12_1,
+                                        } = &pattern11_0
+                                        {
+                                            if let &UnaryOp::Not = &pattern12_0 {
+                                                let pattern14_0 =
+                                                    C::unpack_value_array1(ctx, &pattern12_1);
+                                                if let Some(pattern15_0) =
+                                                    C::value_insn(ctx, pattern4_1)
                                                 {
-                                                    if let &UnaryOp::Not = &pattern17_0 {
-                                                        let pattern19_0 = C::unpack_value_array1(
-                                                            ctx,
-                                                            &pattern17_1,
-                                                        );
-                                                        let closure20 = || {
-                                                            return Some(pattern9_0);
-                                                        };
-                                                        if let Some(pattern20_0) = closure20() {
-                                                            let pattern21_0 = C::is_same(
-                                                                ctx,
-                                                                pattern19_0,
-                                                                pattern20_0,
-                                                            );
-                                                            if pattern21_0 == true {
-                                                                let closure23 = || {
-                                                                    return Some(pattern9_1);
-                                                                };
-                                                                if let Some(pattern23_0) =
-                                                                    closure23()
+                                                    let pattern16_0 =
+                                                        C::insn_data(ctx, pattern15_0);
+                                                    if let &InsnData::Unary {
+                                                        code: ref pattern17_0,
+                                                        args: ref pattern17_1,
+                                                    } = &pattern16_0
+                                                    {
+                                                        if let &UnaryOp::Not = &pattern17_0 {
+                                                            let pattern19_0 =
+                                                                C::unpack_value_array1(
+                                                                    ctx,
+                                                                    &pattern17_1,
+                                                                );
+                                                            if let Some(pattern20_0) =
+                                                                C::value_insn(ctx, pattern19_0)
+                                                            {
+                                                                let pattern21_0 =
+                                                                    C::insn_data(ctx, pattern20_0);
+                                                                if let &InsnData::Binary {
+                                                                    code: ref pattern22_0,
+                                                                    args: ref pattern22_1,
+                                                                } = &pattern21_0
                                                                 {
-                                                                    let pattern24_0 = C::is_same(
-                                                                        ctx,
-                                                                        pattern14_1,
-                                                                        pattern23_0,
-                                                                    );
-                                                                    if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 584.
-                                                                        let expr0_0 =
-                                                                            SimplifyResult::Value {
-                                                                                val: pattern9_0,
-                                                                            };
-                                                                        return Some(expr0_0);
+                                                                    if let &BinaryOp::Or =
+                                                                        &pattern22_0
+                                                                    {
+                                                                        let (
+                                                                            pattern24_0,
+                                                                            pattern24_1,
+                                                                        ) = C::unpack_value_array2(
+                                                                            ctx,
+                                                                            &pattern22_1,
+                                                                        );
+                                                                        let closure25 = || {
+                                                                            return Some(
+                                                                                pattern9_1,
+                                                                            );
+                                                                        };
+                                                                        if let Some(pattern25_0) =
+                                                                            closure25()
+                                                                        {
+                                                                            let pattern26_0 =
+                                                                                C::is_same(
+                                                                                    ctx,
+                                                                                    pattern24_0,
+                                                                                    pattern25_0,
+                                                                                );
+                                                                            if pattern26_0 == true {
+                                                                                let closure28 =
+                                                                                    || {
+                                                                                        return Some(pattern14_0);
+                                                                                    };
+                                                                                if let Some(
+                                                                                    pattern28_0,
+                                                                                ) = closure28()
+                                                                                {
+                                                                                    let pattern29_0 = C::is_same(ctx, pattern24_1, pattern28_0);
+                                                                                    if pattern29_0
+                                                                                        == true
+                                                                                    {
+                                                                                        // Rule at rules.isle line 517.
+                                                                                        let expr0_0 = SimplifyResult::Value {
+                                                                                            val: pattern9_0,
+                                                                                        };
+                                                                                        return Some(expr0_0);
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        let closure25 = || {
+                                                                            return Some(
+                                                                                pattern14_0,
+                                                                            );
+                                                                        };
+                                                                        if let Some(pattern25_0) =
+                                                                            closure25()
+                                                                        {
+                                                                            let pattern26_0 =
+                                                                                C::is_same(
+                                                                                    ctx,
+                                                                                    pattern24_0,
+                                                                                    pattern25_0,
+                                                                                );
+                                                                            if pattern26_0 == true {
+                                                                                let closure28 =
+                                                                                    || {
+                                                                                        return Some(pattern9_1);
+                                                                                    };
+                                                                                if let Some(
+                                                                                    pattern28_0,
+                                                                                ) = closure28()
+                                                                                {
+                                                                                    let pattern29_0 = C::is_same(ctx, pattern24_1, pattern28_0);
+                                                                                    if pattern29_0
+                                                                                        == true
+                                                                                    {
+                                                                                        // Rule at rules.isle line 507.
+                                                                                        let expr0_0 = SimplifyResult::Value {
+                                                                                            val: pattern9_0,
+                                                                                        };
+                                                                                        return Some(expr0_0);
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
                                                                     }
                                                                 }
                                                             }
                                                         }
-                                                        let closure20 = || {
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if let Some(pattern10_0) = C::value_insn(ctx, pattern9_1) {
+                                        let pattern11_0 = C::insn_data(ctx, pattern10_0);
+                                        if let &InsnData::Unary {
+                                            code: ref pattern12_0,
+                                            args: ref pattern12_1,
+                                        } = &pattern11_0
+                                        {
+                                            if let &UnaryOp::Not = &pattern12_0 {
+                                                let pattern14_0 =
+                                                    C::unpack_value_array1(ctx, &pattern12_1);
+                                                if let Some(pattern15_0) =
+                                                    C::value_insn(ctx, pattern4_1)
+                                                {
+                                                    let pattern16_0 =
+                                                        C::insn_data(ctx, pattern15_0);
+                                                    if let &InsnData::Unary {
+                                                        code: ref pattern17_0,
+                                                        args: ref pattern17_1,
+                                                    } = &pattern16_0
+                                                    {
+                                                        if let &UnaryOp::Not = &pattern17_0 {
+                                                            let pattern19_0 =
+                                                                C::unpack_value_array1(
+                                                                    ctx,
+                                                                    &pattern17_1,
+                                                                );
+                                                            if let Some(pattern20_0) =
+                                                                C::value_insn(ctx, pattern19_0)
+                                                            {
+                                                                let pattern21_0 =
+                                                                    C::insn_data(ctx, pattern20_0);
+                                                                if let &InsnData::Binary {
+                                                                    code: ref pattern22_0,
+                                                                    args: ref pattern22_1,
+                                                                } = &pattern21_0
+                                                                {
+                                                                    if let &BinaryOp::Or =
+                                                                        &pattern22_0
+                                                                    {
+                                                                        let (
+                                                                            pattern24_0,
+                                                                            pattern24_1,
+                                                                        ) = C::unpack_value_array2(
+                                                                            ctx,
+                                                                            &pattern22_1,
+                                                                        );
+                                                                        let closure25 = || {
+                                                                            return Some(
+                                                                                pattern9_0,
+                                                                            );
+                                                                        };
+                                                                        if let Some(pattern25_0) =
+                                                                            closure25()
+                                                                        {
+                                                                            let pattern26_0 =
+                                                                                C::is_same(
+                                                                                    ctx,
+                                                                                    pattern24_0,
+                                                                                    pattern25_0,
+                                                                                );
+                                                                            if pattern26_0 == true {
+                                                                                let closure28 =
+                                                                                    || {
+                                                                                        return Some(pattern14_0);
+                                                                                    };
+                                                                                if let Some(
+                                                                                    pattern28_0,
+                                                                                ) = closure28()
+                                                                                {
+                                                                                    let pattern29_0 = C::is_same(ctx, pattern24_1, pattern28_0);
+                                                                                    if pattern29_0
+                                                                                        == true
+                                                                                    {
+                                                                                        // Rule at rules.isle line 527.
+                                                                                        let expr0_0 = SimplifyResult::Value {
+                                                                                            val: pattern9_1,
+                                                                                        };
+                                                                                        return Some(expr0_0);
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        let closure25 = || {
+                                                                            return Some(
+                                                                                pattern14_0,
+                                                                            );
+                                                                        };
+                                                                        if let Some(pattern25_0) =
+                                                                            closure25()
+                                                                        {
+                                                                            let pattern26_0 =
+                                                                                C::is_same(
+                                                                                    ctx,
+                                                                                    pattern24_0,
+                                                                                    pattern25_0,
+                                                                                );
+                                                                            if pattern26_0 == true {
+                                                                                let closure28 =
+                                                                                    || {
+                                                                                        return Some(pattern9_0);
+                                                                                    };
+                                                                                if let Some(
+                                                                                    pattern28_0,
+                                                                                ) = closure28()
+                                                                                {
+                                                                                    let pattern29_0 = C::is_same(ctx, pattern24_1, pattern28_0);
+                                                                                    if pattern29_0
+                                                                                        == true
+                                                                                    {
+                                                                                        // Rule at rules.isle line 537.
+                                                                                        let expr0_0 = SimplifyResult::Value {
+                                                                                            val: pattern9_1,
+                                                                                        };
+                                                                                        return Some(expr0_0);
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                &BinaryOp::Or => {
+                                    let (pattern9_0, pattern9_1) =
+                                        C::unpack_value_array2(ctx, &pattern7_1);
+                                    if let Some(pattern10_0) = C::value_insn(ctx, pattern4_1) {
+                                        let pattern11_0 = C::insn_data(ctx, pattern10_0);
+                                        if let &InsnData::Binary {
+                                            code: ref pattern12_0,
+                                            args: ref pattern12_1,
+                                        } = &pattern11_0
+                                        {
+                                            if let &BinaryOp::Xor = &pattern12_0 {
+                                                let (pattern14_0, pattern14_1) =
+                                                    C::unpack_value_array2(ctx, &pattern12_1);
+                                                let closure15 = || {
+                                                    return Some(pattern9_0);
+                                                };
+                                                if let Some(pattern15_0) = closure15() {
+                                                    let pattern16_0 =
+                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                    if pattern16_0 == true {
+                                                        let closure18 = || {
                                                             return Some(pattern9_1);
                                                         };
-                                                        if let Some(pattern20_0) = closure20() {
-                                                            let pattern21_0 = C::is_same(
+                                                        if let Some(pattern18_0) = closure18() {
+                                                            let pattern19_0 = C::is_same(
                                                                 ctx,
-                                                                pattern19_0,
-                                                                pattern20_0,
+                                                                pattern14_1,
+                                                                pattern18_0,
                                                             );
-                                                            if pattern21_0 == true {
-                                                                let closure23 = || {
-                                                                    return Some(pattern9_0);
-                                                                };
-                                                                if let Some(pattern23_0) =
-                                                                    closure23()
+                                                            if pattern19_0 == true {
+                                                                // Rule at rules.isle line 483.
+                                                                let expr0_0 =
+                                                                    SimplifyResult::Value {
+                                                                        val: pattern4_0,
+                                                                    };
+                                                                return Some(expr0_0);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                let closure15 = || {
+                                                    return Some(pattern9_1);
+                                                };
+                                                if let Some(pattern15_0) = closure15() {
+                                                    let pattern16_0 =
+                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                    if pattern16_0 == true {
+                                                        let closure18 = || {
+                                                            return Some(pattern9_0);
+                                                        };
+                                                        if let Some(pattern18_0) = closure18() {
+                                                            let pattern19_0 = C::is_same(
+                                                                ctx,
+                                                                pattern14_1,
+                                                                pattern18_0,
+                                                            );
+                                                            if pattern19_0 == true {
+                                                                // Rule at rules.isle line 495.
+                                                                let expr0_0 =
+                                                                    SimplifyResult::Value {
+                                                                        val: pattern4_0,
+                                                                    };
+                                                                return Some(expr0_0);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                &BinaryOp::Xor => {
+                                    let (pattern9_0, pattern9_1) =
+                                        C::unpack_value_array2(ctx, &pattern7_1);
+                                    if let Some(pattern10_0) = C::value_insn(ctx, pattern4_1) {
+                                        let pattern11_0 = C::insn_data(ctx, pattern10_0);
+                                        if let &InsnData::Binary {
+                                            code: ref pattern12_0,
+                                            args: ref pattern12_1,
+                                        } = &pattern11_0
+                                        {
+                                            if let &BinaryOp::And = &pattern12_0 {
+                                                let (pattern14_0, pattern14_1) =
+                                                    C::unpack_value_array2(ctx, &pattern12_1);
+                                                let closure15 = || {
+                                                    return Some(pattern9_0);
+                                                };
+                                                if let Some(pattern15_0) = closure15() {
+                                                    let pattern16_0 =
+                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                    if pattern16_0 == true {
+                                                        if let Some(pattern18_0) =
+                                                            C::value_insn(ctx, pattern14_1)
+                                                        {
+                                                            let pattern19_0 =
+                                                                C::insn_data(ctx, pattern18_0);
+                                                            if let &InsnData::Unary {
+                                                                code: ref pattern20_0,
+                                                                args: ref pattern20_1,
+                                                            } = &pattern19_0
+                                                            {
+                                                                if let &UnaryOp::Not = &pattern20_0
                                                                 {
-                                                                    let pattern24_0 = C::is_same(
-                                                                        ctx,
-                                                                        pattern14_1,
-                                                                        pattern23_0,
-                                                                    );
-                                                                    if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 614.
-                                                                        let expr0_0 =
-                                                                            SimplifyResult::Value {
-                                                                                val: pattern9_1,
+                                                                    let pattern22_0 =
+                                                                        C::unpack_value_array1(
+                                                                            ctx,
+                                                                            &pattern20_1,
+                                                                        );
+                                                                    let closure23 = || {
+                                                                        return Some(pattern9_1);
+                                                                    };
+                                                                    if let Some(pattern23_0) =
+                                                                        closure23()
+                                                                    {
+                                                                        let pattern24_0 =
+                                                                            C::is_same(
+                                                                                ctx,
+                                                                                pattern22_0,
+                                                                                pattern23_0,
+                                                                            );
+                                                                        if pattern24_0 == true {
+                                                                            // Rule at rules.isle line 387.
+                                                                            let expr0_0 = SimplifyResult::Value {
+                                                                                val: pattern4_0,
                                                                             };
-                                                                        return Some(expr0_0);
+                                                                            return Some(expr0_0);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                let closure15 = || {
+                                                    return Some(pattern9_1);
+                                                };
+                                                if let Some(pattern15_0) = closure15() {
+                                                    let pattern16_0 =
+                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                    if pattern16_0 == true {
+                                                        if let Some(pattern18_0) =
+                                                            C::value_insn(ctx, pattern14_1)
+                                                        {
+                                                            let pattern19_0 =
+                                                                C::insn_data(ctx, pattern18_0);
+                                                            if let &InsnData::Unary {
+                                                                code: ref pattern20_0,
+                                                                args: ref pattern20_1,
+                                                            } = &pattern19_0
+                                                            {
+                                                                if let &UnaryOp::Not = &pattern20_0
+                                                                {
+                                                                    let pattern22_0 =
+                                                                        C::unpack_value_array1(
+                                                                            ctx,
+                                                                            &pattern20_1,
+                                                                        );
+                                                                    let closure23 = || {
+                                                                        return Some(pattern9_0);
+                                                                    };
+                                                                    if let Some(pattern23_0) =
+                                                                        closure23()
+                                                                    {
+                                                                        let pattern24_0 =
+                                                                            C::is_same(
+                                                                                ctx,
+                                                                                pattern22_0,
+                                                                                pattern23_0,
+                                                                            );
+                                                                        if pattern24_0 == true {
+                                                                            // Rule at rules.isle line 423.
+                                                                            let expr0_0 = SimplifyResult::Value {
+                                                                                val: pattern4_0,
+                                                                            };
+                                                                            return Some(expr0_0);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                if let Some(pattern15_0) =
+                                                    C::value_insn(ctx, pattern14_0)
+                                                {
+                                                    let pattern16_0 =
+                                                        C::insn_data(ctx, pattern15_0);
+                                                    if let &InsnData::Unary {
+                                                        code: ref pattern17_0,
+                                                        args: ref pattern17_1,
+                                                    } = &pattern16_0
+                                                    {
+                                                        if let &UnaryOp::Not = &pattern17_0 {
+                                                            let pattern19_0 =
+                                                                C::unpack_value_array1(
+                                                                    ctx,
+                                                                    &pattern17_1,
+                                                                );
+                                                            let closure20 = || {
+                                                                return Some(pattern9_0);
+                                                            };
+                                                            if let Some(pattern20_0) = closure20() {
+                                                                let pattern21_0 = C::is_same(
+                                                                    ctx,
+                                                                    pattern19_0,
+                                                                    pattern20_0,
+                                                                );
+                                                                if pattern21_0 == true {
+                                                                    let closure23 = || {
+                                                                        return Some(pattern9_1);
+                                                                    };
+                                                                    if let Some(pattern23_0) =
+                                                                        closure23()
+                                                                    {
+                                                                        let pattern24_0 =
+                                                                            C::is_same(
+                                                                                ctx,
+                                                                                pattern14_1,
+                                                                                pattern23_0,
+                                                                            );
+                                                                        if pattern24_0 == true {
+                                                                            // Rule at rules.isle line 411.
+                                                                            let expr0_0 = SimplifyResult::Value {
+                                                                                val: pattern4_0,
+                                                                            };
+                                                                            return Some(expr0_0);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            let closure20 = || {
+                                                                return Some(pattern9_1);
+                                                            };
+                                                            if let Some(pattern20_0) = closure20() {
+                                                                let pattern21_0 = C::is_same(
+                                                                    ctx,
+                                                                    pattern19_0,
+                                                                    pattern20_0,
+                                                                );
+                                                                if pattern21_0 == true {
+                                                                    let closure23 = || {
+                                                                        return Some(pattern9_0);
+                                                                    };
+                                                                    if let Some(pattern23_0) =
+                                                                        closure23()
+                                                                    {
+                                                                        let pattern24_0 =
+                                                                            C::is_same(
+                                                                                ctx,
+                                                                                pattern14_1,
+                                                                                pattern23_0,
+                                                                            );
+                                                                        if pattern24_0 == true {
+                                                                            // Rule at rules.isle line 399.
+                                                                            let expr0_0 = SimplifyResult::Value {
+                                                                                val: pattern4_0,
+                                                                            };
+                                                                            return Some(expr0_0);
+                                                                        }
                                                                     }
                                                                 }
                                                             }
@@ -1982,6 +1369,307 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Option<Simpl
                                                     }
                                                 }
                                             }
+                                        }
+                                    }
+                                    if let Some(pattern10_0) = C::value_insn(ctx, pattern9_0) {
+                                        let pattern11_0 = C::insn_data(ctx, pattern10_0);
+                                        if let &InsnData::Unary {
+                                            code: ref pattern12_0,
+                                            args: ref pattern12_1,
+                                        } = &pattern11_0
+                                        {
+                                            if let &UnaryOp::Not = &pattern12_0 {
+                                                let pattern14_0 =
+                                                    C::unpack_value_array1(ctx, &pattern12_1);
+                                                if let Some(pattern15_0) =
+                                                    C::value_insn(ctx, pattern4_1)
+                                                {
+                                                    let pattern16_0 =
+                                                        C::insn_data(ctx, pattern15_0);
+                                                    if let &InsnData::Binary {
+                                                        code: ref pattern17_0,
+                                                        args: ref pattern17_1,
+                                                    } = &pattern16_0
+                                                    {
+                                                        if let &BinaryOp::And = &pattern17_0 {
+                                                            let (pattern19_0, pattern19_1) =
+                                                                C::unpack_value_array2(
+                                                                    ctx,
+                                                                    &pattern17_1,
+                                                                );
+                                                            let closure20 = || {
+                                                                return Some(pattern9_1);
+                                                            };
+                                                            if let Some(pattern20_0) = closure20() {
+                                                                let pattern21_0 = C::is_same(
+                                                                    ctx,
+                                                                    pattern19_0,
+                                                                    pattern20_0,
+                                                                );
+                                                                if pattern21_0 == true {
+                                                                    let closure23 = || {
+                                                                        return Some(pattern14_0);
+                                                                    };
+                                                                    if let Some(pattern23_0) =
+                                                                        closure23()
+                                                                    {
+                                                                        let pattern24_0 =
+                                                                            C::is_same(
+                                                                                ctx,
+                                                                                pattern19_1,
+                                                                                pattern23_0,
+                                                                            );
+                                                                        if pattern24_0 == true {
+                                                                            // Rule at rules.isle line 447.
+                                                                            let expr0_0 = SimplifyResult::Value {
+                                                                                val: pattern4_0,
+                                                                            };
+                                                                            return Some(expr0_0);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            let closure20 = || {
+                                                                return Some(pattern14_0);
+                                                            };
+                                                            if let Some(pattern20_0) = closure20() {
+                                                                let pattern21_0 = C::is_same(
+                                                                    ctx,
+                                                                    pattern19_0,
+                                                                    pattern20_0,
+                                                                );
+                                                                if pattern21_0 == true {
+                                                                    let closure23 = || {
+                                                                        return Some(pattern9_1);
+                                                                    };
+                                                                    if let Some(pattern23_0) =
+                                                                        closure23()
+                                                                    {
+                                                                        let pattern24_0 =
+                                                                            C::is_same(
+                                                                                ctx,
+                                                                                pattern19_1,
+                                                                                pattern23_0,
+                                                                            );
+                                                                        if pattern24_0 == true {
+                                                                            // Rule at rules.isle line 435.
+                                                                            let expr0_0 = SimplifyResult::Value {
+                                                                                val: pattern4_0,
+                                                                            };
+                                                                            return Some(expr0_0);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if let Some(pattern10_0) = C::value_insn(ctx, pattern9_1) {
+                                        let pattern11_0 = C::insn_data(ctx, pattern10_0);
+                                        if let &InsnData::Unary {
+                                            code: ref pattern12_0,
+                                            args: ref pattern12_1,
+                                        } = &pattern11_0
+                                        {
+                                            if let &UnaryOp::Not = &pattern12_0 {
+                                                let pattern14_0 =
+                                                    C::unpack_value_array1(ctx, &pattern12_1);
+                                                if let Some(pattern15_0) =
+                                                    C::value_insn(ctx, pattern4_1)
+                                                {
+                                                    let pattern16_0 =
+                                                        C::insn_data(ctx, pattern15_0);
+                                                    if let &InsnData::Binary {
+                                                        code: ref pattern17_0,
+                                                        args: ref pattern17_1,
+                                                    } = &pattern16_0
+                                                    {
+                                                        if let &BinaryOp::And = &pattern17_0 {
+                                                            let (pattern19_0, pattern19_1) =
+                                                                C::unpack_value_array2(
+                                                                    ctx,
+                                                                    &pattern17_1,
+                                                                );
+                                                            let closure20 = || {
+                                                                return Some(pattern9_0);
+                                                            };
+                                                            if let Some(pattern20_0) = closure20() {
+                                                                let pattern21_0 = C::is_same(
+                                                                    ctx,
+                                                                    pattern19_0,
+                                                                    pattern20_0,
+                                                                );
+                                                                if pattern21_0 == true {
+                                                                    let closure23 = || {
+                                                                        return Some(pattern14_0);
+                                                                    };
+                                                                    if let Some(pattern23_0) =
+                                                                        closure23()
+                                                                    {
+                                                                        let pattern24_0 =
+                                                                            C::is_same(
+                                                                                ctx,
+                                                                                pattern19_1,
+                                                                                pattern23_0,
+                                                                            );
+                                                                        if pattern24_0 == true {
+                                                                            // Rule at rules.isle line 459.
+                                                                            let expr0_0 = SimplifyResult::Value {
+                                                                                val: pattern4_0,
+                                                                            };
+                                                                            return Some(expr0_0);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            let closure20 = || {
+                                                                return Some(pattern14_0);
+                                                            };
+                                                            if let Some(pattern20_0) = closure20() {
+                                                                let pattern21_0 = C::is_same(
+                                                                    ctx,
+                                                                    pattern19_0,
+                                                                    pattern20_0,
+                                                                );
+                                                                if pattern21_0 == true {
+                                                                    let closure23 = || {
+                                                                        return Some(pattern9_0);
+                                                                    };
+                                                                    if let Some(pattern23_0) =
+                                                                        closure23()
+                                                                    {
+                                                                        let pattern24_0 =
+                                                                            C::is_same(
+                                                                                ctx,
+                                                                                pattern19_1,
+                                                                                pattern23_0,
+                                                                            );
+                                                                        if pattern24_0 == true {
+                                                                            // Rule at rules.isle line 471.
+                                                                            let expr0_0 = SimplifyResult::Value {
+                                                                                val: pattern4_0,
+                                                                            };
+                                                                            return Some(expr0_0);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    let pattern5_0 = C::is_zero(ctx, pattern4_1);
+                    if pattern5_0 == true {
+                        // Rule at rules.isle line 345.
+                        let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
+                        return Some(expr0_0);
+                    }
+                    let pattern5_0 = C::is_all_one(ctx, pattern4_1);
+                    if pattern5_0 == true {
+                        let pattern7_0 = C::value_ty(ctx, pattern4_1);
+                        // Rule at rules.isle line 331.
+                        let expr0_0 = C::make_all_one(ctx, &pattern7_0);
+                        let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                        return Some(expr1_0);
+                    }
+                    if let Some(pattern5_0) = C::value_insn(ctx, pattern4_1) {
+                        let pattern6_0 = C::insn_data(ctx, pattern5_0);
+                        match &pattern6_0 {
+                            &InsnData::Unary {
+                                code: ref pattern7_0,
+                                args: ref pattern7_1,
+                            } => {
+                                if let &UnaryOp::Not = &pattern7_0 {
+                                    let pattern9_0 = C::unpack_value_array1(ctx, &pattern7_1);
+                                    let closure10 = || {
+                                        return Some(pattern4_0);
+                                    };
+                                    if let Some(pattern10_0) = closure10() {
+                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                        if pattern11_0 == true {
+                                            let pattern13_0 = C::value_ty(ctx, pattern9_0);
+                                            // Rule at rules.isle line 352.
+                                            let expr0_0 = C::make_all_one(ctx, &pattern13_0);
+                                            let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                                            return Some(expr1_0);
+                                        }
+                                    }
+                                    if let Some(pattern10_0) = C::value_insn(ctx, pattern9_0) {
+                                        let pattern11_0 = C::insn_data(ctx, pattern10_0);
+                                        if let &InsnData::Binary {
+                                            code: ref pattern12_0,
+                                            args: ref pattern12_1,
+                                        } = &pattern11_0
+                                        {
+                                            if let &BinaryOp::And = &pattern12_0 {
+                                                let (pattern14_0, pattern14_1) =
+                                                    C::unpack_value_array2(ctx, &pattern12_1);
+                                                let closure15 = || {
+                                                    return Some(pattern4_0);
+                                                };
+                                                if let Some(pattern15_0) = closure15() {
+                                                    let pattern16_0 =
+                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                    if pattern16_0 == true {
+                                                        let pattern18_0 =
+                                                            C::value_ty(ctx, pattern14_0);
+                                                        // Rule at rules.isle line 373.
+                                                        let expr0_0 =
+                                                            C::make_all_one(ctx, &pattern18_0);
+                                                        let expr1_0 =
+                                                            SimplifyResult::Value { val: expr0_0 };
+                                                        return Some(expr1_0);
+                                                    }
+                                                    let pattern16_0 =
+                                                        C::is_same(ctx, pattern14_1, pattern15_0);
+                                                    if pattern16_0 == true {
+                                                        let pattern18_0 =
+                                                            C::value_ty(ctx, pattern14_1);
+                                                        // Rule at rules.isle line 380.
+                                                        let expr0_0 =
+                                                            C::make_all_one(ctx, &pattern18_0);
+                                                        let expr1_0 =
+                                                            SimplifyResult::Value { val: expr0_0 };
+                                                        return Some(expr1_0);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            &InsnData::Binary {
+                                code: ref pattern7_0,
+                                args: ref pattern7_1,
+                            } => {
+                                if let &BinaryOp::And = &pattern7_0 {
+                                    let (pattern9_0, pattern9_1) =
+                                        C::unpack_value_array2(ctx, &pattern7_1);
+                                    let closure10 = || {
+                                        return Some(pattern4_0);
+                                    };
+                                    if let Some(pattern10_0) = closure10() {
+                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                        if pattern11_0 == true {
+                                            // Rule at rules.isle line 359.
+                                            let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
+                                            return Some(expr0_0);
+                                        }
+                                        let pattern11_0 = C::is_same(ctx, pattern9_1, pattern10_0);
+                                        if pattern11_0 == true {
+                                            // Rule at rules.isle line 366.
+                                            let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
+                                            return Some(expr0_0);
                                         }
                                     }
                                 }
@@ -1990,68 +1678,493 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Insn) -> Option<Simpl
                         }
                     }
                 }
-                let pattern5_0 = C::is_zero(ctx, pattern4_1);
-                if pattern5_0 == true {
-                    // Rule at rules.isle line 549.
-                    let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
-                    return Some(expr0_0);
-                }
-                if let Some(pattern5_0) = C::value_insn(ctx, pattern4_1) {
-                    let pattern6_0 = C::insn_data(ctx, pattern5_0);
-                    match &pattern6_0 {
-                        &InsnData::Unary {
+                &BinaryOp::Xor => {
+                    let (pattern4_0, pattern4_1) = C::unpack_value_array2(ctx, &pattern2_1);
+                    let closure5 = || {
+                        return Some(pattern4_0);
+                    };
+                    if let Some(pattern5_0) = closure5() {
+                        let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                        if pattern6_0 == true {
+                            let pattern8_0 = C::value_ty(ctx, pattern4_1);
+                            // Rule at rules.isle line 556.
+                            let expr0_0 = C::make_zero(ctx, &pattern8_0);
+                            let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                            return Some(expr1_0);
+                        }
+                    }
+                    if let Some(pattern5_0) = C::value_insn(ctx, pattern4_0) {
+                        let pattern6_0 = C::insn_data(ctx, pattern5_0);
+                        if let &InsnData::Binary {
                             code: ref pattern7_0,
                             args: ref pattern7_1,
-                        } => {
-                            if let &UnaryOp::Not = &pattern7_0 {
-                                let pattern9_0 = C::unpack_value_array1(ctx, &pattern7_1);
-                                let closure10 = || {
-                                    return Some(pattern4_0);
-                                };
-                                if let Some(pattern10_0) = closure10() {
-                                    let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
-                                    if pattern11_0 == true {
-                                        let pattern13_0 = C::value_ty(ctx, pattern4_1);
-                                        // Rule at rules.isle line 563.
-                                        let expr0_0 = C::make_all_one(ctx, &pattern13_0);
-                                        let expr1_0 = SimplifyResult::Value { val: expr0_0 };
-                                        return Some(expr1_0);
+                        } = &pattern6_0
+                        {
+                            match &pattern7_0 {
+                                &BinaryOp::And => {
+                                    let (pattern9_0, pattern9_1) =
+                                        C::unpack_value_array2(ctx, &pattern7_1);
+                                    if let Some(pattern10_0) = C::value_insn(ctx, pattern4_1) {
+                                        let pattern11_0 = C::insn_data(ctx, pattern10_0);
+                                        if let &InsnData::Binary {
+                                            code: ref pattern12_0,
+                                            args: ref pattern12_1,
+                                        } = &pattern11_0
+                                        {
+                                            if let &BinaryOp::Or = &pattern12_0 {
+                                                let (pattern14_0, pattern14_1) =
+                                                    C::unpack_value_array2(ctx, &pattern12_1);
+                                                let closure15 = || {
+                                                    return Some(pattern9_0);
+                                                };
+                                                if let Some(pattern15_0) = closure15() {
+                                                    let pattern16_0 =
+                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                    if pattern16_0 == true {
+                                                        if let Some(pattern18_0) =
+                                                            C::value_insn(ctx, pattern14_1)
+                                                        {
+                                                            let pattern19_0 =
+                                                                C::insn_data(ctx, pattern18_0);
+                                                            if let &InsnData::Unary {
+                                                                code: ref pattern20_0,
+                                                                args: ref pattern20_1,
+                                                            } = &pattern19_0
+                                                            {
+                                                                if let &UnaryOp::Not = &pattern20_0
+                                                                {
+                                                                    let pattern22_0 =
+                                                                        C::unpack_value_array1(
+                                                                            ctx,
+                                                                            &pattern20_1,
+                                                                        );
+                                                                    let closure23 = || {
+                                                                        return Some(pattern9_1);
+                                                                    };
+                                                                    if let Some(pattern23_0) =
+                                                                        closure23()
+                                                                    {
+                                                                        let pattern24_0 =
+                                                                            C::is_same(
+                                                                                ctx,
+                                                                                pattern22_0,
+                                                                                pattern23_0,
+                                                                            );
+                                                                        if pattern24_0 == true {
+                                                                            // Rule at rules.isle line 645.
+                                                                            let expr0_0 = SimplifyResult::Value {
+                                                                                val: pattern14_1,
+                                                                            };
+                                                                            return Some(expr0_0);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                let closure15 = || {
+                                                    return Some(pattern9_1);
+                                                };
+                                                if let Some(pattern15_0) = closure15() {
+                                                    let pattern16_0 =
+                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                    if pattern16_0 == true {
+                                                        if let Some(pattern18_0) =
+                                                            C::value_insn(ctx, pattern14_1)
+                                                        {
+                                                            let pattern19_0 =
+                                                                C::insn_data(ctx, pattern18_0);
+                                                            if let &InsnData::Unary {
+                                                                code: ref pattern20_0,
+                                                                args: ref pattern20_1,
+                                                            } = &pattern19_0
+                                                            {
+                                                                if let &UnaryOp::Not = &pattern20_0
+                                                                {
+                                                                    let pattern22_0 =
+                                                                        C::unpack_value_array1(
+                                                                            ctx,
+                                                                            &pattern20_1,
+                                                                        );
+                                                                    let closure23 = || {
+                                                                        return Some(pattern9_0);
+                                                                    };
+                                                                    if let Some(pattern23_0) =
+                                                                        closure23()
+                                                                    {
+                                                                        let pattern24_0 =
+                                                                            C::is_same(
+                                                                                ctx,
+                                                                                pattern22_0,
+                                                                                pattern23_0,
+                                                                            );
+                                                                        if pattern24_0 == true {
+                                                                            // Rule at rules.isle line 635.
+                                                                            let expr0_0 = SimplifyResult::Value {
+                                                                                val: pattern14_1,
+                                                                            };
+                                                                            return Some(expr0_0);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                if let Some(pattern15_0) =
+                                                    C::value_insn(ctx, pattern14_0)
+                                                {
+                                                    let pattern16_0 =
+                                                        C::insn_data(ctx, pattern15_0);
+                                                    if let &InsnData::Unary {
+                                                        code: ref pattern17_0,
+                                                        args: ref pattern17_1,
+                                                    } = &pattern16_0
+                                                    {
+                                                        if let &UnaryOp::Not = &pattern17_0 {
+                                                            let pattern19_0 =
+                                                                C::unpack_value_array1(
+                                                                    ctx,
+                                                                    &pattern17_1,
+                                                                );
+                                                            let closure20 = || {
+                                                                return Some(pattern9_0);
+                                                            };
+                                                            if let Some(pattern20_0) = closure20() {
+                                                                let pattern21_0 = C::is_same(
+                                                                    ctx,
+                                                                    pattern19_0,
+                                                                    pattern20_0,
+                                                                );
+                                                                if pattern21_0 == true {
+                                                                    let closure23 = || {
+                                                                        return Some(pattern9_1);
+                                                                    };
+                                                                    if let Some(pattern23_0) =
+                                                                        closure23()
+                                                                    {
+                                                                        let pattern24_0 =
+                                                                            C::is_same(
+                                                                                ctx,
+                                                                                pattern14_1,
+                                                                                pattern23_0,
+                                                                            );
+                                                                        if pattern24_0 == true {
+                                                                            // Rule at rules.isle line 625.
+                                                                            let expr0_0 = SimplifyResult::Value {
+                                                                                val: pattern14_0,
+                                                                            };
+                                                                            return Some(expr0_0);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            let closure20 = || {
+                                                                return Some(pattern9_1);
+                                                            };
+                                                            if let Some(pattern20_0) = closure20() {
+                                                                let pattern21_0 = C::is_same(
+                                                                    ctx,
+                                                                    pattern19_0,
+                                                                    pattern20_0,
+                                                                );
+                                                                if pattern21_0 == true {
+                                                                    let closure23 = || {
+                                                                        return Some(pattern9_0);
+                                                                    };
+                                                                    if let Some(pattern23_0) =
+                                                                        closure23()
+                                                                    {
+                                                                        let pattern24_0 =
+                                                                            C::is_same(
+                                                                                ctx,
+                                                                                pattern14_1,
+                                                                                pattern23_0,
+                                                                            );
+                                                                        if pattern24_0 == true {
+                                                                            // Rule at rules.isle line 655.
+                                                                            let expr0_0 = SimplifyResult::Value {
+                                                                                val: pattern14_0,
+                                                                            };
+                                                                            return Some(expr0_0);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                &BinaryOp::Or => {
+                                    let (pattern9_0, pattern9_1) =
+                                        C::unpack_value_array2(ctx, &pattern7_1);
+                                    if let Some(pattern10_0) = C::value_insn(ctx, pattern4_1) {
+                                        let pattern11_0 = C::insn_data(ctx, pattern10_0);
+                                        if let &InsnData::Binary {
+                                            code: ref pattern12_0,
+                                            args: ref pattern12_1,
+                                        } = &pattern11_0
+                                        {
+                                            if let &BinaryOp::And = &pattern12_0 {
+                                                let (pattern14_0, pattern14_1) =
+                                                    C::unpack_value_array2(ctx, &pattern12_1);
+                                                let closure15 = || {
+                                                    return Some(pattern9_0);
+                                                };
+                                                if let Some(pattern15_0) = closure15() {
+                                                    let pattern16_0 =
+                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                    if pattern16_0 == true {
+                                                        if let Some(pattern18_0) =
+                                                            C::value_insn(ctx, pattern14_1)
+                                                        {
+                                                            let pattern19_0 =
+                                                                C::insn_data(ctx, pattern18_0);
+                                                            if let &InsnData::Unary {
+                                                                code: ref pattern20_0,
+                                                                args: ref pattern20_1,
+                                                            } = &pattern19_0
+                                                            {
+                                                                if let &UnaryOp::Not = &pattern20_0
+                                                                {
+                                                                    let pattern22_0 =
+                                                                        C::unpack_value_array1(
+                                                                            ctx,
+                                                                            &pattern20_1,
+                                                                        );
+                                                                    let closure23 = || {
+                                                                        return Some(pattern9_1);
+                                                                    };
+                                                                    if let Some(pattern23_0) =
+                                                                        closure23()
+                                                                    {
+                                                                        let pattern24_0 =
+                                                                            C::is_same(
+                                                                                ctx,
+                                                                                pattern22_0,
+                                                                                pattern23_0,
+                                                                            );
+                                                                        if pattern24_0 == true {
+                                                                            // Rule at rules.isle line 604.
+                                                                            let expr0_0 = SimplifyResult::Value {
+                                                                                val: pattern9_1,
+                                                                            };
+                                                                            return Some(expr0_0);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                let closure15 = || {
+                                                    return Some(pattern9_1);
+                                                };
+                                                if let Some(pattern15_0) = closure15() {
+                                                    let pattern16_0 =
+                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                    if pattern16_0 == true {
+                                                        if let Some(pattern18_0) =
+                                                            C::value_insn(ctx, pattern14_1)
+                                                        {
+                                                            let pattern19_0 =
+                                                                C::insn_data(ctx, pattern18_0);
+                                                            if let &InsnData::Unary {
+                                                                code: ref pattern20_0,
+                                                                args: ref pattern20_1,
+                                                            } = &pattern19_0
+                                                            {
+                                                                if let &UnaryOp::Not = &pattern20_0
+                                                                {
+                                                                    let pattern22_0 =
+                                                                        C::unpack_value_array1(
+                                                                            ctx,
+                                                                            &pattern20_1,
+                                                                        );
+                                                                    let closure23 = || {
+                                                                        return Some(pattern9_0);
+                                                                    };
+                                                                    if let Some(pattern23_0) =
+                                                                        closure23()
+                                                                    {
+                                                                        let pattern24_0 =
+                                                                            C::is_same(
+                                                                                ctx,
+                                                                                pattern22_0,
+                                                                                pattern23_0,
+                                                                            );
+                                                                        if pattern24_0 == true {
+                                                                            // Rule at rules.isle line 594.
+                                                                            let expr0_0 = SimplifyResult::Value {
+                                                                                val: pattern9_0,
+                                                                            };
+                                                                            return Some(expr0_0);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                if let Some(pattern15_0) =
+                                                    C::value_insn(ctx, pattern14_0)
+                                                {
+                                                    let pattern16_0 =
+                                                        C::insn_data(ctx, pattern15_0);
+                                                    if let &InsnData::Unary {
+                                                        code: ref pattern17_0,
+                                                        args: ref pattern17_1,
+                                                    } = &pattern16_0
+                                                    {
+                                                        if let &UnaryOp::Not = &pattern17_0 {
+                                                            let pattern19_0 =
+                                                                C::unpack_value_array1(
+                                                                    ctx,
+                                                                    &pattern17_1,
+                                                                );
+                                                            let closure20 = || {
+                                                                return Some(pattern9_0);
+                                                            };
+                                                            if let Some(pattern20_0) = closure20() {
+                                                                let pattern21_0 = C::is_same(
+                                                                    ctx,
+                                                                    pattern19_0,
+                                                                    pattern20_0,
+                                                                );
+                                                                if pattern21_0 == true {
+                                                                    let closure23 = || {
+                                                                        return Some(pattern9_1);
+                                                                    };
+                                                                    if let Some(pattern23_0) =
+                                                                        closure23()
+                                                                    {
+                                                                        let pattern24_0 =
+                                                                            C::is_same(
+                                                                                ctx,
+                                                                                pattern14_1,
+                                                                                pattern23_0,
+                                                                            );
+                                                                        if pattern24_0 == true {
+                                                                            // Rule at rules.isle line 584.
+                                                                            let expr0_0 = SimplifyResult::Value {
+                                                                                val: pattern9_0,
+                                                                            };
+                                                                            return Some(expr0_0);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            let closure20 = || {
+                                                                return Some(pattern9_1);
+                                                            };
+                                                            if let Some(pattern20_0) = closure20() {
+                                                                let pattern21_0 = C::is_same(
+                                                                    ctx,
+                                                                    pattern19_0,
+                                                                    pattern20_0,
+                                                                );
+                                                                if pattern21_0 == true {
+                                                                    let closure23 = || {
+                                                                        return Some(pattern9_0);
+                                                                    };
+                                                                    if let Some(pattern23_0) =
+                                                                        closure23()
+                                                                    {
+                                                                        let pattern24_0 =
+                                                                            C::is_same(
+                                                                                ctx,
+                                                                                pattern14_1,
+                                                                                pattern23_0,
+                                                                            );
+                                                                        if pattern24_0 == true {
+                                                                            // Rule at rules.isle line 614.
+                                                                            let expr0_0 = SimplifyResult::Value {
+                                                                                val: pattern9_1,
+                                                                            };
+                                                                            return Some(expr0_0);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    let pattern5_0 = C::is_zero(ctx, pattern4_1);
+                    if pattern5_0 == true {
+                        // Rule at rules.isle line 549.
+                        let expr0_0 = SimplifyResult::Value { val: pattern4_0 };
+                        return Some(expr0_0);
+                    }
+                    if let Some(pattern5_0) = C::value_insn(ctx, pattern4_1) {
+                        let pattern6_0 = C::insn_data(ctx, pattern5_0);
+                        match &pattern6_0 {
+                            &InsnData::Unary {
+                                code: ref pattern7_0,
+                                args: ref pattern7_1,
+                            } => {
+                                if let &UnaryOp::Not = &pattern7_0 {
+                                    let pattern9_0 = C::unpack_value_array1(ctx, &pattern7_1);
+                                    let closure10 = || {
+                                        return Some(pattern4_0);
+                                    };
+                                    if let Some(pattern10_0) = closure10() {
+                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                        if pattern11_0 == true {
+                                            let pattern13_0 = C::value_ty(ctx, pattern4_1);
+                                            // Rule at rules.isle line 563.
+                                            let expr0_0 = C::make_all_one(ctx, &pattern13_0);
+                                            let expr1_0 = SimplifyResult::Value { val: expr0_0 };
+                                            return Some(expr1_0);
+                                        }
                                     }
                                 }
                             }
-                        }
-                        &InsnData::Binary {
-                            code: ref pattern7_0,
-                            args: ref pattern7_1,
-                        } => {
-                            if let &BinaryOp::Xor = &pattern7_0 {
-                                let (pattern9_0, pattern9_1) =
-                                    C::unpack_value_array2(ctx, &pattern7_1);
-                                let closure10 = || {
-                                    return Some(pattern4_0);
-                                };
-                                if let Some(pattern10_0) = closure10() {
-                                    let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
-                                    if pattern11_0 == true {
-                                        // Rule at rules.isle line 570.
-                                        let expr0_0 = SimplifyResult::Value { val: pattern9_1 };
-                                        return Some(expr0_0);
-                                    }
-                                    let pattern11_0 = C::is_same(ctx, pattern9_1, pattern10_0);
-                                    if pattern11_0 == true {
-                                        // Rule at rules.isle line 577.
-                                        let expr0_0 = SimplifyResult::Value { val: pattern9_0 };
-                                        return Some(expr0_0);
+                            &InsnData::Binary {
+                                code: ref pattern7_0,
+                                args: ref pattern7_1,
+                            } => {
+                                if let &BinaryOp::Xor = &pattern7_0 {
+                                    let (pattern9_0, pattern9_1) =
+                                        C::unpack_value_array2(ctx, &pattern7_1);
+                                    let closure10 = || {
+                                        return Some(pattern4_0);
+                                    };
+                                    if let Some(pattern10_0) = closure10() {
+                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                        if pattern11_0 == true {
+                                            // Rule at rules.isle line 570.
+                                            let expr0_0 = SimplifyResult::Value { val: pattern9_1 };
+                                            return Some(expr0_0);
+                                        }
+                                        let pattern11_0 = C::is_same(ctx, pattern9_1, pattern10_0);
+                                        if pattern11_0 == true {
+                                            // Rule at rules.isle line 577.
+                                            let expr0_0 = SimplifyResult::Value { val: pattern9_0 };
+                                            return Some(expr0_0);
+                                        }
                                     }
                                 }
                             }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
+                _ => {}
             }
-            _ => {}
         }
+        _ => {}
     }
     return None;
 }

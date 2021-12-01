@@ -660,3 +660,35 @@
   )
   (SimplifyResult.Value not_b)
 )
+
+;; Rules for UnaryOp.Not
+; !(!a) => a
+(rule
+  (simplify
+    (extract_not (value_insn (extract_not a)))
+  )
+  (SimplifyResult.Value a)
+)
+; !(-a) => a - 1
+(rule
+  (simplify
+    (extract_not (value_insn (extract_neg (value_with_ty a ty))))
+  )
+  (SimplifyResult.Insn (InsnData.Binary (BinaryOp.Sub) (value_array2 a (make_one ty))))
+)
+
+;; Rules for UnaryOp.Neg
+; -(-a) => a
+(rule
+  (simplify
+    (extract_neg (value_insn (extract_neg a)))
+  )
+  (SimplifyResult.Value a)
+)
+; -(!a) => a + 1
+(rule
+  (simplify
+    (extract_neg (value_insn (extract_not (value_with_ty a ty))))
+  )
+  (SimplifyResult.Insn (InsnData.Binary (BinaryOp.Add) (value_array2 a (make_one ty))))
+)

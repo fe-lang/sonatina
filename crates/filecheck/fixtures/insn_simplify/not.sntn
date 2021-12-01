@@ -1,0 +1,15 @@
+# !(!v0) => v0
+# check: return v0;
+func %not0(v0.i8) -> i8:
+    block0:
+        v1.i8 = not v0;
+        v2.i8 = not v1;
+        return v2;
+
+# !(-v0) => v0 - 1
+# check: v2.i8 = sub v0 1.i8;
+func %not1(v0.i8) -> i8:
+    block0:
+        v1.i8 = neg v0;
+        v2.i8 = not v1;
+        return v2;
