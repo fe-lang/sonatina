@@ -308,12 +308,12 @@
       )
     )
   )
-  (SimplifyResult.Value a)
+  (SimplifyResult.Value b)
 )
 ; a & (-a) => a where a: is_power_of_two.
 (rule
   (simplify
-    (extract_and a (value_insn (extract_not (and (is_same $true <a) (is_power_of_two $true)))))
+    (extract_and a (value_insn (extract_neg (and (is_same $true <a) (is_power_of_two $true)))))
   )
   (SimplifyResult.Value a)
 )
