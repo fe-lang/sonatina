@@ -70,8 +70,7 @@ impl Immediate {
     }
 
     pub(super) fn all_one(ty: &Type) -> Self {
-        let val = I256::zero().overflowing_sub(I256::one()).0;
-        Self::from_i256(val, ty)
+        Self::from_i256(I256::all_one(), ty)
     }
 
     pub(super) fn is_zero(self) -> bool {

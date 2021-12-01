@@ -56,6 +56,10 @@ impl I256 {
         Self::from_u256(U256::one())
     }
 
+    pub fn all_one() -> Self {
+        I256::zero().overflowing_sub(I256::one()).0
+    }
+
     pub fn from_u256(val: U256) -> Self {
         let is_negative = (val & I256_MASK) != val;
         let abs = if is_negative { !val + U256::one() } else { val };
@@ -215,7 +219,7 @@ impl From<U256> for I256 {
 impl From<bool> for I256 {
     fn from(val: bool) -> Self {
         if val {
-            Self::one()
+            Self::all_one()
         } else {
             Self::zero()
         }
