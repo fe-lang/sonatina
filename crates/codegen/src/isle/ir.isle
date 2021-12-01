@@ -21,6 +21,7 @@
     Eq
     And
     Or
+    Xor
   )
 )
 
@@ -139,4 +140,10 @@
 (extractor
   (extract_or lhs rhs)
   (insn_data (InsnData.Binary (BinaryOp.Or) (value_array2 lhs rhs)))
+)
+
+(decl extract_xor (Value Value) Insn)
+(extractor
+  (extract_xor lhs rhs)
+  (insn_data (InsnData.Binary (BinaryOp.Xor) (value_array2 lhs rhs)))
 )

@@ -361,6 +361,13 @@
   )
   (SimplifyResult.Value a)
 )
+; a | (_ & a) => a
+(rule
+  (simplify
+    (extract_or a (value_insn (extract_and _ (is_same $true <a))))
+  )
+  (SimplifyResult.Value a)
+)
 ; a | !(a & _) => -1
 (rule
   (simplify
@@ -374,4 +381,164 @@
     (extract_or a (value_insn (extract_not (value_insn (extract_and _ (value_with_ty (is_same $true <a) ty))))))
   )
   (SimplifyResult.Value (make_all_one ty))
+)
+; (a ^ b) | (a & !b) => (a ^ b)
+(rule
+  (simplify
+    (extract_or
+      arg0 @ (value_insn (extract_xor a b))
+      (value_insn
+        (extract_and (is_same $true <a) (value_insn (extract_not (is_same $true <b))))
+      )
+    )
+  )
+  (SimplifyResult.Value arg0)
+)
+; (a ^ b) | (!b & a) => (a ^ b)
+(rule
+  (simplify
+    (extract_or
+      arg0 @ (value_insn (extract_xor a b))
+      (value_insn
+        (extract_and (value_insn (extract_not (is_same $true <b))) (is_same $true <a))
+      )
+    )
+  )
+  (SimplifyResult.Value arg0)
+)
+; (a ^ b) | (!a & b) => (a ^ b)
+(rule
+  (simplify
+    (extract_or
+      arg0 @ (value_insn (extract_xor a b))
+      (value_insn
+        (extract_and (value_insn (extract_not (is_same $true <a))) (is_same $true <b))
+      )
+    )
+  )
+  (SimplifyResult.Value arg0)
+)
+; (a ^ b) | (b & !a) => (a ^ b)
+(rule
+  (simplify
+    (extract_or
+      arg0 @ (value_insn (extract_xor a b))
+      (value_insn
+        (extract_and (is_same $true <b) (value_insn (extract_not (is_same $true <a))))
+      )
+    )
+  )
+  (SimplifyResult.Value arg0)
+)
+; (!a ^ b) | (a & b) => (!a ^ b)
+(rule
+  (simplify
+    (extract_or
+      arg0 @ (value_insn (extract_xor (value_insn (extract_not a)) b))
+      (value_insn
+        (extract_and (is_same $true <a) (is_same $true <b))
+      )
+    )
+  )
+  (SimplifyResult.Value arg0)
+)
+; (!a ^ b) | (b & a) => (!a ^ b)
+(rule
+  (simplify
+    (extract_or
+      arg0 @ (value_insn (extract_xor (value_insn (extract_not a)) b))
+      (value_insn
+        (extract_and (is_same $true <b) (is_same $true <a))
+      )
+    )
+  )
+  (SimplifyResult.Value arg0)
+)
+; (a ^ !b) | (a & b) => (a ^ !b)
+(rule
+  (simplify
+    (extract_or
+      arg0 @ (value_insn (extract_xor a (value_insn (extract_not b))))
+      (value_insn
+        (extract_and (is_same $true <a) (is_same $true <b))
+      )
+    )
+  )
+  (SimplifyResult.Value arg0)
+)
+; (a ^ !b) | (b & a) => (a ^ !b)
+(rule
+  (simplify
+    (extract_or
+      arg0 @ (value_insn (extract_xor a (value_insn (extract_not b))))
+      (value_insn
+        (extract_and (is_same $true <b) (is_same $true <a))
+      )
+    )
+  )
+  (SimplifyResult.Value arg0)
+)
+; (a | b) | (a ^ b) => (a | b)
+(rule
+  (simplify
+    (extract_or
+      arg0 @ (value_insn (extract_or a b))
+      (value_insn
+        (extract_xor (is_same $true <a) (is_same $true <b))
+      )
+    )
+  )
+  (SimplifyResult.Value arg0)
+)
+; (a | b) | (b ^ a) => (a | b)
+(rule
+  (simplify
+    (extract_or
+      arg0 @ (value_insn (extract_or a b))
+      (value_insn
+        (extract_xor (is_same $true <b) (is_same $true <a))
+      )
+    )
+  )
+  (SimplifyResult.Value arg0)
+)
+; (!a & b) | !(a | b) => !a
+(rule
+  (simplify
+    (extract_or
+       (value_insn (extract_and neg_a @ (value_insn (extract_not a)) b))
+       (value_insn (extract_not (value_insn (extract_or (is_same $true <a) (is_same $true <b)))))
+    )
+  )
+  (SimplifyResult.Value neg_a)
+)
+; (!a & b) | !(b | a) => !a
+(rule
+  (simplify
+    (extract_or
+       (value_insn (extract_and neg_a @ (value_insn (extract_not a)) b))
+       (value_insn (extract_not (value_insn (extract_or (is_same $true <b) (is_same $true <a)))))
+    )
+  )
+  (SimplifyResult.Value neg_a)
+)
+; (a & !b) | !(a | b) => !b
+(rule
+  (simplify
+    (extract_or
+       (value_insn (extract_and a neg_b @ (value_insn (extract_not b))))
+       (value_insn (extract_not (value_insn (extract_or (is_same $true <a) (is_same $true <b)))))
+    )
+  )
+  (SimplifyResult.Value neg_b)
+)
+; (a & !b) | !(b | a) => !b
+(rule
+  (simplify
+    (extract_or
+       (value_insn (extract_and a neg_b @ (value_insn (extract_not b))))
+       (value_insn (extract_not (value_insn (extract_or (is_same $true <b) (is_same $true <a)))))
+    )
+  )
+  (SimplifyResult.Value neg_b)
 )
