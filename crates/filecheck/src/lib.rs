@@ -12,7 +12,7 @@ use std::{
 
 use sonatina_codegen::{ir::ir_writer::FuncWriter, Function};
 use sonatina_parser::{
-    parser::{ParsedModule, Parser},
+    parser::{ParsedFunction, ParsedModule, Parser},
     ErrorKind,
 };
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
@@ -62,7 +62,7 @@ impl FileCheckRunner {
             })
         {
             let mut checker = FileChecker::new(self.transformer.as_mut(), ent.path());
-            self.results.push(checker.check());
+            self.results.extend(checker.check());
         }
     }
 
@@ -126,22 +126,27 @@ impl<'a> FileChecker<'a> {
         }
     }
 
-    fn check(&mut self) -> FileCheckResult {
+    fn check(&mut self) -> Vec<FileCheckResult> {
         let parsed_module = match self.parse_file() {
             Ok(module) => module,
-            Err(msg) => return FileCheckResult::new(self.file_path, Err(msg)),
+            Err(msg) => return vec![FileCheckResult::new(self.file_path.to_owned(), Err(msg))],
         };
-        let mut funcs = parsed_module.funcs;
 
-        // TODO: Relax the restraint.
-        if funcs.len() != 1 {
-            return FileCheckResult::new(
-                self.file_path,
-                Err("a test file can't contain multiple functions".into()),
-            );
+        let funcs = parsed_module.funcs;
+        if funcs.is_empty() {
+            return vec![FileCheckResult::new(
+                self.file_path.to_owned(),
+                Err("a test file doesn't contains a function".into()),
+            )];
         }
 
-        let parsed_func = funcs.pop().unwrap();
+        funcs
+            .into_iter()
+            .map(|func| self.check_func(func))
+            .collect()
+    }
+
+    fn check_func(&mut self, parsed_func: ParsedFunction) -> FileCheckResult {
         let mut func = parsed_func.func;
         let comments = parsed_func.comments;
 
@@ -156,7 +161,9 @@ impl<'a> FileChecker<'a> {
             Err(err) => Err(format!("{}", err)),
         };
 
-        FileCheckResult::new(self.file_path, result)
+        let mut test_path = self.file_path.to_owned();
+        test_path.push(func.name);
+        FileCheckResult::new(test_path, result)
     }
 
     fn parse_file(&self) -> Result<ParsedModule, String> {
@@ -198,25 +205,28 @@ pub struct FileCheckResult {
 }
 
 impl FileCheckResult {
-    fn new(path: &Path, result: Result<(), String>) -> Self {
-        Self {
-            path: path.into(),
-            result,
-        }
+    fn new(path: PathBuf, result: Result<(), String>) -> Self {
+        Self { path, result }
     }
 
     fn print_result(&self, stdout: &mut StandardStream) -> io::Result<()> {
         let path = self.path.strip_prefix(FIXTURE_ROOT).unwrap();
-        write!(stdout, "test {} ...", path.to_string_lossy())?;
+        write!(
+            stdout,
+            "test {} ...",
+            path.to_string_lossy()
+                .replace("/", "::")
+                .replace(".sntn", "")
+        )?;
         match &self.result {
             Ok(()) => {
                 stdout.set_color(ColorSpec::new().set_fg(Color::Green.into()))?;
-                writeln!(stdout, "ok")?;
+                writeln!(stdout, " ok")?;
                 stdout.reset()?;
             }
             Err(err) => {
                 stdout.set_color(ColorSpec::new().set_fg(Color::Red.into()))?;
-                writeln!(stdout, "FAILED")?;
+                writeln!(stdout, " FAILED")?;
                 stdout.reset()?;
                 writeln!(stdout, "{}", err)?;
             }
