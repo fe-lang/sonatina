@@ -119,7 +119,7 @@ impl InsnData {
         )
     }
 
-    pub(super) fn result_type(&self, dfg: &DataFlowGraph) -> Option<Type> {
+    pub(crate) fn result_type(&self, dfg: &DataFlowGraph) -> Option<Type> {
         match self {
             Self::Unary { args, .. } => Some(dfg.value_ty(args[0]).clone()),
             Self::Binary { code, args } => Some(code.result_type(dfg, args)),

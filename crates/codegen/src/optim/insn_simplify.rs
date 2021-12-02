@@ -10,7 +10,7 @@ use crate::{
     Function, Insn, Value,
 };
 
-use super::simplify_impl::{simplify, SimplifyResult};
+use super::simplify_impl::{simplify_insn, SimplifyResult};
 
 #[derive(Debug, Default)]
 pub struct InsnSimplifySolver {
@@ -53,12 +53,10 @@ impl InsnSimplifySolver {
             return;
         }
 
-        match simplify(&mut inserter.func_mut().dfg, insn) {
-            Some(SimplifyResult::Value { val }) => {
-                self.simplify_insn_with_value(inserter, insn, val)
-            }
+        match simplify_insn(&mut inserter.func_mut().dfg, insn) {
+            Some(SimplifyResult::Value(val)) => self.simplify_insn_with_value(inserter, insn, val),
 
-            Some(SimplifyResult::Insn { data }) => {
+            Some(SimplifyResult::Insn(data)) => {
                 self.simplify_insn_with_data(inserter, insn, data);
             }
 

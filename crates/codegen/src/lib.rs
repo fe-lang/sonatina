@@ -9,6 +9,4 @@ pub mod ir;
 pub mod optim;
 pub mod post_domtree;
 
-mod isle;
-
 pub use ir::{Block, Function, Insn, Signature, Type, Value, Variable};
