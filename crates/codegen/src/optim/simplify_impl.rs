@@ -12,7 +12,7 @@ use crate::ir::{
 #[allow(clippy::all)]
 mod generated_code;
 
-use generated_code::{Context, SimplifyResult as SimplifyResultImpl};
+use generated_code::{Context, SimplifyRawResult};
 
 pub fn simplify_insn(dfg: &mut DataFlowGraph, insn: Insn) -> Option<SimplifyResult> {
     let mut ctx = SimplifyContext::new(dfg);
@@ -32,10 +32,10 @@ pub enum SimplifyResult {
 }
 
 impl SimplifyResult {
-    fn from_impl_result(res: SimplifyResultImpl) -> Option<Self> {
+    fn from_raw(res: SimplifyRawResult) -> Option<Self> {
         match res {
-            SimplifyResultImpl::Value { val } => Some(Self::Value(val)),
-            SimplifyResultImpl::Expr { expr } => expr.as_insn_data().map(Self::Insn),
+            SimplifyRawResult::Value { val } => Some(Self::Value(val)),
+            SimplifyRawResult::Expr { expr } => expr.as_insn_data().map(Self::Insn),
         }
     }
 }
@@ -64,8 +64,8 @@ impl BinaryOp {
     }
 }
 
-type ArgArray1 = [Box<ExprValue>; 1];
-type ArgArray2 = [Box<ExprValue>; 2];
+type ArgArray1 = [ExprValue; 1];
+type ArgArray2 = [ExprValue; 2];
 type BlockArray1 = [Block; 1];
 type BlockArray2 = [Block; 2];
 
@@ -119,33 +119,27 @@ impl ExprData {
         match data {
             InsnData::Unary { code, args } => Self::Unary {
                 code: *code,
-                args: [ExprValue::from(args[0]).into()],
+                args: [args[0].into()],
             },
 
             InsnData::Binary { code, args } => Self::Binary {
                 code: *code,
-                args: [
-                    ExprValue::from(args[0]).into(),
-                    ExprValue::from(args[1]).into(),
-                ],
+                args: [args[0].into(), args[1].into()],
             },
 
             InsnData::Cast { code, args, ty } => Self::Cast {
                 code: *code,
-                args: [ExprValue::from(args[0]).into()],
+                args: [args[0].into()],
                 ty: ty.clone(),
             },
 
             InsnData::Load { args, ty } => Self::Load {
-                args: [ExprValue::from(args[0]).into()],
+                args: [args[0].into()],
                 ty: ty.clone(),
             },
 
             InsnData::Store { args } => Self::Store {
-                args: [
-                    ExprValue::from(args[0]).into(),
-                    ExprValue::from(args[1]).into(),
-                ],
+                args: [args[0].into(), args[1].into()],
             },
 
             InsnData::Jump { code, dests } => Self::Jump {
@@ -154,24 +148,16 @@ impl ExprData {
             },
 
             InsnData::Branch { args, dests } => Self::Branch {
-                args: [ExprValue::from(args[0]).into()],
+                args: [args[0].into()],
                 dests: *dests,
             },
 
             InsnData::Return { args } => Self::Return {
-                args: args
-                    .iter()
-                    .copied()
-                    .map(|val| ExprValue::from(val).into())
-                    .collect(),
+                args: args.iter().copied().map(Into::into).collect(),
             },
 
             InsnData::Phi { values, blocks, ty } => Self::Phi {
-                values: values
-                    .iter()
-                    .copied()
-                    .map(|val| ExprValue::from(val).into())
-                    .collect(),
+                values: values.iter().copied().map(Into::into).collect(),
                 blocks: blocks.clone(),
                 ty: ty.clone(),
             },
@@ -273,20 +259,22 @@ impl<'a> SimplifyContext<'a> {
     }
 
     fn simplify_expr(&mut self, expr: Expr) -> Option<SimplifyResult> {
-        if let Some(res) = generated_code::constructor_simplify(self, expr) {
-            if let Some(res) = SimplifyResult::from_impl_result(res) {
-                return Some(res);
-            }
+        if let Some(res) = generated_code::constructor_simplify(self, expr)
+            .map(SimplifyResult::from_raw)
+            .flatten()
+        {
+            return Some(res);
         }
 
         let expr = try_swap_arg(self, expr)?;
-        let res = generated_code::constructor_simplify(self, expr)?;
-        SimplifyResult::from_impl_result(res)
+        generated_code::constructor_simplify(self, expr)
+            .map(SimplifyResult::from_raw)
+            .flatten()
     }
 
     fn make_expr_from_insn(&mut self, insn: Insn) -> Expr {
         let insn_data = self.dfg.insn_data(insn);
-        let expr_data = ExprData::from_insn_data(&insn_data);
+        let expr_data = ExprData::from_insn_data(insn_data);
 
         let expr = self.make_expr(expr_data);
         if let Some(insn_result) = self.dfg.insn_result(insn) {
@@ -301,8 +289,8 @@ impl<'a> SimplifyContext<'a> {
         let expr_data = ExprData::from_insn_data(&data);
 
         let expr = self.make_expr(expr_data);
-        if let Some(ty) = data.result_type(&self.dfg) {
-            self.types[expr] = Some(ty.clone());
+        if let Some(ty) = data.result_type(self.dfg) {
+            self.types[expr] = Some(ty);
         }
 
         expr
@@ -319,19 +307,19 @@ impl<'a> SimplifyContext<'a> {
 
 impl<'a> generated_code::Context for SimplifyContext<'a> {
     fn unpack_arg_array1(&mut self, arg0: &ArgArray1) -> ExprValue {
-        *arg0[0].clone()
+        arg0[0]
     }
 
     fn pack_arg_array1(&mut self, arg0: ExprValue) -> ArgArray1 {
-        [arg0.clone().into()]
+        [arg0]
     }
 
     fn unpack_arg_array2(&mut self, arg0: &ArgArray2) -> (ExprValue, ExprValue) {
-        (*arg0[0].clone(), *arg0[1].clone())
+        (arg0[0], arg0[1])
     }
 
     fn pack_arg_array2(&mut self, arg0: ExprValue, arg1: ExprValue) -> ArgArray2 {
-        [arg0.clone().into(), arg1.clone().into()]
+        [arg0, arg1]
     }
 
     fn value_ty(&mut self, arg0: ExprValue) -> Type {
@@ -350,7 +338,7 @@ impl<'a> generated_code::Context for SimplifyContext<'a> {
             ExprValue::Value(val) => {
                 let insn = self.dfg().value_insn(val)?;
                 let insn_data = self.dfg().insn_data(insn);
-                let data = ExprData::from_insn_data(&insn_data);
+                let data = ExprData::from_insn_data(insn_data);
                 Some(self.make_expr(data))
             }
             ExprValue::Expr(expr) => Some(expr),
@@ -437,10 +425,10 @@ impl<'a> generated_code::Context for SimplifyContext<'a> {
         ExprValue::Value(val)
     }
 
-    fn make_result(&mut self, arg0: ExprValue) -> SimplifyResultImpl {
+    fn make_result(&mut self, arg0: ExprValue) -> SimplifyRawResult {
         match arg0 {
-            ExprValue::Value(val) => SimplifyResultImpl::Value { val },
-            ExprValue::Expr(expr) => SimplifyResultImpl::Expr {
+            ExprValue::Value(val) => SimplifyRawResult::Value { val },
+            ExprValue::Expr(expr) => SimplifyRawResult::Expr {
                 expr: self.exprs[expr].clone(),
             },
         }

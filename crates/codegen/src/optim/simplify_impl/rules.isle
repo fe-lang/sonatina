@@ -1,5 +1,5 @@
 (type
-  SimplifyResult
+  SimplifyRawResult
     (enum
       (Value (val Value))
       (Expr (expr ExprData))
@@ -37,12 +37,12 @@
 (decl make_all_one (Type) ExprValue)
 (extern constructor make_all_one make_all_one)
 
-(decl make_result (ExprValue) SimplifyResult)
+(decl make_result (ExprValue) SimplifyRawResult)
 (extern constructor make_result make_result)
 
 
 ;; Insn Simplify rule ;;
-(decl simplify (Expr) SimplifyResult)
+(decl simplify (Expr) SimplifyRawResult)
 
 ;; Rules for BinaryOp.Add ;;
 ; a + 0 => a
@@ -93,7 +93,7 @@
   (simplify
     (extract_sub (is_zero $true) a)
   )
-  (SimplifyResult.Expr (ExprData.Unary (UnaryOp.Neg) (arg_array1 a)))
+  (SimplifyRawResult.Expr (ExprData.Unary (UnaryOp.Neg) (arg_array1 a)))
 )
 ; a - a => 0
 (rule
@@ -114,14 +114,14 @@
   (simplify
     (extract_sub (value_expr (extract_sub a b)) (is_same $true <a))
   )
-  (SimplifyResult.Expr (ExprData.Unary (UnaryOp.Neg) (arg_array1 b)))
+  (SimplifyRawResult.Expr (ExprData.Unary (UnaryOp.Neg) (arg_array1 b)))
 )
 ; a - (a + b) => -b
 (rule
   (simplify
     (extract_sub a (value_expr (extract_add (is_same $true <a) b)))
   )
-  (SimplifyResult.Expr (ExprData.Unary (UnaryOp.Neg) (arg_array1 b)))
+  (SimplifyRawResult.Expr (ExprData.Unary (UnaryOp.Neg) (arg_array1 b)))
 )
 ; (a + b) - a =>  b
 (rule
@@ -151,7 +151,7 @@
   (simplify
     (extract_mul a (is_two $true))
   )
-  (SimplifyResult.Expr (ExprData.Binary (BinaryOp.Add) (arg_array2 a a)))
+  (SimplifyRawResult.Expr (ExprData.Binary (BinaryOp.Add) (arg_array2 a a)))
 )
 
 ;; Rules for BinaryOp.Sdiv ;;
@@ -189,7 +189,7 @@
   (simplify
     (extract_gt a b)
   )
-  (SimplifyResult.Expr (ExprData.Binary (BinaryOp.Lt) (arg_array2 b a)))
+  (SimplifyRawResult.Expr (ExprData.Binary (BinaryOp.Lt) (arg_array2 b a)))
 )
 
 ;; Rules for BinaryOp.Slt
@@ -207,7 +207,7 @@
   (simplify
     (extract_sgt a b)
   )
-  (SimplifyResult.Expr (ExprData.Binary (BinaryOp.Slt) (arg_array2 b a)))
+  (SimplifyRawResult.Expr (ExprData.Binary (BinaryOp.Slt) (arg_array2 b a)))
 )
 
 ;; Rules for BinaryOp.Eq
@@ -674,7 +674,7 @@
   (simplify
     (extract_not (value_expr (extract_neg (value_with_ty a ty))))
   )
-  (SimplifyResult.Expr (ExprData.Binary (BinaryOp.Sub) (arg_array2 a (make_one ty))))
+  (SimplifyRawResult.Expr (ExprData.Binary (BinaryOp.Sub) (arg_array2 a (make_one ty))))
 )
 
 ;; Rules for UnaryOp.Neg
@@ -690,5 +690,5 @@
   (simplify
     (extract_neg (value_expr (extract_not (value_with_ty a ty))))
   )
-  (SimplifyResult.Expr (ExprData.Binary (BinaryOp.Add) (arg_array2 a (make_one ty))))
+  (SimplifyRawResult.Expr (ExprData.Binary (BinaryOp.Add) (arg_array2 a (make_one ty))))
 )

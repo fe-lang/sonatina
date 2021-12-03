@@ -30,18 +30,18 @@ pub trait Context {
     fn make_zero(&mut self, arg0: &Type) -> ExprValue;
     fn make_one(&mut self, arg0: &Type) -> ExprValue;
     fn make_all_one(&mut self, arg0: &Type) -> ExprValue;
-    fn make_result(&mut self, arg0: ExprValue) -> SimplifyResult;
+    fn make_result(&mut self, arg0: ExprValue) -> SimplifyRawResult;
 }
 
-/// Internal type SimplifyResult: defined at rules.isle line 2.
+/// Internal type SimplifyRawResult: defined at rules.isle line 2.
 #[derive(Clone, Debug)]
-pub enum SimplifyResult {
+pub enum SimplifyRawResult {
     Value { val: Value },
     Expr { expr: ExprData },
 }
 
 // Generated as internal constructor for term simplify.
-pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<SimplifyResult> {
+pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<SimplifyRawResult> {
     let pattern0_0 = arg0;
     let pattern1_0 = C::expr_data(ctx, pattern0_0);
     match &pattern1_0 {
@@ -77,7 +77,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         code: expr0_0,
                                         args: expr2_0,
                                     };
-                                    let expr4_0 = SimplifyResult::Expr { expr: expr3_0 };
+                                    let expr4_0 = SimplifyRawResult::Expr { expr: expr3_0 };
                                     return Some(expr4_0);
                                 }
                                 _ => {}
@@ -106,7 +106,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         code: expr0_0,
                                         args: expr2_0,
                                     };
-                                    let expr4_0 = SimplifyResult::Expr { expr: expr3_0 };
+                                    let expr4_0 = SimplifyRawResult::Expr { expr: expr3_0 };
                                     return Some(expr4_0);
                                 }
                                 &UnaryOp::Neg => {
@@ -253,7 +253,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                             code: expr0_0,
                             args: expr1_0,
                         };
-                        let expr3_0 = SimplifyResult::Expr { expr: expr2_0 };
+                        let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
                         return Some(expr3_0);
                     }
                     if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
@@ -295,7 +295,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                 code: expr0_0,
                                                 args: expr1_0,
                                             };
-                                            let expr3_0 = SimplifyResult::Expr { expr: expr2_0 };
+                                            let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
                                             return Some(expr3_0);
                                         }
                                     }
@@ -334,7 +334,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                 code: expr0_0,
                                                 args: expr1_0,
                                             };
-                                            let expr3_0 = SimplifyResult::Expr { expr: expr2_0 };
+                                            let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
                                             return Some(expr3_0);
                                         }
                                     }
@@ -384,7 +384,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                             code: expr0_0,
                             args: expr1_0,
                         };
-                        let expr3_0 = SimplifyResult::Expr { expr: expr2_0 };
+                        let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
                         return Some(expr3_0);
                     }
                 }
@@ -435,7 +435,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                         code: expr0_0,
                         args: expr1_0,
                     };
-                    let expr3_0 = SimplifyResult::Expr { expr: expr2_0 };
+                    let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
                     return Some(expr3_0);
                 }
                 &BinaryOp::Slt => {
@@ -463,7 +463,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                         code: expr0_0,
                         args: expr1_0,
                     };
-                    let expr3_0 = SimplifyResult::Expr { expr: expr2_0 };
+                    let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
                     return Some(expr3_0);
                 }
                 &BinaryOp::Eq => {
