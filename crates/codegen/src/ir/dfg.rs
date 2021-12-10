@@ -254,15 +254,26 @@ impl DataFlowGraph {
         matches!(self.insn_data(insn), InsnData::Return { .. })
     }
 
-    pub fn is_same_value(&self, v0: Value, v1: Value) -> bool {
-        if self.resolve_alias(v0) == self.resolve_alias(v1) {
-            return true;
-        }
+    pub fn is_branch(&self, insn: Insn) -> bool {
+        matches!(
+            self.insn_data(insn),
+            InsnData::Jump { .. } | InsnData::Branch { .. }
+        )
+    }
 
-        match (self.value_imm(v0), self.value_imm(v1)) {
-            (Some(imm0), Some(imm1)) => imm0 == imm1,
-            _ => false,
-        }
+    pub fn is_same_value(&self, v0: Value, v1: Value) -> bool {
+        self.resolve_alias(v0) == self.resolve_alias(v1)
+    }
+
+    /// Returns `true` if `value` is an immediate.
+    pub fn is_imm(&self, value: Value) -> bool {
+        self.value_imm(value).is_some()
+    }
+
+    /// Returns `true` if `value` is a function argument.
+    pub fn is_arg(&self, value: Value) -> bool {
+        let value = self.resolve_alias(value);
+        matches!(self.value_data(value), ValueData::Arg { .. })
     }
 }
 

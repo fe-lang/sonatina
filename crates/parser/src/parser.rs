@@ -564,7 +564,6 @@ mod tests {
         let module = Parser::parse(input).unwrap();
         let mut writer = FuncWriter::new(&module.funcs[0].func);
 
-        println!("{}", writer.dump_string().unwrap());
         input.trim() == writer.dump_string().unwrap().trim()
     }
 

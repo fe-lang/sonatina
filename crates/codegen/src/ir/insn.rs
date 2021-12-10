@@ -13,7 +13,7 @@ pub struct Insn(pub u32);
 cranelift_entity::entity_impl!(Insn);
 
 /// An instruction data definition.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InsnData {
     /// Unary instructions.
     Unary { code: UnaryOp, args: [Value; 1] },
@@ -52,6 +52,25 @@ pub enum InsnData {
 }
 
 impl InsnData {
+    pub fn unary(code: UnaryOp, lhs: Value) -> Self {
+        Self::Unary { code, args: [lhs] }
+    }
+
+    pub fn binary(code: BinaryOp, lhs: Value, rhs: Value) -> Self {
+        Self::Binary {
+            code,
+            args: [lhs, rhs],
+        }
+    }
+
+    pub fn cast(code: CastOp, arg: Value, ty: Type) -> Self {
+        Self::Cast {
+            code,
+            args: [arg],
+            ty,
+        }
+    }
+
     pub fn jump(dest: Block) -> InsnData {
         InsnData::Jump {
             code: JumpOp::Jump,
@@ -131,7 +150,7 @@ impl InsnData {
 }
 
 /// Unary operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryOp {
     Not,
     Neg,
@@ -153,7 +172,7 @@ impl fmt::Display for UnaryOp {
 }
 
 /// Binary operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -171,6 +190,13 @@ pub enum BinaryOp {
 }
 
 impl BinaryOp {
+    pub fn is_commutative(self) -> bool {
+        matches!(
+            self,
+            Self::Add | Self::Mul | Self::And | Self::Or | Self::Xor
+        )
+    }
+
     pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Add => "add",
@@ -208,7 +234,7 @@ impl fmt::Display for BinaryOp {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CastOp {
     Sext,
     Zext,
@@ -232,7 +258,7 @@ impl fmt::Display for CastOp {
 }
 
 /// Unconditional jump operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum JumpOp {
     Jump,
     FallThrough,

@@ -1,0 +1,25 @@
+# check: block1:
+# nextln:   jump block4;
+# check: block2:
+# nextln:   return 0.i1;
+# nextln: 
+# nextln: block4:
+# nextln:   return -1.i1;
+func %unreachable_edge(v0.i1) -> i1:
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        br v0 block4 block3;
+
+    block2:
+        v2.i1 = or v0 v0;
+        return v2;
+
+    block3:
+        v3.i1 = or v0 v0;
+        return v3;
+
+    block4:
+        v4.i1 = or v0 v0;
+        return v4;

@@ -5,7 +5,7 @@ use std::fmt;
 use super::{Insn, Type, I256, U256};
 
 /// An opaque reference to [`ValueData`].
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
 pub struct Value(pub u32);
 cranelift_entity::entity_impl!(Value);
 

@@ -15,12 +15,20 @@ mod generated_code;
 use generated_code::{Context, SimplifyRawResult};
 
 pub fn simplify_insn(dfg: &mut DataFlowGraph, insn: Insn) -> Option<SimplifyResult> {
+    if dfg.is_phi(insn) {
+        return simplify_phi(dfg, dfg.insn_data(insn));
+    }
+
     let mut ctx = SimplifyContext::new(dfg);
     let expr = ctx.make_expr_from_insn(insn);
     ctx.simplify_expr(expr)
 }
 
 pub fn simplify_insn_data(dfg: &mut DataFlowGraph, data: InsnData) -> Option<SimplifyResult> {
+    if matches!(data, InsnData::Phi { .. }) {
+        return simplify_phi(dfg, &data);
+    }
+
     let mut ctx = SimplifyContext::new(dfg);
     let expr = ctx.make_expr_from_insn_data(data);
     ctx.simplify_expr(expr)
@@ -29,6 +37,21 @@ pub fn simplify_insn_data(dfg: &mut DataFlowGraph, data: InsnData) -> Option<Sim
 pub enum SimplifyResult {
     Value(Value),
     Insn(InsnData),
+}
+
+fn simplify_phi(dfg: &DataFlowGraph, insn_data: &InsnData) -> Option<SimplifyResult> {
+    match insn_data {
+        InsnData::Phi { values, .. } => {
+            let mut values = values.iter().copied();
+            let first_value = values.next().unwrap();
+            if values.all(|value| dfg.is_same_value(first_value, value)) {
+                Some(SimplifyResult::Value(first_value))
+            } else {
+                None
+            }
+        }
+        _ => unreachable!(),
+    }
 }
 
 impl SimplifyResult {
@@ -53,14 +76,6 @@ fn try_swap_arg(ctx: &mut SimplifyContext, expr: Expr) -> Option<Expr> {
             Some(ctx.make_expr(data))
         }
         _ => None,
-    }
-}
-
-impl BinaryOp {
-    fn is_commutative(self) -> bool {
-        use BinaryOp::*;
-
-        matches!(self, Add | Mul | And | Or | Xor)
     }
 }
 

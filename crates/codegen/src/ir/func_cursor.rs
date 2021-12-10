@@ -203,7 +203,7 @@ impl<'a> FuncCursor for InsnInserter<'a> {
     }
 
     fn func_mut(&mut self) -> &mut Function {
-        &mut self.func
+        self.func
     }
 
     fn loc(&self) -> CursorLocation {

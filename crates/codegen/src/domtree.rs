@@ -26,9 +26,26 @@ impl DomTree {
         self.rpo.clear();
     }
 
-    /// Returns `None` if the block is unreachable from the entry block.
+    /// Retruns the immediate dominator of the `block`.
+    /// Returns None if the `block` is unreachable from the entry block, or the `block` is the entry block itself.
     pub fn idom_of(&self, block: Block) -> Option<Block> {
+        if self.rpo[0] == block {
+            return None;
+        }
         self.doms[block].expand()
+    }
+
+    /// Returns `true` if block1 strictly dominates block2.
+    pub fn dominates(&self, block1: Block, block2: Block) -> bool {
+        let mut current_block = block2;
+        while let Some(block) = self.idom_of(current_block) {
+            if block == block1 {
+                return true;
+            }
+            current_block = block;
+        }
+
+        false
     }
 
     pub fn compute(&mut self, cfg: &ControlFlowGraph) {
@@ -102,6 +119,11 @@ impl DomTree {
     /// Returns `true` if block is reachable from the entry block.
     pub fn is_reachable(&self, block: Block) -> bool {
         self.idom_of(block).is_some()
+    }
+
+    /// Returns blocks in RPO.
+    pub fn rpo(&self) -> &[Block] {
+        &self.rpo
     }
 
     fn intersect(

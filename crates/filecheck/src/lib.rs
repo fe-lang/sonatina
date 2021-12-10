@@ -1,5 +1,5 @@
 pub mod adce;
-// pub mod gvn;
+pub mod gvn;
 pub mod insn_simplify;
 pub mod sccp;
 

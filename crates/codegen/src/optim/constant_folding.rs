@@ -1,6 +1,57 @@
 use std::ops;
 
-use crate::ir::{Immediate, Type, I256};
+use crate::ir::{
+    insn::{BinaryOp, CastOp, UnaryOp},
+    DataFlowGraph, Immediate, InsnData, Type, I256,
+};
+
+pub(super) fn fold_constant(dfg: &DataFlowGraph, insn_data: &InsnData) -> Option<Immediate> {
+    match insn_data {
+        InsnData::Unary { code, args } => {
+            let arg = dfg.value_imm(args[0])?;
+            Some(match *code {
+                UnaryOp::Not => !arg,
+                UnaryOp::Neg => -arg,
+            })
+        }
+
+        InsnData::Binary { code, args } => {
+            let lhs = dfg.value_imm(args[0])?;
+            let rhs = dfg.value_imm(args[1])?;
+            Some(match *code {
+                BinaryOp::Add => lhs + rhs,
+                BinaryOp::Sub => lhs - rhs,
+                BinaryOp::Mul => lhs * rhs,
+                BinaryOp::Udiv => lhs.udiv(rhs),
+                BinaryOp::Sdiv => lhs.sdiv(rhs),
+                BinaryOp::Lt => lhs.lt(rhs),
+                BinaryOp::Gt => lhs.gt(rhs),
+                BinaryOp::Slt => lhs.slt(rhs),
+                BinaryOp::Sgt => lhs.sgt(rhs),
+                BinaryOp::Eq => lhs.const_eq(rhs),
+                BinaryOp::And => lhs & rhs,
+                BinaryOp::Or => lhs | rhs,
+                BinaryOp::Xor => lhs ^ rhs,
+            })
+        }
+
+        InsnData::Cast { code, args, ty } => {
+            let arg = dfg.value_imm(args[0])?;
+            Some(match code {
+                CastOp::Sext => arg.sext(ty),
+                CastOp::Zext => arg.zext(ty),
+                CastOp::Trunc => arg.trunc(ty),
+            })
+        }
+
+        InsnData::Load { .. }
+        | InsnData::Jump { .. }
+        | InsnData::Branch { .. }
+        | InsnData::Store { .. }
+        | InsnData::Return { .. }
+        | InsnData::Phi { .. } => None,
+    }
+}
 
 impl Immediate {
     pub(super) fn udiv(self, rhs: Self) -> Self {

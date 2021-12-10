@@ -1,935 +1,956 @@
 //! This module contains a solver for complete Global Value Numbering.
-//! The algorithm here is based on Rekha R. Pai.: Detection of Redundant Expressions: A Complete and Polynomial-Time Algorithm in SSA:
 //!
-//! Asian Symposium on Programming Languages and Systems 2015 pp49-65:
-//! <https://link.springer.com/chapter/10.1007/978-3-319-26529-2_4>
+//! The algorithm here is based on Karthik Gargi.: A sparse algorithm for predicated global value numbering:
+//! PLDI 2002 Pages 45–56: <https://dl.acm.org/doi/10.1145/512529.512536>.
+//!
+//! Also, to make the GVN complete, this algorithm is based on
+//! Rekha R. Pai.: Detection of Redundant Expressions: A Complete and Polynomial-Time Algorithm in SSA:
+//! Asian Symposium on Programming Languages and Systems 2015 pp49-65: <https://link.springer.com/chapter/10.1007/978-3-319-26529-2_4>
 
-use std::{collections::BTreeSet, hash::Hash};
+use std::collections::BTreeSet;
 
-use cranelift_entity::{
-    entity_impl, packed_option::PackedOption, EntityRef, PrimaryMap, SecondaryMap,
-};
-use fxhash::{FxHashMap, FxHashSet};
+use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, SecondaryMap};
+use fxhash::FxHashMap;
 
 use crate::{
     cfg::ControlFlowGraph,
+    domtree::DomTree,
     ir::{
         func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-        insn::InsnData,
+        insn::{BinaryOp, InsnData},
+        DataFlowGraph, Immediate,
     },
     Block, Function, Insn, Type, Value,
 };
 
-type ValueNumber = u32;
+use super::{constant_folding, interner::Interner, simplify_impl};
 
-#[derive(Debug)]
+///  An initial class that assigned to all values.
+///  If a value still has the initial class after value numbering, then the insn that defines the value is
+///  unreachable.
+const INITIAL_CLASS: Class = Class(0);
+
+/// The rank for immediates.
+const IMMEDIATE_RANK: u32 = 0;
+
+#[derive(Debug, Default)]
 pub struct GvnSolver {
-    next_vn: ValueNumber,
-    partitions: PrimaryMap<Partition, PartitionData>,
-    insns: SecondaryMap<Insn, InsnPartition>,
-    inserted_phis: SecondaryMap<Block, PartitionData>,
-    value_phis: Interner<ValuePhi, ValuePhiData>,
-    value_exprs: Interner<ValueExpr, ValueExprData>,
-    searched: FxHashSet<Partition>,
-    partition_changed: bool,
-    entry: Block,
-}
+    /// Store classes.
+    classes: PrimaryMap<Class, ClassData>,
 
-impl Default for GvnSolver {
-    fn default() -> Self {
-        Self {
-            next_vn: ValueNumber::default(),
-            partitions: PrimaryMap::default(),
-            insns: SecondaryMap::default(),
-            inserted_phis: SecondaryMap::default(),
-            value_phis: Interner::default(),
-            value_exprs: Interner::default(),
-            searched: FxHashSet::default(),
-            partition_changed: true,
-            entry: Block(0),
-        }
-    }
+    /// Maps [`Value`] to [`GvnValueData`].
+    values: SecondaryMap<Value, GvnValueData>,
+
+    /// An interner that intern [`GvnInsnData`] to `[GvnInsnData]`.
+    insns: Interner<GvnInsn, GvnInsnData>,
+
+    /// Maps [`GvnInsnData`] to [`Class`].
+    insn_table: FxHashMap<GvnInsn, Class>,
+
+    /// Store edges.
+    edges: PrimaryMap<Edge, EdgeData>,
+
+    /// Maps [`Block`] to [`GvnBlockData`]
+    blocks: SecondaryMap<Block, GvnBlockData>,
 }
 
 impl GvnSolver {
-    pub fn run(&mut self, func: &mut Function, cfg: &ControlFlowGraph) {
+    pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph, domtree: &mut DomTree) {
         self.clear();
 
-        let mut rpo: Vec<_> = cfg.post_order().collect();
-        rpo.reverse();
-
-        if rpo.is_empty() {
+        // Return if the function has no blocks.
+        if func.layout.entry_block().is_none() {
             return;
         }
 
-        self.compute_equivalences(func, cfg, &rpo);
-        self.remove_redundant_insns(func, &rpo);
-    }
+        // Make dummy INITIAL_CLASS.
+        self.classes.push(ClassData {
+            insn: GvnInsn(u32::MAX),
+            values: BTreeSet::new(),
+        });
+        debug_assert!(self.classes.len() == 1);
 
-    pub fn clear(&mut self) {
-        self.next_vn = 0;
-        self.partitions.clear();
-        self.insns.clear();
-        self.inserted_phis.clear();
-        self.value_phis.clear();
-        self.value_exprs.clear();
-        self.searched.clear();
-        self.partition_changed = true;
-    }
+        // Make the entry block reachable.
+        let entry = func.layout.entry_block().unwrap();
+        self.blocks[entry].reachable = true;
 
-    fn remove_redundant_insns(&mut self, func: &mut Function, rpo: &[Block]) {
-        for &block in rpo {
-            let mut next_insn = func.layout.first_insn_of(block);
-            while let Some(insn) = next_insn {
-                let value = match func.dfg.insn_result(insn) {
-                    Some(value) => value,
-                    None => {
-                        next_insn = func.layout.next_insn_of(insn);
-                        continue;
+        // Make classes for immediates.
+        for &value in func.dfg.immediates.values() {
+            self.assign_class_to_imm_value(value);
+        }
+
+        let mut rank = IMMEDIATE_RANK + 1;
+        // Iterate insns in RPO to assign ranks and analyze edges information.
+        for &block in domtree.rpo() {
+            self.blocks[block].rank = rank;
+            rank += 1;
+
+            for insn in func.layout.iter_insn(block) {
+                if let Some(insn_result) = func.dfg.insn_result(insn) {
+                    self.values[insn_result].rank = rank;
+                    rank += 1;
+                }
+
+                // Make edge data and attach the edge to the originating block and the destinating block.
+                match func.dfg.insn_data(insn) {
+                    InsnData::Jump { dests, .. } => {
+                        let dest = dests[0];
+                        self.add_edge_info(block, dest, None, None);
                     }
-                };
 
-                let (pin, pout) = (
-                    self.insns[insn].pin.unwrap(),
-                    self.insns[insn].pout.unwrap(),
-                );
-                let (pin_data, pout_data) = (&self.partitions[pin], &self.partitions[pout]);
+                    InsnData::Branch { args, dests } => {
+                        let cond = args[0];
+                        debug_assert_eq!(func.dfg.value_ty(cond), &Type::I1);
 
-                let vn = pout_data.value_vn(value).unwrap();
-                let alias = if let Some(alias) = pin_data.representative_value(vn) {
-                    alias
-                } else if let Some(phi) = pout_data.phi_of_vn(vn) {
-                    // No need to resolve phi if insn itself is phi.
-                    if func.dfg.is_phi(insn) {
-                        next_insn = func.layout.next_insn_of(insn);
-                        continue;
+                        let then_block = dests[0];
+                        let else_block = dests[1];
+
+                        let then_imm = self.make_imm(&mut func.dfg, true);
+                        let else_imm = self.make_imm(&mut func.dfg, false);
+
+                        self.add_edge_info(block, then_block, Some(cond), Some(then_imm));
+                        self.add_edge_info(block, else_block, Some(cond), Some(else_imm));
                     }
-                    let ty = func.dfg.value_ty(value).clone();
-                    self.resolve_phi(func, phi, ty)
-                } else {
-                    next_insn = func.layout.next_insn_of(insn);
+
+                    _ => {}
+                }
+            }
+        }
+
+        // Assign rank to function arguments and create class for them.
+        for &arg in &func.arg_values {
+            self.values[arg].rank = u32::MAX;
+            let gvn_insn = self.insns.intern(arg.into());
+            self.make_class(arg, gvn_insn);
+        }
+
+        // Find congruence classes of all reachable insn.
+        // TODO: We don't need to iterate all insns, it's enough to iterate all `touched` insns as
+        // described in the paper.
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &block in domtree.rpo() {
+                // If block is unreachable, skip all insns in the block.
+                if !self.blocks[block].reachable {
                     continue;
-                };
+                }
 
-                func.dfg.change_to_alias(value, alias);
-                next_insn = func.layout.next_insn_of(insn);
-                InsnInserter::new(func, CursorLocation::At(insn)).remove_insn();
+                let mut next_insn = func.layout.first_insn_of(block);
+                while let Some(insn) = next_insn {
+                    if let Some(insn_result) = func.dfg.insn_result(insn) {
+                        changed |= self.assign_congruence(func, domtree, insn, insn_result);
+                    }
+                    next_insn = func.layout.next_insn_of(insn);
+                }
+
+                if let Some(last_insn) = func.layout.last_insn_of(block) {
+                    changed |= self.analyze_last_insn(func, domtree, block, last_insn);
+                }
+            }
+        }
+
+        // Remove redundant insn and unreachable block.
+        self.remove_redundant_code(func, cfg, domtree);
+    }
+
+    /// Clear all internal data of the solver.
+    pub fn clear(&mut self) {
+        self.classes.clear();
+        self.values.clear();
+        self.insns.clear();
+        self.insn_table.clear();
+        self.edges.clear();
+        self.blocks.clear();
+    }
+
+    /// Analyze the last insn of the block.
+    /// This function updates reachability of the edges and blocks.
+    /// Returns `true` if reachability is changed.
+    fn analyze_last_insn(
+        &mut self,
+        func: &Function,
+        domtree: &DomTree,
+        block: Block,
+        insn: Insn,
+    ) -> bool {
+        match func.dfg.insn_data(insn) {
+            InsnData::Jump { .. } => {
+                let out_edges = &self.blocks[block].out_edges;
+                debug_assert_eq!(out_edges.len(), 1);
+                let out_edge = out_edges[0];
+                self.mark_edge_reachable(out_edge)
+            }
+
+            InsnData::Branch {
+                args,
+                dests: [then_dest, else_dest],
+            } => {
+                let cond = args[0];
+                let out_edges = &self.blocks[block].out_edges;
+                debug_assert_eq!(out_edges.len(), 2);
+
+                let then_edge = *out_edges
+                    .iter()
+                    .find(|edge| self.edge_data(**edge).to == *then_dest)
+                    .unwrap();
+                let else_edge = *out_edges
+                    .iter()
+                    .find(|edge| self.edge_data(**edge).to == *else_dest)
+                    .unwrap();
+
+                // Mark appropriate edge as reachable if predicate is congruent to immeidate.
+                let leader = self.leader(cond);
+                if let Some(cond_imm) = func.dfg.value_imm(leader) {
+                    let edge = if cond_imm.is_zero() {
+                        else_edge
+                    } else {
+                        then_edge
+                    };
+                    return self.mark_edge_reachable(edge);
+                }
+
+                // Try to infer reachability of edges.
+                if self.infer_edge_reachability(func, then_edge, domtree) {
+                    // Mark `then_edge` if its cond is inferred as being always true.
+                    self.mark_edge_reachable(then_edge)
+                } else if self.infer_edge_reachability(func, else_edge, domtree) {
+                    // Mark `else_edge` if its cond is inferred as being always true.
+                    self.mark_edge_reachable(else_edge)
+                } else {
+                    // Mark both edges if inference failed.
+                    let changed = self.mark_edge_reachable(then_edge);
+                    changed || self.mark_edge_reachable(else_edge)
+                }
+            }
+
+            _ => false,
+        }
+    }
+
+    /// Search and assign congruence class to the `insn_result`.
+    /// Returns `true` if congruence class is changed.
+    fn assign_congruence(
+        &mut self,
+        func: &mut Function,
+        domtree: &DomTree,
+        insn: Insn,
+        insn_result: Value,
+    ) -> bool {
+        // Perform symbolic evaluation for the insn.
+        let gvn_insn_data = self.perform_symbolic_evaluation(func, domtree, insn);
+        let gvn_insn = self.insns.intern(gvn_insn_data);
+
+        // If insn has a side effect, create new class if the value still belongs to
+        // `INITIAL_CLASS`.
+        if func.dfg.has_side_effect(insn) {
+            let class = self.value_class(insn_result);
+            if class == INITIAL_CLASS {
+                self.make_class(insn_result, gvn_insn);
+                return true;
+            } else {
+                return false;
+            }
+        }
+
+        let old_class = self.value_class(insn_result);
+        let new_class = if let GvnInsnData::Value(value) = self.insn_data(gvn_insn) {
+            // If `gvn_insn` is value itself, then lookup value class of the value.
+            self.value_class(*value)
+        } else if let Some(class) = self.insn_table.get(&gvn_insn) {
+            // If gvn_insn is already inserted, return corresponding class.
+            *class
+        } else if old_class == INITIAL_CLASS {
+            // If the value is not congruent with any known classes, then make new class for the
+            // value and its defining insn.
+            let class = self.make_class(insn_result, gvn_insn);
+            class
+        } else {
+            old_class
+        };
+
+        // If assigned class is not changed, return.
+        if old_class == new_class {
+            return false;
+        }
+
+        // Replace `value` class to `new_class` from `old_class`.
+        self.replace_value_class(insn_result, gvn_insn, old_class, new_class);
+
+        true
+    }
+
+    fn remove_redundant_code(
+        &self,
+        func: &mut Function,
+        cfg: &mut ControlFlowGraph,
+        domtree: &mut DomTree,
+    ) {
+        let entry_block = func.layout.entry_block().unwrap();
+        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(entry_block));
+
+        // Remove unreachable blocks and unused edges.
+        loop {
+            match inserter.loc() {
+                CursorLocation::BlockTop(block) => {
+                    if !self.blocks[block].reachable {
+                        inserter.remove_block();
+                    } else {
+                        inserter.proceed();
+                    }
+                }
+
+                CursorLocation::BlockBottom(..) => inserter.proceed(),
+
+                CursorLocation::At(insn) => {
+                    // If the number of reachable outgoing edge is one, then replace branch
+                    // insn to jump insn with appropriate destination.
+                    if matches!(inserter.func().dfg.insn_data(insn), InsnData::Branch { .. }) {
+                        let block = inserter.block().unwrap();
+                        let mut in_edges = self.reachable_out_edges(block);
+                        let edge = in_edges.next().unwrap();
+                        if in_edges.next().is_none() {
+                            inserter.replace(InsnData::jump(self.edge_data(*edge).to));
+                        }
+                    }
+                    inserter.proceed();
+                }
+
+                CursorLocation::NoWhere => break,
+            }
+        }
+
+        // Recompute cfg and domtree.
+        cfg.compute(inserter.func());
+        domtree.compute(&cfg);
+
+        inserter.set_loc(CursorLocation::BlockTop(entry_block));
+        loop {
+            match inserter.loc() {
+                CursorLocation::BlockTop(_) | CursorLocation::BlockBottom(..) => {
+                    inserter.proceed();
+                }
+
+                CursorLocation::At(insn) => {
+                    let block = inserter.block().unwrap();
+                    if let Some(insn_result) = inserter.func().dfg.insn_result(insn) {
+                        let leader = self.leader(insn_result);
+
+                        // If leader dominates the def of insn_result, remove insn and replace the
+                        // insn_result with leader.
+                        if leader != insn_result
+                            && self.dominates(inserter.func(), domtree, leader, insn_result)
+                        {
+                            inserter.func_mut().dfg.change_to_alias(insn_result, leader);
+                            inserter.remove_insn();
+                            continue;
+                        }
+
+                        // Rewrite phi function if there are the unreachable incoming edge to the block.
+                        let insn_data = inserter.func().dfg.insn_data(insn);
+                        if matches!(insn_data, InsnData::Phi { .. })
+                            && self.blocks[block].in_edges.len()
+                                != self.reachable_in_edges(block).count()
+                        {
+                            let class = self.value_class(insn_result);
+                            let gvn_insn = self.classes[class].insn;
+                            match self.insns.get(gvn_insn) {
+                                GvnInsnData::Insn(insn_data) => inserter.replace(insn_data.clone()),
+                                _ => unreachable!(),
+                            }
+                        }
+
+                        inserter.proceed();
+                    } else {
+                        inserter.proceed();
+                    }
+                }
+
+                CursorLocation::NoWhere => break,
             }
         }
     }
 
-    fn resolve_phi(&mut self, func: &mut Function, phi: ValuePhi, ty: Type) -> Value {
-        let phi_data = self.value_phis.get(phi);
-        let block = phi_data.block;
-        let vn = self.inserted_phis[block].phi_vn(phi).unwrap();
-        if let Some(rep_value) = self.inserted_phis[block].representative_value(vn) {
-            return rep_value;
+    /// Mark the edge and its destinating block as reachable.
+    /// Returns `true` if edge reachability is changed by the call.
+    fn mark_edge_reachable(&mut self, edge: Edge) -> bool {
+        let edge_data = &mut self.edges[edge];
+        let dest = edge_data.to;
+
+        if !edge_data.reachable {
+            edge_data.reachable = true;
+            self.blocks[dest].reachable = true;
+            true
+        } else {
+            false
         }
-
-        let phi_args: Vec<_> = phi_data.args().copied().collect();
-
-        let phi_insn = func.dfg.make_insn(InsnData::phi(ty.clone()));
-        for phi_arg in phi_args.into_iter() {
-            let pout = self.block_pout(func, phi_arg.pred).unwrap();
-
-            let rep_value =
-                if let Some(rep_value) = self.partitions[pout].representative_value(phi_arg.vn) {
-                    rep_value
-                } else {
-                    let pred_phi = self.inserted_phis[phi_arg.inserted_block]
-                        .phi_of_vn(phi_arg.vn)
-                        .unwrap();
-                    self.resolve_phi(func, pred_phi, ty.clone())
-                };
-
-            func.dfg.append_phi_arg(phi_insn, rep_value, phi_arg.pred);
-        }
-
-        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(block));
-        let result = inserter.make_result(phi_insn).unwrap();
-        inserter.attach_result(phi_insn, result);
-        inserter.insert_insn(phi_insn);
-        self.inserted_phis[block].insert_value(result, vn);
-
-        result
     }
 
-    fn compute_equivalences(&mut self, func: &Function, cfg: &ControlFlowGraph, rpo: &[Block]) {
-        debug_assert!(!rpo.is_empty());
+    /// Returns `true` if `edge` is inferred as being reachable.
+    ///
+    /// We assume `edge` is reachable iff any dominant edges to the originating block have
+    /// congruent class with the predicate of the `edge`.
+    fn infer_edge_reachability(&self, func: &Function, edge: Edge, domtree: &DomTree) -> bool {
+        let edge_data = &self.edges[edge];
+        // If `cond` doesn't exist, then the edge must be non conditional jump.
+        let cond = match edge_data.cond.expand() {
+            Some(cond) => cond,
+            None => return true,
+        };
 
-        self.entry = rpo[0];
-        let first_insn = match func.layout.first_insn_of(self.entry) {
+        // If the edge has `cond`, then `resolved_cond` must exist.
+        let resolved_cond = edge_data.resolved_cond.unwrap();
+
+        // Look up dominator blocks of the edge's originating block.
+        let mut block = Some(edge_data.from);
+        while let Some(current_block) = block {
+            if let Some(in_edge) = self.dominant_reachable_in_edges(current_block) {
+                if let Some(inferred_value) = self.infer_value_by_edge(func, in_edge, cond) {
+                    if self.is_congruent_value(inferred_value, resolved_cond) {
+                        return true;
+                    }
+                } else {
+                    block = Some(self.edge_data(in_edge).from);
+                }
+            } else {
+                block = domtree.idom_of(current_block);
+            }
+        }
+
+        false
+    }
+
+    /// Returns representative value at the block by using edge's predicate.
+    ///
+    /// `value` can be inferred to `value2` if
+    /// 1. The predicate of dominant incoming edge is represented as `value1 == value2`.
+    /// 2. `value` is congruent to value1
+    /// 3. `value2`.rank < `value`.rank.
+    ///
+    /// This process is recursively applied while traversing the dominator tree in ascending order.
+    /// If the dominant edge is back edge, then this process is stopped to avoid infinite loop.
+    ///
+    /// # Example
+    /// ```
+    /// let value2 = .. (rank0)
+    /// let value1 = .. (rank1)
+    /// let value = value1 + 0 (rank2)
+    /// if value1 == value2 {
+    ///     use value
+    /// }
+    /// ```
+    /// The use of the `value` inside if-block is inferred to `value2` even if `value` and `value2`
+    /// is not congruent in general.
+    fn infer_value_at_block(
+        &self,
+        func: &Function,
+        domtree: &DomTree,
+        value: Value,
+        target_block: Block,
+    ) -> Value {
+        let mut rep_value = self.leader(value);
+
+        let mut current_block = Some(target_block);
+        // Try to infer value until the representative value becomes immediate or current block
+        // reaches end block.
+        while current_block.is_some() && (!func.dfg.is_imm(rep_value)) {
+            let block = current_block.unwrap();
+            if let Some(dominant_edge) = self.dominant_reachable_in_edges(block) {
+                // Stop looking up the value to avoid infinite lookup loop.
+                if self.is_back_edge(dominant_edge) {
+                    break;
+                }
+
+                // If the value inference succeeds, restart inference with the new representative value.
+                if let Some(value) = self.infer_value_by_edge(func, dominant_edge, rep_value) {
+                    rep_value = value;
+                    current_block = Some(target_block);
+                } else {
+                    // If the inference failed, go up the dominant edge.
+                    current_block = Some(self.edge_data(dominant_edge).from);
+                }
+            } else {
+                // If no dominant edge found, go up the dominator tree.
+                current_block = domtree.idom_of(block);
+            }
+        }
+
+        rep_value
+    }
+
+    /// Returns representative value at the edge by using edge's predicate.
+    ///
+    /// This is used to infer phi arguments which is guranteed to flow through the specified edge.
+    fn infer_value_at_edge(
+        &self,
+        func: &Function,
+        domtree: &DomTree,
+        value: Value,
+        edge: Edge,
+    ) -> Value {
+        let rep_value = self.leader(value);
+
+        if let Some(rep_value) = self.infer_value_by_edge(func, edge, rep_value) {
+            rep_value
+        } else {
+            self.infer_value_at_block(func, domtree, rep_value, self.edge_data(edge).from)
+        }
+    }
+
+    /// Returns inferred `value2` iff
+    /// 1. The predicate of dominant incoming edge is represented as `value1 == value2`.
+    /// 2. `value` is congruent to value1
+    /// 3. `value2`.rank < `value`.rank.
+    fn infer_value_by_edge(&self, func: &Function, edge: Edge, value: Value) -> Option<Value> {
+        let edge_data = self.edge_data(edge);
+        let predicate = edge_data.cond.expand()?;
+        if self.is_congruent_value(predicate, value) {
+            return Some(edge_data.resolved_cond.unwrap());
+        }
+
+        let predicate_insn = match func.dfg.value_insn(predicate) {
             Some(insn) => insn,
-            None => return,
+            None => return None,
         };
 
-        // Insert function argument to first insn partition.
-        let mut first_partition_data = PartitionData::default();
-        for &func_arg in &func.arg_values {
-            first_partition_data.insert_value(func_arg, self.vn_for_value(func, func_arg));
-        }
-        self.set_pin(first_insn, first_partition_data);
-
-        self.partition_changed = true;
-        while self.partition_changed {
-            self.partition_changed = false;
-
-            for &block in rpo {
-                for insn in func.layout.iter_insn(block) {
-                    if func.dfg.is_phi(insn) {
-                        self.transfer_phi(func, cfg, insn);
-                    } else {
-                        self.transfer_insn(func, cfg, insn);
-                    }
+        match func.dfg.insn_data(predicate_insn) {
+            InsnData::Binary {
+                code: BinaryOp::Eq,
+                args: [lhs, rhs],
+            } => {
+                if self.is_congruent_value(*lhs, value)
+                    && self.value_rank(*rhs) < self.value_rank(value)
+                {
+                    Some(*rhs)
+                } else if self.is_congruent_value(*rhs, value)
+                    && self.value_rank(*lhs) < self.value_rank(value)
+                {
+                    Some(*lhs)
+                } else {
+                    None
                 }
             }
+            _ => None,
         }
     }
 
-    fn transfer_insn(&mut self, func: &Function, cfg: &ControlFlowGraph, insn: Insn) {
-        debug_assert!(!func.dfg.is_phi(insn));
-
-        let pin = self.compute_insn_pin(func, cfg, insn);
-        self.insns[insn].pin = pin.into();
-        let pin_data = &self.partitions[pin].clone();
-        let mut pout_data = pin_data.clone();
-
-        // If the insn doesn't have result, do nothing.
-        let value = match func.dfg.insn_result(insn) {
-            Some(value) => value,
-            None => {
-                self.insns[insn].pout = pin.into();
-                return;
-            }
-        };
-
-        // If the insn doesn't have value expr format (i.e. the insn has side effect), just insert its
-        // result value to the pout.
-        let value_expr = match self.value_expr(func, pin, insn) {
-            Some(expr) => expr,
-            None => {
-                pout_data.insert_value(value, self.vn_for_value(func, value));
-                self.set_pout(insn, pout_data);
-                return;
-            }
-        };
-
-        // If the insn's value expr is already in its pin data(i.e. the insn is trivially redundant), just
-        // insert its result value to the partition cell of the value expr's VN.
-        if let Some(vn) = self.partitions[pin].expr_vn(value_expr) {
-            pout_data.insert_value(value, vn);
-            self.set_pout(insn, pout_data);
-            return;
-        }
-
-        // Try to find the redundancy beyond the phi function.
-        self.searched.clear();
-        let vn = self.vn_for_value(func, value);
-        pout_data.insert_value(value, vn);
-        pout_data.insert_expr(value_expr, vn);
-        if let Some(value_phi) = self.compute_value_phi(func, pin, value_expr) {
-            pout_data.insert_phi(value_phi, vn);
-        }
-
-        self.set_pout(insn, pout_data);
-    }
-
-    fn transfer_phi(&mut self, func: &Function, cfg: &ControlFlowGraph, phi: Insn) {
-        debug_assert!(func.dfg.is_phi(phi));
-
-        let pin = self.compute_insn_pin(func, cfg, phi);
-        self.insns[phi].pin = pin.into();
-        let pin_data = &self.partitions[pin];
-        let mut pout_data = pin_data.clone();
-        let value = func.dfg.insn_result(phi).unwrap();
-
-        let mut value_phi_data = ValuePhiData::new(func.layout.insn_block(phi));
-        for (&phi_arg, &pred_block) in func
-            .dfg
-            .insn_args(phi)
+    /// Returns reachable incoming edges of the block.
+    fn reachable_in_edges(&self, block: Block) -> impl Iterator<Item = &Edge> {
+        self.blocks[block]
+            .in_edges
             .iter()
-            .zip(func.dfg.phi_blocks(phi).iter())
-        {
-            let pred_pout = match self.block_pout(func, pred_block) {
-                Some(pout) => pout,
-                None => {
-                    let vn = self.vn_for_value(func, value);
-                    pout_data.insert_value(value, vn);
-                    self.set_pout(phi, pout_data);
-                    return;
-                }
-            };
-            let pred_pout_data = &self.partitions[pred_pout];
-            match pred_pout_data.value_vn(phi_arg) {
-                Some(vn) => value_phi_data.insert_arg(ValuePhiArg::new(pred_block, pred_block, vn)),
-                None => {
-                    let vn = self.vn_for_value(func, value);
-                    pout_data.insert_value(value, vn);
-                    self.set_pout(phi, pout_data);
-                    return;
-                }
-            }
-        }
+            .filter(|edge| self.edge_data(**edge).reachable)
+    }
 
-        let value_phi = self.value_phis.intern(value_phi_data);
-        if let Some(phi_vn) = pout_data.phi_vn(value_phi) {
-            pout_data.insert_value(value, phi_vn);
+    /// Returns reachable outgoing edges of the block.
+    fn reachable_out_edges(&self, block: Block) -> impl Iterator<Item = &Edge> {
+        self.blocks[block]
+            .out_edges
+            .iter()
+            .filter(|edge| self.edge_data(**edge).reachable)
+    }
+
+    /// Returns incoming edge if the edge is only one reachable edge to the block.
+    fn dominant_reachable_in_edges(&self, block: Block) -> Option<Edge> {
+        let mut edges = self.reachable_in_edges(block);
+
+        let dominant = edges.next()?;
+        if edges.next().is_none() {
+            Some(*dominant)
         } else {
-            let vn = self.vn_for_value(func, value);
-            pout_data.insert_value(value, vn);
-            pout_data.insert_phi(value_phi, vn);
+            None
         }
-
-        self.set_pout(phi, pout_data);
     }
 
-    fn compute_insn_pin(
+    /// Returns `true` if two values are congruent.
+    /// NOTE: Returns `false` if both values belong to `INITIAL_CLASS`.
+    fn is_congruent_value(&self, lhs: Value, rhs: Value) -> bool {
+        let lhs_class = self.values[lhs].class;
+        let rhs_class = self.values[rhs].class;
+        (lhs_class == rhs_class) && (lhs_class != INITIAL_CLASS)
+    }
+
+    /// Perform symbolic evaluation for the `insn`.
+    fn perform_symbolic_evaluation(
         &mut self,
-        func: &Function,
-        cfg: &ControlFlowGraph,
+        func: &mut Function,
+        domtree: &DomTree,
         insn: Insn,
-    ) -> Partition {
-        if func.layout.is_first_insn(insn) {
-            self.compute_first_insn_pin(func, cfg, insn)
-        } else {
-            let prev_insn = func.layout.prev_insn_of(insn).unwrap();
-            self.insns[prev_insn].pout.unwrap()
-        }
-    }
-
-    fn next_vn(&mut self) -> ValueNumber {
-        let next_vn = self.next_vn;
-        self.next_vn += 1;
-        next_vn
-    }
-
-    fn vn_for_value(&mut self, func: &Function, value: Value) -> ValueNumber {
-        match func.dfg.value_insn(value) {
-            Some(insn) => {
-                if let Some(pout) = self.insns[insn].pout.expand() {
-                    self.partitions[pout]
-                        .value_vn(value)
-                        .unwrap_or_else(|| self.next_vn())
-                } else {
-                    self.next_vn()
-                }
-            }
-            None => {
-                if func.dfg.value_imm(value).is_some() {
-                    let entry_pin = self.entry_pin(func);
-                    self.partitions[entry_pin]
-                        .value_vn(value)
-                        .unwrap_or_else(|| self.next_vn())
-                } else {
-                    self.next_vn()
-                }
-            }
-        }
-    }
-
-    fn block_pout(&self, func: &Function, block: Block) -> Option<Partition> {
-        let last_insn = func.layout.last_insn_of(block).unwrap();
-        self.insns[last_insn].pout.expand()
-    }
-
-    fn entry_pin(&self, func: &Function) -> Partition {
-        let first_insn = func.layout.first_insn_of(self.entry).unwrap();
-        self.insns[first_insn].pin.unwrap()
-    }
-
-    fn compute_first_insn_pin(
-        &mut self,
-        func: &Function,
-        cfg: &ControlFlowGraph,
-        insn: Insn,
-    ) -> Partition {
+    ) -> GvnInsnData {
         let block = func.layout.insn_block(insn);
-        let pred_num = cfg.pred_num_of(block);
-        if pred_num == 0 {
-            // Entry block. Pin for entry block is already set.
-            self.insns[insn].pin.unwrap()
-        } else if pred_num == 1 {
-            // We use reverse post order traversal, so the predecessor is already visited.
-            let pred_block = cfg.preds_of(block).next().unwrap();
-            let prev_insn = func.layout.last_insn_of(*pred_block).unwrap();
-            self.insns[prev_insn].pout.unwrap()
-        } else {
-            let mut preds = cfg.preds_of(block);
-            let first_pred = preds.next().unwrap();
-            let first_partition = self.block_pout(func, *first_pred).unwrap();
-            let partition_data = preds.fold(
-                self.partitions[first_partition].clone(),
-                |partition, pred| {
-                    if let Some(pout) = self.block_pout(func, *pred) {
-                        let pred_partition = &self.partitions[pout];
-                        partition.join(pred_partition)
-                    } else {
-                        partition
-                    }
-                },
-            );
-
-            self.set_pin(insn, partition_data)
-        }
-    }
-
-    fn compute_value_phi(
-        &mut self,
-        func: &Function,
-        pat: Partition,
-        expr: ValueExpr,
-    ) -> Option<ValuePhi> {
-        let expr_data = self.value_exprs.get(expr);
-        if !self.searched.insert(pat) {
-            return None;
-        }
-
-        let value_phi_data = match expr_data.args.len() {
-            0 => None,
-            1 => self.value_phi_of_unary(func, pat, expr),
-            2 => self.value_phi_of_binary(func, pat, expr),
-            _ => unreachable!(),
-        }?;
-
-        let block = value_phi_data.block;
-        let value_phi = self.value_phis.intern(value_phi_data);
-        if self.inserted_phis[block].phi_vn(value_phi).is_none() {
-            let vn = self.next_vn();
-            self.inserted_phis[block].insert_phi(value_phi, vn);
-        }
-
-        Some(value_phi)
-    }
-
-    fn value_phi_of_unary(
-        &mut self,
-        func: &Function,
-        pat: Partition,
-        expr: ValueExpr,
-    ) -> Option<ValuePhiData> {
-        let expr_data = self.value_exprs.get(expr);
-        debug_assert!(expr_data.args.len() == 1);
-
-        let pat_data = &self.partitions[pat];
-
-        let arg = expr_data.args[0];
-        let value_phi = pat_data.phi_of_vn(arg)?;
-        let value_phi_data = self.value_phis.get(value_phi);
-        let phi_args: Vec<_> = value_phi_data.args().copied().collect();
-
-        let mut new_phi_data = ValuePhiData::new(value_phi_data.block);
-        let mut expr = self.value_exprs.get(expr).clone();
-
-        for phi_arg in phi_args.into_iter() {
-            expr.set_args(&[phi_arg.vn]);
-            let new_arg = self.search_value_phi_arg(func, &expr, phi_arg.pred)?;
-            new_phi_data.insert_arg(new_arg);
-        }
-
-        Some(new_phi_data)
-    }
-
-    fn value_phi_of_binary(
-        &mut self,
-        func: &Function,
-        pat: Partition,
-        expr: ValueExpr,
-    ) -> Option<ValuePhiData> {
-        let expr_data = self.value_exprs.get(expr);
-        debug_assert!(expr_data.args.len() == 2);
-
-        let pat_data = &self.partitions[pat];
-        let lhs = expr_data.args[0];
-        let rhs = expr_data.args[1];
-
-        let lhs_phi = pat_data.phi_of_vn(lhs);
-        let rhs_phi = pat_data.phi_of_vn(rhs);
-        let mut expr_data = self.value_exprs.get(expr).clone();
-
-        let new_phi_data = match (lhs_phi, rhs_phi) {
-            (Some(lhs_phi), Some(rhs_phi)) => {
-                let lhs_phi_data = self.value_phis.get(lhs_phi);
-                let rhs_phi_data = self.value_phis.get(rhs_phi);
-                if lhs_phi_data.block != rhs_phi_data.block {
-                    return None;
-                }
-                let mut new_phi_data = ValuePhiData::new(lhs_phi_data.block);
-
-                let lhs_phi_args: Vec<_> = lhs_phi_data.args().copied().collect();
-                let rhs_phi_args: Vec<_> = rhs_phi_data.args().copied().collect();
-                for (lhs_arg, rhs_arg) in lhs_phi_args.into_iter().zip(rhs_phi_args.into_iter()) {
-                    debug_assert_eq!(lhs_arg.pred, rhs_arg.pred);
-                    expr_data.set_args(&[lhs_arg.vn, rhs_arg.vn]);
-                    let new_arg = self.search_value_phi_arg(func, &expr_data, lhs_arg.pred)?;
-                    new_phi_data.insert_arg(new_arg);
-                }
-                new_phi_data
+        let insn_data = match func.dfg.insn_data(insn) {
+            InsnData::Unary { code, args: [arg] } => {
+                let arg = self.infer_value_at_block(func, domtree, *arg, block);
+                InsnData::unary(*code, arg)
             }
 
-            (Some(phi), None) => {
-                let phi_data = self.value_phis.get(phi);
-                let phi_args: Vec<_> = phi_data.args().copied().collect();
-                let mut new_phi_data = ValuePhiData::new(phi_data.block);
-
-                for phi_arg in phi_args.into_iter() {
-                    expr_data.set_args(&[phi_arg.vn, rhs]);
-                    let new_arg = self.search_value_phi_arg(func, &expr_data, phi_arg.pred)?;
-                    new_phi_data.insert_arg(new_arg);
+            InsnData::Binary {
+                code,
+                args: [lhs, rhs],
+            } => {
+                let mut lhs = self.infer_value_at_block(func, domtree, *lhs, block);
+                let mut rhs = self.infer_value_at_block(func, domtree, *rhs, block);
+                // Canonicalize argument order if the insn is commutative.
+                if code.is_commutative() && self.value_rank(rhs) < self.value_rank(lhs) {
+                    std::mem::swap(&mut lhs, &mut rhs);
                 }
-                new_phi_data
+
+                InsnData::binary(*code, lhs, rhs)
             }
 
-            (None, Some(phi)) => {
-                let phi_data = self.value_phis.get(phi);
-                let phi_args: Vec<_> = phi_data.args().copied().collect();
-                let mut new_phi_data = ValuePhiData::new(phi_data.block);
-
-                for phi_arg in phi_args.into_iter() {
-                    expr_data.set_args(&[lhs, phi_arg.vn]);
-                    let new_arg = self.search_value_phi_arg(func, &expr_data, phi_arg.pred)?;
-                    new_phi_data.insert_arg(new_arg);
-                }
-                new_phi_data
-            }
-            (None, None) => return None,
-        };
-
-        Some(new_phi_data)
-    }
-
-    fn search_value_phi_arg(
-        &mut self,
-        func: &Function,
-        expr: &ValueExprData,
-        pred: Block,
-    ) -> Option<ValuePhiArg> {
-        let pred_expr = self.value_exprs.intern(expr.clone());
-        let pred_pat = self.block_pout(func, pred)?;
-
-        if let Some(vn) = self.partitions[pred_pat].expr_vn(pred_expr) {
-            Some(ValuePhiArg::new(pred, pred, vn))
-        } else {
-            let pred_phi = self.compute_value_phi(func, pred_pat, pred_expr)?;
-            let inserted_block = self.value_phis.get(pred_phi).block;
-            let vn = self.inserted_phis[inserted_block].phi_vn(pred_phi).unwrap();
-            Some(ValuePhiArg::new(pred, inserted_block, vn))
-        }
-    }
-
-    fn set_pin(&mut self, insn: Insn, data: PartitionData) -> Partition {
-        if let Some(partition) = self.insns[insn].pin.expand() {
-            self.partition_changed |= self.partitions[partition] != data;
-            self.partitions[partition] = data;
-            partition
-        } else {
-            let partition = self.partitions.push(data);
-            self.insns[insn].pin = partition.into();
-            self.partition_changed |= true;
-            partition
-        }
-    }
-
-    fn set_pout(&mut self, insn: Insn, data: PartitionData) -> Partition {
-        if let Some(partition) = self.insns[insn].pout.expand() {
-            self.partition_changed |= self.partitions[partition] != data;
-            self.partitions[partition] = data;
-            partition
-        } else {
-            let partition = self.partitions.push(data);
-            self.insns[insn].pout = partition.into();
-            self.partition_changed |= true;
-            partition
-        }
-    }
-
-    /// Transform insn to `ValueExpr`.
-    /// We assume that verifier verifies all definitions of the insn arguments dominates the insn.
-    fn value_expr(&mut self, func: &Function, pin: Partition, insn: Insn) -> Option<ValueExpr> {
-        use crate::ir::insn::{BinaryOp, CastOp};
-        debug_assert!(!func.dfg.is_phi(insn));
-
-        let pin_data = &self.partitions[pin];
-
-        let value_expr_data = match func.dfg.insn_data(insn) {
-            InsnData::Unary { code, args } => {
-                todo!()
+            InsnData::Cast {
+                code,
+                args: [arg],
+                ty,
+            } => {
+                let arg = self.infer_value_at_block(func, domtree, *arg, block);
+                InsnData::cast(*code, arg, ty.clone())
             }
 
-            InsnData::Binary { code, args } => {
-                let lhs = pin_data.value_vn(args[0]).unwrap();
-                let rhs = pin_data.value_vn(args[1]).unwrap();
-                match code {
-                    BinaryOp::Add => ValueExprData::add(lhs, rhs),
-                    BinaryOp::Sub => ValueExprData::sub(lhs, rhs),
-                    BinaryOp::Mul => ValueExprData::mul(lhs, rhs),
-                    BinaryOp::UDiv => ValueExprData::udiv(lhs, rhs),
-                    BinaryOp::SDiv => ValueExprData::sdiv(lhs, rhs),
-                    BinaryOp::Lt => ValueExprData::lt(lhs, rhs),
-                    BinaryOp::Gt => ValueExprData::gt(lhs, rhs),
-                    BinaryOp::Slt => ValueExprData::slt(lhs, rhs),
-                    BinaryOp::Sgt => ValueExprData::sgt(lhs, rhs),
-                    BinaryOp::Eq => ValueExprData::eq(lhs, rhs),
-                    BinaryOp::And => ValueExprData::and(lhs, rhs),
-                    BinaryOp::Or => ValueExprData::or(lhs, rhs),
-                }
-            }
+            data @ InsnData::Store { .. } => data.clone(),
 
-            InsnData::Cast { code, args, ty } => {
-                let value = pin_data.value_vn(args[0]).unwrap();
-                match code {
-                    CastOp::Sext => ValueExprData::sext(value, ty.clone()),
-                    CastOp::Zext => ValueExprData::zext(value, ty.clone()),
-                    CastOp::Trunc => ValueExprData::trunc(value, ty.clone()),
-                }
-            }
             InsnData::Load { .. }
-            | InsnData::Store { .. }
             | InsnData::Jump { .. }
             | InsnData::Branch { .. }
-            | InsnData::Return { .. }
-            | InsnData::Phi { .. } => return None,
-        };
+            | InsnData::Return { .. } => {
+                unreachable!()
+            }
 
-        Some(self.value_exprs.intern(value_expr_data))
-    }
-}
+            InsnData::Phi { values, blocks, ty } => {
+                let edges = &self.blocks[block].in_edges;
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
-struct Partition(pub u32);
-entity_impl!(Partition);
-
-#[derive(Debug, Default, Clone)]
-struct PartitionData {
-    cells: FxHashMap<ValueNumber, PartitionCell>,
-    values_map: FxHashMap<Value, ValueNumber>,
-    expr_map: FxHashMap<ValueExpr, ValueNumber>,
-    phi_map: FxHashMap<ValuePhi, ValueNumber>,
-}
-
-impl PartitionData {
-    fn join(&self, rhs: &Self) -> Self {
-        let mut data = PartitionData::default();
-
-        for (vn, l_cell) in self.cells.iter() {
-            if let Some(r_cell) = rhs.cells.get(vn) {
-                if let Some(cell) = l_cell.intersection(r_cell) {
-                    let vn = cell.vn;
-                    let value_expr = cell.value_expr;
-                    let value_phi = cell.value_phi;
-
-                    data.values_map.reserve(cell.values.len());
-                    for &value in cell.values.iter() {
-                        data.values_map.insert(value, vn);
+                let mut phi_args = Vec::with_capacity(values.len());
+                for (&value, &from) in (values).iter().zip(blocks.iter()) {
+                    let edge = self.find_edge(edges, from, block);
+                    if !self.edge_data(edge).reachable {
+                        continue;
                     }
 
-                    if value_expr.is_some() {
-                        data.expr_map.insert(value_expr.unwrap(), vn);
+                    let inferred_value = self.infer_value_at_edge(func, domtree, value, edge);
+                    // In `Self::remove_redundant_code`, we replace the phi insn with the evaluated insn
+                    // in case at least one of the incoming edges is unreachable.
+                    // So we conservatively evaluate dominant relationship between
+                    // `inferred_value` and `value` not to use an incorrect value.
+                    if self.dominates(func, domtree, inferred_value, value) {
+                        phi_args.push((inferred_value, block));
+                    } else {
+                        phi_args.push((value, block));
                     }
+                }
 
-                    if value_phi.is_some() {
-                        data.phi_map.insert(value_phi.unwrap(), vn);
-                    }
+                // Canonicalize the argument order by block rank.
+                phi_args.sort_unstable_by(|(_, block1), (_, block2)| {
+                    self.block_rank(*block1).cmp(&self.block_rank(*block2))
+                });
 
-                    data.cells.insert(cell.vn, cell);
+                InsnData::Phi {
+                    values: phi_args.iter().map(|(value, _)| *value).collect(),
+                    blocks: phi_args.iter().map(|(_, block)| *block).collect(),
+                    ty: ty.clone(),
                 }
             }
-        }
-
-        data
-    }
-
-    fn representative_value(&self, vn: ValueNumber) -> Option<Value> {
-        self.cells.get(&vn)?.values.iter().next().copied()
-    }
-
-    fn value_vn(&self, value: Value) -> Option<ValueNumber> {
-        self.values_map.get(&value).copied()
-    }
-
-    fn expr_vn(&self, expr: ValueExpr) -> Option<ValueNumber> {
-        self.expr_map.get(&expr).copied()
-    }
-
-    fn phi_vn(&self, phi: ValuePhi) -> Option<ValueNumber> {
-        self.phi_map.get(&phi).copied()
-    }
-
-    fn phi_of_vn(&self, vn: ValueNumber) -> Option<ValuePhi> {
-        self.cells.get(&vn)?.value_phi.expand()
-    }
-
-    fn insert_value(&mut self, value: Value, vn: ValueNumber) {
-        self.values_map.insert(value, vn);
-        self.cell_mut(vn).values.insert(value);
-    }
-
-    fn insert_phi(&mut self, value_phi: ValuePhi, vn: ValueNumber) {
-        self.phi_map.insert(value_phi, vn);
-        self.cell_mut(vn).value_phi = value_phi.into();
-    }
-
-    fn insert_expr(&mut self, value_expr: ValueExpr, vn: ValueNumber) {
-        self.expr_map.insert(value_expr, vn);
-        self.cell_mut(vn).value_expr = value_expr.into();
-    }
-
-    fn cell_mut(&mut self, vn: ValueNumber) -> &mut PartitionCell {
-        self.cells
-            .entry(vn)
-            .or_insert_with(|| PartitionCell::new(vn))
-    }
-}
-
-impl std::cmp::PartialEq for PartitionData {
-    fn eq(&self, rhs: &Self) -> bool {
-        self.cells == rhs.cells
-    }
-}
-
-impl std::cmp::Eq for PartitionData {}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PartitionCell {
-    vn: ValueNumber,
-    values: FxHashSet<Value>,
-    value_expr: PackedOption<ValueExpr>,
-    value_phi: PackedOption<ValuePhi>,
-}
-
-impl PartitionCell {
-    fn new(vn: ValueNumber) -> Self {
-        Self {
-            vn,
-            values: FxHashSet::default(),
-            value_expr: None.into(),
-            value_phi: None.into(),
-        }
-    }
-
-    fn intersection(&self, rhs: &Self) -> Option<Self> {
-        // Unlike the paper, we add value phi function later in transfer function.
-        if self.vn != rhs.vn {
-            return None;
-        }
-
-        let values: FxHashSet<_> = self.values.intersection(&rhs.values).copied().collect();
-        let value_expr = if self.value_expr == rhs.value_expr {
-            self.value_expr
-        } else {
-            None.into()
-        };
-        let value_phi = if self.value_phi == rhs.value_phi {
-            self.value_phi
-        } else {
-            None.into()
         };
 
-        (!values.is_empty()).then(|| Self {
-            vn: self.vn,
-            values,
-            value_expr,
-            value_phi,
+        if let Some(result) = self.perform_constant_folding(func, &insn_data) {
+            result
+        } else if let Some(result) = self.perform_simplification(func, &insn_data) {
+            result
+        } else {
+            GvnInsnData::Insn(insn_data)
+        }
+    }
+
+    /// Perform constant folding.
+    fn perform_constant_folding(
+        &mut self,
+        func: &mut Function,
+        insn_data: &InsnData,
+    ) -> Option<GvnInsnData> {
+        constant_folding::fold_constant(&func.dfg, insn_data)
+            .map(|imm| GvnInsnData::Value(self.make_imm(&mut func.dfg, imm)))
+    }
+
+    /// Perform insn simplification.
+    fn perform_simplification(
+        &mut self,
+        func: &mut Function,
+        insn_data: &InsnData,
+    ) -> Option<GvnInsnData> {
+        simplify_impl::simplify_insn_data(&mut func.dfg, insn_data.clone()).map(|res| match res {
+            simplify_impl::SimplifyResult::Value(value) => {
+                // Need to handle immediate specially.
+                if let Some(imm) = func.dfg.value_imm(value) {
+                    GvnInsnData::Value(self.make_imm(&mut func.dfg, imm))
+                } else {
+                    GvnInsnData::Value(value)
+                }
+            }
+            simplify_impl::SimplifyResult::Insn(insn) => GvnInsnData::Insn(insn),
         })
     }
-}
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
-struct ValuePhi(u32);
-entity_impl!(ValuePhi);
+    /// Make edge data and append in and out edges to corresponding blocks.
+    fn add_edge_info(
+        &mut self,
+        from: Block,
+        to: Block,
+        cond: Option<Value>,
+        resolved_cond: Option<Value>,
+    ) {
+        let edge_data = EdgeData {
+            from,
+            to,
+            cond: cond.into(),
+            resolved_cond: resolved_cond.into(),
+            reachable: false,
+        };
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ValuePhiData {
-    block: Block,
-    args: BTreeSet<ValuePhiArg>,
-}
+        let edge = self.edges.push(edge_data);
+        self.blocks[to].in_edges.push(edge);
+        self.blocks[from].out_edges.push(edge);
+    }
 
-impl ValuePhiData {
-    fn new(block: Block) -> Self {
-        Self {
-            block,
-            args: BTreeSet::default(),
+    /// Replace the class of the `value` from `old` to `new`.
+    /// If `old` class becomes empty, then `gvn_insn` is removed from `insn_table`.
+    fn replace_value_class(&mut self, value: Value, gvn_insn: GvnInsn, old: Class, new: Class) {
+        let value_rank = self.value_rank(value);
+
+        // Remove `value` from `old` class.
+        let old_class_data = &mut self.classes[old];
+        old_class_data.values.remove(&(value_rank, value));
+
+        // If class becomes empty, then remove the `gvn_insn` from the table.
+        if old != INITIAL_CLASS && old_class_data.values.is_empty() {
+            self.insn_table.remove(&gvn_insn);
+        };
+
+        // Add `value` to `new` class.
+        let new_class_data = &mut self.classes[new];
+        new_class_data.values.insert((value_rank, value));
+
+        // Change `value` class to point to `new`.
+        self.values[value].class = new;
+    }
+
+    /// Make value from immediate, also make a corresponding congruence class and update
+    /// `insn_table` for the immediate value if they don't exist yet.
+    fn make_imm(&mut self, dfg: &mut DataFlowGraph, imm: impl Into<Immediate>) -> Value {
+        // `make_imm_value` return always same value for the same immediate.
+        let value = dfg.make_imm_value(imm);
+
+        self.assign_class_to_imm_value(value);
+
+        value
+    }
+
+    /// Assign class to immediate value.
+    fn assign_class_to_imm_value(&mut self, value: Value) {
+        let class = self.values[value].class;
+        let gvn_insn = self.insns.intern(value.into());
+
+        // If the congruence class for the value already exists, then return.
+        if class != INITIAL_CLASS {
+            debug_assert_eq!(self.classes[class].insn, gvn_insn);
+            debug_assert_eq!(self.values[value].rank, IMMEDIATE_RANK);
+            return;
         }
+
+        // Set rank.
+        self.values[value].rank = IMMEDIATE_RANK;
+
+        // Create a congruence class for the immediate.
+        self.make_class(value, gvn_insn);
     }
 
-    fn insert_arg(&mut self, arg: ValuePhiArg) {
-        self.args.insert(arg);
+    fn is_back_edge(&self, edge: Edge) -> bool {
+        let from = self.edge_data(edge).from;
+        let to = self.edge_data(edge).to;
+
+        self.blocks[to].rank <= self.blocks[from].rank
     }
 
-    fn args(&self) -> impl Iterator<Item = &ValuePhiArg> {
-        self.args.iter()
+    /// Returns leader value of the congruent class to which `value` belongs.
+    fn leader(&self, value: Value) -> Value {
+        let class = self.values[value].class;
+        self.classes[class].values.iter().next().unwrap().1
     }
-}
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
-struct ValuePhiArg {
-    pred: Block,
-    inserted_block: Block,
-    vn: ValueNumber,
-}
+    /// Returns `GvnInsnData`.
+    fn insn_data(&self, gvn_insn: GvnInsn) -> &GvnInsnData {
+        self.insns.get(gvn_insn)
+    }
 
-impl ValuePhiArg {
-    fn new(pred: Block, inserted_block: Block, vn: ValueNumber) -> Self {
-        Self {
-            pred,
-            inserted_block,
-            vn,
+    /// Returns `EdgeData`.
+    fn edge_data(&self, edge: Edge) -> &EdgeData {
+        &self.edges[edge]
+    }
+
+    /// Returns the class of the value.
+    fn value_class(&self, value: Value) -> Class {
+        self.values[value].class
+    }
+
+    /// Returns the rank of the given value.
+    fn value_rank(&self, value: Value) -> u32 {
+        self.values[value].rank
+    }
+
+    /// Returns the rank of the given block.
+    fn block_rank(&self, block: Block) -> u32 {
+        self.blocks[block].rank
+    }
+
+    /// Make new class for the value and its defining insn,
+    /// also change belongings class of the value to the created class.
+    fn make_class(&mut self, value: Value, gvn_insn: GvnInsn) -> Class {
+        let mut values = BTreeSet::new();
+        let rank = self.value_rank(value);
+        values.insert((rank, value));
+        let class_data = ClassData {
+            insn: gvn_insn,
+            values,
+        };
+        let class = self.classes.push(class_data);
+
+        // Update the class the value belongs to.
+        self.values[value].class = class;
+
+        // Map insn to the congruence class.
+        self.insn_table.insert(gvn_insn, class);
+
+        class
+    }
+
+    /// Find an edge that have corresponding `from` and `to` block.
+    /// This method panics if an edge isn't found.
+    fn find_edge(&self, edges: &[Edge], from: Block, to: Block) -> Edge {
+        edges
+            .iter()
+            .find(|edge| {
+                let data = self.edge_data(**edge);
+                data.from == from && data.to == to
+            })
+            .copied()
+            .unwrap()
+    }
+
+    /// Returns `true` if def of `value1` strictry dominates def of `value2`.
+    fn dominates(&self, func: &Function, domtree: &DomTree, value1: Value, value2: Value) -> bool {
+        if func.dfg.is_imm(value1) || func.dfg.is_arg(value1) {
+            return true;
+        } else if func.dfg.is_imm(value2) || func.dfg.is_arg(value2) {
+            return false;
         }
-    }
-}
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
-struct InsnPartition {
-    pin: PackedOption<Partition>,
-    pout: PackedOption<Partition>,
-}
+        let insn1 = func.dfg.value_insn(value1).unwrap();
+        let insn2 = func.dfg.value_insn(value2).unwrap();
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
-struct ValueExpr(u32);
-entity_impl!(ValueExpr);
+        let block1 = func.layout.insn_block(insn1);
+        let block2 = func.layout.insn_block(insn2);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ValueExprData {
-    kind: ValueExprOpKind,
-    args: Vec<ValueNumber>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum ValueExprOpKind {
-    Add,
-    Sub,
-    Mul,
-    UDiv,
-    SDiv,
-    Lt,
-    Gt,
-    Slt,
-    Sgt,
-    Eq,
-    And,
-    Or,
-    Sext(Type),
-    Trunc(Type),
-    Zext(Type),
-}
-
-macro_rules! binop_ctor{
-    (
-        $(($name:ident, $variant:ident),)*
-    ) => {
-        $(
-            fn $name(lhs: ValueNumber, rhs: ValueNumber) -> ValueExprData {
-                let mut data = ValueExprData {
-                    kind: ValueExprOpKind::$variant,
-                    args: vec![lhs, rhs],
-                };
-                data.canonicalize_args();
-                data
-
-            }
-        )*
-    };
-
-}
-
-macro_rules! cast_op_ctor {
-    (
-        $(($name:ident, $variant:ident),)*
-    ) => {
-        $(
-            fn $name(value: ValueNumber, ty: Type) -> ValueExprData {
-                let kind = ValueExprOpKind::$variant(ty);
-                ValueExprData {
-                    kind,
-                    args: vec![value],
-                }
-            }
-        )*
-    };
-}
-
-impl ValueExprData {
-    fn set_args(&mut self, args: &[ValueNumber]) {
-        debug_assert_eq!(self.args.len(), args.len());
-
-        self.args = args.to_vec();
-        self.canonicalize_args();
-    }
-
-    fn is_commutative(&self) -> bool {
-        use ValueExprOpKind::*;
-        matches!(self.kind, Add | Mul | Eq | And | Or)
-    }
-
-    fn canonicalize_args(&mut self) {
-        if self.is_commutative() {
-            self.args.sort_unstable();
-        }
-    }
-
-    binop_ctor! {
-        (add, Add),
-        (sub,Sub),
-        (mul, Mul),
-        (udiv, UDiv),
-        (sdiv, SDiv),
-        (lt, Lt),
-        (gt, Gt),
-        (slt, Slt),
-        (sgt, Sgt),
-        (eq, Eq),
-        (and, And),
-        (or, Or),
-    }
-
-    cast_op_ctor! {
-        (sext, Sext),
-        (zext, Zext),
-        (trunc, Trunc),
-    }
-}
-
-#[derive(Debug)]
-struct Interner<K, V>
-where
-    K: EntityRef,
-{
-    map: FxHashMap<V, K>,
-    store: PrimaryMap<K, V>,
-}
-
-impl<K, V> Interner<K, V>
-where
-    K: EntityRef,
-    V: Eq + Hash + Clone,
-{
-    fn intern(&mut self, value: V) -> K {
-        if let Some(&key) = self.map.get(&value) {
-            key
+        if block1 == block2 {
+            self.value_rank(value1) < self.value_rank(value2)
         } else {
-            let key = self.store.push(value.clone());
-            self.map.insert(value, key);
-            key
+            domtree.dominates(block1, block2)
         }
-    }
-
-    fn get(&self, key: K) -> &V {
-        &self.store[key]
-    }
-
-    fn clear(&mut self) {
-        self.map.clear();
-        self.store.clear();
     }
 }
 
-impl<K, V> Default for Interner<K, V>
-where
-    K: EntityRef,
-{
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
+struct Class(u32);
+entity_impl!(Class);
+
+/// A congruence class.
+#[derive(Debug, Clone, PartialEq)]
+struct ClassData {
+    /// A representative expression for the class.
+    insn: GvnInsn,
+
+    /// Values the class includes.
+    /// NOTE: We need sort the value by rank.
+    values: BTreeSet<(u32, Value)>,
+}
+
+/// A collection of value data used by `GvnSolver`.
+#[derive(Debug, Clone, PartialEq)]
+struct GvnValueData {
+    /// A class to which the value belongs.
+    class: Class,
+
+    /// A rank of the value.
+    /// If the value is immediate, then the rank is 0, otherwise the rank is assigned to each value in RPO order.
+    /// This ensures `rankA` is defined earlier than `rankB` iff `rankA` < `rankB`.
+    rank: u32,
+}
+
+impl Default for GvnValueData {
     fn default() -> Self {
         Self {
-            map: FxHashMap::default(),
-            store: PrimaryMap::default(),
+            class: INITIAL_CLASS,
+            rank: 0,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
+struct GvnInsn(u32);
+entity_impl!(GvnInsn);
+
+/// A insn data which represents canonicalized/simplified/folded insn.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum GvnInsnData {
+    /// A value which occurs when insn is simplified/folded to value.
+    Value(Value),
+    /// An insn data.
+    Insn(InsnData),
+}
+
+impl From<Value> for GvnInsnData {
+    fn from(value: Value) -> Self {
+        Self::Value(value)
+    }
+}
+
+impl From<InsnData> for GvnInsnData {
+    fn from(insn: InsnData) -> Self {
+        Self::Insn(insn)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
+struct Edge(u32);
+entity_impl!(Edge);
+
+#[derive(Debug, Clone)]
+struct EdgeData {
+    /// An originating block.
+    from: Block,
+
+    /// A destinating block.
+    to: Block,
+
+    /// Hold branch's condition if branch is conditional.
+    cond: PackedOption<Value>,
+
+    /// An immediate to which cond is resolved if the edge is selected.
+    resolved_cond: PackedOption<Value>,
+
+    /// `true` if the edge is reachable.
+    reachable: bool,
+}
+
+#[derive(Debug, Default, Clone)]
+struct GvnBlockData {
+    /// Incoming edges.
+    in_edges: Vec<Edge>,
+
+    /// Outgoing edges.
+    out_edges: Vec<Edge>,
+
+    /// `true` if the block is reachable.
+    reachable: bool,
+
+    /// A rank of the block.
+    /// The rank definition is same as `GvnValueData::rank`.
+    rank: u32,
 }

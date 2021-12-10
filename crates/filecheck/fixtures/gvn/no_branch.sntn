@@ -1,12 +1,8 @@
 # check:     block0:
-# nextln:         v0.i8 = imm_i8 10;
-# nextln:         v3.i8 = add v0 v0;
-# nextln:         return v3;
-func %no_branch() -> i8:
+# nextln:         v1.i8 = add v0 10.i8;
+# nextln:         return v1;
+func %no_branch(v0.i8) -> i8:
     block0:
-        v0.i8 = imm_i8 10;
-        v1.i8 = imm_i8 10;
-        v2.i8 = imm_i8 10;
-        v3.i8 = add v0 v1;
-        v4.i8 = add v1 v2;
-        return v4;
+        v1.i8 = add v0 10.i8;
+        v2.i8 = add v0 10.i8;
+        return v2;

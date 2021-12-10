@@ -48,16 +48,11 @@ impl InsnSimplifySolver {
     }
 
     pub fn simplify(&mut self, inserter: &mut InsnInserter, insn: Insn) {
-        if inserter.func().dfg.is_phi(insn) {
-            self.simplify_phi(inserter, insn);
-            return;
-        }
-
         match simplify_insn(&mut inserter.func_mut().dfg, insn) {
-            Some(SimplifyResult::Value(val)) => self.simplify_insn_with_value(inserter, insn, val),
+            Some(SimplifyResult::Value(val)) => self.replace_insn_with_value(inserter, insn, val),
 
             Some(SimplifyResult::Insn(data)) => {
-                self.simplify_insn_with_data(inserter, insn, data);
+                self.replace_insn_with_data(inserter, insn, data);
             }
 
             None => inserter.proceed(),
@@ -68,25 +63,7 @@ impl InsnSimplifySolver {
         self.worklist.clear();
     }
 
-    pub fn simplify_phi(&mut self, inserter: &mut InsnInserter, insn: Insn) {
-        debug_assert!(inserter.func().dfg.is_phi(insn));
-        let mut args = inserter.func().dfg.insn_args(insn).iter().copied();
-        let first_arg = args.next().unwrap();
-        if args.all(|arg| inserter.func().dfg.is_same_value(first_arg, arg)) {
-            let insn_result = inserter.func().dfg.insn_result(insn).unwrap();
-            self.worklist
-                .extend(inserter.func().dfg.users(insn_result).copied());
-            inserter
-                .func_mut()
-                .dfg
-                .change_to_alias(insn_result, first_arg);
-            inserter.remove_insn();
-        } else {
-            inserter.proceed();
-        }
-    }
-
-    pub fn simplify_insn_with_value(
+    pub fn replace_insn_with_value(
         &mut self,
         inserter: &mut InsnInserter,
         insn: Insn,
@@ -101,7 +78,7 @@ impl InsnSimplifySolver {
         inserter.remove_insn();
     }
 
-    pub fn simplify_insn_with_data(
+    pub fn replace_insn_with_data(
         &mut self,
         inserter: &mut InsnInserter,
         insn: Insn,
