@@ -492,7 +492,7 @@ fn build_imm_data(number: &str, ty: &Type, line: u32) -> Result<Immediate> {
     match ty {
         Type::I1 => number
             .parse::<i8>()
-            .map(|val| Immediate::I1(val == -1))
+            .map(|val| Immediate::I1(val != 0))
             .map_err(|err| parse_imm_error(err, line)),
 
         Type::I8 => number

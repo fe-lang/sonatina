@@ -309,7 +309,7 @@ impl SccpSolver {
         let mut blocks = func.dfg.phi_blocks(insn).to_vec();
         blocks.retain(|block| !self.reachable_blocks.contains(block));
         for block in blocks {
-            func.dfg.remove_phi_arg_from_block(insn, block);
+            func.dfg.remove_phi_arg(insn, block);
         }
 
         // Remove phi function if it has just one argument.

@@ -31,7 +31,7 @@ use super::{constant_folding, interner::Interner, simplify_impl};
 const INITIAL_CLASS: Class = Class(0);
 
 /// The rank for immediates.
-const IMMEDIATE_RANK: u32 = 0;
+const MINIMUM_RANK: u32 = 0;
 
 #[derive(Debug, Default)]
 pub struct GvnSolver {
@@ -79,7 +79,7 @@ impl GvnSolver {
             self.assign_class_to_imm_value(value);
         }
 
-        let mut rank = IMMEDIATE_RANK + 1;
+        let mut rank = MINIMUM_RANK + 1;
         // Iterate insns in RPO to assign ranks and analyze edges information.
         for &block in domtree.rpo() {
             self.blocks[block].rank = rank;
@@ -119,7 +119,7 @@ impl GvnSolver {
 
         // Assign rank to function arguments and create class for them.
         for &arg in &func.arg_values {
-            self.values[arg].rank = u32::MAX;
+            self.values[arg].rank = MINIMUM_RANK;
             let gvn_insn = self.insns.intern(arg.into());
             self.make_class(arg, gvn_insn);
         }
@@ -260,12 +260,10 @@ impl GvnSolver {
         } else if let Some(class) = self.insn_table.get(&gvn_insn) {
             // If gvn_insn is already inserted, return corresponding class.
             *class
-        } else if old_class == INITIAL_CLASS {
+        } else {
             // If the value is not congruent with any known classes, then make new class for the
             // value and its defining insn.
             self.make_class(insn_result, gvn_insn)
-        } else {
-            old_class
         };
 
         // If assigned class is not changed, return.
@@ -323,6 +321,7 @@ impl GvnSolver {
         cfg.compute(inserter.func());
         domtree.compute(cfg);
 
+        // Remove redundant codes.
         inserter.set_loc(CursorLocation::BlockTop(entry_block));
         loop {
             match inserter.loc() {
@@ -335,37 +334,36 @@ impl GvnSolver {
                     if let Some(insn_result) = inserter.func().dfg.insn_result(insn) {
                         let leader = self.leader(insn_result);
 
-                        // If leader dominates the def of insn_result, remove insn and replace the
+                        // If leader strictly dominates the def of insn_result, remove insn and replace the
                         // insn_result with leader.
-                        if leader != insn_result
-                            && self.dominates(inserter.func(), domtree, leader, insn_result)
-                        {
+                        if self.dominates(inserter.func(), domtree, leader, insn_result) {
                             inserter.func_mut().dfg.change_to_alias(insn_result, leader);
                             inserter.remove_insn();
                             continue;
                         }
 
-                        // Rewrite phi function if there are the unreachable incoming edge to the block.
-                        let insn_data = inserter.func().dfg.insn_data(insn);
-                        if matches!(insn_data, InsnData::Phi { .. })
-                            && self.blocks[block].in_edges.len()
-                                != self.reachable_in_edges(block).count()
-                        {
-                            let class = self.value_class(insn_result);
-                            let gvn_insn = self.classes[class].insn;
-                            match self.insns.get(gvn_insn) {
-                                GvnInsnData::Insn(insn_data) => inserter.replace(insn_data.clone()),
-                                _ => unreachable!(),
-                            }
-                        }
-
-                        inserter.proceed();
-                    } else {
-                        inserter.proceed();
+                        self.rewrite_phi(inserter.func_mut(), insn, block);
                     }
+                    inserter.proceed();
                 }
 
                 CursorLocation::NoWhere => break,
+            }
+        }
+    }
+
+    /// Rewrite phi insn if there is at least one unreachable incoming edge to the block.
+    fn rewrite_phi(&self, func: &mut Function, insn: Insn, block: Block) {
+        if !func.dfg.is_phi(insn) {
+            return;
+        }
+
+        let edges = &self.blocks[block].in_edges;
+        for &edge in edges {
+            let edge_data = self.edge_data(edge);
+            // Remove phi arg if the edge is unreachable.
+            if !edge_data.reachable {
+                func.dfg.remove_phi_arg(insn, edge_data.from);
             }
         }
     }
@@ -626,15 +624,7 @@ impl GvnSolver {
                     }
 
                     let inferred_value = self.infer_value_at_edge(func, domtree, value, edge);
-                    // In `Self::remove_redundant_code`, we replace the phi insn with the evaluated insn
-                    // in case at least one of the incoming edges is unreachable.
-                    // So we conservatively evaluate dominant relationship between
-                    // `inferred_value` and `value` not to use an incorrect value.
-                    if self.dominates(func, domtree, inferred_value, value) {
-                        phi_args.push((inferred_value, block));
-                    } else {
-                        phi_args.push((value, block));
-                    }
+                    phi_args.push((inferred_value, from));
                 }
 
                 // Canonicalize the argument order by block rank.
@@ -750,12 +740,12 @@ impl GvnSolver {
         // If the congruence class for the value already exists, then return.
         if class != INITIAL_CLASS {
             debug_assert_eq!(self.classes[class].insn, gvn_insn);
-            debug_assert_eq!(self.values[value].rank, IMMEDIATE_RANK);
+            debug_assert_eq!(self.values[value].rank, MINIMUM_RANK);
             return;
         }
 
         // Set rank.
-        self.values[value].rank = IMMEDIATE_RANK;
+        self.values[value].rank = MINIMUM_RANK;
 
         // Create a congruence class for the immediate.
         self.make_class(value, gvn_insn);
@@ -833,7 +823,7 @@ impl GvnSolver {
             .unwrap()
     }
 
-    /// Returns `true` if def of `value1` strictry dominates def of `value2`.
+    /// Returns `true` if def of `value1` strictly dominates def of `value2`.
     fn dominates(&self, func: &Function, domtree: &DomTree, value1: Value, value2: Value) -> bool {
         if func.dfg.is_imm(value1) || func.dfg.is_arg(value1) {
             return true;

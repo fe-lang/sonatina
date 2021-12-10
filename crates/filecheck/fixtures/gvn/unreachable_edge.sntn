@@ -23,3 +23,63 @@ func %unreachable_edge(v0.i1) -> i1:
     block4:
         v4.i1 = or v0 v0;
         return v4;
+
+# check: block0:
+# nextln:   jump block1;
+# check: block1:
+# nextln:   v1.i8 = add v0 1.i8;
+# nextln:   jump block3;
+# nextln: 
+# nextln: block3:
+# nextln:   return v1;
+func %phi_replacement(v0.i8) -> i8:
+    block0:
+        br 1.i1 block1 block2;
+
+    block1:
+        v1.i8 = add v0 1.i8;
+        jump block3;
+
+    block2:
+        v2.i8 = add v0 2.i8;
+        jump block3;
+
+    block3:
+        v3.i8 = phi (v1 block1) (v2 block2);
+        return v3;
+
+# check: block0:
+# nextln:   jump block1;
+# nextln: 
+# nextln: block1:
+# nextln:   v1.i8 = add v0 1.i8;
+# nextln:   v2.i1 = trunc v1;
+# nextln:   br v2 block3 block4;
+# nextln: 
+# nextln: block3:
+# nextln:   v4.i8 = add v0 3.i8;
+# nextln:   jump block4;
+# nextln: 
+# nextln: block4:
+# nextln:   v5.i8 = phi (v1 block1) (v4 block3);
+# nextln:   return v5;
+func %phi_replacement2(v0.i8) -> i8:
+    block0:
+        br 1.i1 block1 block2;
+
+    block1:
+        v1.i8 = add v0 1.i8;
+        v2.i1 = trunc v1;
+        br v2 block3 block4;
+
+    block2:
+        v3.i8 = add v0 2.i8;
+        jump block4;
+
+    block3:
+        v4.i8 = add v0 3.i8;
+        jump block4;
+
+    block4:
+        v5.i8 = phi (v1 block1) (v3 block2) (v4 block3);
+        return v5;

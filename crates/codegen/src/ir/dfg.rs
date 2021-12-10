@@ -192,7 +192,11 @@ impl DataFlowGraph {
         }
     }
 
-    pub fn remove_phi_arg_from_block(&mut self, insn: Insn, from: Block) {
+    /// Remove phi arg that flow through the `from`.
+    ///
+    /// # Panics
+    /// If `insn` is not a phi insn, then the function panics.
+    pub fn remove_phi_arg(&mut self, insn: Insn, from: Block) {
         let data = &mut self.insns[insn];
         let (values, blocks) = match data {
             InsnData::Phi { values, blocks, .. } => (values, blocks),
