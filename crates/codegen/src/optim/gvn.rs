@@ -263,8 +263,7 @@ impl GvnSolver {
         } else if old_class == INITIAL_CLASS {
             // If the value is not congruent with any known classes, then make new class for the
             // value and its defining insn.
-            let class = self.make_class(insn_result, gvn_insn);
-            class
+            self.make_class(insn_result, gvn_insn)
         } else {
             old_class
         };
@@ -322,7 +321,7 @@ impl GvnSolver {
 
         // Recompute cfg and domtree.
         cfg.compute(inserter.func());
-        domtree.compute(&cfg);
+        domtree.compute(cfg);
 
         inserter.set_loc(CursorLocation::BlockTop(entry_block));
         loop {
