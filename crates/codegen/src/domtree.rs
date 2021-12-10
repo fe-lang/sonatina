@@ -223,7 +223,7 @@ mod tests {
         builder.seal_all();
 
         let (dom_tree, df) = calc_dom(&builder.build());
-        assert_eq!(dom_tree.idom_of(entry_block), Some(entry_block));
+        assert_eq!(dom_tree.idom_of(entry_block), None);
         assert_eq!(dom_tree.idom_of(then_block), Some(entry_block));
         assert_eq!(dom_tree.idom_of(else_block), Some(entry_block));
         assert_eq!(dom_tree.idom_of(merge_block), Some(entry_block));
@@ -263,7 +263,7 @@ mod tests {
         builder.seal_all();
 
         let (dom_tree, df) = calc_dom(&builder.build());
-        assert_eq!(dom_tree.idom_of(a), Some(a));
+        assert_eq!(dom_tree.idom_of(a), None);
         assert_eq!(dom_tree.idom_of(b), Some(a));
         assert_eq!(dom_tree.idom_of(c), Some(a));
         assert_eq!(dom_tree.idom_of(d), None);
@@ -338,7 +338,7 @@ mod tests {
         builder.seal_all();
 
         let (dom_tree, df) = calc_dom(&builder.build());
-        assert_eq!(dom_tree.idom_of(a), Some(a));
+        assert_eq!(dom_tree.idom_of(a), None);
         assert_eq!(dom_tree.idom_of(b), Some(a));
         assert_eq!(dom_tree.idom_of(c), Some(a));
         assert_eq!(dom_tree.idom_of(d), Some(b));
