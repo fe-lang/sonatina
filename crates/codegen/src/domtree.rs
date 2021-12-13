@@ -167,6 +167,29 @@ impl DFSet {
     }
 }
 
+#[derive(Default)]
+pub struct DominatorTreeTraversable {
+    children: SecondaryMap<Block, Vec<Block>>,
+}
+
+impl DominatorTreeTraversable {
+    pub fn compute(&mut self, domtree: &DomTree) {
+        for &block in domtree.rpo() {
+            if let Some(idom) = domtree.idom_of(block) {
+                self.children[idom].push(block)
+            }
+        }
+    }
+
+    pub fn children_of(&self, block: Block) -> &[Block] {
+        &self.children[block]
+    }
+
+    pub fn clear(&mut self) {
+        self.children.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::many_single_char_names)]
