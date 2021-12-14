@@ -1,6 +1,7 @@
 # check: block1:
 # nextln:   jump block4;
-# check: block2:
+# nextln: 
+# nextln: block2:
 # nextln:   return 0.i1;
 # nextln: 
 # nextln: block4:

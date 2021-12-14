@@ -550,7 +550,7 @@ impl GvnSolver {
                 ty,
             } => {
                 let arg = self.infer_value_at_block(func, domtree, arg, block);
-                InsnData::cast(code, arg, ty.clone())
+                InsnData::cast(code, arg, ty)
             }
 
             InsnData::Store { .. }
@@ -581,7 +581,7 @@ impl GvnSolver {
                 InsnData::Phi {
                     values: phi_args.iter().map(|(value, _)| *value).collect(),
                     blocks: phi_args.iter().map(|(_, block)| *block).collect(),
-                    ty: ty.clone(),
+                    ty,
                 }
             }
         };
@@ -989,7 +989,7 @@ impl<'a> ValuePhiFinder<'a> {
             value_phi_insn.args.push((phi_arg, *block));
         }
 
-        Some(value_phi_insn.to_value_phi())
+        Some(value_phi_insn.canonicalize())
     }
 
     fn compute_value_phi_for_binary(
@@ -1050,7 +1050,7 @@ impl<'a> ValuePhiFinder<'a> {
             value_phi_insn.args.push((phi_arg, block));
         }
 
-        Some(value_phi_insn.to_value_phi())
+        Some(value_phi_insn.canonicalize())
     }
 
     fn compute_value_phi_for_cast(
@@ -1071,7 +1071,7 @@ impl<'a> ValuePhiFinder<'a> {
             value_phi_insn.args.push((phi_arg, *block));
         }
 
-        Some(value_phi_insn.to_value_phi())
+        Some(value_phi_insn.canonicalize())
     }
 
     /// Lookup value phi argument.
@@ -1182,7 +1182,7 @@ impl ValuePhiInsn {
     }
 
     /// Canonicalize the value phi insn and convert into value phi.
-    fn to_value_phi(mut self) -> ValuePhi {
+    fn canonicalize(mut self) -> ValuePhi {
         let first_arg = &self.args[0].0;
 
         // If all arguments are the same, then return first argument.
@@ -1243,7 +1243,7 @@ impl<'a> RedundantCodeRemover<'a> {
 
         // Compute domtree traversable.
         let mut domtree_traversable = DominatorTreeTraversable::default();
-        domtree_traversable.compute(&domtree);
+        domtree_traversable.compute(domtree);
 
         let entry = func.layout.entry_block().unwrap();
         let mut blocks = vec![entry];
