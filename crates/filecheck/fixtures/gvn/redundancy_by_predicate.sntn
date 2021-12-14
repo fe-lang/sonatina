@@ -1,0 +1,43 @@
+# check:    block1:
+# nextln:        jump block3;
+# check:    block3:
+# nextln:        return v2;
+func %redundancy_by_predicate(v0.i32, v1.i32) -> i32:
+    block0:
+        v2.i32 = add v0 1.i32;
+        v3.i1 = eq v0 v1;
+        br v3 block1 block2;
+
+    block1:
+        v4.i32 = add v1 1.i32;
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v6.i32 = phi (v4 block1) (v2 block2);
+        return v6;
+
+# check:    block1:
+# nextln:        jump block3;
+# check:    block3:
+# nextln:        return v2;
+func %redundancy_by_predicate2(v0.i32, v1.i32) -> i32:
+    block0:
+        v2.i32 = add v0 1.i32;
+        v3.i1 = eq v1 v0;
+        br v3 block1 block2;
+
+    block1:
+        v4.i32 = xor v0 v1;
+        v5.i32 = add v1 v4;
+        v6.i32 = add v5 1.i32;
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v7.i32 = phi (v6 block1) (v2 block2);
+        return v7;

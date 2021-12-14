@@ -130,6 +130,16 @@ impl InsnData {
         self.args_mut()[idx] = new_arg;
     }
 
+    pub fn append_phi_arg(&mut self, value: Value, block: Block) {
+        match self {
+            Self::Phi { values, blocks, .. } => {
+                values.push(value);
+                blocks.push(block)
+            }
+            _ => panic!("Expects `InsnData::phi` but got `{:?}`", self),
+        }
+    }
+
     pub fn has_side_effect(&self) -> bool {
         // We assume `Load` has side effect because it may cause trap.
         matches!(
