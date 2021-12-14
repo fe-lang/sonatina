@@ -1,0 +1,46 @@
+# regex: VALUE=\bv\d+\b
+# check:    block3:
+# nextln:        v31.i8 = add 3.i8 v2;
+# nextln:        jump block6;
+# nextln: 
+# nextln:    block4:
+# nextln:        v41.i8 = add 4.i8 v2;
+# nextln:        jump block6;
+# nextln: 
+# nextln:    block5:
+# nextln:        v51.i8 = add 5.i8 v2;
+# nextln:        jump block6;
+# nextln: 
+# nextln:    block6:
+# nextln:        $(var=$VALUE).i8 = phi (v31 block3) (v41 block4) (v51 block5);
+# nextln:        v60.i8 = phi (3.i8 block3) (4.i8 block4) (5.i8 block5);
+# nextln:        return $var;
+func %many_preds(v0.i1, v1.i1, v2.i8) -> i8:
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        br v1 block3 block4;
+
+    block2:
+        jump block5;
+
+    block3:
+        v30.i8 = add 1.i8 2.i8;
+        v31.i8 = add v30 v2;
+        jump block6;
+
+    block4:
+        v40.i8 = add 2.i8 2.i8;
+        v41.i8 = add v40 v2;
+        jump block6;
+
+    block5:
+        v50.i8 = add 5.i8 0.i8;
+        v51.i8 = add v50 v2;
+        jump block6;
+
+    block6:
+        v60.i8 = phi (v30 block3) (v40 block4) (v50 block5);
+        v61.i8 = add v2 v60;
+        return v61;

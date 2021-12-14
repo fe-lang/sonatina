@@ -41,8 +41,8 @@ pub struct GvnSolver {
     /// Maps [`Value`] to [`GvnValueData`].
     values: SecondaryMap<Value, GvnValueData>,
 
-    /// Maps [`GvnInsnData`] to [`Class`].
-    insn_table: FxHashMap<GvnInsnData, Class>,
+    /// Maps [`GvnInsn`] to [`Class`].
+    insn_table: FxHashMap<GvnInsn, Class>,
 
     /// Store edges.
     edges: PrimaryMap<Edge, EdgeData>,
@@ -66,6 +66,7 @@ impl GvnSolver {
         // Make dummy INITIAL_CLASS.
         self.classes.push(ClassData {
             values: BTreeSet::new(),
+            gvn_insn: GvnInsn::Value(Value(u32::MAX)),
         });
         debug_assert!(self.classes.len() == 1);
 
@@ -84,7 +85,7 @@ impl GvnSolver {
         for &arg in &func.arg_values {
             self.values[arg].rank = rank;
             rank += 1;
-            let gvn_insn_data = GvnInsnData::Value(arg);
+            let gvn_insn_data = GvnInsn::Value(arg);
             self.always_avail.push(arg);
             self.make_class(arg, gvn_insn_data);
         }
@@ -263,7 +264,7 @@ impl GvnSolver {
 
         let mut changed = false;
         let old_class = self.value_class(insn_result);
-        let new_class = if let GvnInsnData::Value(value) = &gvn_insn_data {
+        let new_class = if let GvnInsn::Value(value) = &gvn_insn_data {
             // If `gvn_insn` is value itself, then lookup value class of the value.
             self.value_class(*value)
         } else if let Some(class) = self.insn_table.get(&gvn_insn_data).copied() {
@@ -272,16 +273,20 @@ impl GvnSolver {
             // If gvn_insn is already inserted, return corresponding class.
             class
         } else {
-            // Perform value phi computation.
-            changed |= self.perform_value_phi_computation(func, &gvn_insn_data, insn_result, block);
             // If the value is not congruent with any known classes, then make new class for the
             // value and its defining insn.
-            self.make_class(insn_result, gvn_insn_data.clone())
+            let class = self.make_class(insn_result, gvn_insn_data.clone());
+
+            // Perform value phi computation.
+            changed |= self.perform_value_phi_computation(func, &gvn_insn_data, insn_result, block);
+            class
         };
 
         // If assigned class is not changed, return.
         if old_class == new_class {
             return changed;
+        } else {
+            changed = true;
         }
 
         // Replace the class of the `value` from `old` to `new`.
@@ -297,7 +302,7 @@ impl GvnSolver {
     fn perform_value_phi_computation(
         &mut self,
         func: &mut Function,
-        insn_data: &GvnInsnData,
+        insn_data: &GvnInsn,
         value: Value,
         block: Block,
     ) -> bool {
@@ -518,7 +523,7 @@ impl GvnSolver {
         domtree: &DomTree,
         insn_data: InsnData,
         block: Block,
-    ) -> GvnInsnData {
+    ) -> GvnInsn {
         let insn_data = match insn_data {
             InsnData::Unary { code, args: [arg] } => {
                 let arg = self.infer_value_at_block(func, domtree, arg, block);
@@ -548,14 +553,11 @@ impl GvnSolver {
                 InsnData::cast(code, arg, ty.clone())
             }
 
-            data @ InsnData::Store { .. } => data.clone(),
-
-            InsnData::Load { .. }
+            InsnData::Store { .. }
+            | InsnData::Load { .. }
             | InsnData::Jump { .. }
             | InsnData::Branch { .. }
-            | InsnData::Return { .. } => {
-                unreachable!()
-            }
+            | InsnData::Return { .. } => insn_data.clone(),
 
             InsnData::Phi { values, blocks, ty } => {
                 let edges = &self.blocks[block].in_edges;
@@ -585,11 +587,11 @@ impl GvnSolver {
         };
 
         if let Some(imm) = self.perform_constant_folding(func, &insn_data) {
-            GvnInsnData::Value(imm)
+            GvnInsn::Value(imm)
         } else if let Some(result) = self.perform_simplification(func, &insn_data) {
             result
         } else {
-            GvnInsnData::Insn(insn_data)
+            GvnInsn::Insn(insn_data)
         }
     }
 
@@ -608,17 +610,17 @@ impl GvnSolver {
         &mut self,
         func: &mut Function,
         insn_data: &InsnData,
-    ) -> Option<GvnInsnData> {
+    ) -> Option<GvnInsn> {
         simplify_impl::simplify_insn_data(&mut func.dfg, insn_data.clone()).map(|res| match res {
             simplify_impl::SimplifyResult::Value(value) => {
                 // Need to handle immediate specially.
                 if let Some(imm) = func.dfg.value_imm(value) {
-                    GvnInsnData::Value(self.make_imm(&mut func.dfg, imm))
+                    GvnInsn::Value(self.make_imm(&mut func.dfg, imm))
                 } else {
-                    GvnInsnData::Value(value)
+                    GvnInsn::Value(value)
                 }
             }
-            simplify_impl::SimplifyResult::Insn(insn) => GvnInsnData::Insn(insn),
+            simplify_impl::SimplifyResult::Insn(insn) => GvnInsn::Insn(insn),
         })
     }
 
@@ -648,20 +650,22 @@ impl GvnSolver {
     fn replace_value_class(
         &mut self,
         value: Value,
-        gvn_insn_data: &GvnInsnData,
+        gvn_insn_data: &GvnInsn,
         old: Class,
         new: Class,
     ) {
+        debug_assert!(old != new);
+
         let value_rank = self.value_rank(value);
 
         // Remove `value` from `old` class.
         let old_class_data = &mut self.classes[old];
         old_class_data.values.remove(&(value_rank, value));
 
-        // If class becomes empty, then remove the `gvn_insn` from the table.
-        if old != INITIAL_CLASS && old_class_data.values.is_empty() {
-            self.insn_table.remove(&gvn_insn_data);
-        };
+        // Replace insn table.
+        if let Some(insn_class) = self.insn_table.get_mut(gvn_insn_data) {
+            *insn_class = new;
+        }
 
         // Add `value` to `new` class.
         let new_class_data = &mut self.classes[new];
@@ -685,7 +689,7 @@ impl GvnSolver {
     /// Assign class to immediate value.
     fn assign_class_to_imm_value(&mut self, value: Value) {
         let class = self.values[value].class;
-        let gvn_insn_data = GvnInsnData::Value(value);
+        let gvn_insn_data = GvnInsn::Value(value);
 
         // If the congruence class for the value already exists, then return.
         if class != INITIAL_CLASS {
@@ -756,18 +760,21 @@ impl GvnSolver {
 
     /// Make new class for the value and its defining insn,
     /// also change belongings class of the value to the created class.
-    fn make_class(&mut self, value: Value, insn_data: GvnInsnData) -> Class {
+    fn make_class(&mut self, value: Value, gvn_insn: GvnInsn) -> Class {
         let mut values = BTreeSet::new();
         let rank = self.value_rank(value);
         values.insert((rank, value));
-        let class_data = ClassData { values };
+        let class_data = ClassData {
+            values,
+            gvn_insn: gvn_insn.clone(),
+        };
         let class = self.classes.push(class_data);
 
         // Update the class the value belongs to.
         self.values[value].class = class;
 
         // Map insn to the congruence class.
-        self.insn_table.insert(insn_data, class);
+        self.insn_table.insert(gvn_insn, class);
 
         class
     }
@@ -796,6 +803,9 @@ struct ClassData {
     /// Values the class includes.
     /// NOTE: We need sort the value by rank.
     values: BTreeSet<(u32, Value)>,
+
+    /// Representative gvn insn of the class.
+    gvn_insn: GvnInsn,
 }
 
 /// A collection of value data used by `GvnSolver`.
@@ -827,20 +837,20 @@ impl Default for GvnValueData {
 
 /// A insn data which represents canonicalized/simplified/folded insn.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum GvnInsnData {
+enum GvnInsn {
     /// A value which occurs when insn is simplified/folded to value.
     Value(Value),
     /// An insn data.
     Insn(InsnData),
 }
 
-impl From<Value> for GvnInsnData {
+impl From<Value> for GvnInsn {
     fn from(value: Value) -> Self {
         Self::Value(value)
     }
 }
 
-impl From<InsnData> for GvnInsnData {
+impl From<InsnData> for GvnInsn {
     fn from(insn: InsnData) -> Self {
         Self::Insn(insn)
     }
@@ -929,14 +939,14 @@ impl<'a> ValuePhiFinder<'a> {
     fn compute_value_phi(
         &mut self,
         func: &mut Function,
-        gvn_insn: &GvnInsnData,
+        gvn_insn: &GvnInsn,
         block: Block,
     ) -> Option<ValuePhi> {
         if !self.visited.insert(block) {
             return None;
         }
 
-        let insn_data = if let GvnInsnData::Insn(insn_data) = gvn_insn {
+        let insn_data = if let GvnInsn::Insn(insn_data) = gvn_insn {
             insn_data
         } else {
             return None;
@@ -1077,13 +1087,13 @@ impl<'a> ValuePhiFinder<'a> {
             return Some(ValuePhi::Value(imm));
         } else if let Some(simplified) = self.solver.perform_simplification(func, &query) {
             // If query is simplified to a value, then no need to further query for the argument.
-            if let GvnInsnData::Value(value) = simplified {
+            if let GvnInsn::Value(value) = simplified {
                 return Some(ValuePhi::Value(value));
             } else {
                 simplified
             }
         } else {
-            GvnInsnData::Insn(query)
+            GvnInsn::Insn(query)
         };
 
         // If class already exists for the query, return the leader value of the class.
@@ -1109,9 +1119,12 @@ impl<'a> ValuePhiFinder<'a> {
         value: Value,
         block: Block,
     ) -> Option<(Block, Vec<(Value, Block)>)> {
+        let class = self.solver.value_class(value);
         let insn = func.dfg.value_insn(value)?;
 
-        if let InsnData::Phi { values, blocks, .. } = func.dfg.insn_data(insn) {
+        if let GvnInsn::Insn(InsnData::Phi { values, blocks, .. }) =
+            &self.solver.classes[class].gvn_insn
+        {
             let mut result = Vec::with_capacity(values.len());
             let in_edges = &self.solver.blocks[block].in_edges;
 
