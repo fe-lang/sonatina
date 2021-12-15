@@ -292,7 +292,6 @@ impl GvnSolver {
             class
         } else {
             // If the value is not congruent with any known classes, then make a new class for the
-
             // value and its defining insn.
             let class = self.make_class(insn_result, gvn_insn.clone());
 
@@ -317,11 +316,12 @@ impl GvnSolver {
         &mut self,
         func: &mut Function,
         insn_data: &GvnInsn,
-        value: Value,
+        insn_result: Value,
         block: Block,
     ) -> bool {
-        let value_phi = ValuePhiFinder::new(self).compute_value_phi(func, insn_data, block);
-        let value_data = &mut self.values[value];
+        let value_phi =
+            ValuePhiFinder::new(self, insn_result).compute_value_phi(func, insn_data, block);
+        let value_data = &mut self.values[insn_result];
 
         if value_phi == value_data.value_phi {
             false
@@ -934,14 +934,16 @@ struct GvnBlockData {
 /// ```
 struct ValuePhiFinder<'a> {
     solver: &'a mut GvnSolver,
+    insn_result: Value,
     /// Hold visited blocks while finding value phi to prevent infinite loop.
     visited: FxHashSet<Block>,
 }
 
 impl<'a> ValuePhiFinder<'a> {
-    fn new(solver: &'a mut GvnSolver) -> Self {
+    fn new(solver: &'a mut GvnSolver, insn_result: Value) -> Self {
         Self {
             solver,
+            insn_result,
             visited: FxHashSet::default(),
         }
     }
@@ -953,6 +955,7 @@ impl<'a> ValuePhiFinder<'a> {
         gvn_insn: &GvnInsn,
         block: Block,
     ) -> Option<ValuePhi> {
+        // Break infinite loop if the block has been already visited.
         if !self.visited.insert(block) {
             return None;
         }
@@ -965,19 +968,32 @@ impl<'a> ValuePhiFinder<'a> {
 
         match insn_data {
             InsnData::Unary { code, args: [arg] } => {
-                self.compute_value_phi_for_unary(func, *code, *arg)
+                let arg = self.get_phi_of(func, *arg)?;
+                self.compute_value_phi_for_unary(func, *code, arg)
             }
 
             InsnData::Binary {
                 code,
                 args: [lhs, rhs],
-            } => self.compute_value_phi_for_binary(func, *code, *lhs, *rhs),
+            } => {
+                let (lhs, rhs) = match (self.get_phi_of(func, *lhs), self.get_phi_of(func, *rhs)) {
+                    (Some(lhs_phi), Some(rhs_phi)) => (lhs_phi, rhs_phi),
+                    (Some(lhs_phi), None) => ((lhs_phi, ValuePhi::Value(*rhs))),
+                    (None, Some(rhs_phi)) => ((ValuePhi::Value(*lhs), rhs_phi)),
+                    (None, None) => return None,
+                };
+
+                self.compute_value_phi_for_binary(func, *code, lhs, rhs)
+            }
 
             InsnData::Cast {
                 code,
                 args: [arg],
                 ty,
-            } => self.compute_value_phi_for_cast(func, *code, *arg, ty),
+            } => {
+                let arg = self.get_phi_of(func, *arg)?;
+                self.compute_value_phi_for_cast(func, *code, arg, ty)
+            }
 
             _ => None,
         }
@@ -987,103 +1003,137 @@ impl<'a> ValuePhiFinder<'a> {
         &mut self,
         func: &mut Function,
         code: UnaryOp,
-        arg: Value,
+        value_phi: ValuePhi,
     ) -> Option<ValuePhi> {
-        let (phi_block, phi_args) = self.get_phi_of(func, arg)?;
+        let value_phi_insn = if let ValuePhi::PhiInsn(insn) = value_phi {
+            insn
+        } else {
+            return None;
+        };
 
-        let mut value_phi_insn = ValuePhiInsn::with_capacity(phi_block, phi_args.len());
-        for (value, block) in phi_args.iter() {
-            // Create insn to query the value phi argument.
-            let query_insn = InsnData::unary(code, *value);
-            let phi_arg = self.lookup_value_phi_arg(func, query_insn, *block)?;
-            value_phi_insn.args.push((phi_arg, *block));
+        let mut result =
+            ValuePhiInsn::with_capacity(value_phi_insn.block, value_phi_insn.args.len());
+
+        for (arg, block) in value_phi_insn.args.into_iter() {
+            match arg {
+                ValuePhi::Value(value) => {
+                    let query_insn = InsnData::unary(code, value);
+                    let phi_arg = self.lookup_value_phi_arg(func, query_insn, block)?;
+                    result.args.push((phi_arg, block));
+                }
+                ValuePhi::PhiInsn(_) => {
+                    let phi_arg = self.compute_value_phi_for_unary(func, code, arg)?;
+                    result.args.push((phi_arg, block));
+                }
+            }
         }
 
-        Some(value_phi_insn.canonicalize())
+        Some(result.canonicalize())
     }
 
     fn compute_value_phi_for_binary(
         &mut self,
         func: &mut Function,
         code: BinaryOp,
-        lhs: Value,
-        rhs: Value,
+        lhs: ValuePhi,
+        rhs: ValuePhi,
     ) -> Option<ValuePhi> {
-        // Make args.
-        let (phi_block, args): (_, Vec<_>) =
-            match (self.get_phi_of(func, lhs), self.get_phi_of(func, rhs)) {
-                (Some((lhs_block, lhs_args)), Some((rhs_block, rhs_args))) => {
-                    // If two blocks are not identical or number of phi args are not the same, return.
-                    if lhs_block != rhs_block || lhs_args.len() != rhs_args.len() {
-                        return None;
-                    }
-
-                    let mut args = Vec::with_capacity(lhs_args.len());
-                    for ((lhs_arg, phi_lhs_block), (rhs_arg, phi_rhs_block)) in
-                        lhs_args.into_iter().zip(rhs_args.into_iter())
-                    {
-                        // If two blocks where phi arg passed through are not identical, return.
-                        if phi_lhs_block != phi_rhs_block {
-                            return None;
-                        }
-
-                        args.push(((lhs_arg, rhs_arg), phi_lhs_block));
-                    }
-
-                    (lhs_block, args)
+        let (args, phi_block): (Vec<_>, _) = match (lhs, rhs) {
+            (ValuePhi::PhiInsn(lhs_phi), ValuePhi::PhiInsn(rhs_phi)) => {
+                // If two blocks are not identical or number of phi args are not the same, return.
+                if lhs_phi.block != rhs_phi.block || lhs_phi.args.len() != rhs_phi.args.len() {
+                    return None;
                 }
 
-                (Some((phi_block, lhs_args)), None) => (
-                    phi_block,
-                    lhs_args
-                        .into_iter()
-                        .map(|(lhs, block)| ((lhs, rhs), block))
-                        .collect(),
-                ),
-
-                (None, Some((phi_block, rhs_args))) => (
-                    phi_block,
-                    rhs_args
-                        .into_iter()
-                        .map(|(rhs, block)| ((lhs, rhs), block))
-                        .collect(),
-                ),
-
-                // Retrurn if both arguments are not phi insn result.
-                (None, None) => return None,
-            };
-
-        let mut value_phi_insn = ValuePhiInsn::with_capacity(phi_block, args.len());
-        for ((mut lhs, mut rhs), block) in args {
-            if code.is_commutative() && self.solver.value_rank(rhs) < self.solver.value_rank(lhs) {
-                std::mem::swap(&mut lhs, &mut rhs);
+                let mut args = Vec::with_capacity(lhs_phi.args.len());
+                for ((lhs_arg, lhs_block), (rhs_arg, rhs_block)) in
+                    lhs_phi.args.into_iter().zip(rhs_phi.args.into_iter())
+                {
+                    // If two blocks where phi arg passed through are not identical, return.
+                    if lhs_block != rhs_block {
+                        return None;
+                    }
+                    args.push(((lhs_arg, rhs_arg), lhs_block));
+                }
+                (args, lhs_phi.block)
             }
-            let query_insn = InsnData::binary(code, lhs, rhs);
-            let phi_arg = self.lookup_value_phi_arg(func, query_insn, block)?;
-            value_phi_insn.args.push((phi_arg, block));
+
+            (ValuePhi::PhiInsn(lhs_phi), ValuePhi::Value(rhs_value)) => (
+                lhs_phi
+                    .args
+                    .into_iter()
+                    .map(|(phi_arg, block)| ((phi_arg, ValuePhi::Value(rhs_value)), block))
+                    .collect(),
+                lhs_phi.block,
+            ),
+
+            (ValuePhi::Value(lhs_value), ValuePhi::PhiInsn(rhs_phi)) => (
+                rhs_phi
+                    .args
+                    .into_iter()
+                    .map(|(phi_arg, block)| ((ValuePhi::Value(lhs_value), phi_arg), block))
+                    .collect(),
+                rhs_phi.block,
+            ),
+
+            (ValuePhi::Value(_), ValuePhi::Value(_)) => return None,
+        };
+
+        let mut result = ValuePhiInsn::with_capacity(phi_block, args.len());
+        for ((lhs_arg, rhs_arg), block) in args {
+            match (lhs_arg, rhs_arg) {
+                (ValuePhi::Value(mut lhs_value), ValuePhi::Value(mut rhs_value)) => {
+                    if code.is_commutative()
+                        && self.solver.value_rank(rhs_value) < self.solver.value_rank(lhs_value)
+                    {
+                        std::mem::swap(&mut lhs_value, &mut rhs_value);
+                    }
+                    let query_insn = InsnData::binary(code, lhs_value, rhs_value);
+                    let phi_arg = self.lookup_value_phi_arg(func, query_insn, block)?;
+                    result.args.push((phi_arg, block));
+                }
+                (lhs_arg, rhs_arg) => {
+                    let phi_arg =
+                        self.compute_value_phi_for_binary(func, code, lhs_arg, rhs_arg)?;
+                    result.args.push((phi_arg, block));
+                }
+            }
         }
 
-        Some(value_phi_insn.canonicalize())
+        Some(result.canonicalize())
     }
 
     fn compute_value_phi_for_cast(
         &mut self,
         func: &mut Function,
         code: CastOp,
-        arg: Value,
+        value_phi: ValuePhi,
         ty: &Type,
     ) -> Option<ValuePhi> {
-        let (phi_block, phi_args) = self.get_phi_of(func, arg)?;
+        let value_phi_insn = if let ValuePhi::PhiInsn(insn) = value_phi {
+            insn
+        } else {
+            return None;
+        };
 
-        let mut value_phi_insn = ValuePhiInsn::with_capacity(phi_block, phi_args.len());
-        for (value, block) in phi_args.iter() {
-            // Create insn to query the value phi argument.
-            let query_insn = InsnData::cast(code, *value, ty.clone());
-            let phi_arg = self.lookup_value_phi_arg(func, query_insn, *block)?;
-            value_phi_insn.args.push((phi_arg, *block));
+        let mut result =
+            ValuePhiInsn::with_capacity(value_phi_insn.block, value_phi_insn.args.len());
+
+        for (arg, block) in value_phi_insn.args.into_iter() {
+            match arg {
+                ValuePhi::Value(value) => {
+                    let query_insn = InsnData::cast(code, value, ty.clone());
+                    let phi_arg = self.lookup_value_phi_arg(func, query_insn, block)?;
+                    result.args.push((phi_arg, block));
+                }
+                ValuePhi::PhiInsn(_) => {
+                    let phi_arg = self.compute_value_phi_for_cast(func, code, arg, ty)?;
+                    result.args.push((phi_arg, block));
+                }
+            }
         }
 
-        Some(value_phi_insn.canonicalize())
+        Some(result.canonicalize())
     }
 
     /// Lookup value phi argument.
@@ -1118,35 +1168,44 @@ impl<'a> ValuePhiFinder<'a> {
         self.compute_value_phi(func, &query, block)
     }
 
-    /// Returns the phi args and blocks if the insn defining the `value` is phi.
+    /// Returns the phi args and blocks if the insn defining the `value` is phi or `value` has
+    /// `ValuePhi::Insn`.
     /// The result reflects the reachability of the incoming edges,
     /// i.e. if a phi arg pass through an unreachable incoming edge, then the arg and blocks
     /// are omitted from the result.
     /// The result is sorted in the block order.
     ///
     /// This function also returns the blocks where the phi is defined.
-    fn get_phi_of(&self, func: &Function, value: Value) -> Option<(Block, Vec<(Value, Block)>)> {
+    fn get_phi_of(&self, func: &Function, value: Value) -> Option<ValuePhi> {
         let class = self.solver.value_class(value);
         let phi_block = func.layout.insn_block(func.dfg.value_insn(value)?);
 
+        // if the gvn_insn of the value class is phi, then create `ValuePhi::Insn` from its args.
         if let GvnInsn::Insn(InsnData::Phi { values, blocks, .. }) =
             &self.solver.classes[class].gvn_insn
         {
-            let mut result = Vec::with_capacity(values.len());
+            let mut result = ValuePhiInsn::with_capacity(phi_block, values.len());
             let in_edges = &self.solver.blocks[phi_block].in_edges;
 
             for (value, from) in values.iter().copied().zip(blocks.iter().copied()) {
                 let edge = self.solver.find_edge(in_edges, from, phi_block);
                 // If the corresponding edge is reachable, then add to the result.
                 if self.solver.edges[edge].reachable {
-                    result.push((value, from))
+                    result.args.push((ValuePhi::Value(value), from))
                 }
             }
-            result.sort_by_key(|(_, block)| *block);
 
-            Some((phi_block, result))
-        } else {
-            None
+            return Some(result.canonicalize());
+        };
+
+        if value == self.insn_result {
+            return None;
+        }
+
+        // If the value is annotated by value phi insn, return it.
+        match &self.solver.values[value].value_phi {
+            value_phi @ Some(ValuePhi::PhiInsn(..)) => value_phi.clone(),
+            _ => None,
         }
     }
 }

@@ -1,0 +1,113 @@
+#! This test case is translated from
+#! <https://github.com/llvm/llvm-project/blob/main/llvm/test/Transforms/NewGVN/phi-of-ops-move-block.ll>
+
+
+# regex: VALUE=\bv\d+\b
+# check:  block0:
+# nextln:     jump block1;
+# nextln: 
+# nextln: block1:
+# nextln:     v1.i32 = phi (0.i32 block0) (v8 block4);
+# nextln:     store v1 v0;
+# nextln:     v2.i1 = eq v1 0.i32;
+# nextln:     br v2 block2 block4;
+# nextln: 
+# nextln: block2:
+# nextln:     v3.i64 = load 16.i64 i64;
+# nextln:     v4.i1 = eq v3 0.i64;
+# nextln:     br v4 block3 block4;
+# nextln: 
+# nextln: block3:
+# nextln:     jump block3;
+# nextln: 
+# nextln: block4:
+# nextln:     $(var1=$VALUE).i1 = phi (v2 block1) (-1.i1 block2);
+# nextln:     $(var2=$VALUE).i1 = phi (0.i1 block1) (-1.i1 block2);
+# nextln:     v5.i32 = phi (0.i32 block1) (-1.i32 block2);
+# nextln:     v8.i32 = add v1 -1.i32;
+# nextln:     br $var1 block1 block5;
+# nextln: 
+# nextln: block5:
+# nextln:     return;
+func %llvm_test(v0.i64):
+    block0:
+        jump block1;
+
+    block1:
+        v1.i32 = phi (0.i32 block0) (v8 block4);
+        store v1 v0;
+        v2.i1 = eq v1 0.i32;
+        br v2 block2 block4;
+
+    block2:
+        v3.i64 = load 16.i64 i64;
+        v4.i1 = eq v3 0.i64;
+        br v4 block3 block4;
+
+    block3:
+        jump block3;
+
+    block4:
+        v5.i32 = phi (0.i32 block1) (-1.i32 block2);
+        v6.i1 = ne v5 0.i32;
+        v7.i1 = or v2 v6;
+        v8.i32 = add v1 -1.i32;
+        br v7 block1 block5;
+
+    block5:
+        return;
+
+# regex: VALUE=\bv\d+\b
+# check:    block0:
+# nextln:       fallthrough block1;
+# nextln: 
+# nextln:   block1:
+# nextln:       v1.i32 = phi (0.i32 block0) (v6 block5);
+# nextln:       v2.i1 = eq v1 0.i32;
+# nextln:       br v2 block2 block5;
+# nextln: 
+# nextln:   block2:
+# nextln:       br v0 block3 block4;
+# nextln: 
+# nextln:   block3:
+# nextln:       jump block5;
+# nextln: 
+# nextln:   block4:
+# nextln:       jump block5;
+# nextln: 
+# nextln:   block5:
+# nextln:       $(var1=$VALUE).i1 = phi (v2 block1) (-1.i1 block3) (-1.i1 block4);
+# nextln:       $(var2=$VALUE).i1 = phi (0.i1 block1) (-1.i1 block3) (-1.i1 block4);
+# nextln:       v3.i32 = phi (0.i32 block1) (-1.i32 block3) (-1.i32 block4);
+# nextln:       v6.i32 = add v1 -1.i32;
+# nextln:       br $var1 block1 block6;
+# nextln: 
+# nextln:   block6:
+# nextln:       return;
+func %llvm_test2(v0.i1):
+    block0:
+        fallthrough block1;
+
+    block1:
+        v1.i32 = phi (0.i32 block0) (v6 block5);
+        v2.i1 = eq v1 0.i32;
+        br v2 block2 block5;
+
+    block2:
+        br v0 block3 block4;
+
+    block3:
+        jump block5;
+
+    block4:
+        jump block5;
+
+    block5:
+        v3.i32 = phi (0.i32 block1) (-1.i32 block3) (-1.i32 block4);
+        v4.i1 = ne v3 0.i32;
+        v5.i1 = or v2 v4;
+        v6.i32 = add v1 -1.i32;
+        br v5 block1 block6;
+
+    block6:
+        return;
