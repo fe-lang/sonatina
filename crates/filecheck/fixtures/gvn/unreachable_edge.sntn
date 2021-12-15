@@ -32,7 +32,7 @@ func %unreachable_edge(v0.i1) -> i1:
 # nextln: 
 # nextln: block3:
 # nextln:   return v1;
-func %phi_replacement(v0.i8) -> i8:
+func %unreachable_edge2(v0.i8) -> i8:
     block0:
         br 1.i1 block1 block2;
 
@@ -63,7 +63,7 @@ func %phi_replacement(v0.i8) -> i8:
 # nextln: block4:
 # nextln:   v5.i8 = phi (v1 block1) (v4 block3);
 # nextln:   return v5;
-func %phi_replacement2(v0.i8) -> i8:
+func %unreachable_edge3(v0.i8) -> i8:
     block0:
         br 1.i1 block1 block2;
 

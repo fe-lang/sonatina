@@ -85,9 +85,9 @@ impl GvnSolver {
         for &arg in &func.arg_values {
             self.values[arg].rank = rank;
             rank += 1;
-            let gvn_insn_data = GvnInsn::Value(arg);
+            let gvn_insn = GvnInsn::Value(arg);
             self.always_avail.push(arg);
-            self.make_class(arg, gvn_insn_data);
+            self.make_class(arg, gvn_insn);
         }
 
         // Iterate insns in RPO to assign ranks and analyze edges information.
@@ -105,7 +105,7 @@ impl GvnSolver {
                 match func.dfg.insn_data(insn) {
                     InsnData::Jump { dests, .. } => {
                         let dest = dests[0];
-                        self.add_edge_info(block, dest, None, None);
+                        self.add_edge_info(block, dest, None, None, None);
                     }
 
                     InsnData::Branch { args, dests } => {
@@ -115,11 +115,29 @@ impl GvnSolver {
                         let then_block = dests[0];
                         let else_block = dests[1];
 
+                        let then_predicate = func
+                            .dfg
+                            .value_insn(cond)
+                            .map(|insn| func.dfg.insn_data(insn).clone());
+                        let else_predicate = InsnData::unary(UnaryOp::Not, cond);
+
                         let then_imm = self.make_imm(&mut func.dfg, true);
                         let else_imm = self.make_imm(&mut func.dfg, false);
 
-                        self.add_edge_info(block, then_block, Some(cond), Some(then_imm));
-                        self.add_edge_info(block, else_block, Some(cond), Some(else_imm));
+                        self.add_edge_info(
+                            block,
+                            then_block,
+                            Some(cond),
+                            then_predicate,
+                            Some(then_imm),
+                        );
+                        self.add_edge_info(
+                            block,
+                            else_block,
+                            Some(cond),
+                            Some(else_predicate),
+                            Some(else_imm),
+                        );
                     }
 
                     _ => {}
@@ -215,10 +233,10 @@ impl GvnSolver {
                 }
 
                 // Try to infer reachability of edges.
-                if self.infer_edge_reachability(func, then_edge, domtree) {
+                if self.infer_edge_reachability(then_edge, domtree) {
                     // Mark `then_edge` if its cond is inferred as being always true.
                     self.mark_edge_reachable(then_edge)
-                } else if self.infer_edge_reachability(func, else_edge, domtree) {
+                } else if self.infer_edge_reachability(else_edge, domtree) {
                     // Mark `else_edge` if its cond is inferred as being always true.
                     self.mark_edge_reachable(else_edge)
                 } else {
@@ -243,7 +261,7 @@ impl GvnSolver {
     ) -> bool {
         // Perform symbolic evaluation for the insn.
         let block = func.layout.insn_block(insn);
-        let gvn_insn_data = self.perform_symbolic_evaluation(
+        let gvn_insn = self.perform_symbolic_evaluation(
             func,
             domtree,
             func.dfg.insn_data(insn).clone(),
@@ -255,7 +273,7 @@ impl GvnSolver {
         if func.dfg.has_side_effect(insn) {
             let class = self.value_class(insn_result);
             if class == INITIAL_CLASS {
-                self.make_class(insn_result, gvn_insn_data);
+                self.make_class(insn_result, gvn_insn);
                 return true;
             } else {
                 return false;
@@ -264,35 +282,31 @@ impl GvnSolver {
 
         let mut changed = false;
         let old_class = self.value_class(insn_result);
-        let new_class = if let GvnInsn::Value(value) = &gvn_insn_data {
+        let new_class = if let GvnInsn::Value(value) = &gvn_insn {
             // If `gvn_insn` is value itself, then lookup value class of the value.
             self.value_class(*value)
-        } else if let Some(class) = self.insn_table.get(&gvn_insn_data).copied() {
+        } else if let Some(class) = self.insn_table.get(&gvn_insn).copied() {
             // Perform value phi computation.
-            changed |= self.perform_value_phi_computation(func, &gvn_insn_data, insn_result, block);
+            changed |= self.perform_value_phi_computation(func, &gvn_insn, insn_result, block);
             // If gvn_insn is already inserted, return corresponding class.
             class
         } else {
-            // If the value is not congruent with any known classes, then make new class for the
+            // If the value is not congruent with any known classes, then make a new class for the
+
             // value and its defining insn.
-            let class = self.make_class(insn_result, gvn_insn_data.clone());
+            let class = self.make_class(insn_result, gvn_insn.clone());
 
             // Perform value phi computation.
-            changed |= self.perform_value_phi_computation(func, &gvn_insn_data, insn_result, block);
+            changed |= self.perform_value_phi_computation(func, &gvn_insn, insn_result, block);
             class
         };
 
-        // If assigned class is not changed, return.
         if old_class == new_class {
-            return changed;
+            changed
         } else {
-            changed = true;
+            self.replace_value_class(insn_result, old_class, new_class);
+            true
         }
-
-        // Replace the class of the `value` from `old` to `new`.
-        self.replace_value_class(insn_result, &gvn_insn_data, old_class, new_class);
-
-        changed
     }
 
     /// Perform value phi computation for the value.
@@ -336,7 +350,7 @@ impl GvnSolver {
     ///
     /// We assume `edge` is reachable iff any dominant edges to the originating block have
     /// congruent class with the predicate of the `edge`.
-    fn infer_edge_reachability(&self, func: &Function, edge: Edge, domtree: &DomTree) -> bool {
+    fn infer_edge_reachability(&self, edge: Edge, domtree: &DomTree) -> bool {
         let edge_data = &self.edges[edge];
         // If `cond` doesn't exist, then the edge must be non conditional jump.
         let cond = match edge_data.cond.expand() {
@@ -351,7 +365,7 @@ impl GvnSolver {
         let mut block = Some(edge_data.from);
         while let Some(current_block) = block {
             if let Some(in_edge) = self.dominant_reachable_in_edges(current_block) {
-                if let Some(inferred_value) = self.infer_value_by_edge(func, in_edge, cond) {
+                if let Some(inferred_value) = self.infer_value_by_edge(in_edge, cond) {
                     if self.is_congruent_value(inferred_value, resolved_cond) {
                         return true;
                     }
@@ -408,7 +422,7 @@ impl GvnSolver {
                 }
 
                 // If the value inference succeeds, restart inference with the new representative value.
-                if let Some(value) = self.infer_value_by_edge(func, dominant_edge, rep_value) {
+                if let Some(value) = self.infer_value_by_edge(dominant_edge, rep_value) {
                     rep_value = value;
                     current_block = Some(target_block);
                 } else {
@@ -436,7 +450,7 @@ impl GvnSolver {
     ) -> Value {
         let rep_value = self.leader(value);
 
-        if let Some(rep_value) = self.infer_value_by_edge(func, edge, rep_value) {
+        if let Some(rep_value) = self.infer_value_by_edge(edge, rep_value) {
             rep_value
         } else {
             self.infer_value_at_block(func, domtree, rep_value, self.edge_data(edge).from)
@@ -447,19 +461,17 @@ impl GvnSolver {
     /// 1. The predicate of dominant incoming edge is represented as `value1 == value2`.
     /// 2. `value` is congruent to value1
     /// 3. `value2`.rank < `value`.rank.
-    fn infer_value_by_edge(&self, func: &Function, edge: Edge, value: Value) -> Option<Value> {
+    fn infer_value_by_edge(&self, edge: Edge, value: Value) -> Option<Value> {
         let edge_data = self.edge_data(edge);
-        let predicate = edge_data.cond.expand()?;
-        if self.is_congruent_value(predicate, value) {
+        let edge_cond = edge_data.cond.expand()?;
+        // If value is congruent to edge cond value, then return resolved cond of the edge.
+        if self.is_congruent_value(edge_cond, value) {
             return Some(edge_data.resolved_cond.unwrap());
         }
 
-        let predicate_insn = match func.dfg.value_insn(predicate) {
-            Some(insn) => insn,
-            None => return None,
-        };
+        let predicate = edge_data.predicate.as_ref()?;
 
-        match func.dfg.insn_data(predicate_insn) {
+        match predicate {
             InsnData::Binary {
                 code: BinaryOp::Eq,
                 args: [lhs, rhs],
@@ -630,12 +642,14 @@ impl GvnSolver {
         from: Block,
         to: Block,
         cond: Option<Value>,
+        predicate: Option<InsnData>,
         resolved_cond: Option<Value>,
     ) {
         let edge_data = EdgeData {
             from,
             to,
             cond: cond.into(),
+            predicate,
             resolved_cond: resolved_cond.into(),
             reachable: false,
         };
@@ -646,25 +660,19 @@ impl GvnSolver {
     }
 
     /// Replace the class of the `value` from `old` to `new`.
-    /// If `old` class becomes empty, then `gvn_insn` is removed from `insn_table`.
-    fn replace_value_class(
-        &mut self,
-        value: Value,
-        gvn_insn_data: &GvnInsn,
-        old: Class,
-        new: Class,
-    ) {
+    fn replace_value_class(&mut self, value: Value, old: Class, new: Class) {
         debug_assert!(old != new);
-
         let value_rank = self.value_rank(value);
 
         // Remove `value` from `old` class.
         let old_class_data = &mut self.classes[old];
         old_class_data.values.remove(&(value_rank, value));
 
-        // Replace insn table.
-        if let Some(insn_class) = self.insn_table.get_mut(gvn_insn_data) {
-            *insn_class = new;
+        // Remove old gvn_insn from the insn_table if the class becomes empty.
+        if let Some(insn_class) = self.insn_table.get_mut(&old_class_data.gvn_insn) {
+            if *insn_class == old && old_class_data.values.is_empty() {
+                self.insn_table.remove(&old_class_data.gvn_insn);
+            }
         }
 
         // Add `value` to `new` class.
@@ -689,7 +697,7 @@ impl GvnSolver {
     /// Assign class to immediate value.
     fn assign_class_to_imm_value(&mut self, value: Value) {
         let class = self.values[value].class;
-        let gvn_insn_data = GvnInsn::Value(value);
+        let gvn_insn = GvnInsn::Value(value);
 
         // If the congruence class for the value already exists, then return.
         if class != INITIAL_CLASS {
@@ -704,7 +712,7 @@ impl GvnSolver {
         self.always_avail.push(value);
 
         // Create a congruence class for the immediate.
-        self.make_class(value, gvn_insn_data);
+        self.make_class(value, gvn_insn);
     }
 
     fn is_back_edge(&self, edge: Edge) -> bool {
@@ -868,8 +876,11 @@ struct EdgeData {
     /// A destinating block.
     to: Block,
 
-    /// Hold branch's condition if branch is conditional.
+    /// Hold a condition value if branch is conditional.
     cond: PackedOption<Value>,
+
+    /// Hold a predicate insn if branch is conditional.
+    predicate: Option<InsnData>,
 
     /// An immediate to which cond is resolved if the edge is selected.
     resolved_cond: PackedOption<Value>,
@@ -954,19 +965,19 @@ impl<'a> ValuePhiFinder<'a> {
 
         match insn_data {
             InsnData::Unary { code, args: [arg] } => {
-                self.compute_value_phi_for_unary(func, *code, *arg, block)
+                self.compute_value_phi_for_unary(func, *code, *arg)
             }
 
             InsnData::Binary {
                 code,
                 args: [lhs, rhs],
-            } => self.compute_value_phi_for_binary(func, *code, *lhs, *rhs, block),
+            } => self.compute_value_phi_for_binary(func, *code, *lhs, *rhs),
 
             InsnData::Cast {
                 code,
                 args: [arg],
                 ty,
-            } => self.compute_value_phi_for_cast(func, *code, *arg, ty, block),
+            } => self.compute_value_phi_for_cast(func, *code, *arg, ty),
 
             _ => None,
         }
@@ -977,11 +988,10 @@ impl<'a> ValuePhiFinder<'a> {
         func: &mut Function,
         code: UnaryOp,
         arg: Value,
-        block: Block,
     ) -> Option<ValuePhi> {
-        let (_, phi_args) = self.get_phi_of(func, arg, block)?;
+        let (phi_block, phi_args) = self.get_phi_of(func, arg)?;
 
-        let mut value_phi_insn = ValuePhiInsn::with_capacity(block, phi_args.len());
+        let mut value_phi_insn = ValuePhiInsn::with_capacity(phi_block, phi_args.len());
         for (value, block) in phi_args.iter() {
             // Create insn to query the value phi argument.
             let query_insn = InsnData::unary(code, *value);
@@ -998,49 +1008,52 @@ impl<'a> ValuePhiFinder<'a> {
         code: BinaryOp,
         lhs: Value,
         rhs: Value,
-        block: Block,
     ) -> Option<ValuePhi> {
         // Make args.
-        let args: Vec<_> = match (
-            self.get_phi_of(func, lhs, block),
-            self.get_phi_of(func, rhs, block),
-        ) {
-            (Some((lhs_block, lhs_args)), Some((rhs_block, rhs_args))) => {
-                // If two blocks are not identical or number of phi args are not the same, return.
-                if lhs_block != rhs_block || lhs_args.len() != rhs_args.len() {
-                    return None;
-                }
-
-                let mut args = Vec::with_capacity(lhs_args.len());
-                for ((lhs_arg, phi_lhs_block), (rhs_arg, phi_rhs_block)) in
-                    lhs_args.into_iter().zip(rhs_args.into_iter())
-                {
-                    // If two blocks where phi arg passed through are not identical, return.
-                    if phi_lhs_block != phi_rhs_block {
+        let (phi_block, args): (_, Vec<_>) =
+            match (self.get_phi_of(func, lhs), self.get_phi_of(func, rhs)) {
+                (Some((lhs_block, lhs_args)), Some((rhs_block, rhs_args))) => {
+                    // If two blocks are not identical or number of phi args are not the same, return.
+                    if lhs_block != rhs_block || lhs_args.len() != rhs_args.len() {
                         return None;
                     }
 
-                    args.push(((lhs_arg, rhs_arg), phi_lhs_block));
+                    let mut args = Vec::with_capacity(lhs_args.len());
+                    for ((lhs_arg, phi_lhs_block), (rhs_arg, phi_rhs_block)) in
+                        lhs_args.into_iter().zip(rhs_args.into_iter())
+                    {
+                        // If two blocks where phi arg passed through are not identical, return.
+                        if phi_lhs_block != phi_rhs_block {
+                            return None;
+                        }
+
+                        args.push(((lhs_arg, rhs_arg), phi_lhs_block));
+                    }
+
+                    (lhs_block, args)
                 }
 
-                args
-            }
+                (Some((phi_block, lhs_args)), None) => (
+                    phi_block,
+                    lhs_args
+                        .into_iter()
+                        .map(|(lhs, block)| ((lhs, rhs), block))
+                        .collect(),
+                ),
 
-            (Some((_, lhs_args)), None) => lhs_args
-                .into_iter()
-                .map(|(lhs, block)| ((lhs, rhs), block))
-                .collect(),
+                (None, Some((phi_block, rhs_args))) => (
+                    phi_block,
+                    rhs_args
+                        .into_iter()
+                        .map(|(rhs, block)| ((lhs, rhs), block))
+                        .collect(),
+                ),
 
-            (None, Some((_, rhs_args))) => rhs_args
-                .into_iter()
-                .map(|(rhs, block)| ((lhs, rhs), block))
-                .collect(),
+                // Retrurn if both arguments are not phi insn result.
+                (None, None) => return None,
+            };
 
-            // Retrurn if both arguments are not phi insn result.
-            (None, None) => return None,
-        };
-
-        let mut value_phi_insn = ValuePhiInsn::with_capacity(block, args.len());
+        let mut value_phi_insn = ValuePhiInsn::with_capacity(phi_block, args.len());
         for ((mut lhs, mut rhs), block) in args {
             if code.is_commutative() && self.solver.value_rank(rhs) < self.solver.value_rank(lhs) {
                 std::mem::swap(&mut lhs, &mut rhs);
@@ -1059,11 +1072,10 @@ impl<'a> ValuePhiFinder<'a> {
         code: CastOp,
         arg: Value,
         ty: &Type,
-        block: Block,
     ) -> Option<ValuePhi> {
-        let (_, phi_args) = self.get_phi_of(func, arg, block)?;
+        let (phi_block, phi_args) = self.get_phi_of(func, arg)?;
 
-        let mut value_phi_insn = ValuePhiInsn::with_capacity(block, phi_args.len());
+        let mut value_phi_insn = ValuePhiInsn::with_capacity(phi_block, phi_args.len());
         for (value, block) in phi_args.iter() {
             // Create insn to query the value phi argument.
             let query_insn = InsnData::cast(code, *value, ty.clone());
@@ -1110,26 +1122,21 @@ impl<'a> ValuePhiFinder<'a> {
     /// The result reflects the reachability of the incoming edges,
     /// i.e. if a phi arg pass through an unreachable incoming edge, then the arg and blocks
     /// are omitted from the result.
-    /// Ther return vector is sorted in block order.
+    /// The result is sorted in the block order.
     ///
     /// This function also returns the blocks where the phi is defined.
-    fn get_phi_of(
-        &self,
-        func: &Function,
-        value: Value,
-        block: Block,
-    ) -> Option<(Block, Vec<(Value, Block)>)> {
+    fn get_phi_of(&self, func: &Function, value: Value) -> Option<(Block, Vec<(Value, Block)>)> {
         let class = self.solver.value_class(value);
-        let insn = func.dfg.value_insn(value)?;
+        let phi_block = func.layout.insn_block(func.dfg.value_insn(value)?);
 
         if let GvnInsn::Insn(InsnData::Phi { values, blocks, .. }) =
             &self.solver.classes[class].gvn_insn
         {
             let mut result = Vec::with_capacity(values.len());
-            let in_edges = &self.solver.blocks[block].in_edges;
+            let in_edges = &self.solver.blocks[phi_block].in_edges;
 
             for (value, from) in values.iter().copied().zip(blocks.iter().copied()) {
-                let edge = self.solver.find_edge(in_edges, from, block);
+                let edge = self.solver.find_edge(in_edges, from, phi_block);
                 // If the corresponding edge is reachable, then add to the result.
                 if self.solver.edges[edge].reachable {
                     result.push((value, from))
@@ -1137,7 +1144,7 @@ impl<'a> ValuePhiFinder<'a> {
             }
             result.sort_by_key(|(_, block)| *block);
 
-            Some((func.layout.insn_block(insn), result))
+            Some((phi_block, result))
         } else {
             None
         }
@@ -1339,7 +1346,6 @@ impl<'a> RedundantCodeRemover<'a> {
                             {
                                 inserter.func_mut().dfg.change_to_alias(insn_result, value);
                                 inserter.remove_insn();
-                                // Insert (class -> value) to avail set.
                                 continue;
                             }
                         }
@@ -1376,8 +1382,8 @@ impl<'a> RedundantCodeRemover<'a> {
                     phi.append_phi_arg(resolved, *phi_block);
                 }
 
-                // Insert new phi insn to top of the block.
-                inserter.set_loc(CursorLocation::BlockTop(block));
+                // Insert new phi insn to top of the phi_insn block.
+                inserter.set_loc(CursorLocation::BlockTop(phi_insn.block));
                 let insn = inserter.insert_insn_data(phi);
                 let result = inserter.make_result(insn).unwrap();
                 inserter.attach_result(insn, result);

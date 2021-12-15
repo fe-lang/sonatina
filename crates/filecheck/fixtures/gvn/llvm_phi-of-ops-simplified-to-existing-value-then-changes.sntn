@@ -1,0 +1,119 @@
+#! This test case is translated from
+#! <https://github.com/llvm/llvm-project/blob/main/llvm/test/Transforms/NewGVN/phi-of-ops-simplified-to-existing-value-then-changes-again.ll>
+
+# regex: VALUE=\bv\d+\b
+# check:  block0:
+# nextln:    jump block1;
+# nextln: 
+# nextln: block1:
+# nextln:     $(var1=$VALUE).i1 = phi (0.i1 block0) (-1.i1 block7);
+# nextln:     v1.i32 = phi (-2022207984.i32 block0) (0.i32 block7);
+# nextln:     br v0 block3 block2;
+# nextln: 
+# nextln: block2:
+# nextln:     jump block3;
+# nextln: 
+# nextln: block3:
+# nextln:     $(var2=$VALUE).i1 = phi ($var1 block1) (0.i1 block2);
+# nextln:     v2.i32 = phi (-1.i32 block2) (v1 block1);
+# nextln:     br $var2 block6 block7;
+# nextln: 
+# nextln: block6:
+# nextln:     jump block7;
+# nextln: 
+# nextln: block7:
+# nextln:     $(var3=$VALUE).i1 = phi ($var2 block3) (-1.i1 block6);
+# nextln:     v4.i32 = phi (v2 block3) (0.i32 block6);
+# nextln:     br $var3 block8 block1;
+# nextln: 
+# nextln: block8:
+# nextln:     return;
+func %llvm_pr36501(v0.i1):
+    block0:
+        jump block1;
+
+    block1:
+        v1.i32 = phi (-2022207984.i32 block0) (0.i32 block7);
+        br v0 block3 block2;
+
+    block2:
+        jump block3;
+
+    block3:
+        v2.i32 = phi (-1.i32 block2) (v1 block1);
+        v3.i1 = eq v2 0.i32;
+        br v3 block6 block7;
+
+    block6:
+        jump block7;
+
+    block7:
+      v4.i32 = phi (v2 block3) (0.i32 block6);
+      v5.i1 = eq v4 0.i32;
+      br v5 block8 block1;
+
+    block8:
+        return;
+
+# regex: VALUE=\bv\d+\b
+# check:  block0
+# nextln:     jump block1;
+# nextln: 
+# nextln: block1:
+# nextln:     v3.i32 = phi (0.i32 block0) (v0 block1);
+# nextln:     br v1 block2 block1;
+# nextln: 
+# nextln: block2:
+# nextln:     br v2 block16 block11;
+# nextln: 
+# nextln: block16:
+# nextln:     v4.i32 = add v3 1.i32;
+# nextln:     jump block11;
+# nextln: 
+# nextln: block11:
+# nextln:     v5.i32 = phi (v4 block16) (0.i32 block2);
+# nextln:     v6.i1 = eq v5 0.i32;
+# nextln:     store v6 v0;
+# nextln:     v7.i1 = eq v3 0.i32;
+# nextln:     v8.i1 = not v7;
+# nextln:     br v8 block18 block19;
+# nextln: 
+# nextln: block18:
+# nextln:     jump block19;
+# nextln: 
+# nextln: block19:
+# nextln:     $(var=$VALUE).i1 = phi (v6 block11) (0.i1 block18);
+# nextln:     v9.i32 = phi (v5 block11) (1.i32 block18);
+# nextln:     store $var v0;
+# nextln:     return;
+func %llvm_PR42557(v0.i32, v1.i1, v2.i1):
+    block0:
+        jump block1;
+
+    block1:
+        v3.i32 = phi (0.i32 block0) (v0 block1);
+        br v1 block2 block1;
+
+    block2:
+        br v2 block16 block11;
+
+    block16:
+        v4.i32 = add v3 1.i32;
+        jump block11;
+
+    block11:
+        v5.i32 = phi (v4 block16) (0.i32 block2);
+        v6.i1 = eq v5 0.i32;
+        store v6 v0;
+        v7.i1 = eq v3 0.i32;
+        v8.i1 = not v7;
+        br v8 block18 block19;
+
+    block18:
+        jump block19;
+
+    block19:
+        v9.i32 = phi (v5 block11) (1.i32 block18);
+        v10.i1 = eq v9 0.i32;
+        store v10 v0;
+        return;

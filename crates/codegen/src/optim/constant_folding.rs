@@ -63,19 +63,19 @@ impl Immediate {
     }
 
     pub(super) fn lt(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, |lhs, rhs| (lhs.to_u256() < rhs.to_u256()).into())
+        self.apply_binop_raw(rhs, |lhs, rhs| (lhs.to_u256() < rhs.to_u256()).into())
     }
 
     pub(super) fn gt(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, |lhs, rhs| (lhs.to_u256() > rhs.to_u256()).into())
+        self.apply_binop_raw(rhs, |lhs, rhs| (lhs.to_u256() > rhs.to_u256()).into())
     }
 
     pub(super) fn slt(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, |lhs, rhs| (lhs < rhs).into())
+        self.apply_binop_raw(rhs, |lhs, rhs| (lhs < rhs).into())
     }
 
     pub(super) fn sgt(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, |lhs, rhs| (lhs > rhs).into())
+        self.apply_binop_raw(rhs, |lhs, rhs| (lhs > rhs).into())
     }
 
     pub(super) fn sext(self, ty: &Type) -> Self {
@@ -107,8 +107,7 @@ impl Immediate {
     pub(super) fn const_eq(self, rhs: Self) -> Self {
         debug_assert_eq!(self.ty(), rhs.ty());
 
-        let val = (self == rhs).into();
-        Self::from_i256(val, &self.ty())
+        (self == rhs).into()
     }
 
     pub(super) fn zero(ty: &Type) -> Self {

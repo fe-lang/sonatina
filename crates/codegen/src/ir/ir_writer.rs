@@ -171,7 +171,7 @@ impl IrWrite for Insn {
                 ty.write(writer, &mut w)?;
             }
             Store { args } => {
-                w.write_all(b"store")?;
+                w.write_all(b"store ")?;
                 writer.write_insn_args(args, &mut w)?;
             }
             Jump { code, dests } => {

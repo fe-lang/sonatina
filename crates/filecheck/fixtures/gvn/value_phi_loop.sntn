@@ -9,7 +9,6 @@
 # nextln:        fallthrough block2;
 # nextln: 
 # nextln:    block2:
-# nextln:        v22.i32 = sub $var1 v101;
 # nextln:        br v102 block3 block4;
 # nextln: 
 # nextln:    block3:
@@ -18,12 +17,12 @@
 # nextln:        br v103 block5 block1;
 # nextln: 
 # nextln:    block4:
-# nextln:        v40.i32 = load v22 i32;
+# nextln:        v40.i32 = load v10 i32;
 # nextln:        v42.i32 = sub v40 v101;
 # nextln:        jump block5;
 # nextln: 
 # nextln:    block5:
-# nextln:        $(var2=$VALUE).i32 = phi (v22 block3) (v42 block4);
+# nextln:        $(var2=$VALUE).i32 = phi (v10 block3) (v42 block4);
 # nextln:        v50.i32 = phi ($var1 block3) (v40 block4);
 # nextln:        return $var2;
 func %loop_with_break(v100.i32, v101.i32, v102.i1, v103.i1) -> i32:

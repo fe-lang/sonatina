@@ -123,12 +123,26 @@
   )
   (SimplifyRawResult.Expr (ExprData.Unary (UnaryOp.Neg) (arg_array1 b)))
 )
+; b - (a + b) => -a
+(rule
+  (simplify
+    (extract_sub b (value_expr (extract_add a (is_same $true <b))))
+  )
+  (SimplifyRawResult.Expr (ExprData.Unary (UnaryOp.Neg) (arg_array1 a)))
+)
 ; (a + b) - a =>  b
 (rule
   (simplify
     (extract_sub (value_expr (extract_add a b)) (is_same $true <a))
   )
   (make_result b)
+)
+; (a + b) - b =>  a
+(rule
+  (simplify
+    (extract_sub (value_expr (extract_add a b)) (is_same $true <b))
+  )
+  (make_result a)
 )
 
 ;; Rules for BinaryOp.Mul ;;
