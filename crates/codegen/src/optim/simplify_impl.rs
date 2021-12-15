@@ -415,7 +415,7 @@ impl<'a> generated_code::Context for SimplifyContext<'a> {
         }
     }
 
-    fn is_same(&mut self, arg0: ExprValue, arg1: ExprValue) -> bool {
+    fn is_eq(&mut self, arg0: ExprValue, arg1: ExprValue) -> bool {
         match (arg0.as_value(), arg1.as_value()) {
             (Some(val1), Some(val2)) => self.dfg.is_same_value(val1, val2),
             _ => arg0 == arg1,

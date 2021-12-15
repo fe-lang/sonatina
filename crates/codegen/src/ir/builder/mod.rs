@@ -6,7 +6,7 @@ pub use ssa::Variable;
 
 use crate::ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    insn::{BinaryOp, CastOp, InsnData, JumpOp},
+    insn::{BinaryOp, CastOp, InsnData, JumpOp, UnaryOp},
     Immediate,
 };
 
@@ -26,6 +26,19 @@ pub struct FunctionBuilder {
     func: Function,
     loc: CursorLocation,
     ssa_builder: SsaBuilder,
+}
+
+macro_rules! impl_unary_insn {
+    ($name:ident, $code:path) => {
+        pub fn $name(&mut self, lhs: Value) -> Value {
+            let insn_data = InsnData::Unary {
+                code: $code,
+                args: [lhs],
+            };
+
+            self.insert_insn(insn_data).unwrap()
+        }
+    };
 }
 
 macro_rules! impl_binary_insn {
@@ -83,6 +96,9 @@ impl FunctionBuilder {
         self.func.dfg.make_imm_value(imm)
     }
 
+    impl_unary_insn!(not, UnaryOp::Not);
+    impl_unary_insn!(neg, UnaryOp::Neg);
+
     impl_binary_insn!(add, BinaryOp::Add);
     impl_binary_insn!(sub, BinaryOp::Sub);
     impl_binary_insn!(mul, BinaryOp::Mul);
@@ -93,6 +109,7 @@ impl FunctionBuilder {
     impl_binary_insn!(slt, BinaryOp::Slt);
     impl_binary_insn!(sgt, BinaryOp::Sgt);
     impl_binary_insn!(eq, BinaryOp::Eq);
+    impl_binary_insn!(ne, BinaryOp::Ne);
     impl_binary_insn!(and, BinaryOp::And);
     impl_binary_insn!(or, BinaryOp::Or);
 

@@ -412,6 +412,7 @@ impl Code {
             Self::Slt => make_binary!(parser, inserter, BinaryOp::Slt, &mut undefs),
             Self::Sgt => make_binary!(parser, inserter, BinaryOp::Sgt, &mut undefs),
             Self::Eq => make_binary!(parser, inserter, BinaryOp::Eq, &mut undefs),
+            Self::Ne => make_binary!(parser, inserter, BinaryOp::Ne, &mut undefs),
             Self::And => make_binary!(parser, inserter, BinaryOp::And, &mut undefs),
             Self::Or => make_binary!(parser, inserter, BinaryOp::Or, &mut undefs),
             Self::Xor => make_binary!(parser, inserter, BinaryOp::Xor, &mut undefs),

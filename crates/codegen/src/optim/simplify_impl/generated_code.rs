@@ -25,7 +25,7 @@ pub trait Context {
     fn is_one(&mut self, arg0: ExprValue) -> bool;
     fn is_two(&mut self, arg0: ExprValue) -> bool;
     fn is_all_one(&mut self, arg0: ExprValue) -> bool;
-    fn is_same(&mut self, arg0: ExprValue, arg1: ExprValue) -> bool;
+    fn is_eq(&mut self, arg0: ExprValue, arg1: ExprValue) -> bool;
     fn is_power_of_two(&mut self, arg0: ExprValue) -> bool;
     fn make_zero(&mut self, arg0: &Type) -> ExprValue;
     fn make_one(&mut self, arg0: &Type) -> ExprValue;
@@ -62,14 +62,14 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                             match &pattern7_0 {
                                 &UnaryOp::Not => {
                                     let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
-                                    // Rule at rules.isle line 681.
+                                    // Rule at rules.isle line 690.
                                     let expr0_0 = C::make_result(ctx, pattern9_0);
                                     return Some(expr0_0);
                                 }
                                 &UnaryOp::Neg => {
                                     let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
                                     let pattern10_0 = C::value_ty(ctx, pattern9_0);
-                                    // Rule at rules.isle line 688.
+                                    // Rule at rules.isle line 697.
                                     let expr0_0 = BinaryOp::Sub;
                                     let expr1_0 = C::make_one(ctx, &pattern10_0);
                                     let expr2_0 = C::pack_arg_array2(ctx, pattern9_0, expr1_0);
@@ -98,7 +98,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                 &UnaryOp::Not => {
                                     let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
                                     let pattern10_0 = C::value_ty(ctx, pattern9_0);
-                                    // Rule at rules.isle line 704.
+                                    // Rule at rules.isle line 713.
                                     let expr0_0 = BinaryOp::Add;
                                     let expr1_0 = C::make_one(ctx, &pattern10_0);
                                     let expr2_0 = C::pack_arg_array2(ctx, pattern9_0, expr1_0);
@@ -111,7 +111,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                 }
                                 &UnaryOp::Neg => {
                                     let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
-                                    // Rule at rules.isle line 697.
+                                    // Rule at rules.isle line 706.
                                     let expr0_0 = C::make_result(ctx, pattern9_0);
                                     return Some(expr0_0);
                                 }
@@ -144,7 +144,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                     return Some(pattern9_1);
                                 };
                                 if let Some(pattern10_0) = closure10() {
-                                    let pattern11_0 = C::is_same(ctx, pattern4_1, pattern10_0);
+                                    let pattern11_0 = C::is_eq(ctx, pattern4_1, pattern10_0);
                                     if pattern11_0 == true {
                                         // Rule at rules.isle line 70.
                                         let expr0_0 = C::make_result(ctx, pattern9_0);
@@ -175,7 +175,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         };
                                         if let Some(pattern10_0) = closure10() {
                                             let pattern11_0 =
-                                                C::is_same(ctx, pattern9_0, pattern10_0);
+                                                C::is_eq(ctx, pattern9_0, pattern10_0);
                                             if pattern11_0 == true {
                                                 let pattern13_0 = C::value_ty(ctx, pattern9_0);
                                                 // Rule at rules.isle line 77.
@@ -192,7 +192,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         };
                                         if let Some(pattern10_0) = closure10() {
                                             let pattern11_0 =
-                                                C::is_same(ctx, pattern9_0, pattern10_0);
+                                                C::is_eq(ctx, pattern9_0, pattern10_0);
                                             if pattern11_0 == true {
                                                 let pattern13_0 = C::value_ty(ctx, pattern9_0);
                                                 // Rule at rules.isle line 56.
@@ -216,7 +216,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         return Some(pattern4_0);
                                     };
                                     if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_same(ctx, pattern9_1, pattern10_0);
+                                        let pattern11_0 = C::is_eq(ctx, pattern9_1, pattern10_0);
                                         if pattern11_0 == true {
                                             // Rule at rules.isle line 63.
                                             let expr0_0 = C::make_result(ctx, pattern9_0);
@@ -235,7 +235,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                         return Some(pattern4_0);
                     };
                     if let Some(pattern5_0) = closure5() {
-                        let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
                         if pattern6_0 == true {
                             let pattern8_0 = C::value_ty(ctx, pattern4_1);
                             // Rule at rules.isle line 100.
@@ -271,7 +271,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         return Some(pattern9_0);
                                     };
                                     if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_same(ctx, pattern4_1, pattern10_0);
+                                        let pattern11_0 = C::is_eq(ctx, pattern4_1, pattern10_0);
                                         if pattern11_0 == true {
                                             // Rule at rules.isle line 135.
                                             let expr0_0 = C::make_result(ctx, pattern9_1);
@@ -282,7 +282,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         return Some(pattern9_1);
                                     };
                                     if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_same(ctx, pattern4_1, pattern10_0);
+                                        let pattern11_0 = C::is_eq(ctx, pattern4_1, pattern10_0);
                                         if pattern11_0 == true {
                                             // Rule at rules.isle line 142.
                                             let expr0_0 = C::make_result(ctx, pattern9_0);
@@ -297,7 +297,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         return Some(pattern9_0);
                                     };
                                     if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_same(ctx, pattern4_1, pattern10_0);
+                                        let pattern11_0 = C::is_eq(ctx, pattern4_1, pattern10_0);
                                         if pattern11_0 == true {
                                             // Rule at rules.isle line 114.
                                             let expr0_0 = UnaryOp::Neg;
@@ -336,7 +336,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         return Some(pattern4_0);
                                     };
                                     if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                        let pattern11_0 = C::is_eq(ctx, pattern9_0, pattern10_0);
                                         if pattern11_0 == true {
                                             // Rule at rules.isle line 121.
                                             let expr0_0 = UnaryOp::Neg;
@@ -348,7 +348,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                             let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
                                             return Some(expr3_0);
                                         }
-                                        let pattern11_0 = C::is_same(ctx, pattern9_1, pattern10_0);
+                                        let pattern11_0 = C::is_eq(ctx, pattern9_1, pattern10_0);
                                         if pattern11_0 == true {
                                             // Rule at rules.isle line 128.
                                             let expr0_0 = UnaryOp::Neg;
@@ -369,7 +369,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         return Some(pattern4_0);
                                     };
                                     if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                        let pattern11_0 = C::is_eq(ctx, pattern9_0, pattern10_0);
                                         if pattern11_0 == true {
                                             // Rule at rules.isle line 107.
                                             let expr0_0 = C::make_result(ctx, pattern9_1);
@@ -439,7 +439,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                         return Some(pattern4_0);
                     };
                     if let Some(pattern5_0) = closure5() {
-                        let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
                         if pattern6_0 == true {
                             let pattern8_0 = C::value_ty(ctx, pattern4_1);
                             // Rule at rules.isle line 194.
@@ -467,7 +467,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                         return Some(pattern4_0);
                     };
                     if let Some(pattern5_0) = closure5() {
-                        let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
                         if pattern6_0 == true {
                             let pattern8_0 = C::value_ty(ctx, pattern4_1);
                             // Rule at rules.isle line 212.
@@ -495,11 +495,27 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                         return Some(pattern4_0);
                     };
                     if let Some(pattern5_0) = closure5() {
-                        let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
                         if pattern6_0 == true {
                             let pattern8_0 = C::value_ty(ctx, pattern4_1);
                             // Rule at rules.isle line 230.
                             let expr0_0 = C::make_all_one(ctx, &pattern8_0);
+                            let expr1_0 = C::make_result(ctx, expr0_0);
+                            return Some(expr1_0);
+                        }
+                    }
+                }
+                &BinaryOp::Ne => {
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
+                    let closure5 = || {
+                        return Some(pattern4_0);
+                    };
+                    if let Some(pattern5_0) = closure5() {
+                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
+                        if pattern6_0 == true {
+                            let pattern8_0 = C::value_ty(ctx, pattern4_1);
+                            // Rule at rules.isle line 239.
+                            let expr0_0 = C::make_zero(ctx, &pattern8_0);
                             let expr1_0 = C::make_result(ctx, expr0_0);
                             return Some(expr1_0);
                         }
@@ -511,9 +527,9 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                         return Some(pattern4_0);
                     };
                     if let Some(pattern5_0) = closure5() {
-                        let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
                         if pattern6_0 == true {
-                            // Rule at rules.isle line 239.
+                            // Rule at rules.isle line 248.
                             let expr0_0 = C::make_result(ctx, pattern4_0);
                             return Some(expr0_0);
                         }
@@ -543,7 +559,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                             };
                                             if let Some(pattern15_0) = closure15() {
                                                 let pattern16_0 =
-                                                    C::is_same(ctx, pattern14_0, pattern15_0);
+                                                    C::is_eq(ctx, pattern14_0, pattern15_0);
                                                 if pattern16_0 == true {
                                                     if let Some(pattern18_0) =
                                                         C::value_expr(ctx, pattern14_1)
@@ -567,13 +583,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                 if let Some(pattern23_0) =
                                                                     closure23()
                                                                 {
-                                                                    let pattern24_0 = C::is_same(
+                                                                    let pattern24_0 = C::is_eq(
                                                                         ctx,
                                                                         pattern22_0,
                                                                         pattern23_0,
                                                                     );
                                                                     if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 281.
+                                                                        // Rule at rules.isle line 290.
                                                                         let expr0_0 =
                                                                             C::make_result(
                                                                                 ctx, pattern9_0,
@@ -591,7 +607,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                             };
                                             if let Some(pattern15_0) = closure15() {
                                                 let pattern16_0 =
-                                                    C::is_same(ctx, pattern14_0, pattern15_0);
+                                                    C::is_eq(ctx, pattern14_0, pattern15_0);
                                                 if pattern16_0 == true {
                                                     if let Some(pattern18_0) =
                                                         C::value_expr(ctx, pattern14_1)
@@ -615,13 +631,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                 if let Some(pattern23_0) =
                                                                     closure23()
                                                                 {
-                                                                    let pattern24_0 = C::is_same(
+                                                                    let pattern24_0 = C::is_eq(
                                                                         ctx,
                                                                         pattern22_0,
                                                                         pattern23_0,
                                                                     );
                                                                     if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 317.
+                                                                        // Rule at rules.isle line 326.
                                                                         let expr0_0 =
                                                                             C::make_result(
                                                                                 ctx, pattern9_1,
@@ -650,7 +666,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                             return Some(pattern9_0);
                                                         };
                                                         if let Some(pattern20_0) = closure20() {
-                                                            let pattern21_0 = C::is_same(
+                                                            let pattern21_0 = C::is_eq(
                                                                 ctx,
                                                                 pattern19_0,
                                                                 pattern20_0,
@@ -662,13 +678,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                 if let Some(pattern23_0) =
                                                                     closure23()
                                                                 {
-                                                                    let pattern24_0 = C::is_same(
+                                                                    let pattern24_0 = C::is_eq(
                                                                         ctx,
                                                                         pattern14_1,
                                                                         pattern23_0,
                                                                     );
                                                                     if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 305.
+                                                                        // Rule at rules.isle line 314.
                                                                         let expr0_0 =
                                                                             C::make_result(
                                                                                 ctx, pattern9_1,
@@ -682,7 +698,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                             return Some(pattern9_1);
                                                         };
                                                         if let Some(pattern20_0) = closure20() {
-                                                            let pattern21_0 = C::is_same(
+                                                            let pattern21_0 = C::is_eq(
                                                                 ctx,
                                                                 pattern19_0,
                                                                 pattern20_0,
@@ -694,13 +710,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                 if let Some(pattern23_0) =
                                                                     closure23()
                                                                 {
-                                                                    let pattern24_0 = C::is_same(
+                                                                    let pattern24_0 = C::is_eq(
                                                                         ctx,
                                                                         pattern14_1,
                                                                         pattern23_0,
                                                                     );
                                                                     if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 293.
+                                                                        // Rule at rules.isle line 302.
                                                                         let expr0_0 =
                                                                             C::make_result(
                                                                                 ctx, pattern9_0,
@@ -722,14 +738,14 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                     let pattern5_0 = C::is_zero(ctx, pattern4_1);
                     if pattern5_0 == true {
                         let pattern7_0 = C::value_ty(ctx, pattern4_1);
-                        // Rule at rules.isle line 246.
+                        // Rule at rules.isle line 255.
                         let expr0_0 = C::make_zero(ctx, &pattern7_0);
                         let expr1_0 = C::make_result(ctx, expr0_0);
                         return Some(expr1_0);
                     }
                     let pattern5_0 = C::is_all_one(ctx, pattern4_1);
                     if pattern5_0 == true {
-                        // Rule at rules.isle line 253.
+                        // Rule at rules.isle line 262.
                         let expr0_0 = C::make_result(ctx, pattern4_0);
                         return Some(expr0_0);
                     }
@@ -748,10 +764,10 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         };
                                         if let Some(pattern10_0) = closure10() {
                                             let pattern11_0 =
-                                                C::is_same(ctx, pattern9_0, pattern10_0);
+                                                C::is_eq(ctx, pattern9_0, pattern10_0);
                                             if pattern11_0 == true {
                                                 let pattern13_0 = C::value_ty(ctx, pattern9_0);
-                                                // Rule at rules.isle line 260.
+                                                // Rule at rules.isle line 269.
                                                 let expr0_0 = C::make_zero(ctx, &pattern13_0);
                                                 let expr1_0 = C::make_result(ctx, expr0_0);
                                                 return Some(expr1_0);
@@ -765,12 +781,12 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         };
                                         if let Some(pattern10_0) = closure10() {
                                             let pattern11_0 =
-                                                C::is_same(ctx, pattern9_0, pattern10_0);
+                                                C::is_eq(ctx, pattern9_0, pattern10_0);
                                             if pattern11_0 == true {
                                                 let pattern13_0 =
                                                     C::is_power_of_two(ctx, pattern9_0);
                                                 if pattern13_0 == true {
-                                                    // Rule at rules.isle line 329.
+                                                    // Rule at rules.isle line 338.
                                                     let expr0_0 = C::make_result(ctx, pattern4_0);
                                                     return Some(expr0_0);
                                                 }
@@ -793,7 +809,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         };
                                         if let Some(pattern10_0) = closure10() {
                                             let pattern11_0 =
-                                                C::is_same(ctx, pattern9_0, pattern10_0);
+                                                C::is_eq(ctx, pattern9_0, pattern10_0);
                                             if pattern11_0 == true {
                                                 let pattern13_0 =
                                                     C::is_power_of_two(ctx, pattern9_0);
@@ -801,7 +817,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                     let pattern15_0 = C::value_ty(ctx, pattern9_0);
                                                     let pattern16_0 = C::is_one(ctx, pattern9_1);
                                                     if pattern16_0 == true {
-                                                        // Rule at rules.isle line 336.
+                                                        // Rule at rules.isle line 345.
                                                         let expr0_0 =
                                                             C::make_zero(ctx, &pattern15_0);
                                                         let expr1_0 = C::make_result(ctx, expr0_0);
@@ -819,16 +835,16 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         };
                                         if let Some(pattern10_0) = closure10() {
                                             let pattern11_0 =
-                                                C::is_same(ctx, pattern9_0, pattern10_0);
+                                                C::is_eq(ctx, pattern9_0, pattern10_0);
                                             if pattern11_0 == true {
-                                                // Rule at rules.isle line 267.
+                                                // Rule at rules.isle line 276.
                                                 let expr0_0 = C::make_result(ctx, pattern4_0);
                                                 return Some(expr0_0);
                                             }
                                             let pattern11_0 =
-                                                C::is_same(ctx, pattern9_1, pattern10_0);
+                                                C::is_eq(ctx, pattern9_1, pattern10_0);
                                             if pattern11_0 == true {
-                                                // Rule at rules.isle line 274.
+                                                // Rule at rules.isle line 283.
                                                 let expr0_0 = C::make_result(ctx, pattern4_0);
                                                 return Some(expr0_0);
                                             }
@@ -847,9 +863,9 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                         return Some(pattern4_0);
                     };
                     if let Some(pattern5_0) = closure5() {
-                        let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
                         if pattern6_0 == true {
-                            // Rule at rules.isle line 352.
+                            // Rule at rules.isle line 361.
                             let expr0_0 = C::make_result(ctx, pattern4_0);
                             return Some(expr0_0);
                         }
@@ -919,7 +935,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             closure25()
                                                                         {
                                                                             let pattern26_0 =
-                                                                                C::is_same(
+                                                                                C::is_eq(
                                                                                     ctx,
                                                                                     pattern24_0,
                                                                                     pattern25_0,
@@ -933,11 +949,11 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                                     pattern28_0,
                                                                                 ) = closure28()
                                                                                 {
-                                                                                    let pattern29_0 = C::is_same(ctx, pattern24_1, pattern28_0);
+                                                                                    let pattern29_0 = C::is_eq(ctx, pattern24_1, pattern28_0);
                                                                                     if pattern29_0
                                                                                         == true
                                                                                     {
-                                                                                        // Rule at rules.isle line 531.
+                                                                                        // Rule at rules.isle line 540.
                                                                                         let expr0_0 = C::make_result(ctx, pattern9_0);
                                                                                         return Some(expr0_0);
                                                                                     }
@@ -953,7 +969,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             closure25()
                                                                         {
                                                                             let pattern26_0 =
-                                                                                C::is_same(
+                                                                                C::is_eq(
                                                                                     ctx,
                                                                                     pattern24_0,
                                                                                     pattern25_0,
@@ -967,11 +983,11 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                                     pattern28_0,
                                                                                 ) = closure28()
                                                                                 {
-                                                                                    let pattern29_0 = C::is_same(ctx, pattern24_1, pattern28_0);
+                                                                                    let pattern29_0 = C::is_eq(ctx, pattern24_1, pattern28_0);
                                                                                     if pattern29_0
                                                                                         == true
                                                                                     {
-                                                                                        // Rule at rules.isle line 521.
+                                                                                        // Rule at rules.isle line 530.
                                                                                         let expr0_0 = C::make_result(ctx, pattern9_0);
                                                                                         return Some(expr0_0);
                                                                                     }
@@ -1041,7 +1057,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             closure25()
                                                                         {
                                                                             let pattern26_0 =
-                                                                                C::is_same(
+                                                                                C::is_eq(
                                                                                     ctx,
                                                                                     pattern24_0,
                                                                                     pattern25_0,
@@ -1055,11 +1071,11 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                                     pattern28_0,
                                                                                 ) = closure28()
                                                                                 {
-                                                                                    let pattern29_0 = C::is_same(ctx, pattern24_1, pattern28_0);
+                                                                                    let pattern29_0 = C::is_eq(ctx, pattern24_1, pattern28_0);
                                                                                     if pattern29_0
                                                                                         == true
                                                                                     {
-                                                                                        // Rule at rules.isle line 541.
+                                                                                        // Rule at rules.isle line 550.
                                                                                         let expr0_0 = C::make_result(ctx, pattern9_1);
                                                                                         return Some(expr0_0);
                                                                                     }
@@ -1075,7 +1091,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             closure25()
                                                                         {
                                                                             let pattern26_0 =
-                                                                                C::is_same(
+                                                                                C::is_eq(
                                                                                     ctx,
                                                                                     pattern24_0,
                                                                                     pattern25_0,
@@ -1089,11 +1105,11 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                                     pattern28_0,
                                                                                 ) = closure28()
                                                                                 {
-                                                                                    let pattern29_0 = C::is_same(ctx, pattern24_1, pattern28_0);
+                                                                                    let pattern29_0 = C::is_eq(ctx, pattern24_1, pattern28_0);
                                                                                     if pattern29_0
                                                                                         == true
                                                                                     {
-                                                                                        // Rule at rules.isle line 551.
+                                                                                        // Rule at rules.isle line 560.
                                                                                         let expr0_0 = C::make_result(ctx, pattern9_1);
                                                                                         return Some(expr0_0);
                                                                                     }
@@ -1128,19 +1144,19 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                 };
                                                 if let Some(pattern15_0) = closure15() {
                                                     let pattern16_0 =
-                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
                                                     if pattern16_0 == true {
                                                         let closure18 = || {
                                                             return Some(pattern9_1);
                                                         };
                                                         if let Some(pattern18_0) = closure18() {
-                                                            let pattern19_0 = C::is_same(
+                                                            let pattern19_0 = C::is_eq(
                                                                 ctx,
                                                                 pattern14_1,
                                                                 pattern18_0,
                                                             );
                                                             if pattern19_0 == true {
-                                                                // Rule at rules.isle line 497.
+                                                                // Rule at rules.isle line 506.
                                                                 let expr0_0 =
                                                                     C::make_result(ctx, pattern4_0);
                                                                 return Some(expr0_0);
@@ -1153,19 +1169,19 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                 };
                                                 if let Some(pattern15_0) = closure15() {
                                                     let pattern16_0 =
-                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
                                                     if pattern16_0 == true {
                                                         let closure18 = || {
                                                             return Some(pattern9_0);
                                                         };
                                                         if let Some(pattern18_0) = closure18() {
-                                                            let pattern19_0 = C::is_same(
+                                                            let pattern19_0 = C::is_eq(
                                                                 ctx,
                                                                 pattern14_1,
                                                                 pattern18_0,
                                                             );
                                                             if pattern19_0 == true {
-                                                                // Rule at rules.isle line 509.
+                                                                // Rule at rules.isle line 518.
                                                                 let expr0_0 =
                                                                     C::make_result(ctx, pattern4_0);
                                                                 return Some(expr0_0);
@@ -1195,7 +1211,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                 };
                                                 if let Some(pattern15_0) = closure15() {
                                                     let pattern16_0 =
-                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
                                                     if pattern16_0 == true {
                                                         if let Some(pattern18_0) =
                                                             C::value_expr(ctx, pattern14_1)
@@ -1220,14 +1236,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                     if let Some(pattern23_0) =
                                                                         closure23()
                                                                     {
-                                                                        let pattern24_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern22_0,
-                                                                                pattern23_0,
-                                                                            );
+                                                                        let pattern24_0 = C::is_eq(
+                                                                            ctx,
+                                                                            pattern22_0,
+                                                                            pattern23_0,
+                                                                        );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 401.
+                                                                            // Rule at rules.isle line 410.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern4_0,
@@ -1245,7 +1260,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                 };
                                                 if let Some(pattern15_0) = closure15() {
                                                     let pattern16_0 =
-                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
                                                     if pattern16_0 == true {
                                                         if let Some(pattern18_0) =
                                                             C::value_expr(ctx, pattern14_1)
@@ -1270,14 +1285,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                     if let Some(pattern23_0) =
                                                                         closure23()
                                                                     {
-                                                                        let pattern24_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern22_0,
-                                                                                pattern23_0,
-                                                                            );
+                                                                        let pattern24_0 = C::is_eq(
+                                                                            ctx,
+                                                                            pattern22_0,
+                                                                            pattern23_0,
+                                                                        );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 437.
+                                                                            // Rule at rules.isle line 446.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern4_0,
@@ -1309,7 +1323,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                 return Some(pattern9_0);
                                                             };
                                                             if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_same(
+                                                                let pattern21_0 = C::is_eq(
                                                                     ctx,
                                                                     pattern19_0,
                                                                     pattern20_0,
@@ -1321,14 +1335,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                     if let Some(pattern23_0) =
                                                                         closure23()
                                                                     {
-                                                                        let pattern24_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern14_1,
-                                                                                pattern23_0,
-                                                                            );
+                                                                        let pattern24_0 = C::is_eq(
+                                                                            ctx,
+                                                                            pattern14_1,
+                                                                            pattern23_0,
+                                                                        );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 425.
+                                                                            // Rule at rules.isle line 434.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern4_0,
@@ -1342,7 +1355,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                 return Some(pattern9_1);
                                                             };
                                                             if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_same(
+                                                                let pattern21_0 = C::is_eq(
                                                                     ctx,
                                                                     pattern19_0,
                                                                     pattern20_0,
@@ -1354,14 +1367,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                     if let Some(pattern23_0) =
                                                                         closure23()
                                                                     {
-                                                                        let pattern24_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern14_1,
-                                                                                pattern23_0,
-                                                                            );
+                                                                        let pattern24_0 = C::is_eq(
+                                                                            ctx,
+                                                                            pattern14_1,
+                                                                            pattern23_0,
+                                                                        );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 413.
+                                                                            // Rule at rules.isle line 422.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern4_0,
@@ -1407,7 +1419,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                 return Some(pattern9_1);
                                                             };
                                                             if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_same(
+                                                                let pattern21_0 = C::is_eq(
                                                                     ctx,
                                                                     pattern19_0,
                                                                     pattern20_0,
@@ -1419,14 +1431,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                     if let Some(pattern23_0) =
                                                                         closure23()
                                                                     {
-                                                                        let pattern24_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern19_1,
-                                                                                pattern23_0,
-                                                                            );
+                                                                        let pattern24_0 = C::is_eq(
+                                                                            ctx,
+                                                                            pattern19_1,
+                                                                            pattern23_0,
+                                                                        );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 461.
+                                                                            // Rule at rules.isle line 470.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern4_0,
@@ -1440,7 +1451,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                 return Some(pattern14_0);
                                                             };
                                                             if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_same(
+                                                                let pattern21_0 = C::is_eq(
                                                                     ctx,
                                                                     pattern19_0,
                                                                     pattern20_0,
@@ -1452,14 +1463,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                     if let Some(pattern23_0) =
                                                                         closure23()
                                                                     {
-                                                                        let pattern24_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern19_1,
-                                                                                pattern23_0,
-                                                                            );
+                                                                        let pattern24_0 = C::is_eq(
+                                                                            ctx,
+                                                                            pattern19_1,
+                                                                            pattern23_0,
+                                                                        );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 449.
+                                                                            // Rule at rules.isle line 458.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern4_0,
@@ -1505,7 +1515,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                 return Some(pattern9_0);
                                                             };
                                                             if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_same(
+                                                                let pattern21_0 = C::is_eq(
                                                                     ctx,
                                                                     pattern19_0,
                                                                     pattern20_0,
@@ -1517,14 +1527,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                     if let Some(pattern23_0) =
                                                                         closure23()
                                                                     {
-                                                                        let pattern24_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern19_1,
-                                                                                pattern23_0,
-                                                                            );
+                                                                        let pattern24_0 = C::is_eq(
+                                                                            ctx,
+                                                                            pattern19_1,
+                                                                            pattern23_0,
+                                                                        );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 473.
+                                                                            // Rule at rules.isle line 482.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern4_0,
@@ -1538,7 +1547,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                 return Some(pattern14_0);
                                                             };
                                                             if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_same(
+                                                                let pattern21_0 = C::is_eq(
                                                                     ctx,
                                                                     pattern19_0,
                                                                     pattern20_0,
@@ -1550,14 +1559,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                     if let Some(pattern23_0) =
                                                                         closure23()
                                                                     {
-                                                                        let pattern24_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern19_1,
-                                                                                pattern23_0,
-                                                                            );
+                                                                        let pattern24_0 = C::is_eq(
+                                                                            ctx,
+                                                                            pattern19_1,
+                                                                            pattern23_0,
+                                                                        );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 485.
+                                                                            // Rule at rules.isle line 494.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern4_0,
@@ -1580,14 +1588,14 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                     }
                     let pattern5_0 = C::is_zero(ctx, pattern4_1);
                     if pattern5_0 == true {
-                        // Rule at rules.isle line 359.
+                        // Rule at rules.isle line 368.
                         let expr0_0 = C::make_result(ctx, pattern4_0);
                         return Some(expr0_0);
                     }
                     let pattern5_0 = C::is_all_one(ctx, pattern4_1);
                     if pattern5_0 == true {
                         let pattern7_0 = C::value_ty(ctx, pattern4_1);
-                        // Rule at rules.isle line 345.
+                        // Rule at rules.isle line 354.
                         let expr0_0 = C::make_all_one(ctx, &pattern7_0);
                         let expr1_0 = C::make_result(ctx, expr0_0);
                         return Some(expr1_0);
@@ -1605,10 +1613,10 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         return Some(pattern4_0);
                                     };
                                     if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                        let pattern11_0 = C::is_eq(ctx, pattern9_0, pattern10_0);
                                         if pattern11_0 == true {
                                             let pattern13_0 = C::value_ty(ctx, pattern9_0);
-                                            // Rule at rules.isle line 366.
+                                            // Rule at rules.isle line 375.
                                             let expr0_0 = C::make_all_one(ctx, &pattern13_0);
                                             let expr1_0 = C::make_result(ctx, expr0_0);
                                             return Some(expr1_0);
@@ -1629,22 +1637,22 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                 };
                                                 if let Some(pattern15_0) = closure15() {
                                                     let pattern16_0 =
-                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
                                                     if pattern16_0 == true {
                                                         let pattern18_0 =
                                                             C::value_ty(ctx, pattern14_0);
-                                                        // Rule at rules.isle line 387.
+                                                        // Rule at rules.isle line 396.
                                                         let expr0_0 =
                                                             C::make_all_one(ctx, &pattern18_0);
                                                         let expr1_0 = C::make_result(ctx, expr0_0);
                                                         return Some(expr1_0);
                                                     }
                                                     let pattern16_0 =
-                                                        C::is_same(ctx, pattern14_1, pattern15_0);
+                                                        C::is_eq(ctx, pattern14_1, pattern15_0);
                                                     if pattern16_0 == true {
                                                         let pattern18_0 =
                                                             C::value_ty(ctx, pattern14_1);
-                                                        // Rule at rules.isle line 394.
+                                                        // Rule at rules.isle line 403.
                                                         let expr0_0 =
                                                             C::make_all_one(ctx, &pattern18_0);
                                                         let expr1_0 = C::make_result(ctx, expr0_0);
@@ -1667,15 +1675,15 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         return Some(pattern4_0);
                                     };
                                     if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                        let pattern11_0 = C::is_eq(ctx, pattern9_0, pattern10_0);
                                         if pattern11_0 == true {
-                                            // Rule at rules.isle line 373.
+                                            // Rule at rules.isle line 382.
                                             let expr0_0 = C::make_result(ctx, pattern4_0);
                                             return Some(expr0_0);
                                         }
-                                        let pattern11_0 = C::is_same(ctx, pattern9_1, pattern10_0);
+                                        let pattern11_0 = C::is_eq(ctx, pattern9_1, pattern10_0);
                                         if pattern11_0 == true {
-                                            // Rule at rules.isle line 380.
+                                            // Rule at rules.isle line 389.
                                             let expr0_0 = C::make_result(ctx, pattern4_0);
                                             return Some(expr0_0);
                                         }
@@ -1692,10 +1700,10 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                         return Some(pattern4_0);
                     };
                     if let Some(pattern5_0) = closure5() {
-                        let pattern6_0 = C::is_same(ctx, pattern4_1, pattern5_0);
+                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
                         if pattern6_0 == true {
                             let pattern8_0 = C::value_ty(ctx, pattern4_1);
-                            // Rule at rules.isle line 570.
+                            // Rule at rules.isle line 579.
                             let expr0_0 = C::make_zero(ctx, &pattern8_0);
                             let expr1_0 = C::make_result(ctx, expr0_0);
                             return Some(expr1_0);
@@ -1727,7 +1735,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                 };
                                                 if let Some(pattern15_0) = closure15() {
                                                     let pattern16_0 =
-                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
                                                     if pattern16_0 == true {
                                                         if let Some(pattern18_0) =
                                                             C::value_expr(ctx, pattern14_1)
@@ -1752,14 +1760,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                     if let Some(pattern23_0) =
                                                                         closure23()
                                                                     {
-                                                                        let pattern24_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern22_0,
-                                                                                pattern23_0,
-                                                                            );
+                                                                        let pattern24_0 = C::is_eq(
+                                                                            ctx,
+                                                                            pattern22_0,
+                                                                            pattern23_0,
+                                                                        );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 659.
+                                                                            // Rule at rules.isle line 668.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx,
@@ -1778,7 +1785,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                 };
                                                 if let Some(pattern15_0) = closure15() {
                                                     let pattern16_0 =
-                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
                                                     if pattern16_0 == true {
                                                         if let Some(pattern18_0) =
                                                             C::value_expr(ctx, pattern14_1)
@@ -1803,14 +1810,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                     if let Some(pattern23_0) =
                                                                         closure23()
                                                                     {
-                                                                        let pattern24_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern22_0,
-                                                                                pattern23_0,
-                                                                            );
+                                                                        let pattern24_0 = C::is_eq(
+                                                                            ctx,
+                                                                            pattern22_0,
+                                                                            pattern23_0,
+                                                                        );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 649.
+                                                                            // Rule at rules.isle line 658.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx,
@@ -1843,7 +1849,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                 return Some(pattern9_0);
                                                             };
                                                             if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_same(
+                                                                let pattern21_0 = C::is_eq(
                                                                     ctx,
                                                                     pattern19_0,
                                                                     pattern20_0,
@@ -1855,14 +1861,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                     if let Some(pattern23_0) =
                                                                         closure23()
                                                                     {
-                                                                        let pattern24_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern14_1,
-                                                                                pattern23_0,
-                                                                            );
+                                                                        let pattern24_0 = C::is_eq(
+                                                                            ctx,
+                                                                            pattern14_1,
+                                                                            pattern23_0,
+                                                                        );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 639.
+                                                                            // Rule at rules.isle line 648.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx,
@@ -1877,7 +1882,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                 return Some(pattern9_1);
                                                             };
                                                             if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_same(
+                                                                let pattern21_0 = C::is_eq(
                                                                     ctx,
                                                                     pattern19_0,
                                                                     pattern20_0,
@@ -1889,14 +1894,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                     if let Some(pattern23_0) =
                                                                         closure23()
                                                                     {
-                                                                        let pattern24_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern14_1,
-                                                                                pattern23_0,
-                                                                            );
+                                                                        let pattern24_0 = C::is_eq(
+                                                                            ctx,
+                                                                            pattern14_1,
+                                                                            pattern23_0,
+                                                                        );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 669.
+                                                                            // Rule at rules.isle line 678.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx,
@@ -1932,7 +1936,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                 };
                                                 if let Some(pattern15_0) = closure15() {
                                                     let pattern16_0 =
-                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
                                                     if pattern16_0 == true {
                                                         if let Some(pattern18_0) =
                                                             C::value_expr(ctx, pattern14_1)
@@ -1957,14 +1961,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                     if let Some(pattern23_0) =
                                                                         closure23()
                                                                     {
-                                                                        let pattern24_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern22_0,
-                                                                                pattern23_0,
-                                                                            );
+                                                                        let pattern24_0 = C::is_eq(
+                                                                            ctx,
+                                                                            pattern22_0,
+                                                                            pattern23_0,
+                                                                        );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 618.
+                                                                            // Rule at rules.isle line 627.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern9_1,
@@ -1982,7 +1985,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                 };
                                                 if let Some(pattern15_0) = closure15() {
                                                     let pattern16_0 =
-                                                        C::is_same(ctx, pattern14_0, pattern15_0);
+                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
                                                     if pattern16_0 == true {
                                                         if let Some(pattern18_0) =
                                                             C::value_expr(ctx, pattern14_1)
@@ -2007,14 +2010,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                     if let Some(pattern23_0) =
                                                                         closure23()
                                                                     {
-                                                                        let pattern24_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern22_0,
-                                                                                pattern23_0,
-                                                                            );
+                                                                        let pattern24_0 = C::is_eq(
+                                                                            ctx,
+                                                                            pattern22_0,
+                                                                            pattern23_0,
+                                                                        );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 608.
+                                                                            // Rule at rules.isle line 617.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern9_0,
@@ -2046,7 +2048,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                 return Some(pattern9_0);
                                                             };
                                                             if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_same(
+                                                                let pattern21_0 = C::is_eq(
                                                                     ctx,
                                                                     pattern19_0,
                                                                     pattern20_0,
@@ -2058,14 +2060,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                     if let Some(pattern23_0) =
                                                                         closure23()
                                                                     {
-                                                                        let pattern24_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern14_1,
-                                                                                pattern23_0,
-                                                                            );
+                                                                        let pattern24_0 = C::is_eq(
+                                                                            ctx,
+                                                                            pattern14_1,
+                                                                            pattern23_0,
+                                                                        );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 598.
+                                                                            // Rule at rules.isle line 607.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern9_0,
@@ -2079,7 +2080,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                 return Some(pattern9_1);
                                                             };
                                                             if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_same(
+                                                                let pattern21_0 = C::is_eq(
                                                                     ctx,
                                                                     pattern19_0,
                                                                     pattern20_0,
@@ -2091,14 +2092,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                     if let Some(pattern23_0) =
                                                                         closure23()
                                                                     {
-                                                                        let pattern24_0 =
-                                                                            C::is_same(
-                                                                                ctx,
-                                                                                pattern14_1,
-                                                                                pattern23_0,
-                                                                            );
+                                                                        let pattern24_0 = C::is_eq(
+                                                                            ctx,
+                                                                            pattern14_1,
+                                                                            pattern23_0,
+                                                                        );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 628.
+                                                                            // Rule at rules.isle line 637.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern9_1,
@@ -2121,7 +2121,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                     }
                     let pattern5_0 = C::is_zero(ctx, pattern4_1);
                     if pattern5_0 == true {
-                        // Rule at rules.isle line 563.
+                        // Rule at rules.isle line 572.
                         let expr0_0 = C::make_result(ctx, pattern4_0);
                         return Some(expr0_0);
                     }
@@ -2138,10 +2138,10 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         return Some(pattern4_0);
                                     };
                                     if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                        let pattern11_0 = C::is_eq(ctx, pattern9_0, pattern10_0);
                                         if pattern11_0 == true {
                                             let pattern13_0 = C::value_ty(ctx, pattern4_1);
-                                            // Rule at rules.isle line 577.
+                                            // Rule at rules.isle line 586.
                                             let expr0_0 = C::make_all_one(ctx, &pattern13_0);
                                             let expr1_0 = C::make_result(ctx, expr0_0);
                                             return Some(expr1_0);
@@ -2160,15 +2160,15 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         return Some(pattern4_0);
                                     };
                                     if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_same(ctx, pattern9_0, pattern10_0);
+                                        let pattern11_0 = C::is_eq(ctx, pattern9_0, pattern10_0);
                                         if pattern11_0 == true {
-                                            // Rule at rules.isle line 584.
+                                            // Rule at rules.isle line 593.
                                             let expr0_0 = C::make_result(ctx, pattern9_1);
                                             return Some(expr0_0);
                                         }
-                                        let pattern11_0 = C::is_same(ctx, pattern9_1, pattern10_0);
+                                        let pattern11_0 = C::is_eq(ctx, pattern9_1, pattern10_0);
                                         if pattern11_0 == true {
-                                            // Rule at rules.isle line 591.
+                                            // Rule at rules.isle line 600.
                                             let expr0_0 = C::make_result(ctx, pattern9_0);
                                             return Some(expr0_0);
                                         }

@@ -22,8 +22,8 @@
 (decl is_all_one (bool) ExprValue)
 (extern extractor infallible is_all_one is_all_one)
 
-(decl is_same (bool ExprValue) ExprValue)
-(extern extractor infallible is_same is_same (out in))
+(decl is_eq (bool ExprValue) ExprValue)
+(extern extractor infallible is_eq is_eq (out in))
 
 (decl is_power_of_two (bool) ExprValue)
 (extern extractor infallible is_power_of_two is_power_of_two)
@@ -54,28 +54,28 @@
 ; a + (-a) => 0
 (rule
   (simplify
-    (extract_add a (value_expr (extract_neg (value_with_ty(is_same $true <a) ty))))
+    (extract_add a (value_expr (extract_neg (value_with_ty(is_eq $true <a) ty))))
   )
   (make_result (make_zero ty))
 )
 ; a + (b - a) => b
 (rule
   (simplify
-    (extract_add a (value_expr (extract_sub b (is_same $true <a))))
+    (extract_add a (value_expr (extract_sub b (is_eq $true <a))))
   )
   (make_result b)
 )
 ; (a - b) + b => a
 (rule
   (simplify
-    (extract_add (value_expr (extract_sub a b)) (is_same $true <b))
+    (extract_add (value_expr (extract_sub a b)) (is_eq $true <b))
   )
   (make_result a)
 )
 ; a + !a => -1
 (rule
   (simplify
-    (extract_add a (value_expr (extract_not (value_with_ty (is_same $true <a) ty))))
+    (extract_add a (value_expr (extract_not (value_with_ty (is_eq $true <a) ty))))
   )
   (make_result (make_all_one ty))
 )
@@ -98,49 +98,49 @@
 ; a - a => 0
 (rule
   (simplify
-    (extract_sub a (value_with_ty (is_same $true <a) ty))
+    (extract_sub a (value_with_ty (is_eq $true <a) ty))
   )
   (make_result (make_zero ty))
 )
 ; a - (a - b) =>  b
 (rule
   (simplify
-    (extract_sub a (value_expr (extract_sub (is_same $true <a) b)))
+    (extract_sub a (value_expr (extract_sub (is_eq $true <a) b)))
   )
   (make_result b)
 )
 ; (a - b) - a => -b
 (rule
   (simplify
-    (extract_sub (value_expr (extract_sub a b)) (is_same $true <a))
+    (extract_sub (value_expr (extract_sub a b)) (is_eq $true <a))
   )
   (SimplifyRawResult.Expr (ExprData.Unary (UnaryOp.Neg) (arg_array1 b)))
 )
 ; a - (a + b) => -b
 (rule
   (simplify
-    (extract_sub a (value_expr (extract_add (is_same $true <a) b)))
+    (extract_sub a (value_expr (extract_add (is_eq $true <a) b)))
   )
   (SimplifyRawResult.Expr (ExprData.Unary (UnaryOp.Neg) (arg_array1 b)))
 )
 ; b - (a + b) => -a
 (rule
   (simplify
-    (extract_sub b (value_expr (extract_add a (is_same $true <b))))
+    (extract_sub b (value_expr (extract_add a (is_eq $true <b))))
   )
   (SimplifyRawResult.Expr (ExprData.Unary (UnaryOp.Neg) (arg_array1 a)))
 )
 ; (a + b) - a =>  b
 (rule
   (simplify
-    (extract_sub (value_expr (extract_add a b)) (is_same $true <a))
+    (extract_sub (value_expr (extract_add a b)) (is_eq $true <a))
   )
   (make_result b)
 )
 ; (a + b) - b =>  a
 (rule
   (simplify
-    (extract_sub (value_expr (extract_add a b)) (is_same $true <b))
+    (extract_sub (value_expr (extract_add a b)) (is_eq $true <b))
   )
   (make_result a)
 )
@@ -192,7 +192,7 @@
 ; a < a => -1
 (rule
   (simplify
-    (extract_lt a (value_with_ty (is_same $true <a) ty))
+    (extract_lt a (value_with_ty (is_eq $true <a) ty))
   )
   (make_result (make_all_one ty))
 )
@@ -210,7 +210,7 @@
 ; a < a => -1
 (rule
   (simplify
-    (extract_slt a (value_with_ty (is_same $true <a) ty))
+    (extract_slt a (value_with_ty (is_eq $true <a) ty))
   )
   (make_result (make_all_one ty))
 )
@@ -228,16 +228,25 @@
 ; a == a => 1
 (rule
   (simplify
-    (extract_eq a (value_with_ty (is_same $true <a) ty))
+    (extract_eq a (value_with_ty (is_eq $true <a) ty))
   )
   (make_result (make_all_one ty))
+)
+
+;; Rules for BinaryOp.Ne
+; a != a => 0
+(rule
+  (simplify
+    (extract_ne a (value_with_ty (is_eq $true <a) ty))
+  )
+  (make_result (make_zero ty))
 )
 
 ;; Rules for BinaryOp.And
 ; a & a => a
 (rule
   (simplify
-    (extract_and a (is_same $true <a))
+    (extract_and a (is_eq $true <a))
   )
   (make_result a)
 )
@@ -258,21 +267,21 @@
 ; a & !a => 0
 (rule
   (simplify
-    (extract_and a (value_expr (extract_not (value_with_ty (is_same $true <a) ty))))
+    (extract_and a (value_expr (extract_not (value_with_ty (is_eq $true <a) ty))))
   )
   (make_result (make_zero ty))
 )
 ; a & (a | _) => a
 (rule
   (simplify
-    (extract_and a (value_expr (extract_or (is_same $true <a) _)))
+    (extract_and a (value_expr (extract_or (is_eq $true <a) _)))
   )
   (make_result a)
 )
 ; a & (_ | a) => a
 (rule
   (simplify
-    (extract_and a (value_expr (extract_or _ (is_same $true <a))))
+    (extract_and a (value_expr (extract_or _ (is_eq $true <a))))
   )
   (make_result a)
 )
@@ -282,7 +291,7 @@
     (extract_and
       (value_expr (extract_or a b))
       (value_expr
-        (extract_or (is_same $true <a) (value_expr (extract_not (is_same $true <b))))
+        (extract_or (is_eq $true <a) (value_expr (extract_not (is_eq $true <b))))
       )
     )
   )
@@ -294,7 +303,7 @@
     (extract_and
       (value_expr (extract_or a b))
       (value_expr
-        (extract_or (value_expr (extract_not (is_same $true <b))) (is_same $true <a))
+        (extract_or (value_expr (extract_not (is_eq $true <b))) (is_eq $true <a))
       )
     )
   )
@@ -306,7 +315,7 @@
     (extract_and
       (value_expr (extract_or a b))
       (value_expr
-        (extract_or (value_expr (extract_not (is_same $true <a))) (is_same $true <b))
+        (extract_or (value_expr (extract_not (is_eq $true <a))) (is_eq $true <b))
       )
     )
   )
@@ -318,7 +327,7 @@
     (extract_and
       (value_expr (extract_or a b))
       (value_expr
-        (extract_or (is_same $true <b) (value_expr (extract_not (is_same $true <a))))
+        (extract_or (is_eq $true <b) (value_expr (extract_not (is_eq $true <a))))
       )
     )
   )
@@ -327,14 +336,14 @@
 ; a & (-a) => a where a: is_power_of_two.
 (rule
   (simplify
-    (extract_and a (value_expr (extract_neg (and (is_same $true <a) (is_power_of_two $true)))))
+    (extract_and a (value_expr (extract_neg (and (is_eq $true <a) (is_power_of_two $true)))))
   )
   (make_result a)
 )
 ; a & (a - 1) => 0 where a: is_power_of_two.
 (rule
   (simplify
-    (extract_and a (value_expr (extract_sub (and (is_same $true <a) (is_power_of_two $true) (value_ty ty)) (is_one $true))))
+    (extract_and a (value_expr (extract_sub (and (is_eq $true <a) (is_power_of_two $true) (value_ty ty)) (is_one $true))))
   )
   (make_result (make_zero ty))
 )
@@ -350,7 +359,7 @@
 ; a | a => a
 (rule
   (simplify
-    (extract_or a (is_same $true <a))
+    (extract_or a (is_eq $true <a))
   )
   (make_result a)
 )
@@ -364,35 +373,35 @@
 ; a | !a => -1
 (rule
   (simplify
-    (extract_or a (value_expr (extract_not (value_with_ty (is_same $true <a) ty))))
+    (extract_or a (value_expr (extract_not (value_with_ty (is_eq $true <a) ty))))
   )
   (make_result (make_all_one ty))
 )
 ; a | (a & _) => a
 (rule
   (simplify
-    (extract_or a (value_expr (extract_and (is_same $true <a) _)))
+    (extract_or a (value_expr (extract_and (is_eq $true <a) _)))
   )
   (make_result a)
 )
 ; a | (_ & a) => a
 (rule
   (simplify
-    (extract_or a (value_expr (extract_and _ (is_same $true <a))))
+    (extract_or a (value_expr (extract_and _ (is_eq $true <a))))
   )
   (make_result a)
 )
 ; a | !(a & _) => -1
 (rule
   (simplify
-    (extract_or a (value_expr (extract_not (value_expr (extract_and (value_with_ty (is_same $true <a) ty) _)))))
+    (extract_or a (value_expr (extract_not (value_expr (extract_and (value_with_ty (is_eq $true <a) ty) _)))))
   )
   (make_result (make_all_one ty))
 )
 ; a | !(_ & a) => -1
 (rule
   (simplify
-    (extract_or a (value_expr (extract_not (value_expr (extract_and _ (value_with_ty (is_same $true <a) ty))))))
+    (extract_or a (value_expr (extract_not (value_expr (extract_and _ (value_with_ty (is_eq $true <a) ty))))))
   )
   (make_result (make_all_one ty))
 )
@@ -402,7 +411,7 @@
     (extract_or
       arg0 @ (value_expr (extract_xor a b))
       (value_expr
-        (extract_and (is_same $true <a) (value_expr (extract_not (is_same $true <b))))
+        (extract_and (is_eq $true <a) (value_expr (extract_not (is_eq $true <b))))
       )
     )
   )
@@ -414,7 +423,7 @@
     (extract_or
       arg0 @ (value_expr (extract_xor a b))
       (value_expr
-        (extract_and (value_expr (extract_not (is_same $true <b))) (is_same $true <a))
+        (extract_and (value_expr (extract_not (is_eq $true <b))) (is_eq $true <a))
       )
     )
   )
@@ -426,7 +435,7 @@
     (extract_or
       arg0 @ (value_expr (extract_xor a b))
       (value_expr
-        (extract_and (value_expr (extract_not (is_same $true <a))) (is_same $true <b))
+        (extract_and (value_expr (extract_not (is_eq $true <a))) (is_eq $true <b))
       )
     )
   )
@@ -438,7 +447,7 @@
     (extract_or
       arg0 @ (value_expr (extract_xor a b))
       (value_expr
-        (extract_and (is_same $true <b) (value_expr (extract_not (is_same $true <a))))
+        (extract_and (is_eq $true <b) (value_expr (extract_not (is_eq $true <a))))
       )
     )
   )
@@ -450,7 +459,7 @@
     (extract_or
       arg0 @ (value_expr (extract_xor (value_expr (extract_not a)) b))
       (value_expr
-        (extract_and (is_same $true <a) (is_same $true <b))
+        (extract_and (is_eq $true <a) (is_eq $true <b))
       )
     )
   )
@@ -462,7 +471,7 @@
     (extract_or
       arg0 @ (value_expr (extract_xor (value_expr (extract_not a)) b))
       (value_expr
-        (extract_and (is_same $true <b) (is_same $true <a))
+        (extract_and (is_eq $true <b) (is_eq $true <a))
       )
     )
   )
@@ -474,7 +483,7 @@
     (extract_or
       arg0 @ (value_expr (extract_xor a (value_expr (extract_not b))))
       (value_expr
-        (extract_and (is_same $true <a) (is_same $true <b))
+        (extract_and (is_eq $true <a) (is_eq $true <b))
       )
     )
   )
@@ -486,7 +495,7 @@
     (extract_or
       arg0 @ (value_expr (extract_xor a (value_expr (extract_not b))))
       (value_expr
-        (extract_and (is_same $true <b) (is_same $true <a))
+        (extract_and (is_eq $true <b) (is_eq $true <a))
       )
     )
   )
@@ -498,7 +507,7 @@
     (extract_or
       arg0 @ (value_expr (extract_or a b))
       (value_expr
-        (extract_xor (is_same $true <a) (is_same $true <b))
+        (extract_xor (is_eq $true <a) (is_eq $true <b))
       )
     )
   )
@@ -510,7 +519,7 @@
     (extract_or
       arg0 @ (value_expr (extract_or a b))
       (value_expr
-        (extract_xor (is_same $true <b) (is_same $true <a))
+        (extract_xor (is_eq $true <b) (is_eq $true <a))
       )
     )
   )
@@ -521,7 +530,7 @@
   (simplify
     (extract_or
        (value_expr (extract_and neg_a @ (value_expr (extract_not a)) b))
-       (value_expr (extract_not (value_expr (extract_or (is_same $true <a) (is_same $true <b)))))
+       (value_expr (extract_not (value_expr (extract_or (is_eq $true <a) (is_eq $true <b)))))
     )
   )
   (make_result neg_a)
@@ -531,7 +540,7 @@
   (simplify
     (extract_or
        (value_expr (extract_and neg_a @ (value_expr (extract_not a)) b))
-       (value_expr (extract_not (value_expr (extract_or (is_same $true <b) (is_same $true <a)))))
+       (value_expr (extract_not (value_expr (extract_or (is_eq $true <b) (is_eq $true <a)))))
     )
   )
   (make_result neg_a)
@@ -541,7 +550,7 @@
   (simplify
     (extract_or
        (value_expr (extract_and a neg_b @ (value_expr (extract_not b))))
-       (value_expr (extract_not (value_expr (extract_or (is_same $true <a) (is_same $true <b)))))
+       (value_expr (extract_not (value_expr (extract_or (is_eq $true <a) (is_eq $true <b)))))
     )
   )
   (make_result neg_b)
@@ -551,7 +560,7 @@
   (simplify
     (extract_or
        (value_expr (extract_and a neg_b @ (value_expr (extract_not b))))
-       (value_expr (extract_not (value_expr (extract_or (is_same $true <b) (is_same $true <a)))))
+       (value_expr (extract_not (value_expr (extract_or (is_eq $true <b) (is_eq $true <a)))))
     )
   )
   (make_result neg_b)
@@ -568,28 +577,28 @@
 ; a ^ a => 0
 (rule
   (simplify
-    (extract_xor a (value_with_ty (is_same $true <a) ty))
+    (extract_xor a (value_with_ty (is_eq $true <a) ty))
   )
   (make_result (make_zero ty))
 )
 ; a ^ !a => -1
 (rule
   (simplify
-    (extract_xor a (value_expr_with_ty (extract_not (is_same $true <a)) ty))
+    (extract_xor a (value_expr_with_ty (extract_not (is_eq $true <a)) ty))
   )
   (make_result (make_all_one ty))
 )
 ; a ^ (a ^ b) => b
 (rule
   (simplify
-    (extract_xor a (value_expr (extract_xor (is_same $true <a) b)))
+    (extract_xor a (value_expr (extract_xor (is_eq $true <a) b)))
   )
   (make_result b)
 )
 ; a ^ (b ^ a) => b
 (rule
   (simplify
-    (extract_xor a (value_expr (extract_xor b (is_same $true <a))))
+    (extract_xor a (value_expr (extract_xor b (is_eq $true <a))))
   )
   (make_result b)
 )
@@ -598,7 +607,7 @@
   (simplify
     (extract_xor
       (value_expr (extract_or a b))
-      (value_expr (extract_and (value_expr (extract_not (is_same $true <a))) (is_same $true <b)))
+      (value_expr (extract_and (value_expr (extract_not (is_eq $true <a))) (is_eq $true <b)))
     )
   )
   (make_result a)
@@ -608,7 +617,7 @@
   (simplify
     (extract_xor
       (value_expr (extract_or a b))
-      (value_expr (extract_and (is_same $true <b) (value_expr (extract_not (is_same $true <a)))))
+      (value_expr (extract_and (is_eq $true <b) (value_expr (extract_not (is_eq $true <a)))))
     )
   )
   (make_result a)
@@ -618,7 +627,7 @@
   (simplify
     (extract_xor
       (value_expr (extract_or a b))
-      (value_expr (extract_and (is_same $true <a) (value_expr (extract_not (is_same $true <b)))))
+      (value_expr (extract_and (is_eq $true <a) (value_expr (extract_not (is_eq $true <b)))))
     )
   )
   (make_result b)
@@ -628,7 +637,7 @@
   (simplify
     (extract_xor
       (value_expr (extract_or a b))
-      (value_expr (extract_and (value_expr (extract_not (is_same $true <b))) (is_same $true <a)))
+      (value_expr (extract_and (value_expr (extract_not (is_eq $true <b))) (is_eq $true <a)))
     )
   )
   (make_result b)
@@ -639,7 +648,7 @@
   (simplify
     (extract_xor
       (value_expr (extract_and a b))
-      (value_expr (extract_or not_a @ (value_expr (extract_not (is_same $true <a))) (is_same $true <b)))
+      (value_expr (extract_or not_a @ (value_expr (extract_not (is_eq $true <a))) (is_eq $true <b)))
     )
   )
   (make_result not_a)
@@ -649,7 +658,7 @@
   (simplify
     (extract_xor
       (value_expr (extract_and a b))
-      (value_expr (extract_or (is_same $true <b) not_a @ (value_expr (extract_not (is_same $true <a)))))
+      (value_expr (extract_or (is_eq $true <b) not_a @ (value_expr (extract_not (is_eq $true <a)))))
     )
   )
   (make_result not_a)
@@ -659,7 +668,7 @@
   (simplify
     (extract_xor
       (value_expr (extract_and a b))
-      (value_expr (extract_or (is_same $true <a) not_b @ (value_expr (extract_not (is_same $true <b)))))
+      (value_expr (extract_or (is_eq $true <a) not_b @ (value_expr (extract_not (is_eq $true <b)))))
     )
   )
   (make_result not_b)
@@ -669,7 +678,7 @@
   (simplify
     (extract_xor
       (value_expr (extract_and a b))
-      (value_expr (extract_or not_b @ (value_expr (extract_not (is_same $true <b))) (is_same $true <a)))
+      (value_expr (extract_or not_b @ (value_expr (extract_not (is_eq $true <b))) (is_eq $true <a)))
     )
   )
   (make_result not_b)

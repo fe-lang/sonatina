@@ -28,7 +28,8 @@ pub(super) fn fold_constant(dfg: &DataFlowGraph, insn_data: &InsnData) -> Option
                 BinaryOp::Gt => lhs.gt(rhs),
                 BinaryOp::Slt => lhs.slt(rhs),
                 BinaryOp::Sgt => lhs.sgt(rhs),
-                BinaryOp::Eq => lhs.const_eq(rhs),
+                BinaryOp::Eq => lhs.imm_eq(rhs),
+                BinaryOp::Ne => lhs.imm_ne(rhs),
                 BinaryOp::And => lhs & rhs,
                 BinaryOp::Or => lhs | rhs,
                 BinaryOp::Xor => lhs ^ rhs,
@@ -104,10 +105,16 @@ impl Immediate {
         Self::from_i256(self.as_i256(), ty)
     }
 
-    pub(super) fn const_eq(self, rhs: Self) -> Self {
+    pub(super) fn imm_eq(self, rhs: Self) -> Self {
         debug_assert_eq!(self.ty(), rhs.ty());
 
         (self == rhs).into()
+    }
+
+    pub(super) fn imm_ne(self, rhs: Self) -> Self {
+        debug_assert_eq!(self.ty(), rhs.ty());
+
+        (self != rhs).into()
     }
 
     pub(super) fn zero(ty: &Type) -> Self {

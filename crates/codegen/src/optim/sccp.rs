@@ -183,7 +183,8 @@ impl SccpSolver {
                     BinaryOp::Gt => lhs.gt(rhs),
                     BinaryOp::Slt => lhs.slt(rhs),
                     BinaryOp::Sgt => lhs.sgt(rhs),
-                    BinaryOp::Eq => lhs.const_eq(rhs),
+                    BinaryOp::Eq => lhs.eq(rhs),
+                    BinaryOp::Ne => lhs.ne(rhs),
                     BinaryOp::And => lhs.and(rhs),
                     BinaryOp::Or => lhs.or(rhs),
                     BinaryOp::Xor => lhs.xor(rhs),
@@ -477,8 +478,12 @@ impl LatticeCell {
         self.apply_binop(rhs, Immediate::sgt)
     }
 
-    fn const_eq(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, Immediate::const_eq)
+    fn eq(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, Immediate::imm_eq)
+    }
+
+    fn ne(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, Immediate::imm_ne)
     }
 
     fn and(self, rhs: Self) -> Self {

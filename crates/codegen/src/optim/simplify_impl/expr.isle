@@ -67,6 +67,7 @@
     Slt
     Sgt
     Eq
+    Ne
     And
     Or
     Xor
@@ -175,6 +176,12 @@
 (extractor
   (extract_eq lhs rhs)
   (expr_data (ExprData.Binary (BinaryOp.Eq) (arg_array2 lhs rhs)))
+)
+
+(decl extract_ne (ExprValue ExprValue) Expr)
+(extractor
+  (extract_ne lhs rhs)
+  (expr_data (ExprData.Binary (BinaryOp.Ne) (arg_array2 lhs rhs)))
 )
 
 (decl extract_and (ExprValue ExprValue) Expr)

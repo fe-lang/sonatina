@@ -194,6 +194,7 @@ pub enum BinaryOp {
     Slt,
     Sgt,
     Eq,
+    Ne,
     And,
     Or,
     Xor,
@@ -219,6 +220,7 @@ impl BinaryOp {
             Self::Slt => "slt",
             Self::Sgt => "sgt",
             Self::Eq => "eq",
+            Self::Ne => "ne",
             Self::And => "and",
             Self::Or => "or",
             Self::Xor => "xor",
@@ -234,7 +236,10 @@ impl BinaryOp {
     }
 
     fn is_cmp(self) -> bool {
-        matches!(self, Self::Lt | Self::Gt | Self::Slt | Self::Sgt | Self::Eq)
+        matches!(
+            self,
+            Self::Lt | Self::Gt | Self::Slt | Self::Sgt | Self::Eq | Self::Ne
+        )
     }
 }
 

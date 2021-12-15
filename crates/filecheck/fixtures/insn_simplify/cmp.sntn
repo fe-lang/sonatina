@@ -1,0 +1,13 @@
+# a == a => 1
+# check return -1.i1;
+func %eq0(v0.i64) -> i1:
+    block0:
+        v1.i1 = eq v0 v0;
+        return v0;
+
+# a != a => 0
+# check return 0.i1;
+func %eq0(v0.i64) -> i1:
+    block0:
+        v1.i1 = ne v0 v0;
+        return v0;
