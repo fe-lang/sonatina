@@ -907,31 +907,6 @@ struct GvnBlockData {
 
 /// This struct finds value phi congruence that described in
 /// `Detection of Redundant Expressions: A Complete and Polynomial-Time Algorithm in SSA`.
-///
-/// Value phi congruence is the congruence beyond phi functions.
-///
-/// For example, `v7` becomes congruent `v8` if we create `v8.i8 = phi (v3 block1) (v5 block5)` in
-/// the top of `block3` in the below example.
-///
-/// ```
-/// func %example(v0.i1, v1.i8):
-///     block0:
-///         br v0 block1 block2;
-///
-///     block1:
-///         v2.i8 = 10.i8;
-///         v3.i8 = add v2 v1;
-///         jump block3;
-///
-///     block2:
-///         v4.i8 = 20.i8;
-///         v5.i8 = add v4 v1;
-///         jump block3;
-///
-///     block3:
-///         v6.i8 = phi (v2 block1) (v4 block2);
-///         v7.i8 = add v6 v1;
-/// ```
 struct ValuePhiFinder<'a> {
     solver: &'a mut GvnSolver,
     insn_result: Value,
@@ -978,8 +953,8 @@ impl<'a> ValuePhiFinder<'a> {
             } => {
                 let (lhs, rhs) = match (self.get_phi_of(func, *lhs), self.get_phi_of(func, *rhs)) {
                     (Some(lhs_phi), Some(rhs_phi)) => (lhs_phi, rhs_phi),
-                    (Some(lhs_phi), None) => ((lhs_phi, ValuePhi::Value(*rhs))),
-                    (None, Some(rhs_phi)) => ((ValuePhi::Value(*lhs), rhs_phi)),
+                    (Some(lhs_phi), None) => (lhs_phi, ValuePhi::Value(*rhs)),
+                    (None, Some(rhs_phi)) => (ValuePhi::Value(*lhs), rhs_phi),
                     (None, None) => return None,
                 };
 
@@ -1212,7 +1187,7 @@ impl<'a> ValuePhiFinder<'a> {
 
 /// Value phi that described in
 /// `Detection of Redundant Expressions: A Complete and Polynomial-Time Algorithm in SSA`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum ValuePhi {
     /// `ValuePhi` may become value itself if the all arguments of the `ValuePhiInsn` is the same
     /// value.
@@ -1231,7 +1206,7 @@ impl ValuePhi {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ValuePhiInsn {
     /// The Block where the phi insn should be inserted.
     block: Block,
@@ -1275,6 +1250,9 @@ struct RedundantCodeRemover<'a> {
     /// This is necessary to decide whether the args of inserted phi functions are dominated by its
     /// definitions.
     avail_set: SecondaryMap<Block, FxHashMap<Class, Value>>,
+
+    /// Record resolved value phis.
+    resolved_value_phis: FxHashMap<ValuePhi, Value>,
 }
 
 impl<'a> RedundantCodeRemover<'a> {
@@ -1282,6 +1260,7 @@ impl<'a> RedundantCodeRemover<'a> {
         Self {
             solver,
             avail_set: SecondaryMap::default(),
+            resolved_value_phis: FxHashMap::default(),
         }
     }
 
@@ -1381,7 +1360,7 @@ impl<'a> RedundantCodeRemover<'a> {
     }
 
     /// Resolve value phis in the block.
-    fn resolve_value_phi_in_block(&self, func: &mut Function, block: Block) {
+    fn resolve_value_phi_in_block(&mut self, func: &mut Function, block: Block) {
         let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(block));
         loop {
             match inserter.loc() {
@@ -1417,12 +1396,16 @@ impl<'a> RedundantCodeRemover<'a> {
     }
 
     fn try_resolve_value_phi(
-        &self,
+        &mut self,
         inserter: &mut InsnInserter,
         value_phi: &ValuePhi,
         ty: Type,
         block: Block,
     ) -> Option<Value> {
+        if let Some(value) = self.resolved_value_phis.get(value_phi) {
+            return Some(*value);
+        }
+
         match value_phi {
             ValuePhi::Value(value) => {
                 let class = self.solver.value_class(*value);
@@ -1449,6 +1432,9 @@ impl<'a> RedundantCodeRemover<'a> {
 
                 // Restore the inserter loc.
                 inserter.set_loc(current_inserter_loc);
+
+                // Store resolved value phis.
+                self.resolved_value_phis.insert(value_phi.clone(), result);
 
                 // Returns inserted phi insn result.
                 Some(result)
