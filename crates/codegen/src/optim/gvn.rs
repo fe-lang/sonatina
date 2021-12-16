@@ -287,7 +287,7 @@ impl GvnSolver {
             self.value_class(*value)
         } else if let Some(class) = self.insn_table.get(&gvn_insn).copied() {
             // Perform value phi computation.
-            changed |= self.perform_value_phi_computation(func, &gvn_insn, insn_result, block);
+            changed |= self.perform_value_phi_computation(func, &gvn_insn, insn_result);
             // If gvn_insn is already inserted, return corresponding class.
             class
         } else {
@@ -296,7 +296,7 @@ impl GvnSolver {
             let class = self.make_class(insn_result, gvn_insn.clone());
 
             // Perform value phi computation.
-            changed |= self.perform_value_phi_computation(func, &gvn_insn, insn_result, block);
+            changed |= self.perform_value_phi_computation(func, &gvn_insn, insn_result);
             class
         };
 
@@ -317,10 +317,8 @@ impl GvnSolver {
         func: &mut Function,
         insn_data: &GvnInsn,
         insn_result: Value,
-        block: Block,
     ) -> bool {
-        let value_phi =
-            ValuePhiFinder::new(self, insn_result).compute_value_phi(func, insn_data, block);
+        let value_phi = ValuePhiFinder::new(self, insn_result).compute_value_phi(func, insn_data);
         let value_data = &mut self.values[insn_result];
 
         if value_phi == value_data.value_phi {
@@ -909,32 +907,20 @@ struct GvnBlockData {
 /// `Detection of Redundant Expressions: A Complete and Polynomial-Time Algorithm in SSA`.
 struct ValuePhiFinder<'a> {
     solver: &'a mut GvnSolver,
-    insn_result: Value,
     /// Hold visited blocks while finding value phi to prevent infinite loop.
-    visited: FxHashSet<Block>,
+    visited: FxHashSet<Value>,
 }
 
 impl<'a> ValuePhiFinder<'a> {
     fn new(solver: &'a mut GvnSolver, insn_result: Value) -> Self {
-        Self {
-            solver,
-            insn_result,
-            visited: FxHashSet::default(),
-        }
+        let mut visited = FxHashSet::default();
+        visited.insert(insn_result);
+        Self { solver, visited }
     }
 
     /// Main entry of this struct.
-    fn compute_value_phi(
-        &mut self,
-        func: &mut Function,
-        gvn_insn: &GvnInsn,
-        block: Block,
-    ) -> Option<ValuePhi> {
+    fn compute_value_phi(&mut self, func: &mut Function, gvn_insn: &GvnInsn) -> Option<ValuePhi> {
         // Break infinite loop if the block has been already visited.
-        if !self.visited.insert(block) {
-            return None;
-        }
-
         let insn_data = if let GvnInsn::Insn(insn_data) = gvn_insn {
             insn_data
         } else {
@@ -951,11 +937,17 @@ impl<'a> ValuePhiFinder<'a> {
                 code,
                 args: [lhs, rhs],
             } => {
-                let (lhs, rhs) = match (self.get_phi_of(func, *lhs), self.get_phi_of(func, *rhs)) {
-                    (Some(lhs_phi), Some(rhs_phi)) => (lhs_phi, rhs_phi),
-                    (Some(lhs_phi), None) => (lhs_phi, ValuePhi::Value(*rhs)),
-                    (None, Some(rhs_phi)) => (ValuePhi::Value(*lhs), rhs_phi),
-                    (None, None) => return None,
+                let (lhs, rhs) = if lhs == rhs {
+                    let lhs_phi = self.get_phi_of(func, *lhs)?;
+                    let rhs_phi = lhs_phi.clone();
+                    (lhs_phi, rhs_phi)
+                } else {
+                    match (self.get_phi_of(func, *lhs), self.get_phi_of(func, *rhs)) {
+                        (Some(lhs_phi), Some(rhs_phi)) => (lhs_phi, rhs_phi),
+                        (Some(lhs_phi), None) => (lhs_phi, ValuePhi::Value(*rhs)),
+                        (None, Some(rhs_phi)) => (ValuePhi::Value(*lhs), rhs_phi),
+                        (None, None) => return None,
+                    }
                 };
 
                 self.compute_value_phi_for_binary(func, *code, lhs, rhs)
@@ -993,7 +985,7 @@ impl<'a> ValuePhiFinder<'a> {
             match arg {
                 ValuePhi::Value(value) => {
                     let query_insn = InsnData::unary(code, value);
-                    let phi_arg = self.lookup_value_phi_arg(func, query_insn, block)?;
+                    let phi_arg = self.lookup_value_phi_arg(func, query_insn)?;
                     result.args.push((phi_arg, block));
                 }
                 ValuePhi::PhiInsn(_) => {
@@ -1064,7 +1056,7 @@ impl<'a> ValuePhiFinder<'a> {
                         std::mem::swap(&mut lhs_value, &mut rhs_value);
                     }
                     let query_insn = InsnData::binary(code, lhs_value, rhs_value);
-                    let phi_arg = self.lookup_value_phi_arg(func, query_insn, block)?;
+                    let phi_arg = self.lookup_value_phi_arg(func, query_insn)?;
                     result.args.push((phi_arg, block));
                 }
                 (lhs_arg, rhs_arg) => {
@@ -1098,7 +1090,7 @@ impl<'a> ValuePhiFinder<'a> {
             match arg {
                 ValuePhi::Value(value) => {
                     let query_insn = InsnData::cast(code, value, ty.clone());
-                    let phi_arg = self.lookup_value_phi_arg(func, query_insn, block)?;
+                    let phi_arg = self.lookup_value_phi_arg(func, query_insn)?;
                     result.args.push((phi_arg, block));
                 }
                 ValuePhi::PhiInsn(_) => {
@@ -1112,12 +1104,7 @@ impl<'a> ValuePhiFinder<'a> {
     }
 
     /// Lookup value phi argument.
-    fn lookup_value_phi_arg(
-        &mut self,
-        func: &mut Function,
-        query: InsnData,
-        block: Block,
-    ) -> Option<ValuePhi> {
+    fn lookup_value_phi_arg(&mut self, func: &mut Function, query: InsnData) -> Option<ValuePhi> {
         // Perform constant folding and insn simplification to canonicalize query.
         let query = if let Some(imm) = self.solver.perform_constant_folding(func, &query) {
             // If constant folding succeeds, no need to further query for the argument.
@@ -1140,7 +1127,7 @@ impl<'a> ValuePhiFinder<'a> {
         }
 
         // Try to further compute value phi for the query insn.
-        self.compute_value_phi(func, &query, block)
+        self.compute_value_phi(func, &query)
     }
 
     /// Returns the phi args and blocks if the insn defining the `value` is phi or `value` has
@@ -1151,7 +1138,11 @@ impl<'a> ValuePhiFinder<'a> {
     /// The result is sorted in the block order.
     ///
     /// This function also returns the blocks where the phi is defined.
-    fn get_phi_of(&self, func: &Function, value: Value) -> Option<ValuePhi> {
+    fn get_phi_of(&mut self, func: &Function, value: Value) -> Option<ValuePhi> {
+        if !self.visited.insert(value) {
+            return None;
+        }
+
         let class = self.solver.value_class(value);
         let phi_block = func.layout.insn_block(func.dfg.value_insn(value)?);
 
@@ -1172,10 +1163,6 @@ impl<'a> ValuePhiFinder<'a> {
 
             return Some(result.canonicalize());
         };
-
-        if value == self.insn_result {
-            return None;
-        }
 
         // If the value is annotated by value phi insn, return it.
         match &self.solver.values[value].value_phi {
