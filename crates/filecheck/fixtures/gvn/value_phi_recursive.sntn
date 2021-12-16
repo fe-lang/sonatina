@@ -36,3 +36,77 @@ func %value_phi_recursive(v0.i1, v1.i1, v2.i8) -> i8:
         v7.i8 = phi (v6 block6) (5.i8 block5);
         v8.i8 = add v7 v2;
         return v8;
+
+# regex: VALUE=\bv\d+\b
+# check:  block0:
+# nextln:     br v0 block1 block2;
+# nextln: 
+# nextln: block1:
+# nextln:     br v1 block3 block4;
+# nextln: 
+# nextln: block2:
+# nextln:     jump block5;
+# nextln: 
+# nextln: block3:
+# nextln:     v30.i8 = udiv v2 v3;
+# nextln:     v31.i8 = add v30 v2;
+# nextln:     v32.i8 = add v31 v3;
+# nextln:     jump block6;
+# nextln: 
+# nextln: block4:
+# nextln:     v40.i8 = mul v2 v3;
+# nextln:     v41.i8 = add v40 v2;
+# nextln:     v42.i8 = add v41 v3;
+# nextln:     jump block6;
+# nextln: 
+# nextln: block5:
+# nextln:     v50.i8 = add v2 v3;
+# nextln:     v52.i8 = add v50 v3;
+# nextln:     jump block7;
+# nextln: 
+# nextln: block6:
+# nextln:     $(var2=$VALUE).i8 = phi (v32 block3) (v42 block4);
+# nextln:     $(var1=$VALUE).i8 = phi (v31 block3) (v41 block4);
+# nextln:     v60.i8 = phi (v30 block3) (v40 block4);
+# nextln:     jump block7;
+# nextln: 
+# nextln: block7:
+# nextln:     $(var3=$VALUE).i8 = phi (v52 block5) ($var2 block6);
+# nextln:     v70.i8 = phi ($var1 block6) (v50 block5);
+# nextln:     return $var3;
+func %value_phi_recursive2(v0.i1, v1.i1, v2.i8, v3.i8) -> i8:
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        br v1 block3 block4;
+
+    block2:
+        jump block5;
+
+    block3:
+        v30.i8 = udiv v2 v3;
+        v31.i8 = add v30 v2;
+        v32.i8 = add v31 v3;
+        jump block6;
+
+    block4:
+        v40.i8 = mul v2 v3;
+        v41.i8 = add v40 v2;
+        v42.i8 = add v41 v3;
+        jump block6;
+
+    block5:
+        v50.i8 = add v2 v3;
+        v52.i8 = add v50 v3;
+        jump block7;
+
+    block6:
+        v60.i8 = phi (v30 block3) (v40 block4);
+        v61.i8 = add v60 v2;
+        jump block7;
+
+    block7:
+        v70.i8 = phi (v61 block6) (v50 block5);
+        v72.i8 = add v70 v3;
+        return v72;

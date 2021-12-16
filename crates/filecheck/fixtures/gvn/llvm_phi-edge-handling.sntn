@@ -1,0 +1,40 @@
+#! This test case is translated from
+#! <https://github.com/llvm/llvm-project/blob/main/llvm/test/Transforms/NewGVN/phi-of-ops-move-block.ll>
+
+
+# check:  block0:
+# nextln:     br v0 block1 block2;
+# nextln: 
+# nextln: block1:
+# nextln:     jump block5;
+# nextln: 
+# nextln: block2:
+# nextln:     jump block4;
+# nextln: 
+# nextln: block3:
+# nextln:     return 1.i16;
+# nextln: 
+# nextln: block4:
+# nextln:     return 0.i16;
+# nextln: 
+# nextln: block5:
+# nextln:     jump block3;
+func %llvm_hoge(v0.i1) -> i16:
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block5;
+
+    block2:
+        jump block4;
+
+    block3:
+        return 1.i16;
+
+    block4:
+        v1.i16 = phi (10.i16 block5) (0.i16 block2);
+        return v1;
+
+    block5:
+        br -1.i1 block3 block4;

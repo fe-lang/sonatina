@@ -1,0 +1,56 @@
+#! This test case is translated from
+#! <https://github.com/llvm/llvm-project/blob/main/llvm/test/Transforms/NewGVN/todo-pr35074-phi-of-ops.ll>
+# regex: VALUE=\bv\d+\b
+# check:  block0:
+# nextln:      jump block1;
+# nextln: 
+# nextln:  block1:
+# nextln:      $(var=$VALUE).i32 = phi (0.i32 block0) (v2 block5);
+# nextln:      v2.i32 = phi (1.i32 block0) (v5 block5);
+# nextln:      br v1 block5 block2;
+# nextln: 
+# nextln:  block2:
+# nextln:      jump block3;
+# nextln: 
+# nextln:  block3:
+# nextln:      v4.i1 = gt $var v2;
+# nextln:      br v4 block4 block6;
+# nextln: 
+# nextln:  block4:
+# nextln:      return;
+# nextln: 
+# nextln:  block5:
+# nextln:      v5.i32 = add v2 1.i32;
+# nextln:      jump block1;
+# nextln: 
+# nextln:  block6:
+# nextln:      v6.i32 = add v2 1.i32;
+# nextln:      store v6 v0;
+# nextln:      jump block4;
+func %llvm_crash1_pr35074(v0.i32, v1.i1):
+    block0:
+        jump block1;
+
+    block1:
+        v2.i32 = phi (1.i32 block0) (v5 block5);
+        br v1 block5 block2;
+
+    block2:
+        v3.i32 = sub v2 1.i32;
+        jump block3;
+
+    block3:
+        v4.i1 = gt v3 v2;
+        br v4 block4 block6;
+
+    block4:
+        return;
+
+    block5:
+        v5.i32 = add v2 1.i32;
+        jump block1;
+
+    block6:
+        v6.i32 = add v2 1.i32;
+        store v6 v0;
+        jump block4;
