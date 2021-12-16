@@ -30,7 +30,7 @@ use super::{constant_folding, simplify_impl};
 ///  unreachable.
 const INITIAL_CLASS: Class = Class(0);
 
-/// The rank for immediates.
+/// The rank reserved for immediates.
 const MINIMUM_RANK: u32 = 0;
 
 #[derive(Debug, Default)]
@@ -1379,9 +1379,9 @@ impl<'a> RedundantCodeRemover<'a> {
                         // then use resolved phi value and remove insn.
                         if let Some(value_phi) = &self.solver.values[insn_result].value_phi {
                             let ty = inserter.func().dfg.value_ty(insn_result).clone();
-                            if let Some(value) =
-                                self.try_resolve_value_phi(&mut inserter, value_phi, ty, block)
-                            {
+                            if self.is_value_phi_resolvable(value_phi, block) {
+                                let value =
+                                    self.resolve_value_phi(&mut inserter, value_phi, ty, block);
                                 inserter.func_mut().dfg.change_to_alias(insn_result, value);
                                 inserter.remove_insn();
                                 continue;
@@ -1395,21 +1395,43 @@ impl<'a> RedundantCodeRemover<'a> {
         }
     }
 
-    fn try_resolve_value_phi(
-        &mut self,
-        inserter: &mut InsnInserter,
-        value_phi: &ValuePhi,
-        ty: Type,
-        block: Block,
-    ) -> Option<Value> {
-        if let Some(value) = self.resolved_value_phis.get(value_phi) {
-            return Some(*value);
+    fn is_value_phi_resolvable(&self, value_phi: &ValuePhi, block: Block) -> bool {
+        if self.resolved_value_phis.contains_key(value_phi) {
+            return true;
         }
 
         match value_phi {
             ValuePhi::Value(value) => {
                 let class = self.solver.value_class(*value);
-                self.avail_set[block].get(&class).copied()
+                self.avail_set[block].contains_key(&class)
+            }
+            ValuePhi::PhiInsn(phi_insn) => {
+                for (value_phi, phi_block) in &phi_insn.args {
+                    if !self.is_value_phi_resolvable(value_phi, *phi_block) {
+                        return false;
+                    }
+                }
+
+                true
+            }
+        }
+    }
+
+    fn resolve_value_phi(
+        &mut self,
+        inserter: &mut InsnInserter,
+        value_phi: &ValuePhi,
+        ty: Type,
+        block: Block,
+    ) -> Value {
+        if let Some(value) = self.resolved_value_phis.get(value_phi) {
+            return *value;
+        }
+
+        match value_phi {
+            ValuePhi::Value(value) => {
+                let class = self.solver.value_class(*value);
+                self.avail_set[block].get(&class).copied().unwrap()
             }
 
             ValuePhi::PhiInsn(phi_insn) => {
@@ -1420,7 +1442,7 @@ impl<'a> RedundantCodeRemover<'a> {
                 let mut phi = InsnData::phi(ty.clone());
                 for (value_phi, phi_block) in &phi_insn.args {
                     let resolved =
-                        self.try_resolve_value_phi(inserter, value_phi, ty.clone(), *phi_block)?;
+                        self.resolve_value_phi(inserter, value_phi, ty.clone(), *phi_block);
                     phi.append_phi_arg(resolved, *phi_block);
                 }
 
@@ -1437,7 +1459,7 @@ impl<'a> RedundantCodeRemover<'a> {
                 self.resolved_value_phis.insert(value_phi.clone(), result);
 
                 // Returns inserted phi insn result.
-                Some(result)
+                result
             }
         }
     }
