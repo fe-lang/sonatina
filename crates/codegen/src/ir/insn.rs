@@ -121,7 +121,7 @@ impl InsnData {
             | Self::Cast { args, .. }
             | Self::Load { args, .. }
             | Self::Branch { args, .. } => args,
-            Self::Phi { values, .. } => values,
+            Self::Phi { values: args, .. } | Self::Return { args } => args,
             _ => &mut [],
         }
     }
