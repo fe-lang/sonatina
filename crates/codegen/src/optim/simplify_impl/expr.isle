@@ -66,6 +66,10 @@
     Gt
     Slt
     Sgt
+    Le
+    Ge
+    Sle
+    Sge
     Eq
     Ne
     And
@@ -170,6 +174,30 @@
 (extractor
   (extract_sgt lhs rhs)
   (expr_data (ExprData.Binary (BinaryOp.Sgt) (arg_array2 lhs rhs)))
+)
+
+(decl extract_le (ExprValue ExprValue) Expr)
+(extractor
+  (extract_le lhs rhs)
+  (expr_data (ExprData.Binary (BinaryOp.Le) (arg_array2 lhs rhs)))
+)
+
+(decl extract_ge (ExprValue ExprValue) Expr)
+(extractor
+  (extract_ge lhs rhs)
+  (expr_data (ExprData.Binary (BinaryOp.Ge) (arg_array2 lhs rhs)))
+)
+
+(decl extract_sle (ExprValue ExprValue) Expr)
+(extractor
+  (extract_sle lhs rhs)
+  (expr_data (ExprData.Binary (BinaryOp.Sle) (arg_array2 lhs rhs)))
+)
+
+(decl extract_sge (ExprValue ExprValue) Expr)
+(extractor
+  (extract_sge lhs rhs)
+  (expr_data (ExprData.Binary (BinaryOp.Sge) (arg_array2 lhs rhs)))
 )
 
 (decl extract_eq (ExprValue ExprValue) Expr)

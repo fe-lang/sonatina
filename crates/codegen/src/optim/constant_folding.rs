@@ -28,6 +28,10 @@ pub(super) fn fold_constant(dfg: &DataFlowGraph, insn_data: &InsnData) -> Option
                 BinaryOp::Gt => lhs.gt(rhs),
                 BinaryOp::Slt => lhs.slt(rhs),
                 BinaryOp::Sgt => lhs.sgt(rhs),
+                BinaryOp::Le => lhs.le(rhs),
+                BinaryOp::Ge => lhs.ge(rhs),
+                BinaryOp::Sle => lhs.sle(rhs),
+                BinaryOp::Sge => lhs.sge(rhs),
                 BinaryOp::Eq => lhs.imm_eq(rhs),
                 BinaryOp::Ne => lhs.imm_ne(rhs),
                 BinaryOp::And => lhs & rhs,
@@ -77,6 +81,22 @@ impl Immediate {
 
     pub(super) fn sgt(self, rhs: Self) -> Self {
         self.apply_binop_raw(rhs, |lhs, rhs| (lhs > rhs).into())
+    }
+
+    pub(super) fn le(self, rhs: Self) -> Self {
+        self.apply_binop_raw(rhs, |lhs, rhs| (lhs.to_u256() <= rhs.to_u256()).into())
+    }
+
+    pub(super) fn ge(self, rhs: Self) -> Self {
+        self.apply_binop_raw(rhs, |lhs, rhs| (lhs.to_u256() >= rhs.to_u256()).into())
+    }
+
+    pub(super) fn sle(self, rhs: Self) -> Self {
+        self.apply_binop_raw(rhs, |lhs, rhs| (lhs <= rhs).into())
+    }
+
+    pub(super) fn sge(self, rhs: Self) -> Self {
+        self.apply_binop_raw(rhs, |lhs, rhs| (lhs >= rhs).into())
     }
 
     pub(super) fn sext(self, ty: &Type) -> Self {

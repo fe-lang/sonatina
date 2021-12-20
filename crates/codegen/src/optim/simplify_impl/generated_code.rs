@@ -62,14 +62,14 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                             match &pattern7_0 {
                                 &UnaryOp::Not => {
                                     let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
-                                    // Rule at rules.isle line 690.
+                                    // Rule at rules.isle line 726.
                                     let expr0_0 = C::make_result(ctx, pattern9_0);
                                     return Some(expr0_0);
                                 }
                                 &UnaryOp::Neg => {
                                     let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
                                     let pattern10_0 = C::value_ty(ctx, pattern9_0);
-                                    // Rule at rules.isle line 697.
+                                    // Rule at rules.isle line 733.
                                     let expr0_0 = BinaryOp::Sub;
                                     let expr1_0 = C::make_one(ctx, &pattern10_0);
                                     let expr2_0 = C::pack_arg_array2(ctx, pattern9_0, expr1_0);
@@ -98,7 +98,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                 &UnaryOp::Not => {
                                     let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
                                     let pattern10_0 = C::value_ty(ctx, pattern9_0);
-                                    // Rule at rules.isle line 713.
+                                    // Rule at rules.isle line 749.
                                     let expr0_0 = BinaryOp::Add;
                                     let expr1_0 = C::make_one(ctx, &pattern10_0);
                                     let expr2_0 = C::pack_arg_array2(ctx, pattern9_0, expr1_0);
@@ -111,7 +111,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                 }
                                 &UnaryOp::Neg => {
                                     let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
-                                    // Rule at rules.isle line 706.
+                                    // Rule at rules.isle line 742.
                                     let expr0_0 = C::make_result(ctx, pattern9_0);
                                     return Some(expr0_0);
                                 }
@@ -443,7 +443,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                         if pattern6_0 == true {
                             let pattern8_0 = C::value_ty(ctx, pattern4_1);
                             // Rule at rules.isle line 194.
-                            let expr0_0 = C::make_all_one(ctx, &pattern8_0);
+                            let expr0_0 = C::make_zero(ctx, &pattern8_0);
                             let expr1_0 = C::make_result(ctx, expr0_0);
                             return Some(expr1_0);
                         }
@@ -471,7 +471,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                         if pattern6_0 == true {
                             let pattern8_0 = C::value_ty(ctx, pattern4_1);
                             // Rule at rules.isle line 212.
-                            let expr0_0 = C::make_all_one(ctx, &pattern8_0);
+                            let expr0_0 = C::make_zero(ctx, &pattern8_0);
                             let expr1_0 = C::make_result(ctx, expr0_0);
                             return Some(expr1_0);
                         }
@@ -489,7 +489,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                     let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
                     return Some(expr3_0);
                 }
-                &BinaryOp::Eq => {
+                &BinaryOp::Le => {
                     let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
                     let closure5 = || {
                         return Some(pattern4_0);
@@ -505,6 +505,62 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                         }
                     }
                 }
+                &BinaryOp::Ge => {
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
+                    // Rule at rules.isle line 239.
+                    let expr0_0 = BinaryOp::Le;
+                    let expr1_0 = C::pack_arg_array2(ctx, pattern4_1, pattern4_0);
+                    let expr2_0 = ExprData::Binary {
+                        code: expr0_0,
+                        args: expr1_0,
+                    };
+                    let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
+                    return Some(expr3_0);
+                }
+                &BinaryOp::Sle => {
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
+                    let closure5 = || {
+                        return Some(pattern4_0);
+                    };
+                    if let Some(pattern5_0) = closure5() {
+                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
+                        if pattern6_0 == true {
+                            let pattern8_0 = C::value_ty(ctx, pattern4_1);
+                            // Rule at rules.isle line 248.
+                            let expr0_0 = C::make_all_one(ctx, &pattern8_0);
+                            let expr1_0 = C::make_result(ctx, expr0_0);
+                            return Some(expr1_0);
+                        }
+                    }
+                }
+                &BinaryOp::Sge => {
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
+                    // Rule at rules.isle line 257.
+                    let expr0_0 = BinaryOp::Sle;
+                    let expr1_0 = C::pack_arg_array2(ctx, pattern4_1, pattern4_0);
+                    let expr2_0 = ExprData::Binary {
+                        code: expr0_0,
+                        args: expr1_0,
+                    };
+                    let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
+                    return Some(expr3_0);
+                }
+                &BinaryOp::Eq => {
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
+                    let closure5 = || {
+                        return Some(pattern4_0);
+                    };
+                    if let Some(pattern5_0) = closure5() {
+                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
+                        if pattern6_0 == true {
+                            let pattern8_0 = C::value_ty(ctx, pattern4_1);
+                            // Rule at rules.isle line 266.
+                            let expr0_0 = C::make_all_one(ctx, &pattern8_0);
+                            let expr1_0 = C::make_result(ctx, expr0_0);
+                            return Some(expr1_0);
+                        }
+                    }
+                }
                 &BinaryOp::Ne => {
                     let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
                     let closure5 = || {
@@ -514,7 +570,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                         let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
                         if pattern6_0 == true {
                             let pattern8_0 = C::value_ty(ctx, pattern4_1);
-                            // Rule at rules.isle line 239.
+                            // Rule at rules.isle line 275.
                             let expr0_0 = C::make_zero(ctx, &pattern8_0);
                             let expr1_0 = C::make_result(ctx, expr0_0);
                             return Some(expr1_0);
@@ -529,7 +585,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                     if let Some(pattern5_0) = closure5() {
                         let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
                         if pattern6_0 == true {
-                            // Rule at rules.isle line 248.
+                            // Rule at rules.isle line 284.
                             let expr0_0 = C::make_result(ctx, pattern4_0);
                             return Some(expr0_0);
                         }
@@ -589,7 +645,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                         pattern23_0,
                                                                     );
                                                                     if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 290.
+                                                                        // Rule at rules.isle line 326.
                                                                         let expr0_0 =
                                                                             C::make_result(
                                                                                 ctx, pattern9_0,
@@ -637,7 +693,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                         pattern23_0,
                                                                     );
                                                                     if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 326.
+                                                                        // Rule at rules.isle line 362.
                                                                         let expr0_0 =
                                                                             C::make_result(
                                                                                 ctx, pattern9_1,
@@ -684,7 +740,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                         pattern23_0,
                                                                     );
                                                                     if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 314.
+                                                                        // Rule at rules.isle line 350.
                                                                         let expr0_0 =
                                                                             C::make_result(
                                                                                 ctx, pattern9_1,
@@ -716,7 +772,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                         pattern23_0,
                                                                     );
                                                                     if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 302.
+                                                                        // Rule at rules.isle line 338.
                                                                         let expr0_0 =
                                                                             C::make_result(
                                                                                 ctx, pattern9_0,
@@ -738,14 +794,14 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                     let pattern5_0 = C::is_zero(ctx, pattern4_1);
                     if pattern5_0 == true {
                         let pattern7_0 = C::value_ty(ctx, pattern4_1);
-                        // Rule at rules.isle line 255.
+                        // Rule at rules.isle line 291.
                         let expr0_0 = C::make_zero(ctx, &pattern7_0);
                         let expr1_0 = C::make_result(ctx, expr0_0);
                         return Some(expr1_0);
                     }
                     let pattern5_0 = C::is_all_one(ctx, pattern4_1);
                     if pattern5_0 == true {
-                        // Rule at rules.isle line 262.
+                        // Rule at rules.isle line 298.
                         let expr0_0 = C::make_result(ctx, pattern4_0);
                         return Some(expr0_0);
                     }
@@ -767,7 +823,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                 C::is_eq(ctx, pattern9_0, pattern10_0);
                                             if pattern11_0 == true {
                                                 let pattern13_0 = C::value_ty(ctx, pattern9_0);
-                                                // Rule at rules.isle line 269.
+                                                // Rule at rules.isle line 305.
                                                 let expr0_0 = C::make_zero(ctx, &pattern13_0);
                                                 let expr1_0 = C::make_result(ctx, expr0_0);
                                                 return Some(expr1_0);
@@ -786,7 +842,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                 let pattern13_0 =
                                                     C::is_power_of_two(ctx, pattern9_0);
                                                 if pattern13_0 == true {
-                                                    // Rule at rules.isle line 338.
+                                                    // Rule at rules.isle line 374.
                                                     let expr0_0 = C::make_result(ctx, pattern4_0);
                                                     return Some(expr0_0);
                                                 }
@@ -817,7 +873,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                     let pattern15_0 = C::value_ty(ctx, pattern9_0);
                                                     let pattern16_0 = C::is_one(ctx, pattern9_1);
                                                     if pattern16_0 == true {
-                                                        // Rule at rules.isle line 345.
+                                                        // Rule at rules.isle line 381.
                                                         let expr0_0 =
                                                             C::make_zero(ctx, &pattern15_0);
                                                         let expr1_0 = C::make_result(ctx, expr0_0);
@@ -837,14 +893,14 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                             let pattern11_0 =
                                                 C::is_eq(ctx, pattern9_0, pattern10_0);
                                             if pattern11_0 == true {
-                                                // Rule at rules.isle line 276.
+                                                // Rule at rules.isle line 312.
                                                 let expr0_0 = C::make_result(ctx, pattern4_0);
                                                 return Some(expr0_0);
                                             }
                                             let pattern11_0 =
                                                 C::is_eq(ctx, pattern9_1, pattern10_0);
                                             if pattern11_0 == true {
-                                                // Rule at rules.isle line 283.
+                                                // Rule at rules.isle line 319.
                                                 let expr0_0 = C::make_result(ctx, pattern4_0);
                                                 return Some(expr0_0);
                                             }
@@ -865,7 +921,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                     if let Some(pattern5_0) = closure5() {
                         let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
                         if pattern6_0 == true {
-                            // Rule at rules.isle line 361.
+                            // Rule at rules.isle line 397.
                             let expr0_0 = C::make_result(ctx, pattern4_0);
                             return Some(expr0_0);
                         }
@@ -953,7 +1009,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                                     if pattern29_0
                                                                                         == true
                                                                                     {
-                                                                                        // Rule at rules.isle line 540.
+                                                                                        // Rule at rules.isle line 576.
                                                                                         let expr0_0 = C::make_result(ctx, pattern9_0);
                                                                                         return Some(expr0_0);
                                                                                     }
@@ -987,7 +1043,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                                     if pattern29_0
                                                                                         == true
                                                                                     {
-                                                                                        // Rule at rules.isle line 530.
+                                                                                        // Rule at rules.isle line 566.
                                                                                         let expr0_0 = C::make_result(ctx, pattern9_0);
                                                                                         return Some(expr0_0);
                                                                                     }
@@ -1075,7 +1131,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                                     if pattern29_0
                                                                                         == true
                                                                                     {
-                                                                                        // Rule at rules.isle line 550.
+                                                                                        // Rule at rules.isle line 586.
                                                                                         let expr0_0 = C::make_result(ctx, pattern9_1);
                                                                                         return Some(expr0_0);
                                                                                     }
@@ -1109,7 +1165,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                                     if pattern29_0
                                                                                         == true
                                                                                     {
-                                                                                        // Rule at rules.isle line 560.
+                                                                                        // Rule at rules.isle line 596.
                                                                                         let expr0_0 = C::make_result(ctx, pattern9_1);
                                                                                         return Some(expr0_0);
                                                                                     }
@@ -1156,7 +1212,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                 pattern18_0,
                                                             );
                                                             if pattern19_0 == true {
-                                                                // Rule at rules.isle line 506.
+                                                                // Rule at rules.isle line 542.
                                                                 let expr0_0 =
                                                                     C::make_result(ctx, pattern4_0);
                                                                 return Some(expr0_0);
@@ -1181,7 +1237,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                 pattern18_0,
                                                             );
                                                             if pattern19_0 == true {
-                                                                // Rule at rules.isle line 518.
+                                                                // Rule at rules.isle line 554.
                                                                 let expr0_0 =
                                                                     C::make_result(ctx, pattern4_0);
                                                                 return Some(expr0_0);
@@ -1242,7 +1298,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             pattern23_0,
                                                                         );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 410.
+                                                                            // Rule at rules.isle line 446.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern4_0,
@@ -1291,7 +1347,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             pattern23_0,
                                                                         );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 446.
+                                                                            // Rule at rules.isle line 482.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern4_0,
@@ -1341,7 +1397,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             pattern23_0,
                                                                         );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 434.
+                                                                            // Rule at rules.isle line 470.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern4_0,
@@ -1373,7 +1429,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             pattern23_0,
                                                                         );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 422.
+                                                                            // Rule at rules.isle line 458.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern4_0,
@@ -1437,7 +1493,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             pattern23_0,
                                                                         );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 470.
+                                                                            // Rule at rules.isle line 506.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern4_0,
@@ -1469,7 +1525,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             pattern23_0,
                                                                         );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 458.
+                                                                            // Rule at rules.isle line 494.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern4_0,
@@ -1533,7 +1589,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             pattern23_0,
                                                                         );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 482.
+                                                                            // Rule at rules.isle line 518.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern4_0,
@@ -1565,7 +1621,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             pattern23_0,
                                                                         );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 494.
+                                                                            // Rule at rules.isle line 530.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern4_0,
@@ -1588,14 +1644,14 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                     }
                     let pattern5_0 = C::is_zero(ctx, pattern4_1);
                     if pattern5_0 == true {
-                        // Rule at rules.isle line 368.
+                        // Rule at rules.isle line 404.
                         let expr0_0 = C::make_result(ctx, pattern4_0);
                         return Some(expr0_0);
                     }
                     let pattern5_0 = C::is_all_one(ctx, pattern4_1);
                     if pattern5_0 == true {
                         let pattern7_0 = C::value_ty(ctx, pattern4_1);
-                        // Rule at rules.isle line 354.
+                        // Rule at rules.isle line 390.
                         let expr0_0 = C::make_all_one(ctx, &pattern7_0);
                         let expr1_0 = C::make_result(ctx, expr0_0);
                         return Some(expr1_0);
@@ -1616,7 +1672,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         let pattern11_0 = C::is_eq(ctx, pattern9_0, pattern10_0);
                                         if pattern11_0 == true {
                                             let pattern13_0 = C::value_ty(ctx, pattern9_0);
-                                            // Rule at rules.isle line 375.
+                                            // Rule at rules.isle line 411.
                                             let expr0_0 = C::make_all_one(ctx, &pattern13_0);
                                             let expr1_0 = C::make_result(ctx, expr0_0);
                                             return Some(expr1_0);
@@ -1641,7 +1697,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                     if pattern16_0 == true {
                                                         let pattern18_0 =
                                                             C::value_ty(ctx, pattern14_0);
-                                                        // Rule at rules.isle line 396.
+                                                        // Rule at rules.isle line 432.
                                                         let expr0_0 =
                                                             C::make_all_one(ctx, &pattern18_0);
                                                         let expr1_0 = C::make_result(ctx, expr0_0);
@@ -1652,7 +1708,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                     if pattern16_0 == true {
                                                         let pattern18_0 =
                                                             C::value_ty(ctx, pattern14_1);
-                                                        // Rule at rules.isle line 403.
+                                                        // Rule at rules.isle line 439.
                                                         let expr0_0 =
                                                             C::make_all_one(ctx, &pattern18_0);
                                                         let expr1_0 = C::make_result(ctx, expr0_0);
@@ -1677,13 +1733,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                     if let Some(pattern10_0) = closure10() {
                                         let pattern11_0 = C::is_eq(ctx, pattern9_0, pattern10_0);
                                         if pattern11_0 == true {
-                                            // Rule at rules.isle line 382.
+                                            // Rule at rules.isle line 418.
                                             let expr0_0 = C::make_result(ctx, pattern4_0);
                                             return Some(expr0_0);
                                         }
                                         let pattern11_0 = C::is_eq(ctx, pattern9_1, pattern10_0);
                                         if pattern11_0 == true {
-                                            // Rule at rules.isle line 389.
+                                            // Rule at rules.isle line 425.
                                             let expr0_0 = C::make_result(ctx, pattern4_0);
                                             return Some(expr0_0);
                                         }
@@ -1703,7 +1759,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                         let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
                         if pattern6_0 == true {
                             let pattern8_0 = C::value_ty(ctx, pattern4_1);
-                            // Rule at rules.isle line 579.
+                            // Rule at rules.isle line 615.
                             let expr0_0 = C::make_zero(ctx, &pattern8_0);
                             let expr1_0 = C::make_result(ctx, expr0_0);
                             return Some(expr1_0);
@@ -1766,7 +1822,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             pattern23_0,
                                                                         );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 668.
+                                                                            // Rule at rules.isle line 704.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx,
@@ -1816,7 +1872,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             pattern23_0,
                                                                         );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 658.
+                                                                            // Rule at rules.isle line 694.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx,
@@ -1867,7 +1923,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             pattern23_0,
                                                                         );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 648.
+                                                                            // Rule at rules.isle line 684.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx,
@@ -1900,7 +1956,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             pattern23_0,
                                                                         );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 678.
+                                                                            // Rule at rules.isle line 714.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx,
@@ -1967,7 +2023,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             pattern23_0,
                                                                         );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 627.
+                                                                            // Rule at rules.isle line 663.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern9_1,
@@ -2016,7 +2072,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             pattern23_0,
                                                                         );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 617.
+                                                                            // Rule at rules.isle line 653.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern9_0,
@@ -2066,7 +2122,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             pattern23_0,
                                                                         );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 607.
+                                                                            // Rule at rules.isle line 643.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern9_0,
@@ -2098,7 +2154,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                                                             pattern23_0,
                                                                         );
                                                                         if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 637.
+                                                                            // Rule at rules.isle line 673.
                                                                             let expr0_0 =
                                                                                 C::make_result(
                                                                                     ctx, pattern9_1,
@@ -2121,7 +2177,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                     }
                     let pattern5_0 = C::is_zero(ctx, pattern4_1);
                     if pattern5_0 == true {
-                        // Rule at rules.isle line 572.
+                        // Rule at rules.isle line 608.
                         let expr0_0 = C::make_result(ctx, pattern4_0);
                         return Some(expr0_0);
                     }
@@ -2141,7 +2197,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                         let pattern11_0 = C::is_eq(ctx, pattern9_0, pattern10_0);
                                         if pattern11_0 == true {
                                             let pattern13_0 = C::value_ty(ctx, pattern4_1);
-                                            // Rule at rules.isle line 586.
+                                            // Rule at rules.isle line 622.
                                             let expr0_0 = C::make_all_one(ctx, &pattern13_0);
                                             let expr1_0 = C::make_result(ctx, expr0_0);
                                             return Some(expr1_0);
@@ -2162,13 +2218,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                     if let Some(pattern10_0) = closure10() {
                                         let pattern11_0 = C::is_eq(ctx, pattern9_0, pattern10_0);
                                         if pattern11_0 == true {
-                                            // Rule at rules.isle line 593.
+                                            // Rule at rules.isle line 629.
                                             let expr0_0 = C::make_result(ctx, pattern9_1);
                                             return Some(expr0_0);
                                         }
                                         let pattern11_0 = C::is_eq(ctx, pattern9_1, pattern10_0);
                                         if pattern11_0 == true {
-                                            // Rule at rules.isle line 600.
+                                            // Rule at rules.isle line 636.
                                             let expr0_0 = C::make_result(ctx, pattern9_0);
                                             return Some(expr0_0);
                                         }

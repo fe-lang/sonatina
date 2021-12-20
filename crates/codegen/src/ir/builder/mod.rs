@@ -108,6 +108,10 @@ impl FunctionBuilder {
     impl_binary_insn!(gt, BinaryOp::Gt);
     impl_binary_insn!(slt, BinaryOp::Slt);
     impl_binary_insn!(sgt, BinaryOp::Sgt);
+    impl_binary_insn!(le, BinaryOp::Le);
+    impl_binary_insn!(ge, BinaryOp::Ge);
+    impl_binary_insn!(sle, BinaryOp::Sle);
+    impl_binary_insn!(sge, BinaryOp::Sge);
     impl_binary_insn!(eq, BinaryOp::Eq);
     impl_binary_insn!(ne, BinaryOp::Ne);
     impl_binary_insn!(and, BinaryOp::And);

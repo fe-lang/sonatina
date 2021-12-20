@@ -189,12 +189,12 @@
 )
 
 ;; Rules for BinaryOp.Lt
-; a < a => -1
+; a < a => 0
 (rule
   (simplify
     (extract_lt a (value_with_ty (is_eq $true <a) ty))
   )
-  (make_result (make_all_one ty))
+  (make_result (make_zero ty))
 )
 
 ;; Rules for BinaryOp.Gt
@@ -207,12 +207,12 @@
 )
 
 ;; Rules for BinaryOp.Slt
-; a < a => -1
+; a < a => 0
 (rule
   (simplify
     (extract_slt a (value_with_ty (is_eq $true <a) ty))
   )
-  (make_result (make_all_one ty))
+  (make_result (make_zero ty))
 )
 
 ;; Rules for BinaryOp.Sgt
@@ -222,6 +222,42 @@
     (extract_sgt a b)
   )
   (SimplifyRawResult.Expr (ExprData.Binary (BinaryOp.Slt) (arg_array2 b a)))
+)
+
+;; Rules for BinaryOp.Le
+; a <= a => 1
+(rule
+  (simplify
+    (extract_le a (value_with_ty (is_eq $true <a) ty))
+  )
+  (make_result (make_all_one ty))
+)
+
+;; Rules for BinaryOp.Ge
+; a >= b => b <= a
+(rule
+  (simplify
+    (extract_ge a b)
+  )
+  (SimplifyRawResult.Expr (ExprData.Binary (BinaryOp.Le) (arg_array2 b a)))
+)
+
+;; Rules for BinaryOp.Sle
+; a <= a => 1
+(rule
+  (simplify
+    (extract_sle a (value_with_ty (is_eq $true <a) ty))
+  )
+  (make_result (make_all_one ty))
+)
+
+;; Rules for BinaryOp.Sge
+; a <= b => b <= a
+(rule
+  (simplify
+    (extract_sge a b)
+  )
+  (SimplifyRawResult.Expr (ExprData.Binary (BinaryOp.Sle) (arg_array2 b a)))
 )
 
 ;; Rules for BinaryOp.Eq
