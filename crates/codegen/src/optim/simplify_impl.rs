@@ -434,6 +434,14 @@ impl<'a> generated_code::Context for SimplifyContext<'a> {
         ExprValue::Value(val)
     }
 
+    fn make_true(&mut self) -> ExprValue {
+        self.make_all_one(&Type::I1)
+    }
+
+    fn make_false(&mut self) -> ExprValue {
+        self.make_zero(&Type::I1)
+    }
+
     fn make_all_one(&mut self, arg0: &Type) -> ExprValue {
         let imm = Immediate::all_one(arg0);
         let val = self.dfg().make_imm_value(imm);

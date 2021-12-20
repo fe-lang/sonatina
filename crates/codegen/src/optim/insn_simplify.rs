@@ -72,6 +72,7 @@ impl InsnSimplifySolver {
         if let Some(insn_result) = inserter.func().dfg.insn_result(insn) {
             self.worklist
                 .extend(inserter.func().dfg.users(insn_result).copied());
+            self.worklist.push_back(insn);
             inserter.func_mut().dfg.change_to_alias(insn_result, value);
         };
 
@@ -87,6 +88,7 @@ impl InsnSimplifySolver {
         if let Some(res) = inserter.func().dfg.insn_result(insn) {
             self.worklist
                 .extend(inserter.func().dfg.users(res).copied());
+            self.worklist.push_back(insn);
         }
 
         inserter.replace(data);

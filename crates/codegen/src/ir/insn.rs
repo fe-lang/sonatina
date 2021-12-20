@@ -246,7 +246,16 @@ impl BinaryOp {
     fn is_cmp(self) -> bool {
         matches!(
             self,
-            Self::Lt | Self::Gt | Self::Slt | Self::Sgt | Self::Eq | Self::Ne
+            Self::Eq
+                | Self::Ne
+                | Self::Lt
+                | Self::Gt
+                | Self::Slt
+                | Self::Sgt
+                | Self::Le
+                | Self::Ge
+                | Self::Sle
+                | Self::Sge
         )
     }
 }

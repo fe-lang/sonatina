@@ -7,9 +7,6 @@
 # nextln: 
 # nextln:     block2:
 # nextln:       return v0;
-
-
-
 func %phi(v0.i8) -> i8:
     block0:
         v1.i8 = mul v0 0.i8;
