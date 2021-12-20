@@ -120,11 +120,14 @@ impl GvnSolver {
 
                         // Create predicate for each edges.
                         // TODO: We need more elaborate representation of predicate.
-                        let then_predicate = func
-                            .dfg
-                            .value_insn(cond)
-                            .map(|insn| func.dfg.insn_data(insn).clone());
-                        let else_predicate = InsnData::unary(UnaryOp::Not, cond);
+                        let then_predicate = func.dfg.value_insn(cond).map(|insn| {
+                            let insn_data = func.dfg.insn_data(insn).clone();
+                            self.perform_predicate_simplification(&mut func.dfg, insn_data)
+                        });
+                        let else_predicate = self.perform_predicate_simplification(
+                            &mut func.dfg,
+                            InsnData::unary(UnaryOp::Not, cond),
+                        );
 
                         // Make immediates to which the predicate and `cond` is evaluated when the edge is selected.
                         let then_imm = self.make_imm(&mut func.dfg, true);
@@ -604,7 +607,7 @@ impl GvnSolver {
 
         if let Some(imm) = self.perform_constant_folding(func, &insn_data) {
             GvnInsn::Value(imm)
-        } else if let Some(result) = self.perform_simplification(func, &insn_data) {
+        } else if let Some(result) = self.perform_simplification(&mut func.dfg, &insn_data) {
             result
         } else {
             GvnInsn::Insn(insn_data)
@@ -624,21 +627,34 @@ impl GvnSolver {
     /// Perform insn simplification.
     fn perform_simplification(
         &mut self,
-        func: &mut Function,
+        dfg: &mut DataFlowGraph,
         insn_data: &InsnData,
     ) -> Option<GvnInsn> {
-        simplify_impl::simplify_insn_data(&mut func.dfg, insn_data.clone()).map(|res| match res {
+        simplify_impl::simplify_insn_data(dfg, insn_data.clone()).map(|res| match res {
             simplify_impl::SimplifyResult::Value(value) => {
                 // Handle immediate specially because we need to assign a new class to the immediatel
                 // if the immediate is newly created in simplification process.
-                if let Some(imm) = func.dfg.value_imm(value) {
-                    GvnInsn::Value(self.make_imm(&mut func.dfg, imm))
+                if let Some(imm) = dfg.value_imm(value) {
+                    GvnInsn::Value(self.make_imm(dfg, imm))
                 } else {
                     GvnInsn::Value(value)
                 }
             }
             simplify_impl::SimplifyResult::Insn(insn) => GvnInsn::Insn(insn),
         })
+    }
+
+    /// Perform predicate simplification.
+    fn perform_predicate_simplification(
+        &mut self,
+        dfg: &mut DataFlowGraph,
+        insn_data: InsnData,
+    ) -> InsnData {
+        if let Some(GvnInsn::Insn(insn)) = self.perform_simplification(dfg, &insn_data) {
+            insn
+        } else {
+            insn_data.clone()
+        }
     }
 
     /// Make edge data and append incoming/outgoing edges of corresponding blocks.
@@ -1131,7 +1147,7 @@ impl<'a> ValuePhiFinder<'a> {
         let query = if let Some(imm) = self.solver.perform_constant_folding(func, &query) {
             // If constant folding succeeds, no need to further query for the argument.
             return Some(ValuePhi::Value(imm));
-        } else if let Some(simplified) = self.solver.perform_simplification(func, &query) {
+        } else if let Some(simplified) = self.solver.perform_simplification(&mut func.dfg, &query) {
             // If query is simplified to a value, then no need to further query for the argument.
             if let GvnInsn::Value(value) = simplified {
                 return Some(ValuePhi::Value(value));

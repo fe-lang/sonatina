@@ -56,10 +56,12 @@ impl cmp::PartialOrd for Type {
         }
 
         match (self, rhs) {
+            (I1, _) => Some(cmp::Ordering::Less),
+            (I8, I1) => Some(cmp::Ordering::Greater),
             (I8, _) => Some(cmp::Ordering::Less),
-            (I16, I8) => Some(cmp::Ordering::Greater),
+            (I16, I1 | I8) => Some(cmp::Ordering::Greater),
             (I16, _) => Some(cmp::Ordering::Less),
-            (I32, I8 | I16) => Some(cmp::Ordering::Greater),
+            (I32, I1 | I8 | I16) => Some(cmp::Ordering::Greater),
             (I32, _) => Some(cmp::Ordering::Less),
             (I64, I128 | I256) => Some(cmp::Ordering::Less),
             (I64, _) => Some(cmp::Ordering::Greater),

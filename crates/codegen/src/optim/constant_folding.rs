@@ -107,7 +107,7 @@ impl Immediate {
     pub(super) fn zext(self, ty: &Type) -> Self {
         debug_assert!(&self.ty() < ty);
         let i256: I256 = match self {
-            Self::I1(val) => val.into(),
+            Self::I1(val) => (val as u8).into(),
             Self::I8(val) => (val as u8).into(),
             Self::I16(val) => (val as u16).into(),
             Self::I32(val) => (val as u32).into(),
