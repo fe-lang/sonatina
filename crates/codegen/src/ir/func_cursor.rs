@@ -14,6 +14,16 @@ pub trait FuncCursor {
     fn func_mut(&mut self) -> &mut Function;
     fn loc(&self) -> CursorLocation;
 
+    fn set_to_entry(&mut self) {
+        let loc = if let Some(entry) = self.func().layout.entry_block() {
+            CursorLocation::BlockTop(entry)
+        } else {
+            CursorLocation::NoWhere
+        };
+
+        self.set_loc(loc);
+    }
+
     fn insert_insn(&mut self, insn: Insn) {
         match self.loc() {
             CursorLocation::At(at) => self.func_mut().layout.insert_insn_after(insn, at),
@@ -170,6 +180,15 @@ pub trait FuncCursor {
 
     fn proceed(&mut self) {
         self.set_loc(self.next_loc());
+    }
+
+    fn proceed_block(&mut self) {
+        let loc = if let Some(block) = self.next_block() {
+            CursorLocation::BlockTop(block)
+        } else {
+            CursorLocation::NoWhere
+        };
+        self.set_loc(loc)
     }
 
     fn back(&mut self) {

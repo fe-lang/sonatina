@@ -124,15 +124,14 @@ impl AdceSolver {
     }
 
     fn eliminate_dead_code(&mut self, func: &mut Function) -> bool {
-        let loc = if let Some(entry) = func.layout.entry_block() {
-            CursorLocation::BlockTop(entry)
+        let entry = if let Some(entry) = func.layout.entry_block() {
+            entry
         } else {
-            CursorLocation::NoWhere
+            return false;
         };
 
         self.cfg.compute(func);
-        let mut inserter = InsnInserter::new(func, loc);
-        let mut empty_blocks = vec![];
+        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(entry));
         loop {
             match inserter.loc() {
                 CursorLocation::At(insn) => {
@@ -143,12 +142,15 @@ impl AdceSolver {
                     }
                 }
 
-                CursorLocation::BlockTop(..) => inserter.proceed(),
-
-                CursorLocation::BlockBottom(block) => {
-                    if inserter.func().layout.is_block_empty(block) {
-                        empty_blocks.push(block);
+                CursorLocation::BlockTop(block) => {
+                    if self.does_block_live(block) {
+                        inserter.proceed()
+                    } else {
+                        inserter.remove_block()
                     }
+                }
+
+                CursorLocation::BlockBottom(_) => {
                     inserter.proceed();
                 }
 
@@ -156,19 +158,18 @@ impl AdceSolver {
             }
         }
 
+        // Modify branch insns to remove unreachable edges.
+        inserter.set_to_entry();
         let mut br_insn_modified = false;
-        for &block in &empty_blocks {
-            for &pred in self.cfg.preds_of(block) {
-                br_insn_modified |= self.modify_branch(&mut inserter, pred, block);
-            }
-            inserter.set_loc(CursorLocation::BlockTop(block));
-            inserter.remove_block();
+        while let Some(block) = inserter.block() {
+            br_insn_modified |= self.modify_branch(&mut inserter, block);
+            inserter.proceed_block();
         }
 
         br_insn_modified
     }
 
-    fn post_dom(&self, mut block: Block) -> Option<Block> {
+    fn living_post_dom(&self, mut block: Block) -> Option<Block> {
         loop {
             let idom = self.post_domtree.idom_of(block)?;
             match idom {
@@ -180,44 +181,54 @@ impl AdceSolver {
     }
 
     /// Returns `true` if branch insn is modified.
-    fn modify_branch(&self, inserter: &mut InsnInserter, pred: Block, removed: Block) -> bool {
-        if !inserter.func().layout.is_block_inserted(pred) {
-            return false;
-        }
-
-        if !self.does_block_live(pred) {
-            return false;
-        }
-
-        let last_insn = match inserter.func().layout.last_insn_of(pred) {
+    fn modify_branch(&self, inserter: &mut InsnInserter, block: Block) -> bool {
+        let last_insn = match inserter.func().layout.last_insn_of(block) {
             Some(insn) => insn,
             None => return false,
         };
-
         inserter.set_loc(CursorLocation::At(last_insn));
-        match self.post_dom(removed) {
-            Some(postdom) => match inserter.func_mut().dfg.branch_dests_mut(last_insn) {
-                [b1, _] if *b1 == removed => *b1 = postdom,
-                [_, b2] if *b2 == removed => *b2 = postdom,
-                [b1] => *b1 = postdom,
-                _ => unreachable!(),
-            },
 
-            None => {
-                let insn_data = match *inserter.func_mut().dfg.branch_dests(last_insn) {
-                    [b1, b2] if b1 == removed => InsnData::jump(b2),
-                    [b1, b2] if b2 == removed => InsnData::jump(b1),
-                    _ => InsnData::jump(self.post_dom(pred).unwrap()),
-                };
-                inserter.replace(insn_data);
+        let dests: Vec<_> = inserter
+            .func()
+            .dfg
+            .analyze_branch(last_insn)
+            .iter_dests()
+            .collect();
+
+        let mut changed = false;
+        for dest in dests {
+            if self.does_block_live(dest) {
+                continue;
+            }
+
+            match self.living_post_dom(dest) {
+                // If the destination is dead but its post dominator is living, then change the
+                // destination to the post dominator.
+                Some(postdom) => inserter
+                    .func_mut()
+                    .dfg
+                    .rewrite_branch_dest(last_insn, dest, postdom),
+
+                // If the block doesn't have post dominator, then remove the dest.
+                None => {
+                    inserter.func_mut().dfg.remove_branch_dest(last_insn, dest);
+                }
+            }
+
+            changed = true;
+        }
+
+        // Turn branch insn to `jump` if all dests is the same.
+        let branch_info = inserter.func().dfg.analyze_branch(last_insn);
+        if branch_info.dests_num() > 1 {
+            let mut branch_dests = branch_info.iter_dests();
+            let first_dest = branch_dests.next().unwrap();
+            if branch_dests.all(|dest| dest == first_dest) {
+                changed = true;
+                inserter.replace(InsnData::jump(first_dest));
             }
         }
 
-        match *inserter.func().dfg.branch_dests(last_insn) {
-            [b1, b2] if b1 == b2 => inserter.replace(InsnData::jump(b1)),
-            _ => {}
-        }
-
-        true
+        changed
     }
 }

@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, HashSet};
 use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use fxhash::FxHashMap;
 
-use super::{Immediate, Insn, InsnData, Type, Value, ValueData};
+use super::{BranchInfo, Immediate, Insn, InsnData, Type, Value, ValueData};
 
 #[derive(Default, Debug, Clone)]
 pub struct DataFlowGraph {
@@ -242,8 +242,16 @@ impl DataFlowGraph {
         self.insn_results[insn].expand()
     }
 
-    pub fn branch_dests(&self, insn: Insn) -> &[Block] {
-        self.insns[insn].branch_dests()
+    pub fn analyze_branch(&self, insn: Insn) -> BranchInfo {
+        self.insns[insn].analyze_branch()
+    }
+
+    pub fn remove_branch_dest(&mut self, insn: Insn, dest: Block) {
+        self.insns[insn].remove_branch_dest(dest)
+    }
+
+    pub fn rewrite_branch_dest(&mut self, insn: Insn, from: Block, to: Block) {
+        self.insns[insn].rewrite_branch_dest(from, to)
     }
 
     pub fn branch_dests_mut(&mut self, insn: Insn) -> &mut [Block] {

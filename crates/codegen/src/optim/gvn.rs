@@ -391,7 +391,7 @@ impl GvnSolver {
     /// # Example
     /// In the below example, `value` inside if block is inferred to `value2`.
     ///
-    /// ```
+    /// ```pseudo
     /// let value2 = .. (rank0)
     /// let value1 = .. (rank1)
     /// let value = value1 + 0 (rank2)

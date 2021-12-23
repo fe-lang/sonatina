@@ -86,11 +86,53 @@ impl InsnData {
         }
     }
 
-    pub fn branch_dests(&self) -> &[Block] {
+    pub fn analyze_branch(&self) -> BranchInfo {
         match self {
-            Self::Jump { dests, .. } => dests.as_ref(),
-            Self::Branch { dests, .. } => dests.as_ref(),
-            _ => &[],
+            Self::Jump { dests, .. } => BranchInfo::Jump { dest: dests[0] },
+
+            Self::Branch { args, dests } => BranchInfo::Br {
+                cond: args[0],
+                dests,
+            },
+
+            _ => BranchInfo::NotBranch,
+        }
+    }
+
+    pub fn remove_branch_dest(&mut self, dest: Block) {
+        match self {
+            Self::Jump { .. } => panic!("can't remove destination from `Jump` insn"),
+            Self::Branch { dests, .. } => {
+                let remain = if dests[0] == dest {
+                    dests[1]
+                } else if dests[1] == dest {
+                    dests[0]
+                } else {
+                    panic!("no dests found in the branch destination")
+                };
+                *self = Self::jump(remain);
+            }
+            _ => panic!("not a branch"),
+        }
+    }
+
+    pub fn rewrite_branch_dest(&mut self, from: Block, to: Block) {
+        match self {
+            Self::Jump { dests, .. } => {
+                if dests[0] == from {
+                    dests[0] = to
+                }
+            }
+
+            Self::Branch { dests, .. } => {
+                for block in dests.iter_mut() {
+                    if *block == from {
+                        *block = to;
+                    }
+                }
+            }
+
+            _ => {}
         }
     }
 
@@ -308,5 +350,65 @@ impl JumpOp {
 impl fmt::Display for JumpOp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum BranchInfo<'a> {
+    NotBranch,
+
+    /// Unconditional jump
+    Jump {
+        dest: Block,
+    },
+
+    /// Conditional jump.
+    Br {
+        cond: Value,
+        dests: &'a [Block],
+    },
+}
+
+impl<'a> BranchInfo<'a> {
+    pub fn iter_dests(self) -> BranchDestIter<'a> {
+        BranchDestIter {
+            branch_info: self,
+            idx: 0,
+        }
+    }
+
+    pub fn dests_num(self) -> usize {
+        match self {
+            Self::NotBranch => 0,
+            Self::Jump { .. } => 1,
+            Self::Br { dests, .. } => dests.len(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct BranchDestIter<'a> {
+    branch_info: BranchInfo<'a>,
+    idx: usize,
+}
+
+impl<'a> Iterator for BranchDestIter<'a> {
+    type Item = Block;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.branch_info {
+            BranchInfo::Jump { dest } if self.idx == 0 => {
+                self.idx += 1;
+                Some(dest)
+            }
+
+            BranchInfo::Br { dests, .. } if self.idx < dests.len() => {
+                let dest = dests[self.idx];
+                self.idx += 1;
+                Some(dest)
+            }
+
+            _ => None,
+        }
     }
 }

@@ -38,31 +38,34 @@ impl CriticalEdgeSplitter {
     }
 
     fn add_critical_edges(&mut self, insn: Insn, func: &Function, cfg: &ControlFlowGraph) {
-        let dests = func.dfg.branch_dests(insn);
-        if dests.len() < 2 {
+        let branch_info = func.dfg.analyze_branch(insn);
+        if branch_info.dests_num() < 2 {
             return;
         }
 
-        for (i, dest) in dests.iter().enumerate() {
-            if cfg.pred_num_of(*dest) > 1 {
-                self.critical_edges.push(CriticalEdge::new(insn, i));
+        for dest in branch_info.iter_dests() {
+            if cfg.pred_num_of(dest) > 1 {
+                self.critical_edges.push(CriticalEdge::new(insn, dest));
             }
         }
     }
 
     fn split_edge(&mut self, edge: CriticalEdge, func: &mut Function, cfg: &mut ControlFlowGraph) {
         let insn = edge.insn;
-        let dest_idx = edge.dest_idx;
-        let original_dest = func.dfg.branch_dests(insn)[dest_idx];
+        let original_dest = edge.to;
         let source_block = func.layout.insn_block(insn);
 
+        // If already blocks for the edge, then use it.
         if let Some(inserted_dest) = self.inserted_blocks_for[original_dest].expand() {
-            func.dfg.branch_dests_mut(insn)[dest_idx] = inserted_dest;
+            func.dfg
+                .rewrite_branch_dest(insn, original_dest, inserted_dest);
             self.modify_cfg(cfg, source_block, original_dest, inserted_dest);
             self.modify_phi_blocks(func, original_dest);
             return;
         }
 
+        // Create a new block that contains only a jump insn to the destinating block of the
+        // critical edge.
         let inserted_dest = func.dfg.make_block();
         let fallthrough = func.dfg.make_insn(InsnData::Jump {
             code: JumpOp::FallThrough,
@@ -73,9 +76,12 @@ impl CriticalEdgeSplitter {
         cursor.set_loc(CursorLocation::BlockTop(inserted_dest));
         cursor.append_insn(fallthrough);
 
-        func.dfg.branch_dests_mut(insn)[dest_idx] = inserted_dest;
+        // Store the created block to reuse.
         self.inserted_blocks_for[original_dest] = Some(inserted_dest).into();
 
+        // Rewrite branch destination to the new block.
+        func.dfg
+            .rewrite_branch_dest(insn, original_dest, inserted_dest);
         self.modify_cfg(cfg, source_block, original_dest, inserted_dest);
         self.modify_phi_blocks(func, original_dest);
     }
@@ -110,12 +116,12 @@ impl CriticalEdgeSplitter {
 #[derive(Debug)]
 struct CriticalEdge {
     insn: Insn,
-    dest_idx: usize,
+    to: Block,
 }
 
 impl CriticalEdge {
-    fn new(insn: Insn, dest_idx: usize) -> Self {
-        Self { insn, dest_idx }
+    fn new(insn: Insn, to: Block) -> Self {
+        Self { insn, to }
     }
 }
 

@@ -14,7 +14,7 @@ pub use bigint::{I256, U256};
 pub use builder::Variable;
 pub use dfg::{Block, BlockData, DataFlowGraph};
 pub use function::{Function, Signature};
-pub use insn::{Insn, InsnData};
+pub use insn::{BranchInfo, Insn, InsnData};
 pub use layout::Layout;
 pub use types::Type;
 pub use value::{Immediate, Value, ValueData};

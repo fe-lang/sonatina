@@ -82,9 +82,9 @@ impl ControlFlowGraph {
             self.exits.push(exit);
         }
 
-        for dest in func.dfg.branch_dests(insn) {
+        for dest in func.dfg.analyze_branch(insn).iter_dests() {
             let block = func.layout.insn_block(insn);
-            self.add_edge(block, *dest);
+            self.add_edge(block, dest);
         }
     }
 }

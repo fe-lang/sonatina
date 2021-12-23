@@ -82,15 +82,13 @@ impl SccpSolver {
     }
 
     fn eval_edge(&mut self, func: &mut Function, edge: FlowEdge) {
-        let dests = func.dfg.branch_dests(edge.insn);
-        let dest_idx = edge.dest_idx;
+        let dest = edge.to;
 
         if self.reachable_edges.contains(&edge) {
             return;
         }
         self.reachable_edges.insert(edge);
 
-        let dest = dests[dest_idx];
         if self.reachable_blocks.contains(&dest) {
             self.eval_phis_in(func, dest);
         } else {
@@ -98,9 +96,13 @@ impl SccpSolver {
             self.eval_insns_in(func, dest);
         }
 
-        if let Some(dest_last_insn) = func.layout.last_insn_of(dest) {
-            if func.dfg.branch_dests(dest_last_insn).len() == 1 {
-                self.flow_work.push(FlowEdge::new(dest_last_insn, 0))
+        if let Some(last_insn) = func.layout.last_insn_of(dest) {
+            let branch_info = func.dfg.analyze_branch(last_insn);
+            if branch_info.dests_num() == 1 {
+                self.flow_work.push(FlowEdge::new(
+                    last_insn,
+                    branch_info.iter_dests().next().unwrap(),
+                ))
             }
         }
     }
@@ -206,26 +208,26 @@ impl SccpSolver {
 
             InsnData::Load { .. } => LatticeCell::Top,
 
-            InsnData::Jump { .. } => {
-                self.flow_work.push(FlowEdge::new(insn, 0));
+            InsnData::Jump { dests, .. } => {
+                self.flow_work.push(FlowEdge::new(insn, dests[0]));
                 return;
             }
 
-            InsnData::Branch { args, .. } => {
+            InsnData::Branch { args, dests } => {
                 let v_cell = self.lattice[args[0]];
 
                 if v_cell.is_top() {
                     // Add both then and else edges.
-                    self.flow_work.push(FlowEdge::new(insn, 0));
-                    self.flow_work.push(FlowEdge::new(insn, 1));
+                    self.flow_work.push(FlowEdge::new(insn, dests[0]));
+                    self.flow_work.push(FlowEdge::new(insn, dests[1]));
                 } else if v_cell.is_bot() {
                     unreachable!();
                 } else if v_cell.is_zero() {
                     // Add else edge.
-                    self.flow_work.push(FlowEdge::new(insn, 1));
+                    self.flow_work.push(FlowEdge::new(insn, dests[1]));
                 } else {
                     // Add then edge.
-                    self.flow_work.push(FlowEdge::new(insn, 0));
+                    self.flow_work.push(FlowEdge::new(insn, dests[0]));
                 }
 
                 return;
@@ -332,9 +334,12 @@ impl SccpSolver {
         } else {
             return false;
         };
-        let dests = func.dfg.branch_dests(last_insn);
-        for (i, dest) in dests.iter().enumerate() {
-            if *dest == to && self.reachable_edges.contains(&FlowEdge::new(last_insn, i)) {
+        for dest in func.dfg.analyze_branch(last_insn).iter_dests() {
+            if dest == to
+                && self
+                    .reachable_edges
+                    .contains(&FlowEdge::new(last_insn, dest))
+            {
                 return true;
             }
         }
@@ -353,12 +358,12 @@ impl SccpSolver {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct FlowEdge {
     insn: Insn,
-    dest_idx: usize,
+    to: Block,
 }
 
 impl FlowEdge {
-    fn new(insn: Insn, dest_idx: usize) -> Self {
-        Self { insn, dest_idx }
+    fn new(insn: Insn, to: Block) -> Self {
+        Self { insn, to }
     }
 }
 
