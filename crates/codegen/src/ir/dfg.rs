@@ -1,9 +1,8 @@
 //! This module contains Sonatine IR data flow graph.
 
-use std::collections::{BTreeSet, HashSet};
-
 use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use fxhash::FxHashMap;
+use std::collections::{BTreeSet, HashSet};
 
 use super::{BranchInfo, Immediate, Insn, InsnData, Type, Value, ValueData};
 
@@ -265,7 +264,7 @@ impl DataFlowGraph {
     pub fn is_branch(&self, insn: Insn) -> bool {
         matches!(
             self.insn_data(insn),
-            InsnData::Jump { .. } | InsnData::Branch { .. }
+            InsnData::Jump { .. } | InsnData::Branch { .. } | InsnData::BrTable { .. }
         )
     }
 

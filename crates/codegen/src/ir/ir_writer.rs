@@ -164,14 +164,15 @@ impl IrWrite for Insn {
                 writer.write_insn_args(args, &mut w)?;
             }
             Load { args, ty } => {
-                w.write_all(b"load")?;
+                write!(w, "load")?;
                 writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
                 writer.space(&mut w)?;
                 ty.write(writer, &mut w)?;
             }
             Store { args } => {
-                w.write_all(b"store ")?;
+                write!(w, "store")?;
+                writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
             }
             Jump { code, dests } => {
@@ -180,21 +181,52 @@ impl IrWrite for Insn {
                 writer.write_iter_with_delim(dests.iter(), " ", &mut w)?;
             }
             Branch { args, dests } => {
-                w.write_all(b"br")?;
+                write!(w, "br")?;
                 writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
                 writer.space(&mut w)?;
                 writer.write_iter_with_delim(dests.iter(), " ", &mut w)?;
             }
+
+            BrTable {
+                args,
+                default,
+                table,
+            } => {
+                write!(w, "br_table")?;
+                writer.space(&mut w)?;
+                args[0].write(writer, &mut w)?;
+                writer.space(&mut w)?;
+                if let Some(default) = default {
+                    default.write(writer, &mut w)?;
+                } else {
+                    write!(w, "undef")?;
+                }
+                writer.space(&mut w)?;
+
+                let mut table_args = vec![];
+                for (value, block) in args[1..].iter().zip(table.iter()) {
+                    let mut arg = vec![b'('];
+                    value.write(writer, &mut arg)?;
+                    writer.space(&mut arg)?;
+                    block.write(writer, &mut arg)?;
+                    arg.push(b')');
+                    table_args.push(arg);
+                }
+
+                writer.write_iter_with_delim(table_args.iter(), " ", &mut w)?;
+            }
+
             Return { args } => {
-                w.write_all(b"return")?;
+                write!(w, "return")?;
                 if !args.is_empty() {
                     writer.space(&mut w)?;
                 }
                 writer.write_insn_args(args, &mut w)?;
             }
+
             Phi { values, blocks, .. } => {
-                w.write_all(b"phi")?;
+                write!(w, "phi")?;
                 writer.space(&mut w)?;
                 let mut args = vec![];
                 for (value, block) in values.iter().zip(blocks.iter()) {
@@ -210,8 +242,7 @@ impl IrWrite for Insn {
             }
         }
 
-        w.write_all(b";")?;
-
+        write!(w, ";")?;
         Ok(())
     }
 }

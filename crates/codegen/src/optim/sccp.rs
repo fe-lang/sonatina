@@ -233,6 +233,58 @@ impl SccpSolver {
                 return;
             }
 
+            InsnData::BrTable {
+                args,
+                default,
+                table,
+            } => {
+                // An closure that add all destinations of the `BrTable.
+                let mut add_all_dest = || {
+                    if let Some(default) = default {
+                        self.flow_work.push(FlowEdge::new(insn, *default));
+                    }
+                    for dest in table {
+                        self.flow_work.push(FlowEdge::new(insn, *dest));
+                    }
+                };
+
+                let v_cell = self.lattice[args[0]];
+
+                // If the argument of the `BrTable` is top, then add all destinations.
+                if v_cell.is_top() {
+                    add_all_dest();
+                    return;
+                }
+
+                // Verifier verifies that the use of the argument must dominated by the its
+                // definition, so `v_cell` must not be bot.
+                if v_cell.is_bot() {
+                    unreachable!()
+                }
+
+                let mut contains_top = false;
+                for (value, dest) in args[1..].iter().zip(table.iter()) {
+                    if self.lattice[*value] == v_cell {
+                        self.flow_work.push(FlowEdge::new(insn, *dest));
+                        return;
+                    } else if v_cell.is_top() {
+                        contains_top = true;
+                    }
+                }
+
+                if contains_top {
+                    // If one of the table value is top, then add all dests.
+                    add_all_dest();
+                } else {
+                    // If all table values is not top, then just add default destination.
+                    if let Some(default) = default {
+                        self.flow_work.push(FlowEdge::new(insn, *default));
+                    }
+                }
+
+                return;
+            }
+
             InsnData::Store { .. } | InsnData::Return { .. } => {
                 // No insn result. Do nothing.
                 return;

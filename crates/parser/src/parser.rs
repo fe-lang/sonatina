@@ -453,6 +453,37 @@ impl Code {
                     dests: [then, else_],
                 }
             }
+
+            Self::BrTable => {
+                let mut arg_idx = 0;
+                let mut args = smallvec![];
+                let cond = parser.expect_insn_arg(inserter, arg_idx, &mut undefs)?;
+                args.push(cond);
+                arg_idx += 1;
+
+                let default = if eat_token!(parser, Token::Undef)?.is_some() {
+                    None
+                } else {
+                    Some(parser.expect_block()?)
+                };
+
+                let mut table = smallvec![];
+                while eat_token!(parser, Token::LParen)?.is_some() {
+                    let value = parser.expect_insn_arg(inserter, arg_idx, &mut undefs)?;
+                    args.push(value);
+                    let block = parser.expect_block()?;
+                    table.push(block);
+                    expect_token!(parser, Token::RParen, ")")?;
+                    arg_idx += 1;
+                }
+                expect_token!(parser, Token::SemiColon, ";")?;
+                InsnData::BrTable {
+                    args,
+                    default,
+                    table,
+                }
+            }
+
             Self::Return => {
                 let mut args = smallvec![];
                 let mut idx = 0;

@@ -34,11 +34,18 @@ pub enum InsnData {
     /// Store a value to memory.
     Store { args: [Value; 2] },
 
-    /// Unconditional jump operaitons.
+    /// Unconditional jump instruction.
     Jump { code: JumpOp, dests: [Block; 1] },
 
-    /// Conditional jump operations.
+    /// Conditional jump instruction.
     Branch { args: [Value; 1], dests: [Block; 2] },
+
+    /// Indirect jump instruction.
+    BrTable {
+        args: SmallVec<[Value; 8]>,
+        default: Option<Block>,
+        table: SmallVec<[Block; 8]>,
+    },
 
     /// Return.
     Return { args: SmallVec<[Value; 8]> },
@@ -95,6 +102,16 @@ impl InsnData {
                 dests,
             },
 
+            Self::BrTable {
+                args,
+                default,
+                table,
+            } => BranchInfo::BrTable {
+                args,
+                default: *default,
+                table,
+            },
+
             _ => BranchInfo::NotBranch,
         }
     }
@@ -102,6 +119,7 @@ impl InsnData {
     pub fn remove_branch_dest(&mut self, dest: Block) {
         match self {
             Self::Jump { .. } => panic!("can't remove destination from `Jump` insn"),
+
             Self::Branch { dests, .. } => {
                 let remain = if dests[0] == dest {
                     dests[1]
@@ -112,6 +130,20 @@ impl InsnData {
                 };
                 *self = Self::jump(remain);
             }
+
+            Self::BrTable { default, table, .. } => {
+                if Some(dest) == *default {
+                    *default = None;
+                } else {
+                    table.retain(|block| dest != *block);
+                }
+
+                let branch_info = self.analyze_branch();
+                if branch_info.dests_num() == 1 {
+                    *self = Self::jump(branch_info.iter_dests().next().unwrap());
+                }
+            }
+
             _ => panic!("not a branch"),
         }
     }
@@ -143,7 +175,9 @@ impl InsnData {
             | Self::Cast { args, .. }
             | Self::Load { args, .. }
             | Self::Branch { args, .. } => args,
-            Self::Phi { values: args, .. } | Self::Return { args } => args,
+            Self::Phi { values: args, .. } | Self::Return { args } | Self::BrTable { args, .. } => {
+                args
+            }
             _ => &[],
         }
     }
@@ -155,7 +189,9 @@ impl InsnData {
             | Self::Cast { args, .. }
             | Self::Load { args, .. }
             | Self::Branch { args, .. } => args,
-            Self::Phi { values: args, .. } | Self::Return { args } => args,
+            Self::BrTable { args, .. } | Self::Phi { values: args, .. } | Self::Return { args } => {
+                args
+            }
             _ => &mut [],
         }
     }
@@ -359,6 +395,13 @@ pub enum BranchInfo<'a> {
         cond: Value,
         dests: &'a [Block],
     },
+
+    /// Indirect jump.
+    BrTable {
+        args: &'a [Value],
+        default: Option<Block>,
+        table: &'a [Block],
+    },
 }
 
 impl<'a> BranchInfo<'a> {
@@ -374,6 +417,9 @@ impl<'a> BranchInfo<'a> {
             Self::NotBranch => 0,
             Self::Jump { .. } => 1,
             Self::Br { dests, .. } => dests.len(),
+            Self::BrTable { default, table, .. } => {
+                table.len() + if default.is_some() { 1 } else { 0 }
+            }
         }
     }
 }
@@ -388,19 +434,38 @@ impl<'a> Iterator for BranchDestIter<'a> {
     type Item = Block;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.idx >= self.branch_info.dests_num() {
+            return None;
+        }
+
         match self.branch_info {
-            BranchInfo::Jump { dest } if self.idx == 0 => {
+            BranchInfo::Jump { dest } => {
                 self.idx += 1;
                 Some(dest)
             }
 
-            BranchInfo::Br { dests, .. } if self.idx < dests.len() => {
+            BranchInfo::Br { dests, .. } => {
                 let dest = dests[self.idx];
                 self.idx += 1;
                 Some(dest)
             }
 
-            _ => None,
+            BranchInfo::BrTable { default, table, .. } => {
+                if let Some(default) = default {
+                    let dest = if self.idx == 0 {
+                        default
+                    } else {
+                        table[self.idx - 1]
+                    };
+                    Some(dest)
+                } else {
+                    let dest = table[self.idx];
+                    self.idx += 1;
+                    Some(dest)
+                }
+            }
+
+            BranchInfo::NotBranch => None,
         }
     }
 }

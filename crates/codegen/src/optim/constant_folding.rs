@@ -52,6 +52,7 @@ pub(super) fn fold_constant(dfg: &DataFlowGraph, insn_data: &InsnData) -> Option
         InsnData::Load { .. }
         | InsnData::Jump { .. }
         | InsnData::Branch { .. }
+        | InsnData::BrTable { .. }
         | InsnData::Store { .. }
         | InsnData::Return { .. }
         | InsnData::Phi { .. } => None,

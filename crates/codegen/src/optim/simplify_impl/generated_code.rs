@@ -35,6 +35,10 @@ pub trait Context {
     fn make_result(&mut self, arg0: ExprValue) -> SimplifyRawResult;
 }
 
+/// Internal type BrTableDefaultDest: defined at expr.isle line 12.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum BrTableDefaultDest {}
+
 /// Internal type SimplifyRawResult: defined at rules.isle line 2.
 #[derive(Clone, Debug)]
 pub enum SimplifyRawResult {

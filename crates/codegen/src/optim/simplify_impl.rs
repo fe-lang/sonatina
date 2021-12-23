@@ -84,6 +84,10 @@ type ArgArray2 = [ExprValue; 2];
 type BlockArray1 = [Block; 1];
 type BlockArray2 = [Block; 2];
 
+type BlockList = SmallVec<[Block; 8]>;
+type ArgList = SmallVec<[ExprValue; 8]>;
+type BrTableDefaultDest = Option<Block>;
+
 /// An opaque reference to [`ExprData`]
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub struct Expr(pub u32);
@@ -113,18 +117,22 @@ pub enum ExprData {
     Jump { code: JumpOp, dests: BlockArray1 },
 
     /// Conditional jump operations.
-    Branch {
-        args: [ExprValue; 1],
-        dests: BlockArray2,
+    Branch { args: ArgArray1, dests: BlockArray2 },
+
+    /// Indirect jump.
+    BrTable {
+        args: ArgList,
+        default: BrTableDefaultDest,
+        table: BlockList,
     },
 
     /// Return.
-    Return { args: SmallVec<[ExprValue; 8]> },
+    Return { args: ArgList },
 
     /// Phi funcion.
     Phi {
-        values: SmallVec<[ExprValue; 8]>,
-        blocks: SmallVec<[Block; 8]>,
+        values: ArgList,
+        blocks: BlockList,
         ty: Type,
     },
 }
@@ -165,6 +173,16 @@ impl ExprData {
             InsnData::Branch { args, dests } => Self::Branch {
                 args: [args[0].into()],
                 dests: *dests,
+            },
+
+            InsnData::BrTable {
+                args,
+                default,
+                table,
+            } => Self::BrTable {
+                args: args.iter().copied().map(Into::into).collect(),
+                default: *default,
+                table: table.clone(),
             },
 
             InsnData::Return { args } => Self::Return {
@@ -214,6 +232,19 @@ impl ExprData {
             Self::Branch { args, dests } => InsnData::Branch {
                 args: [args[0].as_value()?],
                 dests: *dests,
+            },
+
+            Self::BrTable {
+                args,
+                default,
+                table,
+            } => InsnData::BrTable {
+                args: args
+                    .iter()
+                    .map(|val| val.as_value())
+                    .collect::<Option<_>>()?,
+                default: *default,
+                table: table.clone(),
             },
 
             Self::Return { args } => InsnData::Return {

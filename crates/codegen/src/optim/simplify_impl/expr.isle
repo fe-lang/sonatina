@@ -8,6 +8,7 @@
 
 (type ArgList extern (enum))
 (type BlockList extern (enum))
+(type BrTableDefaultDest (enum))
 
 (type Type extern (enum))
 
@@ -22,7 +23,6 @@
 (extern constructor arg_array2 pack_arg_array2)
 
 (type BlockArray1 extern (enum))
-
 (type BlockArray2 extern (enum))
 
 (decl expr_data (ExprData) Expr)
@@ -104,6 +104,7 @@
     (Store (args ArgArray2) (ty Type))
     (Jump (code JumpOp) (dests BlockArray1))
     (Branch (args ArgArray1) (dests BlockArray2))
+    (BrTable (args ArgList) (default BrTableDefaultDest) (table BlockList))
     (Return (args ArgList))
     (Phi (args ArgList) (blocks BlockList))
   )

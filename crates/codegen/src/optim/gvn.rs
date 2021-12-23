@@ -149,6 +149,22 @@ impl GvnSolver {
                         );
                     }
 
+                    InsnData::BrTable {
+                        args,
+                        default,
+                        table,
+                    } => {
+                        // Add edge destinating to default block.
+                        if let Some(default) = default {
+                            self.add_edge_info(block, *default, None, None, None);
+                        }
+                        let cond = args[0];
+
+                        for (value, dest) in args[1..].iter().zip(table.iter()) {
+                            self.add_edge_info(block, *dest, Some(cond), None, Some(*value));
+                        }
+                    }
+
                     _ => {}
                 }
             }
@@ -248,6 +264,38 @@ impl GvnSolver {
                     let changed = self.mark_edge_reachable(then_edge);
                     changed || self.mark_edge_reachable(else_edge)
                 }
+            }
+
+            InsnData::BrTable {
+                args,
+                default,
+                table,
+            } => {
+                let cond = args[0];
+
+                // Iterate table entry, if one of the entry value is congruent to cond, then mark
+                // the edge as reachable and stop marking.
+                for dest in table {
+                    let edge = self.find_edge(&self.blocks[block].out_edges, block, *dest);
+                    if self.infer_edge_reachability(func, cond, edge, domtree) {
+                        return self.mark_edge_reachable(edge);
+                    }
+                }
+
+                // If none of entry values is congruent to the cond, then mark all edges as
+                // reachable.
+                let mut changed = false;
+                if let Some(default) = default {
+                    let edge_to_default =
+                        self.find_edge(&self.blocks[block].out_edges, block, *default);
+                    changed |= self.mark_edge_reachable(edge_to_default);
+                }
+                for dest in table {
+                    let edge = self.find_edge(&self.blocks[block].out_edges, block, *dest);
+                    changed |= self.mark_edge_reachable(edge);
+                }
+
+                changed
             }
 
             _ => false,
@@ -502,12 +550,12 @@ impl GvnSolver {
             .filter(|edge| self.edge_data(**edge).reachable)
     }
 
-    /// Returns reachable outgoing edges of the block.
-    fn reachable_out_edges(&self, block: Block) -> impl Iterator<Item = &Edge> {
+    /// Returns unreachable outgoing edges of the block.
+    fn unreachable_out_edges(&self, block: Block) -> impl Iterator<Item = &Edge> {
         self.blocks[block]
             .out_edges
             .iter()
-            .filter(|edge| self.edge_data(**edge).reachable)
+            .filter(|edge| !self.edge_data(**edge).reachable)
     }
 
     /// Returns the incoming edge if the edge is only one reachable edge to the block.
@@ -575,6 +623,7 @@ impl GvnSolver {
             | InsnData::Load { .. }
             | InsnData::Jump { .. }
             | InsnData::Branch { .. }
+            | InsnData::BrTable { .. }
             | InsnData::Return { .. } => insn_data.clone(),
 
             InsnData::Phi { values, blocks, ty } => {
@@ -1504,14 +1553,14 @@ impl<'a> RedundantCodeRemover<'a> {
                 CursorLocation::BlockBottom(..) => inserter.proceed(),
 
                 CursorLocation::At(insn) => {
-                    // If the number of reachable outgoing edge is one, then replace branch
-                    // insn to jump insn with appropriate destination.
-                    if matches!(inserter.func().dfg.insn_data(insn), InsnData::Branch { .. }) {
+                    if inserter.func().dfg.is_branch(insn) {
                         let block = inserter.block().unwrap();
-                        let mut in_edges = self.solver.reachable_out_edges(block);
-                        let edge = in_edges.next().unwrap();
-                        if in_edges.next().is_none() {
-                            inserter.replace(InsnData::jump(self.solver.edge_data(*edge).to));
+                        for &out_edge in self.solver.unreachable_out_edges(block) {
+                            let edge_data = self.solver.edge_data(out_edge);
+                            inserter
+                                .func_mut()
+                                .dfg
+                                .remove_branch_dest(insn, edge_data.to);
                         }
                     }
                     inserter.proceed();

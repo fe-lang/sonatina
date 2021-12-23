@@ -1,8 +1,10 @@
+// TODO: verifier.
+//
 mod ssa;
 
 pub use ssa::Variable;
 
-// TODO: verifier.
+use smallvec::SmallVec;
 
 use crate::ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
@@ -143,17 +145,53 @@ impl FunctionBuilder {
         self.insert_insn(insn_data);
     }
 
+    pub fn br_table(&mut self, cond: Value, default: Option<Block>, table: &[(Value, Block)]) {
+        if cfg!(debug_assertions) {
+            if let Some(default) = default {
+                debug_assert!(!self.ssa_builder.is_sealed(default))
+            }
+
+            for (_, dest) in table {
+                debug_assert!(!self.ssa_builder.is_sealed(*dest));
+            }
+        }
+
+        let mut args = SmallVec::new();
+        let mut blocks = SmallVec::new();
+        args.push(cond);
+        for (value, block) in table {
+            args.push(*value);
+            blocks.push(*block);
+        }
+
+        let insn_data = InsnData::BrTable {
+            args,
+            default,
+            table: blocks,
+        };
+        let block = self.cursor().block().unwrap();
+
+        if let Some(default) = default {
+            self.ssa_builder.append_pred(default, block);
+        }
+        for (_, dest) in table {
+            self.ssa_builder.append_pred(*dest, block);
+        }
+        self.insert_insn(insn_data);
+    }
+
     pub fn br(&mut self, cond: Value, then: Block, else_: Block) {
         debug_assert!(!self.ssa_builder.is_sealed(then));
         debug_assert!(!self.ssa_builder.is_sealed(else_));
+
         let insn_data = InsnData::Branch {
             args: [cond],
             dests: [then, else_],
         };
 
-        let pred = self.cursor().block();
-        self.ssa_builder.append_pred(then, pred.unwrap());
-        self.ssa_builder.append_pred(else_, pred.unwrap());
+        let block = self.cursor().block().unwrap();
+        self.ssa_builder.append_pred(then, block);
+        self.ssa_builder.append_pred(else_, block);
         self.insert_insn(insn_data);
     }
 

@@ -92,6 +92,8 @@ impl<'a> Lexer<'a> {
             }
         } else if self.eat_string_if(b"func").is_some() {
             Token::Func
+        } else if self.eat_string_if(b"undef").is_some() {
+            Token::Undef
         } else if self.eat_string_if(b"->").is_some() {
             Token::RArrow
         } else if let Some(code) = self.try_eat_opcode() {
@@ -182,6 +184,7 @@ impl<'a> Lexer<'a> {
             (b"store", Code::Store),
             (b"jump", Code::Jump),
             (b"fallthrough", Code::FallThrough),
+            (b"br_table", Code::BrTable),
             (b"br", Code::Br),
             (b"return", Code::Return),
             (b"phi", Code::Phi),
@@ -291,6 +294,7 @@ pub(super) enum Token<'a> {
     RParen,
     Eq,
     Dot,
+    Undef,
     ModuleComment(&'a str),
     FuncComment(&'a str),
     Block(u32),
@@ -347,6 +351,7 @@ impl<'a> fmt::Display for Token<'a> {
             RParen => w.write_str(")"),
             Eq => w.write_str("="),
             Dot => w.write_str("."),
+            Undef => w.write_str("undef"),
             ModuleComment(comment) => write!(w, "#!{}", comment),
             FuncComment(comment) => write!(w, "#{}", comment),
             Block(id) => write!(w, "block{}", id),
@@ -400,6 +405,8 @@ pub(super) enum Code {
     // Branch ops.
     Br,
 
+    BrTable,
+
     Return,
 
     Phi,
@@ -438,6 +445,7 @@ impl fmt::Display for Code {
             Jump => "jump",
             FallThrough => "fallthrough",
             Br => "br",
+            BrTable => "br_table",
             Return => "return",
             Phi => "phi",
         };
