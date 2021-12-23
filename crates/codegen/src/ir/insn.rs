@@ -136,14 +136,6 @@ impl InsnData {
         }
     }
 
-    pub fn branch_dests_mut(&mut self) -> &mut [Block] {
-        match self {
-            Self::Jump { dests, .. } => dests.as_mut(),
-            Self::Branch { dests, .. } => dests.as_mut(),
-            _ => &mut [],
-        }
-    }
-
     pub fn args(&self) -> &[Value] {
         match self {
             Self::Binary { args, .. } | Self::Store { args, .. } => args,

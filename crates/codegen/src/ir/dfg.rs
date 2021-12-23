@@ -254,10 +254,6 @@ impl DataFlowGraph {
         self.insns[insn].rewrite_branch_dest(from, to)
     }
 
-    pub fn branch_dests_mut(&mut self, insn: Insn) -> &mut [Block] {
-        self.insns[insn].branch_dests_mut()
-    }
-
     pub fn is_phi(&self, insn: Insn) -> bool {
         matches!(self.insn_data(insn), InsnData::Phi { .. })
     }
