@@ -602,6 +602,72 @@ mod tests {
     }
 
     #[test]
+    fn br_table() {
+        let mut builder = func_builder(&[Type::I32], &[Type::I32]);
+        let var = builder.declare_var(Type::I32);
+
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+        let b2 = builder.append_block();
+        let b3 = builder.append_block();
+        let b4 = builder.append_block();
+
+        builder.switch_to_block(b0);
+        let value0 = builder.make_imm_value(0i32);
+        let value1 = builder.make_imm_value(1i32);
+        let value2 = builder.make_imm_value(2i32);
+        let value3 = builder.make_imm_value(3i32);
+
+        builder.def_var(var, value0);
+
+        builder.br_table(
+            builder.args()[0],
+            Some(b4),
+            &[(value1, b1), (value2, b2), (value3, b3)],
+        );
+
+        builder.switch_to_block(b1);
+        builder.def_var(var, value1);
+        builder.jump(b4);
+
+        builder.switch_to_block(b2);
+        builder.def_var(var, value2);
+        builder.jump(b4);
+
+        builder.switch_to_block(b3);
+        builder.def_var(var, value3);
+        builder.jump(b4);
+
+        builder.switch_to_block(b4);
+        let ret = builder.use_var(var);
+        builder.ret(&[ret]);
+
+        builder.seal_all();
+
+        assert_eq!(
+            dump_func(&builder.build()),
+            "func %test_func(v0.i32) -> i32:
+    block0:
+        br_table v0 block4 (1.i32 block1) (2.i32 block2) (3.i32 block3);
+
+    block1:
+        jump block4;
+
+    block2:
+        jump block4;
+
+    block3:
+        jump block4;
+
+    block4:
+        v5.i32 = phi (0.i32 block0) (1.i32 block1) (2.i32 block2) (3.i32 block3);
+        return v5;
+
+"
+        )
+    }
+
+    #[test]
     #[should_panic]
     fn undef_use() {
         let mut builder = func_builder(&[], &[]);
