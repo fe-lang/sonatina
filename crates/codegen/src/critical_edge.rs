@@ -1,15 +1,12 @@
-use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
-
 use super::ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    insn::{InsnData, JumpOp},
+    insn::InsnData,
 };
 use super::{cfg::ControlFlowGraph, Block, Function, Insn};
 
 #[derive(Debug, Default)]
 pub struct CriticalEdgeSplitter {
     critical_edges: Vec<CriticalEdge>,
-    inserted_blocks_for: SecondaryMap<Block, PackedOption<Block>>,
 }
 
 impl CriticalEdgeSplitter {
@@ -34,7 +31,6 @@ impl CriticalEdgeSplitter {
 
     pub fn clear(&mut self) {
         self.critical_edges.clear();
-        self.inserted_blocks_for.clear();
     }
 
     fn add_critical_edges(&mut self, insn: Insn, func: &Function, cfg: &ControlFlowGraph) {
@@ -55,38 +51,23 @@ impl CriticalEdgeSplitter {
         let original_dest = edge.to;
         let source_block = func.layout.insn_block(insn);
 
-        // If already blocks for the edge, then use it.
-        if let Some(inserted_dest) = self.inserted_blocks_for[original_dest].expand() {
-            func.dfg
-                .rewrite_branch_dest(insn, original_dest, inserted_dest);
-            self.modify_cfg(cfg, source_block, original_dest, inserted_dest);
-            self.modify_phi_blocks(func, original_dest);
-            return;
-        }
-
         // Create a new block that contains only a jump insn to the destinating block of the
         // critical edge.
         let inserted_dest = func.dfg.make_block();
-        let fallthrough = func.dfg.make_insn(InsnData::Jump {
-            code: JumpOp::FallThrough,
-            dests: [original_dest],
-        });
+        let jump = func.dfg.make_insn(InsnData::jump(original_dest));
         let mut cursor = InsnInserter::new(func, CursorLocation::BlockTop(original_dest));
-        cursor.insert_block_before(inserted_dest);
+        cursor.append_block(inserted_dest);
         cursor.set_loc(CursorLocation::BlockTop(inserted_dest));
-        cursor.append_insn(fallthrough);
-
-        // Store the created block to reuse.
-        self.inserted_blocks_for[original_dest] = Some(inserted_dest).into();
+        cursor.append_insn(jump);
 
         // Rewrite branch destination to the new block.
         func.dfg
             .rewrite_branch_dest(insn, original_dest, inserted_dest);
         self.modify_cfg(cfg, source_block, original_dest, inserted_dest);
-        self.modify_phi_blocks(func, original_dest);
+        self.modify_phi_blocks(func, original_dest, inserted_dest);
     }
 
-    fn modify_phi_blocks(&self, func: &mut Function, original_dest: Block) {
+    fn modify_phi_blocks(&self, func: &mut Function, original_dest: Block, inserted_dest: Block) {
         for insn in func.layout.iter_insn(original_dest) {
             if !func.dfg.is_phi(insn) {
                 continue;
@@ -94,7 +75,7 @@ impl CriticalEdgeSplitter {
 
             for block in func.dfg.phi_blocks_mut(insn) {
                 if *block == original_dest {
-                    *block = self.inserted_blocks_for[original_dest].unwrap();
+                    *block = inserted_dest;
                 }
             }
         }
@@ -164,11 +145,11 @@ mod tests {
     block1:
         jump block2;
 
-    block3:
-        fallthrough block2;
-
     block2:
         return;
+
+    block3:
+        jump block2;
 
 "
         );
@@ -180,7 +161,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::many_single_char_names)]
-    fn critical_edge_dup() {
+    fn critical_edge_to_same_block() {
         let mut builder = func_builder(&[], &[]);
 
         let a = builder.append_block();
@@ -222,16 +203,19 @@ mod tests {
         jump block2;
 
     block2:
-        br 1.i8 block4 block5;
-
-    block5:
-        fallthrough block3;
+        br 1.i8 block4 block6;
 
     block3:
         return;
 
     block4:
         return;
+
+    block5:
+        jump block3;
+
+    block6:
+        jump block3;
 
 "
         );
@@ -275,9 +259,6 @@ mod tests {
     block0:
         jump block1;
 
-    block3:
-        fallthrough block1;
-
     block1:
         v1.i8 = phi (1.i8 block0) (v2 block3);
         v2.i8 = add v1 1.i8;
@@ -285,6 +266,80 @@ mod tests {
 
     block2:
         return;
+
+    block3:
+        jump block1;
+
+"
+        );
+
+        let mut cfg_split = ControlFlowGraph::default();
+        cfg_split.compute(&func);
+        assert_eq!(cfg, cfg_split);
+    }
+
+    #[test]
+    fn critical_edge_br_table() {
+        let mut builder = func_builder(&[], &[]);
+
+        let a = builder.append_block();
+        let b = builder.append_block();
+        let c = builder.append_block();
+        let d = builder.append_block();
+        let e = builder.append_block();
+
+        builder.switch_to_block(a);
+        let cond = builder.make_imm_value(true);
+        builder.br(cond, b, e);
+
+        builder.switch_to_block(b);
+        let v0 = builder.make_imm_value(0i32);
+        let v1 = builder.make_imm_value(1i32);
+        let v2 = builder.make_imm_value(2i32);
+        builder.br_table(v0, Some(c), &[(v1, d), (v2, e)]);
+
+        builder.switch_to_block(c);
+        builder.jump(b);
+
+        builder.switch_to_block(d);
+        builder.ret(&[]);
+
+        builder.switch_to_block(e);
+        builder.ret(&[]);
+
+        builder.seal_all();
+
+        let mut func = builder.build();
+        let mut cfg = ControlFlowGraph::default();
+        cfg.compute(&func);
+        CriticalEdgeSplitter::default().run(&mut func, &mut cfg);
+
+        assert_eq!(
+            dump_func(&func),
+            "func %test_func():
+    block0:
+        br -1.i1 block5 block6;
+
+    block1:
+        br_table 0.i32 block2 (1.i32 block3) (2.i32 block7);
+
+    block2:
+        jump block1;
+
+    block3:
+        return;
+
+    block4:
+        return;
+
+    block5:
+        jump block1;
+
+    block6:
+        jump block4;
+
+    block7:
+        jump block4;
 
 "
         );

@@ -164,6 +164,21 @@ impl InsnData {
                 }
             }
 
+            Self::BrTable { default, table, .. } => {
+                match default {
+                    Some(default_block) if *default_block == from => {
+                        *default = Some(to);
+                    }
+                    _ => {}
+                }
+
+                for block in table.iter_mut() {
+                    if *block == from {
+                        *block = to
+                    }
+                }
+            }
+
             _ => {}
         }
     }
@@ -457,6 +472,7 @@ impl<'a> Iterator for BranchDestIter<'a> {
                     } else {
                         table[self.idx - 1]
                     };
+                    self.idx += 1;
                     Some(dest)
                 } else {
                     let dest = table[self.idx];
