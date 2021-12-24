@@ -11,7 +11,7 @@ use cranelift_entity::SecondaryMap;
 use crate::{
     cfg::ControlFlowGraph,
     ir::func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    ir::insn::{BinaryOp, CastOp, InsnData, JumpOp, UnaryOp},
+    ir::insn::{BinaryOp, CastOp, InsnData, UnaryOp},
     ir::{Immediate, Type},
     Block, Function, Insn, Value,
 };
@@ -68,9 +68,9 @@ impl SccpSolver {
             }
         }
 
-        self.remove_unreachable_blocks(func);
-        self.fold_insns(func);
+        self.remove_unreachable_edges(func);
         cfg.compute(func);
+        self.fold_insns(func, cfg);
     }
 
     pub fn clear(&mut self) {
@@ -297,72 +297,78 @@ impl SccpSolver {
         self.set_lattice_cell(insn_result, cell);
     }
 
-    fn remove_unreachable_blocks(&mut self, func: &mut Function) {
-        let mut next_block = func.layout.entry_block();
-        while let Some(block) = next_block {
-            next_block = func.layout.next_block_of(block);
-            if !self.reachable_blocks.contains(&block) {
-                InsnInserter::new(func, CursorLocation::BlockTop(block)).remove_block();
+    /// Remove unreachable edges and blocks.
+    fn remove_unreachable_edges(&self, func: &mut Function) {
+        let entry_block = func.layout.entry_block().unwrap();
+        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(entry_block));
+
+        loop {
+            match inserter.loc() {
+                CursorLocation::BlockTop(block) => {
+                    if !self.reachable_blocks.contains(&block) {
+                        inserter.remove_block();
+                    } else {
+                        inserter.proceed();
+                    }
+                }
+
+                CursorLocation::BlockBottom(..) => inserter.proceed(),
+
+                CursorLocation::At(insn) => {
+                    if inserter.func().dfg.is_branch(insn) {
+                        let branch_info = inserter.func().dfg.analyze_branch(insn);
+                        for dest in branch_info.iter_dests().collect::<Vec<_>>() {
+                            if !self.is_reachable_edge(insn, dest) {
+                                inserter.func_mut().dfg.remove_branch_dest(insn, dest);
+                            }
+                        }
+                    }
+                    inserter.proceed();
+                }
+
+                CursorLocation::NoWhere => break,
             }
         }
     }
 
-    fn fold_insns(&mut self, func: &mut Function) {
-        let mut next_block = func.layout.entry_block();
-        while let Some(block) = next_block {
+    fn is_reachable_edge(&self, insn: Insn, dest: Block) -> bool {
+        self.reachable_edges.contains(&FlowEdge::new(insn, dest))
+    }
+
+    fn fold_insns(&mut self, func: &mut Function, cfg: &ControlFlowGraph) {
+        let mut rpo: Vec<_> = cfg.post_order().collect();
+        rpo.reverse();
+
+        for block in rpo {
             let mut next_insn = func.layout.first_insn_of(block);
             while let Some(insn) = next_insn {
                 next_insn = func.layout.next_insn_of(insn);
-                if !self.fold(func, insn) && func.dfg.is_phi(insn) {
-                    self.try_fold_phi(func, insn);
+                self.fold(func, insn);
+            }
+        }
+    }
+
+    fn fold(&self, func: &mut Function, insn: Insn) {
+        let insn_result = match func.dfg.insn_result(insn) {
+            Some(result) => result,
+            None => return,
+        };
+
+        match self.lattice[insn_result].to_imm() {
+            Some(imm) => {
+                InsnInserter::new(func, CursorLocation::At(insn)).remove_insn();
+                let new_value = func.dfg.make_imm_value(imm);
+                func.dfg.change_to_alias(insn_result, new_value);
+            }
+            None => {
+                if func.dfg.is_phi(insn) {
+                    self.try_fold_phi(func, insn)
                 }
             }
-
-            next_block = func.layout.next_block_of(block);
         }
     }
 
-    fn fold(&mut self, func: &mut Function, insn: Insn) -> bool {
-        if let InsnData::Branch { args, dests } = func.dfg.insn_data(insn) {
-            let cell = self.lattice[args[0]];
-            let insn_data = if cell.is_top() {
-                return false;
-            } else if cell.is_bot() {
-                unreachable!();
-            } else if cell.is_zero() {
-                // A then  edge is unreachable. Replace `br` to `jump else`.
-                InsnData::Jump {
-                    code: JumpOp::Jump,
-                    dests: [dests[1]],
-                }
-            } else {
-                // An else edge is unreachable. Replace `br` to `jump then`.
-                InsnData::Jump {
-                    code: JumpOp::Jump,
-                    dests: [dests[0]],
-                }
-            };
-            InsnInserter::new(func, CursorLocation::At(insn)).replace(insn_data);
-            true
-        } else {
-            let insn_result = match func.dfg.insn_result(insn) {
-                Some(result) => result,
-                None => return false,
-            };
-
-            let imm = match self.lattice[insn_result].to_imm() {
-                Some(imm) => imm,
-                None => return false,
-            };
-
-            InsnInserter::new(func, CursorLocation::At(insn)).remove_insn();
-            let new_value = func.dfg.make_imm_value(imm);
-            func.dfg.change_to_alias(insn_result, new_value);
-            true
-        }
-    }
-
-    fn try_fold_phi(&mut self, func: &mut Function, insn: Insn) {
+    fn try_fold_phi(&self, func: &mut Function, insn: Insn) {
         debug_assert!(func.dfg.is_phi(insn));
 
         let mut blocks = func.dfg.phi_blocks(insn).to_vec();

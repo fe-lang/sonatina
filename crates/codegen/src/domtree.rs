@@ -231,7 +231,7 @@ mod tests {
         let merge_block = builder.append_block();
 
         builder.switch_to_block(entry_block);
-        let v0 = builder.make_imm_value(1i8);
+        let v0 = builder.make_imm_value(true);
         builder.br(v0, else_block, then_block);
 
         builder.switch_to_block(then_block);
@@ -268,7 +268,7 @@ mod tests {
         let e = builder.append_block();
 
         builder.switch_to_block(a);
-        let v0 = builder.make_imm_value(1i8);
+        let v0 = builder.make_imm_value(true);
         builder.br(v0, b, c);
 
         builder.switch_to_block(b);
@@ -319,7 +319,7 @@ mod tests {
         let m = builder.append_block();
 
         builder.switch_to_block(a);
-        let v0 = builder.make_imm_value(1i8);
+        let v0 = builder.make_imm_value(true);
         builder.br(v0, c, b);
 
         builder.switch_to_block(b);
@@ -386,5 +386,56 @@ mod tests {
         assert!(test_df(&df, k, &[l]));
         assert!(test_df(&df, l, &[b, m]));
         assert!(test_df(&df, m, &[]));
+    }
+
+    #[test]
+    fn dom_tree_br_tabale() {
+        let mut builder = func_builder(&[], &[]);
+
+        let a = builder.append_block();
+        let b = builder.append_block();
+        let c = builder.append_block();
+        let d = builder.append_block();
+        let e = builder.append_block();
+        let f = builder.append_block();
+
+        builder.switch_to_block(a);
+        let v0 = builder.make_imm_value(0i32);
+        let v1 = builder.make_imm_value(1i32);
+        let v2 = builder.make_imm_value(2i32);
+        builder.br_table(v0, Some(b), &[(v1, c), (v2, d)]);
+
+        builder.switch_to_block(b);
+        let v3 = builder.make_imm_value(true);
+        builder.br(v3, a, e);
+
+        builder.switch_to_block(c);
+        builder.jump(f);
+
+        builder.switch_to_block(d);
+        builder.jump(f);
+
+        builder.switch_to_block(e);
+        builder.ret(&[]);
+
+        builder.switch_to_block(f);
+        builder.ret(&[]);
+
+        builder.seal_all();
+
+        let (dom_tree, df) = calc_dom(&builder.build());
+        assert_eq!(dom_tree.idom_of(a), None);
+        assert_eq!(dom_tree.idom_of(b), Some(a));
+        assert_eq!(dom_tree.idom_of(c), Some(a));
+        assert_eq!(dom_tree.idom_of(d), Some(a));
+        assert_eq!(dom_tree.idom_of(e), Some(b));
+        assert_eq!(dom_tree.idom_of(f), Some(a));
+
+        assert!(test_df(&df, a, &[]));
+        assert!(test_df(&df, b, &[]));
+        assert!(test_df(&df, c, &[f]));
+        assert!(test_df(&df, d, &[f]));
+        assert!(test_df(&df, e, &[]));
+        assert!(test_df(&df, f, &[]));
     }
 }
