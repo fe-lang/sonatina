@@ -1,4 +1,7 @@
+use std::collections::VecDeque;
+
 use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, SecondaryMap};
+use fxhash::FxHashSet;
 use smallvec::SmallVec;
 
 use crate::{cfg::ControlFlowGraph, domtree::DomTree, ir::Block};
@@ -32,7 +35,7 @@ impl LoopTree {
                     let loop_data = LoopData {
                         header: block,
                         parent: None.into(),
-                        childs: SmallVec::new(),
+                        children: SmallVec::new(),
                     };
 
                     self.loops.push(loop_data);
@@ -46,8 +49,17 @@ impl LoopTree {
 
     /// Returns all loops.
     /// The result iterator guarantees outer loops are returned before its inner loops.
-    pub fn loops(&self) -> impl Iterator<Item = Loop> {
+    pub fn loops(&self) -> impl DoubleEndedIterator<Item = Loop> {
         self.loops.keys()
+    }
+
+    /// Returns all blocks in the loop.
+    pub fn iter_blocks_in_loop<'a, 'b>(
+        &'a self,
+        cfg: &'b ControlFlowGraph,
+        lp: Loop,
+    ) -> LoopBlockIter<'a, 'b> {
+        LoopBlockIter::new(self, cfg, lp)
     }
 
     /// Returns `true` if the `block` is in the `lp`.
@@ -115,7 +127,7 @@ impl LoopTree {
                         if outermost_parent == cur_lp {
                             continue;
                         } else {
-                            self.loops[cur_lp].childs.push(outermost_parent);
+                            self.loops[cur_lp].children.push(outermost_parent);
                             self.loops[outermost_parent].parent = cur_lp.into();
 
                             let lp_header_of_block = self.loop_header(lp_of_block);
@@ -159,7 +171,51 @@ struct LoopData {
     parent: PackedOption<Loop>,
 
     /// Child loops that the loop includes.
-    childs: SmallVec<[Loop; 4]>,
+    children: SmallVec<[Loop; 4]>,
+}
+
+pub struct LoopBlockIter<'a, 'b> {
+    lpt: &'a LoopTree,
+    cfg: &'b ControlFlowGraph,
+    lp: Loop,
+    queue: VecDeque<Block>,
+    visited: FxHashSet<Block>,
+}
+
+impl<'a, 'b> LoopBlockIter<'a, 'b> {
+    fn new(lpt: &'a LoopTree, cfg: &'b ControlFlowGraph, lp: Loop) -> Self {
+        let loop_header = lpt.loop_header(lp);
+
+        let mut queue = VecDeque::new();
+        queue.push_back(loop_header);
+
+        let mut visited = FxHashSet::default();
+        visited.insert(loop_header);
+
+        Self {
+            lpt,
+            cfg,
+            lp,
+            queue,
+            visited,
+        }
+    }
+}
+
+impl<'a, 'b> Iterator for LoopBlockIter<'a, 'b> {
+    type Item = Block;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let block = self.queue.pop_front()?;
+
+        for &succ in self.cfg.succs_of(block) {
+            if self.lpt.is_in_loop(succ, self.lp) && self.visited.insert(succ) {
+                self.queue.push_back(succ);
+            }
+        }
+
+        Some(block)
+    }
 }
 
 #[cfg(test)]
