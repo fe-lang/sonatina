@@ -36,7 +36,7 @@ impl DomTree {
     }
 
     /// Returns `true` if block1 strictly dominates block2.
-    pub fn dominates(&self, block1: Block, block2: Block) -> bool {
+    pub fn strictly_dominates(&self, block1: Block, block2: Block) -> bool {
         let mut current_block = block2;
         while let Some(block) = self.idom_of(current_block) {
             if block == block1 {
@@ -46,6 +46,15 @@ impl DomTree {
         }
 
         false
+    }
+
+    /// Returns `true` if block1 dominates block2.
+    pub fn dominates(&self, block1: Block, block2: Block) -> bool {
+        if block1 == block2 {
+            return true;
+        }
+
+        self.strictly_dominates(block1, block2)
     }
 
     pub fn compute(&mut self, cfg: &ControlFlowGraph) {
