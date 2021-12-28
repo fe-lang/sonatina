@@ -4,7 +4,6 @@ use cranelift_entity::SecondaryMap;
 use std::collections::BTreeSet;
 
 use crate::{
-    cfg::ControlFlowGraph,
     ir::func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     ir::insn::InsnData,
     post_domtree::{PDFSet, PDTIdom, PostDomTree},
@@ -17,7 +16,6 @@ pub struct AdceSolver {
     live_blocks: SecondaryMap<Block, bool>,
     empty_blocks: BTreeSet<Block>,
     post_domtree: PostDomTree,
-    cfg: ControlFlowGraph,
     worklist: Vec<Insn>,
 }
 
@@ -31,7 +29,6 @@ impl AdceSolver {
         self.live_blocks.clear();
         self.empty_blocks.clear();
         self.post_domtree.clear();
-        self.cfg.clear();
         self.worklist.clear();
     }
 
@@ -130,7 +127,6 @@ impl AdceSolver {
             return false;
         };
 
-        self.cfg.compute(func);
         let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(entry));
         loop {
             match inserter.loc() {
