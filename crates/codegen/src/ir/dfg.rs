@@ -2,7 +2,7 @@
 
 use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use fxhash::FxHashMap;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 
 use super::{BranchInfo, Immediate, Insn, InsnData, Type, Value, ValueData};
 
@@ -111,6 +111,10 @@ impl DataFlowGraph {
         self.insns[insn].has_side_effect()
     }
 
+    pub fn may_trap(&self, insn: Insn) -> bool {
+        self.insns[insn].may_trap()
+    }
+
     pub fn attach_user(&mut self, insn: Insn) {
         let data = &self.insns[insn];
         for arg in data.args() {
@@ -156,6 +160,10 @@ impl DataFlowGraph {
         }
     }
 
+    pub fn insn_result_ty(&self, insn: Insn) -> Option<&Type> {
+        self.insn_result(insn).map(|value| self.value_ty(value))
+    }
+
     pub fn value_imm(&self, value: Value) -> Option<Immediate> {
         let value = self.resolve_alias(value);
         match self.value_data(value) {
@@ -194,23 +202,25 @@ impl DataFlowGraph {
     /// Remove phi arg that flow through the `from`.
     ///
     /// # Panics
-    /// If `insn` is not a phi insn, then the function panics.
-    pub fn remove_phi_arg(&mut self, insn: Insn, from: Block) {
+    /// If `insn` is not a phi insn or there is no phi argument from the block, then the function panics.
+    pub fn remove_phi_arg(&mut self, insn: Insn, from: Block) -> Value {
         let data = &mut self.insns[insn];
         let (values, blocks) = match data {
             InsnData::Phi { values, blocks, .. } => (values, blocks),
             _ => panic!("insn is not a phi function"),
         };
 
-        let mut remove_values = HashSet::new();
+        let mut index = None;
         for (i, block) in blocks.iter().enumerate() {
             if *block == from {
-                remove_values.insert(values[i]);
+                index = Some(i);
+                break;
             }
         }
 
-        blocks.retain(|b| *b != from);
-        values.retain(|v| !remove_values.contains(v));
+        let index = index.unwrap();
+        blocks.remove(index);
+        values.remove(index)
     }
 
     pub fn insn_args(&self, insn: Insn) -> &[Value] {

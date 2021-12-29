@@ -1,7 +1,5 @@
-use std::collections::VecDeque;
-
 use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, SecondaryMap};
-use fxhash::FxHashSet;
+use fxhash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::{cfg::ControlFlowGraph, domtree::DomTree, ir::Block};
@@ -54,12 +52,12 @@ impl LoopTree {
     }
 
     /// Returns all blocks in the loop.
-    pub fn iter_blocks_in_loop<'a, 'b>(
+    pub fn iter_blocks_post_order<'a, 'b>(
         &'a self,
         cfg: &'b ControlFlowGraph,
         lp: Loop,
-    ) -> LoopBlockIter<'a, 'b> {
-        LoopBlockIter::new(self, cfg, lp)
+    ) -> BlocksInLoopPostOrder<'a, 'b> {
+        BlocksInLoopPostOrder::new(self, cfg, lp)
     }
 
     /// Returns `true` if the `block` is in the `lp`.
@@ -77,6 +75,11 @@ impl LoopTree {
     /// Returns number of loops found.
     pub fn loop_num(&self) -> usize {
         self.loops.len()
+    }
+
+    /// Map `block` to `lp`.
+    pub fn map_block(&mut self, block: Block, lp: Loop) {
+        self.block_to_loop[block] = lp.into();
     }
 
     /// Clear the internal state of `LoopTree`.
@@ -137,7 +140,7 @@ impl LoopTree {
 
                     // If the block is not mapped to any loops, then map it to the loop.
                     None => {
-                        self.block_to_loop[block] = cur_lp.into();
+                        self.map_block(block, cur_lp);
                         // If block is not loop header, then add its predecessors to the worklist.
                         if block != cur_lp_header {
                             worklist.extend(cfg.preds_of(block));
@@ -174,57 +177,75 @@ struct LoopData {
     children: SmallVec<[Loop; 4]>,
 }
 
-pub struct LoopBlockIter<'a, 'b> {
+pub struct BlocksInLoopPostOrder<'a, 'b> {
     lpt: &'a LoopTree,
     cfg: &'b ControlFlowGraph,
     lp: Loop,
-    queue: VecDeque<Block>,
-    visited: FxHashSet<Block>,
+    stack: Vec<Block>,
+    block_state: FxHashMap<Block, BlockState>,
 }
 
-impl<'a, 'b> LoopBlockIter<'a, 'b> {
+impl<'a, 'b> BlocksInLoopPostOrder<'a, 'b> {
     fn new(lpt: &'a LoopTree, cfg: &'b ControlFlowGraph, lp: Loop) -> Self {
         let loop_header = lpt.loop_header(lp);
-
-        let mut queue = VecDeque::new();
-        queue.push_back(loop_header);
-
-        let mut visited = FxHashSet::default();
-        visited.insert(loop_header);
 
         Self {
             lpt,
             cfg,
             lp,
-            queue,
-            visited,
+            stack: vec![loop_header],
+            block_state: FxHashMap::default(),
         }
     }
 }
 
-impl<'a, 'b> Iterator for LoopBlockIter<'a, 'b> {
+impl<'a, 'b> Iterator for BlocksInLoopPostOrder<'a, 'b> {
     type Item = Block;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let block = self.queue.pop_front()?;
+        while let Some(&block) = self.stack.last() {
+            match self.block_state.get(&block) {
+                // The block is already visited, but not returned from the iterator,
+                // so mark the block as `Finished` and return the block.
+                Some(BlockState::Visited) => {
+                    let block = self.stack.pop().unwrap();
+                    self.block_state.insert(block, BlockState::Finished);
+                    return Some(block);
+                }
 
-        for &succ in self.cfg.succs_of(block) {
-            if self.lpt.is_in_loop(succ, self.lp) && self.visited.insert(succ) {
-                self.queue.push_back(succ);
+                // The block is already returned, so just remove the block from the stack.
+                Some(BlockState::Finished) => {
+                    self.stack.pop().unwrap();
+                }
+
+                // The block is not visited yet, so push its unvisited in-loop successors to the stack and mark the block as `Visited`.
+                None => {
+                    self.block_state.insert(block, BlockState::Visited);
+                    for &succ in self.cfg.succs_of(block) {
+                        if self.block_state.get(&succ).is_none()
+                            && self.lpt.is_in_loop(succ, self.lp)
+                        {
+                            self.stack.push(succ);
+                        }
+                    }
+                }
             }
         }
 
-        Some(block)
+        None
     }
+}
+
+enum BlockState {
+    Visited,
+    Finished,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use crate::ir::builder::test_util::func_builder;
-    use crate::Function;
-    use crate::Type;
+    use crate::{ir::builder::test_util::func_builder, Function, Type};
 
     fn compute_loop(func: &Function) -> LoopTree {
         let mut cfg = ControlFlowGraph::new();

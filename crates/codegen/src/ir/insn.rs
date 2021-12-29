@@ -226,11 +226,18 @@ impl InsnData {
     }
 
     pub fn has_side_effect(&self) -> bool {
-        // We assume `Load` has side effect because it may cause trap.
         matches!(
             self,
             InsnData::Load { .. } | InsnData::Store { .. } | InsnData::Return { .. }
         )
+    }
+
+    pub fn may_trap(&self) -> bool {
+        match self {
+            InsnData::Load { .. } | InsnData::Store { .. } => true,
+            InsnData::Binary { code, .. } => matches!(code, BinaryOp::Udiv | BinaryOp::Sdiv),
+            _ => false,
+        }
     }
 
     pub(crate) fn result_type(&self, dfg: &DataFlowGraph) -> Option<Type> {
