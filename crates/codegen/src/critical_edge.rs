@@ -1,8 +1,11 @@
-use super::ir::{
-    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    insn::InsnData,
+use super::{
+    cfg::ControlFlowGraph,
+    ir::{
+        func_cursor::{CursorLocation, FuncCursor, InsnInserter},
+        insn::InsnData,
+    },
+    Block, Function, Insn,
 };
-use super::{cfg::ControlFlowGraph, Block, Function, Insn};
 
 #[derive(Debug, Default)]
 pub struct CriticalEdgeSplitter {

@@ -10,9 +10,11 @@ use cranelift_entity::SecondaryMap;
 
 use crate::{
     cfg::ControlFlowGraph,
-    ir::func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    ir::insn::{BinaryOp, CastOp, InsnData, UnaryOp},
-    ir::{Immediate, Type},
+    ir::{
+        func_cursor::{CursorLocation, FuncCursor, InsnInserter},
+        insn::{BinaryOp, CastOp, InsnData, UnaryOp},
+        Immediate, Type,
+    },
     Block, Function, Insn, Value,
 };
 

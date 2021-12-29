@@ -4,8 +4,10 @@ use cranelift_entity::SecondaryMap;
 use std::collections::BTreeSet;
 
 use crate::{
-    ir::func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    ir::insn::InsnData,
+    ir::{
+        func_cursor::{CursorLocation, FuncCursor, InsnInserter},
+        insn::InsnData,
+    },
     post_domtree::{PDFSet, PDTIdom, PostDomTree},
     Block, Function, Insn,
 };

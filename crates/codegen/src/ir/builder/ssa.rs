@@ -214,8 +214,7 @@ impl SsaBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_util::*;
-    use super::*;
+    use super::{super::test_util::*, *};
 
     #[test]
     fn use_var_local() {

@@ -8,8 +8,10 @@ use sonatina_codegen::ir::{
     U256,
 };
 
-use super::lexer::{Code, Lexer, Token, WithLoc};
-use super::{Error, ErrorKind, Result};
+use super::{
+    lexer::{Code, Lexer, Token, WithLoc},
+    Error, ErrorKind, Result,
+};
 
 pub struct Parser {}
 

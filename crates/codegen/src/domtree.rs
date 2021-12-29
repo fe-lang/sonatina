@@ -7,8 +7,7 @@ use std::collections::BTreeSet;
 
 use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 
-use super::cfg::ControlFlowGraph;
-use super::Block;
+use super::{cfg::ControlFlowGraph, Block};
 
 #[derive(Default, Debug)]
 pub struct DomTree {
@@ -205,8 +204,7 @@ mod tests {
 
     use super::*;
 
-    use crate::ir::builder::test_util::func_builder;
-    use crate::Function;
+    use crate::{ir::builder::test_util::func_builder, Function};
 
     fn calc_dom(func: &Function) -> (DomTree, DFSet) {
         let mut cfg = ControlFlowGraph::default();

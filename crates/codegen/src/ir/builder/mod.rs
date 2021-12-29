@@ -304,8 +304,7 @@ impl FunctionBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::test_util::*;
-    use super::*;
+    use super::{test_util::*, *};
 
     #[test]
     fn entry_block() {
