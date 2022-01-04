@@ -1,6 +1,6 @@
 use sonatina_filecheck::{
     adce::AdceTransform, gvn::GvnTransform, insn_simplify::InsnSimplifyTransform,
-    sccp::SccpTransform, FileCheckRunner,
+    licm::LicmTransformer, sccp::SccpTransform, FileCheckRunner,
 };
 
 fn main() {
@@ -14,6 +14,9 @@ fn main() {
     runner.run();
 
     runner.attach_transformer(GvnTransform::default());
+    runner.run();
+
+    runner.attach_transformer(LicmTransformer::default());
     runner.run();
 
     runner.print_results();

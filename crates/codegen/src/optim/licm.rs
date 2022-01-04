@@ -25,6 +25,8 @@ impl LicmSolver {
         self.invariants.clear();
     }
 
+    /// Run loop iinvariant code motion ont the function.
+    /// This method also modifies `cfg` and `lpt` htt
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph, lpt: &mut LoopTree) {
         for lp in lpt.loops() {
             self.collect_invaliants(func, cfg, lpt, lp);
@@ -35,8 +37,6 @@ impl LicmSolver {
                 self.invariants.clear();
             }
         }
-
-        todo!()
     }
 
     /// Collect loop invariants int the `lp`.
@@ -140,6 +140,7 @@ impl LicmSolver {
         new_preheader
     }
 
+    /// Hois invariants to the preheader.
     fn hoist_invariants(&self, func: &mut Function, preheader: Block) {
         let last_insn = func.layout.last_insn_of(preheader).unwrap();
         for invariant in self.invariants.iter().copied() {
@@ -156,7 +157,7 @@ impl LicmSolver {
         original_preheaders: &[Block],
         new_preheader: Block,
     ) {
-        // Record inserted phis to avoid duplication of same phi.
+        // Record inserted phis to avoid duplication of the same phi.
         let mut inserted_phis = FxHashMap::default();
 
         let mut next_insn = func.layout.first_insn_of(lp_header);
@@ -186,7 +187,7 @@ impl LicmSolver {
                         InsnInserter::new(func, CursorLocation::BlockTop(new_preheader));
                     let new_phi_insn = inserter.insert_insn_data(phi_insn_data.clone());
                     let result = inserter.make_result(new_phi_insn).unwrap();
-                    inserter.attach_result(insn, result);
+                    inserter.attach_result(new_phi_insn, result);
 
                     // Add phi_insn_data to `inserted_phis` for reusing.
                     inserted_phis.insert(phi_insn_data, result);
