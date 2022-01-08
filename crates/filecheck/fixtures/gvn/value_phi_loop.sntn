@@ -12,12 +12,12 @@
 # nextln:        br v102 block3 block4;
 # nextln: 
 # nextln:    block3:
-# nextln:        v30.i32 = load v10 i32;
+# nextln:        v30.i32 = load @storage v10 i32;
 # nextln:        v31.i32 = add v30 v101;
 # nextln:        br v103 block5 block1;
 # nextln: 
 # nextln:    block4:
-# nextln:        v40.i32 = load v10 i32;
+# nextln:        v40.i32 = load @storage v10 i32;
 # nextln:        v42.i32 = sub v40 v101;
 # nextln:        jump block5;
 # nextln: 
@@ -40,12 +40,12 @@ func %value_phi_loop(v100.i32, v101.i32, v102.i1, v103.i1) -> i32:
         br v102 block3 block4;
 
     block3:
-        v30.i32 = load v10 i32;
+        v30.i32 = load @storage v10 i32;
         v31.i32 = add v30 v101;
         br v103 block5 block1;
 
     block4:
-        v40.i32 = load v22 i32;
+        v40.i32 = load @storage v22 i32;
         v42.i32 = sub v40 v101;
         jump block5;
 

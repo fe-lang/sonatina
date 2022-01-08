@@ -27,7 +27,7 @@
 # nextln: 
 # nextln:  block6:
 # nextln:      v6.i32 = add v2 1.i32;
-# nextln:      store v6 v0;
+# nextln:      store @memory v6 v0;
 # nextln:      jump block4;
 func %llvm_crash1_pr35074(v0.i32, v1.i1):
     block0:
@@ -54,5 +54,5 @@ func %llvm_crash1_pr35074(v0.i32, v1.i1):
 
     block6:
         v6.i32 = add v2 1.i32;
-        store v6 v0;
+        store @memory v6 v0;
         jump block4;

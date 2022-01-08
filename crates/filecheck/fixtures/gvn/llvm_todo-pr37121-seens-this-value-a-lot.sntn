@@ -2,7 +2,7 @@
 #! <https://github.com/llvm/llvm-project/blob/main/llvm/test/Transforms/NewGVN/todo-pr37121-seens-this-value-a-lot.ll>
 
 # check:  block0:
-# nextln:     v0.i8 = load 0.i64 i8;
+# nextln:     v0.i8 = load @memory 0.i64 i8;
 # nextln:     jump block1;
 # nextln: 
 # nextln: block1:
@@ -13,7 +13,7 @@
 # nextln: 
 func %llvm_foo(v100.i8):
     block0:
-        v0.i8 = load 0.i64 i8;
+        v0.i8 = load @memory 0.i64 i8;
         jump block1;
 
     block1:
@@ -23,5 +23,5 @@ func %llvm_foo(v100.i8):
 
     block2:
         v3.i8 = phi (v2 block1);
-        store v3 0.i64;
+        store @memory v3 0.i64;
         return;

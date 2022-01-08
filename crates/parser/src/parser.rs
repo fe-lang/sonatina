@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use smallvec::smallvec;
 use sonatina_codegen::ir::{
     func_cursor::{CursorLocation, FuncCursor},
-    insn::{BinaryOp, CastOp, JumpOp, UnaryOp},
+    insn::{BinaryOp, CastOp, DataLocationKind, JumpOp, UnaryOp},
     Block, BlockData, Function, Immediate, Insn, InsnData, Signature, Type, Value, ValueData, I256,
     U256,
 };
@@ -201,6 +201,15 @@ impl<'a, 'b> FuncParser<'a, 'b> {
     fn expect_block(&mut self) -> Result<Block> {
         let id = expect_token!(self, Token::Block(..), "block")?.id();
         Ok(Block(id))
+    }
+
+    fn expect_data_loc_kind(&mut self) -> Result<DataLocationKind> {
+        let token = expect_token!(self, Token::DataLocationKind(..), "data location")?;
+
+        match token {
+            Token::DataLocationKind(loc) => Ok(loc),
+            _ => unreachable!(),
+        }
     }
 
     fn parse_comment(&mut self) -> Result<Vec<String>> {
@@ -432,16 +441,25 @@ impl Code {
                 &mut undefs
             ),
             Self::Load => {
+                let loc = parser.expect_data_loc_kind()?;
                 let arg = parser.expect_insn_arg(inserter, 0, &mut undefs)?;
                 let ty = expect_token!(parser, Token::Ty(..), "type")?.ty().clone();
                 expect_token!(parser, Token::SemiColon, ";")?;
-                InsnData::Load { args: [arg], ty }
+                InsnData::Load {
+                    args: [arg],
+                    ty,
+                    loc,
+                }
             }
             Self::Store => {
+                let loc = parser.expect_data_loc_kind()?;
                 let lhs = parser.expect_insn_arg(inserter, 0, &mut undefs)?;
                 let rhs = parser.expect_insn_arg(inserter, 1, &mut undefs)?;
                 expect_token!(parser, Token::SemiColon, ";")?;
-                InsnData::Store { args: [lhs, rhs] }
+                InsnData::Store {
+                    args: [lhs, rhs],
+                    loc,
+                }
             }
             Self::Jump => make_jump!(parser, JumpOp::Jump),
             Self::FallThrough => make_jump!(parser, JumpOp::FallThrough),

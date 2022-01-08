@@ -8,12 +8,12 @@
 # nextln: 
 # nextln: block1:
 # nextln:     v1.i32 = phi (0.i32 block0) (v8 block4);
-# nextln:     store v1 v0;
+# nextln:     store @storage v1 v0;
 # nextln:     v2.i1 = eq v1 0.i32;
 # nextln:     br v2 block2 block4;
 # nextln: 
 # nextln: block2:
-# nextln:     v3.i64 = load 16.i64 i64;
+# nextln:     v3.i64 = load @memory 16.i64 i64;
 # nextln:     v4.i1 = eq v3 0.i64;
 # nextln:     br v4 block3 block4;
 # nextln: 
@@ -35,12 +35,12 @@ func %llvm_test(v0.i64):
 
     block1:
         v1.i32 = phi (0.i32 block0) (v8 block4);
-        store v1 v0;
+        store @storage v1 v0;
         v2.i1 = eq v1 0.i32;
         br v2 block2 block4;
 
     block2:
-        v3.i64 = load 16.i64 i64;
+        v3.i64 = load @memory 16.i64 i64;
         v4.i1 = eq v3 0.i64;
         br v4 block3 block4;
 

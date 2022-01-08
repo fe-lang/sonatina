@@ -28,11 +28,18 @@ pub enum InsnData {
         ty: Type,
     },
 
-    /// Load a value from memory.
-    Load { args: [Value; 1], ty: Type },
+    /// Load a value from memory or storage.
+    Load {
+        args: [Value; 1],
+        ty: Type,
+        loc: DataLocationKind,
+    },
 
-    /// Store a value to memory.
-    Store { args: [Value; 2] },
+    /// Store a value to memory or storage.
+    Store {
+        args: [Value; 2],
+        loc: DataLocationKind,
+    },
 
     /// Unconditional jump instruction.
     Jump { code: JumpOp, dests: [Block; 1] },
@@ -56,6 +63,15 @@ pub enum InsnData {
         blocks: SmallVec<[Block; 8]>,
         ty: Type,
     },
+}
+
+/// Indicates where the data is stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DataLocationKind {
+    /// Volatile memory.
+    Memory,
+    /// Non-volatile storage.
+    Storage,
 }
 
 impl InsnData {

@@ -1,5 +1,7 @@
 use std::io;
 
+use crate::ir::DataLocationKind;
+
 use super::{Block, Function, Insn, InsnData, Type, Value};
 
 pub struct FuncWriter<'a> {
@@ -163,15 +165,25 @@ impl IrWrite for Insn {
                 writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
             }
-            Load { args, ty } => {
+            Load { args, ty, loc } => {
                 write!(w, "load")?;
+                writer.space(&mut w)?;
+                match loc {
+                    DataLocationKind::Memory => write!(w, "@memory")?,
+                    DataLocationKind::Storage => write!(w, "@storage")?,
+                }
                 writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
                 writer.space(&mut w)?;
                 ty.write(writer, &mut w)?;
             }
-            Store { args } => {
+            Store { args, loc } => {
                 write!(w, "store")?;
+                writer.space(&mut w)?;
+                match loc {
+                    DataLocationKind::Memory => write!(w, "@memory")?,
+                    DataLocationKind::Storage => write!(w, "@storage")?,
+                }
                 writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
             }

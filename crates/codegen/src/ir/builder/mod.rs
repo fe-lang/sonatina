@@ -8,7 +8,7 @@ use smallvec::SmallVec;
 
 use crate::ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    insn::{BinaryOp, CastOp, InsnData, JumpOp, UnaryOp},
+    insn::{BinaryOp, CastOp, DataLocationKind, InsnData, JumpOp, UnaryOp},
     Immediate,
 };
 
@@ -123,13 +123,41 @@ impl FunctionBuilder {
     impl_cast_insn!(zext, CastOp::Zext);
     impl_cast_insn!(trunc, CastOp::Trunc);
 
-    pub fn load(&mut self, addr: Value, ty: Type) -> Value {
-        let insn_data = InsnData::Load { args: [addr], ty };
+    /// Build memory load instruction.
+    pub fn memory_load(&mut self, addr: Value, ty: Type) -> Value {
+        let insn_data = InsnData::Load {
+            args: [addr],
+            ty,
+            loc: DataLocationKind::Memory,
+        };
         self.insert_insn(insn_data).unwrap()
     }
 
-    pub fn store(&mut self, addr: Value, data: Value) {
-        let insn_data = InsnData::Store { args: [addr, data] };
+    /// Build memory store instruction.
+    pub fn memory_store(&mut self, addr: Value, data: Value) {
+        let insn_data = InsnData::Store {
+            args: [addr, data],
+            loc: DataLocationKind::Memory,
+        };
+        self.insert_insn(insn_data);
+    }
+
+    /// Build storage load instruction.
+    pub fn storage_load(&mut self, addr: Value, ty: Type) -> Value {
+        let insn_data = InsnData::Load {
+            args: [addr],
+            ty,
+            loc: DataLocationKind::Storage,
+        };
+        self.insert_insn(insn_data).unwrap()
+    }
+
+    /// Build storage store instruction.
+    pub fn storage_store(&mut self, addr: Value, data: Value) {
+        let insn_data = InsnData::Store {
+            args: [addr, data],
+            loc: DataLocationKind::Storage,
+        };
         self.insert_insn(insn_data);
     }
 

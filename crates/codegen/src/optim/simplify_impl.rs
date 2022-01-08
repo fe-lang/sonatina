@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
 
 use crate::ir::{
-    insn::{BinaryOp, CastOp, JumpOp, UnaryOp},
+    insn::{BinaryOp, CastOp, DataLocationKind, JumpOp, UnaryOp},
     Block, DataFlowGraph, Immediate, Insn, InsnData, Type, Value,
 };
 
@@ -108,11 +108,19 @@ pub enum ExprData {
         ty: Type,
     },
 
-    /// Load a value from memory.
-    Load { args: ArgArray1, ty: Type },
+    /// Load a value from memory or storage.
+    Load {
+        args: ArgArray1,
+        ty: Type,
+        loc: DataLocationKind,
+    },
 
-    /// Store a value to memory.
-    Store { args: ArgArray2 },
+    /// Store a value to memory or storage.
+    Store {
+        args: ArgArray2,
+        loc: DataLocationKind,
+    },
+
     /// Unconditional jump operaitons.
     Jump { code: JumpOp, dests: BlockArray1 },
 
@@ -156,13 +164,15 @@ impl ExprData {
                 ty: ty.clone(),
             },
 
-            InsnData::Load { args, ty } => Self::Load {
+            InsnData::Load { args, ty, loc } => Self::Load {
                 args: [args[0].into()],
                 ty: ty.clone(),
+                loc: *loc,
             },
 
-            InsnData::Store { args } => Self::Store {
+            InsnData::Store { args, loc } => Self::Store {
                 args: [args[0].into(), args[1].into()],
+                loc: *loc,
             },
 
             InsnData::Jump { code, dests } => Self::Jump {
@@ -215,13 +225,15 @@ impl ExprData {
                 ty: ty.clone(),
             },
 
-            Self::Load { args, ty } => InsnData::Load {
+            Self::Load { args, ty, loc } => InsnData::Load {
                 args: [args[0].as_value()?],
                 ty: ty.clone(),
+                loc: *loc,
             },
 
-            Self::Store { args } => InsnData::Store {
+            Self::Store { args, loc } => InsnData::Store {
                 args: [args[0].as_value()?, args[1].as_value()?],
+                loc: *loc,
             },
 
             Self::Jump { code, dests } => InsnData::Jump {

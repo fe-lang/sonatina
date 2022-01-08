@@ -73,7 +73,7 @@ func %llvm_pr36501(v0.i1):
 # nextln: block11:
 # nextln:     v5.i32 = phi (v4 block16) (0.i32 block2);
 # nextln:     v6.i1 = eq v5 0.i32;
-# nextln:     store v6 v0;
+# nextln:     store @memory v6 v0;
 # nextln:     v7.i1 = eq v3 0.i32;
 # nextln:     v8.i1 = not v7;
 # nextln:     br v8 block18 block19;
@@ -84,7 +84,7 @@ func %llvm_pr36501(v0.i1):
 # nextln: block19:
 # nextln:     $(var=$VALUE).i1 = phi (v6 block11) (0.i1 block18);
 # nextln:     v9.i32 = phi (v5 block11) (1.i32 block18);
-# nextln:     store $var v0;
+# nextln:     store @memory $var v0;
 # nextln:     return;
 func %llvm_PR42557(v0.i32, v1.i1, v2.i1):
     block0:
@@ -104,7 +104,7 @@ func %llvm_PR42557(v0.i32, v1.i1, v2.i1):
     block11:
         v5.i32 = phi (v4 block16) (0.i32 block2);
         v6.i1 = eq v5 0.i32;
-        store v6 v0;
+        store @memory v6 v0;
         v7.i1 = eq v3 0.i32;
         v8.i1 = not v7;
         br v8 block18 block19;
@@ -115,5 +115,5 @@ func %llvm_PR42557(v0.i32, v1.i1, v2.i1):
     block19:
         v9.i32 = phi (v5 block11) (1.i32 block18);
         v10.i1 = eq v9 0.i32;
-        store v10 v0;
+        store @memory v10 v0;
         return;

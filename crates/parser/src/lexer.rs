@@ -1,6 +1,6 @@
 use std::fmt;
 
-use sonatina_codegen::ir::Type;
+use sonatina_codegen::ir::{insn::DataLocationKind, Type};
 
 use super::{Error, ErrorKind, Result};
 
@@ -73,6 +73,15 @@ impl<'a> Lexer<'a> {
             Token::Eq
         } else if self.eat_char_if(|c| c == '.').is_some() {
             Token::Dot
+        } else if self.eat_char_if(|c| c == '@').is_some() {
+            let loc = if self.eat_string_if(b"memory").is_some() {
+                DataLocationKind::Memory
+            } else if self.eat_string_if(b"storage").is_some() {
+                DataLocationKind::Storage
+            } else {
+                return Err(self.invalid_token());
+            };
+            Token::DataLocationKind(loc)
         } else if self.eat_char_if(|c| c == '#').is_some() {
             let is_module = self.eat_char_if(|c| c == '!').is_some();
             let start = self.cur;
@@ -300,6 +309,7 @@ pub(super) enum Token<'a> {
     Block(u32),
     Value(u32),
     Ident(&'a str),
+    DataLocationKind(DataLocationKind),
     OpCode(Code),
     Ty(Type),
     Integer(&'a str),
@@ -339,27 +349,33 @@ impl<'a> Token<'a> {
 
 impl<'a> fmt::Display for Token<'a> {
     fn fmt(&self, w: &mut fmt::Formatter) -> fmt::Result {
-        use Token::*;
-
         match self {
-            Func => w.write_str("func"),
-            RArrow => w.write_str("=>"),
-            Colon => w.write_str(":"),
-            SemiColon => w.write_str(";"),
-            Comma => w.write_str(","),
-            LParen => w.write_str("("),
-            RParen => w.write_str(")"),
-            Eq => w.write_str("="),
-            Dot => w.write_str("."),
-            Undef => w.write_str("undef"),
-            ModuleComment(comment) => write!(w, "#!{}", comment),
-            FuncComment(comment) => write!(w, "#{}", comment),
-            Block(id) => write!(w, "block{}", id),
-            Value(id) => write!(w, "v{}", id),
-            Ident(ident) => write!(w, "%{}", ident),
-            OpCode(code) => write!(w, "{}", code),
-            Ty(ty) => write!(w, "{}", ty),
-            Integer(num) => w.write_str(num),
+            Self::Func => write!(w, "func"),
+            Self::RArrow => write!(w, "=>"),
+            Self::Colon => write!(w, ":"),
+            Self::SemiColon => write!(w, ";"),
+            Self::Comma => write!(w, ","),
+            Self::LParen => write!(w, "("),
+            Self::RParen => write!(w, ")"),
+            Self::Eq => write!(w, "="),
+            Self::DataLocationKind(loc) => {
+                write!(w, "@")?;
+
+                match loc {
+                    DataLocationKind::Memory => write!(w, "memory"),
+                    DataLocationKind::Storage => write!(w, "storage"),
+                }
+            }
+            Self::Dot => write!(w, "."),
+            Self::Undef => write!(w, "undef"),
+            Self::ModuleComment(comment) => write!(w, "#!{}", comment),
+            Self::FuncComment(comment) => write!(w, "#{}", comment),
+            Self::Block(id) => write!(w, "block{}", id),
+            Self::Value(id) => write!(w, "v{}", id),
+            Self::Ident(ident) => write!(w, "%{}", ident),
+            Self::OpCode(code) => write!(w, "{}", code),
+            Self::Ty(ty) => write!(w, "{}", ty),
+            Self::Integer(num) => w.write_str(num),
         }
     }
 }

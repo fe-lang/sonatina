@@ -26,7 +26,7 @@
 # nextln: 
 # nextln: block6:
 # nextln:     v5.i32 = add v1 1.i32;
-# nextln:     store v5 v5;
+# nextln:     store @memory v5 v5;
 # nextln:     jump block4;
 func %llvm_test1(v0.i1):
     block0:
@@ -53,7 +53,7 @@ func %llvm_test1(v0.i1):
 
     block6:
         v5.i32 = add v1 1.i32;
-        store v5 v5;
+        store @memory v5 v5;
         jump block4;
 
 
@@ -72,11 +72,11 @@ func %llvm_test1(v0.i1):
 # nextln: 
 # nextln: block3:
 # nextln:     v5.i64 = add v3 1.i64;
-# nextln:     store v1 v5;
+# nextln:     store @memory v1 v5;
 # nextln:     return;
 # nextln: 
 # nextln: block4:
-# nextln:     store v1 v15;
+# nextln:     store @memory v1 v15;
 # nextln:     jump block5;
 # nextln: 
 # nextln: block5:
@@ -100,12 +100,12 @@ func %llvm_test2(v0.i1, v1.i16, v2.i64):
 
     block3:
         v5.i64 = add v3 1.i64;
-        store v1 v5;
+        store @memory v1 v5;
         return;
 
     block4:
         v6.i64 = sub v3 1.i64;
-        store v1 v6;
+        store @memory v1 v6;
         jump block5;
 
     block5:
@@ -125,7 +125,7 @@ func %llvm_test2(v0.i1, v1.i16, v2.i64):
 # nextln: block2:
 # nextln:     v3.i32 = phi (v4 block2) (0.i32 block1);
 # nextln:     v4.i32 = add v3 1.i32;
-# nextln:     v5.i32 = load v0 i32;
+# nextln:     v5.i32 = load @storage v0 i32;
 # nextln:     v6.i1 = lt v4 v5;
 # nextln:     br v6 block2 block3;
 # nextln: 
@@ -150,7 +150,7 @@ func %llvm_pr49873_cmp_simplification_dependency(v0.i64, v1.i1):
     block2:
         v3.i32 = phi (v4 block2) (0.i32 block1);
         v4.i32 = add v3 1.i32;
-        v5.i32 = load v0 i32;
+        v5.i32 = load @storage v0 i32;
         v6.i1 = lt v4 v5;
         br v6 block2 block3;
 
