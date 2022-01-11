@@ -112,11 +112,12 @@ impl CriticalEdge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::builder::test_util::{dump_func, func_builder};
+    use crate::ir::builder::test_util::{build_test_isa, dump_func, func_builder};
 
     #[test]
     fn critical_edge_basic() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -165,7 +166,8 @@ mod tests {
     #[test]
     #[allow(clippy::many_single_char_names)]
     fn critical_edge_to_same_block() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -230,7 +232,8 @@ mod tests {
 
     #[test]
     fn critical_edge_phi() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -283,7 +286,8 @@ mod tests {
 
     #[test]
     fn critical_edge_br_table() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let a = builder.append_block();
         let b = builder.append_block();

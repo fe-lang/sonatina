@@ -204,7 +204,10 @@ mod tests {
 
     use super::*;
 
-    use crate::{ir::builder::test_util::func_builder, Function};
+    use crate::{
+        ir::builder::test_util::{build_test_isa, func_builder},
+        Function,
+    };
 
     fn calc_dom(func: &Function) -> (DomTree, DFSet) {
         let mut cfg = ControlFlowGraph::default();
@@ -230,7 +233,8 @@ mod tests {
 
     #[test]
     fn dom_tree_if_else() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -266,7 +270,8 @@ mod tests {
 
     #[test]
     fn unreachable_edge() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -309,7 +314,8 @@ mod tests {
 
     #[test]
     fn dom_tree_complex() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -397,7 +403,8 @@ mod tests {
 
     #[test]
     fn dom_tree_br_tabale() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let a = builder.append_block();
         let b = builder.append_block();

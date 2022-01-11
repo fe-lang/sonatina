@@ -218,7 +218,8 @@ mod tests {
 
     #[test]
     fn use_var_local() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let var = builder.declare_var(Type::I32);
 
@@ -244,7 +245,8 @@ mod tests {
 
     #[test]
     fn use_var_global_if() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let var = builder.declare_var(Type::I32);
 
@@ -297,7 +299,8 @@ mod tests {
 
     #[test]
     fn use_var_global_many_preds() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let var0 = builder.declare_var(Type::I32);
         let var1 = builder.declare_var(Type::I32);
@@ -387,7 +390,8 @@ mod tests {
 
     #[test]
     fn use_var_global_loop() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let var = builder.declare_var(Type::I32);
 
@@ -443,7 +447,8 @@ mod tests {
 
     #[test]
     fn use_var_global_complex() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let var = builder.declare_var(Type::I32);
 
@@ -526,7 +531,8 @@ mod tests {
 
     #[test]
     fn use_var_global_complex_seal_all() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let var = builder.declare_var(Type::I32);
 
@@ -602,7 +608,8 @@ mod tests {
 
     #[test]
     fn br_table() {
-        let mut builder = func_builder(&[Type::I32], &[Type::I32]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[Type::I32], &[Type::I32], &isa);
         let var = builder.declare_var(Type::I32);
 
         let b0 = builder.append_block();
@@ -669,7 +676,8 @@ mod tests {
     #[test]
     #[should_panic]
     fn undef_use() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();
@@ -681,7 +689,8 @@ mod tests {
     #[test]
     #[should_panic]
     fn unreachable_use() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();

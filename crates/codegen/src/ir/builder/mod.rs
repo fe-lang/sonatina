@@ -6,25 +6,21 @@ pub use ssa::Variable;
 
 use smallvec::SmallVec;
 
-use crate::ir::{
-    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    insn::{BinaryOp, CastOp, DataLocationKind, InsnData, JumpOp, UnaryOp},
-    Immediate,
+use crate::{
+    ir::{
+        func_cursor::{CursorLocation, FuncCursor, InsnInserter},
+        insn::{BinaryOp, CastOp, DataLocationKind, InsnData, JumpOp, UnaryOp},
+        Immediate,
+    },
+    isa::TargetIsa,
 };
 
 use crate::{Block, Function, Signature, Type, Value};
 
 use ssa::SsaBuilder;
 
-pub trait Context {
-    fn hash_type(&self) -> Type;
-    fn address_type(&self) -> Type;
-    fn balance_type(&self) -> Type;
-    fn gas_type(&self) -> Type;
-}
-
-pub struct FunctionBuilder {
-    ctxt: Box<dyn Context>,
+pub struct FunctionBuilder<'isa> {
+    isa: &'isa TargetIsa,
     func: Function,
     loc: CursorLocation,
     ssa_builder: SsaBuilder,
@@ -70,11 +66,11 @@ macro_rules! impl_cast_insn {
     };
 }
 
-impl FunctionBuilder {
-    pub fn new(name: String, sig: Signature, ctxt: Box<dyn Context>) -> Self {
+impl<'isa> FunctionBuilder<'isa> {
+    pub fn new(name: String, sig: Signature, isa: &'isa TargetIsa) -> Self {
         let func = Function::new(name, sig);
         Self {
-            ctxt,
+            isa,
             func,
             loc: CursorLocation::NoWhere,
             ssa_builder: SsaBuilder::default(),
@@ -299,19 +295,19 @@ impl FunctionBuilder {
     }
 
     pub fn hash_type(&self) -> Type {
-        self.ctxt.hash_type()
+        self.isa.type_provider().hash_type()
     }
 
     pub fn address_type(&self) -> Type {
-        self.ctxt.address_type()
+        self.isa.type_provider().address_type()
     }
 
     pub fn balance_type(&self) -> Type {
-        self.ctxt.balance_type()
+        self.isa.type_provider().balance_type()
     }
 
     pub fn gas_type(&self) -> Type {
-        self.ctxt.gas_type()
+        self.isa.type_provider().gas_type()
     }
 
     fn cursor(&mut self) -> InsnInserter {
@@ -336,7 +332,8 @@ mod tests {
 
     #[test]
     fn entry_block() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let b0 = builder.append_block();
         builder.switch_to_block(b0);
@@ -362,7 +359,8 @@ mod tests {
 
     #[test]
     fn entry_block_with_args() {
-        let mut builder = func_builder(&[Type::I32, Type::I64], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[Type::I32, Type::I64], &[], &isa);
 
         let entry_block = builder.append_block();
         builder.switch_to_block(entry_block);
@@ -389,7 +387,8 @@ mod tests {
 
     #[test]
     fn entry_block_with_return() {
-        let mut builder = func_builder(&[], &[Type::I32, Type::I64]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[Type::I32, Type::I64], &isa);
 
         let entry_block = builder.append_block();
 
@@ -411,7 +410,8 @@ mod tests {
 
     #[test]
     fn then_else_merge_block() {
-        let mut builder = func_builder(&[Type::I64], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[Type::I64], &[], &isa);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -464,13 +464,13 @@ mod tests {
 pub(crate) mod test_util {
     use super::*;
 
-    use crate::ir::ir_writer::FuncWriter;
+    use crate::{ir::ir_writer::FuncWriter, isa::IsaSpecificTypeProvider};
 
     use crate::{Function, Signature, Type};
 
-    pub struct TestContext {}
+    pub(crate) struct TestIsa {}
 
-    impl Context for TestContext {
+    impl IsaSpecificTypeProvider for TestIsa {
         fn hash_type(&self) -> Type {
             Type::I256
         }
@@ -488,10 +488,18 @@ pub(crate) mod test_util {
         }
     }
 
-    pub(crate) fn func_builder(args: &[Type], rets: &[Type]) -> FunctionBuilder {
+    pub(crate) fn build_test_isa() -> TargetIsa {
+        let type_provider = TestIsa {};
+        TargetIsa::new(Box::new(type_provider))
+    }
+
+    pub(crate) fn func_builder<'isa>(
+        args: &[Type],
+        rets: &[Type],
+        isa: &'isa TargetIsa,
+    ) -> FunctionBuilder<'isa> {
         let sig = Signature::new(args, rets);
-        let ctxt = TestContext {};
-        FunctionBuilder::new("test_func".into(), sig, Box::new(ctxt))
+        FunctionBuilder::new("test_func".into(), sig, isa)
     }
 
     pub(crate) fn dump_func(func: &Function) -> String {

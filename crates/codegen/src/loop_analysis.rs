@@ -245,7 +245,10 @@ enum BlockState {
 mod tests {
     use super::*;
 
-    use crate::{ir::builder::test_util::func_builder, Function, Type};
+    use crate::{
+        ir::builder::test_util::{build_test_isa, func_builder},
+        Function, Type,
+    };
 
     fn compute_loop(func: &Function) -> LoopTree {
         let mut cfg = ControlFlowGraph::new();
@@ -259,7 +262,8 @@ mod tests {
 
     #[test]
     fn simple_loop() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
         let b0 = builder.append_block();
         let b1 = builder.append_block();
         let b2 = builder.append_block();
@@ -301,7 +305,8 @@ mod tests {
 
     #[test]
     fn continue_loop() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
         let b0 = builder.append_block();
         let b1 = builder.append_block();
         let b2 = builder.append_block();
@@ -364,7 +369,8 @@ mod tests {
 
     #[test]
     fn single_block_loop() {
-        let mut builder = func_builder(&[Type::I1], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[Type::I1], &[], &isa);
         let b0 = builder.append_block();
         let b1 = builder.append_block();
         let b2 = builder.append_block();
@@ -394,7 +400,8 @@ mod tests {
 
     #[test]
     fn nested_loop() {
-        let mut builder = func_builder(&[Type::I1], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[Type::I1], &[], &isa);
         let b0 = builder.append_block();
         let b1 = builder.append_block();
         let b2 = builder.append_block();

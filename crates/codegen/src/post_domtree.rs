@@ -147,7 +147,7 @@ mod tests {
     #![allow(clippy::many_single_char_names)]
 
     use super::{super::Type, *};
-    use crate::ir::builder::test_util::func_builder;
+    use crate::ir::builder::test_util::{build_test_isa, func_builder};
 
     fn calc_dom(func: &Function) -> (PostDomTree, PDFSet) {
         let mut post_dom_tree = PostDomTree::new();
@@ -172,7 +172,8 @@ mod tests {
 
     #[test]
     fn pd_if_else() {
-        let mut builder = func_builder(&[Type::I64], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[Type::I64], &[], &isa);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -215,7 +216,9 @@ mod tests {
 
     #[test]
     fn infinite_loop() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
+
         let a = builder.append_block();
         builder.switch_to_block(a);
         builder.jump(a);
@@ -231,7 +234,9 @@ mod tests {
 
     #[test]
     fn test_multiple_return() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
+
         let a = builder.append_block();
         let b = builder.append_block();
         let c = builder.append_block();
@@ -274,7 +279,8 @@ mod tests {
 
     #[test]
     fn pd_complex() {
-        let mut builder = func_builder(&[], &[]);
+        let isa = build_test_isa();
+        let mut builder = func_builder(&[], &[], &isa);
 
         let a = builder.append_block();
         let b = builder.append_block();
