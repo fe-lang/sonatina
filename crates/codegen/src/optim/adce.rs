@@ -9,21 +9,28 @@ use crate::{
         insn::InsnData,
     },
     post_domtree::{PDFSet, PDTIdom, PostDomTree},
-    Block, Function, Insn,
+    Block, Function, Insn, TargetIsa,
 };
 
-#[derive(Default)]
-pub struct AdceSolver {
+pub struct AdceSolver<'isa> {
     live_insns: SecondaryMap<Insn, bool>,
     live_blocks: SecondaryMap<Block, bool>,
     empty_blocks: BTreeSet<Block>,
     post_domtree: PostDomTree,
     worklist: Vec<Insn>,
+    isa: &'isa TargetIsa,
 }
 
-impl AdceSolver {
-    pub fn new() -> Self {
-        Self::default()
+impl<'isa> AdceSolver<'isa> {
+    pub fn new(isa: &'isa TargetIsa) -> Self {
+        Self {
+            live_insns: SecondaryMap::default(),
+            live_blocks: SecondaryMap::default(),
+            empty_blocks: BTreeSet::default(),
+            post_domtree: PostDomTree::default(),
+            worklist: Vec::default(),
+            isa,
+        }
     }
 
     pub fn clear(&mut self) {
@@ -129,7 +136,7 @@ impl AdceSolver {
             return false;
         };
 
-        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(entry));
+        let mut inserter = InsnInserter::new(func, self.isa, CursorLocation::BlockTop(entry));
         loop {
             match inserter.loc() {
                 CursorLocation::At(insn) => {

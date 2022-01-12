@@ -1,3 +1,5 @@
+use crate::TargetIsa;
+
 use super::{Block, Function, Insn, InsnData, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,12 +209,13 @@ pub trait FuncCursor {
 }
 
 #[derive(Debug)]
-pub struct InsnInserter<'a> {
+pub struct InsnInserter<'isa, 'a> {
     func: &'a mut Function,
     loc: CursorLocation,
+    isa: &'isa TargetIsa,
 }
 
-impl<'a> FuncCursor for InsnInserter<'a> {
+impl<'isa, 'a> FuncCursor for InsnInserter<'isa, 'a> {
     fn set_loc(&mut self, loc: CursorLocation) {
         self.loc = loc;
     }
@@ -230,9 +233,9 @@ impl<'a> FuncCursor for InsnInserter<'a> {
     }
 }
 
-impl<'a> InsnInserter<'a> {
-    pub fn new(func: &'a mut Function, loc: CursorLocation) -> Self {
-        Self { func, loc }
+impl<'isa, 'a> InsnInserter<'isa, 'a> {
+    pub fn new(func: &'a mut Function, isa: &'isa TargetIsa, loc: CursorLocation) -> Self {
+        Self { func, isa, loc }
     }
 
     pub fn insert_insn_data(&mut self, data: InsnData) -> Insn {
@@ -254,7 +257,7 @@ impl<'a> InsnInserter<'a> {
     }
 
     pub fn make_result(&mut self, insn: Insn) -> Option<Value> {
-        let value_data = self.func.dfg.make_result(insn)?;
+        let value_data = self.func.dfg.make_result(self.isa, insn)?;
         Some(self.func.dfg.make_value(value_data))
     }
 

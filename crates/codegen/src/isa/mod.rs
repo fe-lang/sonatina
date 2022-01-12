@@ -1,5 +1,6 @@
 use crate::Type;
 
+#[derive(Debug)]
 pub struct TargetIsa {
     type_provider: Box<dyn IsaSpecificTypeProvider>,
 }
@@ -13,7 +14,7 @@ impl TargetIsa {
     }
 }
 
-pub trait IsaSpecificTypeProvider {
+pub trait IsaSpecificTypeProvider: std::fmt::Debug {
     fn hash_type(&self) -> Type;
     fn address_type(&self) -> Type;
     fn balance_type(&self) -> Type;

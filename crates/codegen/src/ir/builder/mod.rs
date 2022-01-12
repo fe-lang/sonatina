@@ -23,7 +23,7 @@ pub struct FunctionBuilder<'isa> {
     isa: &'isa TargetIsa,
     func: Function,
     loc: CursorLocation,
-    ssa_builder: SsaBuilder,
+    ssa_builder: SsaBuilder<'isa>,
 }
 
 macro_rules! impl_unary_insn {
@@ -73,7 +73,7 @@ impl<'isa> FunctionBuilder<'isa> {
             isa,
             func,
             loc: CursorLocation::NoWhere,
-            ssa_builder: SsaBuilder::default(),
+            ssa_builder: SsaBuilder::new(isa),
         }
     }
 
@@ -311,7 +311,7 @@ impl<'isa> FunctionBuilder<'isa> {
     }
 
     fn cursor(&mut self) -> InsnInserter {
-        InsnInserter::new(&mut self.func, self.loc)
+        InsnInserter::new(&mut self.func, self.isa, self.loc)
     }
 
     fn insert_insn(&mut self, insn_data: InsnData) -> Option<Value> {
@@ -468,6 +468,7 @@ pub(crate) mod test_util {
 
     use crate::{Function, Signature, Type};
 
+    #[derive(Debug)]
     pub(crate) struct TestIsa {}
 
     impl IsaSpecificTypeProvider for TestIsa {

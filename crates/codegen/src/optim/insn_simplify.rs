@@ -7,23 +7,24 @@ use crate::{
         func_cursor::{CursorLocation, FuncCursor, InsnInserter},
         InsnData,
     },
-    Function, Insn, Value,
+    Function, Insn, TargetIsa, Value,
 };
 
 use super::simplify_impl::{simplify_insn, SimplifyResult};
 
-#[derive(Debug, Default)]
-pub struct InsnSimplifySolver {
+#[derive(Debug)]
+pub struct InsnSimplifySolver<'isa> {
     worklist: VecDeque<Insn>,
+    isa: &'isa TargetIsa,
 }
 
-impl InsnSimplifySolver {
+impl<'isa> InsnSimplifySolver<'isa> {
     pub fn run(&mut self, func: &mut Function) {
         let entry = match func.layout.entry_block() {
             Some(entry) => entry,
             None => return,
         };
-        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(entry));
+        let mut inserter = InsnInserter::new(func, self.isa, CursorLocation::BlockTop(entry));
 
         while inserter.loc() != CursorLocation::NoWhere {
             let insn = match inserter.insn() {
@@ -48,7 +49,7 @@ impl InsnSimplifySolver {
     }
 
     pub fn simplify(&mut self, inserter: &mut InsnInserter, insn: Insn) {
-        match simplify_insn(&mut inserter.func_mut().dfg, insn) {
+        match simplify_insn(&mut inserter.func_mut().dfg, self.isa, insn) {
             Some(SimplifyResult::Value(val)) => self.replace_insn_with_value(inserter, insn, val),
 
             Some(SimplifyResult::Insn(data)) => {

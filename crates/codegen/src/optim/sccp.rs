@@ -15,20 +15,31 @@ use crate::{
         insn::{BinaryOp, CastOp, InsnData, UnaryOp},
         Immediate, Type,
     },
-    Block, Function, Insn, Value,
+    Block, Function, Insn, TargetIsa, Value,
 };
 
-#[derive(Debug, Default)]
-pub struct SccpSolver {
+#[derive(Debug)]
+pub struct SccpSolver<'isa> {
     lattice: SecondaryMap<Value, LatticeCell>,
     reachable_edges: BTreeSet<FlowEdge>,
     reachable_blocks: BTreeSet<Block>,
 
     flow_work: Vec<FlowEdge>,
     ssa_work: Vec<Value>,
+    isa: &'isa TargetIsa,
 }
 
-impl SccpSolver {
+impl<'isa> SccpSolver<'isa> {
+    pub fn new(isa: &'isa TargetIsa) -> Self {
+        Self {
+            lattice: SecondaryMap::default(),
+            reachable_edges: BTreeSet::default(),
+            reachable_blocks: BTreeSet::default(),
+            flow_work: Vec::default(),
+            ssa_work: Vec::default(),
+            isa,
+        }
+    }
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) {
         self.clear();
 
@@ -302,7 +313,7 @@ impl SccpSolver {
     /// Remove unreachable edges and blocks.
     fn remove_unreachable_edges(&self, func: &mut Function) {
         let entry_block = func.layout.entry_block().unwrap();
-        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(entry_block));
+        let mut inserter = InsnInserter::new(func, self.isa, CursorLocation::BlockTop(entry_block));
 
         loop {
             match inserter.loc() {
@@ -358,7 +369,7 @@ impl SccpSolver {
 
         match self.lattice[insn_result].to_imm() {
             Some(imm) => {
-                InsnInserter::new(func, CursorLocation::At(insn)).remove_insn();
+                InsnInserter::new(func, self.isa, CursorLocation::At(insn)).remove_insn();
                 let new_value = func.dfg.make_imm_value(imm);
                 func.dfg.change_to_alias(insn_result, new_value);
             }
@@ -384,7 +395,7 @@ impl SccpSolver {
             let phi_value = func.dfg.insn_result(insn).unwrap();
             func.dfg
                 .change_to_alias(phi_value, func.dfg.insn_arg(insn, 0));
-            InsnInserter::new(func, CursorLocation::At(insn)).remove_insn();
+            InsnInserter::new(func, self.isa, CursorLocation::At(insn)).remove_insn();
         }
     }
 

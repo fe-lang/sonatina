@@ -4,9 +4,12 @@
 use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap, SparseSet};
 use smallvec::SmallVec;
 
-use crate::ir::{
-    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    InsnData,
+use crate::{
+    ir::{
+        func_cursor::{CursorLocation, FuncCursor, InsnInserter},
+        InsnData,
+    },
+    TargetIsa,
 };
 
 use crate::{Block, Function, Insn, Type, Value};
@@ -19,7 +22,7 @@ pub struct VariableData {
     ty: Type,
 }
 
-pub(super) struct SsaBuilder {
+pub(super) struct SsaBuilder<'isa> {
     blocks: SecondaryMap<Block, SsaBlockData>,
 
     /// Records all declared variables.
@@ -27,68 +30,19 @@ pub(super) struct SsaBuilder {
 
     /// Records trivial phis.
     trivial_phis: SparseSet<Insn>,
+
+    isa: &'isa TargetIsa,
 }
 
-impl Default for SsaBuilder {
-    fn default() -> Self {
-        Self {
+impl<'isa> SsaBuilder<'isa> {
+    pub(super) fn new(isa: &'isa TargetIsa) -> Self {
+        SsaBuilder {
             blocks: SecondaryMap::default(),
-            vars: PrimaryMap::new(),
+            vars: PrimaryMap::default(),
             trivial_phis: SparseSet::new(),
+            isa,
         }
     }
-}
-
-#[derive(Default, Clone)]
-struct SsaBlockData {
-    /// Records all predecessors of a block.
-    preds: Vec<Block>,
-
-    /// Records sealed blocks.
-    is_sealed: bool,
-
-    /// Records defined variables in an block.
-    defs: SecondaryMap<Variable, PackedOption<Value>>,
-
-    /// Records phis in an unsealed block.
-    incomplete_phis: Vec<(Variable, Insn)>,
-}
-
-impl SsaBlockData {
-    fn def_var(&mut self, var: Variable, value: Value) {
-        self.defs[var] = value.into();
-    }
-
-    fn use_var_local(&self, var: Variable) -> Option<Value> {
-        self.defs[var].expand()
-    }
-
-    fn append_pred(&mut self, pred: Block) {
-        self.preds.push(pred);
-    }
-
-    fn seal(&mut self) {
-        self.is_sealed = true;
-    }
-
-    fn is_sealed(&self) -> bool {
-        self.is_sealed
-    }
-
-    fn take_incomplete_phis(&mut self) -> Vec<(Variable, Insn)> {
-        std::mem::take(&mut self.incomplete_phis)
-    }
-
-    fn push_incomplete_phi(&mut self, var: Variable, insn: Insn) {
-        self.incomplete_phis.push((var, insn))
-    }
-
-    fn preds(&self) -> &[Block] {
-        &self.preds
-    }
-}
-
-impl SsaBuilder {
     pub(super) fn declare_var(&mut self, ty: Type) -> Variable {
         self.vars.push(VariableData { ty })
     }
@@ -185,7 +139,7 @@ impl SsaBuilder {
 
         func.dfg.change_to_alias(phi_value, first);
         self.trivial_phis.insert(phi);
-        InsnInserter::new(func, CursorLocation::At(phi)).remove_insn();
+        InsnInserter::new(func, self.isa, CursorLocation::At(phi)).remove_insn();
 
         for i in 0..func.dfg.users_num(phi_value) {
             let user = func.dfg.user(phi_value, i);
@@ -202,13 +156,62 @@ impl SsaBuilder {
             blocks: SmallVec::new(),
             ty,
         };
-        let mut cursor = InsnInserter::new(func, CursorLocation::BlockTop(block));
+        let mut cursor = InsnInserter::new(func, self.isa, CursorLocation::BlockTop(block));
         let insn = cursor.prepend_insn_data(insn_data);
         let value = cursor.make_result(insn);
         if let Some(value) = value {
             cursor.attach_result(insn, value);
         }
         (insn, value.unwrap())
+    }
+}
+
+#[derive(Default, Clone)]
+struct SsaBlockData {
+    /// Records all predecessors of a block.
+    preds: Vec<Block>,
+
+    /// Records sealed blocks.
+    is_sealed: bool,
+
+    /// Records defined variables in an block.
+    defs: SecondaryMap<Variable, PackedOption<Value>>,
+
+    /// Records phis in an unsealed block.
+    incomplete_phis: Vec<(Variable, Insn)>,
+}
+
+impl SsaBlockData {
+    fn def_var(&mut self, var: Variable, value: Value) {
+        self.defs[var] = value.into();
+    }
+
+    fn use_var_local(&self, var: Variable) -> Option<Value> {
+        self.defs[var].expand()
+    }
+
+    fn append_pred(&mut self, pred: Block) {
+        self.preds.push(pred);
+    }
+
+    fn seal(&mut self) {
+        self.is_sealed = true;
+    }
+
+    fn is_sealed(&self) -> bool {
+        self.is_sealed
+    }
+
+    fn take_incomplete_phis(&mut self) -> Vec<(Variable, Insn)> {
+        std::mem::take(&mut self.incomplete_phis)
+    }
+
+    fn push_incomplete_phi(&mut self, var: Variable, insn: Insn) {
+        self.incomplete_phis.push((var, insn))
+    }
+
+    fn preds(&self) -> &[Block] {
+        &self.preds
     }
 }
 

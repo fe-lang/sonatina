@@ -8,17 +8,21 @@ use crate::{
         InsnData,
     },
     loop_analysis::{Loop, LoopTree},
-    Block, Function, Insn, Value,
+    Block, Function, Insn, TargetIsa, Value,
 };
 
-#[derive(Debug, Default)]
-pub struct LicmSolver {
+#[derive(Debug)]
+pub struct LicmSolver<'isa> {
     invariants: Vec<Insn>,
+    isa: &'isa TargetIsa,
 }
 
-impl LicmSolver {
-    pub fn new() -> Self {
-        Self::default()
+impl<'isa> LicmSolver<'isa> {
+    pub fn new(isa: &'isa TargetIsa) -> Self {
+        Self {
+            invariants: Vec::default(),
+            isa,
+        }
     }
 
     pub fn clear(&mut self) {
@@ -113,7 +117,7 @@ impl LicmSolver {
 
         // Create preheader and insert it before the loop header.
         let new_preheader = func.dfg.make_block();
-        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(lp_header));
+        let mut inserter = InsnInserter::new(func, self.isa, CursorLocation::BlockTop(lp_header));
         inserter.insert_block_before(new_preheader);
 
         // Insert jump insn of which destination is the loop header.
@@ -184,7 +188,7 @@ impl LicmSolver {
                 None => {
                     // Insert new phi insn to the preheader.
                     let mut inserter =
-                        InsnInserter::new(func, CursorLocation::BlockTop(new_preheader));
+                        InsnInserter::new(func, self.isa, CursorLocation::BlockTop(new_preheader));
                     let new_phi_insn = inserter.insert_insn_data(phi_insn_data.clone());
                     let result = inserter.make_result(new_phi_insn).unwrap();
                     inserter.attach_result(new_phi_insn, result);

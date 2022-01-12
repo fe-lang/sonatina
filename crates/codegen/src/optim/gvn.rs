@@ -20,7 +20,7 @@ use crate::{
         insn::{BinaryOp, CastOp, InsnData, UnaryOp},
         DataFlowGraph, Immediate,
     },
-    Block, Function, Insn, Type, Value,
+    Block, Function, Insn, TargetIsa, Type, Value,
 };
 
 use super::{constant_folding, simplify_impl};
@@ -34,8 +34,8 @@ const INITIAL_CLASS: Class = Class(0);
 const IMMEDIATE_RANK: u32 = 0;
 
 /// A GVN solver.
-#[derive(Debug, Default)]
-pub struct GvnSolver {
+#[derive(Debug)]
+pub struct GvnSolver<'isa> {
     /// Store classes.
     classes: PrimaryMap<Class, ClassData>,
 
@@ -55,9 +55,23 @@ pub struct GvnSolver {
 
     /// Hold always available values, i.e. immediates or function arguments.
     always_avail: Vec<Value>,
+
+    isa: &'isa TargetIsa,
 }
 
-impl GvnSolver {
+impl<'isa> GvnSolver<'isa> {
+    pub fn new(isa: &'isa TargetIsa) -> Self {
+        Self {
+            classes: PrimaryMap::default(),
+            values: SecondaryMap::default(),
+            insn_table: FxHashMap::default(),
+            edges: PrimaryMap::default(),
+            blocks: SecondaryMap::default(),
+            value_phi_table: FxHashMap::default(),
+            always_avail: Vec::default(),
+            isa,
+        }
+    }
     /// The main entry point of the struct.
     /// `cfg` and `domtree` is modified to reflect graph structure change.
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph, domtree: &mut DomTree) {
@@ -679,7 +693,7 @@ impl GvnSolver {
         dfg: &mut DataFlowGraph,
         insn_data: &InsnData,
     ) -> Option<GvnInsn> {
-        simplify_impl::simplify_insn_data(dfg, insn_data.clone()).map(|res| match res {
+        simplify_impl::simplify_insn_data(dfg, self.isa, insn_data.clone()).map(|res| match res {
             simplify_impl::SimplifyResult::Value(value) => {
                 // Handle immediate specially because we need to assign a new class to the immediatel
                 // if the immediate is newly created in simplification process.
@@ -975,14 +989,14 @@ struct GvnBlockData {
 
 /// This struct finds value phi that described in
 /// `Detection of Redundant Expressions: A Complete and Polynomial-Time Algorithm in SSA`.
-struct ValuePhiFinder<'a> {
-    solver: &'a mut GvnSolver,
+struct ValuePhiFinder<'isa, 'a> {
+    solver: &'a mut GvnSolver<'isa>,
     /// Hold visited values to prevent infinite loop.
     visited: FxHashSet<Value>,
 }
 
-impl<'a> ValuePhiFinder<'a> {
-    fn new(solver: &'a mut GvnSolver, insn_result: Value) -> Self {
+impl<'isa, 'a> ValuePhiFinder<'isa, 'a> {
+    fn new(solver: &'a mut GvnSolver<'isa>, insn_result: Value) -> Self {
         let mut visited = FxHashSet::default();
         visited.insert(insn_result);
         Self { solver, visited }
@@ -1307,8 +1321,8 @@ impl ValuePhiInsn {
 
 /// A struct for redundant code/edge/block removal.
 /// This struct also resolve value phis and insert phi insns to the appropriate block.
-struct RedundantCodeRemover<'a> {
-    solver: &'a GvnSolver,
+struct RedundantCodeRemover<'isa, 'a> {
+    solver: &'a GvnSolver<'isa>,
 
     /// Record pairs of available class and representative value in bottom of blocks.
     /// This is necessary to decide whether the args of inserted phi functions are dominated by its
@@ -1319,8 +1333,8 @@ struct RedundantCodeRemover<'a> {
     resolved_value_phis: FxHashMap<ValuePhi, Value>,
 }
 
-impl<'a> RedundantCodeRemover<'a> {
-    fn new(solver: &'a GvnSolver) -> Self {
+impl<'isa, 'a> RedundantCodeRemover<'isa, 'a> {
+    fn new(solver: &'a GvnSolver<'isa>) -> Self {
         Self {
             solver,
             avail_set: SecondaryMap::default(),
@@ -1386,7 +1400,8 @@ impl<'a> RedundantCodeRemover<'a> {
             self.avail_set[idom].clone()
         };
 
-        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(block));
+        let mut inserter =
+            InsnInserter::new(func, self.solver.isa, CursorLocation::BlockTop(block));
         loop {
             match inserter.loc() {
                 CursorLocation::BlockTop(_) => {
@@ -1425,7 +1440,8 @@ impl<'a> RedundantCodeRemover<'a> {
 
     /// Resolve value phis in the block.
     fn resolve_value_phi_in_block(&mut self, func: &mut Function, block: Block) {
-        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(block));
+        let mut inserter =
+            InsnInserter::new(func, self.solver.isa, CursorLocation::BlockTop(block));
         loop {
             match inserter.loc() {
                 CursorLocation::BlockTop(_) => {
@@ -1538,7 +1554,8 @@ impl<'a> RedundantCodeRemover<'a> {
     /// Remove unreachable edges and blocks.
     fn remove_unreachable_edges(&self, func: &mut Function) {
         let entry_block = func.layout.entry_block().unwrap();
-        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(entry_block));
+        let mut inserter =
+            InsnInserter::new(func, self.solver.isa, CursorLocation::BlockTop(entry_block));
 
         loop {
             match inserter.loc() {

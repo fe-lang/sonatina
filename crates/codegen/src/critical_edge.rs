@@ -4,17 +4,21 @@ use super::{
         func_cursor::{CursorLocation, FuncCursor, InsnInserter},
         insn::InsnData,
     },
-    Block, Function, Insn,
+    Block, Function, Insn, TargetIsa,
 };
 
-#[derive(Debug, Default)]
-pub struct CriticalEdgeSplitter {
+#[derive(Debug)]
+pub struct CriticalEdgeSplitter<'isa> {
     critical_edges: Vec<CriticalEdge>,
+    isa: &'isa TargetIsa,
 }
 
-impl CriticalEdgeSplitter {
-    pub fn new() -> Self {
-        Self::default()
+impl<'isa> CriticalEdgeSplitter<'isa> {
+    pub fn new(isa: &'isa TargetIsa) -> Self {
+        Self {
+            critical_edges: Vec::default(),
+            isa,
+        }
     }
 
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) {
@@ -58,7 +62,7 @@ impl CriticalEdgeSplitter {
         // critical edge.
         let inserted_dest = func.dfg.make_block();
         let jump = func.dfg.make_insn(InsnData::jump(original_dest));
-        let mut cursor = InsnInserter::new(func, CursorLocation::BlockTop(original_dest));
+        let mut cursor = InsnInserter::new(func, self.isa, CursorLocation::BlockTop(original_dest));
         cursor.append_block(inserted_dest);
         cursor.set_loc(CursorLocation::BlockTop(inserted_dest));
         cursor.append_insn(jump);
@@ -138,7 +142,7 @@ mod tests {
         let mut func = builder.build();
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(&func);
-        CriticalEdgeSplitter::default().run(&mut func, &mut cfg);
+        CriticalEdgeSplitter::new(&isa).run(&mut func, &mut cfg);
 
         assert_eq!(
             dump_func(&func),
@@ -196,7 +200,7 @@ mod tests {
         let mut func = builder.build();
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(&func);
-        CriticalEdgeSplitter::default().run(&mut func, &mut cfg);
+        CriticalEdgeSplitter::new(&isa).run(&mut func, &mut cfg);
 
         assert_eq!(
             dump_func(&func),
@@ -257,7 +261,7 @@ mod tests {
         let mut func = builder.build();
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(&func);
-        CriticalEdgeSplitter::default().run(&mut func, &mut cfg);
+        CriticalEdgeSplitter::new(&isa).run(&mut func, &mut cfg);
 
         assert_eq!(
             dump_func(&func),
@@ -319,7 +323,7 @@ mod tests {
         let mut func = builder.build();
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(&func);
-        CriticalEdgeSplitter::default().run(&mut func, &mut cfg);
+        CriticalEdgeSplitter::new(&isa).run(&mut func, &mut cfg);
 
         assert_eq!(
             dump_func(&func),

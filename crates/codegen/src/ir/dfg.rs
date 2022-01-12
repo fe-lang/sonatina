@@ -4,6 +4,8 @@ use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use fxhash::FxHashMap;
 use std::collections::BTreeSet;
 
+use crate::TargetIsa;
+
 use super::{BranchInfo, Immediate, Insn, InsnData, Type, Value, ValueData};
 
 #[derive(Default, Debug, Clone)]
@@ -82,8 +84,8 @@ impl DataFlowGraph {
         panic!("alias loop detected");
     }
 
-    pub fn make_result(&mut self, insn: Insn) -> Option<ValueData> {
-        let ty = self.insns[insn].result_type(self)?;
+    pub fn make_result(&mut self, isa: &TargetIsa, insn: Insn) -> Option<ValueData> {
+        let ty = self.insns[insn].result_type(isa, self)?;
         Some(ValueData::Insn { insn, ty })
     }
 
