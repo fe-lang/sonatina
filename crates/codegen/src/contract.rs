@@ -31,10 +31,10 @@ entity_impl!(FuncRef);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Linkage of the function.
 pub enum Linkage {
-    /// The function is defined in the contract, and can be called from another accouts.
+    /// The function is defined in the contract, and can be called from another accounts.
     Public,
 
-    /// The funciton is defined in the contract, and can NOT be called from another accouts.
+    /// The function is defined in the contract, and can NOT be called from another accounts.
     Private,
 
     /// The function is defined outside of the contract.
