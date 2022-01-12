@@ -10,3 +10,4 @@ primitive-types = "0.10"
 cranelift-entity = "0.77"
 smallvec = "1.7.0"
 fxhash = "0.2.1"
+sonatina-triple = { path = "../triple" }

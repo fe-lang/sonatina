@@ -1,3 +1,5 @@
+target = "evm-ethereum-london"
+
 # sameln: func %whole_loop_removed() -> i8:
 # nextln:    block3:
 # nextln:        return 1.i8;

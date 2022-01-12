@@ -1,5 +1,7 @@
 #! Simple constant folding without branching.
 
+target = "evm-ethereum-london"
+
 # sameln: func %unary() -> i8:
 # nextln:     block0:
 # nextln:         return 1.i8;

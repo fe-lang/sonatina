@@ -99,6 +99,10 @@ impl<'a> Lexer<'a> {
             } else {
                 return Err(self.invalid_token());
             }
+        } else if self.eat_char_if(|c| c == '"').is_some() {
+            self.eat_string_lit()?
+        } else if self.eat_string_if(b"target").is_some() {
+            Token::Target
         } else if self.eat_string_if(b"func").is_some() {
             Token::Func
         } else if self.eat_string_if(b"undef").is_some() {
@@ -161,6 +165,31 @@ impl<'a> Lexer<'a> {
 
         self.cur = cur;
         Some(self.from_raw_parts(start, cur))
+    }
+
+    fn eat_string_lit(&mut self) -> Result<Token<'a>> {
+        let start = self.cur;
+        let mut cur = self.cur;
+        loop {
+            match self.input.get(cur) {
+                Some(c) => {
+                    if *c == b'"' {
+                        self.cur = cur + 1;
+                        break;
+                    } else {
+                        cur += 1;
+                    }
+                }
+                None => {
+                    return Err(Error::new(
+                        ErrorKind::SyntaxError("missing closing `\"`".into()),
+                        self.line,
+                    ))
+                }
+            }
+        }
+
+        Ok(Token::String(self.from_raw_parts(start, cur)))
     }
 
     fn try_eat_opcode(&mut self) -> Option<Code> {
@@ -304,11 +333,13 @@ pub(super) enum Token<'a> {
     Eq,
     Dot,
     Undef,
+    Target,
     ModuleComment(&'a str),
     FuncComment(&'a str),
     Block(u32),
     Value(u32),
     Ident(&'a str),
+    String(&'a str),
     DataLocationKind(DataLocationKind),
     OpCode(Code),
     Ty(Type),
@@ -325,7 +356,11 @@ impl<'a> Token<'a> {
 
     pub(super) fn string(&self) -> &'a str {
         match self {
-            Self::ModuleComment(s) | Self::FuncComment(s) | Self::Ident(s) | Self::Integer(s) => s,
+            Self::ModuleComment(s)
+            | Self::FuncComment(s)
+            | Self::Ident(s)
+            | Self::Integer(s)
+            | Self::String(s) => s,
             _ => unreachable!(),
         }
     }
@@ -368,6 +403,8 @@ impl<'a> fmt::Display for Token<'a> {
             }
             Self::Dot => write!(w, "."),
             Self::Undef => write!(w, "undef"),
+            Self::Target => write!(w, "target"),
+            Self::String(s) => write!(w, "{}", s),
             Self::ModuleComment(comment) => write!(w, "#!{}", comment),
             Self::FuncComment(comment) => write!(w, "#{}", comment),
             Self::Block(id) => write!(w, "block{}", id),

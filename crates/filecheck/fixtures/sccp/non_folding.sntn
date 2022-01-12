@@ -1,5 +1,7 @@
 #! Assert no constant is never folded.
 
+target = "evm-ethereum-london"
+
 # sameln: func %non_folding(v0.i64):
 # nextln:    block1:
 # nextln:        v1.i64 = load @storage v0 i64;

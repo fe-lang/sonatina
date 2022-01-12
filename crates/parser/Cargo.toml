@@ -6,5 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-sonatina-codegen = { path = "../codegen", version = "0.1.0" }
+sonatina-codegen = { path = "../codegen" }
+sonatina-triple = { path = "../triple" }
 smallvec = "1.7.0"

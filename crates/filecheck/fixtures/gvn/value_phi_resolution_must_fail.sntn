@@ -1,3 +1,5 @@
+target = "evm-ethereum-london"
+
 # check: block3:
 # nextln:    v5.i64 = phi (v2 block1) (v1 block2);
 # nextln:    v6.i64 = add v5 v5;

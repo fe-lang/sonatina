@@ -1,3 +1,5 @@
+target = "evm-ethereum-london"
+
 # check: block1:
 # nextln:  v10.i8 = add v0 v1;
 # nextln:  fallthrough block2;

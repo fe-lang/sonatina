@@ -1,21 +1,23 @@
 use std::path::{Path, PathBuf};
 
-use sonatina_codegen::{cfg::ControlFlowGraph, domtree::DomTree, optim::gvn::GvnSolver, Function};
+use sonatina_codegen::{
+    cfg::ControlFlowGraph, domtree::DomTree, optim::gvn::GvnSolver, Function, TargetIsa,
+};
 
 use super::{FuncTransform, FIXTURE_ROOT};
 
 #[derive(Default)]
 pub struct GvnTransform {
-    solver: GvnSolver,
     domtree: DomTree,
     cfg: ControlFlowGraph,
 }
 
 impl FuncTransform for GvnTransform {
-    fn transform(&mut self, func: &mut Function) {
+    fn transform(&mut self, func: &mut Function, isa: &TargetIsa) {
         self.cfg.compute(func);
         self.domtree.compute(&self.cfg);
-        self.solver.run(func, &mut self.cfg, &mut self.domtree);
+        let mut solver = GvnSolver::new(isa);
+        solver.run(func, &mut self.cfg, &mut self.domtree);
     }
 
     fn test_root(&self) -> PathBuf {

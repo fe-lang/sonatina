@@ -1,3 +1,5 @@
+target = "evm-ethereum-london"
+
 # check:  block3:
 # nextln:     v2.i32 = add v0 1.i32;
 # nextln:     v3.i32 = sub v2 1.i32;

@@ -15,25 +15,15 @@ impl TargetTriple {
             version,
         }
     }
-    pub fn parse<'a>(s: &'a str) -> Result<Self, InvalidTriple<'a>> {
+    pub fn parse(s: &str) -> Result<Self, InvalidTriple> {
         let mut triple = s.split('-');
 
-        let arch = Architecture::parse(
-            triple
-                .next()
-                .ok_or_else(|| InvalidTriple::InvalidFormat(s))?,
-        )?;
-        let chain = Chain::parse(
-            triple
-                .next()
-                .ok_or_else(|| InvalidTriple::InvalidFormat(s))?,
-        )?;
+        let arch = Architecture::parse(triple.next().ok_or(InvalidTriple::InvalidFormat(s))?)?;
+        let chain = Chain::parse(triple.next().ok_or(InvalidTriple::InvalidFormat(s))?)?;
         let version = Version::parse(
             arch,
             chain,
-            triple
-                .next()
-                .ok_or_else(|| InvalidTriple::InvalidFormat(s))?,
+            triple.next().ok_or(InvalidTriple::InvalidFormat(s))?,
         )?;
 
         if triple.next().is_none() {
@@ -50,7 +40,7 @@ pub enum Architecture {
 }
 
 impl Architecture {
-    fn parse<'a>(s: &'a str) -> Result<Self, InvalidTriple<'a>> {
+    fn parse(s: &str) -> Result<Self, InvalidTriple> {
         match s {
             "evm" => Ok(Self::Evm),
             _ => Err(InvalidTriple::ArchitectureNotSupported),
@@ -64,7 +54,7 @@ pub enum Chain {
 }
 
 impl Chain {
-    fn parse<'a>(s: &'a str) -> Result<Self, InvalidTriple<'a>> {
+    fn parse(s: &str) -> Result<Self, InvalidTriple> {
         match s {
             "ethereum" => Ok(Chain::Ethereum),
             _ => Err(InvalidTriple::ChainNotSupported),
@@ -78,7 +68,7 @@ pub enum Version {
 }
 
 impl Version {
-    fn parse<'a>(arch: Architecture, chain: Chain, s: &'a str) -> Result<Self, InvalidTriple<'a>> {
+    fn parse(arch: Architecture, chain: Chain, s: &str) -> Result<Self, InvalidTriple> {
         match (arch, chain) {
             (Architecture::Evm, Chain::Ethereum) => {
                 let evm_version = match s {

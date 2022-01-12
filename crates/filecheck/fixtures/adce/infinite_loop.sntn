@@ -1,5 +1,7 @@
 #! Test infinite loop with no side effects is never removed.
 
+target = "evm-ethereum-london"
+
 # sameln: func %infinite_loop() -> i8:
 # nextln:    block0:
 # nextln:        jump block1

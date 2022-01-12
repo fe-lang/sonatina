@@ -1,3 +1,5 @@
+target = "evm-ethereum-london"
+
 # v0 | -1 => -1
 # check: return -1.i8;
 func %or0(v0.i8) -> i8:

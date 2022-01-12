@@ -1,3 +1,5 @@
+target = "evm-ethereum-london"
+
 # check: block1:
 # nextln:   jump block4;
 # check: block2:

@@ -1,3 +1,5 @@
+target = "evm-ethereum-london"
+
 # sameln: func %phi(v0.i8) -> i8:
 # nextln:     block0:
 # nextln:         jump block1;

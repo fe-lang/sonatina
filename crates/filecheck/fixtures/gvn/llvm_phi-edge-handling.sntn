@@ -1,6 +1,7 @@
 #! This test case is translated from
 #! <https://github.com/llvm/llvm-project/blob/main/llvm/test/Transforms/NewGVN/phi-of-ops-move-block.ll>
 
+target = "evm-ethereum-london"
 
 # check:  block0:
 # nextln:     br v0 block1 block2;

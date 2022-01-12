@@ -1,3 +1,5 @@
+target = "evm-ethereum-london"
+
 # regex: VALUE=\bv\d+\b
 # check: block3:
 # nextln:    $(var=$VALUE).i64 = phi (v3 block1) (v4 block2);

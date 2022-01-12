@@ -1,6 +1,7 @@
 #! This test case is translated from
 #! <https://github.com/llvm/llvm-project/blob/main/llvm/test/Transforms/NewGVN/phi-of-ops-move-block.ll>
 
+target = "evm-ethereum-london"
 
 #define void @llfoo(i32 %arg, i32 %arg1, i32 (i32, i32)* %arg2) {
 # check:  block0:

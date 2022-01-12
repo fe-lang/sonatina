@@ -14,11 +14,18 @@ use super::simplify_impl::{simplify_insn, SimplifyResult};
 
 #[derive(Debug)]
 pub struct InsnSimplifySolver<'isa> {
-    worklist: VecDeque<Insn>,
     isa: &'isa TargetIsa,
+    worklist: VecDeque<Insn>,
 }
 
 impl<'isa> InsnSimplifySolver<'isa> {
+    pub fn new(isa: &'isa TargetIsa) -> Self {
+        Self {
+            isa,
+            worklist: VecDeque::default(),
+        }
+    }
+
     pub fn run(&mut self, func: &mut Function) {
         let entry = match func.layout.entry_block() {
             Some(entry) => entry,

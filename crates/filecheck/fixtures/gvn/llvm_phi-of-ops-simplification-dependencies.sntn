@@ -1,6 +1,9 @@
 #! This test case is translated from
 #! <https://github.com/llvm/llvm-project/blob/main/llvm/test/Transforms/NewGVN/phi-of-ops-simplification-dependencies.ll>
 
+
+target = "evm-ethereum-london"
+
 # regex: VALUE=\bv\d+\b
 # check:  block0:
 # nextln:     jump block1;

@@ -1,3 +1,5 @@
+target = "evm-ethereum-london"
+
 # regex: VALUE=\bv\d+\b
 # check:    block3:
 # nextln:        v31.i8 = add 3.i8 v2;

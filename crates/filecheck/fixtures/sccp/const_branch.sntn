@@ -1,5 +1,7 @@
 #! `br` instruction with constant condition.
 
+target = "evm-ethereum-london"
+
 # check:  block0:
 # nextln:     jump block2;
 # nextln: 

@@ -1,3 +1,5 @@
+target = "evm-ethereum-london"
+
 # a == a => 1
 # check: return -1.i1;
 func %eq0(v0.i64) -> i1:

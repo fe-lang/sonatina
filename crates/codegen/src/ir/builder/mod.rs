@@ -294,8 +294,8 @@ impl<'isa> FunctionBuilder<'isa> {
         &self.func.arg_values
     }
 
-    pub fn hash_type(&self) -> Type {
-        self.isa.type_provider().hash_type()
+    pub fn pointer_type(&self) -> Type {
+        self.isa.type_provider().pointer_type()
     }
 
     pub fn address_type(&self) -> Type {
@@ -464,34 +464,18 @@ mod tests {
 pub(crate) mod test_util {
     use super::*;
 
-    use crate::{ir::ir_writer::FuncWriter, isa::IsaSpecificTypeProvider};
+    use sonatina_triple::TargetTriple;
 
-    use crate::{Function, Signature, Type};
+    use crate::ir::ir_writer::FuncWriter;
 
-    #[derive(Debug)]
-    pub(crate) struct TestIsa {}
-
-    impl IsaSpecificTypeProvider for TestIsa {
-        fn hash_type(&self) -> Type {
-            Type::I256
-        }
-
-        fn address_type(&self) -> Type {
-            Type::make_array(Type::I8, 20)
-        }
-
-        fn balance_type(&self) -> Type {
-            Type::I256
-        }
-
-        fn gas_type(&self) -> Type {
-            Type::I256
-        }
-    }
+    use crate::{
+        isa::{IsaBuilder, TargetIsa},
+        Function, Signature, Type,
+    };
 
     pub(crate) fn build_test_isa() -> TargetIsa {
-        let type_provider = TestIsa {};
-        TargetIsa::new(Box::new(type_provider))
+        let triple = TargetTriple::parse("evm-ethereum-london").unwrap();
+        IsaBuilder::new(triple).build()
     }
 
     pub(crate) fn func_builder<'isa>(

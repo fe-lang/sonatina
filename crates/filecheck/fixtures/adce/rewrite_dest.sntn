@@ -1,3 +1,5 @@
+target = "evm-ethereum-london"
+
 # check:  block0:
 # nextln:     v1.i32 = sext v0;
 # nextln:     jump block2;

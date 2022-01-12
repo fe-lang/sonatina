@@ -1,3 +1,5 @@
+target = "evm-ethereum-london"
+
 # sameln: func %complex_loop() -> i8:
 # nextln:     block1:
 # nextln:         fallthrough block2;

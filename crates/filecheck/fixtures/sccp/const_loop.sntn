@@ -1,5 +1,7 @@
 #! Simple loop with const condition.
 
+target = "evm-ethereum-london"
+
 # sameln: func %const_loop() -> i8:
 # nextln:     block1:
 # nextln:         fallthrough block2;

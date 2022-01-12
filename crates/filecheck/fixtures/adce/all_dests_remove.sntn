@@ -1,3 +1,5 @@
+target = "evm-ethereum-london"
+
 # check:    block0:
 # nextln:        v0.i8 = or 1.i8 0.i8;
 # nextln:        jump block3;

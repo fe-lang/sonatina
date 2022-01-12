@@ -11,7 +11,7 @@ use std::{
     time,
 };
 
-use sonatina_codegen::{ir::ir_writer::FuncWriter, Function};
+use sonatina_codegen::{ir::ir_writer::FuncWriter, Function, TargetIsa};
 use sonatina_parser::{
     parser::{ParsedFunction, ParsedModule, Parser},
     ErrorKind,
@@ -22,7 +22,7 @@ use walkdir::WalkDir;
 pub(crate) const FIXTURE_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 
 pub trait FuncTransform {
-    fn transform(&mut self, func: &mut Function);
+    fn transform(&mut self, func: &mut Function, isa: &TargetIsa);
 
     fn test_root(&self) -> PathBuf;
 }
@@ -141,17 +141,18 @@ impl<'a> FileChecker<'a> {
             )];
         }
 
+        let isa = parsed_module.isa;
         funcs
             .into_iter()
-            .map(|func| self.check_func(func))
+            .map(|func| self.check_func(func, &isa))
             .collect()
     }
 
-    fn check_func(&mut self, parsed_func: ParsedFunction) -> FileCheckResult {
+    fn check_func(&mut self, parsed_func: ParsedFunction, isa: &TargetIsa) -> FileCheckResult {
         let mut func = parsed_func.func;
         let comments = parsed_func.comments;
 
-        self.transformer.transform(&mut func);
+        self.transformer.transform(&mut func, isa);
         let func_ir = FuncWriter::new(&func).dump_string().unwrap();
 
         let checker = self.build_checker(&comments);
