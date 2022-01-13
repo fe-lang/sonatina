@@ -246,6 +246,29 @@ impl InsnData {
         }
     }
 
+    /// Remove phi arg that flow through the `from`.
+    ///
+    /// # Panics
+    /// If `insn` is not a phi insn or there is no phi argument from the block, then the function panics.
+    pub fn remove_phi_arg(&mut self, from: Block) -> Value {
+        let (values, blocks) = match self {
+            InsnData::Phi { values, blocks, .. } => (values, blocks),
+            _ => panic!("insn is not a phi function"),
+        };
+
+        let mut index = None;
+        for (i, block) in blocks.iter().enumerate() {
+            if *block == from {
+                index = Some(i);
+                break;
+            }
+        }
+
+        let index = index.unwrap();
+        blocks.remove(index);
+        values.remove(index)
+    }
+
     pub fn phi_blocks(&self) -> &[Block] {
         match self {
             InsnData::Phi { blocks, .. } => blocks,

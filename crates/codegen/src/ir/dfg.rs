@@ -174,10 +174,6 @@ impl DataFlowGraph {
         }
     }
 
-    pub fn append_phi_arg(&mut self, insn: Insn, value: Value, block: Block) {
-        self.insns[insn].append_phi_arg(value, block)
-    }
-
     pub fn phi_blocks(&self, insn: Insn) -> &[Block] {
         self.insns[insn].phi_blocks()
     }
@@ -186,28 +182,19 @@ impl DataFlowGraph {
         self.insns[insn].phi_blocks_mut()
     }
 
+    pub fn append_phi_arg(&mut self, insn: Insn, value: Value, block: Block) {
+        self.insns[insn].append_phi_arg(value, block);
+        self.attach_user(insn);
+    }
+
     /// Remove phi arg that flow through the `from`.
     ///
     /// # Panics
     /// If `insn` is not a phi insn or there is no phi argument from the block, then the function panics.
     pub fn remove_phi_arg(&mut self, insn: Insn, from: Block) -> Value {
-        let data = &mut self.insns[insn];
-        let (values, blocks) = match data {
-            InsnData::Phi { values, blocks, .. } => (values, blocks),
-            _ => panic!("insn is not a phi function"),
-        };
-
-        let mut index = None;
-        for (i, block) in blocks.iter().enumerate() {
-            if *block == from {
-                index = Some(i);
-                break;
-            }
-        }
-
-        let index = index.unwrap();
-        blocks.remove(index);
-        values.remove(index)
+        let removed = self.insns[insn].remove_phi_arg(from);
+        self.remove_user(removed, insn);
+        removed
     }
 
     pub fn insn_args(&self, insn: Insn) -> &[Value] {
