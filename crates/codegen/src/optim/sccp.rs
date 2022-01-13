@@ -298,6 +298,8 @@ impl<'isa> SccpSolver<'isa> {
                 return;
             }
 
+            InsnData::Alloca { .. } => LatticeCell::Top,
+
             InsnData::Store { .. } | InsnData::Return { .. } => {
                 // No insn result. Do nothing.
                 return;

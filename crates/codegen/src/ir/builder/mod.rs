@@ -157,6 +157,12 @@ impl<'isa> FunctionBuilder<'isa> {
         self.insert_insn(insn_data);
     }
 
+    /// Build alloca instruction.
+    pub fn alloca(&mut self, ty: Type) -> Value {
+        let insn_data = InsnData::Alloca { ty };
+        self.insert_insn(insn_data).unwrap()
+    }
+
     pub fn jump(&mut self, dest: Block) {
         debug_assert!(!self.ssa_builder.is_sealed(dest));
         let insn_data = InsnData::Jump {

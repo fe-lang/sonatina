@@ -24,7 +24,10 @@ impl Type {
     }
 
     pub fn is_integral(&self) -> bool {
-        !matches!(self, Self::Array { .. })
+        matches!(
+            self,
+            Self::I1 | Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::I128 | Self::I256
+        )
     }
 }
 
@@ -38,7 +41,7 @@ impl fmt::Display for Type {
             Self::I64 => f.write_str("i64"),
             Self::I128 => f.write_str("i128"),
             Self::I256 => f.write_str("i256"),
-            Self::Array { elem_ty, len } => f.write_fmt(format_args!("[{};{}]", elem_ty, len)),
+            Self::Array { elem_ty, len } => f.write_fmt(format_args!("[{}; {}]", elem_ty, len)),
         }
     }
 }
@@ -51,7 +54,7 @@ impl cmp::PartialOrd for Type {
             return Some(cmp::Ordering::Equal);
         }
 
-        if matches!(self, Array { .. }) | matches!(rhs, Array { .. }) {
+        if !self.is_integral() || !rhs.is_integral() {
             return None;
         }
 

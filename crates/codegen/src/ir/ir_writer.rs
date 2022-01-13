@@ -155,16 +155,19 @@ impl IrWrite for Insn {
                 writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
             }
+
             Binary { code, args } => {
                 write!(w, "{}", code)?;
                 writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
             }
+
             Cast { code, args, .. } => {
                 write!(w, "{}", code)?;
                 writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
             }
+
             Load { args, ty, loc } => {
                 write!(w, "load")?;
                 writer.space(&mut w)?;
@@ -177,6 +180,7 @@ impl IrWrite for Insn {
                 writer.space(&mut w)?;
                 ty.write(writer, &mut w)?;
             }
+
             Store { args, loc } => {
                 write!(w, "store")?;
                 writer.space(&mut w)?;
@@ -187,11 +191,13 @@ impl IrWrite for Insn {
                 writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
             }
+
             Jump { code, dests } => {
                 write!(w, "{}", code)?;
                 writer.space(&mut w)?;
                 writer.write_iter_with_delim(dests.iter(), " ", &mut w)?;
             }
+
             Branch { args, dests } => {
                 write!(w, "br")?;
                 writer.space(&mut w)?;
@@ -227,6 +233,12 @@ impl IrWrite for Insn {
                 }
 
                 writer.write_iter_with_delim(table_args.iter(), " ", &mut w)?;
+            }
+
+            Alloca { ty } => {
+                write!(w, "alloca")?;
+                writer.space(&mut w)?;
+                ty.write(writer, &mut w)?;
             }
 
             Return { args } => {

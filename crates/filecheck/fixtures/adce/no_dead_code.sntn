@@ -1,38 +1,39 @@
 target = "evm-ethereum-london"
 
-# sameln: func %no_dead_code() -> i8:
-# nextln:    block0:
-# nextln:        v0.i1 = sgt 1.i8 2.i8;
-# nextln:        v1.i8 = sext v0;
-# nextln:        br v0 block1 block2;
+# check:  block0:
+# nextln:     v0.i1 = sgt 1.i8 2.i8;
+# nextln:     v1.i8 = sext v0;
+# nextln:     v2.i256 = alloca [i8; 10];
+# nextln:     br v0 block1 block2;
 # nextln: 
-# nextln:    block1:
-# nextln:        v2.i8 = add v1 1.i8;
-# nextln:        jump block3;
+# nextln: block1:
+# nextln:     v3.i8 = add v1 1.i8;
+# nextln:     jump block3;
 # nextln: 
-# nextln:    block2:
-# nextln:        v3.i8 = sub v1 3.i8;
-# nextln:        v4.i8 = add v3 v1;
-# nextln:        jump block3;
+# nextln: block2:
+# nextln:     v4.i8 = sub v1 3.i8;
+# nextln:     v5.i8 = add v4 v1;
+# nextln:     jump block3;
 # nextln: 
-# nextln:    block3:
-# nextln:        v5.i8 = phi (v2 block1) (v4 block2);
-# nextln:        return v5;
+# nextln: block3:
+# nextln:     v6.i8 = phi (v3 block1) (v5 block2);
+# nextln:     return v6;
 func %no_dead_code() -> i8:
     block0:
         v0.i1 = sgt 1.i8 2.i8;
         v1.i8 = sext v0;
+        v2.i256 = alloca [i8; 10];
         br v0 block1 block2;
 
     block1:
-        v2.i8 = add v1 1.i8;
+        v3.i8 = add v1 1.i8;
         jump block3;
 
     block2:
-        v3.i8 = sub v1 3.i8;
-        v4.i8 = add v3 v1;
+        v4.i8 = sub v1 3.i8;
+        v5.i8 = add v4 v1;
         jump block3;
 
     block3:
-        v5.i8 = phi (v2 block1) (v4 block2);
-        return v5;
+        v6.i8 = phi (v3 block1) (v5 block2);
+        return v6;

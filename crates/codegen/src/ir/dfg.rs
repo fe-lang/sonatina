@@ -175,30 +175,15 @@ impl DataFlowGraph {
     }
 
     pub fn append_phi_arg(&mut self, insn: Insn, value: Value, block: Block) {
-        let data = &mut self.insns[insn];
-        match data {
-            InsnData::Phi { values, blocks, .. } => {
-                values.push(value);
-                blocks.push(block);
-            }
-            _ => panic!("insn is not a phi function"),
-        }
+        self.insns[insn].append_phi_arg(value, block)
     }
 
     pub fn phi_blocks(&self, insn: Insn) -> &[Block] {
-        let data = &self.insns[insn];
-        match data {
-            InsnData::Phi { blocks, .. } => blocks,
-            _ => panic!("insn is not a phi function"),
-        }
+        self.insns[insn].phi_blocks()
     }
 
     pub fn phi_blocks_mut(&mut self, insn: Insn) -> &mut [Block] {
-        let data = &mut self.insns[insn];
-        match data {
-            InsnData::Phi { blocks, .. } => blocks,
-            _ => panic!("insn is not a phi function"),
-        }
+        self.insns[insn].phi_blocks_mut()
     }
 
     /// Remove phi arg that flow through the `from`.
@@ -266,18 +251,15 @@ impl DataFlowGraph {
     }
 
     pub fn is_phi(&self, insn: Insn) -> bool {
-        matches!(self.insn_data(insn), InsnData::Phi { .. })
+        self.insns[insn].is_phi()
     }
 
     pub fn is_return(&self, insn: Insn) -> bool {
-        matches!(self.insn_data(insn), InsnData::Return { .. })
+        self.insns[insn].is_return()
     }
 
     pub fn is_branch(&self, insn: Insn) -> bool {
-        matches!(
-            self.insn_data(insn),
-            InsnData::Jump { .. } | InsnData::Branch { .. } | InsnData::BrTable { .. }
-        )
+        self.insns[insn].is_branch()
     }
 
     pub fn is_same_value(&self, v0: Value, v1: Value) -> bool {

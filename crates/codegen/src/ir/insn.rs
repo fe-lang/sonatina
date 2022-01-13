@@ -56,10 +56,13 @@ pub enum InsnData {
         table: SmallVec<[Block; 8]>,
     },
 
+    /// Allocate a memory on the stack frame for the given type.
+    Alloca { ty: Type },
+
     /// Return.
     Return { args: SmallVec<[Value; 8]> },
 
-    /// Phi funcion.
+    /// Phi function.
     Phi {
         values: SmallVec<[Value; 8]>,
         blocks: SmallVec<[Block; 8]>,
@@ -94,6 +97,10 @@ impl InsnData {
             args: [arg],
             ty,
         }
+    }
+
+    pub fn alloca(ty: Type) -> Self {
+        Self::Alloca { ty }
     }
 
     pub fn jump(dest: Block) -> InsnData {
@@ -229,24 +236,56 @@ impl InsnData {
         }
     }
 
-    pub fn replace_arg(&mut self, new_arg: Value, idx: usize) {
-        self.args_mut()[idx] = new_arg;
-    }
-
     pub fn append_phi_arg(&mut self, value: Value, block: Block) {
         match self {
             Self::Phi { values, blocks, .. } => {
                 values.push(value);
                 blocks.push(block)
             }
-            _ => panic!("Expects `InsnData::phi` but got `{:?}`", self),
+            _ => panic!("expects `InsnData::phi` but got `{:?}`", self),
         }
+    }
+
+    pub fn phi_blocks(&self) -> &[Block] {
+        match self {
+            InsnData::Phi { blocks, .. } => blocks,
+            _ => panic!("insn is not a phi function"),
+        }
+    }
+
+    pub fn phi_blocks_mut(&mut self) -> &mut [Block] {
+        match self {
+            InsnData::Phi { blocks, .. } => blocks,
+            _ => panic!("insn is not a phi function"),
+        }
+    }
+
+    pub fn replace_arg(&mut self, new_arg: Value, idx: usize) {
+        self.args_mut()[idx] = new_arg;
+    }
+
+    pub fn is_phi(&self) -> bool {
+        matches!(self, InsnData::Phi { .. })
+    }
+
+    pub fn is_return(&self) -> bool {
+        matches!(self, InsnData::Return { .. })
+    }
+
+    pub fn is_branch(&self) -> bool {
+        matches!(
+            self,
+            InsnData::Jump { .. } | InsnData::Branch { .. } | InsnData::BrTable { .. }
+        )
     }
 
     pub fn has_side_effect(&self) -> bool {
         matches!(
             self,
-            InsnData::Load { .. } | InsnData::Store { .. } | InsnData::Return { .. }
+            InsnData::Load { .. }
+                | InsnData::Store { .. }
+                | InsnData::Return { .. }
+                | InsnData::Alloca { .. }
         )
     }
 
@@ -264,6 +303,7 @@ impl InsnData {
             Self::Binary { code, args } => Some(code.result_type(dfg, args)),
             Self::Cast { ty, .. } | Self::Load { ty, .. } => Some(ty.clone()),
             Self::Phi { ty, .. } => Some(ty.clone()),
+            Self::Alloca { .. } => Some(isa.type_provider().pointer_type()),
             _ => None,
         }
     }

@@ -69,6 +69,10 @@ impl<'a> Lexer<'a> {
             Token::LParen
         } else if self.eat_char_if(|c| c == ')').is_some() {
             Token::RParen
+        } else if self.eat_char_if(|c| c == '[').is_some() {
+            Token::LBracket
+        } else if self.eat_char_if(|c| c == ']').is_some() {
+            Token::RBracket
         } else if self.eat_char_if(|c| c == '=').is_some() {
             Token::Eq
         } else if self.eat_char_if(|c| c == '.').is_some() {
@@ -111,8 +115,8 @@ impl<'a> Lexer<'a> {
             Token::RArrow
         } else if let Some(code) = self.try_eat_opcode() {
             Token::OpCode(code)
-        } else if let Some(ty) = self.try_eat_ty() {
-            Token::Ty(ty)
+        } else if let Some(ty) = self.try_eat_base_ty() {
+            Token::BaseTy(ty)
         } else if self.eat_string_if(b"block").is_some() {
             if let Some(id) = self.try_eat_id() {
                 Token::Block(id)
@@ -224,13 +228,14 @@ impl<'a> Lexer<'a> {
             (b"fallthrough", Code::FallThrough),
             (b"br_table", Code::BrTable),
             (b"br", Code::Br),
+            (b"alloca", Code::Alloca),
             (b"return", Code::Return),
             (b"phi", Code::Phi),
         }
     }
 
-    fn try_eat_ty(&mut self) -> Option<Type> {
-        let base = try_eat_variant! {
+    fn try_eat_base_ty(&mut self) -> Option<Type> {
+        try_eat_variant! {
             self,
             (b"i8", Type::I8),
             (b"i16", Type::I16),
@@ -239,16 +244,6 @@ impl<'a> Lexer<'a> {
             (b"i128", Type::I128),
             (b"i256", Type::I256),
             (b"i1", Type::I1),
-        };
-
-        if base.is_none() && self.eat_char_if(|c| c == '[').is_some() {
-            let ty = self.try_eat_ty().unwrap();
-            self.eat_char_if(|c| c == ';').unwrap();
-            let len = self.try_eat_integer().unwrap().parse().unwrap();
-            self.eat_char_if(|c| c == ']').unwrap();
-            Some(Type::make_array(ty, len))
-        } else {
-            base
         }
     }
 
@@ -330,6 +325,8 @@ pub(super) enum Token<'a> {
     Comma,
     LParen,
     RParen,
+    LBracket,
+    RBracket,
     Eq,
     Dot,
     Undef,
@@ -342,7 +339,7 @@ pub(super) enum Token<'a> {
     String(&'a str),
     DataLocationKind(DataLocationKind),
     OpCode(Code),
-    Ty(Type),
+    BaseTy(Type),
     Integer(&'a str),
 }
 
@@ -374,7 +371,7 @@ impl<'a> Token<'a> {
     }
 
     pub(super) fn ty(&self) -> &Type {
-        if let Self::Ty(ty) = self {
+        if let Self::BaseTy(ty) = self {
             ty
         } else {
             unreachable!()
@@ -392,6 +389,8 @@ impl<'a> fmt::Display for Token<'a> {
             Self::Comma => write!(w, ","),
             Self::LParen => write!(w, "("),
             Self::RParen => write!(w, ")"),
+            Self::LBracket => write!(w, "["),
+            Self::RBracket => write!(w, "]"),
             Self::Eq => write!(w, "="),
             Self::DataLocationKind(loc) => {
                 write!(w, "@")?;
@@ -411,7 +410,7 @@ impl<'a> fmt::Display for Token<'a> {
             Self::Value(id) => write!(w, "v{}", id),
             Self::Ident(ident) => write!(w, "%{}", ident),
             Self::OpCode(code) => write!(w, "{}", code),
-            Self::Ty(ty) => write!(w, "{}", ty),
+            Self::BaseTy(ty) => write!(w, "{}", ty),
             Self::Integer(num) => w.write_str(num),
         }
     }
@@ -457,8 +456,9 @@ pub(super) enum Code {
 
     // Branch ops.
     Br,
-
     BrTable,
+
+    Alloca,
 
     Return,
 
@@ -497,6 +497,7 @@ impl fmt::Display for Code {
             Store => "store",
             Jump => "jump",
             FallThrough => "fallthrough",
+            Alloca => "alloca",
             Br => "br",
             BrTable => "br_table",
             Return => "return",
@@ -542,7 +543,7 @@ mod tests {
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Ty(Type::I32)
+            BaseTy(Type::I32)
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
@@ -550,7 +551,7 @@ mod tests {
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Ty(Type::I64)
+            BaseTy(Type::I64)
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
@@ -581,7 +582,7 @@ mod tests {
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Ty(Type::I32)
+            BaseTy(Type::I32)
         ));
 
         assert!(matches!(
@@ -594,7 +595,7 @@ mod tests {
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Ty(Type::I64)
+            BaseTy(Type::I64)
         ));
 
         assert!(matches!(
@@ -628,7 +629,7 @@ mod tests {
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Ty(Type::I32)
+            BaseTy(Type::I32)
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
@@ -636,7 +637,7 @@ mod tests {
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Ty(Type::I64)
+            BaseTy(Type::I64)
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
@@ -666,7 +667,7 @@ mod tests {
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Ty(Type::I64)
+            BaseTy(Type::I64)
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
@@ -695,7 +696,7 @@ mod tests {
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Ty(Type::I64)
+            BaseTy(Type::I64)
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
@@ -718,64 +719,6 @@ mod tests {
             SemiColon
         ));
 
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            OpCode(Code::Return)
-        ));
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            SemiColon
-        ));
-
-        assert!(lexer.next_token().unwrap().is_none());
-    }
-
-    #[test]
-    fn lexer_with_array_ty() {
-        let input = "func %test_func([i32;4], [[i128;3];4]):
-    block0:
-        return;";
-        let mut lexer = Lexer::new(input);
-
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            Func
-        ));
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            Ident("test_func")
-        ));
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            LParen
-        ));
-        assert!(
-            matches!(lexer.next_token().ok().flatten().unwrap().item, Ty(ty) if ty == Type::make_array(Type::I32, 4))
-        );
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            Comma
-        ));
-        assert!(
-            matches!(lexer.next_token().ok().flatten().unwrap().item, Ty(ty) if ty == Type::make_array(Type::make_array(Type::I128, 3), 4))
-        );
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            RParen
-        ));
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            Colon
-        ));
-
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            Block(0)
-        ));
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            Colon
-        ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
             OpCode(Code::Return)

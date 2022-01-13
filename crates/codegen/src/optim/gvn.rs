@@ -638,6 +638,7 @@ impl<'isa> GvnSolver<'isa> {
             | InsnData::Jump { .. }
             | InsnData::Branch { .. }
             | InsnData::BrTable { .. }
+            | InsnData::Alloca { .. }
             | InsnData::Return { .. } => insn_data.clone(),
 
             InsnData::Phi { values, blocks, ty } => {
@@ -695,7 +696,7 @@ impl<'isa> GvnSolver<'isa> {
     ) -> Option<GvnInsn> {
         simplify_impl::simplify_insn_data(dfg, self.isa, insn_data.clone()).map(|res| match res {
             simplify_impl::SimplifyResult::Value(value) => {
-                // Handle immediate specially because we need to assign a new class to the immediatel
+                // Handle immediate specially because we need to assign a new class to the immediate.
                 // if the immediate is newly created in simplification process.
                 if let Some(imm) = dfg.value_imm(value) {
                     GvnInsn::Value(self.make_imm(dfg, imm))
@@ -1264,7 +1265,7 @@ impl<'isa, 'a> ValuePhiFinder<'isa, 'a> {
             return Some(result.canonicalize());
         };
 
-        // If the value is annotated with value phi, thne return it.
+        // If the value is annotated with value phi, then return it.
         let class = self.solver.value_class(value);
         match &self.solver.classes[class].value_phi {
             value_phi @ Some(ValuePhi::PhiInsn(..)) => value_phi.clone(),

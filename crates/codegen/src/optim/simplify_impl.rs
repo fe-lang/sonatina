@@ -107,10 +107,16 @@ entity_impl!(Expr);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExprData {
     /// Unary instructions.
-    Unary { code: UnaryOp, args: ArgArray1 },
+    Unary {
+        code: UnaryOp,
+        args: ArgArray1,
+    },
 
     /// Binary instructions.
-    Binary { code: BinaryOp, args: ArgArray2 },
+    Binary {
+        code: BinaryOp,
+        args: ArgArray2,
+    },
 
     /// Cast operations.
     Cast {
@@ -133,10 +139,16 @@ pub enum ExprData {
     },
 
     /// Unconditional jump operaitons.
-    Jump { code: JumpOp, dests: BlockArray1 },
+    Jump {
+        code: JumpOp,
+        dests: BlockArray1,
+    },
 
     /// Conditional jump operations.
-    Branch { args: ArgArray1, dests: BlockArray2 },
+    Branch {
+        args: ArgArray1,
+        dests: BlockArray2,
+    },
 
     /// Indirect jump.
     BrTable {
@@ -145,8 +157,14 @@ pub enum ExprData {
         table: BlockList,
     },
 
+    Alloca {
+        ty: Type,
+    },
+
     /// Return.
-    Return { args: ArgList },
+    Return {
+        args: ArgList,
+    },
 
     /// Phi funcion.
     Phi {
@@ -205,6 +223,8 @@ impl ExprData {
                 default: *default,
                 table: table.clone(),
             },
+
+            InsnData::Alloca { ty } => Self::Alloca { ty: ty.clone() },
 
             InsnData::Return { args } => Self::Return {
                 args: args.iter().copied().map(Into::into).collect(),
@@ -269,6 +289,8 @@ impl ExprData {
                 default: *default,
                 table: table.clone(),
             },
+
+            Self::Alloca { ty } => InsnData::alloca(ty.clone()),
 
             Self::Return { args } => InsnData::Return {
                 args: args

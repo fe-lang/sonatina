@@ -128,29 +128,25 @@ impl<'a, 'b> FuncParser<'a, 'b> {
             let value = Value(value.id());
             inserter.def_value(value, self.lexer.line())?;
             expect_token!(self.lexer, Token::Dot, "dot")?;
-            let ty = expect_token!(self.lexer, Token::Ty(..), "type")?
-                .ty()
-                .clone();
+            let ty = self.expect_ty()?;
             inserter.append_arg_value(value, ty);
 
             while eat_token!(self.lexer, Token::Comma)?.is_some() {
                 let value = Value(expect_token!(self.lexer, Token::Value(..), "value")?.id());
                 inserter.def_value(value, self.lexer.line())?;
                 expect_token!(self.lexer, Token::Dot, "dot")?;
-                let ty = expect_token!(self.lexer, Token::Ty(..), "type")?
-                    .ty()
-                    .clone();
+                let ty = self.expect_ty()?;
                 inserter.append_arg_value(value, ty);
             }
         }
         expect_token!(self.lexer, Token::RParen, ")")?;
 
         if eat_token!(self.lexer, Token::RArrow)?.is_some() {
-            let ty = expect_token!(self.lexer, Token::Ty(..), "type")?;
-            inserter.func.sig.append_return(ty.ty().clone());
+            let ty = self.expect_ty()?;
+            inserter.func.sig.append_return(ty);
             while eat_token!(self.lexer, Token::Comma)?.is_some() {
-                let ty = expect_token!(self.lexer, Token::Ty(..), "type")?;
-                inserter.func.sig.append_return(ty.ty().clone());
+                let ty = self.expect_ty()?;
+                inserter.func.sig.append_return(ty);
             }
         }
         expect_token!(self.lexer, Token::Colon, ":")?;
@@ -177,9 +173,7 @@ impl<'a, 'b> FuncParser<'a, 'b> {
         loop {
             if let Some(value) = eat_token!(self.lexer, Token::Value(..))? {
                 expect_token!(self.lexer, Token::Dot, ".")?;
-                let ty = expect_token!(self.lexer, Token::Ty(..), "type")?
-                    .ty()
-                    .clone();
+                let ty = self.expect_ty()?;
                 expect_token!(self.lexer, Token::Eq, "=")?;
                 let opcode = expect_token!(self.lexer, Token::OpCode(..), "opcode")?.opcode();
                 let insn = opcode.make_insn(self, inserter, Some(ty))?;
@@ -211,24 +205,10 @@ impl<'a, 'b> FuncParser<'a, 'b> {
             }
             Ok(value)
         } else {
-            let number = expect_token!(
-                self.lexer,
-                Token::Integer(..),
-                "expected immediate or value"
-            )?
-            .string();
-            expect_token!(
-                self.lexer,
-                Token::Dot,
-                "expected type annotation for immediate"
-            )?;
-            let ty = expect_token!(
-                self.lexer,
-                Token::Ty(..),
-                "expected type annotation for immediate"
-            )?
-            .ty()
-            .clone();
+            let number =
+                expect_token!(self.lexer, Token::Integer(..), "immediate or value")?.string();
+            expect_token!(self.lexer, Token::Dot, "type annotation for immediate")?;
+            let ty = self.expect_ty()?;
             let imm = build_imm_data(number, &ty, self.lexer.line())?;
             Ok(inserter.def_imm(imm))
         }
@@ -237,6 +217,28 @@ impl<'a, 'b> FuncParser<'a, 'b> {
     fn expect_block(&mut self) -> Result<Block> {
         let id = expect_token!(self.lexer, Token::Block(..), "block")?.id();
         Ok(Block(id))
+    }
+
+    fn expect_ty(&mut self) -> Result<Type> {
+        if let Some(ty) = eat_token!(self.lexer, Token::BaseTy(..))?.map(|tok| tok.ty().clone()) {
+            return Ok(ty);
+        };
+
+        // Try parse array type.
+        expect_token!(self.lexer, Token::LBracket, "[")?;
+        let elem_ty = self.expect_ty()?;
+        expect_token!(self.lexer, Token::SemiColon, ";")?;
+        let len = expect_token!(self.lexer, Token::Integer(..), " or value")?
+            .string()
+            .parse()
+            .map_err(|err| {
+                Error::new(
+                    ErrorKind::SyntaxError(format!("{}", err)),
+                    self.lexer.line(),
+                )
+            })?;
+        expect_token!(self.lexer, Token::RBracket, "]")?;
+        Ok(Type::make_array(elem_ty, len))
     }
 
     fn expect_data_loc_kind(&mut self) -> Result<DataLocationKind> {
@@ -476,12 +478,11 @@ impl Code {
                 CastOp::Trunc,
                 &mut undefs
             ),
+
             Self::Load => {
                 let loc = parser.expect_data_loc_kind()?;
                 let arg = parser.expect_insn_arg(inserter, 0, &mut undefs)?;
-                let ty = expect_token!(parser.lexer, Token::Ty(..), "type")?
-                    .ty()
-                    .clone();
+                let ty = parser.expect_ty()?;
                 expect_token!(parser.lexer, Token::SemiColon, ";")?;
                 InsnData::Load {
                     args: [arg],
@@ -499,8 +500,10 @@ impl Code {
                     loc,
                 }
             }
+
             Self::Jump => make_jump!(parser, JumpOp::Jump),
             Self::FallThrough => make_jump!(parser, JumpOp::FallThrough),
+
             Self::Br => {
                 let cond = parser.expect_insn_arg(inserter, 0, &mut undefs)?;
                 let then = parser.expect_block()?;
@@ -511,7 +514,6 @@ impl Code {
                     dests: [then, else_],
                 }
             }
-
             Self::BrTable => {
                 let mut arg_idx = 0;
                 let mut args = smallvec![];
@@ -540,6 +542,12 @@ impl Code {
                     default,
                     table,
                 }
+            }
+
+            Self::Alloca => {
+                let ty = parser.expect_ty()?;
+                expect_token!(parser.lexer, Token::SemiColon, ";")?;
+                InsnData::Alloca { ty }
             }
 
             Self::Return => {
