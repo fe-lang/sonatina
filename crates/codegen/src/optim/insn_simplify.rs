@@ -1,4 +1,4 @@
-//! This module contains a solver for instrunction simplification.
+//! This module contains a solver for instruction simplification.
 
 use std::collections::VecDeque;
 

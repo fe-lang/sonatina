@@ -113,6 +113,7 @@
     (Jump (code JumpOp) (dests BlockArray1))
     (Branch (args ArgArray1) (dests BlockArray2))
     (BrTable (args ArgList) (default BrTableDefaultDest) (table BlockList))
+    (Alloca (ty Type))
     (Return (args ArgList))
     (Phi (args ArgList) (blocks BlockList))
   )

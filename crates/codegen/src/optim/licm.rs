@@ -29,7 +29,7 @@ impl<'isa> LicmSolver<'isa> {
         self.invariants.clear();
     }
 
-    /// Run loop iinvariant code motion ont the function.
+    /// Run loop invariant code motion ont the function.
     /// This method also modifies `cfg` and `lpt` htt
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph, lpt: &mut LoopTree) {
         for lp in lpt.loops() {
@@ -144,7 +144,7 @@ impl<'isa> LicmSolver<'isa> {
         new_preheader
     }
 
-    /// Hois invariants to the preheader.
+    /// Hoist invariants to the preheader.
     fn hoist_invariants(&self, func: &mut Function, preheader: Block) {
         let last_insn = func.layout.last_insn_of(preheader).unwrap();
         for invariant in self.invariants.iter().copied() {
