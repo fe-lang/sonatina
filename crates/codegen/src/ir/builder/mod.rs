@@ -225,8 +225,8 @@ impl<'isa> FunctionBuilder<'isa> {
         self.insert_insn(insn_data);
     }
 
-    pub fn ret(&mut self, args: &[Value]) {
-        let insn_data = InsnData::Return { args: args.into() };
+    pub fn ret(&mut self, args: Option<Value>) {
+        let insn_data = InsnData::Return { args };
         self.insert_insn(insn_data);
     }
 
@@ -339,7 +339,7 @@ mod tests {
     #[test]
     fn entry_block() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let b0 = builder.append_block();
         builder.switch_to_block(b0);
@@ -347,7 +347,7 @@ mod tests {
         let v1 = builder.make_imm_value(2i8);
         let v2 = builder.add(v0, v1);
         builder.sub(v2, v0);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 
@@ -366,7 +366,7 @@ mod tests {
     #[test]
     fn entry_block_with_args() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[Type::I32, Type::I64], &[], &isa);
+        let mut builder = func_builder(&[Type::I32, Type::I64], None, &isa);
 
         let entry_block = builder.append_block();
         builder.switch_to_block(entry_block);
@@ -375,7 +375,7 @@ mod tests {
         assert_eq!(args.len(), 2);
         let v3 = builder.sext(arg0, Type::I64);
         builder.mul(v3, arg1);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 
@@ -394,21 +394,20 @@ mod tests {
     #[test]
     fn entry_block_with_return() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[Type::I32, Type::I64], &isa);
+        let mut builder = func_builder(&[], Some(&Type::I32), &isa);
 
         let entry_block = builder.append_block();
 
         builder.switch_to_block(entry_block);
         let v0 = builder.make_imm_value(1i32);
-        let v1 = builder.make_imm_value(2i64);
-        builder.ret(&[v0, v1]);
+        builder.ret(Some(v0));
         builder.seal_all();
 
         assert_eq!(
             dump_func(&builder.build()),
-            "func %test_func() -> i32, i64:
+            "func %test_func() -> i32:
     block0:
-        return 1.i32 2.i64;
+        return 1.i32;
 
 "
         );
@@ -417,7 +416,7 @@ mod tests {
     #[test]
     fn then_else_merge_block() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[Type::I64], &[], &isa);
+        let mut builder = func_builder(&[Type::I64], None, &isa);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -440,7 +439,7 @@ mod tests {
         builder.switch_to_block(merge_block);
         let v3 = builder.phi(&[(v1, then_block), (v2, else_block)]);
         builder.add(v3, arg0);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 
@@ -486,10 +485,10 @@ pub(crate) mod test_util {
 
     pub(crate) fn func_builder<'isa>(
         args: &[Type],
-        rets: &[Type],
+        ret: Option<&Type>,
         isa: &'isa TargetIsa,
     ) -> FunctionBuilder<'isa> {
-        let sig = Signature::new(args, rets);
+        let sig = Signature::new(args, ret);
         FunctionBuilder::new("test_func".into(), sig, isa)
     }
 

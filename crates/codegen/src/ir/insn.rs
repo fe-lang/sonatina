@@ -60,7 +60,7 @@ pub enum InsnData {
     Alloca { ty: Type },
 
     /// Return.
-    Return { args: SmallVec<[Value; 8]> },
+    Return { args: Option<Value> },
 
     /// Phi function.
     Phi {
@@ -215,9 +215,8 @@ impl InsnData {
             | Self::Cast { args, .. }
             | Self::Load { args, .. }
             | Self::Branch { args, .. } => args,
-            Self::Phi { values: args, .. } | Self::Return { args } | Self::BrTable { args, .. } => {
-                args
-            }
+            Self::BrTable { args, .. } | Self::Phi { values: args, .. } => args,
+            Self::Return { args } => args.as_ref().map(core::slice::from_ref).unwrap_or_default(),
             _ => &[],
         }
     }
@@ -229,9 +228,8 @@ impl InsnData {
             | Self::Cast { args, .. }
             | Self::Load { args, .. }
             | Self::Branch { args, .. } => args,
-            Self::BrTable { args, .. } | Self::Phi { values: args, .. } | Self::Return { args } => {
-                args
-            }
+            Self::BrTable { args, .. } | Self::Phi { values: args, .. } => args,
+            Self::Return { args } => args.as_mut().map(core::slice::from_mut).unwrap_or_default(),
             _ => &mut [],
         }
     }

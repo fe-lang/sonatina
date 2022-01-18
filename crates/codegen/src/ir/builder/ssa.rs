@@ -1,4 +1,4 @@
-//! SSA construction algorighm here is based on [`Simple and Efficient Construction of Static
+//! SSA construction algorithm here is based on [`Simple and Efficient Construction of Static
 //! Single Assignment Form`](https://link.springer.com/chapter/10.1007/978-3-642-37051-9_6).
 
 use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap, SparseSet};
@@ -222,7 +222,7 @@ mod tests {
     #[test]
     fn use_var_local() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let var = builder.declare_var(Type::I32);
 
@@ -232,7 +232,7 @@ mod tests {
         builder.def_var(var, v0);
         let v1 = builder.use_var(var);
         builder.add(v1, v0);
-        builder.ret(&[]);
+        builder.ret(None);
         builder.seal_block();
 
         assert_eq!(
@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn use_var_global_if() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let var = builder.declare_var(Type::I32);
 
@@ -277,7 +277,7 @@ mod tests {
 
         builder.switch_to_block(b3);
         builder.use_var(var);
-        builder.ret(&[]);
+        builder.ret(None);
         builder.seal_block();
 
         assert_eq!(
@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn use_var_global_many_preds() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let var0 = builder.declare_var(Type::I32);
         let var1 = builder.declare_var(Type::I32);
@@ -353,7 +353,7 @@ mod tests {
         let v_var0 = builder.use_var(var0);
         let v_var1 = builder.use_var(var1);
         builder.add(v_var0, v_var1);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 
@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn use_var_global_loop() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let var = builder.declare_var(Type::I32);
 
@@ -424,7 +424,7 @@ mod tests {
         builder.switch_to_block(b3);
         let val = builder.use_var(var);
         builder.add(val, val);
-        builder.ret(&[]);
+        builder.ret(None);
         builder.seal_block();
 
         assert_eq!(
@@ -451,7 +451,7 @@ mod tests {
     #[test]
     fn use_var_global_complex() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let var = builder.declare_var(Type::I32);
 
@@ -496,7 +496,7 @@ mod tests {
         builder.switch_to_block(b6);
         let val = builder.use_var(var);
         builder.add(val, val);
-        builder.ret(&[]);
+        builder.ret(None);
         builder.seal_block();
 
         let f = builder.build();
@@ -535,7 +535,7 @@ mod tests {
     #[test]
     fn use_var_global_complex_seal_all() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let var = builder.declare_var(Type::I32);
 
@@ -574,7 +574,7 @@ mod tests {
         builder.switch_to_block(b6);
         let val = builder.use_var(var);
         builder.add(val, val);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 
@@ -612,7 +612,7 @@ mod tests {
     #[test]
     fn br_table() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[Type::I32], &[Type::I32], &isa);
+        let mut builder = func_builder(&[Type::I32], Some(&Type::I32), &isa);
         let var = builder.declare_var(Type::I32);
 
         let b0 = builder.append_block();
@@ -649,7 +649,7 @@ mod tests {
 
         builder.switch_to_block(b4);
         let ret = builder.use_var(var);
-        builder.ret(&[ret]);
+        builder.ret(ret.into());
 
         builder.seal_all();
 
@@ -680,7 +680,7 @@ mod tests {
     #[should_panic]
     fn undef_use() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();
@@ -693,7 +693,7 @@ mod tests {
     #[should_panic]
     fn unreachable_use() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();

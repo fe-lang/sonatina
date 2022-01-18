@@ -41,14 +41,14 @@ impl Function {
 #[derive(Debug, Clone, Default)]
 pub struct Signature {
     args: SmallVec<[Type; 8]>,
-    rets: SmallVec<[Type; 8]>,
+    ret: Option<Type>,
 }
 
 impl Signature {
-    pub fn new(args: &[Type], rets: &[Type]) -> Self {
+    pub fn new(args: &[Type], ret: Option<&Type>) -> Self {
         Self {
             args: args.into(),
-            rets: rets.into(),
+            ret: ret.cloned(),
         }
     }
 
@@ -56,15 +56,16 @@ impl Signature {
         self.args.push(arg);
     }
 
-    pub fn append_return(&mut self, ret: Type) {
-        self.rets.push(ret);
+    pub fn set_ret_ty(&mut self, ty: &Type) {
+        debug_assert!(self.ret.is_none());
+        self.ret = Some(ty.clone());
     }
 
     pub fn args(&self) -> &[Type] {
         &self.args
     }
 
-    pub fn returns(&self) -> &[Type] {
-        &self.rets
+    pub fn ret_ty(&self) -> Option<&Type> {
+        self.ret.as_ref()
     }
 }

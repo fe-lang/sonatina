@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn simple_loop() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
         let b0 = builder.append_block();
         let b1 = builder.append_block();
         let b2 = builder.append_block();
@@ -286,7 +286,7 @@ mod tests {
         builder.append_phi_arg(v1, v3, b2);
 
         builder.switch_to_block(b3);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn continue_loop() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
         let b0 = builder.append_block();
         let b1 = builder.append_block();
         let b2 = builder.append_block();
@@ -346,7 +346,7 @@ mod tests {
         builder.jump(b1);
 
         builder.switch_to_block(b6);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 
@@ -370,7 +370,7 @@ mod tests {
     #[test]
     fn single_block_loop() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[Type::I1], &[], &isa);
+        let mut builder = func_builder(&[Type::I1], None, &isa);
         let b0 = builder.append_block();
         let b1 = builder.append_block();
         let b2 = builder.append_block();
@@ -384,7 +384,7 @@ mod tests {
         builder.br(arg, b1, b2);
 
         builder.switch_to_block(b2);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
         let func = builder.build();
@@ -401,7 +401,7 @@ mod tests {
     #[test]
     fn nested_loop() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[Type::I1], &[], &isa);
+        let mut builder = func_builder(&[Type::I1], None, &isa);
         let b0 = builder.append_block();
         let b1 = builder.append_block();
         let b2 = builder.append_block();
@@ -451,7 +451,7 @@ mod tests {
         builder.jump(b1);
 
         builder.switch_to_block(b11);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 

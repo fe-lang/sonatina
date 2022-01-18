@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn pd_if_else() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[Type::I64], &[], &isa);
+        let mut builder = func_builder(&[Type::I64], None, &isa);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -196,7 +196,7 @@ mod tests {
         builder.switch_to_block(merge_block);
         let v3 = builder.phi(&[(v1, then_block), (v2, else_block)]);
         builder.add(v3, arg0);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 
@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn infinite_loop() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let a = builder.append_block();
         builder.switch_to_block(a);
@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn test_multiple_return() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -248,16 +248,16 @@ mod tests {
         builder.br(v0, b, c);
 
         builder.switch_to_block(b);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.switch_to_block(c);
         builder.br(v0, d, e);
 
         builder.switch_to_block(d);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.switch_to_block(e);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 
@@ -280,7 +280,7 @@ mod tests {
     #[test]
     fn pd_complex() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -314,7 +314,7 @@ mod tests {
         builder.br(v0, a, h);
 
         builder.switch_to_block(h);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 

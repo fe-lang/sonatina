@@ -143,11 +143,7 @@ impl<'a, 'b> FuncParser<'a, 'b> {
 
         if eat_token!(self.lexer, Token::RArrow)?.is_some() {
             let ty = self.expect_ty()?;
-            inserter.func.sig.append_return(ty);
-            while eat_token!(self.lexer, Token::Comma)?.is_some() {
-                let ty = self.expect_ty()?;
-                inserter.func.sig.append_return(ty);
-            }
+            inserter.func.sig.set_ret_ty(&ty);
         }
         expect_token!(self.lexer, Token::Colon, ":")?;
 
@@ -551,14 +547,13 @@ impl Code {
             }
 
             Self::Return => {
-                let mut args = smallvec![];
-                let mut idx = 0;
-                while eat_token!(parser.lexer, Token::SemiColon)?.is_none() {
-                    let value = parser.expect_insn_arg(inserter, idx, &mut undefs)?;
-                    args.push(value);
-                    idx += 1;
+                if eat_token!(parser.lexer, Token::SemiColon)?.is_some() {
+                    InsnData::Return { args: None }
+                } else {
+                    let value = parser.expect_insn_arg(inserter, 0, &mut undefs)?;
+                    expect_token!(parser.lexer, Token::SemiColon, ";")?;
+                    InsnData::Return { args: Some(value) }
                 }
-                InsnData::Return { args }
             }
             Self::Phi => {
                 let mut values = smallvec![];
@@ -675,9 +670,9 @@ mod tests {
     #[test]
     fn parser_with_return() {
         assert!(test_func_parser(
-            "func %test_func() -> i32, i64:
+            "func %test_func() -> i32:
     block0:
-        return 311.i32 -120.i64;"
+        return 311.i32;"
         ));
     }
 
@@ -696,12 +691,12 @@ mod tests {
     #[test]
     fn parser_with_non_continuous_value() {
         assert!(test_func_parser(
-            "func %test_func() -> i32, i64:
+            "func %test_func() -> i32:
     block64:
         jump block1;
 
     block1:
-        return 311.i32 -120.i64;"
+        return 311.i32;"
         ));
     }
 
@@ -739,7 +734,7 @@ mod tests {
     #[test]
     fn parser_with_immediate() {
         assert!(test_func_parser(
-            "func %test_func() -> i8, i16:
+            "func %test_func() -> i8:
     block64:
         v0.i8 = add -1.i8 127.i8;
         v1.i8 = add v0 3.i8;
@@ -747,7 +742,7 @@ mod tests {
 
     block1:
         v2.i16 = zext -128.i8;
-        return v1 v2;"
+        return v1;"
         ));
     }
 
@@ -761,15 +756,15 @@ mod tests {
 
             # f1 start 1
             # f1 start 2
-            func %f1() -> i32, i64:
+            func %f1() -> i32:
                 block0:
-                    return 311.i32 -120.i64;
+                    return 311.i32;
 
             # f2 start 1
             # f2 start 2
-            func %f2() -> i32, i64:
+            func %f2() -> i32:
                 block0:
-                    return 311.i32 -120.i64;
+                    return 311.i32;
             ";
 
         let parsed_module = Parser::parse(input).unwrap();

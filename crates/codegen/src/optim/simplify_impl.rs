@@ -138,7 +138,7 @@ pub enum ExprData {
         loc: DataLocationKind,
     },
 
-    /// Unconditional jump operaitons.
+    /// Unconditional jump operations.
     Jump {
         code: JumpOp,
         dests: BlockArray1,
@@ -163,10 +163,10 @@ pub enum ExprData {
 
     /// Return.
     Return {
-        args: ArgList,
+        args: Option<Value>,
     },
 
-    /// Phi funcion.
+    /// Phi function.
     Phi {
         values: ArgList,
         blocks: BlockList,
@@ -226,9 +226,7 @@ impl ExprData {
 
             InsnData::Alloca { ty } => Self::Alloca { ty: ty.clone() },
 
-            InsnData::Return { args } => Self::Return {
-                args: args.iter().copied().map(Into::into).collect(),
-            },
+            InsnData::Return { args } => Self::Return { args: *args },
 
             InsnData::Phi { values, blocks, ty } => Self::Phi {
                 values: values.iter().copied().map(Into::into).collect(),
@@ -292,12 +290,7 @@ impl ExprData {
 
             Self::Alloca { ty } => InsnData::alloca(ty.clone()),
 
-            Self::Return { args } => InsnData::Return {
-                args: args
-                    .iter()
-                    .map(|arg| arg.as_value())
-                    .collect::<Option<_>>()?,
-            },
+            Self::Return { args } => InsnData::Return { args: *args },
 
             Self::Phi { values, blocks, ty } => InsnData::Phi {
                 values: values

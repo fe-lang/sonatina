@@ -121,7 +121,7 @@ mod tests {
     #[test]
     fn critical_edge_basic() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -135,7 +135,7 @@ mod tests {
         builder.jump(c);
 
         builder.switch_to_block(c);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 
@@ -171,7 +171,7 @@ mod tests {
     #[allow(clippy::many_single_char_names)]
     fn critical_edge_to_same_block() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -190,10 +190,10 @@ mod tests {
         builder.br(v0, e, d);
 
         builder.switch_to_block(d);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.switch_to_block(e);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 
@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn critical_edge_phi() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -254,7 +254,7 @@ mod tests {
         builder.br(phi_value, c, b);
 
         builder.switch_to_block(c);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 
@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn critical_edge_br_table() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -313,10 +313,10 @@ mod tests {
         builder.jump(b);
 
         builder.switch_to_block(d);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.switch_to_block(e);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 

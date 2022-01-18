@@ -22,14 +22,12 @@ impl<'a> FuncWriter<'a> {
             &mut w,
         )?;
 
-        let mut rets = self.func.sig.returns().iter().peekable();
-        if rets.peek().is_some() {
+        if let Some(ret_ty) = self.func.sig.ret_ty() {
             w.write_all(b") -> ")?;
+            ret_ty.write(self, &mut w)?;
         } else {
             w.write_all(b")")?;
         }
-
-        self.write_iter_with_delim(rets, ", ", &mut w)?;
 
         self.enter(&mut w)?;
         for block in self.func.layout.iter_block() {
@@ -243,10 +241,10 @@ impl IrWrite for Insn {
 
             Return { args } => {
                 write!(w, "return")?;
-                if !args.is_empty() {
+                if let Some(arg) = args {
                     writer.space(&mut w)?;
+                    arg.write(writer, &mut w)?;
                 }
-                writer.write_insn_args(args, &mut w)?;
             }
 
             Phi { values, blocks, .. } => {

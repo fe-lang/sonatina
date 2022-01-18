@@ -25,7 +25,7 @@ impl DomTree {
         self.rpo.clear();
     }
 
-    /// Retruns the immediate dominator of the `block`.
+    /// Returns the immediate dominator of the `block`.
     /// Returns None if the `block` is unreachable from the entry block, or the `block` is the entry block itself.
     pub fn idom_of(&self, block: Block) -> Option<Block> {
         if self.rpo[0] == block {
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn dom_tree_if_else() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -252,7 +252,7 @@ mod tests {
         builder.jump(merge_block);
 
         builder.switch_to_block(merge_block);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 
@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn unreachable_edge() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -293,7 +293,7 @@ mod tests {
         builder.jump(e);
 
         builder.switch_to_block(e);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 
@@ -315,7 +315,7 @@ mod tests {
     #[test]
     fn dom_tree_complex() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -369,7 +369,7 @@ mod tests {
         builder.br(v0, m, b);
 
         builder.switch_to_block(m);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 
@@ -402,9 +402,9 @@ mod tests {
     }
 
     #[test]
-    fn dom_tree_br_tabale() {
+    fn dom_tree_br_table() {
         let isa = build_test_isa();
-        let mut builder = func_builder(&[], &[], &isa);
+        let mut builder = func_builder(&[], None, &isa);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -430,10 +430,10 @@ mod tests {
         builder.jump(f);
 
         builder.switch_to_block(e);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.switch_to_block(f);
-        builder.ret(&[]);
+        builder.ret(None);
 
         builder.seal_all();
 
