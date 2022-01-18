@@ -3,14 +3,14 @@ use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
 use crate::{Function, Signature};
 
 #[derive(Debug, Clone)]
-pub struct Contract {
+pub struct Module {
     /// Hold all function declared in the contract.
     pub funcs: PrimaryMap<FuncRef, Function>,
 
     pub func_attributes: SecondaryMap<FuncRef, FuncAttribute>,
 }
 
-impl Contract {
+impl Module {
     pub fn declare_function(&mut self, name: String, sig: Signature, linkage: Linkage) -> FuncRef {
         let func = Function::new(name, sig);
         let func_ref = self.funcs.push(func);
