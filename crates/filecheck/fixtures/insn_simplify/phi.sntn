@@ -1,6 +1,6 @@
 target = "evm-ethereum-london"
 
-# sameln: func %phi(v0.i8) -> i8:
+# sameln: func public %phi(v0.i8) -> i8:
 # nextln:     block0:
 # nextln:         jump block1;
 # nextln: 
@@ -9,7 +9,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln:     block2:
 # nextln:       return v0;
-func %phi(v0.i8) -> i8:
+func public %phi(v0.i8) -> i8:
     block0:
         v1.i8 = mul v0 0.i8;
         jump block1;

@@ -17,7 +17,7 @@ target = "evm-ethereum-london"
 # nextln:        $(var=$VALUE).i8 = phi (v31 block3) (v41 block4) (v51 block5);
 # nextln:        v60.i8 = phi (3.i8 block3) (4.i8 block4) (5.i8 block5);
 # nextln:        return $var;
-func %many_preds(v0.i1, v1.i1, v2.i8) -> i8:
+func public %many_preds(v0.i1, v1.i1, v2.i8) -> i8:
     block0:
         br v0 block1 block2;
 

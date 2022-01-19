@@ -30,7 +30,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln: block5:
 # nextln:     return;
-func %llvm_test(v0.i64):
+func public %llvm_test(v0.i64):
     block0:
         jump block1;
 
@@ -85,7 +85,7 @@ func %llvm_test(v0.i64):
 # nextln: 
 # nextln:   block6:
 # nextln:       return;
-func %llvm_test2(v0.i1):
+func public %llvm_test2(v0.i1):
     block0:
         fallthrough block1;
 

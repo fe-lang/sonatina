@@ -4,7 +4,7 @@ target = "evm-ethereum-london"
 # nextln:    v5.i64 = phi (v2 block1) (v1 block2);
 # nextln:    v6.i64 = add v5 v5;
 # nextln:    return v6;
-func %value_phi_resolution_must_fail(v0.i1, v1.i64, v2.i64) -> i64:
+func public %value_phi_resolution_must_fail(v0.i1, v1.i64, v2.i64) -> i64:
     block0:
         br v0 block1 block2;
 

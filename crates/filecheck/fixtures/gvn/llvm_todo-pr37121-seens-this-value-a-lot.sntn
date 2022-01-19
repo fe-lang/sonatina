@@ -13,7 +13,7 @@ target = "evm-ethereum-london"
 # nextln:     jump block1;
 # nextln: 
 # nextln: 
-func %llvm_foo(v100.i8):
+func public %llvm_foo(v100.i8):
     block0:
         v0.i8 = load @memory 0.i64 i8;
         jump block1;

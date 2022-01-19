@@ -2,70 +2,70 @@ target = "evm-ethereum-london"
 
 # a == a => 1
 # check: return -1.i1;
-func %eq0(v0.i64) -> i1:
+func public %eq0(v0.i64) -> i1:
     block0:
         v1.i1 = eq v0 v0;
         return v1;
 
 # a != a => 0
 # check: return 0.i1;
-func %eq1(v0.i64) -> i1:
+func public %eq1(v0.i64) -> i1:
     block0:
         v1.i1 = ne v0 v0;
         return v1;
 
 # a < a => 0
 # check: return 0.i1;
-func %lt(v0.i64) -> i1:
+func public %lt(v0.i64) -> i1:
     block0:
         v1.i1 = lt v0 v0;
         return v1;
 
 # a > b => b < a
 # check: v2.i1 = lt v1 v0;
-func %gt(v0.i64, v1.i64) -> i1:
+func public %gt(v0.i64, v1.i64) -> i1:
     block0:
         v2.i1 = gt v0 v1;
         return v2;
 
 # a < a => 0
 # check: return 0.i1;
-func %slt(v0.i64) -> i1:
+func public %slt(v0.i64) -> i1:
     block0:
         v1.i1 = slt v0 v0;
         return v1;
 
 # a > b => b < a
 # check: v2.i1 = slt v1 v0;
-func %sgt(v0.i64, v1.i64) -> i1:
+func public %sgt(v0.i64, v1.i64) -> i1:
     block0:
         v2.i1 = sgt v0 v1;
         return v2;
 
 # a <= a => 1
 # check: return -1.i1;
-func %le(v0.i64) -> i1:
+func public %le(v0.i64) -> i1:
     block0:
         v1.i1 = le v0 v0;
         return v1;
 
 # a >= b => b <= a
 # check: v2.i1 = le v1 v0;
-func %ge(v0.i64, v1.i64) -> i1:
+func public %ge(v0.i64, v1.i64) -> i1:
     block0:
         v2.i1 = ge v0 v1;
         return v2;
 
 # a <= a => 1
 # check: return -1.i1;
-func %sle(v0.i64) -> i1:
+func public %sle(v0.i64) -> i1:
     block0:
         v1.i1 = sle v0 v0;
         return v1;
 
 # a >= b => b <= a
 # check: v2.i1 = sle v1 v0;
-func %sge(v0.i64, v1.i64) -> i1:
+func public %sge(v0.i64, v1.i64) -> i1:
     block0:
         v2.i1 = sge v0 v1;
         return v2;

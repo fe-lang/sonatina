@@ -372,7 +372,7 @@ mod tests {
         let module = test_module_builder.build();
         assert_eq!(
             dump_func(&module.funcs[func_ref]),
-            "func %test_func():
+            "func public %test_func():
     block0:
         v2.i8 = add 1.i8 2.i8;
         v3.i8 = sub v2 1.i8;
@@ -402,7 +402,7 @@ mod tests {
         let module = test_module_builder.build();
         assert_eq!(
             dump_func(&module.funcs[func_ref]),
-            "func %test_func(v0.i32, v1.i64):
+            "func public %test_func(v0.i32, v1.i64):
     block0:
         v2.i64 = sext v0;
         v3.i64 = mul v2 v1;
@@ -428,7 +428,7 @@ mod tests {
         let module = test_module_builder.build();
         assert_eq!(
             dump_func(&module.funcs[func_ref]),
-            "func %test_func() -> i32:
+            "func public %test_func() -> i32:
     block0:
         return 1.i32;
 
@@ -470,7 +470,7 @@ mod tests {
         let module = test_module_builder.build();
         assert_eq!(
             dump_func(&module.funcs[func_ref]),
-            "func %test_func(v0.i64):
+            "func public %test_func(v0.i64):
     block0:
         br v0 block1 block2;
 

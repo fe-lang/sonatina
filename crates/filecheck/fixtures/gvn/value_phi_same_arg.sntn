@@ -5,7 +5,7 @@ target = "evm-ethereum-london"
 # nextln:    $(var=$VALUE).i64 = phi (v3 block1) (v4 block2);
 # nextln:    v5.i64 = phi (v1 block1) (v2 block2);
 # nextln:    return $var;
-func %value_phi_same_arg(v0.i1, v1.i64, v2.i64) -> i64:
+func public %value_phi_same_arg(v0.i1, v1.i64, v2.i64) -> i64:
     block0:
         br v0 block1 block2;
 

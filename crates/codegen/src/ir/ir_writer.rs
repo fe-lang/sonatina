@@ -15,7 +15,11 @@ impl<'a> FuncWriter<'a> {
     }
 
     pub fn write(&mut self, mut w: impl io::Write) -> io::Result<()> {
-        w.write_fmt(format_args!("func %{}(", self.func.sig.name()))?;
+        w.write_fmt(format_args!(
+            "func {} %{}(",
+            self.func.sig.linkage(),
+            self.func.sig.name()
+        ))?;
         self.write_iter_with_delim(
             self.func.arg_values.iter().map(|v| ValueWithTy(*v)),
             ", ",

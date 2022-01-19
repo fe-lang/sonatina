@@ -14,7 +14,7 @@ mod bigint;
 pub use bigint::{I256, U256};
 pub use builder::Variable;
 pub use dfg::{Block, BlockData, DataFlowGraph};
-pub use function::{Function, Signature};
+pub use function::{Function, Linkage, Signature};
 pub use insn::{BranchInfo, DataLocationKind, Insn, InsnData};
 pub use layout::Layout;
 pub use module::Module;

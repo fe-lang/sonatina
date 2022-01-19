@@ -6,7 +6,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln:    block3:
 # nextln:        return v0;
-func %all_dests_removed() -> i8:
+func public %all_dests_removed() -> i8:
     block0:
         v0.i8 = or 1.i8 0.i8;
         v1.i8 = add v0 1.i8;
@@ -33,7 +33,7 @@ func %all_dests_removed() -> i8:
 # nextln: 
 # nextln:    block3:
 # nextln:        return v1;
-func %all_dests_removed2(v0.i32) -> i8:
+func public %all_dests_removed2(v0.i32) -> i8:
     block0:
         v1.i32 = add v0 v0;
         br_table v0 undef (v1 block1) (2.i32 block2);

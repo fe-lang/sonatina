@@ -30,7 +30,7 @@ target = "evm-ethereum-london"
 # nextln:      v6.i32 = add v2 1.i32;
 # nextln:      store @memory v6 v0;
 # nextln:      jump block4;
-func %llvm_crash1_pr35074(v0.i32, v1.i1):
+func public %llvm_crash1_pr35074(v0.i32, v1.i1):
     block0:
         jump block1;
 

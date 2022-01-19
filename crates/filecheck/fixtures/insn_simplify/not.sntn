@@ -2,7 +2,7 @@ target = "evm-ethereum-london"
 
 # !(!v0) => v0
 # check: return v0;
-func %not0(v0.i8) -> i8:
+func public %not0(v0.i8) -> i8:
     block0:
         v1.i8 = not v0;
         v2.i8 = not v1;
@@ -10,7 +10,7 @@ func %not0(v0.i8) -> i8:
 
 # !(-v0) => v0 - 1
 # check: v2.i8 = sub v0 1.i8;
-func %not1(v0.i8) -> i8:
+func public %not1(v0.i8) -> i8:
     block0:
         v1.i8 = neg v0;
         v2.i8 = not v1;
@@ -18,7 +18,7 @@ func %not1(v0.i8) -> i8:
 
 # !(-v0) => v0 - 1
 # check: v2.i8 = sub v0 1.i8;
-func %not2(v0.i8) -> i8:
+func public %not2(v0.i8) -> i8:
     block0:
         v1.i8 = neg v0;
         v2.i8 = not v1;
@@ -26,7 +26,7 @@ func %not2(v0.i8) -> i8:
 
 # !(a == b) => a != b;
 # check: v3.i1 = ne v0 v1;
-func %not3(v0.i8, v1.i8) -> i8:
+func public %not3(v0.i8, v1.i8) -> i8:
     block0:
         v2.i1 = eq v0 v1;
         v3.i1 = not v2;
@@ -34,7 +34,7 @@ func %not3(v0.i8, v1.i8) -> i8:
 
 # !(a != b) => a == b;
 # check: v3.i1 = eq v0 v1;
-func %not4(v0.i8, v1.i8) -> i8:
+func public %not4(v0.i8, v1.i8) -> i8:
     block0:
         v2.i1 = ne v0 v1;
         v3.i1 = not v2;
@@ -42,7 +42,7 @@ func %not4(v0.i8, v1.i8) -> i8:
 
 # !(a < b) => (b <= a);
 # check: v3.i1 = le v1 v0;
-func %not5(v0.i8, v1.i8) -> i8:
+func public %not5(v0.i8, v1.i8) -> i8:
     block0:
         v2.i1 = lt v0 v1;
         v3.i1 = not v2;
@@ -50,7 +50,7 @@ func %not5(v0.i8, v1.i8) -> i8:
 
 # !(a <= b)  => (b < a);
 # check: v3.i1 = lt v1 v0;
-func %not6(v0.i8, v1.i8) -> i8:
+func public %not6(v0.i8, v1.i8) -> i8:
     block0:
         v2.i1 = le v0 v1;
         v3.i1 = not v2;
@@ -58,7 +58,7 @@ func %not6(v0.i8, v1.i8) -> i8:
 
 # !(a < b) => (b <= a);
 # check: v3.i1 = sle v1 v0;
-func %not7(v0.i8, v1.i8) -> i8:
+func public %not7(v0.i8, v1.i8) -> i8:
     block0:
         v2.i1 = slt v0 v1;
         v3.i1 = not v2;
@@ -66,7 +66,7 @@ func %not7(v0.i8, v1.i8) -> i8:
 
 # !(a <= b) => (b < a);
 # check: v3.i1 = slt v1 v0;
-func %not8(v0.i8, v1.i8) -> i8:
+func public %not8(v0.i8, v1.i8) -> i8:
     block0:
         v2.i1 = sle v0 v1;
         v3.i1 = not v2;
@@ -74,7 +74,7 @@ func %not8(v0.i8, v1.i8) -> i8:
 
 # !(a > b) => !(b < a) => a <= b
 # check: v3.i1 = le v0 v1;
-func %not9(v0.i8, v1.i8) -> i8:
+func public %not9(v0.i8, v1.i8) -> i8:
     block0:
         v2.i1 = gt v0 v1;
         v3.i1 = not v2;
@@ -82,7 +82,7 @@ func %not9(v0.i8, v1.i8) -> i8:
 
 # !(a >= b) => !(b <= a) => a < b
 # check: v3.i1 = lt v0 v1;
-func %not9(v0.i8, v1.i8) -> i8:
+func public %not9(v0.i8, v1.i8) -> i8:
     block0:
         v2.i1 = ge v0 v1;
         v3.i1 = not v2;

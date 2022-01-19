@@ -1,9 +1,9 @@
 target = "evm-ethereum-london"
 
-# sameln: func %whole_loop_removed() -> i8:
+# sameln: func public %whole_loop_removed() -> i8:
 # nextln:    block3:
 # nextln:        return 1.i8;
-func %whole_loop_removed() -> i8:
+func public %whole_loop_removed() -> i8:
     block0:
         v0.i1 = or 1.i8 0.i8;
         v1.i8 = sext v0;

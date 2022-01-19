@@ -1,11 +1,8 @@
-use cranelift_entity::{PrimaryMap, SecondaryMap};
+use cranelift_entity::PrimaryMap;
 use fxhash::FxHashMap;
 
 use crate::{
-    ir::{
-        module::{FuncAttribute, FuncRef, Linkage},
-        Function, Module, Signature,
-    },
+    ir::{module::FuncRef, Function, Module, Signature},
     TargetIsa,
 };
 
@@ -17,8 +14,6 @@ pub struct ModuleBuilder {
 
     pub funcs: PrimaryMap<FuncRef, Function>,
 
-    pub func_attributes: SecondaryMap<FuncRef, FuncAttribute>,
-
     /// Map function name -> FuncRef to avoid duplicated declaration.
     declared_funcs: FxHashMap<String, FuncRef>,
 }
@@ -28,27 +23,16 @@ impl ModuleBuilder {
         Self {
             isa,
             funcs: PrimaryMap::default(),
-            func_attributes: SecondaryMap::with_default(FuncAttribute {
-                linkage: Linkage::External,
-            }),
             declared_funcs: FxHashMap::default(),
         }
     }
 
-    pub fn declare_function(&mut self, sig: Signature, linkage: Linkage) -> FuncRef {
-        if let Some(&func_ref) = self.declared_funcs.get(sig.name()) {
-            if self.func_attributes[func_ref].linkage != linkage {
-                panic!(
-                    "{} is already declared, but linkage is inconsistent.",
-                    sig.name()
-                )
-            }
-            func_ref
+    pub fn declare_function(&mut self, sig: Signature) -> FuncRef {
+        if self.declared_funcs.contains_key(sig.name()) {
+            panic!("{} is already declared.", sig.name())
         } else {
             let func = Function::new(sig);
-            let func_ref = self.funcs.push(func);
-            self.func_attributes[func_ref] = FuncAttribute { linkage };
-            func_ref
+            self.funcs.push(func)
         }
     }
 
@@ -64,7 +48,6 @@ impl ModuleBuilder {
         Module {
             isa: self.isa,
             funcs: self.funcs,
-            func_attributes: self.func_attributes,
         }
     }
 }

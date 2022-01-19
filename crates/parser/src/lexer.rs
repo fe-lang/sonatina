@@ -1,6 +1,6 @@
 use std::fmt;
 
-use sonatina_codegen::ir::{insn::DataLocationKind, Type};
+use sonatina_codegen::ir::{insn::DataLocationKind, Linkage, Type};
 
 use super::{Error, ErrorKind, Result};
 
@@ -111,6 +111,12 @@ impl<'a> Lexer<'a> {
             Token::Func
         } else if self.eat_string_if(b"declare").is_some() {
             Token::Declare
+        } else if self.eat_string_if(b"public").is_some() {
+            Token::Linkage(Linkage::Public)
+        } else if self.eat_string_if(b"private").is_some() {
+            Token::Linkage(Linkage::Private)
+        } else if self.eat_string_if(b"external").is_some() {
+            Token::Linkage(Linkage::External)
         } else if self.eat_string_if(b"undef").is_some() {
             Token::Undef
         } else if self.eat_string_if(b"->").is_some() {
@@ -322,6 +328,7 @@ pub(super) struct WithLoc<T> {
 pub(super) enum Token<'a> {
     Func,
     Declare,
+    Linkage(Linkage),
     RArrow,
     Colon,
     SemiColon,
@@ -387,6 +394,7 @@ impl<'a> fmt::Display for Token<'a> {
         match self {
             Self::Func => write!(w, "func"),
             Self::Declare => write!(w, "declare"),
+            Self::Linkage(linkage) => write!(w, "{}", linkage),
             Self::RArrow => write!(w, "=>"),
             Self::Colon => write!(w, ":"),
             Self::SemiColon => write!(w, ";"),
@@ -516,95 +524,97 @@ impl fmt::Display for Code {
 mod tests {
     use super::*;
 
-    use Token::*;
-
     #[test]
     fn lexer_with_return() {
-        let input = "func %test_func() -> i32, i64:
+        let input = "func private %test_func() -> i32, i64:
     block0:
         return 311.i32 -120.i64;";
         let mut lexer = Lexer::new(input);
 
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Func
+            Token::Func
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Ident("test_func")
+            Token::Linkage(Linkage::Private),
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            LParen
+            Token::Ident("test_func")
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            RParen
+            Token::LParen
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            RArrow
+            Token::RParen
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            BaseTy(Type::I32)
+            Token::RArrow
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Comma
+            Token::BaseTy(Type::I32)
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            BaseTy(Type::I64)
+            Token::Comma
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Colon
-        ));
-
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            Block(0)
+            Token::BaseTy(Type::I64)
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Colon
+            Token::Colon
         ));
 
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            OpCode(Code::Return)
+            Token::Block(0)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Token::Colon
         ));
 
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Integer("311")
-        ));
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            Dot
-        ));
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            BaseTy(Type::I32)
+            Token::OpCode(Code::Return)
         ));
 
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Integer("-120")
+            Token::Integer("311")
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Dot
+            Token::Dot
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            BaseTy(Type::I64)
+            Token::BaseTy(Type::I32)
         ));
 
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            SemiColon
+            Token::Integer("-120")
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Token::Dot
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Token::BaseTy(Type::I64)
+        ));
+
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Token::SemiColon
         ));
 
         assert!(lexer.next_token().unwrap().is_none());
@@ -612,7 +622,7 @@ mod tests {
 
     #[test]
     fn lexer_with_arg() {
-        let input = "func %test_func(i32, i64):
+        let input = "func public %test_func(i32, i64):
     block0:
         v2.i64 = sext v0;
         v3.i64 = mul v2 v1;
@@ -621,115 +631,119 @@ mod tests {
         let mut lexer = Lexer::new(input);
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Func
+            Token::Func
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Ident("test_func")
+            Token::Linkage(Linkage::Public)
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            LParen
+            Token::Ident("test_func")
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            BaseTy(Type::I32)
+            Token::LParen
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Comma
+            Token::BaseTy(Type::I32)
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            BaseTy(Type::I64)
+            Token::Comma
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            RParen
+            Token::BaseTy(Type::I64)
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Colon
-        ));
-
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            Block(0)
+            Token::RParen
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Colon
+            Token::Colon
         ));
 
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Value(2)
+            Token::Block(0)
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Dot
-        ));
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            BaseTy(Type::I64)
-        ));
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            Eq
-        ));
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            OpCode(Code::Sext)
-        ));
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            Value(0)
-        ));
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            SemiColon
+            Token::Colon
         ));
 
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Value(3)
+            Token::Value(2)
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Dot
+            Token::Dot
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            BaseTy(Type::I64)
+            Token::BaseTy(Type::I64)
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Eq
+            Token::Eq
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            OpCode(Code::Mul)
+            Token::OpCode(Code::Sext)
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Value(2)
+            Token::Value(0)
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            Value(1)
-        ));
-        assert!(matches!(
-            lexer.next_token().ok().flatten().unwrap().item,
-            SemiColon
+            Token::SemiColon
         ));
 
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            OpCode(Code::Return)
+            Token::Value(3)
         ));
         assert!(matches!(
             lexer.next_token().ok().flatten().unwrap().item,
-            SemiColon
+            Token::Dot
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Token::BaseTy(Type::I64)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Token::Eq
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Token::OpCode(Code::Mul)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Token::Value(2)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Token::Value(1)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Token::SemiColon
+        ));
+
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Token::OpCode(Code::Return)
+        ));
+        assert!(matches!(
+            lexer.next_token().ok().flatten().unwrap().item,
+            Token::SemiColon
         ));
 
         assert!(lexer.next_token().unwrap().is_none());

@@ -4,7 +4,7 @@ target = "evm-ethereum-london"
 # nextln:        jump block3;
 # check:    block3:
 # nextln:        return v2;
-func %redundancy_by_predicate(v0.i32, v1.i32) -> i32:
+func public %redundancy_by_predicate(v0.i32, v1.i32) -> i32:
     block0:
         v2.i32 = add v0 1.i32;
         v3.i1 = eq v0 v1;
@@ -25,7 +25,7 @@ func %redundancy_by_predicate(v0.i32, v1.i32) -> i32:
 # nextln:        jump block3;
 # check:    block3:
 # nextln:        return v2;
-func %redundancy_by_predicate1(v0.i32, v1.i32) -> i32:
+func public %redundancy_by_predicate1(v0.i32, v1.i32) -> i32:
     block0:
         v2.i32 = add v0 1.i32;
         v3.i1 = eq v1 v0;
@@ -48,7 +48,7 @@ func %redundancy_by_predicate1(v0.i32, v1.i32) -> i32:
 # nextln:        jump block3;
 # check:    block3:
 # nextln:        return v2;
-func %redundancy_by_predicate2(v0.i32, v1.i32) -> i32:
+func public %redundancy_by_predicate2(v0.i32, v1.i32) -> i32:
     block0:
         v2.i32 = add v0 1.i32;
         v3.i1 = ne v1 v0;

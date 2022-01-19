@@ -2,7 +2,7 @@
 
 target = "evm-ethereum-london"
 
-# sameln: func %unreachable_blocks() -> i8:
+# sameln: func public %unreachable_blocks() -> i8:
 # nextln:     block0:
 # nextln:         jump block1;
 # nextln: 
@@ -11,7 +11,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln:     block3:
 # nextln:         return 3.i8;
-func %unreachable_blocks() -> i8:
+func public %unreachable_blocks() -> i8:
     block0:
         v0.i8 = add 1.i8 2.i8;
         br v0 block1 block2;

@@ -2,7 +2,7 @@ target = "evm-ethereum-london"
 
 # -(-v0) => v0
 # check: return v0;
-func %neg0(v0.i8) -> i8:
+func public %neg0(v0.i8) -> i8:
     block0:
         v1.i8 = neg v0;
         v2.i8 = neg v1;
@@ -11,7 +11,7 @@ func %neg0(v0.i8) -> i8:
 
 # -(!v0) => v0
 # check: v2.i16 = add v0 1.i16;
-func %neg1(v0.i16) -> i16:
+func public %neg1(v0.i16) -> i16:
     block0:
         v1.i8 = not v0;
         v2.i8 = neg v1;

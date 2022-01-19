@@ -12,7 +12,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln:    block3:
 # nextln:        return v3;
-func %simple_branch(v0.i1, v1.i8, v2.i8) -> i8:
+func public %simple_branch(v0.i1, v1.i8, v2.i8) -> i8:
     block0:
         v3.i8 = add v1 v2;
         br v0 block1 block2;
@@ -35,7 +35,7 @@ func %simple_branch(v0.i1, v1.i8, v2.i8) -> i8:
 # check:  block2:
 # nextln:   v3.i8 = add v1 v1;
 # nextln:   return v3;
-func %simple_branch2(v0.i1, v1.i8) -> i8:
+func public %simple_branch2(v0.i1, v1.i8) -> i8:
     block0:
         br v0 block1 block2;
 

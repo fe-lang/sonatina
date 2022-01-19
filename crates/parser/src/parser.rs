@@ -7,9 +7,9 @@ use sonatina_codegen::{
         builder::ModuleBuilder,
         func_cursor::{CursorLocation, FuncCursor},
         insn::{BinaryOp, CastOp, DataLocationKind, JumpOp, UnaryOp},
-        module::{FuncRef, Linkage},
-        Block, BlockData, Function, Immediate, Insn, InsnData, Module, Signature, Type, Value,
-        ValueData, I256, U256,
+        module::FuncRef,
+        Block, BlockData, Function, Immediate, Insn, InsnData, Linkage, Module, Signature, Type,
+        Value, ValueData, I256, U256,
     },
     isa::IsaBuilder,
 };
@@ -75,7 +75,7 @@ impl Parser {
             // Todo: parse linkage.
             let sig = Self::parse_declared_func_sig(&mut lexer)?;
             expect_token!(lexer, Token::Colon, ";")?;
-            module_builder.declare_function(sig, Linkage::External);
+            module_builder.declare_function(sig);
         }
 
         // Parse functions.
@@ -124,7 +124,12 @@ impl Parser {
             None
         };
 
-        Ok(Signature::new(name, &args, ret_ty.as_ref()))
+        Ok(Signature::new(
+            name,
+            Linkage::External,
+            &args,
+            ret_ty.as_ref(),
+        ))
     }
 }
 
@@ -160,11 +165,12 @@ impl<'a, 'b> FuncParser<'a, 'b> {
 
         let comments = self.parse_comment()?;
         expect_token!(self.lexer, Token::Func, "func")?;
+        let linkage = expect_linkage(self.lexer)?;
 
         let fn_name = expect_token!(self.lexer, Token::Ident(..), "func name")?.string();
 
         expect_token!(self.lexer, Token::LParen, "(")?;
-        let sig = Signature::new(fn_name, &[], None);
+        let sig = Signature::new(fn_name, linkage, &[], None);
         let mut func = Function::new(sig);
         let mut inserter = InsnInserter::new(&mut func);
 
@@ -193,9 +199,7 @@ impl<'a, 'b> FuncParser<'a, 'b> {
 
         self.parse_body(&mut inserter)?;
 
-        let func_ref = self
-            .module_builder
-            .declare_function(func.sig.clone(), Linkage::Public);
+        let func_ref = self.module_builder.declare_function(func.sig.clone());
         std::mem::swap(&mut self.module_builder.funcs[func_ref], &mut func);
         Ok(Some(ParsedFunction { func_ref, comments }))
     }
@@ -299,6 +303,13 @@ fn expect_ty(lexer: &mut Lexer) -> Result<Type> {
         .map_err(|err| Error::new(ErrorKind::SyntaxError(format!("{}", err)), lexer.line()))?;
     expect_token!(lexer, Token::RBracket, "]")?;
     Ok(Type::make_array(elem_ty, len))
+}
+fn expect_linkage(lexer: &mut Lexer) -> Result<Linkage> {
+    let token = expect_token!(lexer, Token::Linkage { .. }, "linkage")?;
+    match token {
+        Token::Linkage(linkage) => Ok(linkage),
+        _ => unreachable!(),
+    }
 }
 
 struct InsnInserter<'a> {
@@ -721,7 +732,7 @@ mod tests {
     #[test]
     fn parser_with_return() {
         assert!(test_func_parser(
-            "func %test_func() -> i32:
+            "func private %test_func() -> i32:
     block0:
         return 311.i32;"
         ));
@@ -730,7 +741,7 @@ mod tests {
     #[test]
     fn test_with_arg() {
         assert!(test_func_parser(
-            "func %test_func(v0.i32, v1.i64):
+            "func public %test_func(v0.i32, v1.i64):
     block0:
         v2.i64 = sext v0;
         v3.i64 = mul v2 v1;
@@ -742,7 +753,7 @@ mod tests {
     #[test]
     fn parser_with_non_continuous_value() {
         assert!(test_func_parser(
-            "func %test_func() -> i32:
+            "func private %test_func() -> i32:
     block64:
         jump block1;
 
@@ -754,7 +765,7 @@ mod tests {
     #[test]
     fn parser_with_phi() {
         assert!(test_func_parser(
-            "func %test_func():
+            "func private %test_func():
     block0:
         jump block1;
 
@@ -785,7 +796,7 @@ mod tests {
     #[test]
     fn parser_with_immediate() {
         assert!(test_func_parser(
-            "func %test_func() -> i8:
+            "func private %test_func() -> i8:
     block64:
         v0.i8 = add -1.i8 127.i8;
         v1.i8 = add v0 3.i8;
@@ -807,13 +818,13 @@ mod tests {
 
             # f1 start 1
             # f1 start 2
-            func %f1() -> i32:
+            func private %f1() -> i32:
                 block0:
                     return 311.i32;
 
             # f2 start 1
             # f2 start 2
-            func %f2() -> i32:
+            func public %f2() -> i32:
                 block0:
                     return 311.i32;
             ";

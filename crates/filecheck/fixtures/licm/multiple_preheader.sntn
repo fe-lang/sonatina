@@ -28,7 +28,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln:   block5:
 # nextln:       return;
-func %multiple_preheader(v0.i1, v1.i32):
+func public %multiple_preheader(v0.i1, v1.i32):
     block0:
         v2.i32 = add v1 1.i32;
         v3.i32 = sub v1 1.i32;
@@ -83,7 +83,7 @@ func %multiple_preheader(v0.i1, v1.i32):
 # nextln: 
 # nextln:   block5:
 # nextln:       return;
-func %multiple_preheader2(v0.i1, v1.i32):
+func public %multiple_preheader2(v0.i1, v1.i32):
     block0:
         v2.i32 = add v1 1.i32;
         v3.i32 = sub v1 1.i32;

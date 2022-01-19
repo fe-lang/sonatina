@@ -20,7 +20,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln: block5:
 # nextln:     jump block3;
-func %llvm_hoge(v0.i1) -> i16:
+func public %llvm_hoge(v0.i1) -> i16:
     block0:
         br v0 block1 block2;
 

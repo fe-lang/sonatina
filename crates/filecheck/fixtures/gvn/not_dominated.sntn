@@ -6,7 +6,7 @@ target = "evm-ethereum-london"
 # check:  block2:
 # nextln:   v3.i8 = add v1 v1;
 # nextln:   return v3;
-func %not_dominated_by_leader(v0.i1, v1.i8) -> i8:
+func public %not_dominated_by_leader(v0.i1, v1.i8) -> i8:
     block0:
         br v0 block1 block2;
 

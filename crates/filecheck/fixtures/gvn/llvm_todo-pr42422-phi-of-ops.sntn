@@ -74,7 +74,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln: block20:
 # nextln:     return;
-func %llvm_d(v0.i1, v1.i1):
+func public %llvm_d(v0.i1, v1.i1):
     block0:
         jump block1;
 

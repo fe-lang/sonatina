@@ -2,21 +2,21 @@ target = "evm-ethereum-london"
 
 # v0 ^ 0 => v0
 # check: return v0;
-func %xor0(v0.i8) -> i8:
+func public %xor0(v0.i8) -> i8:
     block0:
         v1.i8 = xor v0 0.i8;
         return v1;
 
 # v0 ^ v0 => 0
 # check: return 0.i8;
-func %xor1(v0.i8) -> i8:
+func public %xor1(v0.i8) -> i8:
     block0:
         v1.i8 = xor v0 v0;
         return v1;
 
 # v0 ^ !v0 => -1
 # check: return -1.i8;
-func %xor2(v0.i8) -> i8:
+func public %xor2(v0.i8) -> i8:
     block0:
         v1.i8 = not v0;
         v2.i8 = xor v0 v1;
@@ -24,7 +24,7 @@ func %xor2(v0.i8) -> i8:
 
 # v0 ^ (v0 ^ v1) => v1
 # check: return v1;
-func %xor3(v0.i8, v1.i8) -> i8:
+func public %xor3(v0.i8, v1.i8) -> i8:
     block0:
         v2.i8 = xor v0 v1;
         v3.i8 = xor v0 v2;
@@ -32,7 +32,7 @@ func %xor3(v0.i8, v1.i8) -> i8:
 
 # v0 ^ (v1 ^ v0) => v1
 # check: return v1;
-func %xor4(v0.i8, v1.i8) -> i8:
+func public %xor4(v0.i8, v1.i8) -> i8:
     block0:
         v2.i8 = xor v1 v0;
         v3.i8 = xor v0 v2;
@@ -40,7 +40,7 @@ func %xor4(v0.i8, v1.i8) -> i8:
 
 # (v0 | v1) ^ (!v0 & v1) => v0
 # check: return v0;
-func %xor5(v0.i8, v1.i8) -> i8:
+func public %xor5(v0.i8, v1.i8) -> i8:
     block0:
         v2.i8 = or v0 v1;
         v3.i8 = not v0;
@@ -50,7 +50,7 @@ func %xor5(v0.i8, v1.i8) -> i8:
 
 # (v0 | v1) ^ (v1 & !v0) => v0
 # check: return v0;
-func %xor6(v0.i8, v1.i8) -> i8:
+func public %xor6(v0.i8, v1.i8) -> i8:
     block0:
         v2.i8 = or v0 v1;
         v3.i8 = not v0;
@@ -60,7 +60,7 @@ func %xor6(v0.i8, v1.i8) -> i8:
 
 # (v0 | v1) ^ (v0 & !v1) => v1
 # check: return v1;
-func %xor7(v0.i8, v1.i8) -> i8:
+func public %xor7(v0.i8, v1.i8) -> i8:
     block0:
         v2.i8 = or v0 v1;
         v3.i8 = not v1;
@@ -70,7 +70,7 @@ func %xor7(v0.i8, v1.i8) -> i8:
 
 # (v0 & v1) ^ (!v0 | v1) => !v0
 # check: return v3;
-func %xor8(v0.i8, v1.i8) -> i8:
+func public %xor8(v0.i8, v1.i8) -> i8:
     block0:
         v2.i8 = and v0 v1;
         v3.i8 = not v0;
@@ -80,7 +80,7 @@ func %xor8(v0.i8, v1.i8) -> i8:
 
 # (v0 & v1) ^ (v1 | !v0) => !v0
 # check: return v3;
-func %xor9(v0.i8, v1.i8) -> i8:
+func public %xor9(v0.i8, v1.i8) -> i8:
     block0:
         v2.i8 = and v0 v1;
         v3.i8 = not v0;
@@ -91,7 +91,7 @@ func %xor9(v0.i8, v1.i8) -> i8:
 
 # (v0 & v1) ^ (v0 | !v1) => !v1
 # check: return v3;
-func %xor10(v0.i8, v1.i8) -> i8:
+func public %xor10(v0.i8, v1.i8) -> i8:
     block0:
         v2.i8 = and v0 v1;
         v3.i8 = not v1;
@@ -101,7 +101,7 @@ func %xor10(v0.i8, v1.i8) -> i8:
 
 # (v0 & v1) ^ (!v1 | v0) => !v1
 # check: return v3;
-func %xor11(v0.i8, v1.i8) -> i8:
+func public %xor11(v0.i8, v1.i8) -> i8:
     block0:
         v2.i8 = and v0 v1;
         v3.i8 = not v1;
