@@ -13,9 +13,9 @@ use crate::{
     ir::{
         func_cursor::{CursorLocation, FuncCursor, InsnInserter},
         insn::{BinaryOp, CastOp, InsnData, UnaryOp},
-        Immediate, Type,
+        Block, Function, Immediate, Insn, Type, Value,
     },
-    Block, Function, Insn, TargetIsa, Value,
+    TargetIsa,
 };
 
 #[derive(Debug)]

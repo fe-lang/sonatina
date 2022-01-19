@@ -5,10 +5,10 @@ use crate::{
     cfg::ControlFlowGraph,
     ir::{
         func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-        InsnData,
+        Block, Function, Insn, InsnData, Value,
     },
     loop_analysis::{Loop, LoopTree},
-    Block, Function, Insn, TargetIsa, Value,
+    TargetIsa,
 };
 
 #[derive(Debug)]

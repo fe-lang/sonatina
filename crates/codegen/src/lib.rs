@@ -8,9 +8,7 @@ pub mod domtree;
 pub mod ir;
 pub mod isa;
 pub mod loop_analysis;
-pub mod module;
 pub mod optim;
 pub mod post_domtree;
 
-pub use ir::{Block, Function, Insn, Signature, Type, Value, Variable};
 pub use isa::TargetIsa;

@@ -1,6 +1,6 @@
 use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
 
-use crate::{Function, Signature};
+use crate::ir::{Function, Signature};
 
 #[derive(Debug, Clone)]
 pub struct Module {

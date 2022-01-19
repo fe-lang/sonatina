@@ -1,4 +1,4 @@
-use crate::Type;
+use crate::ir::Type;
 
 use super::{IsaSpecificTypeProvider, TargetIsa};
 

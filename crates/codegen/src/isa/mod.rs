@@ -1,6 +1,6 @@
 use sonatina_triple::{Architecture, TargetTriple};
 
-use crate::Type;
+use crate::ir::Type;
 
 pub mod evm_eth;
 

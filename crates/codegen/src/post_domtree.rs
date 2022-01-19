@@ -3,7 +3,7 @@
 use super::{
     cfg::ControlFlowGraph,
     domtree::{DFSet, DomTree},
-    Block, Function,
+    ir::{Block, Function},
 };
 
 #[derive(Debug)]
@@ -146,8 +146,11 @@ impl Default for PDFSet {
 mod tests {
     #![allow(clippy::many_single_char_names)]
 
-    use super::{super::Type, *};
-    use crate::ir::builder::test_util::{build_test_isa, func_builder};
+    use super::*;
+    use crate::ir::{
+        builder::test_util::{build_test_isa, func_builder},
+        Type,
+    };
 
     fn calc_dom(func: &Function) -> (PostDomTree, PDFSet) {
         let mut post_dom_tree = PostDomTree::new();

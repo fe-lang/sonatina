@@ -18,9 +18,9 @@ use crate::{
     ir::{
         func_cursor::{CursorLocation, FuncCursor, InsnInserter},
         insn::{BinaryOp, CastOp, InsnData, UnaryOp},
-        DataFlowGraph, Immediate,
+        Block, DataFlowGraph, Function, Immediate, Insn, Type, Value,
     },
-    Block, Function, Insn, TargetIsa, Type, Value,
+    TargetIsa,
 };
 
 use super::{constant_folding, simplify_impl};

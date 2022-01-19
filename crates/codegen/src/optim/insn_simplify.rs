@@ -5,9 +5,9 @@ use std::collections::VecDeque;
 use crate::{
     ir::{
         func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-        InsnData,
+        Function, Insn, InsnData, Value,
     },
-    Function, Insn, TargetIsa, Value,
+    TargetIsa,
 };
 
 use super::simplify_impl::{simplify_insn, SimplifyResult};

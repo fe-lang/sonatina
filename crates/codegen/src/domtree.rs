@@ -7,7 +7,9 @@ use std::collections::BTreeSet;
 
 use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 
-use super::{cfg::ControlFlowGraph, Block};
+use crate::ir::Block;
+
+use super::cfg::ControlFlowGraph;
 
 #[derive(Default, Debug)]
 pub struct DomTree {
@@ -204,8 +206,8 @@ mod tests {
 
     use super::*;
 
-    use crate::{
-        ir::builder::test_util::{build_test_isa, func_builder},
+    use crate::ir::{
+        builder::test_util::{build_test_isa, func_builder},
         Function,
     };
 

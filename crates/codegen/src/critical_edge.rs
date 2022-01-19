@@ -3,8 +3,9 @@ use super::{
     ir::{
         func_cursor::{CursorLocation, FuncCursor, InsnInserter},
         insn::InsnData,
+        Block, Function, Insn,
     },
-    Block, Function, Insn, TargetIsa,
+    TargetIsa,
 };
 
 #[derive(Debug)]

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use sonatina_codegen::{optim::adce::AdceSolver, Function, TargetIsa};
+use sonatina_codegen::{ir::Function, optim::adce::AdceSolver, TargetIsa};
 
 use super::{FuncTransform, FIXTURE_ROOT};
 

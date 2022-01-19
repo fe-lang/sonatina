@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use sonatina_codegen::{cfg::ControlFlowGraph, optim::sccp::SccpSolver, Function, TargetIsa};
+use sonatina_codegen::{cfg::ControlFlowGraph, ir::Function, optim::sccp::SccpSolver, TargetIsa};
 
 use super::{FuncTransform, FIXTURE_ROOT};
 

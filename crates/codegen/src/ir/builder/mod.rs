@@ -10,12 +10,10 @@ use crate::{
     ir::{
         func_cursor::{CursorLocation, FuncCursor, InsnInserter},
         insn::{BinaryOp, CastOp, DataLocationKind, InsnData, JumpOp, UnaryOp},
-        Immediate,
+        Block, Function, Immediate, Signature, Type, Value,
     },
     isa::TargetIsa,
 };
-
-use crate::{Block, Function, Signature, Type, Value};
 
 use ssa::SsaBuilder;
 
@@ -471,11 +469,9 @@ pub(crate) mod test_util {
 
     use sonatina_triple::TargetTriple;
 
-    use crate::ir::ir_writer::FuncWriter;
-
     use crate::{
+        ir::{ir_writer::FuncWriter, Function, Signature, Type},
         isa::{IsaBuilder, TargetIsa},
-        Function, Signature, Type,
     };
 
     pub(crate) fn build_test_isa() -> TargetIsa {

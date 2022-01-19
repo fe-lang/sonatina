@@ -5,6 +5,7 @@ pub mod function;
 pub mod insn;
 pub mod ir_writer;
 pub mod layout;
+pub mod module;
 pub mod types;
 pub mod value;
 
@@ -16,5 +17,6 @@ pub use dfg::{Block, BlockData, DataFlowGraph};
 pub use function::{Function, Signature};
 pub use insn::{BranchInfo, DataLocationKind, Insn, InsnData};
 pub use layout::Layout;
+pub use module::Module;
 pub use types::Type;
 pub use value::{Immediate, Value, ValueData};

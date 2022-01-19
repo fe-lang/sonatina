@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use sonatina_codegen::{
-    cfg::ControlFlowGraph, domtree::DomTree, optim::gvn::GvnSolver, Function, TargetIsa,
+    cfg::ControlFlowGraph, domtree::DomTree, ir::Function, optim::gvn::GvnSolver, TargetIsa,
 };
 
 use super::{FuncTransform, FIXTURE_ROOT};

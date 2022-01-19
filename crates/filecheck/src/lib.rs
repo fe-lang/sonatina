@@ -11,7 +11,10 @@ use std::{
     time,
 };
 
-use sonatina_codegen::{ir::ir_writer::FuncWriter, Function, TargetIsa};
+use sonatina_codegen::{
+    ir::{ir_writer::FuncWriter, Function},
+    TargetIsa,
+};
 use sonatina_parser::{
     parser::{ParsedFunction, ParsedModule, Parser},
     ErrorKind,

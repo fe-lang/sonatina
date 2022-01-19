@@ -7,9 +7,10 @@ use crate::{
     ir::{
         func_cursor::{CursorLocation, FuncCursor, InsnInserter},
         insn::InsnData,
+        Block, Function, Insn,
     },
     post_domtree::{PDFSet, PDTIdom, PostDomTree},
-    Block, Function, Insn, TargetIsa,
+    TargetIsa,
 };
 
 pub struct AdceSolver<'isa> {

@@ -7,12 +7,10 @@ use smallvec::SmallVec;
 use crate::{
     ir::{
         func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-        InsnData,
+        Block, Function, Insn, InsnData, Type, Value,
     },
     TargetIsa,
 };
-
-use crate::{Block, Function, Insn, Type, Value};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Variable(u32);

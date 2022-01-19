@@ -245,8 +245,8 @@ enum BlockState {
 mod tests {
     use super::*;
 
-    use crate::{
-        ir::builder::test_util::{build_test_isa, func_builder},
+    use crate::ir::{
+        builder::test_util::{build_test_isa, func_builder},
         Function, Type,
     };
 
