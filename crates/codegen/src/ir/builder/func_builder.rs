@@ -15,7 +15,7 @@ pub struct FunctionBuilder<'isa> {
     isa: &'isa TargetIsa,
     func: Function,
     loc: CursorLocation,
-    ssa_builder: SsaBuilder<'isa>,
+    ssa_builder: SsaBuilder,
 }
 
 macro_rules! impl_unary_insn {
@@ -65,7 +65,7 @@ impl<'isa> FunctionBuilder<'isa> {
             isa,
             func,
             loc: CursorLocation::NoWhere,
-            ssa_builder: SsaBuilder::new(isa),
+            ssa_builder: SsaBuilder::new(),
         }
     }
 
@@ -251,7 +251,8 @@ impl<'isa> FunctionBuilder<'isa> {
 
     pub fn use_var(&mut self, var: Variable) -> Value {
         let block = self.cursor().block().unwrap();
-        self.ssa_builder.use_var(&mut self.func, var, block)
+        self.ssa_builder
+            .use_var(&mut self.func, self.isa, var, block)
     }
 
     pub fn def_var(&mut self, var: Variable, value: Value) {
@@ -263,11 +264,11 @@ impl<'isa> FunctionBuilder<'isa> {
 
     pub fn seal_block(&mut self) {
         let block = self.cursor().block().unwrap();
-        self.ssa_builder.seal_block(&mut self.func, block);
+        self.ssa_builder.seal_block(&mut self.func, self.isa, block);
     }
 
     pub fn seal_all(&mut self) {
-        self.ssa_builder.seal_all(&mut self.func);
+        self.ssa_builder.seal_all(&mut self.func, self.isa);
     }
 
     pub fn is_sealed(&self, block: Block) -> bool {

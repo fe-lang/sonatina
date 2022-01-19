@@ -2,9 +2,14 @@ use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
 
 use crate::ir::{Function, Signature};
 
-#[derive(Debug, Clone)]
+use crate::isa::TargetIsa;
+
+#[derive(Debug)]
 pub struct Module {
-    /// Hold all function declared in the contract.
+    /// Target ISA of the module.
+    pub isa: TargetIsa,
+
+    /// Holds all function declared in the contract.
     pub funcs: PrimaryMap<FuncRef, Function>,
 
     pub func_attributes: SecondaryMap<FuncRef, FuncAttribute>,
