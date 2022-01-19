@@ -11,8 +11,8 @@ pub struct Module {
 }
 
 impl Module {
-    pub fn declare_function(&mut self, name: String, sig: Signature, linkage: Linkage) -> FuncRef {
-        let func = Function::new(name, sig);
+    pub fn declare_function(&mut self, sig: Signature, linkage: Linkage) -> FuncRef {
+        let func = Function::new(sig);
         let func_ref = self.funcs.push(func);
         self.func_attributes[func_ref] = FuncAttribute { linkage };
         func_ref

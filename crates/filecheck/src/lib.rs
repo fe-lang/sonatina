@@ -164,7 +164,7 @@ impl<'a> FileChecker<'a> {
         };
 
         let mut test_path = self.file_path.to_owned();
-        test_path.push(func.name);
+        test_path.push(func.sig.name());
         FileCheckResult::new(test_path, result)
     }
 

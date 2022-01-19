@@ -67,8 +67,8 @@ macro_rules! impl_cast_insn {
 }
 
 impl<'isa> FunctionBuilder<'isa> {
-    pub fn new(name: String, sig: Signature, isa: &'isa TargetIsa) -> Self {
-        let func = Function::new(name, sig);
+    pub fn new(sig: Signature, isa: &'isa TargetIsa) -> Self {
+        let func = Function::new(sig);
         Self {
             isa,
             func,
@@ -488,8 +488,8 @@ pub(crate) mod test_util {
         ret: Option<&Type>,
         isa: &'isa TargetIsa,
     ) -> FunctionBuilder<'isa> {
-        let sig = Signature::new(args, ret);
-        FunctionBuilder::new("test_func".into(), sig, isa)
+        let sig = Signature::new("test_func", args, ret);
+        FunctionBuilder::new(sig, isa)
     }
 
     pub(crate) fn dump_func(func: &Function) -> String {

@@ -121,7 +121,7 @@ impl<'a, 'b> FuncParser<'a, 'b> {
         let fn_name = expect_token!(self.lexer, Token::Ident(..), "func name")?.string();
 
         expect_token!(self.lexer, Token::LParen, "(")?;
-        let mut func = Function::new(fn_name.to_string(), Signature::default());
+        let mut func = Function::new(Signature::new(fn_name, &[], None));
         let mut inserter = InsnInserter::new(&mut func);
 
         if let Some(value) = eat_token!(self.lexer, Token::Value(..))? {

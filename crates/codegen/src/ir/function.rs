@@ -4,9 +4,6 @@ use super::{DataFlowGraph, Layout, Type, Value};
 
 #[derive(Debug, Clone)]
 pub struct Function {
-    /// Name of the function.
-    pub name: String,
-
     /// Signature of the function.
     pub sig: Signature,
     pub arg_values: smallvec::SmallVec<[Value; 8]>,
@@ -16,7 +13,7 @@ pub struct Function {
 }
 
 impl Function {
-    pub fn new(name: String, sig: Signature) -> Self {
+    pub fn new(sig: Signature) -> Self {
         let mut dfg = DataFlowGraph::default();
         let arg_values = sig
             .args()
@@ -29,7 +26,6 @@ impl Function {
             .collect();
 
         Self {
-            name,
             sig,
             arg_values,
             dfg,
@@ -40,16 +36,23 @@ impl Function {
 
 #[derive(Debug, Clone, Default)]
 pub struct Signature {
+    /// Name of the function.
+    name: String,
+
     args: SmallVec<[Type; 8]>,
     ret: Option<Type>,
 }
 
 impl Signature {
-    pub fn new(args: &[Type], ret: Option<&Type>) -> Self {
+    pub fn new(name: &str, args: &[Type], ret: Option<&Type>) -> Self {
         Self {
+            name: name.to_string(),
             args: args.into(),
             ret: ret.cloned(),
         }
+    }
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn append_arg(&mut self, arg: Type) {
