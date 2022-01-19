@@ -109,6 +109,8 @@ impl<'a> Lexer<'a> {
             Token::Target
         } else if self.eat_string_if(b"func").is_some() {
             Token::Func
+        } else if self.eat_string_if(b"declare").is_some() {
+            Token::Declare
         } else if self.eat_string_if(b"undef").is_some() {
             Token::Undef
         } else if self.eat_string_if(b"->").is_some() {
@@ -319,6 +321,7 @@ pub(super) struct WithLoc<T> {
 #[derive(Debug, Clone)]
 pub(super) enum Token<'a> {
     Func,
+    Declare,
     RArrow,
     Colon,
     SemiColon,
@@ -383,6 +386,7 @@ impl<'a> fmt::Display for Token<'a> {
     fn fmt(&self, w: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Func => write!(w, "func"),
+            Self::Declare => write!(w, "declare"),
             Self::RArrow => write!(w, "=>"),
             Self::Colon => write!(w, ":"),
             Self::SemiColon => write!(w, ";"),

@@ -12,11 +12,11 @@ use std::{
 };
 
 use sonatina_codegen::{
-    ir::{ir_writer::FuncWriter, Function},
+    ir::{ir_writer::FuncWriter, module::FuncRef, Function},
     TargetIsa,
 };
 use sonatina_parser::{
-    parser::{ParsedFunction, ParsedModule, Parser},
+    parser::{ParsedModule, Parser},
     ErrorKind,
 };
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
@@ -131,34 +131,31 @@ impl<'a> FileChecker<'a> {
     }
 
     fn check(&mut self) -> Vec<FileCheckResult> {
-        let parsed_module = match self.parse_file() {
+        let mut parsed_module = match self.parse_file() {
             Ok(module) => module,
             Err(msg) => return vec![FileCheckResult::new(self.file_path.to_owned(), Err(msg))],
         };
 
-        let funcs = parsed_module.funcs;
-        if funcs.is_empty() {
-            return vec![FileCheckResult::new(
-                self.file_path.to_owned(),
-                Err("a test file doesn't contains a function".into()),
-            )];
-        }
+        let module = &parsed_module.module;
 
-        let isa = parsed_module.isa;
-        funcs
-            .into_iter()
-            .map(|func| self.check_func(func, &isa))
+        module
+            .iter_functions()
+            .map(|func_ref| self.check_func(&mut parsed_module, func_ref))
             .collect()
     }
 
-    fn check_func(&mut self, parsed_func: ParsedFunction, isa: &TargetIsa) -> FileCheckResult {
-        let mut func = parsed_func.func;
-        let comments = parsed_func.comments;
+    fn check_func(
+        &mut self,
+        parsed_module: &mut ParsedModule,
+        func_ref: FuncRef,
+    ) -> FileCheckResult {
+        let func = &mut parsed_module.module.funcs[func_ref];
+        let comments = &parsed_module.func_comments[func_ref];
 
-        self.transformer.transform(&mut func, isa);
-        let func_ir = FuncWriter::new(&func).dump_string().unwrap();
+        self.transformer.transform(func, &parsed_module.module.isa);
+        let func_ir = FuncWriter::new(func).dump_string().unwrap();
 
-        let checker = self.build_checker(&comments);
+        let checker = self.build_checker(comments);
 
         let result = match checker.explain(&func_ir, &()) {
             Ok((true, _)) => Ok(()),

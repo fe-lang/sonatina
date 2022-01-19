@@ -15,7 +15,28 @@ pub struct Module {
     pub func_attributes: SecondaryMap<FuncRef, FuncAttribute>,
 }
 
-impl Module {}
+impl Module {
+    #[doc(hidden)]
+    pub fn new(isa: TargetIsa) -> Self {
+        Self {
+            isa,
+            funcs: PrimaryMap::default(),
+            func_attributes: SecondaryMap::with_default(FuncAttribute {
+                linkage: Linkage::External,
+            }),
+        }
+    }
+
+    /// Returns `func_ref` in the module.
+    pub fn iter_functions(&self) -> impl Iterator<Item = FuncRef> {
+        self.funcs.keys()
+    }
+
+    /// Returns `true` if the function has external linkage.
+    pub fn is_external(&self, func_ref: FuncRef) -> bool {
+        self.func_attributes[func_ref].linkage == Linkage::External
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FuncAttribute {

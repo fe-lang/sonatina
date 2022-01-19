@@ -9,3 +9,4 @@ edition = "2021"
 sonatina-codegen = { path = "../codegen" }
 sonatina-triple = { path = "../triple" }
 smallvec = "1.7.0"
+cranelift-entity = "0.77"
