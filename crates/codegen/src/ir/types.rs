@@ -13,6 +13,7 @@ pub enum Type {
     I128,
     I256,
     Array { elem_ty: Box<Type>, len: usize },
+    Ptr { base: Box<Type> },
 }
 
 impl Type {
@@ -21,6 +22,10 @@ impl Type {
             elem_ty: elem_ty.into(),
             len,
         }
+    }
+
+    pub fn make_ptr(base: Type) -> Self {
+        Type::Ptr { base: base.into() }
     }
 
     pub fn is_integral(&self) -> bool {
@@ -34,14 +39,15 @@ impl Type {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::I1 => f.write_str("i1"),
-            Self::I8 => f.write_str("i8"),
-            Self::I16 => f.write_str("i16"),
-            Self::I32 => f.write_str("i32"),
-            Self::I64 => f.write_str("i64"),
-            Self::I128 => f.write_str("i128"),
-            Self::I256 => f.write_str("i256"),
-            Self::Array { elem_ty, len } => f.write_fmt(format_args!("[{}; {}]", elem_ty, len)),
+            Self::I1 => write!(f, "i1"),
+            Self::I8 => write!(f, "i8"),
+            Self::I16 => write!(f, "i16"),
+            Self::I32 => write!(f, "i32"),
+            Self::I64 => write!(f, "i64"),
+            Self::I128 => write!(f, "i128"),
+            Self::I256 => write!(f, "i256"),
+            Self::Array { elem_ty, len } => write!(f, "[{}; {}]", elem_ty, len),
+            Self::Ptr { base } => write!(f, "*{}", base),
         }
     }
 }

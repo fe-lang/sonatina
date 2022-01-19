@@ -6,6 +6,7 @@ use sonatina_triple::{Architecture, Chain, EvmVersion, TargetTriple, Version};
 
 #[derive(Debug, Clone, Copy)]
 pub struct EvmEth {
+    #[allow(unused)]
     version: EvmVersion,
 }
 

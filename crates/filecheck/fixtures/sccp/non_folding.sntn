@@ -2,13 +2,17 @@
 
 target = "evm-ethereum-london"
 
-# sameln: func public %non_folding(v0.i64):
+# sameln: func public %non_folding(v0.*i64):
 # nextln:    block1:
 # nextln:        v1.i64 = load @storage v0 i64;
 # nextln:        v2.i64 = add 1.i64 v0;
 # nextln:        v3.i64 = add -1.i64 v1;
-func public %non_folding(v0.i64):
+# nextln:        v4.*i64 = alloca i64;
+# nextln:        v5.*i64 = add v4 8.i256;
+func public %non_folding(v0.*i64):
     block1:
         v1.i64 = load @storage v0 i64;
         v2.i64 = add 1.i64 v0;
         v3.i64 = add -1.i64 v1;
+        v4.*i64 = alloca i64;
+        v5.*i64 = add v4 8.i256;

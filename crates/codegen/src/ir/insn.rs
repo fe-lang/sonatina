@@ -318,13 +318,13 @@ impl InsnData {
         }
     }
 
-    pub(crate) fn result_type(&self, isa: &TargetIsa, dfg: &DataFlowGraph) -> Option<Type> {
+    pub(crate) fn result_type(&self, _isa: &TargetIsa, dfg: &DataFlowGraph) -> Option<Type> {
         match self {
             Self::Unary { args, .. } => Some(dfg.value_ty(args[0]).clone()),
             Self::Binary { code, args } => Some(code.result_type(dfg, args)),
             Self::Cast { ty, .. } | Self::Load { ty, .. } => Some(ty.clone()),
             Self::Phi { ty, .. } => Some(ty.clone()),
-            Self::Alloca { .. } => Some(isa.type_provider().pointer_type()),
+            Self::Alloca { ty } => Some(Type::make_ptr(ty.clone())),
             _ => None,
         }
     }

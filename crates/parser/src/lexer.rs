@@ -77,6 +77,8 @@ impl<'a> Lexer<'a> {
             Token::Eq
         } else if self.eat_char_if(|c| c == '.').is_some() {
             Token::Dot
+        } else if self.eat_char_if(|c| c == '*').is_some() {
+            Token::Star
         } else if self.eat_char_if(|c| c == '@').is_some() {
             let loc = if self.eat_string_if(b"memory").is_some() {
                 DataLocationKind::Memory
@@ -339,6 +341,7 @@ pub(super) enum Token<'a> {
     RBracket,
     Eq,
     Dot,
+    Star,
     Undef,
     Target,
     ModuleComment(&'a str),
@@ -413,6 +416,7 @@ impl<'a> fmt::Display for Token<'a> {
                 }
             }
             Self::Dot => write!(w, "."),
+            Self::Star => write!(w, "*"),
             Self::Undef => write!(w, "undef"),
             Self::Target => write!(w, "target"),
             Self::String(s) => write!(w, "{}", s),

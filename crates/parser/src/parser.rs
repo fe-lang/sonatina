@@ -1,3 +1,4 @@
+// TODO: Refactor and refactor and refactor!!!
 use std::collections::HashSet;
 
 use cranelift_entity::SecondaryMap;
@@ -133,7 +134,6 @@ impl Parser {
     }
 }
 
-// TODO: Reconsider module design when IR define module.
 pub struct ParsedModule {
     pub module: Module,
     pub module_comments: Vec<String>,
@@ -293,16 +293,27 @@ fn expect_ty(lexer: &mut Lexer) -> Result<Type> {
         return Ok(ty);
     };
 
-    // Try parse array type.
-    expect_token!(lexer, Token::LBracket, "[")?;
-    let elem_ty = expect_ty(lexer)?;
-    expect_token!(lexer, Token::SemiColon, ";")?;
-    let len = expect_token!(lexer, Token::Integer(..), " or value")?
-        .string()
-        .parse()
-        .map_err(|err| Error::new(ErrorKind::SyntaxError(format!("{}", err)), lexer.line()))?;
-    expect_token!(lexer, Token::RBracket, "]")?;
-    Ok(Type::make_array(elem_ty, len))
+    if eat_token!(lexer, Token::LBracket)?.is_some() {
+        // Try parse array element type.
+        let elem_ty = expect_ty(lexer)?;
+        expect_token!(lexer, Token::SemiColon, ";")?;
+        // Try parse array length.
+        let len = expect_token!(lexer, Token::Integer(..), " or value")?
+            .string()
+            .parse()
+            .map_err(|err| Error::new(ErrorKind::SyntaxError(format!("{}", err)), lexer.line()))?;
+        expect_token!(lexer, Token::RBracket, "]")?;
+        Ok(Type::make_array(elem_ty, len))
+    } else if eat_token!(lexer, Token::Star)?.is_some() {
+        // Try parse ptr base type.
+        let elem_ty = expect_ty(lexer)?;
+        Ok(Type::make_ptr(elem_ty))
+    } else {
+        Err(Error::new(
+            ErrorKind::SyntaxError("invalid type".into()),
+            lexer.line(),
+        ))
+    }
 }
 fn expect_linkage(lexer: &mut Lexer) -> Result<Linkage> {
     let token = expect_token!(lexer, Token::Linkage { .. }, "linkage")?;
@@ -694,8 +705,8 @@ fn build_imm_data(number: &str, ty: &Type, line: u32) -> Result<Immediate> {
             Ok(Immediate::I256(i256))
         }
 
-        Type::Array { .. } => Err(Error::new(
-            ErrorKind::SemanticError("can't use immediate for array type".into()),
+        Type::Array { .. } | Type::Ptr { .. } => Err(Error::new(
+            ErrorKind::SemanticError("can't use immediate for array or ptr type".into()),
             line,
         )),
     }
