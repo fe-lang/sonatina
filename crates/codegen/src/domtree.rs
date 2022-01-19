@@ -206,10 +206,7 @@ mod tests {
 
     use super::*;
 
-    use crate::ir::{
-        builder::test_util::{build_test_isa, func_builder},
-        Function,
-    };
+    use crate::ir::{builder::test_util::*, Function};
 
     fn calc_dom(func: &Function) -> (DomTree, DFSet) {
         let mut cfg = ControlFlowGraph::default();
@@ -235,8 +232,8 @@ mod tests {
 
     #[test]
     fn dom_tree_if_else() {
-        let isa = build_test_isa();
-        let mut builder = func_builder(&[], None, &isa);
+        let mut test_module_builder = TestModuleBuilder::new();
+        let mut builder = test_module_builder.func_builder(&[], None);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -257,8 +254,12 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
+        let func_ref = builder.finish();
 
-        let (dom_tree, df) = calc_dom(&builder.build());
+        let module = test_module_builder.build();
+        let func = &module.funcs[func_ref];
+
+        let (dom_tree, df) = calc_dom(func);
         assert_eq!(dom_tree.idom_of(entry_block), None);
         assert_eq!(dom_tree.idom_of(then_block), Some(entry_block));
         assert_eq!(dom_tree.idom_of(else_block), Some(entry_block));
@@ -272,8 +273,8 @@ mod tests {
 
     #[test]
     fn unreachable_edge() {
-        let isa = build_test_isa();
-        let mut builder = func_builder(&[], None, &isa);
+        let mut test_module_builder = TestModuleBuilder::new();
+        let mut builder = test_module_builder.func_builder(&[], None);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -298,8 +299,12 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
+        let func_ref = builder.finish();
 
-        let (dom_tree, df) = calc_dom(&builder.build());
+        let module = test_module_builder.build();
+        let func = &module.funcs[func_ref];
+
+        let (dom_tree, df) = calc_dom(func);
         assert_eq!(dom_tree.idom_of(a), None);
         assert_eq!(dom_tree.idom_of(b), Some(a));
         assert_eq!(dom_tree.idom_of(c), Some(a));
@@ -316,8 +321,8 @@ mod tests {
 
     #[test]
     fn dom_tree_complex() {
-        let isa = build_test_isa();
-        let mut builder = func_builder(&[], None, &isa);
+        let mut test_module_builder = TestModuleBuilder::new();
+        let mut builder = test_module_builder.func_builder(&[], None);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -374,8 +379,12 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
+        let func_ref = builder.finish();
 
-        let (dom_tree, df) = calc_dom(&builder.build());
+        let module = test_module_builder.build();
+        let func = &module.funcs[func_ref];
+
+        let (dom_tree, df) = calc_dom(func);
         assert_eq!(dom_tree.idom_of(a), None);
         assert_eq!(dom_tree.idom_of(b), Some(a));
         assert_eq!(dom_tree.idom_of(c), Some(a));
@@ -405,8 +414,8 @@ mod tests {
 
     #[test]
     fn dom_tree_br_table() {
-        let isa = build_test_isa();
-        let mut builder = func_builder(&[], None, &isa);
+        let mut test_module_builder = TestModuleBuilder::new();
+        let mut builder = test_module_builder.func_builder(&[], None);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -438,8 +447,12 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
+        let func_ref = builder.finish();
 
-        let (dom_tree, df) = calc_dom(&builder.build());
+        let module = test_module_builder.build();
+        let func = &module.funcs[func_ref];
+
+        let (dom_tree, df) = calc_dom(func);
         assert_eq!(dom_tree.idom_of(a), None);
         assert_eq!(dom_tree.idom_of(b), Some(a));
         assert_eq!(dom_tree.idom_of(c), Some(a));

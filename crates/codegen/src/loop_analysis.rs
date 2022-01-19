@@ -245,10 +245,7 @@ enum BlockState {
 mod tests {
     use super::*;
 
-    use crate::ir::{
-        builder::test_util::{build_test_isa, func_builder},
-        Function, Type,
-    };
+    use crate::ir::{builder::test_util::*, Function, Type};
 
     fn compute_loop(func: &Function) -> LoopTree {
         let mut cfg = ControlFlowGraph::new();
@@ -262,8 +259,9 @@ mod tests {
 
     #[test]
     fn simple_loop() {
-        let isa = build_test_isa();
-        let mut builder = func_builder(&[], None, &isa);
+        let mut test_module_builder = TestModuleBuilder::new();
+        let mut builder = test_module_builder.func_builder(&[], None);
+
         let b0 = builder.append_block();
         let b1 = builder.append_block();
         let b2 = builder.append_block();
@@ -289,9 +287,11 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
+        let func_ref = builder.finish();
 
-        let func = builder.build();
-        let lpt = compute_loop(&func);
+        let module = test_module_builder.build();
+        let func = &module.funcs[func_ref];
+        let lpt = compute_loop(func);
 
         debug_assert_eq!(lpt.loop_num(), 1);
         let lp0 = lpt.loops().next().unwrap();
@@ -305,8 +305,9 @@ mod tests {
 
     #[test]
     fn continue_loop() {
-        let isa = build_test_isa();
-        let mut builder = func_builder(&[], None, &isa);
+        let mut test_module_builder = TestModuleBuilder::new();
+        let mut builder = test_module_builder.func_builder(&[], None);
+
         let b0 = builder.append_block();
         let b1 = builder.append_block();
         let b2 = builder.append_block();
@@ -349,9 +350,11 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
+        let func_ref = builder.finish();
 
-        let func = builder.build();
-        let lpt = compute_loop(&func);
+        let module = test_module_builder.build();
+        let func = &module.funcs[func_ref];
+        let lpt = compute_loop(func);
 
         debug_assert_eq!(lpt.loop_num(), 1);
         let lp0 = lpt.loops().next().unwrap();
@@ -369,8 +372,8 @@ mod tests {
 
     #[test]
     fn single_block_loop() {
-        let isa = build_test_isa();
-        let mut builder = func_builder(&[Type::I1], None, &isa);
+        let mut test_module_builder = TestModuleBuilder::new();
+        let mut builder = test_module_builder.func_builder(&[Type::I1], None);
         let b0 = builder.append_block();
         let b1 = builder.append_block();
         let b2 = builder.append_block();
@@ -387,8 +390,11 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
-        let func = builder.build();
-        let lpt = compute_loop(&func);
+        let func_ref = builder.finish();
+
+        let module = test_module_builder.build();
+        let func = &module.funcs[func_ref];
+        let lpt = compute_loop(func);
 
         debug_assert_eq!(lpt.loop_num(), 1);
         let lp0 = lpt.loops().next().unwrap();
@@ -400,8 +406,9 @@ mod tests {
 
     #[test]
     fn nested_loop() {
-        let isa = build_test_isa();
-        let mut builder = func_builder(&[Type::I1], None, &isa);
+        let mut test_module_builder = TestModuleBuilder::new();
+        let mut builder = test_module_builder.func_builder(&[Type::I1], None);
+
         let b0 = builder.append_block();
         let b1 = builder.append_block();
         let b2 = builder.append_block();
@@ -454,9 +461,11 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
+        let func_ref = builder.finish();
 
-        let func = builder.build();
-        let lpt = compute_loop(&func);
+        let module = test_module_builder.build();
+        let func = &module.funcs[func_ref];
+        let lpt = compute_loop(func);
 
         debug_assert_eq!(lpt.loop_num(), 4);
         let l0 = lpt.loop_of_block(b1).unwrap();

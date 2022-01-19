@@ -147,10 +147,7 @@ mod tests {
     #![allow(clippy::many_single_char_names)]
 
     use super::*;
-    use crate::ir::{
-        builder::test_util::{build_test_isa, func_builder},
-        Type,
-    };
+    use crate::ir::{builder::test_util::*, Type};
 
     fn calc_dom(func: &Function) -> (PostDomTree, PDFSet) {
         let mut post_dom_tree = PostDomTree::new();
@@ -175,8 +172,8 @@ mod tests {
 
     #[test]
     fn pd_if_else() {
-        let isa = build_test_isa();
-        let mut builder = func_builder(&[Type::I64], None, &isa);
+        let mut test_module_builder = TestModuleBuilder::new();
+        let mut builder = test_module_builder.func_builder(&[Type::I64], None);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -202,9 +199,11 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
+        let func_ref = builder.finish();
 
-        let func = builder.build();
-        let (post_dom_tree, pdf) = calc_dom(&func);
+        let module = test_module_builder.build();
+        let func = &module.funcs[func_ref];
+        let (post_dom_tree, pdf) = calc_dom(func);
 
         assert!(post_dom_tree.is_reachable(entry_block));
         assert!(post_dom_tree.is_reachable(else_block));
@@ -219,17 +218,19 @@ mod tests {
 
     #[test]
     fn infinite_loop() {
-        let isa = build_test_isa();
-        let mut builder = func_builder(&[], None, &isa);
+        let mut test_module_builder = TestModuleBuilder::new();
+        let mut builder = test_module_builder.func_builder(&[], None);
 
         let a = builder.append_block();
         builder.switch_to_block(a);
         builder.jump(a);
 
         builder.seal_all();
+        let func_ref = builder.finish();
 
-        let func = builder.build();
-        let (post_dom_tree, pdf) = calc_dom(&func);
+        let module = test_module_builder.build();
+        let func = &module.funcs[func_ref];
+        let (post_dom_tree, pdf) = calc_dom(func);
 
         assert!(!post_dom_tree.is_reachable(a));
         assert!(test_pdf(&pdf, a, &[]));
@@ -237,8 +238,8 @@ mod tests {
 
     #[test]
     fn test_multiple_return() {
-        let isa = build_test_isa();
-        let mut builder = func_builder(&[], None, &isa);
+        let mut test_module_builder = TestModuleBuilder::new();
+        let mut builder = test_module_builder.func_builder(&[], None);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -263,9 +264,11 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
+        let func_ref = builder.finish();
 
-        let func = builder.build();
-        let (post_dom_tree, pdf) = calc_dom(&func);
+        let module = test_module_builder.build();
+        let func = &module.funcs[func_ref];
+        let (post_dom_tree, pdf) = calc_dom(func);
 
         assert!(post_dom_tree.is_reachable(a));
         assert!(post_dom_tree.is_reachable(b));
@@ -282,8 +285,8 @@ mod tests {
 
     #[test]
     fn pd_complex() {
-        let isa = build_test_isa();
-        let mut builder = func_builder(&[], None, &isa);
+        let mut test_module_builder = TestModuleBuilder::new();
+        let mut builder = test_module_builder.func_builder(&[], None);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -320,9 +323,11 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
+        let func_ref = builder.finish();
 
-        let func = builder.build();
-        let (post_dom_tree, pdf) = calc_dom(&func);
+        let module = test_module_builder.build();
+        let func = &module.funcs[func_ref];
+        let (post_dom_tree, pdf) = calc_dom(func);
 
         assert!(post_dom_tree.is_reachable(a));
         assert!(post_dom_tree.is_reachable(b));

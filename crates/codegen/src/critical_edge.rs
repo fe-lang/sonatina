@@ -117,12 +117,12 @@ impl CriticalEdge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::builder::test_util::{build_test_isa, dump_func, func_builder};
+    use crate::ir::builder::test_util::*;
 
     #[test]
     fn critical_edge_basic() {
-        let isa = build_test_isa();
-        let mut builder = func_builder(&[], None, &isa);
+        let mut test_module_builder = TestModuleBuilder::new();
+        let mut builder = test_module_builder.func_builder(&[], None);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -139,14 +139,16 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
+        let func_ref = builder.finish();
 
-        let mut func = builder.build();
+        let mut module = test_module_builder.build();
+        let func = &mut module.funcs[func_ref];
         let mut cfg = ControlFlowGraph::default();
-        cfg.compute(&func);
-        CriticalEdgeSplitter::new(&isa).run(&mut func, &mut cfg);
+        cfg.compute(func);
+        CriticalEdgeSplitter::new(&module.isa).run(func, &mut cfg);
 
         assert_eq!(
-            dump_func(&func),
+            dump_func(func),
             "func %test_func():
     block0:
         br 1.i32 block3 block1;
@@ -164,15 +166,15 @@ mod tests {
         );
 
         let mut cfg_split = ControlFlowGraph::default();
-        cfg_split.compute(&func);
+        cfg_split.compute(func);
         assert_eq!(cfg, cfg_split);
     }
 
     #[test]
     #[allow(clippy::many_single_char_names)]
     fn critical_edge_to_same_block() {
-        let isa = build_test_isa();
-        let mut builder = func_builder(&[], None, &isa);
+        let mut test_module_builder = TestModuleBuilder::new();
+        let mut builder = test_module_builder.func_builder(&[], None);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -197,14 +199,16 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
+        let func_ref = builder.finish();
 
-        let mut func = builder.build();
+        let mut module = test_module_builder.build();
+        let func = &mut module.funcs[func_ref];
         let mut cfg = ControlFlowGraph::default();
-        cfg.compute(&func);
-        CriticalEdgeSplitter::new(&isa).run(&mut func, &mut cfg);
+        cfg.compute(func);
+        CriticalEdgeSplitter::new(&module.isa).run(func, &mut cfg);
 
         assert_eq!(
-            dump_func(&func),
+            dump_func(func),
             "func %test_func():
     block0:
         br 1.i8 block5 block1;
@@ -231,14 +235,14 @@ mod tests {
         );
 
         let mut cfg_split = ControlFlowGraph::default();
-        cfg_split.compute(&func);
+        cfg_split.compute(func);
         assert_eq!(cfg, cfg_split);
     }
 
     #[test]
     fn critical_edge_phi() {
-        let isa = build_test_isa();
-        let mut builder = func_builder(&[], None, &isa);
+        let mut test_module_builder = TestModuleBuilder::new();
+        let mut builder = test_module_builder.func_builder(&[], None);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -258,14 +262,16 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
+        let func_ref = builder.finish();
 
-        let mut func = builder.build();
+        let mut module = test_module_builder.build();
+        let func = &mut module.funcs[func_ref];
         let mut cfg = ControlFlowGraph::default();
-        cfg.compute(&func);
-        CriticalEdgeSplitter::new(&isa).run(&mut func, &mut cfg);
+        cfg.compute(func);
+        CriticalEdgeSplitter::new(&module.isa).run(func, &mut cfg);
 
         assert_eq!(
-            dump_func(&func),
+            dump_func(func),
             "func %test_func():
     block0:
         jump block1;
@@ -285,14 +291,14 @@ mod tests {
         );
 
         let mut cfg_split = ControlFlowGraph::default();
-        cfg_split.compute(&func);
+        cfg_split.compute(func);
         assert_eq!(cfg, cfg_split);
     }
 
     #[test]
     fn critical_edge_br_table() {
-        let isa = build_test_isa();
-        let mut builder = func_builder(&[], None, &isa);
+        let mut test_module_builder = TestModuleBuilder::new();
+        let mut builder = test_module_builder.func_builder(&[], None);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -320,14 +326,16 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
+        let func_ref = builder.finish();
 
-        let mut func = builder.build();
+        let mut module = test_module_builder.build();
+        let func = &mut module.funcs[func_ref];
         let mut cfg = ControlFlowGraph::default();
-        cfg.compute(&func);
-        CriticalEdgeSplitter::new(&isa).run(&mut func, &mut cfg);
+        cfg.compute(func);
+        CriticalEdgeSplitter::new(&module.isa).run(func, &mut cfg);
 
         assert_eq!(
-            dump_func(&func),
+            dump_func(func),
             "func %test_func():
     block0:
         br -1.i1 block5 block6;
@@ -357,7 +365,7 @@ mod tests {
         );
 
         let mut cfg_split = ControlFlowGraph::default();
-        cfg_split.compute(&func);
+        cfg_split.compute(func);
         assert_eq!(cfg, cfg_split);
     }
 }

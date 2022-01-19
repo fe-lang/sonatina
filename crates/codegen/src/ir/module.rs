@@ -1,6 +1,6 @@
 use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
 
-use crate::ir::{Function, Signature};
+use crate::ir::Function;
 
 use crate::isa::TargetIsa;
 
@@ -15,14 +15,7 @@ pub struct Module {
     pub func_attributes: SecondaryMap<FuncRef, FuncAttribute>,
 }
 
-impl Module {
-    pub fn declare_function(&mut self, sig: Signature, linkage: Linkage) -> FuncRef {
-        let func = Function::new(sig);
-        let func_ref = self.funcs.push(func);
-        self.func_attributes[func_ref] = FuncAttribute { linkage };
-        func_ref
-    }
-}
+impl Module {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FuncAttribute {
