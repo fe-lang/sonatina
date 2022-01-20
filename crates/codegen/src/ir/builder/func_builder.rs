@@ -356,7 +356,7 @@ mod tests {
     #[test]
     fn entry_block() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], None);
+        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
 
         let b0 = builder.append_block();
         builder.switch_to_block(b0);
@@ -372,7 +372,7 @@ mod tests {
         let module = test_module_builder.build();
         assert_eq!(
             dump_func(&module.funcs[func_ref]),
-            "func public %test_func():
+            "func public %test_func() -> void:
     block0:
         v2.i8 = add 1.i8 2.i8;
         v3.i8 = sub v2 1.i8;
@@ -385,7 +385,7 @@ mod tests {
     #[test]
     fn entry_block_with_args() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[Type::I32, Type::I64], None);
+        let mut builder = test_module_builder.func_builder(&[Type::I32, Type::I64], &Type::Void);
 
         let entry_block = builder.append_block();
         builder.switch_to_block(entry_block);
@@ -402,7 +402,7 @@ mod tests {
         let module = test_module_builder.build();
         assert_eq!(
             dump_func(&module.funcs[func_ref]),
-            "func public %test_func(v0.i32, v1.i64):
+            "func public %test_func(v0.i32, v1.i64) -> void:
     block0:
         v2.i64 = sext v0;
         v3.i64 = mul v2 v1;
@@ -415,7 +415,7 @@ mod tests {
     #[test]
     fn entry_block_with_return() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], Some(&Type::I32));
+        let mut builder = test_module_builder.func_builder(&[], &Type::I32);
 
         let entry_block = builder.append_block();
 
@@ -439,7 +439,7 @@ mod tests {
     #[test]
     fn then_else_merge_block() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[Type::I64], None);
+        let mut builder = test_module_builder.func_builder(&[Type::I64], &Type::Void);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -470,7 +470,7 @@ mod tests {
         let module = test_module_builder.build();
         assert_eq!(
             dump_func(&module.funcs[func_ref]),
-            "func public %test_func(v0.i64):
+            "func public %test_func(v0.i64) -> void:
     block0:
         br v0 block1 block2;
 

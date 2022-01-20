@@ -40,8 +40,8 @@ pub(crate) mod test_util {
             }
         }
 
-        pub fn func_builder(&mut self, args: &[Type], ret: Option<&Type>) -> FunctionBuilder {
-            let sig = Signature::new("test_func", Linkage::Public, args, ret);
+        pub fn func_builder(&mut self, args: &[Type], ret_ty: &Type) -> FunctionBuilder {
+            let sig = Signature::new("test_func", Linkage::Public, args, ret_ty);
             let func_ref = self.module_builder.declare_function(sig);
             self.func_ref = Some(func_ref);
             self.module_builder.func_builder(func_ref)

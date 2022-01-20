@@ -45,16 +45,16 @@ pub struct Signature {
     linkage: Linkage,
 
     args: SmallVec<[Type; 8]>,
-    ret: Option<Type>,
+    ret_ty: Type,
 }
 
 impl Signature {
-    pub fn new(name: &str, linkage: Linkage, args: &[Type], ret: Option<&Type>) -> Self {
+    pub fn new(name: &str, linkage: Linkage, args: &[Type], ret_ty: &Type) -> Self {
         Self {
             name: name.to_string(),
             linkage,
             args: args.into(),
-            ret: ret.cloned(),
+            ret_ty: ret_ty.clone(),
         }
     }
     pub fn name(&self) -> &str {
@@ -69,17 +69,17 @@ impl Signature {
         self.args.push(arg);
     }
 
-    pub fn set_ret_ty(&mut self, ty: &Type) {
-        debug_assert!(self.ret.is_none());
-        self.ret = Some(ty.clone());
-    }
-
     pub fn args(&self) -> &[Type] {
         &self.args
     }
 
-    pub fn ret_ty(&self) -> Option<&Type> {
-        self.ret.as_ref()
+    pub fn ret_ty(&self) -> &Type {
+        &self.ret_ty
+    }
+
+    #[doc(hidden)]
+    pub fn set_ret_ty(&mut self, ty: Type) {
+        self.ret_ty = ty;
     }
 }
 

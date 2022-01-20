@@ -31,7 +31,7 @@ target = "evm-ethereum-london"
 # nextln:     v5.i32 = add v1 1.i32;
 # nextln:     store @memory v5 v5;
 # nextln:     jump block4;
-func public %llvm_test1(v0.i1):
+func public %llvm_test1(v0.i1) -> void:
     block0:
         jump block1;
 
@@ -89,7 +89,7 @@ func public %llvm_test1(v0.i1):
 # nextln: 
 # nextln: block6:
 # nextln:     return;
-func public %llvm_test2(v0.i1, v1.i16, v2.i64):
+func public %llvm_test2(v0.i1, v1.i16, v2.i64) -> void:
     block0:
         jump block1;
 
@@ -142,7 +142,7 @@ func public %llvm_test2(v0.i1, v1.i16, v2.i64):
 # nextln: 
 # nextln: block5:
 # nextln:     return;
-func public %llvm_pr49873_cmp_simplification_dependency(v0.i64, v1.i1):
+func public %llvm_pr49873_cmp_simplification_dependency(v0.i64, v1.i1) -> void:
     block0:
         jump block1;
 

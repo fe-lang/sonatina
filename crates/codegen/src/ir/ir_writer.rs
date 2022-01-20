@@ -25,13 +25,8 @@ impl<'a> FuncWriter<'a> {
             ", ",
             &mut w,
         )?;
-
-        if let Some(ret_ty) = self.func.sig.ret_ty() {
-            w.write_all(b") -> ")?;
-            ret_ty.write(self, &mut w)?;
-        } else {
-            w.write_all(b")")?;
-        }
+        write!(w, ") -> ")?;
+        self.func.sig.ret_ty().write(self, &mut w)?;
 
         self.enter(&mut w)?;
         for block in self.func.layout.iter_block() {

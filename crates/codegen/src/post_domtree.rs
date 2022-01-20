@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn pd_if_else() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[Type::I64], None);
+        let mut builder = test_module_builder.func_builder(&[Type::I64], &Type::Void);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -219,7 +219,7 @@ mod tests {
     #[test]
     fn infinite_loop() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], None);
+        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
 
         let a = builder.append_block();
         builder.switch_to_block(a);
@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn test_multiple_return() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], None);
+        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn pd_complex() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], None);
+        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();

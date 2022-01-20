@@ -117,12 +117,12 @@ impl CriticalEdge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::builder::test_util::*;
+    use crate::ir::{builder::test_util::*, Type};
 
     #[test]
     fn critical_edge_basic() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], None);
+        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -149,7 +149,7 @@ mod tests {
 
         assert_eq!(
             dump_func(func),
-            "func public %test_func():
+            "func public %test_func() -> void:
     block0:
         br 1.i32 block3 block1;
 
@@ -174,7 +174,7 @@ mod tests {
     #[allow(clippy::many_single_char_names)]
     fn critical_edge_to_same_block() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], None);
+        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -209,7 +209,7 @@ mod tests {
 
         assert_eq!(
             dump_func(func),
-            "func public %test_func():
+            "func public %test_func() -> void:
     block0:
         br 1.i8 block5 block1;
 
@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn critical_edge_phi() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], None);
+        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -272,7 +272,7 @@ mod tests {
 
         assert_eq!(
             dump_func(func),
-            "func public %test_func():
+            "func public %test_func() -> void:
     block0:
         jump block1;
 
@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn critical_edge_br_table() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], None);
+        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -336,7 +336,7 @@ mod tests {
 
         assert_eq!(
             dump_func(func),
-            "func public %test_func():
+            "func public %test_func() -> void:
     block0:
         br -1.i1 block5 block6;
 

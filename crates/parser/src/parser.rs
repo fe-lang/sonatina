@@ -118,19 +118,11 @@ impl Parser {
             }
         }
 
-        // Parse return type if exists.
-        let ret_ty = if eat_token!(lexer, Token::RArrow)?.is_some() {
-            Some(expect_ty(lexer)?)
-        } else {
-            None
-        };
+        // Parse return type.
+        expect_token!(lexer, Token::RArrow, "->")?;
+        let ret_ty = expect_ty(lexer)?;
 
-        Ok(Signature::new(
-            name,
-            Linkage::External,
-            &args,
-            ret_ty.as_ref(),
-        ))
+        Ok(Signature::new(name, Linkage::External, &args, &ret_ty))
     }
 }
 
@@ -170,7 +162,8 @@ impl<'a, 'b> FuncParser<'a, 'b> {
         let fn_name = expect_token!(self.lexer, Token::Ident(..), "func name")?.string();
 
         expect_token!(self.lexer, Token::LParen, "(")?;
-        let sig = Signature::new(fn_name, linkage, &[], None);
+        // Use `Void` for dummy return type.
+        let sig = Signature::new(fn_name, linkage, &[], &Type::Void);
         let mut func = Function::new(sig);
         let mut inserter = InsnInserter::new(&mut func);
 
@@ -191,10 +184,10 @@ impl<'a, 'b> FuncParser<'a, 'b> {
         }
         expect_token!(self.lexer, Token::RParen, ")")?;
 
-        if eat_token!(self.lexer, Token::RArrow)?.is_some() {
-            let ty = expect_ty(self.lexer)?;
-            inserter.func.sig.set_ret_ty(&ty);
-        }
+        // Parse return type.
+        expect_token!(self.lexer, Token::RArrow, "->")?;
+        let ret_ty = expect_ty(self.lexer)?;
+        inserter.func.sig.set_ret_ty(ret_ty);
         expect_token!(self.lexer, Token::Colon, ":")?;
 
         self.parse_body(&mut inserter)?;
@@ -752,7 +745,7 @@ mod tests {
     #[test]
     fn test_with_arg() {
         assert!(test_func_parser(
-            "func public %test_func(v0.i32, v1.i64):
+            "func public %test_func(v0.i32, v1.i64) -> void:
     block0:
         v2.i64 = sext v0;
         v3.i64 = mul v2 v1;
@@ -776,7 +769,7 @@ mod tests {
     #[test]
     fn parser_with_phi() {
         assert!(test_func_parser(
-            "func private %test_func():
+            "func private %test_func() -> void:
     block0:
         jump block1;
 

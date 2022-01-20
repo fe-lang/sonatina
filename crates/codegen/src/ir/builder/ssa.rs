@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn use_var_local() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], None);
+        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
 
         let var = builder.declare_var(Type::I32);
 
@@ -254,7 +254,7 @@ mod tests {
 
         assert_eq!(
             dump_func(func),
-            "func public %test_func():
+            "func public %test_func() -> void:
     block0:
         v1.i32 = add 1.i32 1.i32;
         return;
@@ -266,7 +266,7 @@ mod tests {
     #[test]
     fn use_var_global_if() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], None);
+        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
 
         let var = builder.declare_var(Type::I32);
 
@@ -303,7 +303,7 @@ mod tests {
 
         assert_eq!(
             dump_func(func),
-            "func public %test_func():
+            "func public %test_func() -> void:
     block0:
         br 1.i32 block2 block1;
 
@@ -324,7 +324,7 @@ mod tests {
     #[test]
     fn use_var_global_many_preds() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], None);
+        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
 
         let var0 = builder.declare_var(Type::I32);
         let var1 = builder.declare_var(Type::I32);
@@ -384,7 +384,7 @@ mod tests {
 
         assert_eq!(
             dump_func(func),
-            "func public %test_func():
+            "func public %test_func() -> void:
     block0:
         br 0.i32 block1 block2;
 
@@ -419,7 +419,7 @@ mod tests {
     #[test]
     fn use_var_global_loop() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], None);
+        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
 
         let var = builder.declare_var(Type::I32);
 
@@ -458,7 +458,7 @@ mod tests {
 
         assert_eq!(
             dump_func(func),
-            "func public %test_func():
+            "func public %test_func() -> void:
     block0:
         jump block1;
 
@@ -480,7 +480,7 @@ mod tests {
     #[test]
     fn use_var_global_complex() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], None);
+        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
 
         let var = builder.declare_var(Type::I32);
 
@@ -534,7 +534,7 @@ mod tests {
 
         assert_eq!(
             dump_func(func),
-            "func public %test_func():
+            "func public %test_func() -> void:
     block0:
         jump block1;
 
@@ -566,7 +566,7 @@ mod tests {
     #[test]
     fn use_var_global_complex_seal_all() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], None);
+        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
 
         let var = builder.declare_var(Type::I32);
 
@@ -615,7 +615,7 @@ mod tests {
 
         assert_eq!(
             dump_func(func),
-            "func public %test_func():
+            "func public %test_func() -> void:
     block0:
         jump block1;
 
@@ -647,7 +647,7 @@ mod tests {
     #[test]
     fn br_table() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[Type::I32], Some(&Type::I32));
+        let mut builder = test_module_builder.func_builder(&[Type::I32], &Type::I32);
         let var = builder.declare_var(Type::I32);
 
         let b0 = builder.append_block();
@@ -719,7 +719,7 @@ mod tests {
     #[should_panic]
     fn undef_use() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], None);
+        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();
@@ -732,7 +732,7 @@ mod tests {
     #[should_panic]
     fn unreachable_use() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], None);
+        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();
