@@ -128,7 +128,6 @@ pub enum ExprData {
     /// Load a value from memory or storage.
     Load {
         args: ArgArray1,
-        ty: Type,
         loc: DataLocationKind,
     },
 
@@ -193,9 +192,8 @@ impl ExprData {
                 ty: ty.clone(),
             },
 
-            InsnData::Load { args, ty, loc } => Self::Load {
+            InsnData::Load { args, loc } => Self::Load {
                 args: [args[0].into()],
-                ty: ty.clone(),
                 loc: *loc,
             },
 
@@ -254,9 +252,8 @@ impl ExprData {
                 ty: ty.clone(),
             },
 
-            Self::Load { args, ty, loc } => InsnData::Load {
+            Self::Load { args, loc } => InsnData::Load {
                 args: [args[0].as_value()?],
-                ty: ty.clone(),
                 loc: *loc,
             },
 

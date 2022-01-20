@@ -33,7 +33,6 @@ pub enum InsnData {
     /// Load a value from memory or storage.
     Load {
         args: [Value; 1],
-        ty: Type,
         loc: DataLocationKind,
     },
 
@@ -322,7 +321,14 @@ impl InsnData {
         match self {
             Self::Unary { args, .. } => Some(dfg.value_ty(args[0]).clone()),
             Self::Binary { code, args } => Some(code.result_type(dfg, args)),
-            Self::Cast { ty, .. } | Self::Load { ty, .. } => Some(ty.clone()),
+            Self::Cast { ty, .. } => Some(ty.clone()),
+            Self::Load { args, .. } => {
+                let ptr_ty = dfg.value_ty(args[0]);
+                match ptr_ty {
+                    Type::Ptr { base } => Some(*base.clone()),
+                    _ => unreachable!(),
+                }
+            }
             Self::Phi { ty, .. } => Some(ty.clone()),
             Self::Alloca { ty } => Some(Type::make_ptr(ty.clone())),
             _ => None,

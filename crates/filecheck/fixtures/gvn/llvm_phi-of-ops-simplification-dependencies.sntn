@@ -128,7 +128,7 @@ func public %llvm_test2(v0.i1, v1.i16, v2.i64) -> void:
 # nextln: block2:
 # nextln:     v3.i32 = phi (v4 block2) (0.i32 block1);
 # nextln:     v4.i32 = add v3 1.i32;
-# nextln:     v5.i32 = load @storage v0 i32;
+# nextln:     v5.i32 = load @storage v0;
 # nextln:     v6.i1 = lt v4 v5;
 # nextln:     br v6 block2 block3;
 # nextln: 
@@ -142,7 +142,7 @@ func public %llvm_test2(v0.i1, v1.i16, v2.i64) -> void:
 # nextln: 
 # nextln: block5:
 # nextln:     return;
-func public %llvm_pr49873_cmp_simplification_dependency(v0.i64, v1.i1) -> void:
+func public %llvm_pr49873_cmp_simplification_dependency(v0.*i32, v1.i1) -> void:
     block0:
         jump block1;
 
@@ -153,7 +153,7 @@ func public %llvm_pr49873_cmp_simplification_dependency(v0.i64, v1.i1) -> void:
     block2:
         v3.i32 = phi (v4 block2) (0.i32 block1);
         v4.i32 = add v3 1.i32;
-        v5.i32 = load @storage v0 i32;
+        v5.i32 = load @storage v0;
         v6.i1 = lt v4 v5;
         br v6 block2 block3;
 

@@ -165,7 +165,7 @@ impl IrWrite for Insn {
                 writer.write_insn_args(args, &mut w)?;
             }
 
-            Load { args, ty, loc } => {
+            Load { args, loc } => {
                 write!(w, "load")?;
                 writer.space(&mut w)?;
                 match loc {
@@ -174,8 +174,6 @@ impl IrWrite for Insn {
                 }
                 writer.space(&mut w)?;
                 writer.write_insn_args(args, &mut w)?;
-                writer.space(&mut w)?;
-                ty.write(writer, &mut w)?;
             }
 
             Store { args, loc } => {

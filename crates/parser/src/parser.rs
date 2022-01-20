@@ -539,13 +539,8 @@ impl Code {
             Self::Load => {
                 let loc = parser.expect_data_loc_kind()?;
                 let arg = parser.expect_insn_arg(inserter, 0, &mut undefs)?;
-                let ty = expect_ty(parser.lexer)?;
                 expect_token!(parser.lexer, Token::SemiColon, ";")?;
-                InsnData::Load {
-                    args: [arg],
-                    ty,
-                    loc,
-                }
+                InsnData::Load { args: [arg], loc }
             }
             Self::Store => {
                 let loc = parser.expect_data_loc_kind()?;

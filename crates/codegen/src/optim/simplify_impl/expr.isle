@@ -108,7 +108,7 @@
     (Unary (code UnaryOp) (args ArgArray1))
     (Binary (code BinaryOp) (args ArgArray2))
     (Cast (code CastOp) (args ArgArray1) (ty Type))
-    (Load (args ArgArray1) (ty Type) (loc DataLocationKind))
+    (Load (args ArgArray1) (loc DataLocationKind))
     (Store (args ArgArray2) (ty Type) (loc DataLocationKind))
     (Jump (code JumpOp) (dests BlockArray1))
     (Branch (args ArgArray1) (dests BlockArray2))

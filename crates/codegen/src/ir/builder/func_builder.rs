@@ -112,10 +112,9 @@ impl<'a> FunctionBuilder<'a> {
     impl_cast_insn!(trunc, CastOp::Trunc);
 
     /// Build memory load instruction.
-    pub fn memory_load(&mut self, addr: Value, ty: Type) -> Value {
+    pub fn memory_load(&mut self, addr: Value) -> Value {
         let insn_data = InsnData::Load {
             args: [addr],
-            ty,
             loc: DataLocationKind::Memory,
         };
         self.insert_insn(insn_data).unwrap()
@@ -131,10 +130,9 @@ impl<'a> FunctionBuilder<'a> {
     }
 
     /// Build storage load instruction.
-    pub fn storage_load(&mut self, addr: Value, ty: Type) -> Value {
+    pub fn storage_load(&mut self, addr: Value) -> Value {
         let insn_data = InsnData::Load {
             args: [addr],
-            ty,
             loc: DataLocationKind::Storage,
         };
         self.insert_insn(insn_data).unwrap()
