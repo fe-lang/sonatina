@@ -254,6 +254,7 @@ impl<'a> Lexer<'a> {
             (b"i128", Type::I128),
             (b"i256", Type::I256),
             (b"i1", Type::I1),
+            (b"void", Type::Void),
         }
     }
 

@@ -705,8 +705,8 @@ fn build_imm_data(number: &str, ty: &Type, line: u32) -> Result<Immediate> {
             Ok(Immediate::I256(i256))
         }
 
-        Type::Array { .. } | Type::Ptr { .. } => Err(Error::new(
-            ErrorKind::SemanticError("can't use immediate for array or ptr type".into()),
+        Type::Array { .. } | Type::Ptr { .. } | Type::Void => Err(Error::new(
+            ErrorKind::SemanticError("can't use non integral types for immediates".into()),
             line,
         )),
     }

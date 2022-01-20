@@ -196,6 +196,7 @@ impl Immediate {
             Type::I256 => Self::I256(val),
             Type::Array { .. } => unreachable!(),
             Type::Ptr { .. } => unreachable!(),
+            Type::Void => unreachable!(),
         }
     }
 

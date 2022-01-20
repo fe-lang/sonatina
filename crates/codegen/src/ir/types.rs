@@ -14,6 +14,7 @@ pub enum Type {
     I256,
     Array { elem_ty: Box<Type>, len: usize },
     Ptr { base: Box<Type> },
+    Void,
 }
 
 impl Type {
@@ -48,6 +49,7 @@ impl fmt::Display for Type {
             Self::I256 => write!(f, "i256"),
             Self::Array { elem_ty, len } => write!(f, "[{}; {}]", elem_ty, len),
             Self::Ptr { base } => write!(f, "*{}", base),
+            Self::Void => write!(f, "void"),
         }
     }
 }
