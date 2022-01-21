@@ -25,5 +25,5 @@ func public %llvm_foo(v100.i8, v101.*i8) -> void:
 
     block2:
         v3.i8 = phi (v2 block1);
-        store @memory v3 0.i64;
+        store @memory v101 v3;
         return;

@@ -9,7 +9,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln: block1:
 # nextln:     v1.i32 = phi (0.i32 block0) (v8 block4);
-# nextln:     store @storage v1 v0;
+# nextln:     store @storage v0 v1;
 # nextln:     v2.i1 = eq v1 0.i32;
 # nextln:     br v2 block2 block4;
 # nextln: 
@@ -30,13 +30,13 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln: block5:
 # nextln:     return;
-func public %llvm_test(v0.i64, v100.*i64) -> void:
+func public %llvm_test(v0.*i32, v100.*i64) -> void:
     block0:
         jump block1;
 
     block1:
         v1.i32 = phi (0.i32 block0) (v8 block4);
-        store @storage v1 v0;
+        store @storage v0 v1;
         v2.i1 = eq v1 0.i32;
         br v2 block2 block4;
 
