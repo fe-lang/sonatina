@@ -82,7 +82,7 @@ func public %not9(v0.i8, v1.i8) -> i8:
 
 # !(a >= b) => !(b <= a) => a < b
 # check: v3.i1 = lt v0 v1;
-func public %not9(v0.i8, v1.i8) -> i8:
+func public %not10(v0.i8, v1.i8) -> i8:
     block0:
         v2.i1 = ge v0 v1;
         v3.i1 = not v2;

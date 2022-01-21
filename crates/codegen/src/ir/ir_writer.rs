@@ -187,6 +187,14 @@ impl IrWrite for Insn {
                 writer.write_insn_args(args, &mut w)?;
             }
 
+            Call { func, args, .. } => {
+                write!(w, "call")?;
+                writer.space(&mut w)?;
+                write!(w, "%{}", writer.func.callees[func].name())?;
+                writer.space(&mut w)?;
+                writer.write_insn_args(args, &mut w)?;
+            }
+
             Jump { code, dests } => {
                 write!(w, "{}", code)?;
                 writer.space(&mut w)?;

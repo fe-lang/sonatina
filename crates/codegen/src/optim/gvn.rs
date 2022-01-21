@@ -635,6 +635,7 @@ impl<'isa> GvnSolver<'isa> {
 
             InsnData::Store { .. }
             | InsnData::Load { .. }
+            | InsnData::Call { .. }
             | InsnData::Jump { .. }
             | InsnData::Branch { .. }
             | InsnData::BrTable { .. }

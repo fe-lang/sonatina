@@ -221,6 +221,8 @@ impl<'isa> SccpSolver<'isa> {
 
             InsnData::Load { .. } => LatticeCell::Top,
 
+            InsnData::Call { .. } => LatticeCell::Top,
+
             InsnData::Jump { dests, .. } => {
                 self.flow_work.push(FlowEdge::new(insn, dests[0]));
                 return;

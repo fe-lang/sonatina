@@ -138,6 +138,19 @@ impl<'a> FunctionBuilder<'a> {
         self.insert_insn(insn_data).unwrap()
     }
 
+    pub fn call(&mut self, func: FuncRef, args: &[Value]) -> Value {
+        let sig = self.module_builder.funcs[func].sig.clone();
+        let ret_ty = sig.ret_ty().clone();
+        self.func_mut().callees.insert(func, sig);
+
+        let insn_data = InsnData::Call {
+            func,
+            args: args.into(),
+            ret_ty,
+        };
+        self.insert_insn(insn_data).unwrap()
+    }
+
     /// Build storage store instruction.
     pub fn storage_store(&mut self, addr: Value, data: Value) {
         let insn_data = InsnData::Store {

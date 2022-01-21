@@ -7,7 +7,7 @@ use smallvec::SmallVec;
 
 use crate::TargetIsa;
 
-use super::{Block, DataFlowGraph, Type, Value};
+use super::{module::FuncRef, Block, DataFlowGraph, Type, Value};
 
 /// An opaque reference to [`InsnData`]
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
@@ -40,6 +40,13 @@ pub enum InsnData {
     Store {
         args: [Value; 2],
         loc: DataLocationKind,
+    },
+
+    /// Call a function in the same contract.
+    Call {
+        func: FuncRef,
+        args: SmallVec<[Value; 8]>,
+        ret_ty: Type,
     },
 
     /// Unconditional jump instruction.
@@ -210,12 +217,18 @@ impl InsnData {
     pub fn args(&self) -> &[Value] {
         match self {
             Self::Binary { args, .. } | Self::Store { args, .. } => args,
+
             Self::Unary { args, .. }
             | Self::Cast { args, .. }
             | Self::Load { args, .. }
             | Self::Branch { args, .. } => args,
-            Self::BrTable { args, .. } | Self::Phi { values: args, .. } => args,
+
+            Self::Call { args, .. }
+            | Self::BrTable { args, .. }
+            | Self::Phi { values: args, .. } => args,
+
             Self::Return { args } => args.as_ref().map(core::slice::from_ref).unwrap_or_default(),
+
             _ => &[],
         }
     }
@@ -223,12 +236,18 @@ impl InsnData {
     pub fn args_mut(&mut self) -> &mut [Value] {
         match self {
             Self::Binary { args, .. } | Self::Store { args, .. } => args,
+
             Self::Unary { args, .. }
             | Self::Cast { args, .. }
             | Self::Load { args, .. }
             | Self::Branch { args, .. } => args,
-            Self::BrTable { args, .. } | Self::Phi { values: args, .. } => args,
+
+            Self::Call { args, .. }
+            | Self::BrTable { args, .. }
+            | Self::Phi { values: args, .. } => args,
+
             Self::Return { args } => args.as_mut().map(core::slice::from_mut).unwrap_or_default(),
+
             _ => &mut [],
         }
     }
@@ -304,6 +323,7 @@ impl InsnData {
             self,
             InsnData::Load { .. }
                 | InsnData::Store { .. }
+                | InsnData::Call { .. }
                 | InsnData::Return { .. }
                 | InsnData::Alloca { .. }
         )
@@ -311,7 +331,7 @@ impl InsnData {
 
     pub fn may_trap(&self) -> bool {
         match self {
-            InsnData::Load { .. } | InsnData::Store { .. } => true,
+            InsnData::Load { .. } | InsnData::Store { .. } | InsnData::Call { .. } => true,
             InsnData::Binary { code, .. } => matches!(code, BinaryOp::Udiv | BinaryOp::Sdiv),
             _ => false,
         }
@@ -329,6 +349,7 @@ impl InsnData {
                     _ => unreachable!(),
                 }
             }
+            Self::Call { ret_ty, .. } => Some(ret_ty.clone()),
             Self::Phi { ty, .. } => Some(ty.clone()),
             Self::Alloca { ty } => Some(Type::make_ptr(ty.clone())),
             _ => None,

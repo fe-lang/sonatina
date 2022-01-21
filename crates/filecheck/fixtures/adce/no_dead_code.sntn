@@ -1,5 +1,7 @@
 target = "evm-ethereum-london"
 
+declare external %external_add(i8, i8) -> i8;
+
 # check:  block0:
 # nextln:     v0.i1 = sgt 1.i8 2.i8;
 # nextln:     v1.i8 = sext v0;
@@ -17,7 +19,8 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln: block3:
 # nextln:     v6.i8 = phi (v3 block1) (v5 block2);
-# nextln:     return v6;
+# nextln:     v7.i8 = call %external_add v6 1.i8;
+# nextln:     return v7;
 func public %no_dead_code() -> i8:
     block0:
         v0.i1 = sgt 1.i8 2.i8;
@@ -36,4 +39,5 @@ func public %no_dead_code() -> i8:
 
     block3:
         v6.i8 = phi (v3 block1) (v5 block2);
-        return v6;
+        v7.i8 = call %external_add v6 1.i8;
+        return v7;

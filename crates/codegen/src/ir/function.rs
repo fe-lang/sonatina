@@ -1,8 +1,9 @@
 use std::fmt;
 
+use fxhash::FxHashMap;
 use smallvec::SmallVec;
 
-use super::{DataFlowGraph, Layout, Type, Value};
+use super::{module::FuncRef, DataFlowGraph, Layout, Type, Value};
 
 #[derive(Debug, Clone)]
 pub struct Function {
@@ -12,6 +13,9 @@ pub struct Function {
 
     pub dfg: DataFlowGraph,
     pub layout: Layout,
+
+    /// Stores signature of the functions that called by the function.
+    pub callees: FxHashMap<FuncRef, Signature>,
 }
 
 impl Function {
@@ -32,6 +36,7 @@ impl Function {
             arg_values,
             dfg,
             layout: Layout::default(),
+            callees: FxHashMap::default(),
         }
     }
 }

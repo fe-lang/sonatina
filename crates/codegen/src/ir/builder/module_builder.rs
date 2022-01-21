@@ -31,13 +31,20 @@ impl ModuleBuilder {
         if self.declared_funcs.contains_key(sig.name()) {
             panic!("{} is already declared.", sig.name())
         } else {
+            let name = sig.name().to_string();
             let func = Function::new(sig);
-            self.funcs.push(func)
+            let func_ref = self.funcs.push(func);
+            self.declared_funcs.insert(name, func_ref);
+            func_ref
         }
     }
 
-    pub fn get_func_ref(&mut self, name: &str) -> Option<FuncRef> {
+    pub fn get_func_ref(&self, name: &str) -> Option<FuncRef> {
         self.declared_funcs.get(name).copied()
+    }
+
+    pub fn get_sig(&self, func: FuncRef) -> &Signature {
+        &self.funcs[func].sig
     }
 
     pub fn func_builder(&mut self, func: FuncRef) -> FunctionBuilder {

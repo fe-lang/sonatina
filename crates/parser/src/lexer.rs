@@ -234,6 +234,7 @@ impl<'a> Lexer<'a> {
             (b"trunc", Code::Trunc),
             (b"load", Code::Load),
             (b"store", Code::Store),
+            (b"call", Code::Call),
             (b"jump", Code::Jump),
             (b"fallthrough", Code::FallThrough),
             (b"br_table", Code::BrTable),
@@ -467,6 +468,9 @@ pub(super) enum Code {
     Load,
     Store,
 
+    // Function Call ops.
+    Call,
+
     // Jump ops.
     Jump,
     FallThrough,
@@ -512,6 +516,7 @@ impl fmt::Display for Code {
             Trunc => "trunc",
             Load => "load",
             Store => "store",
+            Call => "call",
             Jump => "jump",
             FallThrough => "fallthrough",
             Alloca => "alloca",

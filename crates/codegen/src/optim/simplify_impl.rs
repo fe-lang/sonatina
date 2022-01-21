@@ -7,6 +7,7 @@ use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
 use crate::{
     ir::{
         insn::{BinaryOp, CastOp, DataLocationKind, JumpOp, UnaryOp},
+        module::FuncRef,
         Block, DataFlowGraph, Immediate, Insn, InsnData, Type, Value,
     },
     TargetIsa,
@@ -136,6 +137,11 @@ pub enum ExprData {
         args: ArgArray2,
         loc: DataLocationKind,
     },
+    Call {
+        func: FuncRef,
+        args: ArgList,
+        ret_ty: Type,
+    },
 
     /// Unconditional jump operations.
     Jump {
@@ -202,6 +208,12 @@ impl ExprData {
                 loc: *loc,
             },
 
+            InsnData::Call { func, args, ret_ty } => Self::Call {
+                func: *func,
+                args: args.iter().copied().map(Into::into).collect(),
+                ret_ty: ret_ty.clone(),
+            },
+
             InsnData::Jump { code, dests } => Self::Jump {
                 code: *code,
                 dests: *dests,
@@ -260,6 +272,15 @@ impl ExprData {
             Self::Store { args, loc } => InsnData::Store {
                 args: [args[0].as_value()?, args[1].as_value()?],
                 loc: *loc,
+            },
+
+            Self::Call { func, args, ret_ty } => InsnData::Call {
+                func: *func,
+                args: args
+                    .iter()
+                    .map(|val| val.as_value())
+                    .collect::<Option<_>>()?,
+                ret_ty: ret_ty.clone(),
             },
 
             Self::Jump { code, dests } => InsnData::Jump {

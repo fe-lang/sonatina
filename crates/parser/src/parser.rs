@@ -75,7 +75,7 @@ impl Parser {
         while eat_token!(lexer, Token::Declare)?.is_some() {
             // Todo: parse linkage.
             let sig = Self::parse_declared_func_sig(&mut lexer)?;
-            expect_token!(lexer, Token::Colon, ";")?;
+            expect_token!(lexer, Token::SemiColon, ";")?;
             module_builder.declare_function(sig);
         }
 
@@ -103,6 +103,7 @@ impl Parser {
     }
 
     fn parse_declared_func_sig(lexer: &mut Lexer) -> Result<Signature> {
+        let linkage = expect_linkage(lexer)?;
         let name = expect_token!(lexer, Token::Ident(..), "func name")?.string();
 
         // Parse argument types.
@@ -122,7 +123,7 @@ impl Parser {
         expect_token!(lexer, Token::RArrow, "->")?;
         let ret_ty = expect_ty(lexer)?;
 
-        Ok(Signature::new(name, Linkage::External, &args, &ret_ty))
+        Ok(Signature::new(name, linkage, &args, &ret_ty))
     }
 }
 
@@ -553,6 +554,32 @@ impl Code {
                 }
             }
 
+            Self::Call => {
+                let func_name =
+                    expect_token!(parser.lexer, Token::Ident(..), "func name")?.string();
+                let mut args = smallvec![];
+                let mut idx = 0;
+                while eat_token!(parser.lexer, Token::SemiColon)?.is_none() {
+                    let arg = parser.expect_insn_arg(inserter, idx, &mut undefs)?;
+                    args.push(arg);
+                    idx += 1;
+                }
+
+                let func = parser
+                    .module_builder
+                    .get_func_ref(func_name)
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::SemanticError(format!("%{} is not declared", func_name)),
+                            parser.lexer.line(),
+                        )
+                    })?;
+                let sig = parser.module_builder.get_sig(func).clone();
+                let ret_ty = sig.ret_ty().clone();
+                inserter.func_mut().callees.insert(func, sig);
+                InsnData::Call { func, args, ret_ty }
+            }
+
             Self::Jump => make_jump!(parser, JumpOp::Jump),
             Self::FallThrough => make_jump!(parser, JumpOp::FallThrough),
 
@@ -611,6 +638,7 @@ impl Code {
                     InsnData::Return { args: Some(value) }
                 }
             }
+
             Self::Phi => {
                 let mut values = smallvec![];
                 let mut blocks = smallvec![];
