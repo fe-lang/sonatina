@@ -217,7 +217,7 @@ impl FileCheckResult {
             stdout,
             "test {} ...",
             path.to_string_lossy()
-                .replace("/", "::")
+                .replace('/', "::")
                 .replace(".sntn", "")
         )?;
         match &self.result {
