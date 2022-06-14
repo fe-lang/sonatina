@@ -363,17 +363,14 @@ impl<'a> SimplifyContext<'a> {
     }
 
     fn simplify_expr(&mut self, expr: Expr) -> Option<SimplifyResult> {
-        if let Some(res) = generated_code::constructor_simplify(self, expr)
-            .map(SimplifyResult::from_raw)
-            .flatten()
+        if let Some(res) =
+            generated_code::constructor_simplify(self, expr).and_then(SimplifyResult::from_raw)
         {
             return Some(res);
         }
 
         let expr = try_swap_arg(self, expr)?;
-        generated_code::constructor_simplify(self, expr)
-            .map(SimplifyResult::from_raw)
-            .flatten()
+        generated_code::constructor_simplify(self, expr).and_then(SimplifyResult::from_raw)
     }
 
     fn make_expr_from_insn(&mut self, insn: Insn) -> Expr {

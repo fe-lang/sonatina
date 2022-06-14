@@ -93,7 +93,7 @@ impl<'a> Lexer<'a> {
             let start = self.cur;
             while self.eat_char_if(|c| c != '\n').is_some() {}
             let end = self.cur;
-            let comment = self.from_raw_parts(start, end);
+            let comment = self.str_slice(start, end);
             if is_module {
                 Token::ModuleComment(comment)
             } else {
@@ -178,7 +178,7 @@ impl<'a> Lexer<'a> {
         }
 
         self.cur = cur;
-        Some(self.from_raw_parts(start, cur))
+        Some(self.str_slice(start, cur))
     }
 
     fn eat_string_lit(&mut self) -> Result<Token<'a>> {
@@ -203,7 +203,7 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        Ok(Token::String(self.from_raw_parts(start, cur)))
+        Ok(Token::String(self.str_slice(start, cur)))
     }
 
     fn try_eat_opcode(&mut self) -> Option<Code> {
@@ -263,7 +263,7 @@ impl<'a> Lexer<'a> {
         let start = self.cur;
         while self.eat_char_if(|c| c.is_digit(10)).is_some() {}
         let end = self.cur;
-        self.from_raw_parts(start, end).parse().ok()
+        self.str_slice(start, end).parse().ok()
     }
 
     fn try_eat_ident(&mut self) -> Option<&'a str> {
@@ -276,7 +276,7 @@ impl<'a> Lexer<'a> {
         if start == end {
             None
         } else {
-            Some(self.from_raw_parts(start, end))
+            Some(self.str_slice(start, end))
         }
     }
 
@@ -289,7 +289,7 @@ impl<'a> Lexer<'a> {
         if start == end {
             None
         } else {
-            Some(self.from_raw_parts(start, end))
+            Some(self.str_slice(start, end))
         }
     }
 
@@ -303,7 +303,7 @@ impl<'a> Lexer<'a> {
         self.input.get(self.cur).map(|peek| *peek as char)
     }
 
-    fn from_raw_parts(&self, start: usize, end: usize) -> &'a str {
+    fn str_slice(&self, start: usize, end: usize) -> &'a str {
         unsafe { std::str::from_utf8_unchecked(&self.input[start..end]) }
     }
 
@@ -314,7 +314,7 @@ impl<'a> Lexer<'a> {
             .is_some()
         {}
         let end = self.cur;
-        let invalid_token = self.from_raw_parts(start, end);
+        let invalid_token = self.str_slice(start, end);
         Error::new(
             ErrorKind::InvalidToken(invalid_token.to_string()),
             self.line,
