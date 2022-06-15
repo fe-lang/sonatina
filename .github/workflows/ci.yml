@@ -25,12 +25,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - users: actions/checkout@v2
+      - uses: actions/checkout@v2
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: nightly
+          components: rustfmt
       - run: cargo fmt --all -- --check
-  
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
@@ -41,7 +42,7 @@ jobs:
         with:
           toolchain: stable
       - run: cargo clippy --workspace --all-features --all-targets -- -D clippy::all
-  
+
   test:
     name: Test
     defaults:
@@ -64,11 +65,11 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
 
-      - name: Test 
-      - run: cargo test --workspace --all-targets
-        
+      - name: Test
+        run: cargo test --workspace --all-targets
+
       - name: Filecheck
-      - run: cargo run -p sonatina-filecheck
+        run: cargo run -p sonatina-filecheck
 
       # NOTE: --all-targets option doesn't invoke doctest, see https://github.com/rust-lang/cargo/issues/6669.
       - name: Doctest
