@@ -1,3 +1,6 @@
+//! This crate provides a parser for sonatina-IR text format.
+//! The text format is mainly used for debugging and testing.
+
 pub mod parser;
 
 mod lexer;

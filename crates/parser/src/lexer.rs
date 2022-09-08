@@ -261,7 +261,7 @@ impl<'a> Lexer<'a> {
 
     fn try_eat_id(&mut self) -> Option<u32> {
         let start = self.cur;
-        while self.eat_char_if(|c| c.is_digit(10)).is_some() {}
+        while self.eat_char_if(|c| c.is_ascii_digit()).is_some() {}
         let end = self.cur;
         self.str_slice(start, end).parse().ok()
     }
@@ -283,7 +283,7 @@ impl<'a> Lexer<'a> {
     fn try_eat_integer(&mut self) -> Option<&'a str> {
         let start = self.cur;
         self.eat_char_if(|c| c == '-');
-        while self.eat_char_if(|c| c.is_digit(10)).is_some() {}
+        while self.eat_char_if(|c| c.is_ascii_digit()).is_some() {}
         let end = self.cur;
 
         if start == end {
