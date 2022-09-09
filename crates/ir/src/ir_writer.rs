@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::ir::DataLocationKind;
+use crate::DataLocationKind;
 
 use super::{Block, Function, Insn, InsnData, Type, Value};
 

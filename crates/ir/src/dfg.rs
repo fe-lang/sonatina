@@ -4,7 +4,7 @@ use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use fxhash::FxHashMap;
 use std::collections::BTreeSet;
 
-use crate::TargetIsa;
+use crate::isa::TargetIsa;
 
 use super::{BranchInfo, Immediate, Insn, InsnData, Type, Value, ValueData};
 

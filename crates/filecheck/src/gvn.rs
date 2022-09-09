@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use sonatina_codegen::{
-    cfg::ControlFlowGraph, domtree::DomTree, ir::Function, optim::gvn::GvnSolver, TargetIsa,
-};
+use sonatina_codegen::{cfg::ControlFlowGraph, domtree::DomTree, optim::gvn::GvnSolver};
+
+use sonatina_ir::{isa::TargetIsa, Function};
 
 use super::{FuncTransform, FIXTURE_ROOT};
 

@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use sonatina_codegen::{ir::Function, optim::insn_simplify::InsnSimplifySolver, TargetIsa};
+use sonatina_codegen::optim::insn_simplify::InsnSimplifySolver;
+
+use sonatina_ir::{isa::TargetIsa, Function};
 
 use super::{FuncTransform, FIXTURE_ROOT};
 

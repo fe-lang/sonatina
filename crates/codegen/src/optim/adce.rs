@@ -3,14 +3,13 @@
 use cranelift_entity::SecondaryMap;
 use std::collections::BTreeSet;
 
-use crate::{
-    ir::{
-        func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-        insn::InsnData,
-        Block, Function, Insn,
-    },
-    post_domtree::{PDFSet, PDTIdom, PostDomTree},
-    TargetIsa,
+use crate::post_domtree::{PDFSet, PDTIdom, PostDomTree};
+
+use sonatina_ir::{
+    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
+    insn::InsnData,
+    isa::TargetIsa,
+    Block, Function, Insn,
 };
 
 pub struct AdceSolver<'isa> {

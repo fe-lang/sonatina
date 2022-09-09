@@ -1,6 +1,6 @@
 use smallvec::SmallVec;
 
-use crate::ir::{
+use crate::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     insn::{BinaryOp, CastOp, DataLocationKind, InsnData, JumpOp, UnaryOp},
     module::FuncRef,

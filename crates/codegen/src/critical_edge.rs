@@ -1,11 +1,10 @@
-use super::{
-    cfg::ControlFlowGraph,
-    ir::{
-        func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-        insn::InsnData,
-        Block, Function, Insn,
-    },
-    TargetIsa,
+use super::cfg::ControlFlowGraph;
+
+use sonatina_ir::{
+    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
+    insn::InsnData,
+    isa::TargetIsa,
+    Block, Function, Insn,
 };
 
 #[derive(Debug)]
@@ -117,7 +116,7 @@ impl CriticalEdge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{builder::test_util::*, Type};
+    use sonatina_ir::{builder::test_util::*, Type};
 
     #[test]
     fn critical_edge_basic() {

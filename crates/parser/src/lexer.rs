@@ -1,6 +1,6 @@
 use std::fmt;
 
-use sonatina_codegen::ir::{insn::DataLocationKind, Linkage, Type};
+use sonatina_ir::{insn::DataLocationKind, Linkage, Type};
 
 use super::{Error, ErrorKind, Result};
 
