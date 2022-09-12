@@ -3,8 +3,9 @@
 use super::{
     cfg::ControlFlowGraph,
     domtree::{DFSet, DomTree},
-    ir::{Block, Function},
 };
+
+use sonatina_ir::{Block, Function};
 
 #[derive(Debug)]
 pub struct PostDomTree {
@@ -147,7 +148,7 @@ mod tests {
     #![allow(clippy::many_single_char_names)]
 
     use super::*;
-    use crate::ir::{builder::test_util::*, Type};
+    use sonatina_ir::{builder::test_util::*, Type};
 
     fn calc_dom(func: &Function) -> (PostDomTree, PDFSet) {
         let mut post_dom_tree = PostDomTree::new();

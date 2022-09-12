@@ -1,5 +1,5 @@
 [package]
-name = "sonatina-codegen"
+name = "sonatina-ir"
 version = "0.1.0"
 edition = "2021"
 
@@ -10,5 +10,4 @@ primitive-types = "0.10"
 cranelift-entity = "0.77"
 smallvec = "1.7.0"
 fxhash = "0.2.1"
-sonatina-ir = { path = "../ir" }
 sonatina-triple = { path = "../triple" }

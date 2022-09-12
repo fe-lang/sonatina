@@ -15,12 +15,13 @@ use fxhash::{FxHashMap, FxHashSet};
 use crate::{
     cfg::ControlFlowGraph,
     domtree::{DomTree, DominatorTreeTraversable},
-    ir::{
-        func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-        insn::{BinaryOp, CastOp, InsnData, UnaryOp},
-        Block, DataFlowGraph, Function, Immediate, Insn, Type, Value,
-    },
-    TargetIsa,
+};
+
+use sonatina_ir::{
+    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
+    insn::{BinaryOp, CastOp, InsnData, UnaryOp},
+    isa::TargetIsa,
+    Block, DataFlowGraph, Function, Immediate, Insn, Type, Value,
 };
 
 use super::{constant_folding, simplify_impl};

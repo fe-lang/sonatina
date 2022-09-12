@@ -1,10 +1,7 @@
 use cranelift_entity::PrimaryMap;
 use fxhash::FxHashMap;
 
-use crate::{
-    ir::{module::FuncRef, Function, Module, Signature},
-    TargetIsa,
-};
+use crate::{isa::TargetIsa, module::FuncRef, Function, Module, Signature};
 
 use super::FunctionBuilder;
 

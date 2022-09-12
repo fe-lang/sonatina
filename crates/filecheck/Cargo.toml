@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 filecheck = "0.2.1"
+sonatina-ir = {path = "../ir"}
 sonatina-codegen = {path = "../codegen"}
 sonatina-parser = {path = "../parser"}
 termcolor = "1.1.2"

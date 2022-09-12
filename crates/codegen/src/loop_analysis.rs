@@ -2,7 +2,9 @@ use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, Sec
 use fxhash::FxHashMap;
 use smallvec::SmallVec;
 
-use crate::{cfg::ControlFlowGraph, domtree::DomTree, ir::Block};
+use crate::{cfg::ControlFlowGraph, domtree::DomTree};
+
+use sonatina_ir::Block;
 
 #[derive(Debug, Default)]
 pub struct LoopTree {
@@ -245,7 +247,7 @@ enum BlockState {
 mod tests {
     use super::*;
 
-    use crate::ir::{builder::test_util::*, Function, Type};
+    use sonatina_ir::{builder::test_util::*, Function, Type};
 
     fn compute_loop(func: &Function) -> LoopTree {
         let mut cfg = ControlFlowGraph::new();

@@ -2,12 +2,10 @@
 
 use std::collections::VecDeque;
 
-use crate::{
-    ir::{
-        func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-        Function, Insn, InsnData, Value,
-    },
-    TargetIsa,
+use sonatina_ir::{
+    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
+    isa::TargetIsa,
+    Function, Insn, InsnData, Value,
 };
 
 use super::simplify_impl::{simplify_insn, SimplifyResult};

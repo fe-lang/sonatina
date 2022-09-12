@@ -1,6 +1,6 @@
 use cranelift_entity::{entity_impl, PrimaryMap};
 
-use crate::ir::Function;
+use crate::Function;
 
 use crate::isa::TargetIsa;
 

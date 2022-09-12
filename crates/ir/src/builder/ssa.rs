@@ -5,11 +5,9 @@ use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap, Sp
 use smallvec::SmallVec;
 
 use crate::{
-    ir::{
-        func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-        Block, Function, Insn, InsnData, Type, Value,
-    },
-    TargetIsa,
+    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
+    isa::TargetIsa,
+    Block, Function, Insn, InsnData, Type, Value,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

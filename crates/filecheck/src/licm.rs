@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use sonatina_codegen::{
-    cfg::ControlFlowGraph, domtree::DomTree, ir::Function, loop_analysis::LoopTree,
-    optim::licm::LicmSolver, TargetIsa,
+    cfg::ControlFlowGraph, domtree::DomTree, loop_analysis::LoopTree, optim::licm::LicmSolver,
 };
+
+use sonatina_ir::{isa::TargetIsa, Function};
 
 use super::{FuncTransform, FIXTURE_ROOT};
 

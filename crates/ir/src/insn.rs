@@ -5,7 +5,7 @@ use std::fmt;
 
 use smallvec::SmallVec;
 
-use crate::TargetIsa;
+use crate::isa::TargetIsa;
 
 use super::{module::FuncRef, Block, DataFlowGraph, Type, Value};
 
@@ -337,7 +337,7 @@ impl InsnData {
         }
     }
 
-    pub(crate) fn result_type(&self, _isa: &TargetIsa, dfg: &DataFlowGraph) -> Option<Type> {
+    pub fn result_type(&self, _isa: &TargetIsa, dfg: &DataFlowGraph) -> Option<Type> {
         match self {
             Self::Unary { args, .. } => Some(dfg.value_ty(args[0]).clone()),
             Self::Binary { code, args } => Some(code.result_type(dfg, args)),

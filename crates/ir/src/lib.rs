@@ -4,6 +4,7 @@ pub mod func_cursor;
 pub mod function;
 pub mod insn;
 pub mod ir_writer;
+pub mod isa;
 pub mod layout;
 pub mod module;
 pub mod types;

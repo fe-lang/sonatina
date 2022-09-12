@@ -3,16 +3,15 @@ use std::collections::HashSet;
 
 use cranelift_entity::SecondaryMap;
 use smallvec::smallvec;
-use sonatina_codegen::{
-    ir::{
-        builder::ModuleBuilder,
-        func_cursor::{CursorLocation, FuncCursor},
-        insn::{BinaryOp, CastOp, DataLocationKind, JumpOp, UnaryOp},
-        module::FuncRef,
-        Block, BlockData, Function, Immediate, Insn, InsnData, Linkage, Module, Signature, Type,
-        Value, ValueData, I256, U256,
-    },
+
+use sonatina_ir::{
+    builder::ModuleBuilder,
+    func_cursor::{CursorLocation, FuncCursor},
+    insn::{BinaryOp, CastOp, DataLocationKind, JumpOp, UnaryOp},
     isa::IsaBuilder,
+    module::FuncRef,
+    Block, BlockData, Function, Immediate, Insn, InsnData, Linkage, Module, Signature, Type, Value,
+    ValueData, I256, U256,
 };
 use sonatina_triple::TargetTriple;
 
@@ -739,7 +738,7 @@ fn parse_imm_error(err: impl std::fmt::Display, line: u32) -> Error {
 mod tests {
     use super::*;
 
-    use sonatina_codegen::ir::ir_writer::FuncWriter;
+    use sonatina_ir::ir_writer::FuncWriter;
 
     fn test_func_parser(input: &str) -> bool {
         let mut lexer = Lexer::new(input);

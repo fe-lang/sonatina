@@ -1,4 +1,4 @@
-use crate::TargetIsa;
+use crate::isa::TargetIsa;
 
 use super::{Block, Function, Insn, InsnData, Value};
 

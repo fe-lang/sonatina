@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 
-use super::ir::{Block, Function, Insn};
+use sonatina_ir::{Block, Function, Insn};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct ControlFlowGraph {

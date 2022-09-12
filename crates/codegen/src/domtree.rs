@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 
-use crate::ir::Block;
+use sonatina_ir::Block;
 
 use super::cfg::ControlFlowGraph;
 
@@ -206,7 +206,7 @@ mod tests {
 
     use super::*;
 
-    use crate::ir::{builder::test_util::*, Function, Type};
+    use sonatina_ir::{builder::test_util::*, Function, Type};
 
     fn calc_dom(func: &Function) -> (DomTree, DFSet) {
         let mut cfg = ControlFlowGraph::default();

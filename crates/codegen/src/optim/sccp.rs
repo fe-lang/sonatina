@@ -8,14 +8,13 @@ use std::{collections::BTreeSet, ops};
 
 use cranelift_entity::SecondaryMap;
 
-use crate::{
-    cfg::ControlFlowGraph,
-    ir::{
-        func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-        insn::{BinaryOp, CastOp, InsnData, UnaryOp},
-        Block, Function, Immediate, Insn, Type, Value,
-    },
-    TargetIsa,
+use crate::cfg::ControlFlowGraph;
+
+use sonatina_ir::{
+    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
+    insn::{BinaryOp, CastOp, InsnData, UnaryOp},
+    isa::TargetIsa,
+    Block, Function, Immediate, Insn, Type, Value,
 };
 
 #[derive(Debug)]

@@ -4,13 +4,11 @@ use smallvec::SmallVec;
 
 use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
 
-use crate::{
-    ir::{
-        insn::{BinaryOp, CastOp, DataLocationKind, JumpOp, UnaryOp},
-        module::FuncRef,
-        Block, DataFlowGraph, Immediate, Insn, InsnData, Type, Value,
-    },
-    TargetIsa,
+use sonatina_ir::{
+    insn::{BinaryOp, CastOp, DataLocationKind, JumpOp, UnaryOp},
+    isa::TargetIsa,
+    module::FuncRef,
+    Block, DataFlowGraph, Immediate, Insn, InsnData, Type, Value,
 };
 
 #[allow(clippy::all)]

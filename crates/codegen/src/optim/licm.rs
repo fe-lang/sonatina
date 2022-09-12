@@ -3,12 +3,13 @@ use fxhash::{FxHashMap, FxHashSet};
 
 use crate::{
     cfg::ControlFlowGraph,
-    ir::{
-        func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-        Block, Function, Insn, InsnData, Value,
-    },
     loop_analysis::{Loop, LoopTree},
-    TargetIsa,
+};
+
+use sonatina_ir::{
+    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
+    isa::TargetIsa,
+    Block, Function, Insn, InsnData, Value,
 };
 
 #[derive(Debug)]
