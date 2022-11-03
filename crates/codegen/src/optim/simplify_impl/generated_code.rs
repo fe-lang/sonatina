@@ -5,10 +5,11 @@
 // - rules.isle
 
 #![allow(dead_code, unreachable_code, unreachable_patterns)]
-#![allow(unused_imports, unused_variables, non_snake_case)]
-#![allow(irrefutable_let_patterns)]
+#![allow(unused_imports, unused_variables, non_snake_case, unused_mut)]
+#![allow(irrefutable_let_patterns, unused_assignments, non_camel_case_types)]
 
 use super::*; // Pulls in all external types.
+use std::marker::PhantomData;
 
 /// Context during lowering: an implementation of this trait
 /// must be provided with all external constructors and extractors.
@@ -25,18 +26,44 @@ pub trait Context {
     fn is_one(&mut self, arg0: ExprValue) -> bool;
     fn is_two(&mut self, arg0: ExprValue) -> bool;
     fn is_all_one(&mut self, arg0: ExprValue) -> bool;
-    fn is_eq(&mut self, arg0: ExprValue, arg1: ExprValue) -> bool;
     fn is_power_of_two(&mut self, arg0: ExprValue) -> bool;
-    fn make_zero(&mut self, arg0: &Type) -> ExprValue;
-    fn make_one(&mut self, arg0: &Type) -> ExprValue;
+    fn is_eq(&mut self, arg0: ExprValue, arg1: ExprValue) -> Option<Unit>;
+    fn make_zero(&mut self, arg0: Type) -> ExprValue;
+    fn make_one(&mut self, arg0: Type) -> ExprValue;
     fn make_true(&mut self) -> ExprValue;
     fn make_false(&mut self) -> ExprValue;
-    fn make_all_one(&mut self, arg0: &Type) -> ExprValue;
+    fn make_all_one(&mut self, arg0: Type) -> ExprValue;
     fn make_result(&mut self, arg0: ExprValue) -> SimplifyRawResult;
 }
 
-/// Internal type BrTableDefaultDest: defined at expr.isle line 13.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub trait ContextIter {
+    type Context;
+    type Output;
+    fn next(&mut self, ctx: &mut Self::Context) -> Option<Self::Output>;
+}
+
+pub struct ContextIterWrapper<Item, I: Iterator<Item = Item>, C: Context> {
+    iter: I,
+    _ctx: PhantomData<C>,
+}
+impl<Item, I: Iterator<Item = Item>, C: Context> From<I> for ContextIterWrapper<Item, I, C> {
+    fn from(iter: I) -> Self {
+        Self {
+            iter,
+            _ctx: PhantomData,
+        }
+    }
+}
+impl<Item, I: Iterator<Item = Item>, C: Context> ContextIter for ContextIterWrapper<Item, I, C> {
+    type Context = C;
+    type Output = Item;
+    fn next(&mut self, _ctx: &mut Self::Context) -> Option<Self::Output> {
+        self.iter.next()
+    }
+}
+
+/// Internal type BrTableDefaultDest: defined at expr.isle line 14.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum BrTableDefaultDest {}
 
 /// Internal type SimplifyRawResult: defined at rules.isle line 2.
@@ -50,14 +77,2550 @@ pub enum SimplifyRawResult {
 pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<SimplifyRawResult> {
     let pattern0_0 = arg0;
     let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        if let &BinaryOp::Or = pattern2_0 {
+            let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+            if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                if let &ExprData::Binary {
+                    code: ref pattern7_0,
+                    args: ref pattern7_1,
+                } = &pattern6_0
+                {
+                    if let &BinaryOp::And = pattern7_0 {
+                        let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                        if let Some(pattern10_0) = C::value_expr(ctx, pattern9_1) {
+                            let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                            if let &ExprData::Unary {
+                                code: ref pattern12_0,
+                                args: ref pattern12_1,
+                            } = &pattern11_0
+                            {
+                                if let &UnaryOp::Not = pattern12_0 {
+                                    let pattern14_0 = C::unpack_arg_array1(ctx, pattern12_1);
+                                    if let Some(pattern15_0) = C::value_expr(ctx, pattern4_1) {
+                                        let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                        if let &ExprData::Unary {
+                                            code: ref pattern17_0,
+                                            args: ref pattern17_1,
+                                        } = &pattern16_0
+                                        {
+                                            if let &UnaryOp::Not = pattern17_0 {
+                                                let pattern19_0 =
+                                                    C::unpack_arg_array1(ctx, pattern17_1);
+                                                if let Some(pattern20_0) =
+                                                    C::value_expr(ctx, pattern19_0)
+                                                {
+                                                    let pattern21_0 =
+                                                        C::expr_data(ctx, pattern20_0);
+                                                    if let &ExprData::Binary {
+                                                        code: ref pattern22_0,
+                                                        args: ref pattern22_1,
+                                                    } = &pattern21_0
+                                                    {
+                                                        if let &BinaryOp::Or = pattern22_0 {
+                                                            let (pattern24_0, pattern24_1) =
+                                                                C::unpack_arg_array2(
+                                                                    ctx,
+                                                                    pattern22_1,
+                                                                );
+                                                            let mut closure25 = || {
+                                                                let expr0_0 = C::is_eq(
+                                                                    ctx,
+                                                                    pattern9_0,
+                                                                    pattern24_1,
+                                                                )?;
+                                                                return Some(expr0_0);
+                                                            };
+                                                            if let Some(pattern25_0) = closure25() {
+                                                                let mut closure26 = || {
+                                                                    let expr0_0 = C::is_eq(
+                                                                        ctx,
+                                                                        pattern14_0,
+                                                                        pattern24_0,
+                                                                    )?;
+                                                                    return Some(expr0_0);
+                                                                };
+                                                                if let Some(pattern26_0) =
+                                                                    closure26()
+                                                                {
+                                                                    // Rule at rules.isle line 648.
+                                                                    let expr0_0 = C::make_result(
+                                                                        ctx, pattern9_1,
+                                                                    );
+                                                                    return Some(expr0_0);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        if let &BinaryOp::Or = pattern2_0 {
+            let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+            if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                if let &ExprData::Binary {
+                    code: ref pattern7_0,
+                    args: ref pattern7_1,
+                } = &pattern6_0
+                {
+                    if let &BinaryOp::And = pattern7_0 {
+                        let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                        if let Some(pattern10_0) = C::value_expr(ctx, pattern9_1) {
+                            let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                            if let &ExprData::Unary {
+                                code: ref pattern12_0,
+                                args: ref pattern12_1,
+                            } = &pattern11_0
+                            {
+                                if let &UnaryOp::Not = pattern12_0 {
+                                    let pattern14_0 = C::unpack_arg_array1(ctx, pattern12_1);
+                                    if let Some(pattern15_0) = C::value_expr(ctx, pattern4_1) {
+                                        let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                        if let &ExprData::Unary {
+                                            code: ref pattern17_0,
+                                            args: ref pattern17_1,
+                                        } = &pattern16_0
+                                        {
+                                            if let &UnaryOp::Not = pattern17_0 {
+                                                let pattern19_0 =
+                                                    C::unpack_arg_array1(ctx, pattern17_1);
+                                                if let Some(pattern20_0) =
+                                                    C::value_expr(ctx, pattern19_0)
+                                                {
+                                                    let pattern21_0 =
+                                                        C::expr_data(ctx, pattern20_0);
+                                                    if let &ExprData::Binary {
+                                                        code: ref pattern22_0,
+                                                        args: ref pattern22_1,
+                                                    } = &pattern21_0
+                                                    {
+                                                        if let &BinaryOp::Or = pattern22_0 {
+                                                            let (pattern24_0, pattern24_1) =
+                                                                C::unpack_arg_array2(
+                                                                    ctx,
+                                                                    pattern22_1,
+                                                                );
+                                                            let mut closure25 = || {
+                                                                let expr0_0 = C::is_eq(
+                                                                    ctx,
+                                                                    pattern9_0,
+                                                                    pattern24_0,
+                                                                )?;
+                                                                return Some(expr0_0);
+                                                            };
+                                                            if let Some(pattern25_0) = closure25() {
+                                                                let mut closure26 = || {
+                                                                    let expr0_0 = C::is_eq(
+                                                                        ctx,
+                                                                        pattern14_0,
+                                                                        pattern24_1,
+                                                                    )?;
+                                                                    return Some(expr0_0);
+                                                                };
+                                                                if let Some(pattern26_0) =
+                                                                    closure26()
+                                                                {
+                                                                    // Rule at rules.isle line 636.
+                                                                    let expr0_0 = C::make_result(
+                                                                        ctx, pattern9_1,
+                                                                    );
+                                                                    return Some(expr0_0);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        if let &BinaryOp::Or = pattern2_0 {
+            let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+            if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                if let &ExprData::Binary {
+                    code: ref pattern7_0,
+                    args: ref pattern7_1,
+                } = &pattern6_0
+                {
+                    if let &BinaryOp::And = pattern7_0 {
+                        let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                        if let Some(pattern10_0) = C::value_expr(ctx, pattern9_0) {
+                            let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                            if let &ExprData::Unary {
+                                code: ref pattern12_0,
+                                args: ref pattern12_1,
+                            } = &pattern11_0
+                            {
+                                if let &UnaryOp::Not = pattern12_0 {
+                                    let pattern14_0 = C::unpack_arg_array1(ctx, pattern12_1);
+                                    if let Some(pattern15_0) = C::value_expr(ctx, pattern4_1) {
+                                        let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                        if let &ExprData::Unary {
+                                            code: ref pattern17_0,
+                                            args: ref pattern17_1,
+                                        } = &pattern16_0
+                                        {
+                                            if let &UnaryOp::Not = pattern17_0 {
+                                                let pattern19_0 =
+                                                    C::unpack_arg_array1(ctx, pattern17_1);
+                                                if let Some(pattern20_0) =
+                                                    C::value_expr(ctx, pattern19_0)
+                                                {
+                                                    let pattern21_0 =
+                                                        C::expr_data(ctx, pattern20_0);
+                                                    if let &ExprData::Binary {
+                                                        code: ref pattern22_0,
+                                                        args: ref pattern22_1,
+                                                    } = &pattern21_0
+                                                    {
+                                                        if let &BinaryOp::Or = pattern22_0 {
+                                                            let (pattern24_0, pattern24_1) =
+                                                                C::unpack_arg_array2(
+                                                                    ctx,
+                                                                    pattern22_1,
+                                                                );
+                                                            let mut closure25 = || {
+                                                                let expr0_0 = C::is_eq(
+                                                                    ctx,
+                                                                    pattern14_0,
+                                                                    pattern24_1,
+                                                                )?;
+                                                                return Some(expr0_0);
+                                                            };
+                                                            if let Some(pattern25_0) = closure25() {
+                                                                let mut closure26 = || {
+                                                                    let expr0_0 = C::is_eq(
+                                                                        ctx,
+                                                                        pattern9_1,
+                                                                        pattern24_0,
+                                                                    )?;
+                                                                    return Some(expr0_0);
+                                                                };
+                                                                if let Some(pattern26_0) =
+                                                                    closure26()
+                                                                {
+                                                                    // Rule at rules.isle line 624.
+                                                                    let expr0_0 = C::make_result(
+                                                                        ctx, pattern9_0,
+                                                                    );
+                                                                    return Some(expr0_0);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        if let &BinaryOp::Or = pattern2_0 {
+            let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+            if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                if let &ExprData::Binary {
+                    code: ref pattern7_0,
+                    args: ref pattern7_1,
+                } = &pattern6_0
+                {
+                    if let &BinaryOp::And = pattern7_0 {
+                        let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                        if let Some(pattern10_0) = C::value_expr(ctx, pattern9_0) {
+                            let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                            if let &ExprData::Unary {
+                                code: ref pattern12_0,
+                                args: ref pattern12_1,
+                            } = &pattern11_0
+                            {
+                                if let &UnaryOp::Not = pattern12_0 {
+                                    let pattern14_0 = C::unpack_arg_array1(ctx, pattern12_1);
+                                    if let Some(pattern15_0) = C::value_expr(ctx, pattern4_1) {
+                                        let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                        if let &ExprData::Unary {
+                                            code: ref pattern17_0,
+                                            args: ref pattern17_1,
+                                        } = &pattern16_0
+                                        {
+                                            if let &UnaryOp::Not = pattern17_0 {
+                                                let pattern19_0 =
+                                                    C::unpack_arg_array1(ctx, pattern17_1);
+                                                if let Some(pattern20_0) =
+                                                    C::value_expr(ctx, pattern19_0)
+                                                {
+                                                    let pattern21_0 =
+                                                        C::expr_data(ctx, pattern20_0);
+                                                    if let &ExprData::Binary {
+                                                        code: ref pattern22_0,
+                                                        args: ref pattern22_1,
+                                                    } = &pattern21_0
+                                                    {
+                                                        if let &BinaryOp::Or = pattern22_0 {
+                                                            let (pattern24_0, pattern24_1) =
+                                                                C::unpack_arg_array2(
+                                                                    ctx,
+                                                                    pattern22_1,
+                                                                );
+                                                            let mut closure25 = || {
+                                                                let expr0_0 = C::is_eq(
+                                                                    ctx,
+                                                                    pattern14_0,
+                                                                    pattern24_0,
+                                                                )?;
+                                                                return Some(expr0_0);
+                                                            };
+                                                            if let Some(pattern25_0) = closure25() {
+                                                                let mut closure26 = || {
+                                                                    let expr0_0 = C::is_eq(
+                                                                        ctx,
+                                                                        pattern9_1,
+                                                                        pattern24_1,
+                                                                    )?;
+                                                                    return Some(expr0_0);
+                                                                };
+                                                                if let Some(pattern26_0) =
+                                                                    closure26()
+                                                                {
+                                                                    // Rule at rules.isle line 612.
+                                                                    let expr0_0 = C::make_result(
+                                                                        ctx, pattern9_0,
+                                                                    );
+                                                                    return Some(expr0_0);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        if let &BinaryOp::Or = pattern2_0 {
+            let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+            if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                if let &ExprData::Binary {
+                    code: ref pattern7_0,
+                    args: ref pattern7_1,
+                } = &pattern6_0
+                {
+                    if let &BinaryOp::Or = pattern7_0 {
+                        let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                        if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                            let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                            if let &ExprData::Binary {
+                                code: ref pattern12_0,
+                                args: ref pattern12_1,
+                            } = &pattern11_0
+                            {
+                                if let &BinaryOp::Xor = pattern12_0 {
+                                    let (pattern14_0, pattern14_1) =
+                                        C::unpack_arg_array2(ctx, pattern12_1);
+                                    let mut closure15 = || {
+                                        let expr0_0 = C::is_eq(ctx, pattern9_0, pattern14_1)?;
+                                        return Some(expr0_0);
+                                    };
+                                    if let Some(pattern15_0) = closure15() {
+                                        let mut closure16 = || {
+                                            let expr0_0 = C::is_eq(ctx, pattern9_1, pattern14_0)?;
+                                            return Some(expr0_0);
+                                        };
+                                        if let Some(pattern16_0) = closure16() {
+                                            // Rule at rules.isle line 599.
+                                            let expr0_0 = C::make_result(ctx, pattern4_0);
+                                            return Some(expr0_0);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        if let &BinaryOp::Or = pattern2_0 {
+            let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+            if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                if let &ExprData::Binary {
+                    code: ref pattern7_0,
+                    args: ref pattern7_1,
+                } = &pattern6_0
+                {
+                    if let &BinaryOp::Or = pattern7_0 {
+                        let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                        if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                            let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                            if let &ExprData::Binary {
+                                code: ref pattern12_0,
+                                args: ref pattern12_1,
+                            } = &pattern11_0
+                            {
+                                if let &BinaryOp::Xor = pattern12_0 {
+                                    let (pattern14_0, pattern14_1) =
+                                        C::unpack_arg_array2(ctx, pattern12_1);
+                                    let mut closure15 = || {
+                                        let expr0_0 = C::is_eq(ctx, pattern9_0, pattern14_0)?;
+                                        return Some(expr0_0);
+                                    };
+                                    if let Some(pattern15_0) = closure15() {
+                                        let mut closure16 = || {
+                                            let expr0_0 = C::is_eq(ctx, pattern9_1, pattern14_1)?;
+                                            return Some(expr0_0);
+                                        };
+                                        if let Some(pattern16_0) = closure16() {
+                                            // Rule at rules.isle line 586.
+                                            let expr0_0 = C::make_result(ctx, pattern4_0);
+                                            return Some(expr0_0);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        match pattern2_0 {
+            &BinaryOp::Or => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Xor = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern9_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Unary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &UnaryOp::Not = pattern12_0 {
+                                        let pattern14_0 = C::unpack_arg_array1(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern4_1) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Binary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &BinaryOp::And = pattern17_0 {
+                                                    let (pattern19_0, pattern19_1) =
+                                                        C::unpack_arg_array2(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern19_1)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern14_0,
+                                                                pattern19_0,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 573.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern4_0);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::Xor => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::And = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Binary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &BinaryOp::Or = pattern12_0 {
+                                        let (pattern14_0, pattern14_1) =
+                                            C::unpack_arg_array2(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern14_0) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Unary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &UnaryOp::Not = pattern17_0 {
+                                                    let pattern19_0 =
+                                                        C::unpack_arg_array1(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern14_1)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern19_0,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 785.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern14_0);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        match pattern2_0 {
+            &BinaryOp::Or => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Xor = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern9_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Unary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &UnaryOp::Not = pattern12_0 {
+                                        let pattern14_0 = C::unpack_arg_array1(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern4_1) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Binary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &BinaryOp::And = pattern17_0 {
+                                                    let (pattern19_0, pattern19_1) =
+                                                        C::unpack_arg_array2(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern19_0)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern14_0,
+                                                                pattern19_1,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 560.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern4_0);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::Xor => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::And = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Binary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &BinaryOp::Or = pattern12_0 {
+                                        let (pattern14_0, pattern14_1) =
+                                            C::unpack_arg_array2(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern14_1) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Unary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &UnaryOp::Not = pattern17_0 {
+                                                    let pattern19_0 =
+                                                        C::unpack_arg_array1(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern14_0)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern19_0,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 773.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern14_1);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        match pattern2_0 {
+            &BinaryOp::And => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Sub = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            let pattern10_0 = C::is_power_of_two(ctx, pattern9_0);
+                            if pattern10_0 == true {
+                                let pattern12_0 = C::value_ty(ctx, pattern9_0);
+                                let pattern13_0 = C::is_one(ctx, pattern9_1);
+                                if pattern13_0 == true {
+                                    let mut closure15 = || {
+                                        let expr0_0 = C::is_eq(ctx, pattern4_0, pattern9_0)?;
+                                        return Some(expr0_0);
+                                    };
+                                    if let Some(pattern15_0) = closure15() {
+                                        // Rule at rules.isle line 411.
+                                        let expr0_0 = C::make_zero(ctx, pattern12_0);
+                                        let expr1_0 = C::make_result(ctx, expr0_0);
+                                        return Some(expr1_0);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::Or => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Xor = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern9_0) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Unary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &UnaryOp::Not = pattern12_0 {
+                                        let pattern14_0 = C::unpack_arg_array1(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern4_1) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Binary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &BinaryOp::And = pattern17_0 {
+                                                    let (pattern19_0, pattern19_1) =
+                                                        C::unpack_arg_array2(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 = C::is_eq(
+                                                            ctx,
+                                                            pattern14_0,
+                                                            pattern19_1,
+                                                        )?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern19_0,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 547.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern4_0);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::Xor => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::And = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Binary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &BinaryOp::Or = pattern12_0 {
+                                        let (pattern14_0, pattern14_1) =
+                                            C::unpack_arg_array2(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern14_1) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Unary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &UnaryOp::Not = pattern17_0 {
+                                                    let pattern19_0 =
+                                                        C::unpack_arg_array1(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern19_0)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern14_0,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 761.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern14_1);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        match pattern2_0 {
+            &BinaryOp::And => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Unary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &UnaryOp::Neg = pattern7_0 {
+                            let pattern9_0 = C::unpack_arg_array1(ctx, pattern7_1);
+                            let pattern10_0 = C::is_power_of_two(ctx, pattern9_0);
+                            if pattern10_0 == true {
+                                let mut closure12 = || {
+                                    let expr0_0 = C::is_eq(ctx, pattern4_0, pattern9_0)?;
+                                    return Some(expr0_0);
+                                };
+                                if let Some(pattern12_0) = closure12() {
+                                    // Rule at rules.isle line 403.
+                                    let expr0_0 = C::make_result(ctx, pattern4_0);
+                                    return Some(expr0_0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::Or => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Xor = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern9_0) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Unary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &UnaryOp::Not = pattern12_0 {
+                                        let pattern14_0 = C::unpack_arg_array1(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern4_1) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Binary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &BinaryOp::And = pattern17_0 {
+                                                    let (pattern19_0, pattern19_1) =
+                                                        C::unpack_arg_array2(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 = C::is_eq(
+                                                            ctx,
+                                                            pattern14_0,
+                                                            pattern19_0,
+                                                        )?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern19_1,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 535.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern4_0);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::Xor => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::And = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Binary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &BinaryOp::Or = pattern12_0 {
+                                        let (pattern14_0, pattern14_1) =
+                                            C::unpack_arg_array2(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern14_0) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Unary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &UnaryOp::Not = pattern17_0 {
+                                                    let pattern19_0 =
+                                                        C::unpack_arg_array1(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern19_0)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern14_1,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 749.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern14_0);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        match pattern2_0 {
+            &BinaryOp::And => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Or = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Binary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &BinaryOp::Or = pattern12_0 {
+                                        let (pattern14_0, pattern14_1) =
+                                            C::unpack_arg_array2(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern14_1) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Unary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &UnaryOp::Not = pattern17_0 {
+                                                    let pattern19_0 =
+                                                        C::unpack_arg_array1(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern19_0)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern14_0,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 389.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern9_1);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::Or => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Xor = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Binary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &BinaryOp::And = pattern12_0 {
+                                        let (pattern14_0, pattern14_1) =
+                                            C::unpack_arg_array2(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern14_1) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Unary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &UnaryOp::Not = pattern17_0 {
+                                                    let pattern19_0 =
+                                                        C::unpack_arg_array1(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern19_0)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern14_0,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 522.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern4_0);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::Xor => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Or = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Binary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &BinaryOp::And = pattern12_0 {
+                                        let (pattern14_0, pattern14_1) =
+                                            C::unpack_arg_array2(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern14_0) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Unary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &UnaryOp::Not = pattern17_0 {
+                                                    let pattern19_0 =
+                                                        C::unpack_arg_array1(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern14_1)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern19_0,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 737.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern9_1);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        match pattern2_0 {
+            &BinaryOp::And => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Or = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Binary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &BinaryOp::Or = pattern12_0 {
+                                        let (pattern14_0, pattern14_1) =
+                                            C::unpack_arg_array2(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern14_0) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Unary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &UnaryOp::Not = pattern17_0 {
+                                                    let pattern19_0 =
+                                                        C::unpack_arg_array1(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern19_0)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern14_1,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 376.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern9_1);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::Or => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Xor = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Binary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &BinaryOp::And = pattern12_0 {
+                                        let (pattern14_0, pattern14_1) =
+                                            C::unpack_arg_array2(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern14_0) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Unary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &UnaryOp::Not = pattern17_0 {
+                                                    let pattern19_0 =
+                                                        C::unpack_arg_array1(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern19_0)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern14_1,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 509.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern4_0);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::Xor => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Or = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Binary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &BinaryOp::And = pattern12_0 {
+                                        let (pattern14_0, pattern14_1) =
+                                            C::unpack_arg_array2(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern14_1) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Unary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &UnaryOp::Not = pattern17_0 {
+                                                    let pattern19_0 =
+                                                        C::unpack_arg_array1(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern14_0)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern19_0,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 725.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern9_1);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        match pattern2_0 {
+            &BinaryOp::Sub => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Add = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            let mut closure10 = || {
+                                let expr0_0 = C::is_eq(ctx, pattern9_1, pattern4_1)?;
+                                return Some(expr0_0);
+                            };
+                            if let Some(pattern10_0) = closure10() {
+                                // Rule at rules.isle line 158.
+                                let expr0_0 = C::make_result(ctx, pattern9_0);
+                                return Some(expr0_0);
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::And => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Or = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Binary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &BinaryOp::Or = pattern12_0 {
+                                        let (pattern14_0, pattern14_1) =
+                                            C::unpack_arg_array2(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern14_0) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Unary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &UnaryOp::Not = pattern17_0 {
+                                                    let pattern19_0 =
+                                                        C::unpack_arg_array1(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern14_1)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern19_0,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 364.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern9_0);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::Or => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Xor = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Binary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &BinaryOp::And = pattern12_0 {
+                                        let (pattern14_0, pattern14_1) =
+                                            C::unpack_arg_array2(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern14_0) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Unary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &UnaryOp::Not = pattern17_0 {
+                                                    let pattern19_0 =
+                                                        C::unpack_arg_array1(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern14_1)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern19_0,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 496.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern4_0);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::Xor => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Or = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Binary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &BinaryOp::And = pattern12_0 {
+                                        let (pattern14_0, pattern14_1) =
+                                            C::unpack_arg_array2(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern14_1) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Unary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &UnaryOp::Not = pattern17_0 {
+                                                    let pattern19_0 =
+                                                        C::unpack_arg_array1(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern19_0)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern14_0,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 713.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern9_0);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        match pattern2_0 {
+            &BinaryOp::Sub => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Add = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            let mut closure10 = || {
+                                let expr0_0 = C::is_eq(ctx, pattern4_0, pattern9_1)?;
+                                return Some(expr0_0);
+                            };
+                            if let Some(pattern10_0) = closure10() {
+                                // Rule at rules.isle line 150.
+                                let expr0_0 = UnaryOp::Neg;
+                                let expr1_0 = C::pack_arg_array1(ctx, pattern9_0);
+                                let expr2_0 = ExprData::Unary {
+                                    code: expr0_0,
+                                    args: expr1_0,
+                                };
+                                let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
+                                return Some(expr3_0);
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::And => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Or = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Binary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &BinaryOp::Or = pattern12_0 {
+                                        let (pattern14_0, pattern14_1) =
+                                            C::unpack_arg_array2(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern14_1) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Unary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &UnaryOp::Not = pattern17_0 {
+                                                    let pattern19_0 =
+                                                        C::unpack_arg_array1(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern14_0)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern19_0,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 352.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern9_0);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::Or => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Xor = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Binary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &BinaryOp::And = pattern12_0 {
+                                        let (pattern14_0, pattern14_1) =
+                                            C::unpack_arg_array2(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern14_1) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Unary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &UnaryOp::Not = pattern17_0 {
+                                                    let pattern19_0 =
+                                                        C::unpack_arg_array1(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern14_0)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern19_0,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 483.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern4_0);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Unary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &UnaryOp::Not = pattern7_0 {
+                            let pattern9_0 = C::unpack_arg_array1(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern9_0) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Binary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &BinaryOp::And = pattern12_0 {
+                                        let (pattern14_0, pattern14_1) =
+                                            C::unpack_arg_array2(ctx, pattern12_1);
+                                        let pattern15_0 = C::value_ty(ctx, pattern14_1);
+                                        let mut closure16 = || {
+                                            let expr0_0 = C::is_eq(ctx, pattern4_0, pattern14_1)?;
+                                            return Some(expr0_0);
+                                        };
+                                        if let Some(pattern16_0) = closure16() {
+                                            // Rule at rules.isle line 475.
+                                            let expr0_0 = C::make_all_one(ctx, pattern15_0);
+                                            let expr1_0 = C::make_result(ctx, expr0_0);
+                                            return Some(expr1_0);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::Xor => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Or = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
+                                let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                if let &ExprData::Binary {
+                                    code: ref pattern12_0,
+                                    args: ref pattern12_1,
+                                } = &pattern11_0
+                                {
+                                    if let &BinaryOp::And = pattern12_0 {
+                                        let (pattern14_0, pattern14_1) =
+                                            C::unpack_arg_array2(ctx, pattern12_1);
+                                        if let Some(pattern15_0) = C::value_expr(ctx, pattern14_0) {
+                                            let pattern16_0 = C::expr_data(ctx, pattern15_0);
+                                            if let &ExprData::Unary {
+                                                code: ref pattern17_0,
+                                                args: ref pattern17_1,
+                                            } = &pattern16_0
+                                            {
+                                                if let &UnaryOp::Not = pattern17_0 {
+                                                    let pattern19_0 =
+                                                        C::unpack_arg_array1(ctx, pattern17_1);
+                                                    let mut closure20 = || {
+                                                        let expr0_0 =
+                                                            C::is_eq(ctx, pattern9_0, pattern19_0)?;
+                                                        return Some(expr0_0);
+                                                    };
+                                                    if let Some(pattern20_0) = closure20() {
+                                                        let mut closure21 = || {
+                                                            let expr0_0 = C::is_eq(
+                                                                ctx,
+                                                                pattern9_1,
+                                                                pattern14_1,
+                                                            )?;
+                                                            return Some(expr0_0);
+                                                        };
+                                                        if let Some(pattern21_0) = closure21() {
+                                                            // Rule at rules.isle line 701.
+                                                            let expr0_0 =
+                                                                C::make_result(ctx, pattern9_0);
+                                                            return Some(expr0_0);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        match pattern2_0 {
+            &BinaryOp::Sub => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        match pattern7_0 {
+                            &BinaryOp::Add => {
+                                let (pattern9_0, pattern9_1) =
+                                    C::unpack_arg_array2(ctx, pattern7_1);
+                                let mut closure10 = || {
+                                    let expr0_0 = C::is_eq(ctx, pattern9_0, pattern4_1)?;
+                                    return Some(expr0_0);
+                                };
+                                if let Some(pattern10_0) = closure10() {
+                                    // Rule at rules.isle line 142.
+                                    let expr0_0 = C::make_result(ctx, pattern9_1);
+                                    return Some(expr0_0);
+                                }
+                            }
+                            &BinaryOp::Sub => {
+                                let (pattern9_0, pattern9_1) =
+                                    C::unpack_arg_array2(ctx, pattern7_1);
+                                let mut closure10 = || {
+                                    let expr0_0 = C::is_eq(ctx, pattern9_0, pattern4_1)?;
+                                    return Some(expr0_0);
+                                };
+                                if let Some(pattern10_0) = closure10() {
+                                    // Rule at rules.isle line 134.
+                                    let expr0_0 = UnaryOp::Neg;
+                                    let expr1_0 = C::pack_arg_array1(ctx, pattern9_1);
+                                    let expr2_0 = ExprData::Unary {
+                                        code: expr0_0,
+                                        args: expr1_0,
+                                    };
+                                    let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
+                                    return Some(expr3_0);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            &BinaryOp::And => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Or = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            let mut closure10 = || {
+                                let expr0_0 = C::is_eq(ctx, pattern4_0, pattern9_1)?;
+                                return Some(expr0_0);
+                            };
+                            if let Some(pattern10_0) = closure10() {
+                                // Rule at rules.isle line 344.
+                                let expr0_0 = C::make_result(ctx, pattern4_0);
+                                return Some(expr0_0);
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::Or => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    match &pattern6_0 {
+                        &ExprData::Unary {
+                            code: ref pattern7_0,
+                            args: ref pattern7_1,
+                        } => {
+                            if let &UnaryOp::Not = pattern7_0 {
+                                let pattern9_0 = C::unpack_arg_array1(ctx, pattern7_1);
+                                if let Some(pattern10_0) = C::value_expr(ctx, pattern9_0) {
+                                    let pattern11_0 = C::expr_data(ctx, pattern10_0);
+                                    if let &ExprData::Binary {
+                                        code: ref pattern12_0,
+                                        args: ref pattern12_1,
+                                    } = &pattern11_0
+                                    {
+                                        if let &BinaryOp::And = pattern12_0 {
+                                            let (pattern14_0, pattern14_1) =
+                                                C::unpack_arg_array2(ctx, pattern12_1);
+                                            let pattern15_0 = C::value_ty(ctx, pattern14_0);
+                                            let mut closure16 = || {
+                                                let expr0_0 =
+                                                    C::is_eq(ctx, pattern4_0, pattern14_0)?;
+                                                return Some(expr0_0);
+                                            };
+                                            if let Some(pattern16_0) = closure16() {
+                                                // Rule at rules.isle line 467.
+                                                let expr0_0 = C::make_all_one(ctx, pattern15_0);
+                                                let expr1_0 = C::make_result(ctx, expr0_0);
+                                                return Some(expr1_0);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        &ExprData::Binary {
+                            code: ref pattern7_0,
+                            args: ref pattern7_1,
+                        } => {
+                            if let &BinaryOp::And = pattern7_0 {
+                                let (pattern9_0, pattern9_1) =
+                                    C::unpack_arg_array2(ctx, pattern7_1);
+                                let mut closure10 = || {
+                                    let expr0_0 = C::is_eq(ctx, pattern4_0, pattern9_1)?;
+                                    return Some(expr0_0);
+                                };
+                                if let Some(pattern10_0) = closure10() {
+                                    // Rule at rules.isle line 459.
+                                    let expr0_0 = C::make_result(ctx, pattern4_0);
+                                    return Some(expr0_0);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            &BinaryOp::Xor => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Xor = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            let mut closure10 = || {
+                                let expr0_0 = C::is_eq(ctx, pattern4_0, pattern9_1)?;
+                                return Some(expr0_0);
+                            };
+                            if let Some(pattern10_0) = closure10() {
+                                // Rule at rules.isle line 693.
+                                let expr0_0 = C::make_result(ctx, pattern9_0);
+                                return Some(expr0_0);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        match pattern2_0 {
+            &BinaryOp::Sub => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        match pattern7_0 {
+                            &BinaryOp::Add => {
+                                let (pattern9_0, pattern9_1) =
+                                    C::unpack_arg_array2(ctx, pattern7_1);
+                                let mut closure10 = || {
+                                    let expr0_0 = C::is_eq(ctx, pattern4_0, pattern9_0)?;
+                                    return Some(expr0_0);
+                                };
+                                if let Some(pattern10_0) = closure10() {
+                                    // Rule at rules.isle line 126.
+                                    let expr0_0 = UnaryOp::Neg;
+                                    let expr1_0 = C::pack_arg_array1(ctx, pattern9_1);
+                                    let expr2_0 = ExprData::Unary {
+                                        code: expr0_0,
+                                        args: expr1_0,
+                                    };
+                                    let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
+                                    return Some(expr3_0);
+                                }
+                            }
+                            &BinaryOp::Sub => {
+                                let (pattern9_0, pattern9_1) =
+                                    C::unpack_arg_array2(ctx, pattern7_1);
+                                let mut closure10 = || {
+                                    let expr0_0 = C::is_eq(ctx, pattern4_0, pattern9_0)?;
+                                    return Some(expr0_0);
+                                };
+                                if let Some(pattern10_0) = closure10() {
+                                    // Rule at rules.isle line 118.
+                                    let expr0_0 = C::make_result(ctx, pattern9_1);
+                                    return Some(expr0_0);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            &BinaryOp::And => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    match &pattern6_0 {
+                        &ExprData::Unary {
+                            code: ref pattern7_0,
+                            args: ref pattern7_1,
+                        } => {
+                            if let &UnaryOp::Not = pattern7_0 {
+                                let pattern9_0 = C::unpack_arg_array1(ctx, pattern7_1);
+                                let pattern10_0 = C::value_ty(ctx, pattern9_0);
+                                let mut closure11 = || {
+                                    let expr0_0 = C::is_eq(ctx, pattern4_0, pattern9_0)?;
+                                    return Some(expr0_0);
+                                };
+                                if let Some(pattern11_0) = closure11() {
+                                    // Rule at rules.isle line 328.
+                                    let expr0_0 = C::make_zero(ctx, pattern10_0);
+                                    let expr1_0 = C::make_result(ctx, expr0_0);
+                                    return Some(expr1_0);
+                                }
+                            }
+                        }
+                        &ExprData::Binary {
+                            code: ref pattern7_0,
+                            args: ref pattern7_1,
+                        } => {
+                            if let &BinaryOp::Or = pattern7_0 {
+                                let (pattern9_0, pattern9_1) =
+                                    C::unpack_arg_array2(ctx, pattern7_1);
+                                let mut closure10 = || {
+                                    let expr0_0 = C::is_eq(ctx, pattern4_0, pattern9_0)?;
+                                    return Some(expr0_0);
+                                };
+                                if let Some(pattern10_0) = closure10() {
+                                    // Rule at rules.isle line 336.
+                                    let expr0_0 = C::make_result(ctx, pattern4_0);
+                                    return Some(expr0_0);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            &BinaryOp::Or => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    match &pattern6_0 {
+                        &ExprData::Unary {
+                            code: ref pattern7_0,
+                            args: ref pattern7_1,
+                        } => {
+                            if let &UnaryOp::Not = pattern7_0 {
+                                let pattern9_0 = C::unpack_arg_array1(ctx, pattern7_1);
+                                let pattern10_0 = C::value_ty(ctx, pattern9_0);
+                                let mut closure11 = || {
+                                    let expr0_0 = C::is_eq(ctx, pattern4_0, pattern9_0)?;
+                                    return Some(expr0_0);
+                                };
+                                if let Some(pattern11_0) = closure11() {
+                                    // Rule at rules.isle line 443.
+                                    let expr0_0 = C::make_all_one(ctx, pattern10_0);
+                                    let expr1_0 = C::make_result(ctx, expr0_0);
+                                    return Some(expr1_0);
+                                }
+                            }
+                        }
+                        &ExprData::Binary {
+                            code: ref pattern7_0,
+                            args: ref pattern7_1,
+                        } => {
+                            if let &BinaryOp::And = pattern7_0 {
+                                let (pattern9_0, pattern9_1) =
+                                    C::unpack_arg_array2(ctx, pattern7_1);
+                                let mut closure10 = || {
+                                    let expr0_0 = C::is_eq(ctx, pattern4_0, pattern9_0)?;
+                                    return Some(expr0_0);
+                                };
+                                if let Some(pattern10_0) = closure10() {
+                                    // Rule at rules.isle line 451.
+                                    let expr0_0 = C::make_result(ctx, pattern4_0);
+                                    return Some(expr0_0);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            &BinaryOp::Xor => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Xor = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            let mut closure10 = || {
+                                let expr0_0 = C::is_eq(ctx, pattern4_0, pattern9_0)?;
+                                return Some(expr0_0);
+                            };
+                            if let Some(pattern10_0) = closure10() {
+                                // Rule at rules.isle line 685.
+                                let expr0_0 = C::make_result(ctx, pattern9_1);
+                                return Some(expr0_0);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        match pattern2_0 {
+            &BinaryOp::Add => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Binary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &BinaryOp::Sub = pattern7_0 {
+                            let (pattern9_0, pattern9_1) = C::unpack_arg_array2(ctx, pattern7_1);
+                            let mut closure10 = || {
+                                let expr0_0 = C::is_eq(ctx, pattern9_0, pattern4_1)?;
+                                return Some(expr0_0);
+                            };
+                            if let Some(pattern10_0) = closure10() {
+                                // Rule at rules.isle line 86.
+                                let expr0_0 = C::make_result(ctx, pattern9_0);
+                                return Some(expr0_0);
+                            }
+                        }
+                    }
+                }
+            }
+            &BinaryOp::Sub => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                let pattern5_0 = C::is_zero(ctx, pattern4_0);
+                if pattern5_0 == true {
+                    // Rule at rules.isle line 111.
+                    let expr0_0 = UnaryOp::Neg;
+                    let expr1_0 = C::pack_arg_array1(ctx, pattern4_1);
+                    let expr2_0 = ExprData::Unary {
+                        code: expr0_0,
+                        args: expr1_0,
+                    };
+                    let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
+                    return Some(expr3_0);
+                }
+            }
+            &BinaryOp::Mul => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                let pattern5_0 = C::is_two(ctx, pattern4_1);
+                if pattern5_0 == true {
+                    // Rule at rules.isle line 182.
+                    let expr0_0 = BinaryOp::Add;
+                    let expr1_0 = C::pack_arg_array2(ctx, pattern4_0, pattern4_0);
+                    let expr2_0 = ExprData::Binary {
+                        code: expr0_0,
+                        args: expr1_0,
+                    };
+                    let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
+                    return Some(expr3_0);
+                }
+            }
+            &BinaryOp::And => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                let mut closure5 = || {
+                    let expr0_0 = C::is_eq(ctx, pattern4_0, pattern4_1)?;
+                    return Some(expr0_0);
+                };
+                if let Some(pattern5_0) = closure5() {
+                    // Rule at rules.isle line 320.
+                    let expr0_0 = C::make_result(ctx, pattern4_0);
+                    return Some(expr0_0);
+                }
+            }
+            &BinaryOp::Or => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                let pattern5_0 = C::is_zero(ctx, pattern4_1);
+                if pattern5_0 == true {
+                    // Rule at rules.isle line 436.
+                    let expr0_0 = C::make_result(ctx, pattern4_0);
+                    return Some(expr0_0);
+                }
+            }
+            &BinaryOp::Xor => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    if let &ExprData::Unary {
+                        code: ref pattern7_0,
+                        args: ref pattern7_1,
+                    } = &pattern6_0
+                    {
+                        if let &UnaryOp::Not = pattern7_0 {
+                            let pattern9_0 = C::unpack_arg_array1(ctx, pattern7_1);
+                            let pattern10_0 = C::value_ty(ctx, pattern4_1);
+                            let mut closure11 = || {
+                                let expr0_0 = C::is_eq(ctx, pattern4_0, pattern9_0)?;
+                                return Some(expr0_0);
+                            };
+                            if let Some(pattern11_0) = closure11() {
+                                // Rule at rules.isle line 677.
+                                let expr0_0 = C::make_all_one(ctx, pattern10_0);
+                                let expr1_0 = C::make_result(ctx, expr0_0);
+                                return Some(expr1_0);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
+    if let &ExprData::Binary {
+        code: ref pattern2_0,
+        args: ref pattern2_1,
+    } = &pattern1_0
+    {
+        match pattern2_0 {
+            &BinaryOp::Add => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
+                    let pattern6_0 = C::expr_data(ctx, pattern5_0);
+                    match &pattern6_0 {
+                        &ExprData::Unary {
+                            code: ref pattern7_0,
+                            args: ref pattern7_1,
+                        } => {
+                            match pattern7_0 {
+                                &UnaryOp::Not => {
+                                    let pattern9_0 = C::unpack_arg_array1(ctx, pattern7_1);
+                                    let pattern10_0 = C::value_ty(ctx, pattern9_0);
+                                    let mut closure11 = || {
+                                        let expr0_0 = C::is_eq(ctx, pattern4_0, pattern9_0)?;
+                                        return Some(expr0_0);
+                                    };
+                                    if let Some(pattern11_0) = closure11() {
+                                        // Rule at rules.isle line 78.
+                                        let expr0_0 = C::make_all_one(ctx, pattern10_0);
+                                        let expr1_0 = C::make_result(ctx, expr0_0);
+                                        return Some(expr1_0);
+                                    }
+                                }
+                                &UnaryOp::Neg => {
+                                    let pattern9_0 = C::unpack_arg_array1(ctx, pattern7_1);
+                                    let pattern10_0 = C::value_ty(ctx, pattern9_0);
+                                    let mut closure11 = || {
+                                        let expr0_0 = C::is_eq(ctx, pattern4_0, pattern9_0)?;
+                                        return Some(expr0_0);
+                                    };
+                                    if let Some(pattern11_0) = closure11() {
+                                        // Rule at rules.isle line 62.
+                                        let expr0_0 = C::make_zero(ctx, pattern10_0);
+                                        let expr1_0 = C::make_result(ctx, expr0_0);
+                                        return Some(expr1_0);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        &ExprData::Binary {
+                            code: ref pattern7_0,
+                            args: ref pattern7_1,
+                        } => {
+                            if let &BinaryOp::Sub = pattern7_0 {
+                                let (pattern9_0, pattern9_1) =
+                                    C::unpack_arg_array2(ctx, pattern7_1);
+                                let mut closure10 = || {
+                                    let expr0_0 = C::is_eq(ctx, pattern4_0, pattern9_1)?;
+                                    return Some(expr0_0);
+                                };
+                                if let Some(pattern10_0) = closure10() {
+                                    // Rule at rules.isle line 70.
+                                    let expr0_0 = C::make_result(ctx, pattern9_0);
+                                    return Some(expr0_0);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            &BinaryOp::Sub => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                let pattern5_0 = C::is_zero(ctx, pattern4_1);
+                if pattern5_0 == true {
+                    // Rule at rules.isle line 104.
+                    let expr0_0 = C::make_result(ctx, pattern4_0);
+                    return Some(expr0_0);
+                }
+            }
+            &BinaryOp::Mul => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                let pattern5_0 = C::is_one(ctx, pattern4_1);
+                if pattern5_0 == true {
+                    // Rule at rules.isle line 175.
+                    let expr0_0 = C::make_result(ctx, pattern4_0);
+                    return Some(expr0_0);
+                }
+            }
+            &BinaryOp::And => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                let pattern5_0 = C::is_all_one(ctx, pattern4_1);
+                if pattern5_0 == true {
+                    // Rule at rules.isle line 313.
+                    let expr0_0 = C::make_result(ctx, pattern4_0);
+                    return Some(expr0_0);
+                }
+            }
+            &BinaryOp::Or => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                let mut closure5 = || {
+                    let expr0_0 = C::is_eq(ctx, pattern4_0, pattern4_1)?;
+                    return Some(expr0_0);
+                };
+                if let Some(pattern5_0) = closure5() {
+                    // Rule at rules.isle line 428.
+                    let expr0_0 = C::make_result(ctx, pattern4_0);
+                    return Some(expr0_0);
+                }
+            }
+            &BinaryOp::Xor => {
+                let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                let pattern5_0 = C::value_ty(ctx, pattern4_1);
+                let mut closure6 = || {
+                    let expr0_0 = C::is_eq(ctx, pattern4_0, pattern4_1)?;
+                    return Some(expr0_0);
+                };
+                if let Some(pattern6_0) = closure6() {
+                    // Rule at rules.isle line 669.
+                    let expr0_0 = C::make_zero(ctx, pattern5_0);
+                    let expr1_0 = C::make_result(ctx, expr0_0);
+                    return Some(expr1_0);
+                }
+            }
+            _ => {}
+        }
+    }
+    let pattern0_0 = arg0;
+    let pattern1_0 = C::expr_data(ctx, pattern0_0);
     match &pattern1_0 {
         &ExprData::Unary {
             code: ref pattern2_0,
             args: ref pattern2_1,
         } => {
-            match &pattern2_0 {
+            match pattern2_0 {
                 &UnaryOp::Not => {
-                    let pattern4_0 = C::unpack_arg_array1(ctx, &pattern2_1);
+                    let pattern4_0 = C::unpack_arg_array1(ctx, pattern2_1);
                     if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
                         let pattern6_0 = C::expr_data(ctx, pattern5_0);
                         match &pattern6_0 {
@@ -65,19 +2628,19 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                 code: ref pattern7_0,
                                 args: ref pattern7_1,
                             } => {
-                                match &pattern7_0 {
+                                match pattern7_0 {
                                     &UnaryOp::Not => {
-                                        let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
-                                        // Rule at rules.isle line 733.
+                                        let pattern9_0 = C::unpack_arg_array1(ctx, pattern7_1);
+                                        // Rule at rules.isle line 800.
                                         let expr0_0 = C::make_result(ctx, pattern9_0);
                                         return Some(expr0_0);
                                     }
                                     &UnaryOp::Neg => {
-                                        let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
+                                        let pattern9_0 = C::unpack_arg_array1(ctx, pattern7_1);
                                         let pattern10_0 = C::value_ty(ctx, pattern9_0);
-                                        // Rule at rules.isle line 740.
+                                        // Rule at rules.isle line 807.
                                         let expr0_0 = BinaryOp::Sub;
-                                        let expr1_0 = C::make_one(ctx, &pattern10_0);
+                                        let expr1_0 = C::make_one(ctx, pattern10_0);
                                         let expr2_0 = C::pack_arg_array2(ctx, pattern9_0, expr1_0);
                                         let expr3_0 = ExprData::Binary {
                                             code: expr0_0,
@@ -93,11 +2656,11 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                 code: ref pattern7_0,
                                 args: ref pattern7_1,
                             } => {
-                                match &pattern7_0 {
+                                match pattern7_0 {
                                     &BinaryOp::Lt => {
                                         let (pattern9_0, pattern9_1) =
-                                            C::unpack_arg_array2(ctx, &pattern7_1);
-                                        // Rule at rules.isle line 761.
+                                            C::unpack_arg_array2(ctx, pattern7_1);
+                                        // Rule at rules.isle line 828.
                                         let expr0_0 = BinaryOp::Le;
                                         let expr1_0 =
                                             C::pack_arg_array2(ctx, pattern9_1, pattern9_0);
@@ -110,8 +2673,8 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                     }
                                     &BinaryOp::Slt => {
                                         let (pattern9_0, pattern9_1) =
-                                            C::unpack_arg_array2(ctx, &pattern7_1);
-                                        // Rule at rules.isle line 775.
+                                            C::unpack_arg_array2(ctx, pattern7_1);
+                                        // Rule at rules.isle line 842.
                                         let expr0_0 = BinaryOp::Sle;
                                         let expr1_0 =
                                             C::pack_arg_array2(ctx, pattern9_1, pattern9_0);
@@ -124,8 +2687,8 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                     }
                                     &BinaryOp::Le => {
                                         let (pattern9_0, pattern9_1) =
-                                            C::unpack_arg_array2(ctx, &pattern7_1);
-                                        // Rule at rules.isle line 768.
+                                            C::unpack_arg_array2(ctx, pattern7_1);
+                                        // Rule at rules.isle line 835.
                                         let expr0_0 = BinaryOp::Lt;
                                         let expr1_0 =
                                             C::pack_arg_array2(ctx, pattern9_1, pattern9_0);
@@ -138,8 +2701,8 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                     }
                                     &BinaryOp::Sle => {
                                         let (pattern9_0, pattern9_1) =
-                                            C::unpack_arg_array2(ctx, &pattern7_1);
-                                        // Rule at rules.isle line 782.
+                                            C::unpack_arg_array2(ctx, pattern7_1);
+                                        // Rule at rules.isle line 849.
                                         let expr0_0 = BinaryOp::Slt;
                                         let expr1_0 =
                                             C::pack_arg_array2(ctx, pattern9_1, pattern9_0);
@@ -152,8 +2715,8 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                     }
                                     &BinaryOp::Eq => {
                                         let (pattern9_0, pattern9_1) =
-                                            C::unpack_arg_array2(ctx, &pattern7_1);
-                                        // Rule at rules.isle line 747.
+                                            C::unpack_arg_array2(ctx, pattern7_1);
+                                        // Rule at rules.isle line 814.
                                         let expr0_0 = BinaryOp::Ne;
                                         let expr1_0 =
                                             C::pack_arg_array2(ctx, pattern9_0, pattern9_1);
@@ -166,8 +2729,8 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                     }
                                     &BinaryOp::Ne => {
                                         let (pattern9_0, pattern9_1) =
-                                            C::unpack_arg_array2(ctx, &pattern7_1);
-                                        // Rule at rules.isle line 754.
+                                            C::unpack_arg_array2(ctx, pattern7_1);
+                                        // Rule at rules.isle line 821.
                                         let expr0_0 = BinaryOp::Eq;
                                         let expr1_0 =
                                             C::pack_arg_array2(ctx, pattern9_0, pattern9_1);
@@ -186,7 +2749,7 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                     }
                 }
                 &UnaryOp::Neg => {
-                    let pattern4_0 = C::unpack_arg_array1(ctx, &pattern2_1);
+                    let pattern4_0 = C::unpack_arg_array1(ctx, pattern2_1);
                     if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
                         let pattern6_0 = C::expr_data(ctx, pattern5_0);
                         if let &ExprData::Unary {
@@ -194,13 +2757,13 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                             args: ref pattern7_1,
                         } = &pattern6_0
                         {
-                            match &pattern7_0 {
+                            match pattern7_0 {
                                 &UnaryOp::Not => {
-                                    let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
+                                    let pattern9_0 = C::unpack_arg_array1(ctx, pattern7_1);
                                     let pattern10_0 = C::value_ty(ctx, pattern9_0);
-                                    // Rule at rules.isle line 798.
+                                    // Rule at rules.isle line 865.
                                     let expr0_0 = BinaryOp::Add;
-                                    let expr1_0 = C::make_one(ctx, &pattern10_0);
+                                    let expr1_0 = C::make_one(ctx, pattern10_0);
                                     let expr2_0 = C::pack_arg_array2(ctx, pattern9_0, expr1_0);
                                     let expr3_0 = ExprData::Binary {
                                         code: expr0_0,
@@ -210,8 +2773,8 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                                     return Some(expr4_0);
                                 }
                                 &UnaryOp::Neg => {
-                                    let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
-                                    // Rule at rules.isle line 791.
+                                    let pattern9_0 = C::unpack_arg_array1(ctx, pattern7_1);
+                                    // Rule at rules.isle line 858.
                                     let expr0_0 = C::make_result(ctx, pattern9_0);
                                     return Some(expr0_0);
                                 }
@@ -227,331 +2790,79 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
             code: ref pattern2_0,
             args: ref pattern2_1,
         } => {
-            match &pattern2_0 {
+            match pattern2_0 {
                 &BinaryOp::Add => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
-                    if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
-                        let pattern6_0 = C::expr_data(ctx, pattern5_0);
-                        if let &ExprData::Binary {
-                            code: ref pattern7_0,
-                            args: ref pattern7_1,
-                        } = &pattern6_0
-                        {
-                            if let &BinaryOp::Sub = &pattern7_0 {
-                                let (pattern9_0, pattern9_1) =
-                                    C::unpack_arg_array2(ctx, &pattern7_1);
-                                let closure10 = || {
-                                    return Some(pattern9_1);
-                                };
-                                if let Some(pattern10_0) = closure10() {
-                                    let pattern11_0 = C::is_eq(ctx, pattern4_1, pattern10_0);
-                                    if pattern11_0 == true {
-                                        // Rule at rules.isle line 76.
-                                        let expr0_0 = C::make_result(ctx, pattern9_0);
-                                        return Some(expr0_0);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
                     let pattern5_0 = C::is_zero(ctx, pattern4_1);
                     if pattern5_0 == true {
-                        // Rule at rules.isle line 56.
+                        // Rule at rules.isle line 57.
                         let expr0_0 = C::make_result(ctx, pattern4_0);
                         return Some(expr0_0);
-                    }
-                    if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
-                        let pattern6_0 = C::expr_data(ctx, pattern5_0);
-                        match &pattern6_0 {
-                            &ExprData::Unary {
-                                code: ref pattern7_0,
-                                args: ref pattern7_1,
-                            } => {
-                                match &pattern7_0 {
-                                    &UnaryOp::Not => {
-                                        let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
-                                        let closure10 = || {
-                                            return Some(pattern4_0);
-                                        };
-                                        if let Some(pattern10_0) = closure10() {
-                                            let pattern11_0 =
-                                                C::is_eq(ctx, pattern9_0, pattern10_0);
-                                            if pattern11_0 == true {
-                                                let pattern13_0 = C::value_ty(ctx, pattern9_0);
-                                                // Rule at rules.isle line 83.
-                                                let expr0_0 = C::make_all_one(ctx, &pattern13_0);
-                                                let expr1_0 = C::make_result(ctx, expr0_0);
-                                                return Some(expr1_0);
-                                            }
-                                        }
-                                    }
-                                    &UnaryOp::Neg => {
-                                        let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
-                                        let closure10 = || {
-                                            return Some(pattern4_0);
-                                        };
-                                        if let Some(pattern10_0) = closure10() {
-                                            let pattern11_0 =
-                                                C::is_eq(ctx, pattern9_0, pattern10_0);
-                                            if pattern11_0 == true {
-                                                let pattern13_0 = C::value_ty(ctx, pattern9_0);
-                                                // Rule at rules.isle line 62.
-                                                let expr0_0 = C::make_zero(ctx, &pattern13_0);
-                                                let expr1_0 = C::make_result(ctx, expr0_0);
-                                                return Some(expr1_0);
-                                            }
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            &ExprData::Binary {
-                                code: ref pattern7_0,
-                                args: ref pattern7_1,
-                            } => {
-                                if let &BinaryOp::Sub = &pattern7_0 {
-                                    let (pattern9_0, pattern9_1) =
-                                        C::unpack_arg_array2(ctx, &pattern7_1);
-                                    let closure10 = || {
-                                        return Some(pattern4_0);
-                                    };
-                                    if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_eq(ctx, pattern9_1, pattern10_0);
-                                        if pattern11_0 == true {
-                                            // Rule at rules.isle line 69.
-                                            let expr0_0 = C::make_result(ctx, pattern9_0);
-                                            return Some(expr0_0);
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
                     }
                 }
                 &BinaryOp::Sub => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
-                    let closure5 = || {
-                        return Some(pattern4_0);
-                    };
-                    if let Some(pattern5_0) = closure5() {
-                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
-                        if pattern6_0 == true {
-                            let pattern8_0 = C::value_ty(ctx, pattern4_1);
-                            // Rule at rules.isle line 106.
-                            let expr0_0 = C::make_zero(ctx, &pattern8_0);
-                            let expr1_0 = C::make_result(ctx, expr0_0);
-                            return Some(expr1_0);
-                        }
-                    }
-                    let pattern5_0 = C::is_zero(ctx, pattern4_0);
-                    if pattern5_0 == true {
-                        // Rule at rules.isle line 99.
-                        let expr0_0 = UnaryOp::Neg;
-                        let expr1_0 = C::pack_arg_array1(ctx, pattern4_1);
-                        let expr2_0 = ExprData::Unary {
-                            code: expr0_0,
-                            args: expr1_0,
-                        };
-                        let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
-                        return Some(expr3_0);
-                    }
-                    if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
-                        let pattern6_0 = C::expr_data(ctx, pattern5_0);
-                        if let &ExprData::Binary {
-                            code: ref pattern7_0,
-                            args: ref pattern7_1,
-                        } = &pattern6_0
-                        {
-                            match &pattern7_0 {
-                                &BinaryOp::Add => {
-                                    let (pattern9_0, pattern9_1) =
-                                        C::unpack_arg_array2(ctx, &pattern7_1);
-                                    let closure10 = || {
-                                        return Some(pattern9_0);
-                                    };
-                                    if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_eq(ctx, pattern4_1, pattern10_0);
-                                        if pattern11_0 == true {
-                                            // Rule at rules.isle line 141.
-                                            let expr0_0 = C::make_result(ctx, pattern9_1);
-                                            return Some(expr0_0);
-                                        }
-                                    }
-                                    let closure10 = || {
-                                        return Some(pattern9_1);
-                                    };
-                                    if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_eq(ctx, pattern4_1, pattern10_0);
-                                        if pattern11_0 == true {
-                                            // Rule at rules.isle line 148.
-                                            let expr0_0 = C::make_result(ctx, pattern9_0);
-                                            return Some(expr0_0);
-                                        }
-                                    }
-                                }
-                                &BinaryOp::Sub => {
-                                    let (pattern9_0, pattern9_1) =
-                                        C::unpack_arg_array2(ctx, &pattern7_1);
-                                    let closure10 = || {
-                                        return Some(pattern9_0);
-                                    };
-                                    if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_eq(ctx, pattern4_1, pattern10_0);
-                                        if pattern11_0 == true {
-                                            // Rule at rules.isle line 120.
-                                            let expr0_0 = UnaryOp::Neg;
-                                            let expr1_0 = C::pack_arg_array1(ctx, pattern9_1);
-                                            let expr2_0 = ExprData::Unary {
-                                                code: expr0_0,
-                                                args: expr1_0,
-                                            };
-                                            let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
-                                            return Some(expr3_0);
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    let pattern5_0 = C::is_zero(ctx, pattern4_1);
-                    if pattern5_0 == true {
-                        // Rule at rules.isle line 92.
-                        let expr0_0 = C::make_result(ctx, pattern4_0);
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                    let pattern5_0 = C::value_ty(ctx, pattern4_1);
+                    let mut closure6 = || {
+                        let expr0_0 = C::is_eq(ctx, pattern4_0, pattern4_1)?;
                         return Some(expr0_0);
-                    }
-                    if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
-                        let pattern6_0 = C::expr_data(ctx, pattern5_0);
-                        if let &ExprData::Binary {
-                            code: ref pattern7_0,
-                            args: ref pattern7_1,
-                        } = &pattern6_0
-                        {
-                            match &pattern7_0 {
-                                &BinaryOp::Add => {
-                                    let (pattern9_0, pattern9_1) =
-                                        C::unpack_arg_array2(ctx, &pattern7_1);
-                                    let closure10 = || {
-                                        return Some(pattern4_0);
-                                    };
-                                    if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_eq(ctx, pattern9_0, pattern10_0);
-                                        if pattern11_0 == true {
-                                            // Rule at rules.isle line 127.
-                                            let expr0_0 = UnaryOp::Neg;
-                                            let expr1_0 = C::pack_arg_array1(ctx, pattern9_1);
-                                            let expr2_0 = ExprData::Unary {
-                                                code: expr0_0,
-                                                args: expr1_0,
-                                            };
-                                            let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
-                                            return Some(expr3_0);
-                                        }
-                                        let pattern11_0 = C::is_eq(ctx, pattern9_1, pattern10_0);
-                                        if pattern11_0 == true {
-                                            // Rule at rules.isle line 134.
-                                            let expr0_0 = UnaryOp::Neg;
-                                            let expr1_0 = C::pack_arg_array1(ctx, pattern9_0);
-                                            let expr2_0 = ExprData::Unary {
-                                                code: expr0_0,
-                                                args: expr1_0,
-                                            };
-                                            let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
-                                            return Some(expr3_0);
-                                        }
-                                    }
-                                }
-                                &BinaryOp::Sub => {
-                                    let (pattern9_0, pattern9_1) =
-                                        C::unpack_arg_array2(ctx, &pattern7_1);
-                                    let closure10 = || {
-                                        return Some(pattern4_0);
-                                    };
-                                    if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_eq(ctx, pattern9_0, pattern10_0);
-                                        if pattern11_0 == true {
-                                            // Rule at rules.isle line 113.
-                                            let expr0_0 = C::make_result(ctx, pattern9_1);
-                                            return Some(expr0_0);
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-                &BinaryOp::Mul => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
-                    let pattern5_0 = C::is_zero(ctx, pattern4_1);
-                    if pattern5_0 == true {
-                        let pattern7_0 = C::value_ty(ctx, pattern4_1);
-                        // Rule at rules.isle line 157.
-                        let expr0_0 = C::make_zero(ctx, &pattern7_0);
+                    };
+                    if let Some(pattern6_0) = closure6() {
+                        // Rule at rules.isle line 97.
+                        let expr0_0 = C::make_zero(ctx, pattern5_0);
                         let expr1_0 = C::make_result(ctx, expr0_0);
                         return Some(expr1_0);
                     }
-                    let pattern5_0 = C::is_one(ctx, pattern4_1);
+                }
+                &BinaryOp::Mul => {
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                    let pattern5_0 = C::is_zero(ctx, pattern4_1);
                     if pattern5_0 == true {
-                        // Rule at rules.isle line 164.
-                        let expr0_0 = C::make_result(ctx, pattern4_0);
-                        return Some(expr0_0);
-                    }
-                    let pattern5_0 = C::is_two(ctx, pattern4_1);
-                    if pattern5_0 == true {
-                        // Rule at rules.isle line 171.
-                        let expr0_0 = BinaryOp::Add;
-                        let expr1_0 = C::pack_arg_array2(ctx, pattern4_0, pattern4_0);
-                        let expr2_0 = ExprData::Binary {
-                            code: expr0_0,
-                            args: expr1_0,
-                        };
-                        let expr3_0 = SimplifyRawResult::Expr { expr: expr2_0 };
-                        return Some(expr3_0);
+                        let pattern7_0 = C::value_ty(ctx, pattern4_1);
+                        // Rule at rules.isle line 169.
+                        let expr0_0 = C::make_zero(ctx, pattern7_0);
+                        let expr1_0 = C::make_result(ctx, expr0_0);
+                        return Some(expr1_0);
                     }
                 }
                 &BinaryOp::Udiv => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
                     let pattern5_0 = C::is_zero(ctx, pattern4_0);
                     if pattern5_0 == true {
                         let pattern7_0 = C::value_ty(ctx, pattern4_0);
-                        // Rule at rules.isle line 191.
-                        let expr0_0 = C::make_zero(ctx, &pattern7_0);
+                        // Rule at rules.isle line 201.
+                        let expr0_0 = C::make_zero(ctx, pattern7_0);
                         let expr1_0 = C::make_result(ctx, expr0_0);
                         return Some(expr1_0);
                     }
                 }
                 &BinaryOp::Sdiv => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
                     let pattern5_0 = C::is_zero(ctx, pattern4_0);
                     if pattern5_0 == true {
                         let pattern7_0 = C::value_ty(ctx, pattern4_0);
-                        // Rule at rules.isle line 181.
-                        let expr0_0 = C::make_zero(ctx, &pattern7_0);
+                        // Rule at rules.isle line 192.
+                        let expr0_0 = C::make_zero(ctx, pattern7_0);
                         let expr1_0 = C::make_result(ctx, expr0_0);
                         return Some(expr1_0);
                     }
                 }
                 &BinaryOp::Lt => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
-                    let closure5 = || {
-                        return Some(pattern4_0);
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                    let mut closure5 = || {
+                        let expr0_0 = C::is_eq(ctx, pattern4_0, pattern4_1)?;
+                        return Some(expr0_0);
                     };
                     if let Some(pattern5_0) = closure5() {
-                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
-                        if pattern6_0 == true {
-                            let pattern8_0 = C::value_ty(ctx, pattern4_1);
-                            // Rule at rules.isle line 219.
-                            let expr0_0 = C::make_false(ctx);
-                            let expr1_0 = C::make_result(ctx, expr0_0);
-                            return Some(expr1_0);
-                        }
+                        // Rule at rules.isle line 231.
+                        let expr0_0 = C::make_false(ctx);
+                        let expr1_0 = C::make_result(ctx, expr0_0);
+                        return Some(expr1_0);
                     }
                 }
                 &BinaryOp::Gt => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
-                    // Rule at rules.isle line 228.
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                    // Rule at rules.isle line 241.
                     let expr0_0 = BinaryOp::Lt;
                     let expr1_0 = C::pack_arg_array2(ctx, pattern4_1, pattern4_0);
                     let expr2_0 = ExprData::Binary {
@@ -562,24 +2873,21 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                     return Some(expr3_0);
                 }
                 &BinaryOp::Slt => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
-                    let closure5 = || {
-                        return Some(pattern4_0);
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                    let mut closure5 = || {
+                        let expr0_0 = C::is_eq(ctx, pattern4_0, pattern4_1)?;
+                        return Some(expr0_0);
                     };
                     if let Some(pattern5_0) = closure5() {
-                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
-                        if pattern6_0 == true {
-                            let pattern8_0 = C::value_ty(ctx, pattern4_1);
-                            // Rule at rules.isle line 237.
-                            let expr0_0 = C::make_false(ctx);
-                            let expr1_0 = C::make_result(ctx, expr0_0);
-                            return Some(expr1_0);
-                        }
+                        // Rule at rules.isle line 250.
+                        let expr0_0 = C::make_false(ctx);
+                        let expr1_0 = C::make_result(ctx, expr0_0);
+                        return Some(expr1_0);
                     }
                 }
                 &BinaryOp::Sgt => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
-                    // Rule at rules.isle line 246.
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                    // Rule at rules.isle line 260.
                     let expr0_0 = BinaryOp::Slt;
                     let expr1_0 = C::pack_arg_array2(ctx, pattern4_1, pattern4_0);
                     let expr2_0 = ExprData::Binary {
@@ -590,24 +2898,21 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                     return Some(expr3_0);
                 }
                 &BinaryOp::Le => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
-                    let closure5 = || {
-                        return Some(pattern4_0);
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                    let mut closure5 = || {
+                        let expr0_0 = C::is_eq(ctx, pattern4_0, pattern4_1)?;
+                        return Some(expr0_0);
                     };
                     if let Some(pattern5_0) = closure5() {
-                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
-                        if pattern6_0 == true {
-                            let pattern8_0 = C::value_ty(ctx, pattern4_1);
-                            // Rule at rules.isle line 255.
-                            let expr0_0 = C::make_true(ctx);
-                            let expr1_0 = C::make_result(ctx, expr0_0);
-                            return Some(expr1_0);
-                        }
+                        // Rule at rules.isle line 269.
+                        let expr0_0 = C::make_true(ctx);
+                        let expr1_0 = C::make_result(ctx, expr0_0);
+                        return Some(expr1_0);
                     }
                 }
                 &BinaryOp::Ge => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
-                    // Rule at rules.isle line 264.
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                    // Rule at rules.isle line 279.
                     let expr0_0 = BinaryOp::Le;
                     let expr1_0 = C::pack_arg_array2(ctx, pattern4_1, pattern4_0);
                     let expr2_0 = ExprData::Binary {
@@ -618,24 +2923,21 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                     return Some(expr3_0);
                 }
                 &BinaryOp::Sle => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
-                    let closure5 = || {
-                        return Some(pattern4_0);
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                    let mut closure5 = || {
+                        let expr0_0 = C::is_eq(ctx, pattern4_0, pattern4_1)?;
+                        return Some(expr0_0);
                     };
                     if let Some(pattern5_0) = closure5() {
-                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
-                        if pattern6_0 == true {
-                            let pattern8_0 = C::value_ty(ctx, pattern4_1);
-                            // Rule at rules.isle line 273.
-                            let expr0_0 = C::make_true(ctx);
-                            let expr1_0 = C::make_result(ctx, expr0_0);
-                            return Some(expr1_0);
-                        }
+                        // Rule at rules.isle line 288.
+                        let expr0_0 = C::make_true(ctx);
+                        let expr1_0 = C::make_result(ctx, expr0_0);
+                        return Some(expr1_0);
                     }
                 }
                 &BinaryOp::Sge => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
-                    // Rule at rules.isle line 282.
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                    // Rule at rules.isle line 298.
                     let expr0_0 = BinaryOp::Sle;
                     let expr1_0 = C::pack_arg_array2(ctx, pattern4_1, pattern4_0);
                     let expr2_0 = ExprData::Binary {
@@ -646,1693 +2948,60 @@ pub fn constructor_simplify<C: Context>(ctx: &mut C, arg0: Expr) -> Option<Simpl
                     return Some(expr3_0);
                 }
                 &BinaryOp::Eq => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
-                    let closure5 = || {
-                        return Some(pattern4_0);
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                    let mut closure5 = || {
+                        let expr0_0 = C::is_eq(ctx, pattern4_0, pattern4_1)?;
+                        return Some(expr0_0);
                     };
                     if let Some(pattern5_0) = closure5() {
-                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
-                        if pattern6_0 == true {
-                            let pattern8_0 = C::value_ty(ctx, pattern4_1);
-                            // Rule at rules.isle line 200.
-                            let expr0_0 = C::make_true(ctx);
-                            let expr1_0 = C::make_result(ctx, expr0_0);
-                            return Some(expr1_0);
-                        }
+                        // Rule at rules.isle line 210.
+                        let expr0_0 = C::make_true(ctx);
+                        let expr1_0 = C::make_result(ctx, expr0_0);
+                        return Some(expr1_0);
                     }
                 }
                 &BinaryOp::Ne => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
-                    let closure5 = || {
-                        return Some(pattern4_0);
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
+                    let mut closure5 = || {
+                        let expr0_0 = C::is_eq(ctx, pattern4_0, pattern4_1)?;
+                        return Some(expr0_0);
                     };
                     if let Some(pattern5_0) = closure5() {
-                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
-                        if pattern6_0 == true {
-                            let pattern8_0 = C::value_ty(ctx, pattern4_1);
-                            // Rule at rules.isle line 209.
-                            let expr0_0 = C::make_false(ctx);
-                            let expr1_0 = C::make_result(ctx, expr0_0);
-                            return Some(expr1_0);
-                        }
+                        // Rule at rules.isle line 220.
+                        let expr0_0 = C::make_false(ctx);
+                        let expr1_0 = C::make_result(ctx, expr0_0);
+                        return Some(expr1_0);
                     }
                 }
                 &BinaryOp::And => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
-                    let closure5 = || {
-                        return Some(pattern4_0);
-                    };
-                    if let Some(pattern5_0) = closure5() {
-                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
-                        if pattern6_0 == true {
-                            // Rule at rules.isle line 291.
-                            let expr0_0 = C::make_result(ctx, pattern4_0);
-                            return Some(expr0_0);
-                        }
-                    }
-                    if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
-                        let pattern6_0 = C::expr_data(ctx, pattern5_0);
-                        if let &ExprData::Binary {
-                            code: ref pattern7_0,
-                            args: ref pattern7_1,
-                        } = &pattern6_0
-                        {
-                            if let &BinaryOp::Or = &pattern7_0 {
-                                let (pattern9_0, pattern9_1) =
-                                    C::unpack_arg_array2(ctx, &pattern7_1);
-                                if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
-                                    let pattern11_0 = C::expr_data(ctx, pattern10_0);
-                                    if let &ExprData::Binary {
-                                        code: ref pattern12_0,
-                                        args: ref pattern12_1,
-                                    } = &pattern11_0
-                                    {
-                                        if let &BinaryOp::Or = &pattern12_0 {
-                                            let (pattern14_0, pattern14_1) =
-                                                C::unpack_arg_array2(ctx, &pattern12_1);
-                                            let closure15 = || {
-                                                return Some(pattern9_0);
-                                            };
-                                            if let Some(pattern15_0) = closure15() {
-                                                let pattern16_0 =
-                                                    C::is_eq(ctx, pattern14_0, pattern15_0);
-                                                if pattern16_0 == true {
-                                                    if let Some(pattern18_0) =
-                                                        C::value_expr(ctx, pattern14_1)
-                                                    {
-                                                        let pattern19_0 =
-                                                            C::expr_data(ctx, pattern18_0);
-                                                        if let &ExprData::Unary {
-                                                            code: ref pattern20_0,
-                                                            args: ref pattern20_1,
-                                                        } = &pattern19_0
-                                                        {
-                                                            if let &UnaryOp::Not = &pattern20_0 {
-                                                                let pattern22_0 =
-                                                                    C::unpack_arg_array1(
-                                                                        ctx,
-                                                                        &pattern20_1,
-                                                                    );
-                                                                let closure23 = || {
-                                                                    return Some(pattern9_1);
-                                                                };
-                                                                if let Some(pattern23_0) =
-                                                                    closure23()
-                                                                {
-                                                                    let pattern24_0 = C::is_eq(
-                                                                        ctx,
-                                                                        pattern22_0,
-                                                                        pattern23_0,
-                                                                    );
-                                                                    if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 333.
-                                                                        let expr0_0 =
-                                                                            C::make_result(
-                                                                                ctx, pattern9_0,
-                                                                            );
-                                                                        return Some(expr0_0);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            let closure15 = || {
-                                                return Some(pattern9_1);
-                                            };
-                                            if let Some(pattern15_0) = closure15() {
-                                                let pattern16_0 =
-                                                    C::is_eq(ctx, pattern14_0, pattern15_0);
-                                                if pattern16_0 == true {
-                                                    if let Some(pattern18_0) =
-                                                        C::value_expr(ctx, pattern14_1)
-                                                    {
-                                                        let pattern19_0 =
-                                                            C::expr_data(ctx, pattern18_0);
-                                                        if let &ExprData::Unary {
-                                                            code: ref pattern20_0,
-                                                            args: ref pattern20_1,
-                                                        } = &pattern19_0
-                                                        {
-                                                            if let &UnaryOp::Not = &pattern20_0 {
-                                                                let pattern22_0 =
-                                                                    C::unpack_arg_array1(
-                                                                        ctx,
-                                                                        &pattern20_1,
-                                                                    );
-                                                                let closure23 = || {
-                                                                    return Some(pattern9_0);
-                                                                };
-                                                                if let Some(pattern23_0) =
-                                                                    closure23()
-                                                                {
-                                                                    let pattern24_0 = C::is_eq(
-                                                                        ctx,
-                                                                        pattern22_0,
-                                                                        pattern23_0,
-                                                                    );
-                                                                    if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 369.
-                                                                        let expr0_0 =
-                                                                            C::make_result(
-                                                                                ctx, pattern9_1,
-                                                                            );
-                                                                        return Some(expr0_0);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            if let Some(pattern15_0) =
-                                                C::value_expr(ctx, pattern14_0)
-                                            {
-                                                let pattern16_0 = C::expr_data(ctx, pattern15_0);
-                                                if let &ExprData::Unary {
-                                                    code: ref pattern17_0,
-                                                    args: ref pattern17_1,
-                                                } = &pattern16_0
-                                                {
-                                                    if let &UnaryOp::Not = &pattern17_0 {
-                                                        let pattern19_0 =
-                                                            C::unpack_arg_array1(ctx, &pattern17_1);
-                                                        let closure20 = || {
-                                                            return Some(pattern9_0);
-                                                        };
-                                                        if let Some(pattern20_0) = closure20() {
-                                                            let pattern21_0 = C::is_eq(
-                                                                ctx,
-                                                                pattern19_0,
-                                                                pattern20_0,
-                                                            );
-                                                            if pattern21_0 == true {
-                                                                let closure23 = || {
-                                                                    return Some(pattern9_1);
-                                                                };
-                                                                if let Some(pattern23_0) =
-                                                                    closure23()
-                                                                {
-                                                                    let pattern24_0 = C::is_eq(
-                                                                        ctx,
-                                                                        pattern14_1,
-                                                                        pattern23_0,
-                                                                    );
-                                                                    if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 357.
-                                                                        let expr0_0 =
-                                                                            C::make_result(
-                                                                                ctx, pattern9_1,
-                                                                            );
-                                                                        return Some(expr0_0);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                        let closure20 = || {
-                                                            return Some(pattern9_1);
-                                                        };
-                                                        if let Some(pattern20_0) = closure20() {
-                                                            let pattern21_0 = C::is_eq(
-                                                                ctx,
-                                                                pattern19_0,
-                                                                pattern20_0,
-                                                            );
-                                                            if pattern21_0 == true {
-                                                                let closure23 = || {
-                                                                    return Some(pattern9_0);
-                                                                };
-                                                                if let Some(pattern23_0) =
-                                                                    closure23()
-                                                                {
-                                                                    let pattern24_0 = C::is_eq(
-                                                                        ctx,
-                                                                        pattern14_1,
-                                                                        pattern23_0,
-                                                                    );
-                                                                    if pattern24_0 == true {
-                                                                        // Rule at rules.isle line 345.
-                                                                        let expr0_0 =
-                                                                            C::make_result(
-                                                                                ctx, pattern9_0,
-                                                                            );
-                                                                        return Some(expr0_0);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
                     let pattern5_0 = C::is_zero(ctx, pattern4_1);
                     if pattern5_0 == true {
                         let pattern7_0 = C::value_ty(ctx, pattern4_1);
-                        // Rule at rules.isle line 298.
-                        let expr0_0 = C::make_zero(ctx, &pattern7_0);
+                        // Rule at rules.isle line 307.
+                        let expr0_0 = C::make_zero(ctx, pattern7_0);
                         let expr1_0 = C::make_result(ctx, expr0_0);
                         return Some(expr1_0);
-                    }
-                    let pattern5_0 = C::is_all_one(ctx, pattern4_1);
-                    if pattern5_0 == true {
-                        // Rule at rules.isle line 305.
-                        let expr0_0 = C::make_result(ctx, pattern4_0);
-                        return Some(expr0_0);
-                    }
-                    if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
-                        let pattern6_0 = C::expr_data(ctx, pattern5_0);
-                        match &pattern6_0 {
-                            &ExprData::Unary {
-                                code: ref pattern7_0,
-                                args: ref pattern7_1,
-                            } => {
-                                match &pattern7_0 {
-                                    &UnaryOp::Not => {
-                                        let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
-                                        let closure10 = || {
-                                            return Some(pattern4_0);
-                                        };
-                                        if let Some(pattern10_0) = closure10() {
-                                            let pattern11_0 =
-                                                C::is_eq(ctx, pattern9_0, pattern10_0);
-                                            if pattern11_0 == true {
-                                                let pattern13_0 = C::value_ty(ctx, pattern9_0);
-                                                // Rule at rules.isle line 312.
-                                                let expr0_0 = C::make_zero(ctx, &pattern13_0);
-                                                let expr1_0 = C::make_result(ctx, expr0_0);
-                                                return Some(expr1_0);
-                                            }
-                                        }
-                                    }
-                                    &UnaryOp::Neg => {
-                                        let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
-                                        let closure10 = || {
-                                            return Some(pattern4_0);
-                                        };
-                                        if let Some(pattern10_0) = closure10() {
-                                            let pattern11_0 =
-                                                C::is_eq(ctx, pattern9_0, pattern10_0);
-                                            if pattern11_0 == true {
-                                                let pattern13_0 =
-                                                    C::is_power_of_two(ctx, pattern9_0);
-                                                if pattern13_0 == true {
-                                                    // Rule at rules.isle line 381.
-                                                    let expr0_0 = C::make_result(ctx, pattern4_0);
-                                                    return Some(expr0_0);
-                                                }
-                                            }
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            &ExprData::Binary {
-                                code: ref pattern7_0,
-                                args: ref pattern7_1,
-                            } => {
-                                match &pattern7_0 {
-                                    &BinaryOp::Sub => {
-                                        let (pattern9_0, pattern9_1) =
-                                            C::unpack_arg_array2(ctx, &pattern7_1);
-                                        let closure10 = || {
-                                            return Some(pattern4_0);
-                                        };
-                                        if let Some(pattern10_0) = closure10() {
-                                            let pattern11_0 =
-                                                C::is_eq(ctx, pattern9_0, pattern10_0);
-                                            if pattern11_0 == true {
-                                                let pattern13_0 =
-                                                    C::is_power_of_two(ctx, pattern9_0);
-                                                if pattern13_0 == true {
-                                                    let pattern15_0 = C::value_ty(ctx, pattern9_0);
-                                                    let pattern16_0 = C::is_one(ctx, pattern9_1);
-                                                    if pattern16_0 == true {
-                                                        // Rule at rules.isle line 388.
-                                                        let expr0_0 =
-                                                            C::make_zero(ctx, &pattern15_0);
-                                                        let expr1_0 = C::make_result(ctx, expr0_0);
-                                                        return Some(expr1_0);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    &BinaryOp::Or => {
-                                        let (pattern9_0, pattern9_1) =
-                                            C::unpack_arg_array2(ctx, &pattern7_1);
-                                        let closure10 = || {
-                                            return Some(pattern4_0);
-                                        };
-                                        if let Some(pattern10_0) = closure10() {
-                                            let pattern11_0 =
-                                                C::is_eq(ctx, pattern9_0, pattern10_0);
-                                            if pattern11_0 == true {
-                                                // Rule at rules.isle line 319.
-                                                let expr0_0 = C::make_result(ctx, pattern4_0);
-                                                return Some(expr0_0);
-                                            }
-                                            let pattern11_0 =
-                                                C::is_eq(ctx, pattern9_1, pattern10_0);
-                                            if pattern11_0 == true {
-                                                // Rule at rules.isle line 326.
-                                                let expr0_0 = C::make_result(ctx, pattern4_0);
-                                                return Some(expr0_0);
-                                            }
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            _ => {}
-                        }
                     }
                 }
                 &BinaryOp::Or => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
-                    let closure5 = || {
-                        return Some(pattern4_0);
-                    };
-                    if let Some(pattern5_0) = closure5() {
-                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
-                        if pattern6_0 == true {
-                            // Rule at rules.isle line 404.
-                            let expr0_0 = C::make_result(ctx, pattern4_0);
-                            return Some(expr0_0);
-                        }
-                    }
-                    if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
-                        let pattern6_0 = C::expr_data(ctx, pattern5_0);
-                        if let &ExprData::Binary {
-                            code: ref pattern7_0,
-                            args: ref pattern7_1,
-                        } = &pattern6_0
-                        {
-                            match &pattern7_0 {
-                                &BinaryOp::And => {
-                                    let (pattern9_0, pattern9_1) =
-                                        C::unpack_arg_array2(ctx, &pattern7_1);
-                                    if let Some(pattern10_0) = C::value_expr(ctx, pattern9_0) {
-                                        let pattern11_0 = C::expr_data(ctx, pattern10_0);
-                                        if let &ExprData::Unary {
-                                            code: ref pattern12_0,
-                                            args: ref pattern12_1,
-                                        } = &pattern11_0
-                                        {
-                                            if let &UnaryOp::Not = &pattern12_0 {
-                                                let pattern14_0 =
-                                                    C::unpack_arg_array1(ctx, &pattern12_1);
-                                                if let Some(pattern15_0) =
-                                                    C::value_expr(ctx, pattern4_1)
-                                                {
-                                                    let pattern16_0 =
-                                                        C::expr_data(ctx, pattern15_0);
-                                                    if let &ExprData::Unary {
-                                                        code: ref pattern17_0,
-                                                        args: ref pattern17_1,
-                                                    } = &pattern16_0
-                                                    {
-                                                        if let &UnaryOp::Not = &pattern17_0 {
-                                                            let pattern19_0 = C::unpack_arg_array1(
-                                                                ctx,
-                                                                &pattern17_1,
-                                                            );
-                                                            if let Some(pattern20_0) =
-                                                                C::value_expr(ctx, pattern19_0)
-                                                            {
-                                                                let pattern21_0 =
-                                                                    C::expr_data(ctx, pattern20_0);
-                                                                if let &ExprData::Binary {
-                                                                    code: ref pattern22_0,
-                                                                    args: ref pattern22_1,
-                                                                } = &pattern21_0
-                                                                {
-                                                                    if let &BinaryOp::Or =
-                                                                        &pattern22_0
-                                                                    {
-                                                                        let (
-                                                                            pattern24_0,
-                                                                            pattern24_1,
-                                                                        ) = C::unpack_arg_array2(
-                                                                            ctx,
-                                                                            &pattern22_1,
-                                                                        );
-                                                                        let closure25 = || {
-                                                                            return Some(
-                                                                                pattern9_1,
-                                                                            );
-                                                                        };
-                                                                        if let Some(pattern25_0) =
-                                                                            closure25()
-                                                                        {
-                                                                            let pattern26_0 =
-                                                                                C::is_eq(
-                                                                                    ctx,
-                                                                                    pattern24_0,
-                                                                                    pattern25_0,
-                                                                                );
-                                                                            if pattern26_0 == true {
-                                                                                let closure28 =
-                                                                                    || {
-                                                                                        return Some(pattern14_0);
-                                                                                    };
-                                                                                if let Some(
-                                                                                    pattern28_0,
-                                                                                ) = closure28()
-                                                                                {
-                                                                                    let pattern29_0 = C::is_eq(ctx, pattern24_1, pattern28_0);
-                                                                                    if pattern29_0
-                                                                                        == true
-                                                                                    {
-                                                                                        // Rule at rules.isle line 583.
-                                                                                        let expr0_0 = C::make_result(ctx, pattern9_0);
-                                                                                        return Some(expr0_0);
-                                                                                    }
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                        let closure25 = || {
-                                                                            return Some(
-                                                                                pattern14_0,
-                                                                            );
-                                                                        };
-                                                                        if let Some(pattern25_0) =
-                                                                            closure25()
-                                                                        {
-                                                                            let pattern26_0 =
-                                                                                C::is_eq(
-                                                                                    ctx,
-                                                                                    pattern24_0,
-                                                                                    pattern25_0,
-                                                                                );
-                                                                            if pattern26_0 == true {
-                                                                                let closure28 =
-                                                                                    || {
-                                                                                        return Some(pattern9_1);
-                                                                                    };
-                                                                                if let Some(
-                                                                                    pattern28_0,
-                                                                                ) = closure28()
-                                                                                {
-                                                                                    let pattern29_0 = C::is_eq(ctx, pattern24_1, pattern28_0);
-                                                                                    if pattern29_0
-                                                                                        == true
-                                                                                    {
-                                                                                        // Rule at rules.isle line 573.
-                                                                                        let expr0_0 = C::make_result(ctx, pattern9_0);
-                                                                                        return Some(expr0_0);
-                                                                                    }
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if let Some(pattern10_0) = C::value_expr(ctx, pattern9_1) {
-                                        let pattern11_0 = C::expr_data(ctx, pattern10_0);
-                                        if let &ExprData::Unary {
-                                            code: ref pattern12_0,
-                                            args: ref pattern12_1,
-                                        } = &pattern11_0
-                                        {
-                                            if let &UnaryOp::Not = &pattern12_0 {
-                                                let pattern14_0 =
-                                                    C::unpack_arg_array1(ctx, &pattern12_1);
-                                                if let Some(pattern15_0) =
-                                                    C::value_expr(ctx, pattern4_1)
-                                                {
-                                                    let pattern16_0 =
-                                                        C::expr_data(ctx, pattern15_0);
-                                                    if let &ExprData::Unary {
-                                                        code: ref pattern17_0,
-                                                        args: ref pattern17_1,
-                                                    } = &pattern16_0
-                                                    {
-                                                        if let &UnaryOp::Not = &pattern17_0 {
-                                                            let pattern19_0 = C::unpack_arg_array1(
-                                                                ctx,
-                                                                &pattern17_1,
-                                                            );
-                                                            if let Some(pattern20_0) =
-                                                                C::value_expr(ctx, pattern19_0)
-                                                            {
-                                                                let pattern21_0 =
-                                                                    C::expr_data(ctx, pattern20_0);
-                                                                if let &ExprData::Binary {
-                                                                    code: ref pattern22_0,
-                                                                    args: ref pattern22_1,
-                                                                } = &pattern21_0
-                                                                {
-                                                                    if let &BinaryOp::Or =
-                                                                        &pattern22_0
-                                                                    {
-                                                                        let (
-                                                                            pattern24_0,
-                                                                            pattern24_1,
-                                                                        ) = C::unpack_arg_array2(
-                                                                            ctx,
-                                                                            &pattern22_1,
-                                                                        );
-                                                                        let closure25 = || {
-                                                                            return Some(
-                                                                                pattern9_0,
-                                                                            );
-                                                                        };
-                                                                        if let Some(pattern25_0) =
-                                                                            closure25()
-                                                                        {
-                                                                            let pattern26_0 =
-                                                                                C::is_eq(
-                                                                                    ctx,
-                                                                                    pattern24_0,
-                                                                                    pattern25_0,
-                                                                                );
-                                                                            if pattern26_0 == true {
-                                                                                let closure28 =
-                                                                                    || {
-                                                                                        return Some(pattern14_0);
-                                                                                    };
-                                                                                if let Some(
-                                                                                    pattern28_0,
-                                                                                ) = closure28()
-                                                                                {
-                                                                                    let pattern29_0 = C::is_eq(ctx, pattern24_1, pattern28_0);
-                                                                                    if pattern29_0
-                                                                                        == true
-                                                                                    {
-                                                                                        // Rule at rules.isle line 593.
-                                                                                        let expr0_0 = C::make_result(ctx, pattern9_1);
-                                                                                        return Some(expr0_0);
-                                                                                    }
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                        let closure25 = || {
-                                                                            return Some(
-                                                                                pattern14_0,
-                                                                            );
-                                                                        };
-                                                                        if let Some(pattern25_0) =
-                                                                            closure25()
-                                                                        {
-                                                                            let pattern26_0 =
-                                                                                C::is_eq(
-                                                                                    ctx,
-                                                                                    pattern24_0,
-                                                                                    pattern25_0,
-                                                                                );
-                                                                            if pattern26_0 == true {
-                                                                                let closure28 =
-                                                                                    || {
-                                                                                        return Some(pattern9_0);
-                                                                                    };
-                                                                                if let Some(
-                                                                                    pattern28_0,
-                                                                                ) = closure28()
-                                                                                {
-                                                                                    let pattern29_0 = C::is_eq(ctx, pattern24_1, pattern28_0);
-                                                                                    if pattern29_0
-                                                                                        == true
-                                                                                    {
-                                                                                        // Rule at rules.isle line 603.
-                                                                                        let expr0_0 = C::make_result(ctx, pattern9_1);
-                                                                                        return Some(expr0_0);
-                                                                                    }
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                &BinaryOp::Or => {
-                                    let (pattern9_0, pattern9_1) =
-                                        C::unpack_arg_array2(ctx, &pattern7_1);
-                                    if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
-                                        let pattern11_0 = C::expr_data(ctx, pattern10_0);
-                                        if let &ExprData::Binary {
-                                            code: ref pattern12_0,
-                                            args: ref pattern12_1,
-                                        } = &pattern11_0
-                                        {
-                                            if let &BinaryOp::Xor = &pattern12_0 {
-                                                let (pattern14_0, pattern14_1) =
-                                                    C::unpack_arg_array2(ctx, &pattern12_1);
-                                                let closure15 = || {
-                                                    return Some(pattern9_0);
-                                                };
-                                                if let Some(pattern15_0) = closure15() {
-                                                    let pattern16_0 =
-                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
-                                                    if pattern16_0 == true {
-                                                        let closure18 = || {
-                                                            return Some(pattern9_1);
-                                                        };
-                                                        if let Some(pattern18_0) = closure18() {
-                                                            let pattern19_0 = C::is_eq(
-                                                                ctx,
-                                                                pattern14_1,
-                                                                pattern18_0,
-                                                            );
-                                                            if pattern19_0 == true {
-                                                                // Rule at rules.isle line 549.
-                                                                let expr0_0 =
-                                                                    C::make_result(ctx, pattern4_0);
-                                                                return Some(expr0_0);
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                let closure15 = || {
-                                                    return Some(pattern9_1);
-                                                };
-                                                if let Some(pattern15_0) = closure15() {
-                                                    let pattern16_0 =
-                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
-                                                    if pattern16_0 == true {
-                                                        let closure18 = || {
-                                                            return Some(pattern9_0);
-                                                        };
-                                                        if let Some(pattern18_0) = closure18() {
-                                                            let pattern19_0 = C::is_eq(
-                                                                ctx,
-                                                                pattern14_1,
-                                                                pattern18_0,
-                                                            );
-                                                            if pattern19_0 == true {
-                                                                // Rule at rules.isle line 561.
-                                                                let expr0_0 =
-                                                                    C::make_result(ctx, pattern4_0);
-                                                                return Some(expr0_0);
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                &BinaryOp::Xor => {
-                                    let (pattern9_0, pattern9_1) =
-                                        C::unpack_arg_array2(ctx, &pattern7_1);
-                                    if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
-                                        let pattern11_0 = C::expr_data(ctx, pattern10_0);
-                                        if let &ExprData::Binary {
-                                            code: ref pattern12_0,
-                                            args: ref pattern12_1,
-                                        } = &pattern11_0
-                                        {
-                                            if let &BinaryOp::And = &pattern12_0 {
-                                                let (pattern14_0, pattern14_1) =
-                                                    C::unpack_arg_array2(ctx, &pattern12_1);
-                                                let closure15 = || {
-                                                    return Some(pattern9_0);
-                                                };
-                                                if let Some(pattern15_0) = closure15() {
-                                                    let pattern16_0 =
-                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
-                                                    if pattern16_0 == true {
-                                                        if let Some(pattern18_0) =
-                                                            C::value_expr(ctx, pattern14_1)
-                                                        {
-                                                            let pattern19_0 =
-                                                                C::expr_data(ctx, pattern18_0);
-                                                            if let &ExprData::Unary {
-                                                                code: ref pattern20_0,
-                                                                args: ref pattern20_1,
-                                                            } = &pattern19_0
-                                                            {
-                                                                if let &UnaryOp::Not = &pattern20_0
-                                                                {
-                                                                    let pattern22_0 =
-                                                                        C::unpack_arg_array1(
-                                                                            ctx,
-                                                                            &pattern20_1,
-                                                                        );
-                                                                    let closure23 = || {
-                                                                        return Some(pattern9_1);
-                                                                    };
-                                                                    if let Some(pattern23_0) =
-                                                                        closure23()
-                                                                    {
-                                                                        let pattern24_0 = C::is_eq(
-                                                                            ctx,
-                                                                            pattern22_0,
-                                                                            pattern23_0,
-                                                                        );
-                                                                        if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 453.
-                                                                            let expr0_0 =
-                                                                                C::make_result(
-                                                                                    ctx, pattern4_0,
-                                                                                );
-                                                                            return Some(expr0_0);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                let closure15 = || {
-                                                    return Some(pattern9_1);
-                                                };
-                                                if let Some(pattern15_0) = closure15() {
-                                                    let pattern16_0 =
-                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
-                                                    if pattern16_0 == true {
-                                                        if let Some(pattern18_0) =
-                                                            C::value_expr(ctx, pattern14_1)
-                                                        {
-                                                            let pattern19_0 =
-                                                                C::expr_data(ctx, pattern18_0);
-                                                            if let &ExprData::Unary {
-                                                                code: ref pattern20_0,
-                                                                args: ref pattern20_1,
-                                                            } = &pattern19_0
-                                                            {
-                                                                if let &UnaryOp::Not = &pattern20_0
-                                                                {
-                                                                    let pattern22_0 =
-                                                                        C::unpack_arg_array1(
-                                                                            ctx,
-                                                                            &pattern20_1,
-                                                                        );
-                                                                    let closure23 = || {
-                                                                        return Some(pattern9_0);
-                                                                    };
-                                                                    if let Some(pattern23_0) =
-                                                                        closure23()
-                                                                    {
-                                                                        let pattern24_0 = C::is_eq(
-                                                                            ctx,
-                                                                            pattern22_0,
-                                                                            pattern23_0,
-                                                                        );
-                                                                        if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 489.
-                                                                            let expr0_0 =
-                                                                                C::make_result(
-                                                                                    ctx, pattern4_0,
-                                                                                );
-                                                                            return Some(expr0_0);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                if let Some(pattern15_0) =
-                                                    C::value_expr(ctx, pattern14_0)
-                                                {
-                                                    let pattern16_0 =
-                                                        C::expr_data(ctx, pattern15_0);
-                                                    if let &ExprData::Unary {
-                                                        code: ref pattern17_0,
-                                                        args: ref pattern17_1,
-                                                    } = &pattern16_0
-                                                    {
-                                                        if let &UnaryOp::Not = &pattern17_0 {
-                                                            let pattern19_0 = C::unpack_arg_array1(
-                                                                ctx,
-                                                                &pattern17_1,
-                                                            );
-                                                            let closure20 = || {
-                                                                return Some(pattern9_0);
-                                                            };
-                                                            if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_eq(
-                                                                    ctx,
-                                                                    pattern19_0,
-                                                                    pattern20_0,
-                                                                );
-                                                                if pattern21_0 == true {
-                                                                    let closure23 = || {
-                                                                        return Some(pattern9_1);
-                                                                    };
-                                                                    if let Some(pattern23_0) =
-                                                                        closure23()
-                                                                    {
-                                                                        let pattern24_0 = C::is_eq(
-                                                                            ctx,
-                                                                            pattern14_1,
-                                                                            pattern23_0,
-                                                                        );
-                                                                        if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 477.
-                                                                            let expr0_0 =
-                                                                                C::make_result(
-                                                                                    ctx, pattern4_0,
-                                                                                );
-                                                                            return Some(expr0_0);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                            let closure20 = || {
-                                                                return Some(pattern9_1);
-                                                            };
-                                                            if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_eq(
-                                                                    ctx,
-                                                                    pattern19_0,
-                                                                    pattern20_0,
-                                                                );
-                                                                if pattern21_0 == true {
-                                                                    let closure23 = || {
-                                                                        return Some(pattern9_0);
-                                                                    };
-                                                                    if let Some(pattern23_0) =
-                                                                        closure23()
-                                                                    {
-                                                                        let pattern24_0 = C::is_eq(
-                                                                            ctx,
-                                                                            pattern14_1,
-                                                                            pattern23_0,
-                                                                        );
-                                                                        if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 465.
-                                                                            let expr0_0 =
-                                                                                C::make_result(
-                                                                                    ctx, pattern4_0,
-                                                                                );
-                                                                            return Some(expr0_0);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if let Some(pattern10_0) = C::value_expr(ctx, pattern9_0) {
-                                        let pattern11_0 = C::expr_data(ctx, pattern10_0);
-                                        if let &ExprData::Unary {
-                                            code: ref pattern12_0,
-                                            args: ref pattern12_1,
-                                        } = &pattern11_0
-                                        {
-                                            if let &UnaryOp::Not = &pattern12_0 {
-                                                let pattern14_0 =
-                                                    C::unpack_arg_array1(ctx, &pattern12_1);
-                                                if let Some(pattern15_0) =
-                                                    C::value_expr(ctx, pattern4_1)
-                                                {
-                                                    let pattern16_0 =
-                                                        C::expr_data(ctx, pattern15_0);
-                                                    if let &ExprData::Binary {
-                                                        code: ref pattern17_0,
-                                                        args: ref pattern17_1,
-                                                    } = &pattern16_0
-                                                    {
-                                                        if let &BinaryOp::And = &pattern17_0 {
-                                                            let (pattern19_0, pattern19_1) =
-                                                                C::unpack_arg_array2(
-                                                                    ctx,
-                                                                    &pattern17_1,
-                                                                );
-                                                            let closure20 = || {
-                                                                return Some(pattern9_1);
-                                                            };
-                                                            if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_eq(
-                                                                    ctx,
-                                                                    pattern19_0,
-                                                                    pattern20_0,
-                                                                );
-                                                                if pattern21_0 == true {
-                                                                    let closure23 = || {
-                                                                        return Some(pattern14_0);
-                                                                    };
-                                                                    if let Some(pattern23_0) =
-                                                                        closure23()
-                                                                    {
-                                                                        let pattern24_0 = C::is_eq(
-                                                                            ctx,
-                                                                            pattern19_1,
-                                                                            pattern23_0,
-                                                                        );
-                                                                        if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 513.
-                                                                            let expr0_0 =
-                                                                                C::make_result(
-                                                                                    ctx, pattern4_0,
-                                                                                );
-                                                                            return Some(expr0_0);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                            let closure20 = || {
-                                                                return Some(pattern14_0);
-                                                            };
-                                                            if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_eq(
-                                                                    ctx,
-                                                                    pattern19_0,
-                                                                    pattern20_0,
-                                                                );
-                                                                if pattern21_0 == true {
-                                                                    let closure23 = || {
-                                                                        return Some(pattern9_1);
-                                                                    };
-                                                                    if let Some(pattern23_0) =
-                                                                        closure23()
-                                                                    {
-                                                                        let pattern24_0 = C::is_eq(
-                                                                            ctx,
-                                                                            pattern19_1,
-                                                                            pattern23_0,
-                                                                        );
-                                                                        if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 501.
-                                                                            let expr0_0 =
-                                                                                C::make_result(
-                                                                                    ctx, pattern4_0,
-                                                                                );
-                                                                            return Some(expr0_0);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if let Some(pattern10_0) = C::value_expr(ctx, pattern9_1) {
-                                        let pattern11_0 = C::expr_data(ctx, pattern10_0);
-                                        if let &ExprData::Unary {
-                                            code: ref pattern12_0,
-                                            args: ref pattern12_1,
-                                        } = &pattern11_0
-                                        {
-                                            if let &UnaryOp::Not = &pattern12_0 {
-                                                let pattern14_0 =
-                                                    C::unpack_arg_array1(ctx, &pattern12_1);
-                                                if let Some(pattern15_0) =
-                                                    C::value_expr(ctx, pattern4_1)
-                                                {
-                                                    let pattern16_0 =
-                                                        C::expr_data(ctx, pattern15_0);
-                                                    if let &ExprData::Binary {
-                                                        code: ref pattern17_0,
-                                                        args: ref pattern17_1,
-                                                    } = &pattern16_0
-                                                    {
-                                                        if let &BinaryOp::And = &pattern17_0 {
-                                                            let (pattern19_0, pattern19_1) =
-                                                                C::unpack_arg_array2(
-                                                                    ctx,
-                                                                    &pattern17_1,
-                                                                );
-                                                            let closure20 = || {
-                                                                return Some(pattern9_0);
-                                                            };
-                                                            if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_eq(
-                                                                    ctx,
-                                                                    pattern19_0,
-                                                                    pattern20_0,
-                                                                );
-                                                                if pattern21_0 == true {
-                                                                    let closure23 = || {
-                                                                        return Some(pattern14_0);
-                                                                    };
-                                                                    if let Some(pattern23_0) =
-                                                                        closure23()
-                                                                    {
-                                                                        let pattern24_0 = C::is_eq(
-                                                                            ctx,
-                                                                            pattern19_1,
-                                                                            pattern23_0,
-                                                                        );
-                                                                        if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 525.
-                                                                            let expr0_0 =
-                                                                                C::make_result(
-                                                                                    ctx, pattern4_0,
-                                                                                );
-                                                                            return Some(expr0_0);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                            let closure20 = || {
-                                                                return Some(pattern14_0);
-                                                            };
-                                                            if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_eq(
-                                                                    ctx,
-                                                                    pattern19_0,
-                                                                    pattern20_0,
-                                                                );
-                                                                if pattern21_0 == true {
-                                                                    let closure23 = || {
-                                                                        return Some(pattern9_0);
-                                                                    };
-                                                                    if let Some(pattern23_0) =
-                                                                        closure23()
-                                                                    {
-                                                                        let pattern24_0 = C::is_eq(
-                                                                            ctx,
-                                                                            pattern19_1,
-                                                                            pattern23_0,
-                                                                        );
-                                                                        if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 537.
-                                                                            let expr0_0 =
-                                                                                C::make_result(
-                                                                                    ctx, pattern4_0,
-                                                                                );
-                                                                            return Some(expr0_0);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    let pattern5_0 = C::is_zero(ctx, pattern4_1);
-                    if pattern5_0 == true {
-                        // Rule at rules.isle line 411.
-                        let expr0_0 = C::make_result(ctx, pattern4_0);
-                        return Some(expr0_0);
-                    }
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
                     let pattern5_0 = C::is_all_one(ctx, pattern4_1);
                     if pattern5_0 == true {
                         let pattern7_0 = C::value_ty(ctx, pattern4_1);
-                        // Rule at rules.isle line 397.
-                        let expr0_0 = C::make_all_one(ctx, &pattern7_0);
+                        // Rule at rules.isle line 422.
+                        let expr0_0 = C::make_all_one(ctx, pattern7_0);
                         let expr1_0 = C::make_result(ctx, expr0_0);
                         return Some(expr1_0);
                     }
-                    if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
-                        let pattern6_0 = C::expr_data(ctx, pattern5_0);
-                        match &pattern6_0 {
-                            &ExprData::Unary {
-                                code: ref pattern7_0,
-                                args: ref pattern7_1,
-                            } => {
-                                if let &UnaryOp::Not = &pattern7_0 {
-                                    let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
-                                    let closure10 = || {
-                                        return Some(pattern4_0);
-                                    };
-                                    if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_eq(ctx, pattern9_0, pattern10_0);
-                                        if pattern11_0 == true {
-                                            let pattern13_0 = C::value_ty(ctx, pattern9_0);
-                                            // Rule at rules.isle line 418.
-                                            let expr0_0 = C::make_all_one(ctx, &pattern13_0);
-                                            let expr1_0 = C::make_result(ctx, expr0_0);
-                                            return Some(expr1_0);
-                                        }
-                                    }
-                                    if let Some(pattern10_0) = C::value_expr(ctx, pattern9_0) {
-                                        let pattern11_0 = C::expr_data(ctx, pattern10_0);
-                                        if let &ExprData::Binary {
-                                            code: ref pattern12_0,
-                                            args: ref pattern12_1,
-                                        } = &pattern11_0
-                                        {
-                                            if let &BinaryOp::And = &pattern12_0 {
-                                                let (pattern14_0, pattern14_1) =
-                                                    C::unpack_arg_array2(ctx, &pattern12_1);
-                                                let closure15 = || {
-                                                    return Some(pattern4_0);
-                                                };
-                                                if let Some(pattern15_0) = closure15() {
-                                                    let pattern16_0 =
-                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
-                                                    if pattern16_0 == true {
-                                                        let pattern18_0 =
-                                                            C::value_ty(ctx, pattern14_0);
-                                                        // Rule at rules.isle line 439.
-                                                        let expr0_0 =
-                                                            C::make_all_one(ctx, &pattern18_0);
-                                                        let expr1_0 = C::make_result(ctx, expr0_0);
-                                                        return Some(expr1_0);
-                                                    }
-                                                    let pattern16_0 =
-                                                        C::is_eq(ctx, pattern14_1, pattern15_0);
-                                                    if pattern16_0 == true {
-                                                        let pattern18_0 =
-                                                            C::value_ty(ctx, pattern14_1);
-                                                        // Rule at rules.isle line 446.
-                                                        let expr0_0 =
-                                                            C::make_all_one(ctx, &pattern18_0);
-                                                        let expr1_0 = C::make_result(ctx, expr0_0);
-                                                        return Some(expr1_0);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            &ExprData::Binary {
-                                code: ref pattern7_0,
-                                args: ref pattern7_1,
-                            } => {
-                                if let &BinaryOp::And = &pattern7_0 {
-                                    let (pattern9_0, pattern9_1) =
-                                        C::unpack_arg_array2(ctx, &pattern7_1);
-                                    let closure10 = || {
-                                        return Some(pattern4_0);
-                                    };
-                                    if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_eq(ctx, pattern9_0, pattern10_0);
-                                        if pattern11_0 == true {
-                                            // Rule at rules.isle line 425.
-                                            let expr0_0 = C::make_result(ctx, pattern4_0);
-                                            return Some(expr0_0);
-                                        }
-                                        let pattern11_0 = C::is_eq(ctx, pattern9_1, pattern10_0);
-                                        if pattern11_0 == true {
-                                            // Rule at rules.isle line 432.
-                                            let expr0_0 = C::make_result(ctx, pattern4_0);
-                                            return Some(expr0_0);
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
                 }
                 &BinaryOp::Xor => {
-                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, &pattern2_1);
-                    let closure5 = || {
-                        return Some(pattern4_0);
-                    };
-                    if let Some(pattern5_0) = closure5() {
-                        let pattern6_0 = C::is_eq(ctx, pattern4_1, pattern5_0);
-                        if pattern6_0 == true {
-                            let pattern8_0 = C::value_ty(ctx, pattern4_1);
-                            // Rule at rules.isle line 622.
-                            let expr0_0 = C::make_zero(ctx, &pattern8_0);
-                            let expr1_0 = C::make_result(ctx, expr0_0);
-                            return Some(expr1_0);
-                        }
-                    }
-                    if let Some(pattern5_0) = C::value_expr(ctx, pattern4_0) {
-                        let pattern6_0 = C::expr_data(ctx, pattern5_0);
-                        if let &ExprData::Binary {
-                            code: ref pattern7_0,
-                            args: ref pattern7_1,
-                        } = &pattern6_0
-                        {
-                            match &pattern7_0 {
-                                &BinaryOp::And => {
-                                    let (pattern9_0, pattern9_1) =
-                                        C::unpack_arg_array2(ctx, &pattern7_1);
-                                    if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
-                                        let pattern11_0 = C::expr_data(ctx, pattern10_0);
-                                        if let &ExprData::Binary {
-                                            code: ref pattern12_0,
-                                            args: ref pattern12_1,
-                                        } = &pattern11_0
-                                        {
-                                            if let &BinaryOp::Or = &pattern12_0 {
-                                                let (pattern14_0, pattern14_1) =
-                                                    C::unpack_arg_array2(ctx, &pattern12_1);
-                                                let closure15 = || {
-                                                    return Some(pattern9_0);
-                                                };
-                                                if let Some(pattern15_0) = closure15() {
-                                                    let pattern16_0 =
-                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
-                                                    if pattern16_0 == true {
-                                                        if let Some(pattern18_0) =
-                                                            C::value_expr(ctx, pattern14_1)
-                                                        {
-                                                            let pattern19_0 =
-                                                                C::expr_data(ctx, pattern18_0);
-                                                            if let &ExprData::Unary {
-                                                                code: ref pattern20_0,
-                                                                args: ref pattern20_1,
-                                                            } = &pattern19_0
-                                                            {
-                                                                if let &UnaryOp::Not = &pattern20_0
-                                                                {
-                                                                    let pattern22_0 =
-                                                                        C::unpack_arg_array1(
-                                                                            ctx,
-                                                                            &pattern20_1,
-                                                                        );
-                                                                    let closure23 = || {
-                                                                        return Some(pattern9_1);
-                                                                    };
-                                                                    if let Some(pattern23_0) =
-                                                                        closure23()
-                                                                    {
-                                                                        let pattern24_0 = C::is_eq(
-                                                                            ctx,
-                                                                            pattern22_0,
-                                                                            pattern23_0,
-                                                                        );
-                                                                        if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 711.
-                                                                            let expr0_0 =
-                                                                                C::make_result(
-                                                                                    ctx,
-                                                                                    pattern14_1,
-                                                                                );
-                                                                            return Some(expr0_0);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                let closure15 = || {
-                                                    return Some(pattern9_1);
-                                                };
-                                                if let Some(pattern15_0) = closure15() {
-                                                    let pattern16_0 =
-                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
-                                                    if pattern16_0 == true {
-                                                        if let Some(pattern18_0) =
-                                                            C::value_expr(ctx, pattern14_1)
-                                                        {
-                                                            let pattern19_0 =
-                                                                C::expr_data(ctx, pattern18_0);
-                                                            if let &ExprData::Unary {
-                                                                code: ref pattern20_0,
-                                                                args: ref pattern20_1,
-                                                            } = &pattern19_0
-                                                            {
-                                                                if let &UnaryOp::Not = &pattern20_0
-                                                                {
-                                                                    let pattern22_0 =
-                                                                        C::unpack_arg_array1(
-                                                                            ctx,
-                                                                            &pattern20_1,
-                                                                        );
-                                                                    let closure23 = || {
-                                                                        return Some(pattern9_0);
-                                                                    };
-                                                                    if let Some(pattern23_0) =
-                                                                        closure23()
-                                                                    {
-                                                                        let pattern24_0 = C::is_eq(
-                                                                            ctx,
-                                                                            pattern22_0,
-                                                                            pattern23_0,
-                                                                        );
-                                                                        if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 701.
-                                                                            let expr0_0 =
-                                                                                C::make_result(
-                                                                                    ctx,
-                                                                                    pattern14_1,
-                                                                                );
-                                                                            return Some(expr0_0);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                if let Some(pattern15_0) =
-                                                    C::value_expr(ctx, pattern14_0)
-                                                {
-                                                    let pattern16_0 =
-                                                        C::expr_data(ctx, pattern15_0);
-                                                    if let &ExprData::Unary {
-                                                        code: ref pattern17_0,
-                                                        args: ref pattern17_1,
-                                                    } = &pattern16_0
-                                                    {
-                                                        if let &UnaryOp::Not = &pattern17_0 {
-                                                            let pattern19_0 = C::unpack_arg_array1(
-                                                                ctx,
-                                                                &pattern17_1,
-                                                            );
-                                                            let closure20 = || {
-                                                                return Some(pattern9_0);
-                                                            };
-                                                            if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_eq(
-                                                                    ctx,
-                                                                    pattern19_0,
-                                                                    pattern20_0,
-                                                                );
-                                                                if pattern21_0 == true {
-                                                                    let closure23 = || {
-                                                                        return Some(pattern9_1);
-                                                                    };
-                                                                    if let Some(pattern23_0) =
-                                                                        closure23()
-                                                                    {
-                                                                        let pattern24_0 = C::is_eq(
-                                                                            ctx,
-                                                                            pattern14_1,
-                                                                            pattern23_0,
-                                                                        );
-                                                                        if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 691.
-                                                                            let expr0_0 =
-                                                                                C::make_result(
-                                                                                    ctx,
-                                                                                    pattern14_0,
-                                                                                );
-                                                                            return Some(expr0_0);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                            let closure20 = || {
-                                                                return Some(pattern9_1);
-                                                            };
-                                                            if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_eq(
-                                                                    ctx,
-                                                                    pattern19_0,
-                                                                    pattern20_0,
-                                                                );
-                                                                if pattern21_0 == true {
-                                                                    let closure23 = || {
-                                                                        return Some(pattern9_0);
-                                                                    };
-                                                                    if let Some(pattern23_0) =
-                                                                        closure23()
-                                                                    {
-                                                                        let pattern24_0 = C::is_eq(
-                                                                            ctx,
-                                                                            pattern14_1,
-                                                                            pattern23_0,
-                                                                        );
-                                                                        if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 721.
-                                                                            let expr0_0 =
-                                                                                C::make_result(
-                                                                                    ctx,
-                                                                                    pattern14_0,
-                                                                                );
-                                                                            return Some(expr0_0);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                &BinaryOp::Or => {
-                                    let (pattern9_0, pattern9_1) =
-                                        C::unpack_arg_array2(ctx, &pattern7_1);
-                                    if let Some(pattern10_0) = C::value_expr(ctx, pattern4_1) {
-                                        let pattern11_0 = C::expr_data(ctx, pattern10_0);
-                                        if let &ExprData::Binary {
-                                            code: ref pattern12_0,
-                                            args: ref pattern12_1,
-                                        } = &pattern11_0
-                                        {
-                                            if let &BinaryOp::And = &pattern12_0 {
-                                                let (pattern14_0, pattern14_1) =
-                                                    C::unpack_arg_array2(ctx, &pattern12_1);
-                                                let closure15 = || {
-                                                    return Some(pattern9_0);
-                                                };
-                                                if let Some(pattern15_0) = closure15() {
-                                                    let pattern16_0 =
-                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
-                                                    if pattern16_0 == true {
-                                                        if let Some(pattern18_0) =
-                                                            C::value_expr(ctx, pattern14_1)
-                                                        {
-                                                            let pattern19_0 =
-                                                                C::expr_data(ctx, pattern18_0);
-                                                            if let &ExprData::Unary {
-                                                                code: ref pattern20_0,
-                                                                args: ref pattern20_1,
-                                                            } = &pattern19_0
-                                                            {
-                                                                if let &UnaryOp::Not = &pattern20_0
-                                                                {
-                                                                    let pattern22_0 =
-                                                                        C::unpack_arg_array1(
-                                                                            ctx,
-                                                                            &pattern20_1,
-                                                                        );
-                                                                    let closure23 = || {
-                                                                        return Some(pattern9_1);
-                                                                    };
-                                                                    if let Some(pattern23_0) =
-                                                                        closure23()
-                                                                    {
-                                                                        let pattern24_0 = C::is_eq(
-                                                                            ctx,
-                                                                            pattern22_0,
-                                                                            pattern23_0,
-                                                                        );
-                                                                        if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 670.
-                                                                            let expr0_0 =
-                                                                                C::make_result(
-                                                                                    ctx, pattern9_1,
-                                                                                );
-                                                                            return Some(expr0_0);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                let closure15 = || {
-                                                    return Some(pattern9_1);
-                                                };
-                                                if let Some(pattern15_0) = closure15() {
-                                                    let pattern16_0 =
-                                                        C::is_eq(ctx, pattern14_0, pattern15_0);
-                                                    if pattern16_0 == true {
-                                                        if let Some(pattern18_0) =
-                                                            C::value_expr(ctx, pattern14_1)
-                                                        {
-                                                            let pattern19_0 =
-                                                                C::expr_data(ctx, pattern18_0);
-                                                            if let &ExprData::Unary {
-                                                                code: ref pattern20_0,
-                                                                args: ref pattern20_1,
-                                                            } = &pattern19_0
-                                                            {
-                                                                if let &UnaryOp::Not = &pattern20_0
-                                                                {
-                                                                    let pattern22_0 =
-                                                                        C::unpack_arg_array1(
-                                                                            ctx,
-                                                                            &pattern20_1,
-                                                                        );
-                                                                    let closure23 = || {
-                                                                        return Some(pattern9_0);
-                                                                    };
-                                                                    if let Some(pattern23_0) =
-                                                                        closure23()
-                                                                    {
-                                                                        let pattern24_0 = C::is_eq(
-                                                                            ctx,
-                                                                            pattern22_0,
-                                                                            pattern23_0,
-                                                                        );
-                                                                        if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 660.
-                                                                            let expr0_0 =
-                                                                                C::make_result(
-                                                                                    ctx, pattern9_0,
-                                                                                );
-                                                                            return Some(expr0_0);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                if let Some(pattern15_0) =
-                                                    C::value_expr(ctx, pattern14_0)
-                                                {
-                                                    let pattern16_0 =
-                                                        C::expr_data(ctx, pattern15_0);
-                                                    if let &ExprData::Unary {
-                                                        code: ref pattern17_0,
-                                                        args: ref pattern17_1,
-                                                    } = &pattern16_0
-                                                    {
-                                                        if let &UnaryOp::Not = &pattern17_0 {
-                                                            let pattern19_0 = C::unpack_arg_array1(
-                                                                ctx,
-                                                                &pattern17_1,
-                                                            );
-                                                            let closure20 = || {
-                                                                return Some(pattern9_0);
-                                                            };
-                                                            if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_eq(
-                                                                    ctx,
-                                                                    pattern19_0,
-                                                                    pattern20_0,
-                                                                );
-                                                                if pattern21_0 == true {
-                                                                    let closure23 = || {
-                                                                        return Some(pattern9_1);
-                                                                    };
-                                                                    if let Some(pattern23_0) =
-                                                                        closure23()
-                                                                    {
-                                                                        let pattern24_0 = C::is_eq(
-                                                                            ctx,
-                                                                            pattern14_1,
-                                                                            pattern23_0,
-                                                                        );
-                                                                        if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 650.
-                                                                            let expr0_0 =
-                                                                                C::make_result(
-                                                                                    ctx, pattern9_0,
-                                                                                );
-                                                                            return Some(expr0_0);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                            let closure20 = || {
-                                                                return Some(pattern9_1);
-                                                            };
-                                                            if let Some(pattern20_0) = closure20() {
-                                                                let pattern21_0 = C::is_eq(
-                                                                    ctx,
-                                                                    pattern19_0,
-                                                                    pattern20_0,
-                                                                );
-                                                                if pattern21_0 == true {
-                                                                    let closure23 = || {
-                                                                        return Some(pattern9_0);
-                                                                    };
-                                                                    if let Some(pattern23_0) =
-                                                                        closure23()
-                                                                    {
-                                                                        let pattern24_0 = C::is_eq(
-                                                                            ctx,
-                                                                            pattern14_1,
-                                                                            pattern23_0,
-                                                                        );
-                                                                        if pattern24_0 == true {
-                                                                            // Rule at rules.isle line 680.
-                                                                            let expr0_0 =
-                                                                                C::make_result(
-                                                                                    ctx, pattern9_1,
-                                                                                );
-                                                                            return Some(expr0_0);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
+                    let (pattern4_0, pattern4_1) = C::unpack_arg_array2(ctx, pattern2_1);
                     let pattern5_0 = C::is_zero(ctx, pattern4_1);
                     if pattern5_0 == true {
-                        // Rule at rules.isle line 615.
+                        // Rule at rules.isle line 663.
                         let expr0_0 = C::make_result(ctx, pattern4_0);
                         return Some(expr0_0);
-                    }
-                    if let Some(pattern5_0) = C::value_expr(ctx, pattern4_1) {
-                        let pattern6_0 = C::expr_data(ctx, pattern5_0);
-                        match &pattern6_0 {
-                            &ExprData::Unary {
-                                code: ref pattern7_0,
-                                args: ref pattern7_1,
-                            } => {
-                                if let &UnaryOp::Not = &pattern7_0 {
-                                    let pattern9_0 = C::unpack_arg_array1(ctx, &pattern7_1);
-                                    let closure10 = || {
-                                        return Some(pattern4_0);
-                                    };
-                                    if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_eq(ctx, pattern9_0, pattern10_0);
-                                        if pattern11_0 == true {
-                                            let pattern13_0 = C::value_ty(ctx, pattern4_1);
-                                            // Rule at rules.isle line 629.
-                                            let expr0_0 = C::make_all_one(ctx, &pattern13_0);
-                                            let expr1_0 = C::make_result(ctx, expr0_0);
-                                            return Some(expr1_0);
-                                        }
-                                    }
-                                }
-                            }
-                            &ExprData::Binary {
-                                code: ref pattern7_0,
-                                args: ref pattern7_1,
-                            } => {
-                                if let &BinaryOp::Xor = &pattern7_0 {
-                                    let (pattern9_0, pattern9_1) =
-                                        C::unpack_arg_array2(ctx, &pattern7_1);
-                                    let closure10 = || {
-                                        return Some(pattern4_0);
-                                    };
-                                    if let Some(pattern10_0) = closure10() {
-                                        let pattern11_0 = C::is_eq(ctx, pattern9_0, pattern10_0);
-                                        if pattern11_0 == true {
-                                            // Rule at rules.isle line 636.
-                                            let expr0_0 = C::make_result(ctx, pattern9_1);
-                                            return Some(expr0_0);
-                                        }
-                                        let pattern11_0 = C::is_eq(ctx, pattern9_1, pattern10_0);
-                                        if pattern11_0 == true {
-                                            // Rule at rules.isle line 643.
-                                            let expr0_0 = C::make_result(ctx, pattern9_0);
-                                            return Some(expr0_0);
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
                     }
                 }
                 _ => {}

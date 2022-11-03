@@ -80,6 +80,7 @@ fn try_swap_arg(ctx: &mut SimplifyContext, expr: Expr) -> Option<Expr> {
     }
 }
 
+type Unit = ();
 type ArgArray1 = [ExprValue; 1];
 type ArgArray2 = [ExprValue; 2];
 type BlockArray1 = [Block; 1];
@@ -488,35 +489,36 @@ impl<'a> generated_code::Context for SimplifyContext<'a> {
         }
     }
 
-    fn is_eq(&mut self, arg0: ExprValue, arg1: ExprValue) -> bool {
+    fn is_eq(&mut self, arg0: ExprValue, arg1: ExprValue) -> Option<()> {
         match (arg0.as_value(), arg1.as_value()) {
             (Some(val1), Some(val2)) => self.dfg.is_same_value(val1, val2),
             _ => arg0 == arg1,
         }
+        .then_some(())
     }
 
-    fn make_zero(&mut self, arg0: &Type) -> ExprValue {
-        let imm = Immediate::zero(*arg0);
+    fn make_zero(&mut self, arg0: Type) -> ExprValue {
+        let imm = Immediate::zero(arg0);
         let val = self.dfg().make_imm_value(imm);
         ExprValue::Value(val)
     }
 
-    fn make_one(&mut self, arg0: &Type) -> ExprValue {
-        let imm = Immediate::one(*arg0);
+    fn make_one(&mut self, arg0: Type) -> ExprValue {
+        let imm = Immediate::one(arg0);
         let val = self.dfg().make_imm_value(imm);
         ExprValue::Value(val)
     }
 
     fn make_true(&mut self) -> ExprValue {
-        self.make_all_one(&Type::I1)
+        self.make_all_one(Type::I1)
     }
 
     fn make_false(&mut self) -> ExprValue {
-        self.make_zero(&Type::I1)
+        self.make_zero(Type::I1)
     }
 
-    fn make_all_one(&mut self, arg0: &Type) -> ExprValue {
-        let imm = Immediate::all_one(*arg0);
+    fn make_all_one(&mut self, arg0: Type) -> ExprValue {
+        let imm = Immediate::all_one(arg0);
         let val = self.dfg().make_imm_value(imm);
         ExprValue::Value(val)
     }
