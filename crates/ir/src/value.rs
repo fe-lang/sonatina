@@ -181,7 +181,7 @@ impl Immediate {
             Type::I64 => Self::I64(val.trunc_to_i64()),
             Type::I128 => Self::I128(val.trunc_to_i128()),
             Type::I256 => Self::I256(val),
-            Type::Array { .. } | Type::Ptr { .. } | Type::Void => unreachable!(),
+            _ => unreachable!(),
         }
     }
 

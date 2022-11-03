@@ -317,10 +317,6 @@ impl<'a> FunctionBuilder<'a> {
         &self.func().arg_values
     }
 
-    pub fn pointer_type(&self) -> Type {
-        self.module_builder.isa.type_provider().pointer_type()
-    }
-
     pub fn address_type(&self) -> Type {
         self.module_builder.isa.type_provider().address_type()
     }

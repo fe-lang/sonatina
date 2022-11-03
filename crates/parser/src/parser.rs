@@ -9,7 +9,7 @@ use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor},
     insn::{BinaryOp, CastOp, DataLocationKind, JumpOp, UnaryOp},
     isa::IsaBuilder,
-    module::FuncRef,
+    module::{FuncRef, ModuleCtx},
     Block, BlockData, Function, Immediate, Insn, InsnData, Linkage, Module, Signature, Type, Value,
     ValueData, I256, U256,
 };
@@ -20,7 +20,10 @@ use super::{
     Error, ErrorKind, Result,
 };
 
-pub struct Parser {}
+#[derive(Default)]
+pub struct Parser {
+    ctx: ModuleCtx,
+}
 
 macro_rules! eat_token {
     ($lexer:expr, $token:pat) => {
@@ -50,7 +53,7 @@ macro_rules! expect_token {
 }
 
 impl Parser {
-    pub fn parse(input: &str) -> Result<ParsedModule> {
+    pub fn parse(self, input: &str) -> Result<ParsedModule> {
         let mut lexer = Lexer::new(input);
 
         // Parse comments.
@@ -65,15 +68,15 @@ impl Parser {
         }
 
         // Parse target triple.
-        let triple = Self::parse_target_triple(&mut lexer)?;
+        let triple = self.parse_target_triple(&mut lexer)?;
         let isa = IsaBuilder::new(triple).build();
 
-        let mut module_builder = ModuleBuilder::new(isa);
+        let mut module_builder = ModuleBuilder::new(self.ctx.clone(), isa);
 
         // Parse declared functions.
         while eat_token!(lexer, Token::Declare)?.is_some() {
             // Todo: parse linkage.
-            let sig = Self::parse_declared_func_sig(&mut lexer)?;
+            let sig = self.parse_declared_func_sig(&mut lexer)?;
             expect_token!(lexer, Token::SemiColon, ";")?;
             module_builder.declare_function(sig);
         }
@@ -92,7 +95,7 @@ impl Parser {
         })
     }
 
-    fn parse_target_triple(lexer: &mut Lexer) -> Result<TargetTriple> {
+    fn parse_target_triple(&self, lexer: &mut Lexer) -> Result<TargetTriple> {
         expect_token!(lexer, Token::Target, "target")?;
         expect_token!(lexer, Token::Eq, "=")?;
         let triple = expect_token!(lexer, Token::String(..), "target triple")?.string();
@@ -101,7 +104,7 @@ impl Parser {
             .map_err(|e| Error::new(ErrorKind::SemanticError(format!("{}", e)), lexer.line()))
     }
 
-    fn parse_declared_func_sig(lexer: &mut Lexer) -> Result<Signature> {
+    fn parse_declared_func_sig(&self, lexer: &mut Lexer) -> Result<Signature> {
         let linkage = expect_linkage(lexer)?;
         let name = expect_token!(lexer, Token::Ident(..), "func name")?.string();
 
@@ -109,18 +112,18 @@ impl Parser {
         expect_token!(lexer, Token::LParen, "(")?;
         let mut args = vec![];
         if eat_token!(lexer, Token::RParen)?.is_none() {
-            let ty = expect_ty(lexer)?;
+            let ty = expect_ty(&self.ctx, lexer)?;
             args.push(ty);
             while eat_token!(lexer, Token::RParen)?.is_none() {
                 expect_token!(lexer, Token::Comma, ",")?;
-                let ty = expect_ty(lexer)?;
+                let ty = expect_ty(&self.ctx, lexer)?;
                 args.push(ty);
             }
         }
 
         // Parse return type.
         expect_token!(lexer, Token::RArrow, "->")?;
-        let ret_ty = expect_ty(lexer)?;
+        let ret_ty = expect_ty(&self.ctx, lexer)?;
 
         Ok(Signature::new(name, linkage, &args, &ret_ty))
     }
@@ -164,21 +167,21 @@ impl<'a, 'b> FuncParser<'a, 'b> {
         expect_token!(self.lexer, Token::LParen, "(")?;
         // Use `Void` for dummy return type.
         let sig = Signature::new(fn_name, linkage, &[], &Type::Void);
-        let mut func = Function::new(sig);
+        let mut func = Function::new(&self.module_builder.ctx, sig);
         let mut inserter = InsnInserter::new(&mut func);
 
         if let Some(value) = eat_token!(self.lexer, Token::Value(..))? {
             let value = Value(value.id());
             inserter.def_value(value, self.lexer.line())?;
             expect_token!(self.lexer, Token::Dot, "dot")?;
-            let ty = expect_ty(self.lexer)?;
+            let ty = expect_ty(&self.module_builder.ctx, self.lexer)?;
             inserter.append_arg_value(value, ty);
 
             while eat_token!(self.lexer, Token::Comma)?.is_some() {
                 let value = Value(expect_token!(self.lexer, Token::Value(..), "value")?.id());
                 inserter.def_value(value, self.lexer.line())?;
                 expect_token!(self.lexer, Token::Dot, "dot")?;
-                let ty = expect_ty(self.lexer)?;
+                let ty = expect_ty(&self.module_builder.ctx, self.lexer)?;
                 inserter.append_arg_value(value, ty);
             }
         }
@@ -186,7 +189,7 @@ impl<'a, 'b> FuncParser<'a, 'b> {
 
         // Parse return type.
         expect_token!(self.lexer, Token::RArrow, "->")?;
-        let ret_ty = expect_ty(self.lexer)?;
+        let ret_ty = expect_ty(&self.module_builder.ctx, self.lexer)?;
         inserter.func.sig.set_ret_ty(ret_ty);
         expect_token!(self.lexer, Token::Colon, ":")?;
 
@@ -214,17 +217,13 @@ impl<'a, 'b> FuncParser<'a, 'b> {
         loop {
             if let Some(value) = eat_token!(self.lexer, Token::Value(..))? {
                 expect_token!(self.lexer, Token::Dot, ".")?;
-                let ty = expect_ty(self.lexer)?;
+                let ty = expect_ty(&self.module_builder.ctx, self.lexer)?;
                 expect_token!(self.lexer, Token::Eq, "=")?;
                 let opcode = expect_token!(self.lexer, Token::OpCode(..), "opcode")?.opcode();
                 let insn = opcode.make_insn(self, inserter, Some(ty))?;
                 let value = Value(value.id());
                 inserter.def_value(value, self.lexer.line())?;
-                let result = inserter
-                    .func
-                    .dfg
-                    .make_result(&self.module_builder.isa, insn)
-                    .unwrap();
+                let result = inserter.func.dfg.make_result(insn).unwrap();
                 inserter.func.dfg.values[value] = result;
                 inserter.func.dfg.attach_result(insn, value);
             } else if let Some(opcode) = eat_token!(self.lexer, Token::OpCode(..))? {
@@ -253,7 +252,7 @@ impl<'a, 'b> FuncParser<'a, 'b> {
             let number =
                 expect_token!(self.lexer, Token::Integer(..), "immediate or value")?.string();
             expect_token!(self.lexer, Token::Dot, "type annotation for immediate")?;
-            let ty = expect_ty(self.lexer)?;
+            let ty = expect_ty(&self.module_builder.ctx, self.lexer)?;
             let imm = build_imm_data(number, &ty, self.lexer.line())?;
             Ok(inserter.def_imm(imm))
         }
@@ -281,14 +280,15 @@ impl<'a, 'b> FuncParser<'a, 'b> {
         Ok(comments)
     }
 }
-fn expect_ty(lexer: &mut Lexer) -> Result<Type> {
+
+fn expect_ty(ctx: &ModuleCtx, lexer: &mut Lexer) -> Result<Type> {
     if let Some(ty) = eat_token!(lexer, Token::BaseTy(..))?.map(|tok| tok.ty().clone()) {
         return Ok(ty);
     };
 
     if eat_token!(lexer, Token::LBracket)?.is_some() {
         // Try parse array element type.
-        let elem_ty = expect_ty(lexer)?;
+        let elem_ty = expect_ty(ctx, lexer)?;
         expect_token!(lexer, Token::SemiColon, ";")?;
         // Try parse array length.
         let len = expect_token!(lexer, Token::Integer(..), " or value")?
@@ -296,11 +296,11 @@ fn expect_ty(lexer: &mut Lexer) -> Result<Type> {
             .parse()
             .map_err(|err| Error::new(ErrorKind::SyntaxError(format!("{}", err)), lexer.line()))?;
         expect_token!(lexer, Token::RBracket, "]")?;
-        Ok(Type::make_array(elem_ty, len))
+        Ok(ctx.with_ty_store_mut(|s| s.make_array(elem_ty, len)))
     } else if eat_token!(lexer, Token::Star)?.is_some() {
         // Try parse ptr base type.
-        let elem_ty = expect_ty(lexer)?;
-        Ok(Type::make_ptr(elem_ty))
+        let elem_ty = expect_ty(ctx, lexer)?;
+        Ok(ctx.with_ty_store_mut(|s| s.make_ptr(elem_ty)))
     } else {
         Err(Error::new(
             ErrorKind::SyntaxError("invalid type".into()),
@@ -623,7 +623,7 @@ impl Code {
             }
 
             Self::Alloca => {
-                let ty = expect_ty(parser.lexer)?;
+                let ty = expect_ty(&parser.module_builder.ctx, parser.lexer)?;
                 expect_token!(parser.lexer, Token::SemiColon, ";")?;
                 InsnData::Alloca { ty }
             }
@@ -720,7 +720,7 @@ fn build_imm_data(number: &str, ty: &Type, line: u32) -> Result<Immediate> {
             Ok(Immediate::I256(i256))
         }
 
-        Type::Array { .. } | Type::Ptr { .. } | Type::Void => Err(Error::new(
+        _ => Err(Error::new(
             ErrorKind::SemanticError("can't use non integral types for immediates".into()),
             line,
         )),
@@ -744,7 +744,7 @@ mod tests {
         let mut lexer = Lexer::new(input);
         let triple = TargetTriple::parse("evm-ethereum-london").unwrap();
         let isa = IsaBuilder::new(triple).build();
-        let mut module_builder = ModuleBuilder::new(isa);
+        let mut module_builder = ModuleBuilder::new(ModuleCtx::new(), isa);
         let parsed_func = FuncParser::new(&mut lexer, &mut module_builder)
             .parse()
             .unwrap()
@@ -855,7 +855,8 @@ mod tests {
                     return 311.i32;
             ";
 
-        let parsed_module = Parser::parse(input).unwrap();
+        let parser = Parser::default();
+        let parsed_module = parser.parse(input).unwrap();
         let module_comments = parsed_module.module_comments;
         assert_eq!(module_comments[0], " Module comment 1");
         assert_eq!(module_comments[1], " Module comment 2");

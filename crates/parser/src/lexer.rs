@@ -428,7 +428,7 @@ impl<'a> fmt::Display for Token<'a> {
             Self::Value(id) => write!(w, "v{}", id),
             Self::Ident(ident) => write!(w, "%{}", ident),
             Self::OpCode(code) => write!(w, "{}", code),
-            Self::BaseTy(ty) => write!(w, "{}", ty),
+            Self::BaseTy(_) => write!(w, "type"),
             Self::Integer(num) => w.write_str(num),
         }
     }

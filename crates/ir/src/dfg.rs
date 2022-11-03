@@ -4,12 +4,13 @@ use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use fxhash::FxHashMap;
 use std::collections::BTreeSet;
 
-use crate::isa::TargetIsa;
+use crate::module::ModuleCtx;
 
 use super::{BranchInfo, Immediate, Insn, InsnData, Type, Value, ValueData};
 
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct DataFlowGraph {
+    pub ctx: ModuleCtx,
     #[doc(hidden)]
     pub blocks: PrimaryMap<Block, BlockData>,
     #[doc(hidden)]
@@ -22,8 +23,16 @@ pub struct DataFlowGraph {
 }
 
 impl DataFlowGraph {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(ctx: ModuleCtx) -> Self {
+        Self {
+            ctx,
+            blocks: PrimaryMap::default(),
+            values: PrimaryMap::default(),
+            insns: PrimaryMap::default(),
+            insn_results: SecondaryMap::default(),
+            immediates: FxHashMap::default(),
+            users: SecondaryMap::default(),
+        }
     }
 
     pub fn make_block(&mut self) -> Block {
@@ -84,8 +93,8 @@ impl DataFlowGraph {
         panic!("alias loop detected");
     }
 
-    pub fn make_result(&mut self, isa: &TargetIsa, insn: Insn) -> Option<ValueData> {
-        let ty = self.insns[insn].result_type(isa, self)?;
+    pub fn make_result(&mut self, insn: Insn) -> Option<ValueData> {
+        let ty = self.insns[insn].result_type(self)?;
         Some(ValueData::Insn { insn, ty })
     }
 

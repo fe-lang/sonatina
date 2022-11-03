@@ -5,8 +5,6 @@ use std::fmt;
 
 use smallvec::SmallVec;
 
-use crate::isa::TargetIsa;
-
 use super::{module::FuncRef, Block, DataFlowGraph, Type, Value};
 
 /// An opaque reference to [`InsnData`]
@@ -337,21 +335,19 @@ impl InsnData {
         }
     }
 
-    pub fn result_type(&self, _isa: &TargetIsa, dfg: &DataFlowGraph) -> Option<Type> {
+    pub fn result_type(&self, dfg: &DataFlowGraph) -> Option<Type> {
         match self {
             Self::Unary { args, .. } => Some(dfg.value_ty(args[0]).clone()),
             Self::Binary { code, args } => Some(code.result_type(dfg, args)),
             Self::Cast { ty, .. } => Some(ty.clone()),
             Self::Load { args, .. } => {
-                let ptr_ty = dfg.value_ty(args[0]);
-                match ptr_ty {
-                    Type::Ptr { base } => Some(*base.clone()),
-                    _ => unreachable!(),
-                }
+                let ptr_ty = *dfg.value_ty(args[0]);
+                debug_assert!(dfg.ctx.with_ty_store(|s| s.is_ptr(ptr_ty)));
+                dfg.ctx.with_ty_store(|s| s.deref(ptr_ty))
             }
             Self::Call { ret_ty, .. } => Some(ret_ty.clone()),
             Self::Phi { ty, .. } => Some(ty.clone()),
-            Self::Alloca { ty } => Some(Type::make_ptr(ty.clone())),
+            Self::Alloca { ty } => Some(dfg.ctx.with_ty_store_mut(|s| s.make_ptr(*ty))),
             _ => None,
         }
     }

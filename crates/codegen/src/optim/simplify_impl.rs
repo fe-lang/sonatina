@@ -388,7 +388,7 @@ impl<'a> SimplifyContext<'a> {
         let expr_data = ExprData::from_insn_data(&data);
 
         let expr = self.make_expr(expr_data);
-        if let Some(ty) = data.result_type(self.isa, self.dfg) {
+        if let Some(ty) = data.result_type(self.dfg) {
             self.types[expr] = Some(ty);
         }
 

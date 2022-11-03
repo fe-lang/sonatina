@@ -1,7 +1,11 @@
 use cranelift_entity::PrimaryMap;
 use fxhash::FxHashMap;
 
-use crate::{isa::TargetIsa, module::FuncRef, Function, Module, Signature};
+use crate::{
+    isa::TargetIsa,
+    module::{FuncRef, ModuleCtx},
+    Function, Module, Signature,
+};
 
 use super::FunctionBuilder;
 
@@ -11,15 +15,18 @@ pub struct ModuleBuilder {
 
     pub funcs: PrimaryMap<FuncRef, Function>,
 
+    pub ctx: ModuleCtx,
+
     /// Map function name -> FuncRef to avoid duplicated declaration.
     declared_funcs: FxHashMap<String, FuncRef>,
 }
 
 impl ModuleBuilder {
-    pub fn new(isa: TargetIsa) -> Self {
+    pub fn new(ctx: ModuleCtx, isa: TargetIsa) -> Self {
         Self {
             isa,
             funcs: PrimaryMap::default(),
+            ctx,
             declared_funcs: FxHashMap::default(),
         }
     }
@@ -29,7 +36,7 @@ impl ModuleBuilder {
             panic!("{} is already declared.", sig.name())
         } else {
             let name = sig.name().to_string();
-            let func = Function::new(sig);
+            let func = Function::new(&self.ctx, sig);
             let func_ref = self.funcs.push(func);
             self.declared_funcs.insert(name, func_ref);
             func_ref
@@ -52,6 +59,7 @@ impl ModuleBuilder {
         Module {
             isa: self.isa,
             funcs: self.funcs,
+            ctx: self.ctx,
         }
     }
 }

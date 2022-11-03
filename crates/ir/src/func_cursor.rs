@@ -257,7 +257,7 @@ impl<'isa, 'a> InsnInserter<'isa, 'a> {
     }
 
     pub fn make_result(&mut self, insn: Insn) -> Option<Value> {
-        let value_data = self.func.dfg.make_result(self.isa, insn)?;
+        let value_data = self.func.dfg.make_result(insn)?;
         Some(self.func.dfg.make_value(value_data))
     }
 

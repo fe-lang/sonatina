@@ -3,6 +3,8 @@ use std::fmt;
 use fxhash::FxHashMap;
 use smallvec::SmallVec;
 
+use crate::module::ModuleCtx;
+
 use super::{module::FuncRef, DataFlowGraph, Layout, Type, Value};
 
 #[derive(Debug, Clone)]
@@ -14,13 +16,13 @@ pub struct Function {
     pub dfg: DataFlowGraph,
     pub layout: Layout,
 
-    /// Stores signature of the functions that called by the function.
+    /// Stores signatures of all functions that called by the function.
     pub callees: FxHashMap<FuncRef, Signature>,
 }
 
 impl Function {
-    pub fn new(sig: Signature) -> Self {
-        let mut dfg = DataFlowGraph::default();
+    pub fn new(ctx: &ModuleCtx, sig: Signature) -> Self {
+        let mut dfg = DataFlowGraph::new(ctx.clone());
         let arg_values = sig
             .args()
             .iter()

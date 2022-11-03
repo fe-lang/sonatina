@@ -168,7 +168,8 @@ impl<'a> FileChecker<'a> {
 
     fn parse_file(&self) -> Result<ParsedModule, String> {
         let input = fs::read_to_string(&self.file_path).unwrap();
-        match Parser::parse(&input) {
+        let parser = Parser::default();
+        match parser.parse(&input) {
             Ok(module) => Ok(module),
             Err(err) => match err.kind {
                 ErrorKind::InvalidToken(msg) => Err(format!(

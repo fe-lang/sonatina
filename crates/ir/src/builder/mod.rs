@@ -15,7 +15,7 @@ pub mod test_util {
     use crate::{
         ir_writer::FuncWriter,
         isa::{IsaBuilder, TargetIsa},
-        module::{FuncRef, Module},
+        module::{FuncRef, Module, ModuleCtx},
         Function, Linkage, Signature, Type,
     };
 
@@ -54,7 +54,7 @@ pub mod test_util {
     impl Default for TestModuleBuilder {
         fn default() -> Self {
             Self {
-                module_builder: ModuleBuilder::new(build_test_isa()),
+                module_builder: ModuleBuilder::new(ModuleCtx::default(), build_test_isa()),
                 func_ref: None,
             }
         }
