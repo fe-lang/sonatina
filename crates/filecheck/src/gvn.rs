@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use sonatina_codegen::{cfg::ControlFlowGraph, domtree::DomTree, optim::gvn::GvnSolver};
 
-use sonatina_ir::{isa::TargetIsa, Function};
+use sonatina_ir::Function;
 
 use super::{FuncTransform, FIXTURE_ROOT};
 
@@ -13,10 +13,10 @@ pub struct GvnTransform {
 }
 
 impl FuncTransform for GvnTransform {
-    fn transform(&mut self, func: &mut Function, isa: &TargetIsa) {
+    fn transform(&mut self, func: &mut Function) {
         self.cfg.compute(func);
         self.domtree.compute(&self.cfg);
-        let mut solver = GvnSolver::new(isa);
+        let mut solver = GvnSolver::new();
         solver.run(func, &mut self.cfg, &mut self.domtree);
     }
 

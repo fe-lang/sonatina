@@ -8,21 +8,18 @@ use crate::{
 
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    isa::TargetIsa,
     Block, Function, Insn, InsnData, Value,
 };
 
 #[derive(Debug)]
-pub struct LicmSolver<'isa> {
+pub struct LicmSolver {
     invariants: Vec<Insn>,
-    isa: &'isa TargetIsa,
 }
 
-impl<'isa> LicmSolver<'isa> {
-    pub fn new(isa: &'isa TargetIsa) -> Self {
+impl LicmSolver {
+    pub fn new() -> Self {
         Self {
             invariants: Vec::default(),
-            isa,
         }
     }
 
@@ -118,7 +115,7 @@ impl<'isa> LicmSolver<'isa> {
 
         // Create preheader and insert it before the loop header.
         let new_preheader = func.dfg.make_block();
-        let mut inserter = InsnInserter::new(func, self.isa, CursorLocation::BlockTop(lp_header));
+        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(lp_header));
         inserter.insert_block_before(new_preheader);
 
         // Insert jump insn of which destination is the loop header.
@@ -189,7 +186,7 @@ impl<'isa> LicmSolver<'isa> {
                 None => {
                     // Insert new phi insn to the preheader.
                     let mut inserter =
-                        InsnInserter::new(func, self.isa, CursorLocation::BlockTop(new_preheader));
+                        InsnInserter::new(func, CursorLocation::BlockTop(new_preheader));
                     let new_phi_insn = inserter.insert_insn_data(phi_insn_data.clone());
                     let result = inserter.make_result(new_phi_insn).unwrap();
                     inserter.attach_result(new_phi_insn, result);

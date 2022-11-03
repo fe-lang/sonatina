@@ -53,8 +53,9 @@ pub mod test_util {
 
     impl Default for TestModuleBuilder {
         fn default() -> Self {
+            let ctx = ModuleCtx::new(build_test_isa());
             Self {
-                module_builder: ModuleBuilder::new(ModuleCtx::default(), build_test_isa()),
+                module_builder: ModuleBuilder::new(ctx),
                 func_ref: None,
             }
         }

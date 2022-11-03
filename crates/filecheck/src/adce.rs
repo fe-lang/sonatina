@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use sonatina_codegen::optim::adce::AdceSolver;
 
-use sonatina_ir::{isa::TargetIsa, Function};
+use sonatina_ir::Function;
 
 use super::{FuncTransform, FIXTURE_ROOT};
 
@@ -10,8 +10,8 @@ use super::{FuncTransform, FIXTURE_ROOT};
 pub struct AdceTransform {}
 
 impl FuncTransform for AdceTransform {
-    fn transform(&mut self, func: &mut Function, isa: &TargetIsa) {
-        let mut solver = AdceSolver::new(isa);
+    fn transform(&mut self, func: &mut Function) {
+        let mut solver = AdceSolver::new();
         solver.run(func);
     }
 

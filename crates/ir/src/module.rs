@@ -10,9 +10,6 @@ use super::Linkage;
 
 #[derive(Debug)]
 pub struct Module {
-    /// Target ISA of the module.
-    pub isa: TargetIsa,
-
     /// Holds all function declared in the contract.
     pub funcs: PrimaryMap<FuncRef, Function>,
 
@@ -23,9 +20,8 @@ impl Module {
     #[doc(hidden)]
     pub fn new(isa: TargetIsa) -> Self {
         Self {
-            isa,
             funcs: PrimaryMap::default(),
-            ctx: ModuleCtx::new(),
+            ctx: ModuleCtx::new(isa),
         }
     }
 
@@ -42,12 +38,14 @@ impl Module {
 
 #[derive(Debug, Clone)]
 pub struct ModuleCtx {
+    pub isa: TargetIsa,
     type_store: Arc<Mutex<TypeStore>>,
 }
 
 impl ModuleCtx {
-    pub fn new() -> Self {
+    pub fn new(isa: TargetIsa) -> Self {
         Self {
+            isa,
             type_store: Arc::new(Mutex::new(TypeStore::default())),
         }
     }
@@ -64,12 +62,6 @@ impl ModuleCtx {
         F: FnOnce(&mut TypeStore) -> R,
     {
         f(&mut self.type_store.lock().unwrap())
-    }
-}
-
-impl Default for ModuleCtx {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

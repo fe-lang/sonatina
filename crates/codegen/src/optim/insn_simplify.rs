@@ -4,22 +4,19 @@ use std::collections::VecDeque;
 
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    isa::TargetIsa,
     Function, Insn, InsnData, Value,
 };
 
 use super::simplify_impl::{simplify_insn, SimplifyResult};
 
 #[derive(Debug)]
-pub struct InsnSimplifySolver<'isa> {
-    isa: &'isa TargetIsa,
+pub struct InsnSimplifySolver {
     worklist: VecDeque<Insn>,
 }
 
-impl<'isa> InsnSimplifySolver<'isa> {
-    pub fn new(isa: &'isa TargetIsa) -> Self {
+impl InsnSimplifySolver {
+    pub fn new() -> Self {
         Self {
-            isa,
             worklist: VecDeque::default(),
         }
     }
@@ -29,7 +26,7 @@ impl<'isa> InsnSimplifySolver<'isa> {
             Some(entry) => entry,
             None => return,
         };
-        let mut inserter = InsnInserter::new(func, self.isa, CursorLocation::BlockTop(entry));
+        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(entry));
 
         while inserter.loc() != CursorLocation::NoWhere {
             let insn = match inserter.insn() {
@@ -54,7 +51,7 @@ impl<'isa> InsnSimplifySolver<'isa> {
     }
 
     pub fn simplify(&mut self, inserter: &mut InsnInserter, insn: Insn) {
-        match simplify_insn(&mut inserter.func_mut().dfg, self.isa, insn) {
+        match simplify_insn(&mut inserter.func_mut().dfg, insn) {
             Some(SimplifyResult::Value(val)) => self.replace_insn_with_value(inserter, insn, val),
 
             Some(SimplifyResult::Insn(data)) => {

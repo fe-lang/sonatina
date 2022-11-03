@@ -262,12 +262,8 @@ impl<'a> FunctionBuilder<'a> {
 
     pub fn use_var(&mut self, var: Variable) -> Value {
         let block = self.cursor().block().unwrap();
-        self.ssa_builder.use_var(
-            &mut self.module_builder.funcs[self.func_ref],
-            &self.module_builder.isa,
-            var,
-            block,
-        )
+        self.ssa_builder
+            .use_var(&mut self.module_builder.funcs[self.func_ref], var, block)
     }
 
     pub fn def_var(&mut self, var: Variable, value: Value) {
@@ -282,18 +278,13 @@ impl<'a> FunctionBuilder<'a> {
 
     pub fn seal_block(&mut self) {
         let block = self.cursor().block().unwrap();
-        self.ssa_builder.seal_block(
-            &mut self.module_builder.funcs[self.func_ref],
-            &self.module_builder.isa,
-            block,
-        );
+        self.ssa_builder
+            .seal_block(&mut self.module_builder.funcs[self.func_ref], block);
     }
 
     pub fn seal_all(&mut self) {
-        self.ssa_builder.seal_all(
-            &mut self.module_builder.funcs[self.func_ref],
-            &self.module_builder.isa,
-        );
+        self.ssa_builder
+            .seal_all(&mut self.module_builder.funcs[self.func_ref]);
     }
 
     pub fn is_sealed(&self, block: Block) -> bool {
@@ -318,23 +309,19 @@ impl<'a> FunctionBuilder<'a> {
     }
 
     pub fn address_type(&self) -> Type {
-        self.module_builder.isa.type_provider().address_type()
+        self.module_builder.ctx.isa.type_provider().address_type()
     }
 
     pub fn balance_type(&self) -> Type {
-        self.module_builder.isa.type_provider().balance_type()
+        self.module_builder.ctx.isa.type_provider().balance_type()
     }
 
     pub fn gas_type(&self) -> Type {
-        self.module_builder.isa.type_provider().gas_type()
+        self.module_builder.ctx.isa.type_provider().gas_type()
     }
 
     fn cursor(&mut self) -> InsnInserter {
-        InsnInserter::new(
-            &mut self.module_builder.funcs[self.func_ref],
-            &self.module_builder.isa,
-            self.loc,
-        )
+        InsnInserter::new(&mut self.module_builder.funcs[self.func_ref], self.loc)
     }
 
     fn insert_insn(&mut self, insn_data: InsnData) -> Option<Value> {

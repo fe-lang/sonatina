@@ -6,7 +6,6 @@ use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
 
 use sonatina_ir::{
     insn::{BinaryOp, CastOp, DataLocationKind, JumpOp, UnaryOp},
-    isa::TargetIsa,
     module::FuncRef,
     Block, DataFlowGraph, Immediate, Insn, InsnData, Type, Value,
 };
@@ -16,30 +15,22 @@ mod generated_code;
 
 use generated_code::{Context, SimplifyRawResult};
 
-pub fn simplify_insn(
-    dfg: &mut DataFlowGraph,
-    isa: &TargetIsa,
-    insn: Insn,
-) -> Option<SimplifyResult> {
+pub fn simplify_insn(dfg: &mut DataFlowGraph, insn: Insn) -> Option<SimplifyResult> {
     if dfg.is_phi(insn) {
         return simplify_phi(dfg, dfg.insn_data(insn));
     }
 
-    let mut ctx = SimplifyContext::new(dfg, isa);
+    let mut ctx = SimplifyContext::new(dfg);
     let expr = ctx.make_expr_from_insn(insn);
     ctx.simplify_expr(expr)
 }
 
-pub fn simplify_insn_data(
-    dfg: &mut DataFlowGraph,
-    isa: &TargetIsa,
-    data: InsnData,
-) -> Option<SimplifyResult> {
+pub fn simplify_insn_data(dfg: &mut DataFlowGraph, data: InsnData) -> Option<SimplifyResult> {
     if matches!(data, InsnData::Phi { .. }) {
         return simplify_phi(dfg, &data);
     }
 
-    let mut ctx = SimplifyContext::new(dfg, isa);
+    let mut ctx = SimplifyContext::new(dfg);
     let expr = ctx.make_expr_from_insn_data(data);
     ctx.simplify_expr(expr)
 }
@@ -345,16 +336,14 @@ impl From<Value> for ExprValue {
 
 struct SimplifyContext<'a> {
     dfg: &'a mut DataFlowGraph,
-    isa: &'a TargetIsa,
     exprs: PrimaryMap<Expr, ExprData>,
     types: SecondaryMap<Expr, Option<Type>>,
 }
 
 impl<'a> SimplifyContext<'a> {
-    fn new(dfg: &'a mut DataFlowGraph, isa: &'a TargetIsa) -> Self {
+    fn new(dfg: &'a mut DataFlowGraph) -> Self {
         Self {
             dfg,
-            isa,
             exprs: PrimaryMap::new(),
             types: SecondaryMap::new(),
         }

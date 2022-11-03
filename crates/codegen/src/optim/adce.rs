@@ -8,28 +8,25 @@ use crate::post_domtree::{PDFSet, PDTIdom, PostDomTree};
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     insn::InsnData,
-    isa::TargetIsa,
     Block, Function, Insn,
 };
 
-pub struct AdceSolver<'isa> {
+pub struct AdceSolver {
     live_insns: SecondaryMap<Insn, bool>,
     live_blocks: SecondaryMap<Block, bool>,
     empty_blocks: BTreeSet<Block>,
     post_domtree: PostDomTree,
     worklist: Vec<Insn>,
-    isa: &'isa TargetIsa,
 }
 
-impl<'isa> AdceSolver<'isa> {
-    pub fn new(isa: &'isa TargetIsa) -> Self {
+impl AdceSolver {
+    pub fn new() -> Self {
         Self {
             live_insns: SecondaryMap::default(),
             live_blocks: SecondaryMap::default(),
             empty_blocks: BTreeSet::default(),
             post_domtree: PostDomTree::default(),
             worklist: Vec::default(),
-            isa,
         }
     }
 
@@ -136,7 +133,7 @@ impl<'isa> AdceSolver<'isa> {
             return false;
         };
 
-        let mut inserter = InsnInserter::new(func, self.isa, CursorLocation::BlockTop(entry));
+        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(entry));
         loop {
             match inserter.loc() {
                 CursorLocation::At(insn) => {
@@ -235,5 +232,11 @@ impl<'isa> AdceSolver<'isa> {
         }
 
         changed
+    }
+}
+
+impl Default for AdceSolver {
+    fn default() -> Self {
+        Self::new()
     }
 }

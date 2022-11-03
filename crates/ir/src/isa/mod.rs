@@ -1,3 +1,4 @@
+use dyn_clone::DynClone;
 use sonatina_triple::{Architecture, TargetTriple};
 
 use crate::Type;
@@ -19,7 +20,7 @@ impl IsaBuilder {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TargetIsa {
     triple: TargetTriple,
     type_provider: Box<dyn IsaSpecificTypeProvider>,
@@ -42,9 +43,11 @@ impl TargetIsa {
     }
 }
 
-pub trait IsaSpecificTypeProvider: std::fmt::Debug {
+pub trait IsaSpecificTypeProvider: std::fmt::Debug + DynClone {
     fn pointer_type(&self) -> Type;
     fn address_type(&self) -> Type;
     fn balance_type(&self) -> Type;
     fn gas_type(&self) -> Type;
 }
+
+dyn_clone::clone_trait_object!(IsaSpecificTypeProvider);

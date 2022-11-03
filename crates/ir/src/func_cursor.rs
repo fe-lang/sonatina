@@ -1,5 +1,3 @@
-use crate::isa::TargetIsa;
-
 use super::{Block, Function, Insn, InsnData, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,13 +207,12 @@ pub trait FuncCursor {
 }
 
 #[derive(Debug)]
-pub struct InsnInserter<'isa, 'a> {
+pub struct InsnInserter<'a> {
     func: &'a mut Function,
     loc: CursorLocation,
-    isa: &'isa TargetIsa,
 }
 
-impl<'isa, 'a> FuncCursor for InsnInserter<'isa, 'a> {
+impl<'a> FuncCursor for InsnInserter<'a> {
     fn set_loc(&mut self, loc: CursorLocation) {
         self.loc = loc;
     }
@@ -233,9 +230,9 @@ impl<'isa, 'a> FuncCursor for InsnInserter<'isa, 'a> {
     }
 }
 
-impl<'isa, 'a> InsnInserter<'isa, 'a> {
-    pub fn new(func: &'a mut Function, isa: &'isa TargetIsa, loc: CursorLocation) -> Self {
-        Self { func, isa, loc }
+impl<'a> InsnInserter<'a> {
+    pub fn new(func: &'a mut Function, loc: CursorLocation) -> Self {
+        Self { func, loc }
     }
 
     pub fn insert_insn_data(&mut self, data: InsnData) -> Insn {

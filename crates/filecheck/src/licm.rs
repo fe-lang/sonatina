@@ -4,7 +4,7 @@ use sonatina_codegen::{
     cfg::ControlFlowGraph, domtree::DomTree, loop_analysis::LoopTree, optim::licm::LicmSolver,
 };
 
-use sonatina_ir::{isa::TargetIsa, Function};
+use sonatina_ir::Function;
 
 use super::{FuncTransform, FIXTURE_ROOT};
 
@@ -16,11 +16,11 @@ pub struct LicmTransformer {
 }
 
 impl FuncTransform for LicmTransformer {
-    fn transform(&mut self, func: &mut Function, isa: &TargetIsa) {
+    fn transform(&mut self, func: &mut Function) {
         self.cfg.compute(func);
         self.domtree.compute(&self.cfg);
         self.lpt.compute(&self.cfg, &self.domtree);
-        let mut solver = LicmSolver::new(isa);
+        let mut solver = LicmSolver::new();
         solver.run(func, &mut self.cfg, &mut self.lpt);
     }
 

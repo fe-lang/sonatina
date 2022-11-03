@@ -21,9 +21,7 @@ use super::{
 };
 
 #[derive(Default)]
-pub struct Parser {
-    ctx: ModuleCtx,
-}
+pub struct Parser {}
 
 macro_rules! eat_token {
     ($lexer:expr, $token:pat) => {
@@ -70,13 +68,14 @@ impl Parser {
         // Parse target triple.
         let triple = self.parse_target_triple(&mut lexer)?;
         let isa = IsaBuilder::new(triple).build();
+        let ctx = ModuleCtx::new(isa);
 
-        let mut module_builder = ModuleBuilder::new(self.ctx.clone(), isa);
+        let mut module_builder = ModuleBuilder::new(ctx);
 
         // Parse declared functions.
         while eat_token!(lexer, Token::Declare)?.is_some() {
             // Todo: parse linkage.
-            let sig = self.parse_declared_func_sig(&mut lexer)?;
+            let sig = self.parse_declared_func_sig(&module_builder.ctx, &mut lexer)?;
             expect_token!(lexer, Token::SemiColon, ";")?;
             module_builder.declare_function(sig);
         }
@@ -104,7 +103,7 @@ impl Parser {
             .map_err(|e| Error::new(ErrorKind::SemanticError(format!("{}", e)), lexer.line()))
     }
 
-    fn parse_declared_func_sig(&self, lexer: &mut Lexer) -> Result<Signature> {
+    fn parse_declared_func_sig(&self, ctx: &ModuleCtx, lexer: &mut Lexer) -> Result<Signature> {
         let linkage = expect_linkage(lexer)?;
         let name = expect_token!(lexer, Token::Ident(..), "func name")?.string();
 
@@ -112,18 +111,18 @@ impl Parser {
         expect_token!(lexer, Token::LParen, "(")?;
         let mut args = vec![];
         if eat_token!(lexer, Token::RParen)?.is_none() {
-            let ty = expect_ty(&self.ctx, lexer)?;
+            let ty = expect_ty(ctx, lexer)?;
             args.push(ty);
             while eat_token!(lexer, Token::RParen)?.is_none() {
                 expect_token!(lexer, Token::Comma, ",")?;
-                let ty = expect_ty(&self.ctx, lexer)?;
+                let ty = expect_ty(ctx, lexer)?;
                 args.push(ty);
             }
         }
 
         // Parse return type.
         expect_token!(lexer, Token::RArrow, "->")?;
-        let ret_ty = expect_ty(&self.ctx, lexer)?;
+        let ret_ty = expect_ty(ctx, lexer)?;
 
         Ok(Signature::new(name, linkage, &args, &ret_ty))
     }
@@ -744,7 +743,7 @@ mod tests {
         let mut lexer = Lexer::new(input);
         let triple = TargetTriple::parse("evm-ethereum-london").unwrap();
         let isa = IsaBuilder::new(triple).build();
-        let mut module_builder = ModuleBuilder::new(ModuleCtx::new(), isa);
+        let mut module_builder = ModuleBuilder::new(ModuleCtx::new(isa));
         let parsed_func = FuncParser::new(&mut lexer, &mut module_builder)
             .parse()
             .unwrap()

@@ -2,7 +2,6 @@ use cranelift_entity::PrimaryMap;
 use fxhash::FxHashMap;
 
 use crate::{
-    isa::TargetIsa,
     module::{FuncRef, ModuleCtx},
     Function, Module, Signature,
 };
@@ -11,8 +10,6 @@ use super::FunctionBuilder;
 
 #[derive(Debug)]
 pub struct ModuleBuilder {
-    pub isa: TargetIsa,
-
     pub funcs: PrimaryMap<FuncRef, Function>,
 
     pub ctx: ModuleCtx,
@@ -22,9 +19,8 @@ pub struct ModuleBuilder {
 }
 
 impl ModuleBuilder {
-    pub fn new(ctx: ModuleCtx, isa: TargetIsa) -> Self {
+    pub fn new(ctx: ModuleCtx) -> Self {
         Self {
-            isa,
             funcs: PrimaryMap::default(),
             ctx,
             declared_funcs: FxHashMap::default(),
@@ -57,7 +53,6 @@ impl ModuleBuilder {
 
     pub fn build(self) -> Module {
         Module {
-            isa: self.isa,
             funcs: self.funcs,
             ctx: self.ctx,
         }

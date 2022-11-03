@@ -3,21 +3,24 @@ use super::cfg::ControlFlowGraph;
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     insn::InsnData,
-    isa::TargetIsa,
     Block, Function, Insn,
 };
 
 #[derive(Debug)]
-pub struct CriticalEdgeSplitter<'isa> {
+pub struct CriticalEdgeSplitter {
     critical_edges: Vec<CriticalEdge>,
-    isa: &'isa TargetIsa,
 }
 
-impl<'isa> CriticalEdgeSplitter<'isa> {
-    pub fn new(isa: &'isa TargetIsa) -> Self {
+impl Default for CriticalEdgeSplitter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CriticalEdgeSplitter {
+    pub fn new() -> Self {
         Self {
             critical_edges: Vec::default(),
-            isa,
         }
     }
 
@@ -62,7 +65,7 @@ impl<'isa> CriticalEdgeSplitter<'isa> {
         // critical edge.
         let inserted_dest = func.dfg.make_block();
         let jump = func.dfg.make_insn(InsnData::jump(original_dest));
-        let mut cursor = InsnInserter::new(func, self.isa, CursorLocation::BlockTop(original_dest));
+        let mut cursor = InsnInserter::new(func, CursorLocation::BlockTop(original_dest));
         cursor.append_block(inserted_dest);
         cursor.set_loc(CursorLocation::BlockTop(inserted_dest));
         cursor.append_insn(jump);
@@ -144,7 +147,7 @@ mod tests {
         let func = &mut module.funcs[func_ref];
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(func);
-        CriticalEdgeSplitter::new(&module.isa).run(func, &mut cfg);
+        CriticalEdgeSplitter::new().run(func, &mut cfg);
 
         assert_eq!(
             dump_func(func),
@@ -204,7 +207,7 @@ mod tests {
         let func = &mut module.funcs[func_ref];
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(func);
-        CriticalEdgeSplitter::new(&module.isa).run(func, &mut cfg);
+        CriticalEdgeSplitter::new().run(func, &mut cfg);
 
         assert_eq!(
             dump_func(func),
@@ -267,7 +270,7 @@ mod tests {
         let func = &mut module.funcs[func_ref];
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(func);
-        CriticalEdgeSplitter::new(&module.isa).run(func, &mut cfg);
+        CriticalEdgeSplitter::new().run(func, &mut cfg);
 
         assert_eq!(
             dump_func(func),
@@ -331,7 +334,7 @@ mod tests {
         let func = &mut module.funcs[func_ref];
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(func);
-        CriticalEdgeSplitter::new(&module.isa).run(func, &mut cfg);
+        CriticalEdgeSplitter::new().run(func, &mut cfg);
 
         assert_eq!(
             dump_func(func),
