@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn critical_edge_basic() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[], Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -176,7 +176,7 @@ mod tests {
     #[allow(clippy::many_single_char_names)]
     fn critical_edge_to_same_block() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[], Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn critical_edge_phi() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[], Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -300,7 +300,7 @@ mod tests {
     #[test]
     fn critical_edge_br_table() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[], Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();

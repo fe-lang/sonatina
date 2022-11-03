@@ -88,13 +88,13 @@ impl Immediate {
         self.apply_binop_raw(rhs, |lhs, rhs| (lhs >= rhs).into())
     }
 
-    pub fn sext(self, ty: &Type) -> Self {
-        debug_assert!(&self.ty() < ty);
+    pub fn sext(self, ty: Type) -> Self {
+        debug_assert!(self.ty() < ty);
         Self::from_i256(self.as_i256(), ty)
     }
 
-    pub fn zext(self, ty: &Type) -> Self {
-        debug_assert!(&self.ty() < ty);
+    pub fn zext(self, ty: Type) -> Self {
+        debug_assert!(self.ty() < ty);
         let i256: I256 = match self {
             Self::I1(val) => (val as u8).into(),
             Self::I8(val) => (val as u8).into(),
@@ -108,8 +108,8 @@ impl Immediate {
         Self::from_i256(i256, ty)
     }
 
-    pub fn trunc(self, ty: &Type) -> Self {
-        debug_assert!(&self.ty() > ty);
+    pub fn trunc(self, ty: Type) -> Self {
+        debug_assert!(self.ty() > ty);
 
         Self::from_i256(self.as_i256(), ty)
     }
@@ -126,17 +126,17 @@ impl Immediate {
         (self != rhs).into()
     }
 
-    pub fn zero(ty: &Type) -> Self {
+    pub fn zero(ty: Type) -> Self {
         let val = I256::zero();
         Self::from_i256(val, ty)
     }
 
-    pub fn one(ty: &Type) -> Self {
+    pub fn one(ty: Type) -> Self {
         let val = I256::one();
         Self::from_i256(val, ty)
     }
 
-    pub fn all_one(ty: &Type) -> Self {
+    pub fn all_one(ty: Type) -> Self {
         Self::from_i256(I256::all_one(), ty)
     }
 
@@ -149,7 +149,7 @@ impl Immediate {
     }
 
     pub fn is_all_one(self) -> bool {
-        self == Self::all_one(&self.ty())
+        self == Self::all_one(self.ty())
     }
 
     pub fn is_two(self) -> bool {
@@ -157,7 +157,7 @@ impl Immediate {
     }
 
     pub fn is_power_of_two(self) -> bool {
-        (self & (self - Immediate::one(&self.ty()))).is_zero()
+        (self & (self - Immediate::one(self.ty()))).is_zero()
     }
 
     fn as_i256(self) -> I256 {
@@ -172,7 +172,7 @@ impl Immediate {
         }
     }
 
-    fn from_i256(val: I256, ty: &Type) -> Self {
+    fn from_i256(val: I256, ty: Type) -> Self {
         match ty {
             Type::I1 => Self::I1(val.trunc_to_i1()),
             Type::I8 => Self::I8(val.trunc_to_i8()),
@@ -192,7 +192,7 @@ impl Immediate {
         debug_assert_eq!(self.ty(), rhs.ty());
 
         let res = self.apply_binop_raw(rhs, f);
-        Self::from_i256(res, &self.ty())
+        Self::from_i256(res, self.ty())
     }
 
     fn apply_binop_raw<F, R>(self, rhs: Self, f: F) -> R
@@ -211,7 +211,7 @@ impl Immediate {
         F: FnOnce(I256) -> I256,
     {
         let res = self.apply_unop_raw(f);
-        Self::from_i256(res, &self.ty())
+        Self::from_i256(res, self.ty())
     }
 
     fn apply_unop_raw<F, R>(self, f: F) -> R

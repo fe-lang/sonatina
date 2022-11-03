@@ -124,7 +124,7 @@ impl GvnSolver {
 
                     InsnData::Branch { args, dests } => {
                         let cond = args[0];
-                        debug_assert_eq!(func.dfg.value_ty(cond), &Type::I1);
+                        debug_assert_eq!(func.dfg.value_ty(cond), Type::I1);
 
                         let then_block = dests[0];
                         let else_block = dests[1];

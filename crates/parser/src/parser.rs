@@ -124,7 +124,7 @@ impl Parser {
         expect_token!(lexer, Token::RArrow, "->")?;
         let ret_ty = expect_ty(ctx, lexer)?;
 
-        Ok(Signature::new(name, linkage, &args, &ret_ty))
+        Ok(Signature::new(name, linkage, &args, ret_ty))
     }
 }
 
@@ -165,7 +165,7 @@ impl<'a, 'b> FuncParser<'a, 'b> {
 
         expect_token!(self.lexer, Token::LParen, "(")?;
         // Use `Void` for dummy return type.
-        let sig = Signature::new(fn_name, linkage, &[], &Type::Void);
+        let sig = Signature::new(fn_name, linkage, &[], Type::Void);
         let mut func = Function::new(&self.module_builder.ctx, sig);
         let mut inserter = InsnInserter::new(&mut func);
 

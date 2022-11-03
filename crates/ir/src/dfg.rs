@@ -161,17 +161,17 @@ impl DataFlowGraph {
         }
     }
 
-    pub fn value_ty(&self, value: Value) -> &Type {
+    pub fn value_ty(&self, value: Value) -> Type {
         let value = self.resolve_alias(value);
         match &self.values[value] {
             ValueData::Insn { ty, .. }
             | ValueData::Arg { ty, .. }
-            | ValueData::Immediate { ty, .. } => ty,
+            | ValueData::Immediate { ty, .. } => *ty,
             ValueData::Alias { .. } => unreachable!(),
         }
     }
 
-    pub fn insn_result_ty(&self, insn: Insn) -> Option<&Type> {
+    pub fn insn_result_ty(&self, insn: Insn) -> Option<Type> {
         self.insn_result(insn).map(|value| self.value_ty(value))
     }
 

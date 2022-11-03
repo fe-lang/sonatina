@@ -209,9 +209,9 @@ impl SccpSolver {
             InsnData::Cast { code, args, ty } => {
                 let arg_cell = self.lattice[args[0]];
                 match code {
-                    CastOp::Sext => arg_cell.sext(ty),
-                    CastOp::Zext => arg_cell.zext(ty),
-                    CastOp::Trunc => arg_cell.trunc(ty),
+                    CastOp::Sext => arg_cell.sext(*ty),
+                    CastOp::Zext => arg_cell.zext(*ty),
+                    CastOp::Trunc => arg_cell.trunc(*ty),
                 }
             }
 
@@ -600,15 +600,15 @@ impl LatticeCell {
         self.apply_binop(rhs, ops::BitXor::bitxor)
     }
 
-    fn sext(self, ty: &Type) -> Self {
+    fn sext(self, ty: Type) -> Self {
         self.apply_unop(|val| Immediate::sext(val, ty))
     }
 
-    fn zext(self, ty: &Type) -> Self {
+    fn zext(self, ty: Type) -> Self {
         self.apply_unop(|val| Immediate::zext(val, ty))
     }
 
-    fn trunc(self, ty: &Type) -> Self {
+    fn trunc(self, ty: Type) -> Self {
         self.apply_unop(|val| Immediate::trunc(val, ty))
     }
 }

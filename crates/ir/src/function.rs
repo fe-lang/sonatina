@@ -56,12 +56,12 @@ pub struct Signature {
 }
 
 impl Signature {
-    pub fn new(name: &str, linkage: Linkage, args: &[Type], ret_ty: &Type) -> Self {
+    pub fn new(name: &str, linkage: Linkage, args: &[Type], ret_ty: Type) -> Self {
         Self {
             name: name.to_string(),
             linkage,
             args: args.into(),
-            ret_ty: ret_ty.clone(),
+            ret_ty,
         }
     }
     pub fn name(&self) -> &str {

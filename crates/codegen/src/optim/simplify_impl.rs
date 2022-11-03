@@ -496,13 +496,13 @@ impl<'a> generated_code::Context for SimplifyContext<'a> {
     }
 
     fn make_zero(&mut self, arg0: &Type) -> ExprValue {
-        let imm = Immediate::zero(arg0);
+        let imm = Immediate::zero(*arg0);
         let val = self.dfg().make_imm_value(imm);
         ExprValue::Value(val)
     }
 
     fn make_one(&mut self, arg0: &Type) -> ExprValue {
-        let imm = Immediate::one(arg0);
+        let imm = Immediate::one(*arg0);
         let val = self.dfg().make_imm_value(imm);
         ExprValue::Value(val)
     }
@@ -516,7 +516,7 @@ impl<'a> generated_code::Context for SimplifyContext<'a> {
     }
 
     fn make_all_one(&mut self, arg0: &Type) -> ExprValue {
-        let imm = Immediate::all_one(arg0);
+        let imm = Immediate::all_one(*arg0);
         let val = self.dfg().make_imm_value(imm);
         ExprValue::Value(val)
     }

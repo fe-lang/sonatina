@@ -341,7 +341,7 @@ impl InsnData {
             Self::Binary { code, args } => Some(code.result_type(dfg, args)),
             Self::Cast { ty, .. } => Some(ty.clone()),
             Self::Load { args, .. } => {
-                let ptr_ty = *dfg.value_ty(args[0]);
+                let ptr_ty = dfg.value_ty(args[0]);
                 debug_assert!(dfg.ctx.with_ty_store(|s| s.is_ptr(ptr_ty)));
                 dfg.ctx.with_ty_store(|s| s.deref(ptr_ty))
             }

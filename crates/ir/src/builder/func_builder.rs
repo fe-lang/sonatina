@@ -300,7 +300,7 @@ impl<'a> FunctionBuilder<'a> {
         self.func_ref
     }
 
-    pub fn type_of(&self, value: Value) -> &Type {
+    pub fn type_of(&self, value: Value) -> Type {
         self.func().dfg.value_ty(value)
     }
 
@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn entry_block() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[], Type::Void);
 
         let b0 = builder.append_block();
         builder.switch_to_block(b0);
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn entry_block_with_args() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[Type::I32, Type::I64], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[Type::I32, Type::I64], Type::Void);
 
         let entry_block = builder.append_block();
         builder.switch_to_block(entry_block);
@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn entry_block_with_return() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], &Type::I32);
+        let mut builder = test_module_builder.func_builder(&[], Type::I32);
 
         let entry_block = builder.append_block();
 
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     fn then_else_merge_block() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[Type::I64], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[Type::I64], Type::Void);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();

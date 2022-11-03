@@ -41,9 +41,9 @@ pub(super) fn fold_constant(dfg: &DataFlowGraph, insn_data: &InsnData) -> Option
         InsnData::Cast { code, args, ty } => {
             let arg = dfg.value_imm(args[0])?;
             Some(match code {
-                CastOp::Sext => arg.sext(ty),
-                CastOp::Zext => arg.zext(ty),
-                CastOp::Trunc => arg.trunc(ty),
+                CastOp::Sext => arg.sext(*ty),
+                CastOp::Zext => arg.zext(*ty),
+                CastOp::Trunc => arg.trunc(*ty),
             })
         }
 
