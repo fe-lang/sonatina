@@ -86,6 +86,11 @@ impl<'a> FunctionBuilder<'a> {
         self.func_mut().dfg.make_imm_value(imm)
     }
 
+    pub fn declare_struct_type(&mut self, name: &str, fields: &[Type], packed: bool) -> Type {
+        self.module_builder
+            .declare_struct_type(name, fields, packed)
+    }
+
     impl_unary_insn!(not, UnaryOp::Not);
     impl_unary_insn!(neg, UnaryOp::Neg);
 

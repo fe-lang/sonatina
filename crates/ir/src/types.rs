@@ -22,6 +22,15 @@ impl TypeStore {
         Type::Compound(ty)
     }
 
+    pub fn make_struct(&mut self, name: &str, fields: &[Type], packed: bool) -> Type {
+        let compound_data = CompoundTypeData::Struct {
+            name: name.to_string(),
+            fields: fields.to_vec(),
+            packed,
+        };
+        Type::Compound(self.make_compound(compound_data))
+    }
+
     pub fn deref(&self, ptr: Type) -> Option<Type> {
         match ptr {
             Type::Compound(ty) => {
@@ -89,9 +98,16 @@ cranelift_entity::entity_impl!(CompoundType);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CompoundTypeData {
-    Array { elem: Type, len: usize },
+    Array {
+        elem: Type,
+        len: usize,
+    },
     Ptr(Type),
-    Struct { name: String, fields: Vec<Type> },
+    Struct {
+        name: String,
+        fields: Vec<Type>,
+        packed: bool,
+    },
 }
 
 impl CompoundTypeData {

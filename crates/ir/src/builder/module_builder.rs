@@ -3,7 +3,7 @@ use fxhash::FxHashMap;
 
 use crate::{
     module::{FuncRef, ModuleCtx},
-    Function, Module, Signature,
+    Function, Module, Signature, Type,
 };
 
 use super::FunctionBuilder;
@@ -37,6 +37,11 @@ impl ModuleBuilder {
             self.declared_funcs.insert(name, func_ref);
             func_ref
         }
+    }
+
+    pub fn declare_struct_type(&mut self, name: &str, fields: &[Type], packed: bool) -> Type {
+        self.ctx
+            .with_ty_store_mut(|s| s.make_struct(name, fields, packed))
     }
 
     pub fn get_func_ref(&self, name: &str) -> Option<FuncRef> {
