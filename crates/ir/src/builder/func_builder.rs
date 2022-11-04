@@ -140,7 +140,7 @@ impl<'a> FunctionBuilder<'a> {
 
     pub fn call(&mut self, func: FuncRef, args: &[Value]) -> Value {
         let sig = self.module_builder.funcs[func].sig.clone();
-        let ret_ty = sig.ret_ty().clone();
+        let ret_ty = sig.ret_ty();
         self.func_mut().callees.insert(func, sig);
 
         let insn_data = InsnData::Call {
@@ -234,7 +234,7 @@ impl<'a> FunctionBuilder<'a> {
     }
 
     pub fn phi(&mut self, args: &[(Value, Block)]) -> Value {
-        let ty = self.func().dfg.value_ty(args[0].0).clone();
+        let ty = self.func().dfg.value_ty(args[0].0);
         let insn_data = InsnData::Phi {
             values: args.iter().map(|(val, _)| *val).collect(),
             blocks: args.iter().map(|(_, block)| *block).collect(),

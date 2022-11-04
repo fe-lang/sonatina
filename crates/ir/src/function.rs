@@ -28,7 +28,7 @@ impl Function {
             .iter()
             .enumerate()
             .map(|(idx, arg_ty)| {
-                let value = dfg.make_arg_value(arg_ty, idx);
+                let value = dfg.make_arg_value(*arg_ty, idx);
                 dfg.make_value(value)
             })
             .collect();
@@ -80,8 +80,8 @@ impl Signature {
         &self.args
     }
 
-    pub fn ret_ty(&self) -> &Type {
-        &self.ret_ty
+    pub fn ret_ty(&self) -> Type {
+        self.ret_ty
     }
 
     #[doc(hidden)]

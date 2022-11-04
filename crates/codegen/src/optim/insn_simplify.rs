@@ -98,3 +98,9 @@ impl InsnSimplifySolver {
         inserter.proceed();
     }
 }
+
+impl Default for InsnSimplifySolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}

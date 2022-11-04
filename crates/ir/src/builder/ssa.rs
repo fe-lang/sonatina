@@ -142,7 +142,7 @@ impl SsaBuilder {
     }
 
     fn prepend_phi(&mut self, func: &mut Function, var: Variable, block: Block) -> (Insn, Value) {
-        let ty = self.var_ty(var).clone();
+        let ty = self.var_ty(var);
         let insn_data = InsnData::Phi {
             values: SmallVec::new(),
             blocks: SmallVec::new(),

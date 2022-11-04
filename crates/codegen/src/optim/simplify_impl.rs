@@ -185,7 +185,7 @@ impl ExprData {
             InsnData::Cast { code, args, ty } => Self::Cast {
                 code: *code,
                 args: [args[0].into()],
-                ty: ty.clone(),
+                ty: *ty,
             },
 
             InsnData::Load { args, loc } => Self::Load {
@@ -201,7 +201,7 @@ impl ExprData {
             InsnData::Call { func, args, ret_ty } => Self::Call {
                 func: *func,
                 args: args.iter().copied().map(Into::into).collect(),
-                ret_ty: ret_ty.clone(),
+                ret_ty: *ret_ty,
             },
 
             InsnData::Jump { code, dests } => Self::Jump {
@@ -224,14 +224,14 @@ impl ExprData {
                 table: table.clone(),
             },
 
-            InsnData::Alloca { ty } => Self::Alloca { ty: ty.clone() },
+            InsnData::Alloca { ty } => Self::Alloca { ty: *ty },
 
             InsnData::Return { args } => Self::Return { args: *args },
 
             InsnData::Phi { values, blocks, ty } => Self::Phi {
                 values: values.iter().copied().map(Into::into).collect(),
                 blocks: blocks.clone(),
-                ty: ty.clone(),
+                ty: *ty,
             },
         }
     }
@@ -251,7 +251,7 @@ impl ExprData {
             Self::Cast { code, args, ty } => InsnData::Cast {
                 code: *code,
                 args: [args[0].as_value()?],
-                ty: ty.clone(),
+                ty: *ty,
             },
 
             Self::Load { args, loc } => InsnData::Load {
@@ -270,7 +270,7 @@ impl ExprData {
                     .iter()
                     .map(|val| val.as_value())
                     .collect::<Option<_>>()?,
-                ret_ty: ret_ty.clone(),
+                ret_ty: *ret_ty,
             },
 
             Self::Jump { code, dests } => InsnData::Jump {
@@ -296,7 +296,7 @@ impl ExprData {
                 table: table.clone(),
             },
 
-            Self::Alloca { ty } => InsnData::alloca(ty.clone()),
+            Self::Alloca { ty } => InsnData::alloca(*ty),
 
             Self::Return { args } => InsnData::Return { args: *args },
 
@@ -306,7 +306,7 @@ impl ExprData {
                     .map(|val| val.as_value())
                     .collect::<Option<_>>()?,
                 blocks: blocks.clone(),
-                ty: ty.clone(),
+                ty: *ty,
             },
         })
     }
@@ -368,7 +368,7 @@ impl<'a> SimplifyContext<'a> {
         let expr = self.make_expr(expr_data);
         if let Some(insn_result) = self.dfg.insn_result(insn) {
             let ty = self.dfg.value_ty(insn_result);
-            self.types[expr] = Some(ty.clone());
+            self.types[expr] = Some(ty);
         }
 
         expr
@@ -413,8 +413,8 @@ impl<'a> generated_code::Context for SimplifyContext<'a> {
 
     fn value_ty(&mut self, arg0: ExprValue) -> Type {
         match arg0 {
-            ExprValue::Value(val) => self.dfg().value_ty(val).clone(),
-            ExprValue::Expr(expr) => self.types[expr].clone().unwrap(),
+            ExprValue::Value(val) => self.dfg().value_ty(val),
+            ExprValue::Expr(expr) => self.types[expr].unwrap(),
         }
     }
 

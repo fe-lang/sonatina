@@ -337,16 +337,16 @@ impl InsnData {
 
     pub fn result_type(&self, dfg: &DataFlowGraph) -> Option<Type> {
         match self {
-            Self::Unary { args, .. } => Some(dfg.value_ty(args[0]).clone()),
+            Self::Unary { args, .. } => Some(dfg.value_ty(args[0])),
             Self::Binary { code, args } => Some(code.result_type(dfg, args)),
-            Self::Cast { ty, .. } => Some(ty.clone()),
+            Self::Cast { ty, .. } => Some(*ty),
             Self::Load { args, .. } => {
                 let ptr_ty = dfg.value_ty(args[0]);
                 debug_assert!(dfg.ctx.with_ty_store(|s| s.is_ptr(ptr_ty)));
                 dfg.ctx.with_ty_store(|s| s.deref(ptr_ty))
             }
-            Self::Call { ret_ty, .. } => Some(ret_ty.clone()),
-            Self::Phi { ty, .. } => Some(ty.clone()),
+            Self::Call { ret_ty, .. } => Some(*ret_ty),
+            Self::Phi { ty, .. } => Some(*ty),
             Self::Alloca { ty } => Some(dfg.ctx.with_ty_store_mut(|s| s.make_ptr(*ty))),
             _ => None,
         }
@@ -433,7 +433,7 @@ impl BinaryOp {
         if self.is_cmp() {
             Type::I1
         } else {
-            dfg.value_ty(args[0]).clone()
+            dfg.value_ty(args[0])
         }
     }
 
@@ -541,9 +541,7 @@ impl<'a> BranchInfo<'a> {
             Self::NotBranch => 0,
             Self::Jump { .. } => 1,
             Self::Br { dests, .. } => dests.len(),
-            Self::BrTable { default, table, .. } => {
-                table.len() + if default.is_some() { 1 } else { 0 }
-            }
+            Self::BrTable { default, table, .. } => table.len() + usize::from(default.is_some()),
         }
     }
 }

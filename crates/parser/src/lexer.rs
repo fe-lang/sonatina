@@ -385,9 +385,9 @@ impl<'a> Token<'a> {
         }
     }
 
-    pub(super) fn ty(&self) -> &Type {
+    pub(super) fn ty(&self) -> Type {
         if let Self::BaseTy(ty) = self {
-            ty
+            *ty
         } else {
             unreachable!()
         }

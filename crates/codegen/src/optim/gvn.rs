@@ -885,6 +885,12 @@ impl GvnSolver {
     }
 }
 
+impl Default for GvnSolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 struct Class(u32);
 entity_impl!(Class);
@@ -1042,7 +1048,7 @@ impl<'a> ValuePhiFinder<'a> {
                 ty,
             } => {
                 let arg = self.get_phi_of(func, *arg)?;
-                self.compute_value_phi_for_cast(func, *code, arg, ty)
+                self.compute_value_phi_for_cast(func, *code, arg, *ty)
             }
 
             _ => None,
@@ -1175,7 +1181,7 @@ impl<'a> ValuePhiFinder<'a> {
         func: &mut Function,
         code: CastOp,
         value_phi: ValuePhi,
-        ty: &Type,
+        ty: Type,
     ) -> Option<ValuePhi> {
         let value_phi_insn = if let ValuePhi::PhiInsn(insn) = value_phi {
             insn
@@ -1189,7 +1195,7 @@ impl<'a> ValuePhiFinder<'a> {
         for (arg, block) in value_phi_insn.args.into_iter() {
             match arg {
                 ValuePhi::Value(value) => {
-                    let query_insn = InsnData::cast(code, value, ty.clone());
+                    let query_insn = InsnData::cast(code, value, ty);
                     let phi_arg = self.lookup_value_phi_arg(func, query_insn)?;
                     result.args.push((phi_arg, block));
                 }
@@ -1456,7 +1462,7 @@ impl<'a> RedundantCodeRemover<'a> {
                         // then use resolved phi value and remove insn.
                         let class = self.solver.value_class(insn_result);
                         if let Some(value_phi) = &self.solver.classes[class].value_phi {
-                            let ty = inserter.func().dfg.value_ty(insn_result).clone();
+                            let ty = inserter.func().dfg.value_ty(insn_result);
                             if self.is_value_phi_resolvable(value_phi, block) {
                                 let value =
                                     self.resolve_value_phi(&mut inserter, value_phi, ty, block);
@@ -1523,10 +1529,9 @@ impl<'a> RedundantCodeRemover<'a> {
                 let current_inserter_loc = inserter.loc();
 
                 // Resolve phi value's arguments and append them to the newly `InsnData::Phi`.
-                let mut phi = InsnData::phi(ty.clone());
+                let mut phi = InsnData::phi(ty);
                 for (value_phi, phi_block) in &phi_insn.args {
-                    let resolved =
-                        self.resolve_value_phi(inserter, value_phi, ty.clone(), *phi_block);
+                    let resolved = self.resolve_value_phi(inserter, value_phi, ty, *phi_block);
                     phi.append_phi_arg(resolved, *phi_block);
                 }
 

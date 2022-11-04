@@ -103,11 +103,8 @@ impl DataFlowGraph {
         self.insn_results[insn] = value.into();
     }
 
-    pub fn make_arg_value(&mut self, ty: &Type, idx: usize) -> ValueData {
-        ValueData::Arg {
-            ty: ty.clone(),
-            idx,
-        }
+    pub fn make_arg_value(&mut self, ty: Type, idx: usize) -> ValueData {
+        ValueData::Arg { ty, idx }
     }
 
     pub fn insn_data(&self, insn: Insn) -> &InsnData {

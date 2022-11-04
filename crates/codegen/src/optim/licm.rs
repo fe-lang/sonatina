@@ -170,7 +170,7 @@ impl LicmSolver {
 
             // Create new phi insn that should be inserted to the preheader, and remove insn
             // arguments passing through original preheaders.
-            let mut phi_insn_data = InsnData::phi(func.dfg.insn_result_ty(insn).unwrap().clone());
+            let mut phi_insn_data = InsnData::phi(func.dfg.insn_result_ty(insn).unwrap());
             for &block in original_preheaders {
                 // Remove an argument.
                 let value = func.dfg.remove_phi_arg(insn, block);
@@ -203,5 +203,11 @@ impl LicmSolver {
 
             next_insn = func.layout.next_insn_of(insn);
         }
+    }
+}
+
+impl Default for LicmSolver {
+    fn default() -> Self {
+        Self::new()
     }
 }

@@ -167,7 +167,7 @@ impl<'a> FileChecker<'a> {
     }
 
     fn parse_file(&self) -> Result<ParsedModule, String> {
-        let input = fs::read_to_string(&self.file_path).unwrap();
+        let input = fs::read_to_string(self.file_path).unwrap();
         let parser = Parser::default();
         match parser.parse(&input) {
             Ok(module) => Ok(module),

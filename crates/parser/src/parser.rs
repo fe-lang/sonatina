@@ -281,7 +281,7 @@ impl<'a, 'b> FuncParser<'a, 'b> {
 }
 
 fn expect_ty(ctx: &ModuleCtx, lexer: &mut Lexer) -> Result<Type> {
-    if let Some(ty) = eat_token!(lexer, Token::BaseTy(..))?.map(|tok| tok.ty().clone()) {
+    if let Some(ty) = eat_token!(lexer, Token::BaseTy(..))?.map(|tok| tok.ty()) {
         return Ok(ty);
     };
 
@@ -424,7 +424,7 @@ impl<'a> InsnInserter<'a> {
     fn append_arg_value(&mut self, value: Value, ty: Type) {
         let idx = self.func.arg_values.len();
 
-        let value_data = self.func.dfg.make_arg_value(&ty, idx);
+        let value_data = self.func.dfg.make_arg_value(ty, idx);
         self.func.sig.append_arg(ty);
         self.func.dfg.values[value] = value_data;
         self.func.arg_values.push(value);
@@ -573,7 +573,7 @@ impl Code {
                         )
                     })?;
                 let sig = parser.module_builder.get_sig(func).clone();
-                let ret_ty = sig.ret_ty().clone();
+                let ret_ty = sig.ret_ty();
                 inserter.func_mut().callees.insert(func, sig);
                 InsnData::Call { func, args, ret_ty }
             }
