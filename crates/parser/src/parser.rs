@@ -72,6 +72,31 @@ impl Parser {
 
         let mut module_builder = ModuleBuilder::new(ctx);
 
+        // Parse declared struct types.
+        while eat_token!(lexer, Token::Type)?.is_some() {
+            let name = expect_token!(lexer, Token::Ident(_), "type name")?.string();
+            expect_token!(lexer, Token::Eq, "=")?;
+            let packed = eat_token!(lexer, Token::LAngleBracket)?.is_some();
+            expect_token!(lexer, Token::LBrace, "{")?;
+
+            let mut fields = vec![];
+            if eat_token!(lexer, Token::RBrace)?.is_none() {
+                loop {
+                    let ty = expect_ty(&module_builder.ctx, &mut lexer)?;
+                    fields.push(ty);
+                    if eat_token!(lexer, Token::RBrace)?.is_some() {
+                        break;
+                    }
+                    expect_token!(lexer, Token::Comma, ",")?;
+                }
+            }
+            if packed {
+                expect_token!(lexer, Token::RAngleBracket, ">")?;
+            }
+
+            module_builder.declare_struct_type(name, &fields, packed);
+        }
+
         // Parse declared functions.
         while eat_token!(lexer, Token::Declare)?.is_some() {
             // Todo: parse linkage.
@@ -300,6 +325,15 @@ fn expect_ty(ctx: &ModuleCtx, lexer: &mut Lexer) -> Result<Type> {
         // Try parse ptr base type.
         let elem_ty = expect_ty(ctx, lexer)?;
         Ok(ctx.with_ty_store_mut(|s| s.make_ptr(elem_ty)))
+    } else if let Some(tok) = eat_token!(lexer, Token::Ident(..))? {
+        let name = tok.string();
+        ctx.with_ty_store(|s| s.struct_type_by_name(name))
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::SemanticError(format!("type `{name}` is not declared")),
+                    lexer.line(),
+                )
+            })
     } else {
         Err(Error::new(
             ErrorKind::SyntaxError("invalid type".into()),

@@ -9,6 +9,7 @@ use fxhash::FxHashMap;
 pub struct TypeStore {
     compounds: PrimaryMap<CompoundType, CompoundTypeData>,
     rev_types: FxHashMap<CompoundTypeData, CompoundType>,
+    struct_types: FxHashMap<String, CompoundType>,
 }
 
 impl TypeStore {
@@ -28,7 +29,17 @@ impl TypeStore {
             fields: fields.to_vec(),
             packed,
         };
-        Type::Compound(self.make_compound(compound_data))
+        let compound = self.make_compound(compound_data);
+        debug_assert!(
+            !self.struct_types.contains_key(name),
+            "struct {name} is already defined"
+        );
+        self.struct_types.insert(name.to_string(), compound);
+        Type::Compound(compound)
+    }
+
+    pub fn struct_type_by_name(&self, name: &str) -> Option<Type> {
+        self.struct_types.get(name).map(|ty| Type::Compound(*ty))
     }
 
     pub fn deref(&self, ptr: Type) -> Option<Type> {
