@@ -91,6 +91,7 @@ cranelift_entity::entity_impl!(CompoundType);
 pub enum CompoundTypeData {
     Array { elem: Type, len: usize },
     Ptr(Type),
+    Struct { name: String, fields: Vec<Type> },
 }
 
 impl CompoundTypeData {
