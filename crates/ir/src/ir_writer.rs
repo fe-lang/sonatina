@@ -163,8 +163,8 @@ impl IrWrite for CompoundType {
                 write!(w, "*")?;
                 elem.write(writer, w)
             }
-            CompoundTypeData::Struct { name, .. } => {
-                write!(w, "{name}")
+            CompoundTypeData::Struct(def) => {
+                write!(w, "%{}", def.name)
             }
         }
     }

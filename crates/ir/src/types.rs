@@ -24,11 +24,11 @@ impl TypeStore {
     }
 
     pub fn make_struct(&mut self, name: &str, fields: &[Type], packed: bool) -> Type {
-        let compound_data = CompoundTypeData::Struct {
+        let compound_data = CompoundTypeData::Struct(StructDef {
             name: name.to_string(),
             fields: fields.to_vec(),
             packed,
-        };
+        });
         let compound = self.make_compound(compound_data);
         debug_assert!(
             !self.struct_types.contains_key(name),
@@ -36,6 +36,17 @@ impl TypeStore {
         );
         self.struct_types.insert(name.to_string(), compound);
         Type::Compound(compound)
+    }
+
+    /// Returns `[StructDef]` if the given type is a struct type.
+    pub fn struct_def(&self, ty: Type) -> Option<&StructDef> {
+        match ty {
+            Type::Compound(compound) => match self.compounds[compound] {
+                CompoundTypeData::Struct(ref def) => Some(def),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     pub fn struct_type_by_name(&self, name: &str) -> Option<Type> {
@@ -109,16 +120,16 @@ cranelift_entity::entity_impl!(CompoundType);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CompoundTypeData {
-    Array {
-        elem: Type,
-        len: usize,
-    },
+    Array { elem: Type, len: usize },
     Ptr(Type),
-    Struct {
-        name: String,
-        fields: Vec<Type>,
-        packed: bool,
-    },
+    Struct(StructDef),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<Type>,
+    pub packed: bool,
 }
 
 impl CompoundTypeData {

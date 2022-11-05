@@ -906,4 +906,44 @@ mod tests {
         assert_eq!(func2_comment[0], " f2 start 1");
         assert_eq!(func2_comment[1], " f2 start 2");
     }
+
+    #[test]
+    fn test_with_struct_type() {
+        let input = "
+            target = \"evm-ethereum-london\"
+            
+            type %s1 = {i32, i64}
+            type %s2_packed = <{i32, i64, *%s1}>
+
+            func public %test(v0.*%s1, v1.*%s2_packed) -> i32:
+                block0:
+                    return 311.i32;
+            ";
+
+        let parser = Parser::default();
+        let module = parser.parse(input).unwrap().module;
+
+        module.ctx.with_ty_store(|s| {
+            let ty = s.struct_type_by_name("s1").unwrap();
+            let def = s.struct_def(ty).unwrap();
+            assert_eq!(def.fields.len(), 2);
+            assert_eq!(def.fields[0], Type::I32);
+            assert_eq!(def.fields[1], Type::I64);
+            assert!(!def.packed);
+        });
+
+        let s1_ptr_ty = module.ctx.with_ty_store_mut(|s| {
+            let ty = s.struct_type_by_name("s1").unwrap();
+            s.make_ptr(ty)
+        });
+        module.ctx.with_ty_store(|s| {
+            let ty = s.struct_type_by_name("s2_packed").unwrap();
+            let def = s.struct_def(ty).unwrap();
+            assert_eq!(def.fields.len(), 3);
+            assert_eq!(def.fields[0], Type::I32);
+            assert_eq!(def.fields[1], Type::I64);
+            assert_eq!(def.fields[2], s1_ptr_ty);
+            assert!(def.packed);
+        });
+    }
 }
