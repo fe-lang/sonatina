@@ -241,6 +241,7 @@ impl<'a> Lexer<'a> {
             (b"xor", Code::Xor),
             (b"sext", Code::Sext),
             (b"zext", Code::Zext),
+            (b"bitcast", Code::BitCast),
             (b"trunc", Code::Trunc),
             (b"load", Code::Load),
             (b"store", Code::Store),
@@ -249,6 +250,7 @@ impl<'a> Lexer<'a> {
             (b"fallthrough", Code::FallThrough),
             (b"br_table", Code::BrTable),
             (b"br", Code::Br),
+            (b"gep", Code::Gep),
             (b"alloca", Code::Alloca),
             (b"return", Code::Return),
             (b"phi", Code::Phi),
@@ -484,6 +486,7 @@ pub(super) enum Code {
     Sext,
     Zext,
     Trunc,
+    BitCast,
 
     Load,
     Store,
@@ -498,6 +501,8 @@ pub(super) enum Code {
     // Branch ops.
     Br,
     BrTable,
+
+    Gep,
 
     Alloca,
 
@@ -518,6 +523,7 @@ impl fmt::Display for Code {
             Mul => "mul",
             Udiv => "udiv",
             Sdiv => "sdiv",
+            BitCast => "bitcast",
             Lt => "lt",
             Gt => "gt",
             Slt => "slt",
@@ -539,6 +545,7 @@ impl fmt::Display for Code {
             Call => "call",
             Jump => "jump",
             FallThrough => "fallthrough",
+            Gep => "gep",
             Alloca => "alloca",
             Br => "br",
             BrTable => "br_table",

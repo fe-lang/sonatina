@@ -561,6 +561,13 @@ impl Code {
             Self::Xor => make_binary!(parser, inserter, BinaryOp::Xor, &mut undefs),
             Self::Sext => make_cast!(parser, inserter, ret_ty.unwrap(), CastOp::Sext, &mut undefs),
             Self::Zext => make_cast!(parser, inserter, ret_ty.unwrap(), CastOp::Zext, &mut undefs),
+            Self::BitCast => make_cast!(
+                parser,
+                inserter,
+                ret_ty.unwrap(),
+                CastOp::BitCast,
+                &mut undefs
+            ),
             Self::Trunc => make_cast!(
                 parser,
                 inserter,
@@ -653,6 +660,18 @@ impl Code {
                     default,
                     table,
                 }
+            }
+
+            Self::Gep => {
+                let mut args = smallvec![];
+                let mut idx = 0;
+                while eat_token!(parser.lexer, Token::SemiColon)?.is_none() {
+                    let arg = parser.expect_insn_arg(inserter, idx, &mut undefs)?;
+                    args.push(arg);
+                    idx += 1;
+                }
+
+                InsnData::Gep { args }
             }
 
             Self::Alloca => {
