@@ -5,7 +5,9 @@ use std::fmt;
 
 use smallvec::SmallVec;
 
-use super::{module::FuncRef, Block, DataFlowGraph, Type, Value};
+use crate::types::CompoundTypeData;
+
+use super::{module::FuncRef, Block, DataFlowGraph, Type, Value, ValueData};
 
 /// An opaque reference to [`InsnData`]
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
@@ -16,10 +18,16 @@ cranelift_entity::entity_impl!(Insn);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InsnData {
     /// Unary instructions.
-    Unary { code: UnaryOp, args: [Value; 1] },
+    Unary {
+        code: UnaryOp,
+        args: [Value; 1],
+    },
 
     /// Binary instructions.
-    Binary { code: BinaryOp, args: [Value; 2] },
+    Binary {
+        code: BinaryOp,
+        args: [Value; 2],
+    },
 
     /// Cast operations.
     Cast {
@@ -48,10 +56,16 @@ pub enum InsnData {
     },
 
     /// Unconditional jump instruction.
-    Jump { code: JumpOp, dests: [Block; 1] },
+    Jump {
+        code: JumpOp,
+        dests: [Block; 1],
+    },
 
     /// Conditional jump instruction.
-    Branch { args: [Value; 1], dests: [Block; 2] },
+    Branch {
+        args: [Value; 1],
+        dests: [Block; 2],
+    },
 
     /// Indirect jump instruction.
     BrTable {
@@ -61,10 +75,18 @@ pub enum InsnData {
     },
 
     /// Allocate a memory on the stack frame for the given type.
-    Alloca { ty: Type },
+    Alloca {
+        ty: Type,
+    },
 
     /// Return.
-    Return { args: Option<Value> },
+    Return {
+        args: Option<Value>,
+    },
+
+    Gep {
+        args: SmallVec<[Value; 8]>,
+    },
 
     /// Phi function.
     Phi {
@@ -345,6 +367,7 @@ impl InsnData {
                 debug_assert!(dfg.ctx.with_ty_store(|s| s.is_ptr(ptr_ty)));
                 dfg.ctx.with_ty_store(|s| s.deref(ptr_ty))
             }
+            Self::Gep { args } => Some(get_gep_result_type(dfg, args[0], &args[1..])),
             Self::Call { ret_ty, .. } => Some(*ret_ty),
             Self::Phi { ty, .. } => Some(*ty),
             Self::Alloca { ty } => Some(dfg.ctx.with_ty_store_mut(|s| s.make_ptr(*ty))),
@@ -593,4 +616,33 @@ impl<'a> Iterator for BranchDestIter<'a> {
             BranchInfo::NotBranch => None,
         }
     }
+}
+
+fn get_gep_result_type(dfg: &DataFlowGraph, base: Value, indices: &[Value]) -> Type {
+    let ctx = &dfg.ctx;
+    let base_ty = ctx.with_ty_store(|s| {
+        let ty = dfg.value_ty(base);
+        debug_assert!(s.is_ptr(ty));
+        s.deref(ty).unwrap()
+    });
+
+    let mut result_ty = base_ty;
+    for &index in indices {
+        let Type::Compound(compound) = result_ty else {
+            unreachable!()
+        };
+
+        result_ty = ctx.with_ty_store(|s| match s.resolve_compound(compound) {
+            CompoundTypeData::Array { elem, .. } | CompoundTypeData::Ptr(elem) => *elem,
+            CompoundTypeData::Struct(s) => {
+                let index = match dfg.value_data(index) {
+                    ValueData::Immediate { imm, .. } => imm.as_usize(),
+                    _ => unreachable!(),
+                };
+                s.fields[index]
+            }
+        });
+    }
+
+    ctx.with_ty_store_mut(|s| s.make_ptr(result_ty))
 }

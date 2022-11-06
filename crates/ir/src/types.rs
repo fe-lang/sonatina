@@ -24,7 +24,7 @@ impl TypeStore {
     }
 
     pub fn make_struct(&mut self, name: &str, fields: &[Type], packed: bool) -> Type {
-        let compound_data = CompoundTypeData::Struct(StructDef {
+        let compound_data = CompoundTypeData::Struct(StructData {
             name: name.to_string(),
             fields: fields.to_vec(),
             packed,
@@ -39,7 +39,7 @@ impl TypeStore {
     }
 
     /// Returns `[StructDef]` if the given type is a struct type.
-    pub fn struct_def(&self, ty: Type) -> Option<&StructDef> {
+    pub fn struct_def(&self, ty: Type) -> Option<&StructData> {
         match ty {
             Type::Compound(compound) => match self.compounds[compound] {
                 CompoundTypeData::Struct(ref def) => Some(def),
@@ -122,11 +122,11 @@ cranelift_entity::entity_impl!(CompoundType);
 pub enum CompoundTypeData {
     Array { elem: Type, len: usize },
     Ptr(Type),
-    Struct(StructDef),
+    Struct(StructData),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StructDef {
+pub struct StructData {
     pub name: String,
     pub fields: Vec<Type>,
     pub packed: bool,

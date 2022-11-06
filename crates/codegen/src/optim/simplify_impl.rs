@@ -161,6 +161,10 @@ pub enum ExprData {
         args: Option<Value>,
     },
 
+    Gep {
+        args: ArgList,
+    },
+
     /// Phi function.
     Phi {
         values: ArgList,
@@ -225,6 +229,10 @@ impl ExprData {
             },
 
             InsnData::Alloca { ty } => Self::Alloca { ty: *ty },
+
+            InsnData::Gep { args } => Self::Gep {
+                args: args.iter().copied().map(Into::into).collect(),
+            },
 
             InsnData::Return { args } => Self::Return { args: *args },
 
@@ -297,6 +305,13 @@ impl ExprData {
             },
 
             Self::Alloca { ty } => InsnData::alloca(*ty),
+
+            Self::Gep { args } => InsnData::Gep {
+                args: args
+                    .iter()
+                    .map(|val| val.as_value())
+                    .collect::<Option<_>>()?,
+            },
 
             Self::Return { args } => InsnData::Return { args: *args },
 

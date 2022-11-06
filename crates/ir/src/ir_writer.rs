@@ -290,6 +290,12 @@ impl IrWrite for Insn {
                 }
             }
 
+            Gep { args } => {
+                write!(w, "gep")?;
+                writer.space(&mut *w)?;
+                writer.write_insn_args(args, &mut *w)?;
+            }
+
             Phi { values, blocks, .. } => {
                 write!(w, "phi")?;
                 writer.space(&mut *w)?;

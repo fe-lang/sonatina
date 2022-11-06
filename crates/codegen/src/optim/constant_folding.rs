@@ -55,6 +55,7 @@ pub(super) fn fold_constant(dfg: &DataFlowGraph, insn_data: &InsnData) -> Option
         | InsnData::Store { .. }
         | InsnData::Call { .. }
         | InsnData::Alloca { .. }
+        | InsnData::Gep { .. }
         | InsnData::Return { .. }
         | InsnData::Phi { .. } => None,
     }

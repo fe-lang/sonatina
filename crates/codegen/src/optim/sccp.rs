@@ -297,7 +297,7 @@ impl SccpSolver {
                 return;
             }
 
-            InsnData::Alloca { .. } => LatticeCell::Top,
+            InsnData::Alloca { .. } | InsnData::Gep { .. } => LatticeCell::Top,
 
             InsnData::Store { .. } | InsnData::Return { .. } => {
                 // No insn result. Do nothing.

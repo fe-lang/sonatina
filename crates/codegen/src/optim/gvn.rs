@@ -637,6 +637,7 @@ impl GvnSolver {
             | InsnData::Branch { .. }
             | InsnData::BrTable { .. }
             | InsnData::Alloca { .. }
+            | InsnData::Gep { .. }
             | InsnData::Return { .. } => insn_data.clone(),
 
             InsnData::Phi { values, blocks, ty } => {

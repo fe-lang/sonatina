@@ -148,6 +148,14 @@ impl Immediate {
         self.apply_unop_raw(|val| val == I256::one())
     }
 
+    pub fn is_positive(self) -> bool {
+        self.apply_unop_raw(|val| val.is_positive())
+    }
+
+    pub fn is_negative(&self) -> bool {
+        self.apply_unop_raw(|val| val.is_negative())
+    }
+
     pub fn is_all_one(self) -> bool {
         self == Self::all_one(self.ty())
     }
@@ -160,7 +168,7 @@ impl Immediate {
         (self & (self - Immediate::one(self.ty()))).is_zero()
     }
 
-    fn as_i256(self) -> I256 {
+    pub fn as_i256(self) -> I256 {
         match self {
             Self::I1(val) => val.into(),
             Self::I8(val) => val.into(),
@@ -170,6 +178,11 @@ impl Immediate {
             Self::I128(val) => val.into(),
             Self::I256(val) => val,
         }
+    }
+
+    pub fn as_usize(self) -> usize {
+        debug_assert!(!self.is_negative());
+        self.as_i256().to_u256().as_usize()
     }
 
     fn from_i256(val: I256, ty: Type) -> Self {
