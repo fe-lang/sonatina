@@ -465,6 +465,7 @@ pub enum CastOp {
     Sext,
     Zext,
     Trunc,
+    BitCast,
 }
 
 impl CastOp {
@@ -473,6 +474,7 @@ impl CastOp {
             Self::Sext => "sext",
             Self::Zext => "zext",
             Self::Trunc => "trunc",
+            Self::BitCast => "BitCast",
         }
     }
 }

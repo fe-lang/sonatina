@@ -212,6 +212,7 @@ impl SccpSolver {
                     CastOp::Sext => arg_cell.sext(*ty),
                     CastOp::Zext => arg_cell.zext(*ty),
                     CastOp::Trunc => arg_cell.trunc(*ty),
+                    CastOp::BitCast => LatticeCell::Top,
                 }
             }
 

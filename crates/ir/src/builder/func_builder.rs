@@ -115,6 +115,7 @@ impl<'a> FunctionBuilder<'a> {
     impl_cast_insn!(sext, CastOp::Sext);
     impl_cast_insn!(zext, CastOp::Zext);
     impl_cast_insn!(trunc, CastOp::Trunc);
+    impl_cast_insn!(bitcast, CastOp::BitCast);
 
     /// Build memory load instruction.
     pub fn memory_load(&mut self, addr: Value) -> Value {

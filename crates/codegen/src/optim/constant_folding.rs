@@ -44,6 +44,7 @@ pub(super) fn fold_constant(dfg: &DataFlowGraph, insn_data: &InsnData) -> Option
                 CastOp::Sext => arg.sext(*ty),
                 CastOp::Zext => arg.zext(*ty),
                 CastOp::Trunc => arg.trunc(*ty),
+                CastOp::BitCast => return None,
             })
         }
 
