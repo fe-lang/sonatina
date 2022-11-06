@@ -4,12 +4,13 @@ use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use fxhash::FxHashMap;
 use std::collections::BTreeSet;
 
-use crate::isa::TargetIsa;
+use crate::module::ModuleCtx;
 
 use super::{BranchInfo, Immediate, Insn, InsnData, Type, Value, ValueData};
 
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct DataFlowGraph {
+    pub ctx: ModuleCtx,
     #[doc(hidden)]
     pub blocks: PrimaryMap<Block, BlockData>,
     #[doc(hidden)]
@@ -22,8 +23,16 @@ pub struct DataFlowGraph {
 }
 
 impl DataFlowGraph {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(ctx: ModuleCtx) -> Self {
+        Self {
+            ctx,
+            blocks: PrimaryMap::default(),
+            values: PrimaryMap::default(),
+            insns: PrimaryMap::default(),
+            insn_results: SecondaryMap::default(),
+            immediates: FxHashMap::default(),
+            users: SecondaryMap::default(),
+        }
     }
 
     pub fn make_block(&mut self) -> Block {
@@ -84,8 +93,8 @@ impl DataFlowGraph {
         panic!("alias loop detected");
     }
 
-    pub fn make_result(&mut self, isa: &TargetIsa, insn: Insn) -> Option<ValueData> {
-        let ty = self.insns[insn].result_type(isa, self)?;
+    pub fn make_result(&mut self, insn: Insn) -> Option<ValueData> {
+        let ty = self.insns[insn].result_type(self)?;
         Some(ValueData::Insn { insn, ty })
     }
 
@@ -94,11 +103,8 @@ impl DataFlowGraph {
         self.insn_results[insn] = value.into();
     }
 
-    pub fn make_arg_value(&mut self, ty: &Type, idx: usize) -> ValueData {
-        ValueData::Arg {
-            ty: ty.clone(),
-            idx,
-        }
+    pub fn make_arg_value(&mut self, ty: Type, idx: usize) -> ValueData {
+        ValueData::Arg { ty, idx }
     }
 
     pub fn insn_data(&self, insn: Insn) -> &InsnData {
@@ -152,17 +158,17 @@ impl DataFlowGraph {
         }
     }
 
-    pub fn value_ty(&self, value: Value) -> &Type {
+    pub fn value_ty(&self, value: Value) -> Type {
         let value = self.resolve_alias(value);
         match &self.values[value] {
             ValueData::Insn { ty, .. }
             | ValueData::Arg { ty, .. }
-            | ValueData::Immediate { ty, .. } => ty,
+            | ValueData::Immediate { ty, .. } => *ty,
             ValueData::Alias { .. } => unreachable!(),
         }
     }
 
-    pub fn insn_result_ty(&self, insn: Insn) -> Option<&Type> {
+    pub fn insn_result_ty(&self, insn: Insn) -> Option<Type> {
         self.insn_result(insn).map(|value| self.value_ty(value))
     }
 

@@ -3,6 +3,8 @@ use std::fmt;
 use fxhash::FxHashMap;
 use smallvec::SmallVec;
 
+use crate::module::ModuleCtx;
+
 use super::{module::FuncRef, DataFlowGraph, Layout, Type, Value};
 
 #[derive(Debug, Clone)]
@@ -14,19 +16,19 @@ pub struct Function {
     pub dfg: DataFlowGraph,
     pub layout: Layout,
 
-    /// Stores signature of the functions that called by the function.
+    /// Stores signatures of all functions that called by the function.
     pub callees: FxHashMap<FuncRef, Signature>,
 }
 
 impl Function {
-    pub fn new(sig: Signature) -> Self {
-        let mut dfg = DataFlowGraph::default();
+    pub fn new(ctx: &ModuleCtx, sig: Signature) -> Self {
+        let mut dfg = DataFlowGraph::new(ctx.clone());
         let arg_values = sig
             .args()
             .iter()
             .enumerate()
             .map(|(idx, arg_ty)| {
-                let value = dfg.make_arg_value(arg_ty, idx);
+                let value = dfg.make_arg_value(*arg_ty, idx);
                 dfg.make_value(value)
             })
             .collect();
@@ -54,12 +56,12 @@ pub struct Signature {
 }
 
 impl Signature {
-    pub fn new(name: &str, linkage: Linkage, args: &[Type], ret_ty: &Type) -> Self {
+    pub fn new(name: &str, linkage: Linkage, args: &[Type], ret_ty: Type) -> Self {
         Self {
             name: name.to_string(),
             linkage,
             args: args.into(),
-            ret_ty: ret_ty.clone(),
+            ret_ty,
         }
     }
     pub fn name(&self) -> &str {
@@ -78,8 +80,8 @@ impl Signature {
         &self.args
     }
 
-    pub fn ret_ty(&self) -> &Type {
-        &self.ret_ty
+    pub fn ret_ty(&self) -> Type {
+        self.ret_ty
     }
 
     #[doc(hidden)]

@@ -6,7 +6,6 @@ use smallvec::SmallVec;
 
 use crate::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    isa::TargetIsa,
     Block, Function, Insn, InsnData, Type, Value,
 };
 
@@ -44,44 +43,38 @@ impl SsaBuilder {
         self.blocks[block].def_var(var, value);
     }
 
-    pub(super) fn use_var(
-        &mut self,
-        func: &mut Function,
-        isa: &TargetIsa,
-        var: Variable,
-        block: Block,
-    ) -> Value {
+    pub(super) fn use_var(&mut self, func: &mut Function, var: Variable, block: Block) -> Value {
         if let Some(value) = self.blocks[block].use_var_local(var) {
             value
         } else {
-            self.use_var_recursive(func, isa, var, block)
+            self.use_var_recursive(func, var, block)
         }
     }
 
-    pub(super) fn var_ty(&mut self, var: Variable) -> &Type {
-        &self.vars[var].ty
+    pub(super) fn var_ty(&mut self, var: Variable) -> Type {
+        self.vars[var].ty
     }
 
     pub(super) fn append_pred(&mut self, block: Block, pred: Block) {
         self.blocks[block].append_pred(pred);
     }
 
-    pub(super) fn seal_block(&mut self, func: &mut Function, isa: &TargetIsa, block: Block) {
+    pub(super) fn seal_block(&mut self, func: &mut Function, block: Block) {
         if self.is_sealed(block) {
             return;
         }
 
         for (var, phi) in self.blocks[block].take_incomplete_phis() {
-            self.add_phi_args(func, isa, var, phi);
+            self.add_phi_args(func, var, phi);
         }
 
         self.blocks[block].seal();
     }
 
-    pub(super) fn seal_all(&mut self, func: &mut Function, isa: &TargetIsa) {
+    pub(super) fn seal_all(&mut self, func: &mut Function) {
         let mut next_block = func.layout.entry_block();
         while let Some(block) = next_block {
-            self.seal_block(func, isa, block);
+            self.seal_block(func, block);
             next_block = func.layout.next_block_of(block);
         }
     }
@@ -90,46 +83,40 @@ impl SsaBuilder {
         self.blocks[block].is_sealed()
     }
 
-    fn use_var_recursive(
-        &mut self,
-        func: &mut Function,
-        isa: &TargetIsa,
-        var: Variable,
-        block: Block,
-    ) -> Value {
+    fn use_var_recursive(&mut self, func: &mut Function, var: Variable, block: Block) -> Value {
         if !self.is_sealed(block) {
-            let (insn, value) = self.prepend_phi(func, isa, var, block);
+            let (insn, value) = self.prepend_phi(func, var, block);
             self.blocks[block].push_incomplete_phi(var, insn);
             self.def_var(var, value, block);
             return value;
         }
 
         match *self.blocks[block].preds() {
-            [pred] => self.use_var(func, isa, var, pred),
+            [pred] => self.use_var(func, var, pred),
             _ => {
-                let (phi_insn, phi_value) = self.prepend_phi(func, isa, var, block);
+                let (phi_insn, phi_value) = self.prepend_phi(func, var, block);
                 // Break potential cycles by defining operandless phi.
                 self.def_var(var, phi_value, block);
-                self.add_phi_args(func, isa, var, phi_insn);
+                self.add_phi_args(func, var, phi_insn);
                 phi_value
             }
         }
     }
 
-    fn add_phi_args(&mut self, func: &mut Function, isa: &TargetIsa, var: Variable, phi: Insn) {
+    fn add_phi_args(&mut self, func: &mut Function, var: Variable, phi: Insn) {
         let block = func.layout.insn_block(phi);
         let preds = std::mem::take(&mut self.blocks[block].preds);
 
         for pred in &preds {
-            let value = self.use_var(func, isa, var, *pred);
+            let value = self.use_var(func, var, *pred);
             func.dfg.append_phi_arg(phi, value, *pred);
         }
         self.blocks[block].preds = preds;
 
-        self.remove_trivial_phi(func, isa, phi);
+        self.remove_trivial_phi(func, phi);
     }
 
-    fn remove_trivial_phi(&mut self, func: &mut Function, isa: &TargetIsa, phi: Insn) {
+    fn remove_trivial_phi(&mut self, func: &mut Function, phi: Insn) {
         let phi_value = func.dfg.insn_result(phi).unwrap();
         let phi_args = func.dfg.insn_args(phi);
         if phi_args.is_empty() {
@@ -144,30 +131,24 @@ impl SsaBuilder {
 
         func.dfg.change_to_alias(phi_value, first);
         self.trivial_phis.insert(phi);
-        InsnInserter::new(func, isa, CursorLocation::At(phi)).remove_insn();
+        InsnInserter::new(func, CursorLocation::At(phi)).remove_insn();
 
         for i in 0..func.dfg.users_num(phi_value) {
             let user = func.dfg.user(phi_value, i);
             if func.dfg.is_phi(user) && !self.trivial_phis.contains_key(user) {
-                self.remove_trivial_phi(func, isa, user);
+                self.remove_trivial_phi(func, user);
             }
         }
     }
 
-    fn prepend_phi(
-        &mut self,
-        func: &mut Function,
-        isa: &TargetIsa,
-        var: Variable,
-        block: Block,
-    ) -> (Insn, Value) {
-        let ty = self.var_ty(var).clone();
+    fn prepend_phi(&mut self, func: &mut Function, var: Variable, block: Block) -> (Insn, Value) {
+        let ty = self.var_ty(var);
         let insn_data = InsnData::Phi {
             values: SmallVec::new(),
             blocks: SmallVec::new(),
             ty,
         };
-        let mut cursor = InsnInserter::new(func, isa, CursorLocation::BlockTop(block));
+        let mut cursor = InsnInserter::new(func, CursorLocation::BlockTop(block));
         let insn = cursor.prepend_insn_data(insn_data);
         let value = cursor.make_result(insn);
         if let Some(value) = value {
@@ -233,7 +214,7 @@ mod tests {
     #[test]
     fn use_var_local() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[], Type::Void);
 
         let var = builder.declare_var(Type::I32);
 
@@ -264,7 +245,7 @@ mod tests {
     #[test]
     fn use_var_global_if() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[], Type::Void);
 
         let var = builder.declare_var(Type::I32);
 
@@ -322,7 +303,7 @@ mod tests {
     #[test]
     fn use_var_global_many_preds() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[], Type::Void);
 
         let var0 = builder.declare_var(Type::I32);
         let var1 = builder.declare_var(Type::I32);
@@ -417,7 +398,7 @@ mod tests {
     #[test]
     fn use_var_global_loop() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[], Type::Void);
 
         let var = builder.declare_var(Type::I32);
 
@@ -478,7 +459,7 @@ mod tests {
     #[test]
     fn use_var_global_complex() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[], Type::Void);
 
         let var = builder.declare_var(Type::I32);
 
@@ -564,7 +545,7 @@ mod tests {
     #[test]
     fn use_var_global_complex_seal_all() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[], Type::Void);
 
         let var = builder.declare_var(Type::I32);
 
@@ -645,7 +626,7 @@ mod tests {
     #[test]
     fn br_table() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[Type::I32], &Type::I32);
+        let mut builder = test_module_builder.func_builder(&[Type::I32], Type::I32);
         let var = builder.declare_var(Type::I32);
 
         let b0 = builder.append_block();
@@ -717,7 +698,7 @@ mod tests {
     #[should_panic]
     fn undef_use() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[], Type::Void);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();
@@ -730,7 +711,7 @@ mod tests {
     #[should_panic]
     fn unreachable_use() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[], Type::Void);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use sonatina_codegen::optim::insn_simplify::InsnSimplifySolver;
 
-use sonatina_ir::{isa::TargetIsa, Function};
+use sonatina_ir::Function;
 
 use super::{FuncTransform, FIXTURE_ROOT};
 
@@ -10,8 +10,8 @@ use super::{FuncTransform, FIXTURE_ROOT};
 pub struct InsnSimplifyTransform {}
 
 impl FuncTransform for InsnSimplifyTransform {
-    fn transform(&mut self, func: &mut Function, isa: &TargetIsa) {
-        let mut solver = InsnSimplifySolver::new(isa);
+    fn transform(&mut self, func: &mut Function) {
+        let mut solver = InsnSimplifySolver::new();
         solver.run(func);
     }
 

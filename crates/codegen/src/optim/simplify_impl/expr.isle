@@ -1,4 +1,5 @@
 (type bool (primitive bool))
+(type Unit (primitive Unit))
 
 (type Value (primitive Value))
 (type Expr (primitive Expr))
@@ -12,7 +13,7 @@
 (type BlockList extern (enum))
 (type BrTableDefaultDest (enum))
 
-(type Type extern (enum))
+(type Type (primitive Type))
 
 (type ArgArray1 extern (enum))
 (decl arg_array1 (ExprValue) ArgArray1)

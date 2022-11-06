@@ -28,7 +28,7 @@ impl IsaSpecificTypeProvider for EvmEth {
     }
 
     fn address_type(&self) -> Type {
-        Type::make_array(Type::I8, 20)
+        todo!()
     }
 
     fn balance_type(&self) -> Type {

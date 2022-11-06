@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn simple_loop() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[], Type::Void);
 
         let b0 = builder.append_block();
         let b1 = builder.append_block();
@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn continue_loop() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[], Type::Void);
 
         let b0 = builder.append_block();
         let b1 = builder.append_block();
@@ -375,7 +375,7 @@ mod tests {
     #[test]
     fn single_block_loop() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[Type::I1], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[Type::I1], Type::Void);
         let b0 = builder.append_block();
         let b1 = builder.append_block();
         let b2 = builder.append_block();
@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn nested_loop() {
         let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[Type::I1], &Type::Void);
+        let mut builder = test_module_builder.func_builder(&[Type::I1], Type::Void);
 
         let b0 = builder.append_block();
         let b1 = builder.append_block();

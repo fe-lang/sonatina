@@ -1,3 +1,5 @@
+use std::fmt::{Display, Formatter};
+
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +36,12 @@ impl TargetTriple {
     }
 }
 
+impl Display for TargetTriple {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}-{}-{}", self.architecture, self.chain, self.version)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Architecture {
     Evm,
@@ -48,6 +56,14 @@ impl Architecture {
     }
 }
 
+impl Display for Architecture {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Evm => write!(f, "evm"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Chain {
     Ethereum,
@@ -58,6 +74,14 @@ impl Chain {
         match s {
             "ethereum" => Ok(Chain::Ethereum),
             _ => Err(InvalidTriple::ChainNotSupported),
+        }
+    }
+}
+
+impl Display for Chain {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Chain::Ethereum => write!(f, "ethereum"),
         }
     }
 }
@@ -82,6 +106,14 @@ impl Version {
                 };
                 Ok(Self::EvmVersion(evm_version))
             }
+        }
+    }
+}
+
+impl Display for Version {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EvmVersion(evm_version) => write!(f, "{}", evm_version),
         }
     }
 }
@@ -111,6 +143,19 @@ pub enum InvalidTriple<'a> {
 
     #[error("given triple consists of invalid combination")]
     InvalidCombination,
+}
+
+impl Display for EvmVersion {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Frontier => write!(f, "frontier"),
+            Self::Homestead => write!(f, "homestead"),
+            Self::Byzantium => write!(f, "byzantium"),
+            Self::Constantinople => write!(f, "constantinople"),
+            Self::Istanbul => write!(f, "istanbul"),
+            Self::London => write!(f, "london"),
+        }
+    }
 }
 
 #[cfg(test)]

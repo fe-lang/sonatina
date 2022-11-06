@@ -73,6 +73,14 @@ impl<'a> Lexer<'a> {
             Token::LBracket
         } else if self.eat_char_if(|c| c == ']').is_some() {
             Token::RBracket
+        } else if self.eat_char_if(|c| c == '{').is_some() {
+            Token::LBrace
+        } else if self.eat_char_if(|c| c == '}').is_some() {
+            Token::RBrace
+        } else if self.eat_char_if(|c| c == '<').is_some() {
+            Token::LAngleBracket
+        } else if self.eat_char_if(|c| c == '>').is_some() {
+            Token::RAngleBracket
         } else if self.eat_char_if(|c| c == '=').is_some() {
             Token::Eq
         } else if self.eat_char_if(|c| c == '.').is_some() {
@@ -121,6 +129,8 @@ impl<'a> Lexer<'a> {
             Token::Linkage(Linkage::External)
         } else if self.eat_string_if(b"undef").is_some() {
             Token::Undef
+        } else if self.eat_string_if(b"type").is_some() {
+            Token::Type
         } else if self.eat_string_if(b"->").is_some() {
             Token::RArrow
         } else if let Some(code) = self.try_eat_opcode() {
@@ -231,6 +241,7 @@ impl<'a> Lexer<'a> {
             (b"xor", Code::Xor),
             (b"sext", Code::Sext),
             (b"zext", Code::Zext),
+            (b"bitcast", Code::BitCast),
             (b"trunc", Code::Trunc),
             (b"load", Code::Load),
             (b"store", Code::Store),
@@ -239,6 +250,7 @@ impl<'a> Lexer<'a> {
             (b"fallthrough", Code::FallThrough),
             (b"br_table", Code::BrTable),
             (b"br", Code::Br),
+            (b"gep", Code::Gep),
             (b"alloca", Code::Alloca),
             (b"return", Code::Return),
             (b"phi", Code::Phi),
@@ -341,10 +353,15 @@ pub(super) enum Token<'a> {
     RParen,
     LBracket,
     RBracket,
+    LBrace,
+    RBrace,
+    LAngleBracket,
+    RAngleBracket,
     Eq,
     Dot,
     Star,
     Undef,
+    Type,
     Target,
     ModuleComment(&'a str),
     FuncComment(&'a str),
@@ -385,9 +402,9 @@ impl<'a> Token<'a> {
         }
     }
 
-    pub(super) fn ty(&self) -> &Type {
+    pub(super) fn ty(&self) -> Type {
         if let Self::BaseTy(ty) = self {
-            ty
+            *ty
         } else {
             unreachable!()
         }
@@ -406,8 +423,12 @@ impl<'a> fmt::Display for Token<'a> {
             Self::Comma => write!(w, ","),
             Self::LParen => write!(w, "("),
             Self::RParen => write!(w, ")"),
+            Self::LBrace => write!(w, "{{"),
+            Self::RBrace => write!(w, "}}"),
             Self::LBracket => write!(w, "["),
             Self::RBracket => write!(w, "]"),
+            Self::LAngleBracket => write!(w, "<"),
+            Self::RAngleBracket => write!(w, ">"),
             Self::Eq => write!(w, "="),
             Self::DataLocationKind(loc) => {
                 write!(w, "@")?;
@@ -420,6 +441,7 @@ impl<'a> fmt::Display for Token<'a> {
             Self::Dot => write!(w, "."),
             Self::Star => write!(w, "*"),
             Self::Undef => write!(w, "undef"),
+            Self::Type => write!(w, "type"),
             Self::Target => write!(w, "target"),
             Self::String(s) => write!(w, "{}", s),
             Self::ModuleComment(comment) => write!(w, "#!{}", comment),
@@ -428,7 +450,7 @@ impl<'a> fmt::Display for Token<'a> {
             Self::Value(id) => write!(w, "v{}", id),
             Self::Ident(ident) => write!(w, "%{}", ident),
             Self::OpCode(code) => write!(w, "{}", code),
-            Self::BaseTy(ty) => write!(w, "{}", ty),
+            Self::BaseTy(_) => write!(w, "type"),
             Self::Integer(num) => w.write_str(num),
         }
     }
@@ -464,6 +486,7 @@ pub(super) enum Code {
     Sext,
     Zext,
     Trunc,
+    BitCast,
 
     Load,
     Store,
@@ -478,6 +501,8 @@ pub(super) enum Code {
     // Branch ops.
     Br,
     BrTable,
+
+    Gep,
 
     Alloca,
 
@@ -498,6 +523,7 @@ impl fmt::Display for Code {
             Mul => "mul",
             Udiv => "udiv",
             Sdiv => "sdiv",
+            BitCast => "bitcast",
             Lt => "lt",
             Gt => "gt",
             Slt => "slt",
@@ -519,6 +545,7 @@ impl fmt::Display for Code {
             Call => "call",
             Jump => "jump",
             FallThrough => "fallthrough",
+            Gep => "gep",
             Alloca => "alloca",
             Br => "br",
             BrTable => "br_table",

@@ -20,7 +20,6 @@ use crate::{
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     insn::{BinaryOp, CastOp, InsnData, UnaryOp},
-    isa::TargetIsa,
     Block, DataFlowGraph, Function, Immediate, Insn, Type, Value,
 };
 
@@ -36,7 +35,7 @@ const IMMEDIATE_RANK: u32 = 0;
 
 /// A GVN solver.
 #[derive(Debug)]
-pub struct GvnSolver<'isa> {
+pub struct GvnSolver {
     /// Store classes.
     classes: PrimaryMap<Class, ClassData>,
 
@@ -56,12 +55,10 @@ pub struct GvnSolver<'isa> {
 
     /// Hold always available values, i.e. immediates or function arguments.
     always_avail: Vec<Value>,
-
-    isa: &'isa TargetIsa,
 }
 
-impl<'isa> GvnSolver<'isa> {
-    pub fn new(isa: &'isa TargetIsa) -> Self {
+impl GvnSolver {
+    pub fn new() -> Self {
         Self {
             classes: PrimaryMap::default(),
             values: SecondaryMap::default(),
@@ -70,7 +67,6 @@ impl<'isa> GvnSolver<'isa> {
             blocks: SecondaryMap::default(),
             value_phi_table: FxHashMap::default(),
             always_avail: Vec::default(),
-            isa,
         }
     }
     /// The main entry point of the struct.
@@ -128,7 +124,7 @@ impl<'isa> GvnSolver<'isa> {
 
                     InsnData::Branch { args, dests } => {
                         let cond = args[0];
-                        debug_assert_eq!(func.dfg.value_ty(cond), &Type::I1);
+                        debug_assert_eq!(func.dfg.value_ty(cond), Type::I1);
 
                         let then_block = dests[0];
                         let else_block = dests[1];
@@ -641,6 +637,7 @@ impl<'isa> GvnSolver<'isa> {
             | InsnData::Branch { .. }
             | InsnData::BrTable { .. }
             | InsnData::Alloca { .. }
+            | InsnData::Gep { .. }
             | InsnData::Return { .. } => insn_data.clone(),
 
             InsnData::Phi { values, blocks, ty } => {
@@ -696,7 +693,7 @@ impl<'isa> GvnSolver<'isa> {
         dfg: &mut DataFlowGraph,
         insn_data: &InsnData,
     ) -> Option<GvnInsn> {
-        simplify_impl::simplify_insn_data(dfg, self.isa, insn_data.clone()).map(|res| match res {
+        simplify_impl::simplify_insn_data(dfg, insn_data.clone()).map(|res| match res {
             simplify_impl::SimplifyResult::Value(value) => {
                 // Handle immediate specially because we need to assign a new class to the immediate.
                 // if the immediate is newly created in simplification process.
@@ -889,6 +886,12 @@ impl<'isa> GvnSolver<'isa> {
     }
 }
 
+impl Default for GvnSolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 struct Class(u32);
 entity_impl!(Class);
@@ -992,14 +995,14 @@ struct GvnBlockData {
 
 /// This struct finds value phi that described in
 /// `Detection of Redundant Expressions: A Complete and Polynomial-Time Algorithm in SSA`.
-struct ValuePhiFinder<'isa, 'a> {
-    solver: &'a mut GvnSolver<'isa>,
+struct ValuePhiFinder<'a> {
+    solver: &'a mut GvnSolver,
     /// Hold visited values to prevent infinite loop.
     visited: FxHashSet<Value>,
 }
 
-impl<'isa, 'a> ValuePhiFinder<'isa, 'a> {
-    fn new(solver: &'a mut GvnSolver<'isa>, insn_result: Value) -> Self {
+impl<'a> ValuePhiFinder<'a> {
+    fn new(solver: &'a mut GvnSolver, insn_result: Value) -> Self {
         let mut visited = FxHashSet::default();
         visited.insert(insn_result);
         Self { solver, visited }
@@ -1046,7 +1049,7 @@ impl<'isa, 'a> ValuePhiFinder<'isa, 'a> {
                 ty,
             } => {
                 let arg = self.get_phi_of(func, *arg)?;
-                self.compute_value_phi_for_cast(func, *code, arg, ty)
+                self.compute_value_phi_for_cast(func, *code, arg, *ty)
             }
 
             _ => None,
@@ -1179,7 +1182,7 @@ impl<'isa, 'a> ValuePhiFinder<'isa, 'a> {
         func: &mut Function,
         code: CastOp,
         value_phi: ValuePhi,
-        ty: &Type,
+        ty: Type,
     ) -> Option<ValuePhi> {
         let value_phi_insn = if let ValuePhi::PhiInsn(insn) = value_phi {
             insn
@@ -1193,7 +1196,7 @@ impl<'isa, 'a> ValuePhiFinder<'isa, 'a> {
         for (arg, block) in value_phi_insn.args.into_iter() {
             match arg {
                 ValuePhi::Value(value) => {
-                    let query_insn = InsnData::cast(code, value, ty.clone());
+                    let query_insn = InsnData::cast(code, value, ty);
                     let phi_arg = self.lookup_value_phi_arg(func, query_insn)?;
                     result.args.push((phi_arg, block));
                 }
@@ -1324,8 +1327,8 @@ impl ValuePhiInsn {
 
 /// A struct for redundant code/edge/block removal.
 /// This struct also resolve value phis and insert phi insns to the appropriate block.
-struct RedundantCodeRemover<'isa, 'a> {
-    solver: &'a GvnSolver<'isa>,
+struct RedundantCodeRemover<'a> {
+    solver: &'a GvnSolver,
 
     /// Record pairs of available class and representative value in bottom of blocks.
     /// This is necessary to decide whether the args of inserted phi functions are dominated by its
@@ -1336,8 +1339,8 @@ struct RedundantCodeRemover<'isa, 'a> {
     resolved_value_phis: FxHashMap<ValuePhi, Value>,
 }
 
-impl<'isa, 'a> RedundantCodeRemover<'isa, 'a> {
-    fn new(solver: &'a GvnSolver<'isa>) -> Self {
+impl<'a> RedundantCodeRemover<'a> {
+    fn new(solver: &'a GvnSolver) -> Self {
         Self {
             solver,
             avail_set: SecondaryMap::default(),
@@ -1403,8 +1406,7 @@ impl<'isa, 'a> RedundantCodeRemover<'isa, 'a> {
             self.avail_set[idom].clone()
         };
 
-        let mut inserter =
-            InsnInserter::new(func, self.solver.isa, CursorLocation::BlockTop(block));
+        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(block));
         loop {
             match inserter.loc() {
                 CursorLocation::BlockTop(_) => {
@@ -1443,8 +1445,7 @@ impl<'isa, 'a> RedundantCodeRemover<'isa, 'a> {
 
     /// Resolve value phis in the block.
     fn resolve_value_phi_in_block(&mut self, func: &mut Function, block: Block) {
-        let mut inserter =
-            InsnInserter::new(func, self.solver.isa, CursorLocation::BlockTop(block));
+        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(block));
         loop {
             match inserter.loc() {
                 CursorLocation::BlockTop(_) => {
@@ -1462,7 +1463,7 @@ impl<'isa, 'a> RedundantCodeRemover<'isa, 'a> {
                         // then use resolved phi value and remove insn.
                         let class = self.solver.value_class(insn_result);
                         if let Some(value_phi) = &self.solver.classes[class].value_phi {
-                            let ty = inserter.func().dfg.value_ty(insn_result).clone();
+                            let ty = inserter.func().dfg.value_ty(insn_result);
                             if self.is_value_phi_resolvable(value_phi, block) {
                                 let value =
                                     self.resolve_value_phi(&mut inserter, value_phi, ty, block);
@@ -1529,10 +1530,9 @@ impl<'isa, 'a> RedundantCodeRemover<'isa, 'a> {
                 let current_inserter_loc = inserter.loc();
 
                 // Resolve phi value's arguments and append them to the newly `InsnData::Phi`.
-                let mut phi = InsnData::phi(ty.clone());
+                let mut phi = InsnData::phi(ty);
                 for (value_phi, phi_block) in &phi_insn.args {
-                    let resolved =
-                        self.resolve_value_phi(inserter, value_phi, ty.clone(), *phi_block);
+                    let resolved = self.resolve_value_phi(inserter, value_phi, ty, *phi_block);
                     phi.append_phi_arg(resolved, *phi_block);
                 }
 
@@ -1557,8 +1557,7 @@ impl<'isa, 'a> RedundantCodeRemover<'isa, 'a> {
     /// Remove unreachable edges and blocks.
     fn remove_unreachable_edges(&self, func: &mut Function) {
         let entry_block = func.layout.entry_block().unwrap();
-        let mut inserter =
-            InsnInserter::new(func, self.solver.isa, CursorLocation::BlockTop(entry_block));
+        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(entry_block));
 
         loop {
             match inserter.loc() {

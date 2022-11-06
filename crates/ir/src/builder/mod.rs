@@ -15,7 +15,7 @@ pub mod test_util {
     use crate::{
         ir_writer::FuncWriter,
         isa::{IsaBuilder, TargetIsa},
-        module::{FuncRef, Module},
+        module::{FuncRef, Module, ModuleCtx},
         Function, Linkage, Signature, Type,
     };
 
@@ -34,7 +34,7 @@ pub mod test_util {
             Self::default()
         }
 
-        pub fn func_builder(&mut self, args: &[Type], ret_ty: &Type) -> FunctionBuilder {
+        pub fn func_builder(&mut self, args: &[Type], ret_ty: Type) -> FunctionBuilder {
             let sig = Signature::new("test_func", Linkage::Public, args, ret_ty);
             let func_ref = self.module_builder.declare_function(sig);
             self.func_ref = Some(func_ref);
@@ -53,8 +53,9 @@ pub mod test_util {
 
     impl Default for TestModuleBuilder {
         fn default() -> Self {
+            let ctx = ModuleCtx::new(build_test_isa());
             Self {
-                module_builder: ModuleBuilder::new(build_test_isa()),
+                module_builder: ModuleBuilder::new(ctx),
                 func_ref: None,
             }
         }

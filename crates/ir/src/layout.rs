@@ -351,6 +351,8 @@ impl InsnNode {
 
 #[cfg(test)]
 mod tests {
+    use crate::{builder::test_util::build_test_isa, module::ModuleCtx};
+
     use super::*;
 
     use super::super::{dfg::DataFlowGraph, insn::BinaryOp, InsnData};
@@ -371,7 +373,8 @@ mod tests {
     #[test]
     fn test_block_insertion() {
         let mut layout = Layout::new();
-        let mut dfg = DataFlowGraph::new();
+        let ctx = ModuleCtx::new(build_test_isa());
+        let mut dfg = DataFlowGraph::new(ctx);
         assert_eq!(layout.entry_block, None);
         assert_eq!(layout.last_block, None);
 
@@ -417,7 +420,8 @@ mod tests {
     #[test]
     fn test_block_removal() {
         let mut layout = Layout::new();
-        let mut dfg = DataFlowGraph::new();
+        let ctx = ModuleCtx::new(build_test_isa());
+        let mut dfg = DataFlowGraph::new(ctx);
 
         // block1 -> block2 -> block3 -> block4.
         let b1 = dfg.make_block();
@@ -459,7 +463,8 @@ mod tests {
     #[test]
     fn test_insn_insertion() {
         let mut layout = Layout::new();
-        let mut dfg = DataFlowGraph::new();
+        let ctx = ModuleCtx::new(build_test_isa());
+        let mut dfg = DataFlowGraph::new(ctx);
         let b1 = dfg.make_block();
         layout.append_block(b1);
         assert_eq!(layout.first_insn_of(b1), None);
@@ -506,7 +511,8 @@ mod tests {
     #[test]
     fn test_insn_removal() {
         let mut layout = Layout::new();
-        let mut dfg = DataFlowGraph::new();
+        let ctx = ModuleCtx::new(build_test_isa());
+        let mut dfg = DataFlowGraph::new(ctx);
         let b1 = dfg.make_block();
         layout.append_block(b1);
 

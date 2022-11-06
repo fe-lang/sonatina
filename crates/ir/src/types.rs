@@ -1,9 +1,116 @@
 //! This module contains Sonatina IR types definitions.
 
-use std::{cmp, fmt};
+use std::cmp;
+
+use cranelift_entity::PrimaryMap;
+use fxhash::FxHashMap;
+use indexmap::IndexMap;
+
+#[derive(Debug, Default)]
+pub struct TypeStore {
+    compounds: PrimaryMap<CompoundType, CompoundTypeData>,
+    rev_types: FxHashMap<CompoundTypeData, CompoundType>,
+    struct_types: IndexMap<String, CompoundType>,
+}
+
+impl TypeStore {
+    pub fn make_ptr(&mut self, ty: Type) -> Type {
+        let ty = self.make_compound(CompoundTypeData::Ptr(ty));
+        Type::Compound(ty)
+    }
+
+    pub fn make_array(&mut self, elem: Type, len: usize) -> Type {
+        let ty = self.make_compound(CompoundTypeData::Array { elem, len });
+        Type::Compound(ty)
+    }
+
+    pub fn make_struct(&mut self, name: &str, fields: &[Type], packed: bool) -> Type {
+        let compound_data = CompoundTypeData::Struct(StructData {
+            name: name.to_string(),
+            fields: fields.to_vec(),
+            packed,
+        });
+        let compound = self.make_compound(compound_data);
+        debug_assert!(
+            !self.struct_types.contains_key(name),
+            "struct {name} is already defined"
+        );
+        self.struct_types.insert(name.to_string(), compound);
+        Type::Compound(compound)
+    }
+
+    /// Returns `[StructDef]` if the given type is a struct type.
+    pub fn struct_def(&self, ty: Type) -> Option<&StructData> {
+        match ty {
+            Type::Compound(compound) => match self.compounds[compound] {
+                CompoundTypeData::Struct(ref def) => Some(def),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    pub fn struct_type_by_name(&self, name: &str) -> Option<Type> {
+        self.struct_types.get(name).map(|ty| Type::Compound(*ty))
+    }
+
+    pub fn all_struct_data(&self) -> impl Iterator<Item = &StructData> {
+        self.struct_types
+            .values()
+            .map(|compound_type| match self.compounds[*compound_type] {
+                CompoundTypeData::Struct(ref def) => def,
+                _ => unreachable!(),
+            })
+    }
+
+    pub fn deref(&self, ptr: Type) -> Option<Type> {
+        match ptr {
+            Type::Compound(ty) => {
+                let ty_data = &self.compounds[ty];
+                match ty_data {
+                    CompoundTypeData::Ptr(ty) => Some(*ty),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub fn is_integral(&self, ty: Type) -> bool {
+        ty.is_integral()
+    }
+
+    pub fn is_ptr(&self, ty: Type) -> bool {
+        match ty {
+            Type::Compound(compound) => self.compounds[compound].is_ptr(),
+            _ => false,
+        }
+    }
+
+    pub fn is_array(&self, ty: Type) -> bool {
+        match ty {
+            Type::Compound(compound) => self.compounds[compound].is_array(),
+            _ => false,
+        }
+    }
+
+    pub fn make_compound(&mut self, data: CompoundTypeData) -> CompoundType {
+        if let Some(compound) = self.rev_types.get(&data) {
+            *compound
+        } else {
+            let compound = self.compounds.push(data.clone());
+            self.rev_types.insert(data, compound);
+            compound
+        }
+    }
+
+    pub fn resolve_compound(&self, compound: CompoundType) -> &CompoundTypeData {
+        &self.compounds[compound]
+    }
+}
 
 /// Sonatina IR types definition.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Type {
     I1,
     I8,
@@ -12,45 +119,45 @@ pub enum Type {
     I64,
     I128,
     I256,
-    Array { elem_ty: Box<Type>, len: usize },
-    Ptr { base: Box<Type> },
+    Compound(CompoundType),
     Void,
 }
 
+/// An opaque reference to [`CompoundTypeData`].
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
+pub struct CompoundType(u32);
+cranelift_entity::entity_impl!(CompoundType);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CompoundTypeData {
+    Array { elem: Type, len: usize },
+    Ptr(Type),
+    Struct(StructData),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StructData {
+    pub name: String,
+    pub fields: Vec<Type>,
+    pub packed: bool,
+}
+
+impl CompoundTypeData {
+    pub fn is_array(&self) -> bool {
+        matches!(self, Self::Array { .. })
+    }
+
+    pub fn is_ptr(&self) -> bool {
+        matches!(self, Self::Ptr(_))
+    }
+}
+
 impl Type {
-    pub fn make_array(elem_ty: Type, len: usize) -> Self {
-        Self::Array {
-            elem_ty: elem_ty.into(),
-            len,
-        }
-    }
-
-    pub fn make_ptr(base: Type) -> Self {
-        Type::Ptr { base: base.into() }
-    }
-
     pub fn is_integral(&self) -> bool {
         matches!(
             self,
             Self::I1 | Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::I128 | Self::I256
         )
-    }
-}
-
-impl fmt::Display for Type {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::I1 => write!(f, "i1"),
-            Self::I8 => write!(f, "i8"),
-            Self::I16 => write!(f, "i16"),
-            Self::I32 => write!(f, "i32"),
-            Self::I64 => write!(f, "i64"),
-            Self::I128 => write!(f, "i128"),
-            Self::I256 => write!(f, "i256"),
-            Self::Array { elem_ty, len } => write!(f, "[{}; {}]", elem_ty, len),
-            Self::Ptr { base } => write!(f, "*{}", base),
-            Self::Void => write!(f, "void"),
-        }
     }
 }
 

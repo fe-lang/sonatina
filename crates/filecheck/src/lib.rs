@@ -11,7 +11,7 @@ use std::{
     time,
 };
 
-use sonatina_ir::{ir_writer::FuncWriter, isa::TargetIsa, module::FuncRef, Function};
+use sonatina_ir::{ir_writer::FuncWriter, module::FuncRef, Function};
 
 use sonatina_parser::{
     parser::{ParsedModule, Parser},
@@ -23,7 +23,7 @@ use walkdir::WalkDir;
 pub(crate) const FIXTURE_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 
 pub trait FuncTransform {
-    fn transform(&mut self, func: &mut Function, isa: &TargetIsa);
+    fn transform(&mut self, func: &mut Function);
 
     fn test_root(&self) -> PathBuf;
 }
@@ -150,7 +150,7 @@ impl<'a> FileChecker<'a> {
         let func = &mut parsed_module.module.funcs[func_ref];
         let comments = &parsed_module.func_comments[func_ref];
 
-        self.transformer.transform(func, &parsed_module.module.isa);
+        self.transformer.transform(func);
         let func_ir = FuncWriter::new(func).dump_string().unwrap();
 
         let checker = self.build_checker(comments);
@@ -167,8 +167,9 @@ impl<'a> FileChecker<'a> {
     }
 
     fn parse_file(&self) -> Result<ParsedModule, String> {
-        let input = fs::read_to_string(&self.file_path).unwrap();
-        match Parser::parse(&input) {
+        let input = fs::read_to_string(self.file_path).unwrap();
+        let parser = Parser::default();
+        match parser.parse(&input) {
             Ok(module) => Ok(module),
             Err(err) => match err.kind {
                 ErrorKind::InvalidToken(msg) => Err(format!(

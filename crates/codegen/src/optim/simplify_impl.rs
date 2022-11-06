@@ -6,7 +6,6 @@ use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
 
 use sonatina_ir::{
     insn::{BinaryOp, CastOp, DataLocationKind, JumpOp, UnaryOp},
-    isa::TargetIsa,
     module::FuncRef,
     Block, DataFlowGraph, Immediate, Insn, InsnData, Type, Value,
 };
@@ -16,30 +15,22 @@ mod generated_code;
 
 use generated_code::{Context, SimplifyRawResult};
 
-pub fn simplify_insn(
-    dfg: &mut DataFlowGraph,
-    isa: &TargetIsa,
-    insn: Insn,
-) -> Option<SimplifyResult> {
+pub fn simplify_insn(dfg: &mut DataFlowGraph, insn: Insn) -> Option<SimplifyResult> {
     if dfg.is_phi(insn) {
         return simplify_phi(dfg, dfg.insn_data(insn));
     }
 
-    let mut ctx = SimplifyContext::new(dfg, isa);
+    let mut ctx = SimplifyContext::new(dfg);
     let expr = ctx.make_expr_from_insn(insn);
     ctx.simplify_expr(expr)
 }
 
-pub fn simplify_insn_data(
-    dfg: &mut DataFlowGraph,
-    isa: &TargetIsa,
-    data: InsnData,
-) -> Option<SimplifyResult> {
+pub fn simplify_insn_data(dfg: &mut DataFlowGraph, data: InsnData) -> Option<SimplifyResult> {
     if matches!(data, InsnData::Phi { .. }) {
         return simplify_phi(dfg, &data);
     }
 
-    let mut ctx = SimplifyContext::new(dfg, isa);
+    let mut ctx = SimplifyContext::new(dfg);
     let expr = ctx.make_expr_from_insn_data(data);
     ctx.simplify_expr(expr)
 }
@@ -89,6 +80,7 @@ fn try_swap_arg(ctx: &mut SimplifyContext, expr: Expr) -> Option<Expr> {
     }
 }
 
+type Unit = ();
 type ArgArray1 = [ExprValue; 1];
 type ArgArray2 = [ExprValue; 2];
 type BlockArray1 = [Block; 1];
@@ -169,6 +161,10 @@ pub enum ExprData {
         args: Option<Value>,
     },
 
+    Gep {
+        args: ArgList,
+    },
+
     /// Phi function.
     Phi {
         values: ArgList,
@@ -193,7 +189,7 @@ impl ExprData {
             InsnData::Cast { code, args, ty } => Self::Cast {
                 code: *code,
                 args: [args[0].into()],
-                ty: ty.clone(),
+                ty: *ty,
             },
 
             InsnData::Load { args, loc } => Self::Load {
@@ -209,7 +205,7 @@ impl ExprData {
             InsnData::Call { func, args, ret_ty } => Self::Call {
                 func: *func,
                 args: args.iter().copied().map(Into::into).collect(),
-                ret_ty: ret_ty.clone(),
+                ret_ty: *ret_ty,
             },
 
             InsnData::Jump { code, dests } => Self::Jump {
@@ -232,14 +228,18 @@ impl ExprData {
                 table: table.clone(),
             },
 
-            InsnData::Alloca { ty } => Self::Alloca { ty: ty.clone() },
+            InsnData::Alloca { ty } => Self::Alloca { ty: *ty },
+
+            InsnData::Gep { args } => Self::Gep {
+                args: args.iter().copied().map(Into::into).collect(),
+            },
 
             InsnData::Return { args } => Self::Return { args: *args },
 
             InsnData::Phi { values, blocks, ty } => Self::Phi {
                 values: values.iter().copied().map(Into::into).collect(),
                 blocks: blocks.clone(),
-                ty: ty.clone(),
+                ty: *ty,
             },
         }
     }
@@ -259,7 +259,7 @@ impl ExprData {
             Self::Cast { code, args, ty } => InsnData::Cast {
                 code: *code,
                 args: [args[0].as_value()?],
-                ty: ty.clone(),
+                ty: *ty,
             },
 
             Self::Load { args, loc } => InsnData::Load {
@@ -278,7 +278,7 @@ impl ExprData {
                     .iter()
                     .map(|val| val.as_value())
                     .collect::<Option<_>>()?,
-                ret_ty: ret_ty.clone(),
+                ret_ty: *ret_ty,
             },
 
             Self::Jump { code, dests } => InsnData::Jump {
@@ -304,7 +304,14 @@ impl ExprData {
                 table: table.clone(),
             },
 
-            Self::Alloca { ty } => InsnData::alloca(ty.clone()),
+            Self::Alloca { ty } => InsnData::alloca(*ty),
+
+            Self::Gep { args } => InsnData::Gep {
+                args: args
+                    .iter()
+                    .map(|val| val.as_value())
+                    .collect::<Option<_>>()?,
+            },
 
             Self::Return { args } => InsnData::Return { args: *args },
 
@@ -314,7 +321,7 @@ impl ExprData {
                     .map(|val| val.as_value())
                     .collect::<Option<_>>()?,
                 blocks: blocks.clone(),
-                ty: ty.clone(),
+                ty: *ty,
             },
         })
     }
@@ -345,16 +352,14 @@ impl From<Value> for ExprValue {
 
 struct SimplifyContext<'a> {
     dfg: &'a mut DataFlowGraph,
-    isa: &'a TargetIsa,
     exprs: PrimaryMap<Expr, ExprData>,
     types: SecondaryMap<Expr, Option<Type>>,
 }
 
 impl<'a> SimplifyContext<'a> {
-    fn new(dfg: &'a mut DataFlowGraph, isa: &'a TargetIsa) -> Self {
+    fn new(dfg: &'a mut DataFlowGraph) -> Self {
         Self {
             dfg,
-            isa,
             exprs: PrimaryMap::new(),
             types: SecondaryMap::new(),
         }
@@ -378,7 +383,7 @@ impl<'a> SimplifyContext<'a> {
         let expr = self.make_expr(expr_data);
         if let Some(insn_result) = self.dfg.insn_result(insn) {
             let ty = self.dfg.value_ty(insn_result);
-            self.types[expr] = Some(ty.clone());
+            self.types[expr] = Some(ty);
         }
 
         expr
@@ -388,7 +393,7 @@ impl<'a> SimplifyContext<'a> {
         let expr_data = ExprData::from_insn_data(&data);
 
         let expr = self.make_expr(expr_data);
-        if let Some(ty) = data.result_type(self.isa, self.dfg) {
+        if let Some(ty) = data.result_type(self.dfg) {
             self.types[expr] = Some(ty);
         }
 
@@ -423,8 +428,8 @@ impl<'a> generated_code::Context for SimplifyContext<'a> {
 
     fn value_ty(&mut self, arg0: ExprValue) -> Type {
         match arg0 {
-            ExprValue::Value(val) => self.dfg().value_ty(val).clone(),
-            ExprValue::Expr(expr) => self.types[expr].clone().unwrap(),
+            ExprValue::Value(val) => self.dfg().value_ty(val),
+            ExprValue::Expr(expr) => self.types[expr].unwrap(),
         }
     }
 
@@ -499,34 +504,35 @@ impl<'a> generated_code::Context for SimplifyContext<'a> {
         }
     }
 
-    fn is_eq(&mut self, arg0: ExprValue, arg1: ExprValue) -> bool {
+    fn is_eq(&mut self, arg0: ExprValue, arg1: ExprValue) -> Option<()> {
         match (arg0.as_value(), arg1.as_value()) {
             (Some(val1), Some(val2)) => self.dfg.is_same_value(val1, val2),
             _ => arg0 == arg1,
         }
+        .then_some(())
     }
 
-    fn make_zero(&mut self, arg0: &Type) -> ExprValue {
+    fn make_zero(&mut self, arg0: Type) -> ExprValue {
         let imm = Immediate::zero(arg0);
         let val = self.dfg().make_imm_value(imm);
         ExprValue::Value(val)
     }
 
-    fn make_one(&mut self, arg0: &Type) -> ExprValue {
+    fn make_one(&mut self, arg0: Type) -> ExprValue {
         let imm = Immediate::one(arg0);
         let val = self.dfg().make_imm_value(imm);
         ExprValue::Value(val)
     }
 
     fn make_true(&mut self) -> ExprValue {
-        self.make_all_one(&Type::I1)
+        self.make_all_one(Type::I1)
     }
 
     fn make_false(&mut self) -> ExprValue {
-        self.make_zero(&Type::I1)
+        self.make_zero(Type::I1)
     }
 
-    fn make_all_one(&mut self, arg0: &Type) -> ExprValue {
+    fn make_all_one(&mut self, arg0: Type) -> ExprValue {
         let imm = Immediate::all_one(arg0);
         let val = self.dfg().make_imm_value(imm);
         ExprValue::Value(val)

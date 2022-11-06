@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use sonatina_codegen::{cfg::ControlFlowGraph, optim::sccp::SccpSolver};
 
-use sonatina_ir::{isa::TargetIsa, Function};
+use sonatina_ir::Function;
 
 use super::{FuncTransform, FIXTURE_ROOT};
 
@@ -12,9 +12,9 @@ pub struct SccpTransform {
 }
 
 impl FuncTransform for SccpTransform {
-    fn transform(&mut self, func: &mut Function, isa: &TargetIsa) {
+    fn transform(&mut self, func: &mut Function) {
         self.cfg.compute(func);
-        let mut solver = SccpSolver::new(isa);
+        let mut solver = SccpSolver::new();
         solver.run(func, &mut self.cfg);
     }
 
