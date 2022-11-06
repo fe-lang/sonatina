@@ -4,12 +4,13 @@ use std::cmp;
 
 use cranelift_entity::PrimaryMap;
 use fxhash::FxHashMap;
+use indexmap::IndexMap;
 
 #[derive(Debug, Default)]
 pub struct TypeStore {
     compounds: PrimaryMap<CompoundType, CompoundTypeData>,
     rev_types: FxHashMap<CompoundTypeData, CompoundType>,
-    struct_types: FxHashMap<String, CompoundType>,
+    struct_types: IndexMap<String, CompoundType>,
 }
 
 impl TypeStore {
@@ -51,6 +52,15 @@ impl TypeStore {
 
     pub fn struct_type_by_name(&self, name: &str) -> Option<Type> {
         self.struct_types.get(name).map(|ty| Type::Compound(*ty))
+    }
+
+    pub fn all_struct_data(&self) -> impl Iterator<Item = &StructData> {
+        self.struct_types
+            .values()
+            .map(|compound_type| match self.compounds[*compound_type] {
+                CompoundTypeData::Struct(ref def) => def,
+                _ => unreachable!(),
+            })
     }
 
     pub fn deref(&self, ptr: Type) -> Option<Type> {

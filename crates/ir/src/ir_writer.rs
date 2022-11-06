@@ -1,11 +1,44 @@
 use std::io;
 
 use crate::{
-    types::{CompoundType, CompoundTypeData},
-    DataLocationKind,
+    module::ModuleCtx,
+    types::{CompoundType, CompoundTypeData, StructData},
+    DataLocationKind, Module,
 };
 
 use super::{Block, Function, Insn, InsnData, Type, Value};
+
+pub struct ModuleWriter<'a> {
+    module: &'a Module,
+}
+
+impl<'a> ModuleWriter<'a> {
+    pub fn new(module: &'a Module) -> Self {
+        Self { module }
+    }
+
+    pub fn write(&mut self, mut w: impl io::Write) -> io::Result<()> {
+        // Write target.
+        writeln!(w, "target = {}", self.module.ctx.isa.triple())?;
+
+        // Write struct types defined in the module.
+        self.module.ctx.with_ty_store(|s| {
+            for s in s.all_struct_data() {
+                s.ir_write(&self.module.ctx, &mut w)?;
+            }
+            io::Result::Ok(())
+        })?;
+
+        for func_ref in self.module.funcs.keys() {
+            let func = &self.module.funcs[func_ref];
+            let mut func_writer = FuncWriter::new(func);
+            func_writer.write(&mut w)?;
+            writeln!(w)?;
+        }
+
+        Ok(())
+    }
+}
 
 pub struct FuncWriter<'a> {
     func: &'a Function,
@@ -29,7 +62,7 @@ impl<'a> FuncWriter<'a> {
             &mut w,
         )?;
         write!(w, ") -> ")?;
-        self.func.sig.ret_ty().write(self, &mut w)?;
+        self.func.sig.ret_ty().ir_write(self.ctx(), &mut w)?;
 
         self.enter(&mut w)?;
         for block in self.func.layout.iter_block() {
@@ -40,6 +73,10 @@ impl<'a> FuncWriter<'a> {
         self.leave();
 
         Ok(())
+    }
+
+    pub fn ctx(&self) -> &ModuleCtx {
+        &self.func.dfg.ctx
     }
 
     pub fn dump_string(&mut self) -> io::Result<String> {
@@ -116,7 +153,7 @@ impl IrWrite for Value {
         if let Some(imm) = writer.func.dfg.value_imm(value) {
             write!(w, "{}.", imm)?;
             let ty = writer.func.dfg.value_ty(value);
-            ty.write(writer, w)
+            ty.ir_write(writer.ctx(), w)
         } else {
             write!(w, "v{}", value.0)
         }
@@ -129,8 +166,8 @@ impl IrWrite for Block {
     }
 }
 
-impl IrWrite for Type {
-    fn write(&self, writer: &mut FuncWriter, w: &mut impl io::Write) -> io::Result<()> {
+impl Type {
+    fn ir_write(&self, ctx: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
         match self {
             Self::I1 => write!(w, "i1"),
             Self::I8 => write!(w, "i8"),
@@ -140,32 +177,52 @@ impl IrWrite for Type {
             Self::I128 => write!(w, "i128"),
             Self::I256 => write!(w, "i256"),
             Self::Void => write!(w, "void"),
-            Self::Compound(compound) => compound.write(writer, w),
+            Self::Compound(compound) => compound.ir_write(ctx, w),
         }
     }
 }
 
-impl IrWrite for CompoundType {
-    fn write(&self, writer: &mut FuncWriter, w: &mut impl io::Write) -> io::Result<()> {
-        let comp_data = writer
-            .func
-            .dfg
-            .ctx
-            .with_ty_store(|s| s.resolve_compound(*self).clone());
+impl CompoundType {
+    fn ir_write(&self, ctx: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
+        let comp_data = ctx.with_ty_store(|s| s.resolve_compound(*self).clone());
 
         match comp_data {
             CompoundTypeData::Array { elem, len } => {
                 write!(w, "[")?;
-                elem.write(writer, &mut *w)?;
+                elem.ir_write(ctx, &mut *w)?;
                 write!(w, "; {}]", len)
             }
             CompoundTypeData::Ptr(elem) => {
                 write!(w, "*")?;
-                elem.write(writer, w)
+                elem.ir_write(ctx, w)
             }
             CompoundTypeData::Struct(def) => {
                 write!(w, "%{}", def.name)
             }
+        }
+    }
+}
+
+impl StructData {
+    fn ir_write(&self, ctx: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
+        write!(w, "type %{} = ", self.name)?;
+        if self.packed {
+            write!(w, "<{{")?;
+        } else {
+            write!(w, "{{")?;
+        }
+
+        let mut delim = "";
+        for &ty in &self.fields {
+            write!(w, "{}", delim)?;
+            ty.ir_write(ctx, w)?;
+            delim = ", ";
+        }
+
+        if self.packed {
+            write!(w, "}}>")
+        } else {
+            write!(w, "}}")
         }
     }
 }
@@ -179,7 +236,7 @@ impl IrWrite for Insn {
             insn_result.write(writer, &mut *w)?;
             w.write_all(b".")?;
             let ty = writer.func.dfg.value_ty(insn_result);
-            ty.write(writer, &mut *w)?;
+            ty.ir_write(writer.ctx(), &mut *w)?;
             w.write_all(b" = ")?;
         }
 
@@ -279,7 +336,7 @@ impl IrWrite for Insn {
             Alloca { ty } => {
                 write!(w, "alloca")?;
                 writer.space(&mut *w)?;
-                ty.write(writer, &mut *w)?;
+                ty.ir_write(writer.ctx(), &mut *w)?;
             }
 
             Return { args } => {
@@ -325,7 +382,7 @@ impl IrWrite for ValueWithTy {
         let ty = f.func.dfg.value_ty(self.0);
         self.0.write(f, &mut *w)?;
         w.write_all(b".")?;
-        ty.write(f, w)
+        ty.ir_write(f.ctx(), w)
     }
 }
 
