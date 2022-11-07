@@ -1,12 +1,20 @@
 [package]
 name = "sonatina-parser"
-version = "0.1.0"
+version = "0.0.1-alpha"
 edition = "2021"
+authors = ["Sonatina Developers"]
+license = "Apache-2.0"
+readme = "../../README.md"
+homepage = "https://github.com/fe-lang/sonatina/tree/main/crates/parser"
+repository = "https://github.com/fe-lang/sonatina"
+description = "Parser for sonatina-ir text format"
+categories = ["compilers", "parser", "wasm"] 
+keywords = ["compiler", "evm", "wasm", "smart-contract"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-sonatina-ir = { path = "../ir" }
-sonatina-triple = { path = "../triple" }
+sonatina-ir = { path = "../ir", version = "0.0.1-alpha" }
+sonatina-triple = { path = "../triple", version = "0.0.1-alpha" }
 smallvec = "1.7.0"
 cranelift-entity = "0.77"
