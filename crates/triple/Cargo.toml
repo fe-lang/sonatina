@@ -1,7 +1,15 @@
 [package]
 name = "sonatina-triple"
-version = "0.1.0"
+version = "0.0.1-alpha"
 edition = "2021"
+authors = ["Sonatina Developers"]
+license = "Apache-2.0"
+readme = "../../README.md"
+homepage = "https://github.com/fe-lang/sonatina/tree/main/crates/triple"
+repository = "https://github.com/fe-lang/sonatina"
+description = "Target triple for smart contract"
+categories = ["compilers", "wasm"] 
+keywords = ["compiler", "evm", "wasm", "smart-contract"]
 
 
 [dependencies]
