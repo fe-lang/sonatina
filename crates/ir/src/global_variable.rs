@@ -38,6 +38,10 @@ impl GlobalVariableStore {
     pub fn is_const(&self, gv: GlobalVariable) -> bool {
         self.gv_data[gv].is_const
     }
+
+    pub fn ty(&self, gv: GlobalVariable) -> Type {
+        self.gv_data[gv].ty
+    }
 }
 
 /// An opaque reference to [`GlobalVariableData`].

@@ -4,7 +4,7 @@ use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use fxhash::FxHashMap;
 use std::collections::BTreeSet;
 
-use crate::{global_variable::ConstantValue, module::ModuleCtx};
+use crate::{global_variable::ConstantValue, module::ModuleCtx, GlobalVariable};
 
 use super::{BranchInfo, Immediate, Insn, InsnData, Type, Value, ValueData};
 
@@ -63,6 +63,13 @@ impl DataFlowGraph {
         let value = self.make_value(value_data);
         self.immediates.insert(imm, value);
         value
+    }
+
+    pub fn make_global_value(&mut self, gv: GlobalVariable) -> Value {
+        let gv_ty = self.ctx.with_gv_store(|s| s.ty(gv));
+        let ty = self.ctx.with_ty_store_mut(|s| s.make_ptr(gv_ty));
+        let value_data = ValueData::Global { gv, ty };
+        self.make_value(value_data)
     }
 
     pub fn replace_insn(&mut self, insn: Insn, insn_data: InsnData) {
