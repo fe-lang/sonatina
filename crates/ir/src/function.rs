@@ -90,16 +90,16 @@ impl Signature {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Linkage of the function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Linkage of symbols.
 pub enum Linkage {
-    /// The function is defined in the contract, and can be called from another accounts.
+    /// The symbol is defined in the module, and can be used from the outside of the module.
     Public,
 
-    /// The function is defined in the contract, and can NOT be called from another accounts.
+    /// The symbol is defined in the module, and can NOT be called from another module.
     Private,
 
-    /// The function is defined outside of the contract.
+    /// The symbol is defined outside of the module.
     External,
 }
 
