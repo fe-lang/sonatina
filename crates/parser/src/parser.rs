@@ -1055,4 +1055,44 @@ mod tests {
             assert!(def.packed);
         });
     }
+
+    #[test]
+    fn test_with_gv() {
+        let input = "
+            target = \"evm-ethereum-london\"
+            
+            gv public const %CONST_PUBLIC: i32 = 1;
+            gv external %GLOBAL_EXTERNAL: i32;
+
+            func public %test() -> i32:
+                block0:
+                    v2.i32 =  add %CONST_PUBLIC %GLOBAL_EXTERNAL;
+                    return v2;
+            ";
+
+        let parser = Parser::default();
+        let module = parser.parse(input).unwrap().module;
+
+        module.ctx.with_gv_store(|s| {
+            let symbol = "CONST_PUBLIC";
+            let gv = s.gv_by_symbol(symbol).unwrap();
+            let data = s.gv_data(gv);
+            assert_eq!(data.symbol, symbol);
+            assert_eq!(data.ty, Type::I32);
+            assert_eq!(data.linkage, Linkage::Public);
+            assert!(data.is_const);
+            assert_eq!(data.data, Some(ConstantValue::make_imm(1i32)));
+        });
+
+        module.ctx.with_gv_store(|s| {
+            let symbol = "GLOBAL_EXTERNAL";
+            let gv = s.gv_by_symbol(symbol).unwrap();
+            let data = s.gv_data(gv);
+            assert_eq!(data.symbol, symbol);
+            assert_eq!(data.ty, Type::I32);
+            assert_eq!(data.linkage, Linkage::External);
+            assert!(!data.is_const);
+            assert_eq!(data.data, None)
+        });
+    }
 }
