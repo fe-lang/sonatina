@@ -190,7 +190,7 @@ impl DataFlowGraph {
                     return None;
                 }
                 match s.init_data(*gv)? {
-                    ConstantValue::Immediate { data, .. } => Some(*data),
+                    ConstantValue::Immediate(data) => Some(*data),
                     _ => None,
                 }
             }),

@@ -176,13 +176,13 @@ impl IrWrite for Value {
 impl GlobalVariableData {
     fn ir_write(&self, ctx: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
         let const_ = if self.is_const { " const" } else { "" };
-        write! {w, "gv{const_} {} %{}: ", self.linkage, self.symbol}?;
+        write! {w, "gv {}{const_} %{}:", self.linkage, self.symbol}?;
         self.ty.ir_write(ctx, w)?;
 
         if let Some(data) = &self.data {
-            write!(w, " = {}", data)
+            write!(w, " = {};", data)
         } else {
-            Ok(())
+            write!(w, ";")
         }
     }
 }

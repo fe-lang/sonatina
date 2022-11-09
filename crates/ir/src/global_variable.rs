@@ -65,13 +65,19 @@ pub struct GlobalVariableData {
 }
 
 impl GlobalVariableData {
-    pub fn new(symbol: String, ty: Type, linkage: Linkage, is_const: bool) -> Self {
+    pub fn new(
+        symbol: String,
+        ty: Type,
+        linkage: Linkage,
+        is_const: bool,
+        data: Option<ConstantValue>,
+    ) -> Self {
         Self {
             symbol,
             ty,
             linkage,
             is_const,
-            data: None,
+            data,
         }
     }
 
@@ -88,30 +94,30 @@ impl GlobalVariableData {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConstantValue {
-    Immediate { data: Immediate },
-    Array { data: Vec<ConstantValue> },
-    Struct { data: Vec<ConstantValue> },
+    Immediate(Immediate),
+    Array(Vec<ConstantValue>),
+    Struct(Vec<ConstantValue>),
 }
 
 impl ConstantValue {
     pub fn make_imm(data: impl Into<Immediate>) -> Self {
-        Self::Immediate { data: data.into() }
+        Self::Immediate(data.into())
     }
 
     pub fn make_array(data: Vec<ConstantValue>) -> Self {
-        Self::Array { data }
+        Self::Array(data)
     }
 
     pub fn make_struct(data: Vec<ConstantValue>) -> Self {
-        Self::Struct { data }
+        Self::Struct(data)
     }
 }
 
 impl fmt::Display for ConstantValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Immediate { data } => write!(f, "{}", data),
-            Self::Array { data } => {
+            Self::Immediate(data) => write!(f, "{}", data),
+            Self::Array(data) => {
                 write!(f, "[")?;
                 for (i, v) in data.iter().enumerate() {
                     if i > 0 {
@@ -121,7 +127,7 @@ impl fmt::Display for ConstantValue {
                 }
                 write!(f, "]")
             }
-            Self::Struct { data } => {
+            Self::Struct(data) => {
                 write!(f, "{{")?;
                 for (i, v) in data.iter().enumerate() {
                     if i > 0 {
