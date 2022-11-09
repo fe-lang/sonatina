@@ -30,6 +30,14 @@ impl GlobalVariableStore {
     pub fn gv_by_symbol(&self, symbol: &str) -> Option<GlobalVariable> {
         self.symbols.get(symbol).copied()
     }
+
+    pub fn init_data(&self, gv: GlobalVariable) -> Option<&ConstantValue> {
+        self.gv_data[gv].data.as_ref()
+    }
+
+    pub fn is_const(&self, gv: GlobalVariable) -> bool {
+        self.gv_data[gv].is_const
+    }
 }
 
 /// An opaque reference to [`GlobalVariableData`].

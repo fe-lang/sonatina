@@ -2,6 +2,8 @@
 
 use std::{fmt, ops};
 
+use crate::GlobalVariable;
+
 use super::{Insn, Type, I256, U256};
 
 /// An opaque reference to [`ValueData`].
@@ -22,6 +24,9 @@ pub enum ValueData {
 
     /// The value is immediate value.
     Immediate { imm: Immediate, ty: Type },
+
+    /// The value is global value.
+    Global { gv: GlobalVariable, ty: Type },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

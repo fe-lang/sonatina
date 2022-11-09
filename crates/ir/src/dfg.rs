@@ -4,7 +4,7 @@ use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use fxhash::FxHashMap;
 use std::collections::BTreeSet;
 
-use crate::module::ModuleCtx;
+use crate::{global_variable::ConstantValue, module::ModuleCtx};
 
 use super::{BranchInfo, Immediate, Insn, InsnData, Type, Value, ValueData};
 
@@ -83,9 +83,10 @@ impl DataFlowGraph {
     pub fn resolve_alias(&self, mut value: Value) -> Value {
         for _ in 0..self.values.len() {
             match self.values[value] {
-                ValueData::Insn { .. } | ValueData::Arg { .. } | ValueData::Immediate { .. } => {
-                    return value
-                }
+                ValueData::Insn { .. }
+                | ValueData::Arg { .. }
+                | ValueData::Immediate { .. }
+                | ValueData::Global { .. } => return value,
                 ValueData::Alias { alias } => value = alias,
             }
         }
@@ -163,7 +164,8 @@ impl DataFlowGraph {
         match &self.values[value] {
             ValueData::Insn { ty, .. }
             | ValueData::Arg { ty, .. }
-            | ValueData::Immediate { ty, .. } => *ty,
+            | ValueData::Immediate { ty, .. }
+            | ValueData::Global { ty, .. } => *ty,
             ValueData::Alias { .. } => unreachable!(),
         }
     }
@@ -176,6 +178,15 @@ impl DataFlowGraph {
         let value = self.resolve_alias(value);
         match self.value_data(value) {
             ValueData::Immediate { imm, .. } => Some(*imm),
+            ValueData::Global { gv, .. } => self.ctx.with_gv_store(|s| {
+                if !s.is_const(*gv) {
+                    return None;
+                }
+                match s.init_data(*gv)? {
+                    ConstantValue::Immediate { data, .. } => Some(*data),
+                    _ => None,
+                }
+            }),
             _ => None,
         }
     }
