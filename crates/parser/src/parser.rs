@@ -94,6 +94,7 @@ impl Parser {
             if packed {
                 expect_token!(lexer, Token::RAngleBracket, ">")?;
             }
+            expect_token!(lexer, Token::SemiColon, ";")?;
 
             module_builder.declare_struct_type(name, &fields, packed);
         }
@@ -297,7 +298,7 @@ impl<'a, 'b> FuncParser<'a, 'b> {
                 .func()
                 .dfg
                 .ctx
-                .with_gv_store(|s| s.gv_by_symbol(&ident.string()))
+                .with_gv_store(|s| s.gv_by_symbol(ident.string()))
                 .unwrap();
             Ok(inserter.func_mut().dfg.make_global_value(gv))
         } else {
@@ -1020,8 +1021,8 @@ mod tests {
         let input = "
             target = \"evm-ethereum-london\"
             
-            type %s1 = {i32, i64}
-            type %s2_packed = <{i32, i64, *%s1}>
+            type %s1 = {i32, i64};
+            type %s2_packed = <{i32, i64, *%s1}>;
 
             func public %test(v0.*%s1, v1.*%s2_packed) -> i32:
                 block0:
