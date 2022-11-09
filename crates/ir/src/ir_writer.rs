@@ -3,7 +3,7 @@ use std::io;
 use crate::{
     module::ModuleCtx,
     types::{CompoundType, CompoundTypeData, StructData},
-    DataLocationKind, Module,
+    DataLocationKind, GlobalVariableData, Module,
 };
 
 use super::{Block, Function, Insn, InsnData, Type, Value};
@@ -26,6 +26,15 @@ impl<'a> ModuleWriter<'a> {
             for s in s.all_struct_data() {
                 s.ir_write(&self.module.ctx, &mut w)?;
             }
+            io::Result::Ok(())
+        })?;
+
+        // Write module level global variables.
+        self.module.ctx.with_gv_store(|s| {
+            for gv in s.all_gv_data() {
+                gv.ir_write(&self.module.ctx, &mut w)?;
+            }
+
             io::Result::Ok(())
         })?;
 
@@ -154,8 +163,26 @@ impl IrWrite for Value {
             write!(w, "{}.", imm)?;
             let ty = writer.func.dfg.value_ty(value);
             ty.ir_write(writer.ctx(), w)
+        } else if let Some(gv) = writer.func.dfg.value_gv(value) {
+            writer
+                .ctx()
+                .with_gv_store(|s| write!(w, "%{}", s.gv_data(gv).symbol))
         } else {
             write!(w, "v{}", value.0)
+        }
+    }
+}
+
+impl GlobalVariableData {
+    fn ir_write(&self, ctx: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
+        let const_ = if self.is_const { " const" } else { "" };
+        write! {w, "gv{const_} {} %{}: ", self.linkage, self.symbol}?;
+        self.ty.ir_write(ctx, w)?;
+
+        if let Some(data) = &self.data {
+            write!(w, " = {}", data)
+        } else {
+            Ok(())
         }
     }
 }

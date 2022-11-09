@@ -1,3 +1,5 @@
+use std::fmt;
+
 use cranelift_entity::PrimaryMap;
 use fxhash::FxHashMap;
 
@@ -42,6 +44,10 @@ impl GlobalVariableStore {
     pub fn ty(&self, gv: GlobalVariable) -> Type {
         self.gv_data[gv].ty
     }
+
+    pub fn all_gv_data(&self) -> impl Iterator<Item = &GlobalVariableData> {
+        self.gv_data.values()
+    }
 }
 
 /// An opaque reference to [`GlobalVariableData`].
@@ -51,11 +57,11 @@ cranelift_entity::entity_impl!(GlobalVariable);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GlobalVariableData {
-    symbol: String,
-    ty: Type,
-    linkage: Linkage,
-    is_const: bool,
-    data: Option<ConstantValue>,
+    pub symbol: String,
+    pub ty: Type,
+    pub linkage: Linkage,
+    pub is_const: bool,
+    pub data: Option<ConstantValue>,
 }
 
 impl GlobalVariableData {
@@ -82,38 +88,49 @@ impl GlobalVariableData {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConstantValue {
-    Immediate {
-        ty: Type,
-        data: Immediate,
-    },
-    Array {
-        elem_ty: Type,
-        len: usize,
-        data: Vec<ConstantValue>,
-    },
-    Struct {
-        ty: Type,
-        data: Vec<ConstantValue>,
-    },
+    Immediate { data: Immediate },
+    Array { data: Vec<ConstantValue> },
+    Struct { data: Vec<ConstantValue> },
 }
 
 impl ConstantValue {
-    pub fn make_imm(ty: Type, data: impl Into<Immediate>) -> Self {
-        Self::Immediate {
-            ty,
-            data: data.into(),
-        }
+    pub fn make_imm(data: impl Into<Immediate>) -> Self {
+        Self::Immediate { data: data.into() }
     }
 
-    pub fn make_array(elem_ty: Type, data: Vec<ConstantValue>) -> Self {
-        Self::Array {
-            elem_ty,
-            len: data.len(),
-            data,
-        }
+    pub fn make_array(data: Vec<ConstantValue>) -> Self {
+        Self::Array { data }
     }
 
-    pub fn make_struct(ty: Type, data: Vec<ConstantValue>) -> Self {
-        Self::Struct { ty, data }
+    pub fn make_struct(data: Vec<ConstantValue>) -> Self {
+        Self::Struct { data }
+    }
+}
+
+impl fmt::Display for ConstantValue {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Immediate { data } => write!(f, "{}", data),
+            Self::Array { data } => {
+                write!(f, "[")?;
+                for (i, v) in data.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", v)?;
+                }
+                write!(f, "]")
+            }
+            Self::Struct { data } => {
+                write!(f, "{{")?;
+                for (i, v) in data.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", v)?;
+                }
+                write!(f, "}}")
+            }
+        }
     }
 }

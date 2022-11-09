@@ -198,6 +198,14 @@ impl DataFlowGraph {
         }
     }
 
+    pub fn value_gv(&self, value: Value) -> Option<GlobalVariable> {
+        let value = self.resolve_alias(value);
+        match self.value_data(value) {
+            ValueData::Global { gv, .. } => Some(*gv),
+            _ => None,
+        }
+    }
+
     pub fn phi_blocks(&self, insn: Insn) -> &[Block] {
         self.insns[insn].phi_blocks()
     }
