@@ -4,7 +4,7 @@ use crate::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     insn::{BinaryOp, CastOp, DataLocationKind, InsnData, JumpOp, UnaryOp},
     module::FuncRef,
-    Block, Function, Immediate, Type, Value,
+    Block, Function, GlobalVariable, Immediate, Type, Value,
 };
 
 use super::{
@@ -84,6 +84,11 @@ impl<'a> FunctionBuilder<'a> {
         Imm: Into<Immediate>,
     {
         self.func_mut().dfg.make_imm_value(imm)
+    }
+
+    /// Return pointer value to the global variable.
+    pub fn make_global_value(&mut self, gv: GlobalVariable) -> Value {
+        self.func_mut().dfg.make_global_value(gv)
     }
 
     pub fn declare_struct_type(&mut self, name: &str, fields: &[Type], packed: bool) -> Type {
@@ -340,6 +345,7 @@ impl<'a> FunctionBuilder<'a> {
         self.loc = CursorLocation::At(insn);
         result
     }
+
     fn func(&self) -> &Function {
         &self.module_builder.funcs[self.func_ref]
     }

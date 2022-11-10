@@ -50,6 +50,16 @@ impl TypeStore {
         }
     }
 
+    pub fn array_def(&self, ty: Type) -> Option<(Type, usize)> {
+        match ty {
+            Type::Compound(compound) => match self.compounds[compound] {
+                CompoundTypeData::Array { elem, len } => Some((elem, len)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     pub fn struct_type_by_name(&self, name: &str) -> Option<Type> {
         self.struct_types.get(name).map(|ty| Type::Compound(*ty))
     }

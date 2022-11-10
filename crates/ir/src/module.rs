@@ -4,7 +4,7 @@ use cranelift_entity::{entity_impl, PrimaryMap};
 
 use crate::Function;
 
-use crate::{isa::TargetIsa, types::TypeStore};
+use crate::{global_variable::GlobalVariableStore, isa::TargetIsa, types::TypeStore};
 
 use super::Linkage;
 
@@ -39,7 +39,10 @@ impl Module {
 #[derive(Debug, Clone)]
 pub struct ModuleCtx {
     pub isa: TargetIsa,
+    // TODO: Consider using `RwLock` instead of `Mutex`.
     type_store: Arc<Mutex<TypeStore>>,
+    // TODO: Consider using `RwLock` instead of `Mutex`.
+    gv_store: Arc<Mutex<GlobalVariableStore>>,
 }
 
 impl ModuleCtx {
@@ -47,6 +50,7 @@ impl ModuleCtx {
         Self {
             isa,
             type_store: Arc::new(Mutex::new(TypeStore::default())),
+            gv_store: Arc::new(Mutex::new(GlobalVariableStore::default())),
         }
     }
 
@@ -62,6 +66,20 @@ impl ModuleCtx {
         F: FnOnce(&mut TypeStore) -> R,
     {
         f(&mut self.type_store.lock().unwrap())
+    }
+
+    pub fn with_gv_store<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&GlobalVariableStore) -> R,
+    {
+        f(&self.gv_store.lock().unwrap())
+    }
+
+    pub fn with_gv_store_mut<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut GlobalVariableStore) -> R,
+    {
+        f(&mut self.gv_store.lock().unwrap())
     }
 }
 

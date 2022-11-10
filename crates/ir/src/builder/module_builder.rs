@@ -3,7 +3,7 @@ use fxhash::FxHashMap;
 
 use crate::{
     module::{FuncRef, ModuleCtx},
-    Function, Module, Signature, Type,
+    Function, GlobalVariable, GlobalVariableData, Module, Signature, Type,
 };
 
 use super::FunctionBuilder;
@@ -37,6 +37,14 @@ impl ModuleBuilder {
             self.declared_funcs.insert(name, func_ref);
             func_ref
         }
+    }
+
+    pub fn make_global(&self, global: GlobalVariableData) -> GlobalVariable {
+        self.ctx.with_gv_store_mut(|s| s.make_gv(global))
+    }
+
+    pub fn global_by_name(&self, name: &str) -> Option<GlobalVariable> {
+        self.ctx.with_gv_store(|s| s.gv_by_symbol(name))
     }
 
     pub fn declare_struct_type(&mut self, name: &str, fields: &[Type], packed: bool) -> Type {

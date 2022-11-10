@@ -7,11 +7,12 @@ use smallvec::smallvec;
 use sonatina_ir::{
     builder::ModuleBuilder,
     func_cursor::{CursorLocation, FuncCursor},
+    global_variable::ConstantValue,
     insn::{BinaryOp, CastOp, DataLocationKind, JumpOp, UnaryOp},
     isa::IsaBuilder,
     module::{FuncRef, ModuleCtx},
-    Block, BlockData, Function, Immediate, Insn, InsnData, Linkage, Module, Signature, Type, Value,
-    ValueData, I256, U256,
+    Block, BlockData, Function, GlobalVariableData, Immediate, Insn, InsnData, Linkage, Module,
+    Signature, Type, Value, ValueData, I256, U256,
 };
 use sonatina_triple::TargetTriple;
 
@@ -93,13 +94,33 @@ impl Parser {
             if packed {
                 expect_token!(lexer, Token::RAngleBracket, ">")?;
             }
+            expect_token!(lexer, Token::SemiColon, ";")?;
 
             module_builder.declare_struct_type(name, &fields, packed);
         }
 
+        // Parse global variables.
+        while eat_token!(lexer, Token::Gv)?.is_some() {
+            let linkage = expect_linkage(&mut lexer)?;
+            let is_const = eat_token!(lexer, Token::Const)?.is_some();
+            let symbol = expect_token!(lexer, Token::Ident(_), "global variable name")?.string();
+            expect_token!(lexer, Token::Colon, ":")?;
+            let ty = expect_ty(&module_builder.ctx, &mut lexer)?;
+
+            let init = eat_token!(lexer, Token::Eq)?
+                .map(|_| {
+                    let init = expect_constant(&module_builder.ctx, &mut lexer, ty)?;
+                    Ok(init)
+                })
+                .transpose()?;
+
+            expect_token!(lexer, Token::SemiColon, ";")?;
+            let gv_data = GlobalVariableData::new(symbol.to_string(), ty, linkage, is_const, init);
+            module_builder.make_global(gv_data);
+        }
+
         // Parse declared functions.
         while eat_token!(lexer, Token::Declare)?.is_some() {
-            // Todo: parse linkage.
             let sig = self.parse_declared_func_sig(&module_builder.ctx, &mut lexer)?;
             expect_token!(lexer, Token::SemiColon, ";")?;
             module_builder.declare_function(sig);
@@ -272,6 +293,14 @@ impl<'a, 'b> FuncParser<'a, 'b> {
                 undefs.push(idx);
             }
             Ok(value)
+        } else if let Some(ident) = eat_token!(self.lexer, Token::Ident(..))? {
+            let gv = inserter
+                .func()
+                .dfg
+                .ctx
+                .with_gv_store(|s| s.gv_by_symbol(ident.string()))
+                .unwrap();
+            Ok(inserter.func_mut().dfg.make_global_value(gv))
         } else {
             let number =
                 expect_token!(self.lexer, Token::Integer(..), "immediate or value")?.string();
@@ -341,11 +370,72 @@ fn expect_ty(ctx: &ModuleCtx, lexer: &mut Lexer) -> Result<Type> {
         ))
     }
 }
+
 fn expect_linkage(lexer: &mut Lexer) -> Result<Linkage> {
     let token = expect_token!(lexer, Token::Linkage { .. }, "linkage")?;
     match token {
         Token::Linkage(linkage) => Ok(linkage),
         _ => unreachable!(),
+    }
+}
+
+fn expect_constant(ctx: &ModuleCtx, lexer: &mut Lexer, ty: Type) -> Result<ConstantValue> {
+    if let Some(number) = eat_token!(lexer, Token::Integer(..))? {
+        if !ty.is_integral() {
+            return Err(Error::new(
+                ErrorKind::SemanticError("expected integral type".to_string()),
+                lexer.line(),
+            ));
+        }
+
+        let data = build_imm_data(number.string(), &ty, lexer.line())?;
+        Ok(ConstantValue::Immediate(data))
+    } else if eat_token!(lexer, Token::LBracket)?.is_some() {
+        let (elem_ty, mut len) = ctx.with_ty_store(|s| s.array_def(ty)).ok_or_else(|| {
+            Error::new(
+                ErrorKind::SemanticError("expcted array type".into()),
+                lexer.line(),
+            )
+        })?;
+
+        let mut data = Vec::with_capacity(len);
+        while len > 0 {
+            let elem = expect_constant(ctx, lexer, elem_ty)?;
+            data.push(elem);
+            if len > 1 {
+                expect_token!(lexer, Token::Comma, ",")?;
+            }
+            len -= 1;
+        }
+
+        expect_token!(lexer, Token::RBracket, "]")?;
+        Ok(ConstantValue::Array(data))
+    } else if eat_token!(lexer, Token::LBrace)?.is_some() {
+        let fields = ctx
+            .with_ty_store(|s| s.struct_def(ty).map(|def| def.fields.clone()))
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::SemanticError("expected struct type".into()),
+                    lexer.line(),
+                )
+            })?;
+
+        let mut data = Vec::with_capacity(fields.len());
+        let field_len = fields.len();
+        for (i, field_ty) in fields.into_iter().enumerate() {
+            let field = expect_constant(ctx, lexer, field_ty)?;
+            data.push(field);
+            if i < field_len - 1 {
+                expect_token!(lexer, Token::Comma, ",")?;
+            }
+        }
+        expect_token!(lexer, Token::RBrace, "}")?;
+        Ok(ConstantValue::Struct(data))
+    } else {
+        Err(Error::new(
+            ErrorKind::SyntaxError("invalid constant".into()),
+            lexer.line(),
+        ))
     }
 }
 
@@ -931,8 +1021,8 @@ mod tests {
         let input = "
             target = \"evm-ethereum-london\"
             
-            type %s1 = {i32, i64}
-            type %s2_packed = <{i32, i64, *%s1}>
+            type %s1 = {i32, i64};
+            type %s2_packed = <{i32, i64, *%s1}>;
 
             func public %test(v0.*%s1, v1.*%s2_packed) -> i32:
                 block0:
@@ -963,6 +1053,46 @@ mod tests {
             assert_eq!(def.fields[1], Type::I64);
             assert_eq!(def.fields[2], s1_ptr_ty);
             assert!(def.packed);
+        });
+    }
+
+    #[test]
+    fn test_with_gv() {
+        let input = "
+            target = \"evm-ethereum-london\"
+            
+            gv public const %CONST_PUBLIC: i32 = 1;
+            gv external %GLOBAL_EXTERNAL: i32;
+
+            func public %test() -> i32:
+                block0:
+                    v2.i32 =  add %CONST_PUBLIC %GLOBAL_EXTERNAL;
+                    return v2;
+            ";
+
+        let parser = Parser::default();
+        let module = parser.parse(input).unwrap().module;
+
+        module.ctx.with_gv_store(|s| {
+            let symbol = "CONST_PUBLIC";
+            let gv = s.gv_by_symbol(symbol).unwrap();
+            let data = s.gv_data(gv);
+            assert_eq!(data.symbol, symbol);
+            assert_eq!(data.ty, Type::I32);
+            assert_eq!(data.linkage, Linkage::Public);
+            assert!(data.is_const);
+            assert_eq!(data.data, Some(ConstantValue::make_imm(1i32)));
+        });
+
+        module.ctx.with_gv_store(|s| {
+            let symbol = "GLOBAL_EXTERNAL";
+            let gv = s.gv_by_symbol(symbol).unwrap();
+            let data = s.gv_data(gv);
+            assert_eq!(data.symbol, symbol);
+            assert_eq!(data.ty, Type::I32);
+            assert_eq!(data.linkage, Linkage::External);
+            assert!(!data.is_const);
+            assert_eq!(data.data, None)
         });
     }
 }

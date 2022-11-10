@@ -119,6 +119,10 @@ impl<'a> Lexer<'a> {
             Token::Target
         } else if self.eat_string_if(b"func").is_some() {
             Token::Func
+        } else if self.eat_string_if(b"gv").is_some() {
+            Token::Gv
+        } else if self.eat_string_if(b"const").is_some() {
+            Token::Const
         } else if self.eat_string_if(b"declare").is_some() {
             Token::Declare
         } else if self.eat_string_if(b"public").is_some() {
@@ -343,6 +347,8 @@ pub(super) struct WithLoc<T> {
 #[derive(Debug, Clone)]
 pub(super) enum Token<'a> {
     Func,
+    Gv,
+    Const,
     Declare,
     Linkage(Linkage),
     RArrow,
@@ -415,6 +421,8 @@ impl<'a> fmt::Display for Token<'a> {
     fn fmt(&self, w: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Func => write!(w, "func"),
+            Self::Gv => write!(w, "gv"),
+            Self::Const => write!(w, "const"),
             Self::Declare => write!(w, "declare"),
             Self::Linkage(linkage) => write!(w, "{}", linkage),
             Self::RArrow => write!(w, "=>"),
