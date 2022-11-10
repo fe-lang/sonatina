@@ -15,7 +15,7 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 
 [dependencies]
 primitive-types = "0.12"
-cranelift-entity = "0.77"
+cranelift-entity = "0.89"
 smallvec = "1.7.0"
 fxhash = "0.2.1"
 dyn-clone = "1.0.4"
