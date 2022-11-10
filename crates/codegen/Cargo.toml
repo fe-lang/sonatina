@@ -15,7 +15,6 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-primitive-types = "0.12"
 cranelift-entity = "0.89"
 smallvec = "1.7.0"
 fxhash = "0.2.1"
