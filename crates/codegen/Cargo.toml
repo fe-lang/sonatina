@@ -1,6 +1,6 @@
 [package]
 name = "sonatina-codegen"
-version = "0.0.1-alpha"
+version = "0.0.2-alpha"
 edition = "2021"
 authors = ["Sonatina Developers"]
 license = "Apache-2.0"
@@ -19,5 +19,5 @@ primitive-types = "0.10"
 cranelift-entity = "0.77"
 smallvec = "1.7.0"
 fxhash = "0.2.1"
-sonatina-ir = { path = "../ir", version =  "0.0.1-alpha" }
-sonatina-triple = { path = "../triple", version = "0.0.1-alpha" }
+sonatina-ir = { path = "../ir", version = "0.0.2-alpha" }
+sonatina-triple = { path = "../triple", version = "0.0.2-alpha" }
