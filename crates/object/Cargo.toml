@@ -1,6 +1,6 @@
 [package]
 name = "sonatina-object"
-version = "0.0.2-alpha"
+version = "0.0.3-alpha"
 edition = "2021"
 authors = ["Sonatina Developers"]
 license = "Apache-2.0"
