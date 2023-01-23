@@ -15,7 +15,7 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-cranelift-entity = "0.91"
+cranelift-entity = "0.92"
 smallvec = "1.7.0"
 fxhash = "0.2.1"
 sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
