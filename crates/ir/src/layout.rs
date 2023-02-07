@@ -87,17 +87,19 @@ impl Layout {
         self.insns[insn] != InsnNode::default()
     }
 
-    pub fn iter_block(&self) -> impl Iterator<Item = Block> + '_ {
+    pub fn iter_block(&self) -> BlockIter<'_> {
         BlockIter {
             next: self.entry_block,
+            next_back: self.last_block,
             blocks: &self.blocks,
         }
     }
 
-    pub fn iter_insn(&self, block: Block) -> impl Iterator<Item = Insn> + '_ {
+    pub fn iter_insn(&self, block: Block) -> InsnIter<'_> {
         debug_assert!(self.is_block_inserted(block));
         InsnIter {
             next: self.blocks[block].first_insn,
+            next_back: self.blocks[block].last_insn,
             insns: &self.insns,
         }
     }
@@ -291,8 +293,9 @@ impl Layout {
     }
 }
 
-struct BlockIter<'a> {
+pub struct BlockIter<'a> {
     next: Option<Block>,
+    next_back: Option<Block>,
     blocks: &'a SecondaryMap<Block, BlockNode>,
 }
 
@@ -306,8 +309,17 @@ impl<'a> Iterator for BlockIter<'a> {
     }
 }
 
-struct InsnIter<'a> {
+impl<'a> DoubleEndedIterator for BlockIter<'a> {
+    fn next_back(&mut self) -> Option<Block> {
+        let back = self.next_back?;
+        self.next_back = self.blocks[back].prev;
+        Some(back)
+    }
+}
+
+pub struct InsnIter<'a> {
     next: Option<Insn>,
+    next_back: Option<Insn>,
     insns: &'a SecondaryMap<Insn, InsnNode>,
 }
 
@@ -318,6 +330,14 @@ impl<'a> Iterator for InsnIter<'a> {
         let next = self.next?;
         self.next = self.insns[next].next;
         Some(next)
+    }
+}
+
+impl<'a> DoubleEndedIterator for InsnIter<'a> {
+    fn next_back(&mut self) -> Option<Insn> {
+        let back = self.next_back?;
+        self.next_back = self.insns[back].prev;
+        Some(back)
     }
 }
 

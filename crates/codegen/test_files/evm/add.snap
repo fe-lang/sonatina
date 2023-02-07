@@ -1,0 +1,10 @@
+---
+source: crates/codegen/tests/evm.rs
+assertion_line: 83
+expression: node
+input_file: crates/codegen/test_files/evm/add.sona
+---
+[
+    ADD,
+    SUB,
+]
