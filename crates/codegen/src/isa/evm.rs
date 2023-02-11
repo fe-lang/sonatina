@@ -9,7 +9,7 @@ use sonatina_ir::{
     Insn, InsnData,
 };
 
-use crate::machinst::lower::{Lower, LowerBackend};
+use crate::machinst::{lower::{Lower, LowerBackend}, vcode::Label};
 
 #[derive(Default)]
 pub struct EvmBackend {
@@ -33,7 +33,8 @@ impl LowerBackend for EvmBackend {
                     }
 
                     UnaryOp::Neg => {
-                        ctx.push(OpCode::PUSH1([0]), &[], &[]);
+                        let push_op = ctx.push(OpCode::PUSH1, &[], &[]);
+                        ctx.add_immediate(push_op, &[0]);
                         ctx.push(OpCode::SUB, &[arg], &[result_reg.unwrap()]);
                     }
                 }
@@ -127,7 +128,11 @@ impl LowerBackend for EvmBackend {
                 loc,
             } => {}
 
-            InsnData::Call { func, args, ret_ty } => {}
+            InsnData::Call { func, args, ret_ty } => {
+                let push_op = ctx.push(OpCode::PUSH1, &[], &[]);
+                ctx.add_jump_fixup_inst(push_op, Label::Function(*func));
+                ctx.push(OpCode::JUMP, &[], &[]);
+            }
 
             InsnData::Jump {
                 code: JumpOp::FallThrough,
@@ -137,10 +142,9 @@ impl LowerBackend for EvmBackend {
                 code: JumpOp::Jump,
                 dests: [dest],
             } => {
-                let dest_reg = ctx.jumpdest_reg(*dest);
-                let push_op = ctx.push(OpCode::PUSH2([0, 0]), &[], &[dest_reg]);
-                ctx.add_jump_fixup_inst(push_op, *dest);
-                ctx.push(OpCode::JUMP, &[dest_reg], &[]);
+                let push_op = ctx.push(OpCode::PUSH1, &[], &[]);
+                ctx.add_jump_fixup_inst(push_op, Label::Block(*dest));
+                ctx.push(OpCode::JUMP, &[], &[]);
                 // XXX mark as side-effecting
             }
 
@@ -148,15 +152,14 @@ impl LowerBackend for EvmBackend {
                 args: [v],
                 dests: [left, right],
             } => {
-                let left_reg = ctx.jumpdest_reg(*left);
-                let push_op = ctx.push(OpCode::PUSH2([0, 0]), &[], &[left_reg]);
-                ctx.add_jump_fixup_inst(push_op, *left);
-                ctx.push(OpCode::JUMPI, &[left_reg, ctx.value_reg(*v)], &[]);
+                let push_op = ctx.push(OpCode::PUSH1, &[], &[]);
+                ctx.add_jump_fixup_inst(push_op, Label::Block(*left));
+                // Note: JUMPI expects dest to be at top of stack
+                ctx.push(OpCode::JUMPI, &[ctx.value_reg(*v)], &[]);
 
-                let right_reg = ctx.jumpdest_reg(*right);
-                let push_op = ctx.push(OpCode::PUSH2([0, 0]), &[], &[right_reg]);
-                ctx.add_jump_fixup_inst(push_op, *right);
-                ctx.push(OpCode::JUMP, &[right_reg], &[]);
+                let push_op = ctx.push(OpCode::PUSH1, &[], &[]);
+                ctx.add_jump_fixup_inst(push_op, Label::Block(*right));
+                ctx.push(OpCode::JUMP, &[], &[]);
             }
 
             InsnData::BrTable {

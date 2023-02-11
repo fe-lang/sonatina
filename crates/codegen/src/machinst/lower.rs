@@ -1,7 +1,7 @@
 use ir::Immediate;
 use sonatina_ir as ir;
 
-use super::vcode::{VCode, VCodeInst, VReg, VRegKind};
+use super::vcode::{VCode, VCodeInst, VReg, VRegKind, Label};
 
 pub trait LowerBackend {
     type MInst;
@@ -61,7 +61,11 @@ impl<'a, Op: Default> Lower<'a, Op> {
             .add_inst_to_block(op, inputs, outputs, self.cur_insn, self.cur_block.unwrap())
     }
 
-    pub fn add_jump_fixup_inst(&mut self, inst: VCodeInst, dest: ir::Block) {
+    pub fn add_immediate(&mut self, inst: VCodeInst, bytes: &[u8]) {
+        self.vcode.inst_imm_bytes.insert(inst, bytes.into());
+    }
+
+    pub fn add_jump_fixup_inst(&mut self, inst: VCodeInst, dest: Label) {
         self.vcode.jump_fixups.push((inst, dest));
     }
 
@@ -72,11 +76,6 @@ impl<'a, Op: Default> Lower<'a, Op> {
 
     pub fn value_reg(&self, val: ir::Value) -> VReg {
         self.vcode.value_regs[val]
-    }
-
-    // XXX remove?
-    pub fn jumpdest_reg(&mut self, block: ir::Block) -> VReg {
-        self.vcode.vregs.push(VRegKind::JumpDest(block))
     }
 
     pub fn insn_result_reg(&self, insn: ir::Insn) -> Option<VReg> {

@@ -1,4 +1,8 @@
+use std::collections::BTreeMap;
+
 use cranelift_entity::{entity_impl, EntityList, ListPool, PrimaryMap, SecondaryMap};
+use ir::module::FuncRef;
+use smallvec::SmallVec;
 use sonatina_ir as ir;
 
 // TODO: move to reg/stackalloc crate?
@@ -21,7 +25,12 @@ impl Default for VReg {
 pub enum VRegKind {
     Value(ir::Value),
     Temp(ir::Type),
-    JumpDest(ir::Block),
+    JumpDest(Label),
+}
+
+pub enum Label {
+    Block(ir::Block),
+    Function(FuncRef),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
@@ -35,7 +44,12 @@ pub struct VCode<Op> {
     pub inst_outputs: SecondaryMap<VCodeInst, EntityList<VReg>>,
     pub inst_ir: SecondaryMap<VCodeInst, Option<ir::Insn>>,
 
-    pub jump_fixups: Vec<(VCodeInst, ir::Block)>,
+    /// Immediate bytes for PUSH* ops
+    pub inst_imm_bytes: BTreeMap<VCodeInst, SmallVec<[u8; 8]>>,
+
+    /// Instructions that contain label offsets that will need to updated
+    /// when the bytecode is emitted
+    pub jump_fixups: Vec<(VCodeInst, Label)>,
 
     // Or PrimaryMap<VCodeBlock, ..>?
     blocks: SecondaryMap<ir::Block, EntityList<VCodeInst>>,
