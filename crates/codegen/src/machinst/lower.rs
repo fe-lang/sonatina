@@ -1,7 +1,7 @@
 use ir::Immediate;
 use sonatina_ir as ir;
 
-use super::vcode::{VCode, VCodeInst, VReg, VRegKind, Label};
+use super::vcode::{Label, VCode, VCodeInst, VReg, VRegKind};
 
 pub trait LowerBackend {
     type MInst;

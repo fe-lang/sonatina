@@ -21,6 +21,8 @@ fxhash = "0.2.1"
 sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
 sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
 sonatina-stackalloc = { path = "../stackalloc" }
+bit-set = "0.5.3"
+vec_map = "0.8.2"
 
 [dev-dependencies]
 sonatina-parser = {path = "../parser"}

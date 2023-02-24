@@ -9,7 +9,10 @@ use sonatina_ir::{
     Insn, InsnData,
 };
 
-use crate::machinst::{lower::{Lower, LowerBackend}, vcode::Label};
+use crate::machinst::{
+    lower::{Lower, LowerBackend},
+    vcode::Label,
+};
 
 #[derive(Default)]
 pub struct EvmBackend {

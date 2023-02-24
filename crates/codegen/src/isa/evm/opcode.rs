@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[repr(u8)]
 pub enum OpCode {
     STOP = 0x00,
@@ -111,6 +111,7 @@ pub enum OpCode {
     SWAP16 = 0x9f,
     RETURN = 0xf3,
     REVERT = 0xfd,
+    #[default]
     INVALID = 0xfe,
     ADDRESS = 0x30,
     BALANCE = 0x31,
@@ -147,10 +148,4 @@ pub enum OpCode {
     STATICCALL = 0xfa,
     SELFDESTRUCT = 0xff,
     CHAINID = 0x46,
-}
-
-impl Default for OpCode {
-    fn default() -> Self {
-        OpCode::INVALID
-    }
 }
