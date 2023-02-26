@@ -25,21 +25,22 @@
 //! This might change; it might make more sense to consider the result of a phi
 //! to be defined by each of the predecessor blocks, or by the block containing the phi.
 
-use crate::{cfg::ControlFlowGraph, stackalloc::Function};
+use crate::cfg::ControlFlowGraph;
 use bit_set::BitSet;
 use cranelift_entity::{EntityRef, SecondaryMap};
 use sonatina_ir as ir;
 
-pub struct Liveness<V: EntityRef> {
+#[derive(Default)]
+pub struct Liveness {
     /// block => (live_ins, live_outs)
     live_ins: SecondaryMap<ir::Block, BitSet>,
     live_outs: SecondaryMap<ir::Block, BitSet>,
 
     /// value => (defining block, is_defined_by_phi)
-    defs: SecondaryMap<V, Option<(ir::Block, bool)>>,
+    defs: SecondaryMap<ir::Value, Option<(ir::Block, bool)>>,
 }
 
-impl<V: EntityRef> Liveness<V> {
+impl Liveness {
     pub fn new() -> Self {
         Self {
             live_ins: SecondaryMap::default(),
@@ -48,7 +49,7 @@ impl<V: EntityRef> Liveness<V> {
         }
     }
 
-    pub fn compute(&mut self, func: &impl Function<ValueType = V>, cfg: &ControlFlowGraph) {
+    pub fn compute(&mut self, func: &ir::Function, cfg: &ControlFlowGraph) {
         self.clear();
 
         // Precompute `defs`:
@@ -57,13 +58,13 @@ impl<V: EntityRef> Liveness<V> {
             self.live_ins[block] = BitSet::new();
             self.live_ins[block] = BitSet::new();
 
-            func.for_each_def(block, |val, is_phi_def| {
+            for_each_def(func, block, |val, is_phi_def| {
                 self.defs[val] = Some((block, is_phi_def));
             });
         }
 
         for block in cfg.post_order() {
-            func.for_each_use(block, |val, phi_source_block| {
+            for_each_use(func, block, |val, phi_source_block| {
                 if let Some(pred_block) = phi_source_block {
                     // A phi input is considered to be a use by the associated
                     // predecessor block
@@ -84,7 +85,7 @@ impl<V: EntityRef> Liveness<V> {
     }
 
     /// Propagate liveness of `val` "upward" from its use in `block`
-    fn up_and_mark(&mut self, cfg: &ControlFlowGraph, block: ir::Block, val: V) {
+    fn up_and_mark(&mut self, cfg: &ControlFlowGraph, block: ir::Block, val: ir::Value) {
         let Some((def_block, is_phi_def)) = self.defs[val] else {
             // `val` is never defined, so it must be an immediate
             // xxx maybe for_each_use should omit immediates
@@ -122,16 +123,34 @@ impl<V: EntityRef> Liveness<V> {
     }
 }
 
-impl<V: EntityRef> Default for Liveness<V> {
-    fn default() -> Self {
-        Self::new()
+fn for_each_use(
+    func: &ir::Function,
+    block: ir::Block,
+    mut f: impl FnMut(ir::Value, Option<ir::Block>),
+) {
+    for insn in func.layout.iter_insn(block) {
+        match func.dfg.insn_data(insn) {
+            ir::InsnData::Phi { values, blocks, .. } => values
+                .iter()
+                .zip(blocks.iter())
+                .for_each(|(v, b)| f(*v, Some(*b))),
+            data => data.args().iter().for_each(|v| f(*v, None)),
+        }
+    }
+}
+
+fn for_each_def(func: &ir::Function, block: ir::Block, mut f: impl FnMut(ir::Value, bool)) {
+    for insn in func.layout.iter_insn(block) {
+        if let Some(val) = func.dfg.insn_result(insn) {
+            f(val, func.dfg.is_phi(insn))
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use bit_set::BitSet;
-    use sonatina_ir::{Block, Module, Value};
+    use sonatina_ir::{Block, Module};
     use sonatina_parser::{parser::Parser, ErrorKind};
 
     use crate::cfg::ControlFlowGraph;
@@ -215,7 +234,7 @@ func public %complex_loop() -> i8:
         let mut cfg = ControlFlowGraph::new();
         cfg.compute(function);
 
-        let mut live: Liveness<Value> = Liveness::default();
+        let mut live = Liveness::default();
         live.compute(function, &cfg);
 
         assert_eq!(live.block_live_ins(Block(1)), &bitset(&[]));
