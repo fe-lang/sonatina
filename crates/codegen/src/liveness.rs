@@ -25,17 +25,15 @@
 //! This might change; it might make more sense to consider the result of a phi
 //! to be defined by each of the predecessor blocks, or by the block containing the phi.
 
-use std::ops::IndexMut;
-
-use crate::cfg::ControlFlowGraph;
+use crate::{cfg::ControlFlowGraph, stackalloc::Function};
 use bit_set::BitSet;
 use cranelift_entity::{EntityRef, SecondaryMap};
 use sonatina_ir as ir;
-use sonatina_stackalloc::Function;
 
 pub struct Liveness<V: EntityRef> {
     /// block => (live_ins, live_outs)
-    live_ins_outs: SecondaryMap<ir::Block, (BitSet, BitSet)>,
+    live_ins: SecondaryMap<ir::Block, BitSet>,
+    live_outs: SecondaryMap<ir::Block, BitSet>,
 
     /// value => (defining block, is_defined_by_phi)
     defs: SecondaryMap<V, Option<(ir::Block, bool)>>,
@@ -44,16 +42,20 @@ pub struct Liveness<V: EntityRef> {
 impl<V: EntityRef> Liveness<V> {
     pub fn new() -> Self {
         Self {
-            live_ins_outs: SecondaryMap::default(),
+            live_ins: SecondaryMap::default(),
+            live_outs: SecondaryMap::default(),
             defs: SecondaryMap::default(),
         }
     }
 
     pub fn compute(&mut self, func: &impl Function<ValueType = V>, cfg: &ControlFlowGraph) {
+        self.clear();
+
         // Precompute `defs`:
         // find defining block and is_phi_def for each value
         for block in cfg.post_order() {
-            self.live_ins_outs[block] = (BitSet::new(), BitSet::new());
+            self.live_ins[block] = BitSet::new();
+            self.live_ins[block] = BitSet::new();
 
             func.for_each_def(block, |val, is_phi_def| {
                 self.defs[val] = Some((block, is_phi_def));
@@ -73,11 +75,12 @@ impl<V: EntityRef> Liveness<V> {
         }
     }
 
+    // XXX better api
     pub fn block_live_ins(&self, block: ir::Block) -> &BitSet {
-        &self.live_ins_outs[block].0
+        &self.live_ins[block]
     }
     pub fn block_live_outs(&self, block: ir::Block) -> &BitSet {
-        &self.live_ins_outs[block].1
+        &self.live_outs[block]
     }
 
     /// Propagate liveness of `val` "upward" from its use in `block`
@@ -94,7 +97,7 @@ impl<V: EntityRef> Liveness<V> {
             return;
         }
 
-        if !self.mark_live_in(block, val) {
+        if !self.live_ins[block].insert(val.index()) {
             // Already marked, so propagation to preds already done
             return;
         }
@@ -106,28 +109,15 @@ impl<V: EntityRef> Liveness<V> {
         }
 
         for pred in cfg.preds_of(block) {
-            self.mark_live_out(*pred, val);
+            self.live_outs[*pred].insert(val.index());
             self.up_and_mark(cfg, *pred, val);
         }
     }
 
-    /// Add `val` to the live-in set for `block`.
-    /// Returns `true` if `val` was not already in the set.
-    fn mark_live_in(&mut self, block: ir::Block, val: V) -> bool {
-        let (ins, _) = self.live_ins_outs.index_mut(block);
-        ins.insert(val.index())
-    }
-
-    /// Add `val` to the live-out set for `block`.
-    /// Returns `true` if `val` was not already in the set.
-    fn mark_live_out(&mut self, block: ir::Block, val: V) -> bool {
-        let (_, outs) = self.live_ins_outs.index_mut(block);
-        outs.insert(val.index())
-    }
-
     /// Reset the `Liveness` struct so that it can be reused.
     pub fn clear(&mut self) {
-        self.live_ins_outs.clear();
+        self.live_ins.clear();
+        self.live_outs.clear();
         self.defs.clear();
     }
 }

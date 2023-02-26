@@ -5,6 +5,5 @@ members = [
   "crates/ir",
   "crates/object",
   "crates/parser",
-  "crates/stackalloc",
   "crates/triple"
 ]

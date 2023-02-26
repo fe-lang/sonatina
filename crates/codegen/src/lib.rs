@@ -11,3 +11,4 @@ pub mod loop_analysis;
 pub mod machinst;
 pub mod optim;
 pub mod post_domtree;
+pub mod stackalloc;
