@@ -309,6 +309,7 @@ impl<'a> Iterator for BlockIter<'a> {
     }
 }
 
+// xxx values should be consumed from each end
 impl<'a> DoubleEndedIterator for BlockIter<'a> {
     fn next_back(&mut self) -> Option<Block> {
         let back = self.next_back?;

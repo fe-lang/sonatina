@@ -25,47 +25,52 @@
 //! This might change; it might make more sense to consider the result of a phi
 //! to be defined by each of the predecessor blocks, or by the block containing the phi.
 
-use crate::cfg::ControlFlowGraph;
-use bit_set::BitSet;
-use cranelift_entity::{EntityRef, SecondaryMap};
+// XXX handle args
+
+// XXX is it better to collect var liveness for each edge??
+
+use std::collections::{btree_map::Entry, BTreeMap};
+
+use crate::{bitset::BitSet, cfg::ControlFlowGraph};
+use cranelift_entity::SecondaryMap;
 use sonatina_ir as ir;
 
 #[derive(Default)]
 pub struct Liveness {
     /// block => (live_ins, live_outs)
-    live_ins: SecondaryMap<ir::Block, BitSet>,
-    live_outs: SecondaryMap<ir::Block, BitSet>,
+    live_ins: SecondaryMap<ir::Block, BitSet<ir::Value>>,
+    live_outs: SecondaryMap<ir::Block, BitSet<ir::Value>>,
 
     /// value => (defining block, is_defined_by_phi)
-    defs: SecondaryMap<ir::Value, Option<(ir::Block, bool)>>,
+    defs: SecondaryMap<ir::Value, Option<ValDef>>,
 }
 
 impl Liveness {
     pub fn new() -> Self {
-        Self {
-            live_ins: SecondaryMap::default(),
-            live_outs: SecondaryMap::default(),
-            defs: SecondaryMap::default(),
-        }
+        Self::default()
     }
 
     pub fn compute(&mut self, func: &ir::Function, cfg: &ControlFlowGraph) {
         self.clear();
 
-        // Precompute `defs`:
-        // find defining block and is_phi_def for each value
+        for arg in &func.arg_values {
+            self.defs[*arg] = Some(ValDef::FnArg);
+        }
         for block in cfg.post_order() {
-            self.live_ins[block] = BitSet::new();
-            self.live_ins[block] = BitSet::new();
-
             for_each_def(func, block, |val, is_phi_def| {
-                self.defs[val] = Some((block, is_phi_def));
+                self.defs[val] = if is_phi_def {
+                    Some(ValDef::Phi(block))
+                } else {
+                    Some(ValDef::Normal(block))
+                }
             });
         }
 
         for block in cfg.post_order() {
             for_each_use(func, block, |val, phi_source_block| {
-                if let Some(pred_block) = phi_source_block {
+                if func.dfg.is_imm(val) {
+                    // ignore
+                } else if let Some(pred_block) = phi_source_block {
                     // A phi input is considered to be a use by the associated
                     // predecessor block
                     self.up_and_mark(cfg, pred_block, val);
@@ -77,40 +82,38 @@ impl Liveness {
     }
 
     // XXX better api
-    pub fn block_live_ins(&self, block: ir::Block) -> &BitSet {
+    pub fn block_live_ins(&self, block: ir::Block) -> &BitSet<ir::Value> {
         &self.live_ins[block]
     }
-    pub fn block_live_outs(&self, block: ir::Block) -> &BitSet {
+    pub fn block_live_outs(&self, block: ir::Block) -> &BitSet<ir::Value> {
         &self.live_outs[block]
     }
 
     /// Propagate liveness of `val` "upward" from its use in `block`
     fn up_and_mark(&mut self, cfg: &ControlFlowGraph, block: ir::Block, val: ir::Value) {
-        let Some((def_block, is_phi_def)) = self.defs[val] else {
-            // `val` is never defined, so it must be an immediate
-            // xxx maybe for_each_use should omit immediates
-            return;
-        };
+        eprintln!("up and mark {block:?} {val:?}");
+        let def = self.defs[val].unwrap();
 
         // If `val` is defined in this block, there's nothing to do.
-        // If `val` is defined by a phi function, then we consider it live-in.
-        if def_block == block && !is_phi_def {
+        if def == ValDef::Normal(block) {
             return;
         }
 
-        if !self.live_ins[block].insert(val.index()) {
+        eprintln!("live_in: {block:?} {val:?}");
+        if self.live_ins[block].contains(val) {
             // Already marked, so propagation to preds already done
             return;
         }
+        self.live_ins[block].insert(val);
 
         // If `val` is the result of a phi, then it's live-in for the block
         // containing the phi, but not live-out for any predecessor block.
-        if def_block == block && is_phi_def {
+        if def == ValDef::Phi(block) {
             return;
         }
 
         for pred in cfg.preds_of(block) {
-            self.live_outs[*pred].insert(val.index());
+            self.live_outs[*pred].insert(val);
             self.up_and_mark(cfg, *pred, val);
         }
     }
@@ -121,6 +124,98 @@ impl Liveness {
         self.live_outs.clear();
         self.defs.clear();
     }
+}
+
+// XXX
+#[derive(Default)]
+pub struct EdgeLiveness {
+    edges: BTreeMap<(ir::Block, ir::Block), BitSet<ir::Value>>,
+    // xxx store block var uses?
+    /// value => (defining block, is_defined_by_phi)
+    defs: SecondaryMap<ir::Value, Option<ValDef>>,
+}
+
+impl EdgeLiveness {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn compute(&mut self, func: &ir::Function, cfg: &ControlFlowGraph) {
+        // Precompute `defs`
+        for arg in &func.arg_values {
+            self.defs[*arg] = Some(ValDef::FnArg);
+        }
+        for block in cfg.post_order() {
+            for_each_def(func, block, |val, is_phi_def| {
+                self.defs[val] = if is_phi_def {
+                    Some(ValDef::Phi(block))
+                } else {
+                    Some(ValDef::Normal(block))
+                }
+            });
+        }
+
+        for block in cfg.post_order() {
+            for_each_use(func, block, |val, phi_source_block| {
+                if func.dfg.is_imm(val) {
+                    // ignore
+                } else if let Some(pred_block) = phi_source_block {
+                    // A phi arg is considered to be a use by the associated
+                    // predecessor block
+                    self.up_and_mark(cfg, pred_block, val);
+                } else {
+                    self.up_and_mark(cfg, block, val);
+                }
+            });
+        }
+    }
+
+    pub fn live_on_edge(&self, edge: (ir::Block, ir::Block)) -> &BitSet<ir::Value> {
+        &self.edges[&edge]
+    }
+
+    // xxx rename; only for testing?
+    pub fn into_edges(self) -> BTreeMap<(ir::Block, ir::Block), BitSet<ir::Value>> {
+        self.edges
+    }
+
+    /// Propagate liveness of `val` "upward" from its use in `block`
+    fn up_and_mark(&mut self, cfg: &ControlFlowGraph, block: ir::Block, val: ir::Value) {
+        let def = self.defs[val].unwrap();
+
+        // If `val` is defined in this block, there's nothing to do.
+        if def == ValDef::Normal(block) {
+            return;
+        }
+
+        for pred in cfg.preds_of(block) {
+            let edge = (*pred, block);
+            let liveset = match self.edges.entry(edge) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => entry.insert(BitSet::new()),
+            };
+
+            if liveset.contains(val) {
+                // Already marked, so propagation to preds already done
+                return;
+            }
+            liveset.insert(val);
+
+            // If `val` is defined here by a phi, then it's considered to be
+            // live on the incoming edges (ie defined by all pred blocks).
+            if def == ValDef::Phi(block) {
+                continue;
+            }
+            self.up_and_mark(cfg, *pred, val);
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum ValDef {
+    FnArg,
+    Normal(ir::Block),
+    Phi(ir::Block),
 }
 
 fn for_each_use(
@@ -149,53 +244,22 @@ fn for_each_def(func: &ir::Function, block: ir::Block, mut f: impl FnMut(ir::Val
 
 #[cfg(test)]
 mod tests {
-    use bit_set::BitSet;
     use sonatina_ir::{Block, Module};
-    use sonatina_parser::{parser::Parser, ErrorKind};
+    use sonatina_parser::parser::Parser;
 
     use crate::cfg::ControlFlowGraph;
 
-    use super::Liveness;
+    use super::{EdgeLiveness, Liveness};
 
-    // xxx copied from evm.rs
-    fn parse_sona(content: &str) -> Result<Module, String> {
+    fn parse_sona(content: &str) -> Module {
         let parser = Parser::default();
-        match parser.parse(content) {
-            Ok(module) => Ok(module.module),
-            Err(err) => match err.kind {
-                ErrorKind::InvalidToken(msg) => Err(format!(
-                    "failed to parse file: invalid token: {}. line: {}",
-                    msg, err.line
-                )),
-
-                ErrorKind::SyntaxError(msg) => Err(format!(
-                    "failed to parse file: invalid syntax: {}. line: {}",
-                    msg, err.line
-                )),
-
-                ErrorKind::SemanticError(msg) => Err(format!(
-                    "failed to parse file: invalid semantics: {}. line: {}",
-                    msg, err.line
-                )),
-            },
-        }
+        parser.parse(content).unwrap().module
     }
 
-    fn bitset(vals: &[usize]) -> BitSet {
-        let mut set = BitSet::new();
-        vals.iter().for_each(|v| {
-            set.insert(*v);
-        });
-        set
-    }
-
-    #[test]
-    fn test() {
-        let src = r#"
+    const SRC: &'static str = r#"
 target = "evm-ethereum-london"
-func public %complex_loop() -> i8:
+func public %complex_loop(v0.i8, v20.i8) -> i8:
     block1:
-        v0.i8 = add 1.i8 2.i8;
         v1.i8 = sub v0 1.i8;
         fallthrough block2;
 
@@ -226,10 +290,9 @@ func public %complex_loop() -> i8:
         jump block2;
 "#;
 
-        let module = match parse_sona(src) {
-            Ok(m) => m,
-            Err(err) => panic!("{}", err),
-        };
+    #[test]
+    fn test() {
+        let module = parse_sona(SRC);
         let function = module.funcs.values().next().unwrap();
         let mut cfg = ControlFlowGraph::new();
         cfg.compute(function);
@@ -237,22 +300,60 @@ func public %complex_loop() -> i8:
         let mut live = Liveness::default();
         live.compute(function, &cfg);
 
-        assert_eq!(live.block_live_ins(Block(1)), &bitset(&[]));
-        assert_eq!(live.block_live_outs(Block(1)), &bitset(&[0]));
+        assert_eq!(live.block_live_ins(Block(1)), &[0].into());
+        assert_eq!(live.block_live_outs(Block(1)), &[0].into());
 
-        assert_eq!(live.block_live_ins(Block(2)), &bitset(&[0, 2, 3]));
-        assert_eq!(live.block_live_outs(Block(2)), &bitset(&[0, 2, 3]));
+        assert_eq!(live.block_live_ins(Block(2)), &[0, 2, 3].into());
+        assert_eq!(live.block_live_outs(Block(2)), &[0, 2, 3].into());
 
-        assert_eq!(live.block_live_ins(Block(3)), &bitset(&[0, 2, 3]));
-        assert_eq!(live.block_live_outs(Block(3)), &bitset(&[0, 3]));
+        assert_eq!(live.block_live_ins(Block(3)), &[0, 2, 3].into());
+        assert_eq!(live.block_live_outs(Block(3)), &[0, 3].into());
 
-        assert_eq!(live.block_live_ins(Block(4)), &bitset(&[2]));
-        assert_eq!(live.block_live_outs(Block(4)), &bitset(&[]));
+        assert_eq!(live.block_live_ins(Block(4)), &[2].into());
+        assert_eq!(live.block_live_outs(Block(4)), &[].into());
 
-        assert_eq!(live.block_live_ins(Block(5)), &bitset(&[0, 3]));
-        assert_eq!(live.block_live_outs(Block(5)), &bitset(&[0]));
+        assert_eq!(live.block_live_ins(Block(5)), &[0, 3].into());
+        assert_eq!(live.block_live_outs(Block(5)), &[0].into());
 
-        assert_eq!(live.block_live_ins(Block(6)), &bitset(&[0, 3]));
-        assert_eq!(live.block_live_outs(Block(6)), &bitset(&[0]));
+        assert_eq!(live.block_live_ins(Block(6)), &[0, 3].into());
+        assert_eq!(live.block_live_outs(Block(6)), &[0].into());
+    }
+
+    #[test]
+    fn test_edges() {
+        let module = parse_sona(SRC);
+        let function = module.funcs.values().next().unwrap();
+        let mut cfg = ControlFlowGraph::new();
+        cfg.compute(function);
+
+        let mut live = EdgeLiveness::default();
+        live.compute(function, &cfg);
+
+        let mut edges = live.into_edges();
+
+        assert_eq!(
+            edges.remove(&(Block(1), Block(2))).unwrap(),
+            [0, 2, 3].into(),
+        );
+        assert_eq!(
+            edges.remove(&(Block(2), Block(3))).unwrap(),
+            [0, 2, 3].into()
+        );
+        assert_eq!(edges.remove(&(Block(2), Block(4))).unwrap(), [2].into());
+        assert_eq!(edges.remove(&(Block(3), Block(5))).unwrap(), [0, 3].into());
+        assert_eq!(edges.remove(&(Block(3), Block(6))).unwrap(), [0, 3].into());
+        assert_eq!(
+            edges.remove(&(Block(5), Block(7))).unwrap(),
+            [0, 8, 9].into()
+        );
+        assert_eq!(
+            edges.remove(&(Block(6), Block(7))).unwrap(),
+            [0, 8, 9].into()
+        );
+        assert_eq!(
+            edges.remove(&(Block(7), Block(2))).unwrap(),
+            [0, 2, 3].into()
+        );
+        assert!(edges.is_empty());
     }
 }
