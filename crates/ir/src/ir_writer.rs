@@ -59,7 +59,7 @@ impl<'a> FuncWriter<'a> {
         Self { func, level: 0 }
     }
 
-    pub fn write(&mut self, mut w: impl io::Write) -> io::Result<()> {
+    pub fn write_signature(&mut self, mut w: impl io::Write) -> io::Result<()> {
         w.write_fmt(format_args!(
             "func {} %{}(",
             self.func.sig.linkage(),
@@ -71,7 +71,11 @@ impl<'a> FuncWriter<'a> {
             &mut w,
         )?;
         write!(w, ") -> ")?;
-        self.func.sig.ret_ty().ir_write(self.ctx(), &mut w)?;
+        self.func.sig.ret_ty().ir_write(self.ctx(), &mut w)
+    }
+
+    pub fn write(&mut self, mut w: impl io::Write) -> io::Result<()> {
+        self.write_signature(&mut w)?;
 
         self.enter(&mut w)?;
         for block in self.func.layout.iter_block() {
@@ -152,7 +156,7 @@ impl<'a> FuncWriter<'a> {
     }
 }
 
-trait IrWrite {
+pub trait IrWrite {
     fn write(&self, writer: &mut FuncWriter, w: &mut impl io::Write) -> io::Result<()>;
 }
 

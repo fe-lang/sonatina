@@ -84,5 +84,7 @@ fn test_evm(fixture: Fixture<&str>) {
         Err(err) => panic!("{:?}", err),
     };
 
-    snap_test!(format! {"{}", vcode}, fixture.path());
+    let mut v = Vec::new();
+    vcode.print(&mut v, function).unwrap();
+    snap_test!(String::from_utf8(v).unwrap(), fixture.path());
 }

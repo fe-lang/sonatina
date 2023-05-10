@@ -1,16 +1,18 @@
 ---
 source: crates/codegen/tests/evm.rs
-expression: "format! { \"{}\", vcode }"
+expression: "String::from_utf8(v).unwrap()"
 input_file: crates/codegen/test_files/evm/add.sntn
 ---
-block0:
+// func public %simple(v0.i8) -> i8
+simple:
+  block0:
     JUMPDEST
-    PUSH1  [255]
+    PUSH1 [255]  // v1.i8 = add v0 -1.i8;
     SWAP1
     ADD
-    PUSH1  [5]
+    PUSH1 [5]  // v2.i8 = sub v1 5.i8;
     SWAP1
     SUB
-    SWAP1
+    SWAP1  // return v2;
     JUMP
 

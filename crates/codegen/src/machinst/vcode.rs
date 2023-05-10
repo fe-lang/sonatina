@@ -1,19 +1,18 @@
+use cranelift_entity::packed_option::PackedOption;
 use cranelift_entity::{
     entity_impl, packed_option::ReservedValue, EntityList, EntityRef, ListPool, PrimaryMap,
     SecondaryMap,
 };
 use indexmap::IndexMap;
-use ir::module::FuncRef;
-use ir::Block;
 use smallvec::SmallVec;
-use sonatina_ir as ir;
+use sonatina_ir::{module::FuncRef, Block, Function, Insn};
 use std::collections::BTreeMap;
 use std::fmt;
 
 #[derive(Debug, Copy, Clone)]
 pub enum Label {
     Insn(VCodeInst),
-    Block(ir::Block),
+    Block(Block),
     Function(FuncRef),
 }
 
@@ -24,7 +23,7 @@ entity_impl!(VCodeInst);
 #[derive(Default)]
 pub struct VCode<Op> {
     pub insts: PrimaryMap<VCodeInst, Op>,
-    pub inst_ir: SecondaryMap<VCodeInst, Option<ir::Insn>>,
+    pub inst_ir: SecondaryMap<VCodeInst, PackedOption<Insn>>,
 
     /// Immediate bytes for PUSH* ops
     pub inst_imm_bytes: BTreeMap<VCodeInst, SmallVec<[u8; 8]>>,
@@ -34,7 +33,7 @@ pub struct VCode<Op> {
     pub jump_fixups: IndexMap<VCodeInst, Label>,
 
     // Or PrimaryMap<VCodeBlock, ..>?
-    blocks: SecondaryMap<ir::Block, EntityList<VCodeInst>>,
+    blocks: SecondaryMap<Block, EntityList<VCodeInst>>,
 
     insts_pool: ListPool<VCodeInst>,
 }
@@ -43,16 +42,16 @@ impl<Op> VCode<Op> {
     pub fn add_inst_to_block(
         &mut self,
         op: Op,
-        source_insn: Option<ir::Insn>,
-        block: ir::Block,
+        source_insn: Option<Insn>,
+        block: Block,
     ) -> VCodeInst {
         let inst = self.insts.push(op);
-        self.inst_ir[inst] = source_insn;
+        self.inst_ir[inst] = source_insn.into();
         self.blocks[block].push(inst, &mut self.insts_pool);
         inst
     }
 
-    pub fn block_insns(&self, block: ir::Block) -> impl Iterator<Item = VCodeInst> + '_ {
+    pub fn block_insns(&self, block: Block) -> impl Iterator<Item = VCodeInst> + '_ {
         EntityIter {
             list: &self.blocks[block],
             pool: &self.insts_pool,
@@ -63,34 +62,51 @@ impl<Op> VCode<Op> {
     // pub fn emit(self, alloc: &sonatina_stackalloc::Output)
 }
 
-impl<Op> fmt::Display for VCode<Op>
+impl<Op> VCode<Op>
 where
     Op: fmt::Debug,
 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    pub fn print(&self, mut w: impl std::io::Write, func: &Function) -> std::io::Result<()> {
+        use sonatina_ir::ir_writer::{FuncWriter, IrWrite};
+        let mut writer = FuncWriter::new(func);
+        let mut cur_ir = None;
+
+        write!(w, "// ")?;
+        writer.write_signature(&mut w)?;
+        writeln!(w)?;
+        writeln!(w, "{}:", func.sig.name())?;
+
         for block in self.blocks.keys() {
             if self.block_insns(block).count() > 0 {
-                writeln!(f, "block{}:", block.0)?;
+                writeln!(w, "  block{}:", block.0)?;
             }
             for (idx, insn) in self.block_insns(block).enumerate() {
-                write!(f, "    {:?}", self.insts[insn])?;
+                write!(w, "    {:?}", self.insts[insn])?;
                 if let Some(bytes) = self.inst_imm_bytes.get(&insn) {
-                    write!(f, "  {bytes:?}")?;
+                    write!(w, " {bytes:?}")?;
                 } else if let Some(label) = self.jump_fixups.get(&insn) {
                     match label {
-                        Label::Block(Block(n)) => write!(f, "  `block{n}`"),
+                        Label::Block(Block(n)) => write!(w, " block{n}"),
                         Label::Insn(insn) => {
                             let pos = self
                                 .block_insns(block)
                                 .position(|i| i == *insn)
                                 .expect("Label::Insn must be in same block");
                             let offset: i32 = pos as i32 - idx as i32;
-                            write!(f, "  `pc + ({offset})`")
+                            write!(w, " `pc + ({offset})`")
                         }
-                        Label::Function(func) => write!(f, "  {func:?}"),
+                        Label::Function(func) => write!(w, " {func:?}"),
                     }?;
                 }
-                writeln!(f)?;
+
+                if let Some(ir) = self.inst_ir[insn].expand() {
+                    if cur_ir != Some(ir) {
+                        cur_ir = Some(ir);
+                        write!(w, "  // ")?;
+                        ir.write(&mut writer, &mut w)?;
+                    }
+                }
+                writeln!(w)?;
             }
         }
         Ok(())
