@@ -1,6 +1,9 @@
 use dir_test::{dir_test, Fixture};
 
-use sonatina_codegen::{isa::evm::EvmBackend, machinst::lower::Lower};
+use sonatina_codegen::{
+    cfg::ControlFlowGraph, isa::evm::EvmBackend, liveness::Liveness, machinst::lower::Lower,
+    stackalloc::SimpleAlloc,
+};
 use sonatina_parser::{
     parser::{ParsedModule, Parser},
     ErrorKind,
@@ -59,7 +62,7 @@ fn parse_sona(content: &str) -> Result<ParsedModule, String> {
 
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/test_files/evm",
-    glob: "*.sona"
+    glob: "*.sntn"
 )]
 fn test_evm(fixture: Fixture<&str>) {
     let module = match parse_sona(fixture.content()) {
@@ -68,13 +71,18 @@ fn test_evm(fixture: Fixture<&str>) {
     };
 
     let function = module.module.funcs.values().next().unwrap();
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(function);
+    let mut liveness = Liveness::new();
+    liveness.compute(function, &cfg);
+    let mut alloc = SimpleAlloc::for_function(function, &cfg, &liveness, 16);
     let lower = Lower::new(function);
     let backend = EvmBackend::default();
-    let vcode = match lower.lower(&backend) {
+
+    let vcode = match lower.lower(&backend, &mut alloc) {
         Ok(vcode) => vcode,
         Err(err) => panic!("{:?}", err),
     };
 
-    let node = format! {"{:#?}", vcode.insts.values().collect::<Vec<_>>()};
-    snap_test!(node, fixture.path());
+    snap_test!(format! {"{}", vcode}, fixture.path());
 }

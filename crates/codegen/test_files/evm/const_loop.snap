@@ -1,0 +1,22 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "format! { \"{}\", vcode }"
+input_file: crates/codegen/test_files/evm/const_loop.sntn
+---
+block1:
+    PUSH1  [1]
+block2:
+    PUSH1  [10]
+    DUP2
+    ADD
+    SWAP1
+    DUP2
+    GT
+    PUSH1  `block3`
+    JUMPI
+    PUSH1  `block2`
+    JUMP
+block3:
+    SWAP1
+    JUMP
+

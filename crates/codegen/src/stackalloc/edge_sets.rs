@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::collections::BTreeSet;
 
 use crate::cfg::ControlFlowGraph;

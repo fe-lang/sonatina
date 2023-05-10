@@ -25,24 +25,23 @@
 //! This might change; it might make more sense to consider the result of a phi
 //! to be defined by each of the predecessor blocks, or by the block containing the phi.
 
-// XXX handle args
-
-// XXX is it better to collect var liveness for each edge??
-
 use std::collections::{btree_map::Entry, BTreeMap};
 
 use crate::{bitset::BitSet, cfg::ControlFlowGraph};
 use cranelift_entity::SecondaryMap;
-use sonatina_ir as ir;
+use sonatina_ir::{Block, Function, InsnData, Value};
 
 #[derive(Default)]
 pub struct Liveness {
     /// block => (live_ins, live_outs)
-    live_ins: SecondaryMap<ir::Block, BitSet<ir::Value>>,
-    live_outs: SecondaryMap<ir::Block, BitSet<ir::Value>>,
+    live_ins: SecondaryMap<Block, BitSet<Value>>,
+    live_outs: SecondaryMap<Block, BitSet<Value>>,
 
     /// value => (defining block, is_defined_by_phi)
-    defs: SecondaryMap<ir::Value, Option<ValDef>>,
+    defs: SecondaryMap<Value, Option<ValDef>>,
+    pub val_live_blocks: SecondaryMap<Value, BitSet<Block>>,
+    pub val_use_blocks: SecondaryMap<Value, BitSet<Block>>,
+    pub val_use_count: SecondaryMap<Value, u32>,
 }
 
 impl Liveness {
@@ -50,7 +49,7 @@ impl Liveness {
         Self::default()
     }
 
-    pub fn compute(&mut self, func: &ir::Function, cfg: &ControlFlowGraph) {
+    pub fn compute(&mut self, func: &Function, cfg: &ControlFlowGraph) {
         self.clear();
 
         for arg in &func.arg_values {
@@ -69,12 +68,14 @@ impl Liveness {
         for block in cfg.post_order() {
             for_each_use(func, block, |val, phi_source_block| {
                 if func.dfg.is_imm(val) {
-                    // ignore
+                    self.mark_use(val, block);
                 } else if let Some(pred_block) = phi_source_block {
                     // A phi input is considered to be a use by the associated
                     // predecessor block
+                    self.mark_use(val, pred_block);
                     self.up_and_mark(cfg, pred_block, val);
                 } else {
+                    self.mark_use(val, block);
                     self.up_and_mark(cfg, block, val);
                 }
             });
@@ -82,24 +83,24 @@ impl Liveness {
     }
 
     // XXX better api
-    pub fn block_live_ins(&self, block: ir::Block) -> &BitSet<ir::Value> {
+    pub fn block_live_ins(&self, block: Block) -> &BitSet<Value> {
         &self.live_ins[block]
     }
-    pub fn block_live_outs(&self, block: ir::Block) -> &BitSet<ir::Value> {
+    pub fn block_live_outs(&self, block: Block) -> &BitSet<Value> {
         &self.live_outs[block]
     }
 
     /// Propagate liveness of `val` "upward" from its use in `block`
-    fn up_and_mark(&mut self, cfg: &ControlFlowGraph, block: ir::Block, val: ir::Value) {
-        eprintln!("up and mark {block:?} {val:?}");
+    fn up_and_mark(&mut self, cfg: &ControlFlowGraph, block: Block, val: Value) {
         let def = self.defs[val].unwrap();
+
+        self.val_live_blocks[val].insert(block);
 
         // If `val` is defined in this block, there's nothing to do.
         if def == ValDef::Normal(block) {
             return;
         }
 
-        eprintln!("live_in: {block:?} {val:?}");
         if self.live_ins[block].contains(val) {
             // Already marked, so propagation to preds already done
             return;
@@ -118,21 +119,27 @@ impl Liveness {
         }
     }
 
+    fn mark_use(&mut self, val: Value, block: Block) {
+        self.val_use_blocks[val].insert(block);
+        self.val_use_count[val] += 1;
+    }
+
     /// Reset the `Liveness` struct so that it can be reused.
     pub fn clear(&mut self) {
         self.live_ins.clear();
         self.live_outs.clear();
         self.defs.clear();
+        self.val_live_blocks.clear();
     }
 }
 
-// XXX
+// xxx remove?
 #[derive(Default)]
 pub struct EdgeLiveness {
-    edges: BTreeMap<(ir::Block, ir::Block), BitSet<ir::Value>>,
+    edges: BTreeMap<(Block, Block), BitSet<Value>>,
     // xxx store block var uses?
     /// value => (defining block, is_defined_by_phi)
-    defs: SecondaryMap<ir::Value, Option<ValDef>>,
+    defs: SecondaryMap<Value, Option<ValDef>>,
 }
 
 impl EdgeLiveness {
@@ -140,7 +147,7 @@ impl EdgeLiveness {
         Self::default()
     }
 
-    pub fn compute(&mut self, func: &ir::Function, cfg: &ControlFlowGraph) {
+    pub fn compute(&mut self, func: &Function, cfg: &ControlFlowGraph) {
         // Precompute `defs`
         for arg in &func.arg_values {
             self.defs[*arg] = Some(ValDef::FnArg);
@@ -170,17 +177,17 @@ impl EdgeLiveness {
         }
     }
 
-    pub fn live_on_edge(&self, edge: (ir::Block, ir::Block)) -> &BitSet<ir::Value> {
+    pub fn live_on_edge(&self, edge: (Block, Block)) -> &BitSet<Value> {
         &self.edges[&edge]
     }
 
     // xxx rename; only for testing?
-    pub fn into_edges(self) -> BTreeMap<(ir::Block, ir::Block), BitSet<ir::Value>> {
+    pub fn into_edges(self) -> BTreeMap<(Block, Block), BitSet<Value>> {
         self.edges
     }
 
     /// Propagate liveness of `val` "upward" from its use in `block`
-    fn up_and_mark(&mut self, cfg: &ControlFlowGraph, block: ir::Block, val: ir::Value) {
+    fn up_and_mark(&mut self, cfg: &ControlFlowGraph, block: Block, val: Value) {
         let def = self.defs[val].unwrap();
 
         // If `val` is defined in this block, there's nothing to do.
@@ -214,18 +221,14 @@ impl EdgeLiveness {
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum ValDef {
     FnArg,
-    Normal(ir::Block),
-    Phi(ir::Block),
+    Normal(Block),
+    Phi(Block),
 }
 
-fn for_each_use(
-    func: &ir::Function,
-    block: ir::Block,
-    mut f: impl FnMut(ir::Value, Option<ir::Block>),
-) {
+fn for_each_use(func: &Function, block: Block, mut f: impl FnMut(Value, Option<Block>)) {
     for insn in func.layout.iter_insn(block) {
         match func.dfg.insn_data(insn) {
-            ir::InsnData::Phi { values, blocks, .. } => values
+            InsnData::Phi { values, blocks, .. } => values
                 .iter()
                 .zip(blocks.iter())
                 .for_each(|(v, b)| f(*v, Some(*b))),
@@ -234,7 +237,7 @@ fn for_each_use(
     }
 }
 
-fn for_each_def(func: &ir::Function, block: ir::Block, mut f: impl FnMut(ir::Value, bool)) {
+fn for_each_def(func: &Function, block: Block, mut f: impl FnMut(Value, bool)) {
     for insn in func.layout.iter_insn(block) {
         if let Some(val) = func.dfg.insn_result(insn) {
             f(val, func.dfg.is_phi(insn))
@@ -300,23 +303,23 @@ func public %complex_loop(v0.i8, v20.i8) -> i8:
         let mut live = Liveness::default();
         live.compute(function, &cfg);
 
-        assert_eq!(live.block_live_ins(Block(1)), &[0].into());
-        assert_eq!(live.block_live_outs(Block(1)), &[0].into());
+        assert_eq!(live.block_live_ins(Block(1)), &[0].as_slice().into());
+        assert_eq!(live.block_live_outs(Block(1)), &[0].as_slice().into());
 
-        assert_eq!(live.block_live_ins(Block(2)), &[0, 2, 3].into());
-        assert_eq!(live.block_live_outs(Block(2)), &[0, 2, 3].into());
+        assert_eq!(live.block_live_ins(Block(2)), &[0, 2, 3].as_slice().into());
+        assert_eq!(live.block_live_outs(Block(2)), &[0, 2, 3].as_slice().into());
 
-        assert_eq!(live.block_live_ins(Block(3)), &[0, 2, 3].into());
-        assert_eq!(live.block_live_outs(Block(3)), &[0, 3].into());
+        assert_eq!(live.block_live_ins(Block(3)), &[0, 2, 3].as_slice().into());
+        assert_eq!(live.block_live_outs(Block(3)), &[0, 3].as_slice().into());
 
-        assert_eq!(live.block_live_ins(Block(4)), &[2].into());
-        assert_eq!(live.block_live_outs(Block(4)), &[].into());
+        assert_eq!(live.block_live_ins(Block(4)), &[2].as_slice().into());
+        assert_eq!(live.block_live_outs(Block(4)), &[].as_slice().into());
 
-        assert_eq!(live.block_live_ins(Block(5)), &[0, 3].into());
-        assert_eq!(live.block_live_outs(Block(5)), &[0].into());
+        assert_eq!(live.block_live_ins(Block(5)), &[0, 3].as_slice().into());
+        assert_eq!(live.block_live_outs(Block(5)), &[0].as_slice().into());
 
-        assert_eq!(live.block_live_ins(Block(6)), &[0, 3].into());
-        assert_eq!(live.block_live_outs(Block(6)), &[0].into());
+        assert_eq!(live.block_live_ins(Block(6)), &[0, 3].as_slice().into());
+        assert_eq!(live.block_live_outs(Block(6)), &[0].as_slice().into());
     }
 
     #[test]
@@ -333,26 +336,35 @@ func public %complex_loop(v0.i8, v20.i8) -> i8:
 
         assert_eq!(
             edges.remove(&(Block(1), Block(2))).unwrap(),
-            [0, 2, 3].into(),
+            [0, 2, 3].as_slice().into(),
         );
         assert_eq!(
             edges.remove(&(Block(2), Block(3))).unwrap(),
-            [0, 2, 3].into()
+            [0, 2, 3].as_slice().into()
         );
-        assert_eq!(edges.remove(&(Block(2), Block(4))).unwrap(), [2].into());
-        assert_eq!(edges.remove(&(Block(3), Block(5))).unwrap(), [0, 3].into());
-        assert_eq!(edges.remove(&(Block(3), Block(6))).unwrap(), [0, 3].into());
+        assert_eq!(
+            edges.remove(&(Block(2), Block(4))).unwrap(),
+            [2].as_slice().into()
+        );
+        assert_eq!(
+            edges.remove(&(Block(3), Block(5))).unwrap(),
+            [0, 3].as_slice().into()
+        );
+        assert_eq!(
+            edges.remove(&(Block(3), Block(6))).unwrap(),
+            [0, 3].as_slice().into()
+        );
         assert_eq!(
             edges.remove(&(Block(5), Block(7))).unwrap(),
-            [0, 8, 9].into()
+            [0, 8, 9].as_slice().into()
         );
         assert_eq!(
             edges.remove(&(Block(6), Block(7))).unwrap(),
-            [0, 8, 9].into()
+            [0, 8, 9].as_slice().into()
         );
         assert_eq!(
             edges.remove(&(Block(7), Block(2))).unwrap(),
-            [0, 2, 3].into()
+            [0, 2, 3].as_slice().into()
         );
         assert!(edges.is_empty());
     }

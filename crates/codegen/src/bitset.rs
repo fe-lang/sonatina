@@ -68,11 +68,44 @@ impl<T> Default for BitSet<T> {
     }
 }
 
-impl<T: EntityRef, const N: usize> From<[usize; N]> for BitSet<T> {
-    fn from(elems: [usize; N]) -> Self {
+impl<T: EntityRef> From<&[usize]> for BitSet<T> {
+    fn from(elems: &[usize]) -> Self {
         let mut bs = BitSet::new();
         for e in elems {
-            bs.insert(T::new(e));
+            bs.insert(T::new(*e));
+        }
+        bs
+    }
+}
+
+impl<T: EntityRef, const N: usize> From<[T; N]> for BitSet<T> {
+    fn from(elems: [T; N]) -> Self {
+        let mut bs = BitSet::new();
+        for e in elems {
+            bs.insert(e);
+        }
+        bs
+    }
+}
+
+// impl<T: EntityRef, const N: usize> From<[usize; N]> for BitSet<T> {
+//     fn from(elems: [usize; N]) -> Self {
+//         let mut bs = BitSet::new();
+//         for e in elems {
+//             bs.insert(T::new(e));
+//         }
+//         bs
+//     }
+// }
+
+impl<A: EntityRef> FromIterator<A> for BitSet<A> {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = A>,
+    {
+        let mut bs = BitSet::new();
+        for e in iter {
+            bs.insert(e);
         }
         bs
     }

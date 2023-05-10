@@ -1,34 +1,18 @@
-use std::collections::BTreeMap;
-
-use cranelift_entity::{entity_impl, EntityList, ListPool, PrimaryMap, SecondaryMap};
+use cranelift_entity::{
+    entity_impl, packed_option::ReservedValue, EntityList, EntityRef, ListPool, PrimaryMap,
+    SecondaryMap,
+};
+use indexmap::IndexMap;
 use ir::module::FuncRef;
+use ir::Block;
 use smallvec::SmallVec;
 use sonatina_ir as ir;
+use std::collections::BTreeMap;
+use std::fmt;
 
-// TODO: move to reg/stackalloc crate?
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
-pub struct VReg(pub u32);
-cranelift_entity::entity_impl!(VReg);
-
-impl VReg {
-    pub fn is_invalid(&self) -> bool {
-        *self == VReg::default()
-    }
-}
-
-impl Default for VReg {
-    fn default() -> Self {
-        VReg(u32::MAX)
-    }
-}
-
-pub enum VRegKind {
-    Value(ir::Value),
-    Temp(ir::Type),
-    JumpDest(Label),
-}
-
+#[derive(Debug, Copy, Clone)]
 pub enum Label {
+    Insn(VCodeInst),
     Block(ir::Block),
     Function(FuncRef),
 }
@@ -40,8 +24,6 @@ entity_impl!(VCodeInst);
 #[derive(Default)]
 pub struct VCode<Op> {
     pub insts: PrimaryMap<VCodeInst, Op>,
-    pub inst_inputs: SecondaryMap<VCodeInst, EntityList<VReg>>,
-    pub inst_outputs: SecondaryMap<VCodeInst, EntityList<VReg>>,
     pub inst_ir: SecondaryMap<VCodeInst, Option<ir::Insn>>,
 
     /// Immediate bytes for PUSH* ops
@@ -49,36 +31,90 @@ pub struct VCode<Op> {
 
     /// Instructions that contain label offsets that will need to updated
     /// when the bytecode is emitted
-    pub jump_fixups: Vec<(VCodeInst, Label)>,
+    pub jump_fixups: IndexMap<VCodeInst, Label>,
 
     // Or PrimaryMap<VCodeBlock, ..>?
     blocks: SecondaryMap<ir::Block, EntityList<VCodeInst>>,
 
-    /// Virtual registers
-    pub vregs: PrimaryMap<VReg, VRegKind>,
-    /// Reverse map to lookup register for a value
-    pub value_regs: SecondaryMap<ir::Value, VReg>,
-
     insts_pool: ListPool<VCodeInst>,
-    vregs_pool: ListPool<VReg>,
 }
 
 impl<Op> VCode<Op> {
     pub fn add_inst_to_block(
         &mut self,
         op: Op,
-        inputs: &[VReg],
-        outputs: &[VReg],
         source_insn: Option<ir::Insn>,
         block: ir::Block,
     ) -> VCodeInst {
         let inst = self.insts.push(op);
-        self.inst_inputs[inst] = EntityList::from_slice(inputs, &mut self.vregs_pool);
-        self.inst_outputs[inst] = EntityList::from_slice(outputs, &mut self.vregs_pool);
         self.inst_ir[inst] = source_insn;
         self.blocks[block].push(inst, &mut self.insts_pool);
         inst
     }
 
+    pub fn block_insns(&self, block: ir::Block) -> impl Iterator<Item = VCodeInst> + '_ {
+        EntityIter {
+            list: &self.blocks[block],
+            pool: &self.insts_pool,
+            next: 0,
+        }
+    }
+
     // pub fn emit(self, alloc: &sonatina_stackalloc::Output)
+}
+
+impl<Op> fmt::Display for VCode<Op>
+where
+    Op: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for block in self.blocks.keys() {
+            if self.block_insns(block).count() > 0 {
+                writeln!(f, "block{}:", block.0)?;
+            }
+            for (idx, insn) in self.block_insns(block).enumerate() {
+                write!(f, "    {:?}", self.insts[insn])?;
+                if let Some(bytes) = self.inst_imm_bytes.get(&insn) {
+                    write!(f, "  {bytes:?}")?;
+                } else if let Some(label) = self.jump_fixups.get(&insn) {
+                    match label {
+                        Label::Block(Block(n)) => write!(f, "  `block{n}`"),
+                        Label::Insn(insn) => {
+                            let pos = self
+                                .block_insns(block)
+                                .position(|i| i == *insn)
+                                .expect("Label::Insn must be in same block");
+                            let offset: i32 = pos as i32 - idx as i32;
+                            write!(f, "  `pc + ({offset})`")
+                        }
+                        Label::Function(func) => write!(f, "  {func:?}"),
+                    }?;
+                }
+                writeln!(f)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+struct EntityIter<'a, T>
+where
+    T: EntityRef + ReservedValue,
+{
+    list: &'a EntityList<T>,
+    pool: &'a ListPool<T>,
+    next: usize,
+}
+
+impl<'a, T> Iterator for EntityIter<'a, T>
+where
+    T: EntityRef + ReservedValue,
+{
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        let next = self.list.get(self.next, self.pool)?;
+        self.next += 1;
+        Some(next)
+    }
 }

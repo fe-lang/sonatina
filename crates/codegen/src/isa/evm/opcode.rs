@@ -45,6 +45,7 @@ pub enum OpCode {
     PC = 0x58,
     MSIZE = 0x59,
     JUMPDEST = 0x5b,
+    PUSH0 = 0x5f,
     PUSH1 = 0x60,
     PUSH2 = 0x61,
     PUSH3 = 0x62,

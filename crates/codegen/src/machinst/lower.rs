@@ -1,12 +1,12 @@
+use super::vcode::{Label, VCode, VCodeInst};
+use crate::stackalloc::Allocator;
 use ir::Immediate;
 use sonatina_ir as ir;
-
-use super::vcode::{Label, VCode, VCodeInst, VReg, VRegKind};
 
 pub trait LowerBackend {
     type MInst;
 
-    fn lower(&self, ctx: &mut Lower<Self::MInst>, inst: ir::Insn);
+    fn lower(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, inst: ir::Insn);
     // -> Option<InstOutput> == SmallVec<[ValueRegs<Reg>; 2]>
 }
 
@@ -24,23 +24,19 @@ pub struct Lower<'a, Op> {
 
 impl<'a, Op: Default> Lower<'a, Op> {
     pub fn new(function: &'a ir::Function) -> Self {
-        let mut vcode = VCode::default();
-
-        // Add vregs for all `Value`s
-        for val in function.dfg.values.keys() {
-            let reg = vcode.vregs.push(VRegKind::Value(val));
-            vcode.value_regs[val] = reg;
-        }
-
         Lower {
             function,
-            vcode,
+            vcode: VCode::default(),
             cur_insn: None,
             cur_block: None,
         }
     }
 
-    pub fn lower<B: LowerBackend<MInst = Op>>(mut self, backend: &B) -> CodegenResult<VCode<Op>> {
+    pub fn lower<B: LowerBackend<MInst = Op>>(
+        mut self,
+        backend: &B,
+        alloc: &mut dyn Allocator,
+    ) -> CodegenResult<VCode<Op>> {
         for block in self.function.layout.iter_block() {
             // XXX insert JUMPDEST op if block has preds
             self.cur_block = Some(block);
@@ -49,16 +45,25 @@ impl<'a, Op: Default> Lower<'a, Op> {
                 self.cur_insn = Some(insn);
                 // TODO: skip if insn isn't used and doesn't have side-effects
 
-                backend.lower(&mut self, insn);
+                backend.lower(&mut self, alloc, insn);
             }
         }
 
         Ok(self.vcode)
     }
 
-    pub fn push(&mut self, op: Op, inputs: &[VReg], outputs: &[VReg]) -> VCodeInst {
+    pub fn push(&mut self, op: Op) -> VCodeInst {
         self.vcode
-            .add_inst_to_block(op, inputs, outputs, self.cur_insn, self.cur_block.unwrap())
+            .add_inst_to_block(op, self.cur_insn, self.cur_block.unwrap())
+    }
+
+    pub fn push_with_imm(&mut self, op: Op, bytes: &[u8]) {
+        let i = self.push(op);
+        self.add_immediate(i, bytes);
+    }
+
+    pub fn next_insn(&self) -> VCodeInst {
+        self.vcode.insts.next_key()
     }
 
     pub fn add_immediate(&mut self, inst: VCodeInst, bytes: &[u8]) {
@@ -66,21 +71,7 @@ impl<'a, Op: Default> Lower<'a, Op> {
     }
 
     pub fn add_jump_fixup_inst(&mut self, inst: VCodeInst, dest: Label) {
-        self.vcode.jump_fixups.push((inst, dest));
-    }
-
-    // XXX remove?
-    pub fn temp_reg(&mut self, ty: ir::Type) -> VReg {
-        self.vcode.vregs.push(VRegKind::Temp(ty))
-    }
-
-    pub fn value_reg(&self, val: ir::Value) -> VReg {
-        self.vcode.value_regs[val]
-    }
-
-    pub fn insn_result_reg(&self, insn: ir::Insn) -> Option<VReg> {
-        let val = self.function.dfg.insn_result(insn)?;
-        Some(self.value_reg(val))
+        self.vcode.jump_fixups.insert(inst, dest);
     }
 
     pub fn insn_data(&self, insn: ir::Insn) -> &ir::InsnData {
@@ -89,5 +80,13 @@ impl<'a, Op: Default> Lower<'a, Op> {
 
     pub fn value_imm(&self, value: ir::Value) -> Option<Immediate> {
         self.function.dfg.value_imm(value)
+    }
+
+    pub fn insn_result(&self, insn: ir::Insn) -> Option<ir::Value> {
+        self.function.dfg.insn_result(insn)
+    }
+
+    pub fn insn_block(&self, insn: ir::Insn) -> ir::Block {
+        self.function.layout.insn_block(insn)
     }
 }
