@@ -1,13 +1,14 @@
 use super::vcode::{Label, VCode, VCodeInst};
 use crate::stackalloc::Allocator;
-use ir::Immediate;
-use sonatina_ir as ir;
+use sonatina_ir::{Block, Function, Immediate, Insn, InsnData, Value};
 
 pub trait LowerBackend {
     type MInst;
 
-    fn lower(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, inst: ir::Insn);
+    fn lower(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, inst: Insn);
     // -> Option<InstOutput> == SmallVec<[ValueRegs<Reg>; 2]>
+
+    fn enter_block(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, block: Block);
 }
 
 #[derive(Debug)]
@@ -15,15 +16,15 @@ pub struct CodegenError {}
 pub type CodegenResult<T> = Result<T, CodegenError>;
 
 pub struct Lower<'a, Op> {
-    function: &'a ir::Function,
+    function: &'a Function,
     vcode: VCode<Op>,
 
-    cur_insn: Option<ir::Insn>,
-    cur_block: Option<ir::Block>,
+    cur_insn: Option<Insn>,
+    cur_block: Option<Block>,
 }
 
 impl<'a, Op: Default> Lower<'a, Op> {
-    pub fn new(function: &'a ir::Function) -> Self {
+    pub fn new(function: &'a Function) -> Self {
         Lower {
             function,
             vcode: VCode::default(),
@@ -40,11 +41,10 @@ impl<'a, Op: Default> Lower<'a, Op> {
         for block in self.function.layout.iter_block() {
             // XXX insert JUMPDEST op if block has preds
             self.cur_block = Some(block);
+            backend.enter_block(&mut self, alloc, block);
 
             for insn in self.function.layout.iter_insn(block) {
                 self.cur_insn = Some(insn);
-                // TODO: skip if insn isn't used and doesn't have side-effects
-
                 backend.lower(&mut self, alloc, insn);
             }
         }
@@ -74,19 +74,19 @@ impl<'a, Op: Default> Lower<'a, Op> {
         self.vcode.jump_fixups.insert(inst, dest);
     }
 
-    pub fn insn_data(&self, insn: ir::Insn) -> &ir::InsnData {
+    pub fn insn_data(&self, insn: Insn) -> &InsnData {
         self.function.dfg.insn_data(insn)
     }
 
-    pub fn value_imm(&self, value: ir::Value) -> Option<Immediate> {
+    pub fn value_imm(&self, value: Value) -> Option<Immediate> {
         self.function.dfg.value_imm(value)
     }
 
-    pub fn insn_result(&self, insn: ir::Insn) -> Option<ir::Value> {
+    pub fn insn_result(&self, insn: Insn) -> Option<Value> {
         self.function.dfg.insn_result(insn)
     }
 
-    pub fn insn_block(&self, insn: ir::Insn) -> ir::Block {
+    pub fn insn_block(&self, insn: Insn) -> Block {
         self.function.layout.insn_block(insn)
     }
 }

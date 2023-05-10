@@ -4,6 +4,7 @@ expression: "format! { \"{}\", vcode }"
 input_file: crates/codegen/test_files/evm/add.sntn
 ---
 block0:
+    JUMPDEST
     PUSH1  [255]
     SWAP1
     ADD

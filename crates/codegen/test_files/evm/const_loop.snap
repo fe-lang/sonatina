@@ -4,8 +4,10 @@ expression: "format! { \"{}\", vcode }"
 input_file: crates/codegen/test_files/evm/const_loop.sntn
 ---
 block1:
+    JUMPDEST
     PUSH1  [1]
 block2:
+    JUMPDEST
     PUSH1  [10]
     DUP2
     ADD
@@ -17,6 +19,7 @@ block2:
     PUSH1  `block2`
     JUMP
 block3:
+    JUMPDEST
     SWAP1
     JUMP
 

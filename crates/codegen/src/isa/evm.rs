@@ -13,7 +13,7 @@ use crate::{
 use smallvec::{smallvec, SmallVec};
 use sonatina_ir::{
     insn::{BinaryOp, CastOp, JumpOp, UnaryOp},
-    Immediate, Insn, InsnData, Value, U256,
+    Block, Immediate, Insn, InsnData, Value, U256,
 };
 
 const FRAME_POINTER_OFFSET: u8 = 0x40;
@@ -25,6 +25,13 @@ pub struct EvmBackend {
 
 impl LowerBackend for EvmBackend {
     type MInst = OpCode;
+
+    fn enter_block(&self, ctx: &mut Lower<Self::MInst>, _alloc: &mut dyn Allocator, block: Block) {
+        // Every block start is a jumpdest unless
+        //  - all incoming edges are fallthroughs (TODO)
+        //  - it's the entry block of the main fn (TODO)
+        ctx.push(OpCode::JUMPDEST);
+    }
 
     fn lower(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, insn: Insn) {
         let result = ctx.insn_result(insn);
@@ -119,14 +126,19 @@ impl LowerBackend for EvmBackend {
             InsnData::Call { func, args, ret_ty } => {
                 // xxx if func uses memory, store new fp
 
-                // Push (pc+1) onto stack, for jump at end of func.
-                let p = ctx.push(OpCode::PUSH1);
-                ctx.add_jump_fixup_inst(p, Label::Insn(ctx.next_insn()));
+                // Push return pc onto stack (determined below)
+                let push_pc = ctx.push(OpCode::PUSH1);
 
+                // Move fn args onto stack
                 perform_actions(ctx, &alloc.read(insn, &args));
+                // Push fn address onto stack and jump
                 let p = ctx.push(OpCode::PUSH1);
                 ctx.add_jump_fixup_inst(p, Label::Function(*func));
                 ctx.push(OpCode::JUMP);
+
+                // Mark return pc as jumpdest
+                let jumpdest_op = ctx.push(OpCode::JUMPDEST);
+                ctx.add_jump_fixup_inst(push_pc, Label::Insn(jumpdest_op));
             }
 
             InsnData::Jump {
@@ -162,7 +174,8 @@ impl LowerBackend for EvmBackend {
                 // perform them, then jump left.
                 let left_actions = alloc.traverse_edge(from, *left);
                 if !left_actions.is_empty() {
-                    ctx.add_jump_fixup_inst(jumpi_target, Label::Insn(ctx.next_insn()));
+                    let jd = ctx.push(OpCode::JUMPDEST);
+                    ctx.add_jump_fixup_inst(jumpi_target, Label::Insn(jd));
                     perform_actions(ctx, &left_actions);
 
                     let left_jump_target = ctx.push(OpCode::PUSH1);
@@ -178,11 +191,17 @@ impl LowerBackend for EvmBackend {
                 args,
                 default,
                 table,
-            } => {}
+            } => {
+                todo!()
+            }
 
-            InsnData::Alloca { ty } => {}
+            InsnData::Alloca { ty } => {
+                todo!()
+            }
 
-            InsnData::Gep { args } => {}
+            InsnData::Gep { args } => {
+                todo!()
+            }
 
             InsnData::Return { args } => {
                 let v = match args {
