@@ -245,35 +245,54 @@ fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
                 ctx.push(swap_op(*n));
             }
             Action::Push(imm) => {
-                let bytes = imm_to_be_bytes(&imm);
-                push_imm(ctx, &bytes);
+                if imm.is_zero() {
+                    ctx.push(OpCode::PUSH0);
+                } else {
+                    let bytes = match imm {
+                        Immediate::I1(v) => smallvec![*v as u8],
+                        Immediate::I8(v) => SmallVec::from_slice(&v.to_be_bytes()),
+                        Immediate::I16(v) => shrink_bytes(&v.to_be_bytes()),
+                        Immediate::I32(v) => shrink_bytes(&v.to_be_bytes()),
+                        Immediate::I64(v) => shrink_bytes(&v.to_be_bytes()),
+                        Immediate::I128(v) => shrink_bytes(&v.to_be_bytes()),
+                        Immediate::I256(v) => todo!(),
+                    };
+                    push_bytes(ctx, &bytes);
+
+                    // Sign-extend negative numbers to 32 bytes
+                    // TODO: signextend isn't always needed (eg push then mstore8)
+                    if imm.is_negative() && bytes.len() < 32 {
+                        push_bytes(ctx, &u32_to_be((bytes.len() - 1) as u32));
+                        ctx.push(OpCode::SIGNEXTEND);
+                    }
+                }
             }
             Action::Pop => {
                 ctx.push(OpCode::POP);
             }
             Action::MemLoadAbs(offset) => {
                 let bytes = u32_to_be(*offset);
-                push_imm(ctx, &bytes);
+                push_bytes(ctx, &bytes);
                 ctx.push(OpCode::MLOAD);
             }
             Action::MemLoadFrameSlot(offset) => {
                 ctx.push_with_imm(OpCode::PUSH1, &[FRAME_POINTER_OFFSET]);
                 ctx.push(OpCode::MLOAD);
                 let bytes = u32_to_be(*offset);
-                push_imm(ctx, &bytes);
+                push_bytes(ctx, &bytes);
                 ctx.push(OpCode::ADD);
                 ctx.push(OpCode::MLOAD);
             }
             Action::MemStoreAbs(offset) => {
                 let bytes = u32_to_be(*offset);
-                push_imm(ctx, &bytes);
+                push_bytes(ctx, &bytes);
                 ctx.push(OpCode::MSTORE);
             }
             Action::MemStoreFrameSlot(offset) => {
                 ctx.push_with_imm(OpCode::PUSH1, &[FRAME_POINTER_OFFSET]);
                 ctx.push(OpCode::MLOAD);
                 let bytes = u32_to_be(*offset);
-                push_imm(ctx, &bytes);
+                push_bytes(ctx, &bytes);
                 ctx.push(OpCode::ADD);
                 ctx.push(OpCode::MSTORE);
             }
@@ -281,13 +300,33 @@ fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
     }
 }
 
-fn push_imm(ctx: &mut Lower<OpCode>, bytes: &[u8]) {
+fn push_bytes(ctx: &mut Lower<OpCode>, bytes: &[u8]) {
     assert!(!bytes.is_empty());
     if bytes == &[0] {
         ctx.push(OpCode::PUSH0);
     } else {
         ctx.push_with_imm(push_op(bytes.len()), bytes);
     }
+}
+
+/// Remove unnecessary leading bytes of the big-endian two's complement
+/// representation of a number.
+fn shrink_bytes(bytes: &[u8]) -> SmallVec<[u8; 8]> {
+    assert!(!bytes.is_empty());
+
+    let is_neg = bytes[0].leading_ones() > 0;
+    let skip = if is_neg { 0xff } else { 0x00 };
+    let mut bytes = bytes
+        .into_iter()
+        .copied()
+        .skip_while(|b| *b == skip)
+        .collect::<SmallVec<[u8; 8]>>();
+
+    // Negative numbers need a leading 1 bit for sign-extension
+    if is_neg && bytes.first().map(|&b| b < 0x80).unwrap_or(true) {
+        bytes.insert(0, 0xff);
+    }
+    bytes
 }
 
 fn imm_to_be_bytes(imm: &Immediate) -> SmallVec<[u8; 4]> {

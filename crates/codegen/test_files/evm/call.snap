@@ -1,0 +1,59 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(v).unwrap()"
+input_file: crates/codegen/test_files/evm/call.sntn
+---
+// func private %square(v0.i64) -> i64
+square:
+  block0:
+    JUMPDEST
+    MUL  // v1.i64 = mul v0 v0;
+    SWAP1  // return v1;
+    JUMP
+
+// func private %invert(v0.i64) -> i64
+invert:
+  block0:
+    JUMPDEST
+    PUSH1 [255]  // v1.i64 = mul v0 -1.i64;
+    PUSH0
+    SIGNEXTEND
+    SWAP1
+    MUL
+    SWAP1  // return v1;
+    JUMP
+
+// func public %main(v0.i8, v1.i64) -> i64
+main:
+  block0:
+    JUMPDEST
+    PUSH1 block1  // br v0 block1 block2;
+    JUMPI
+    PUSH1 block2
+    JUMP
+  block1:
+    JUMPDEST
+    PUSH1 `pc + (4)`  // v2.i64 = call %square v1;
+    DUP1
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    PUSH1 block3  // jump block3;
+    JUMP
+  block2:
+    JUMPDEST
+    PUSH1 `pc + (4)`  // v3.i64 = call %invert v1;
+    DUP1
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH1 block3  // jump block3;
+    JUMP
+  block3:
+    JUMPDEST
+    SWAP1  // return v4;
+    POP
+    SWAP1
+    JUMP
+
+

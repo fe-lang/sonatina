@@ -7,7 +7,9 @@ input_file: crates/codegen/test_files/evm/add.sntn
 simple:
   block0:
     JUMPDEST
-    PUSH1 [255]  // v1.i8 = add v0 -1.i8;
+    PUSH1 [156]  // v1.i8 = add v0 -100.i8;
+    PUSH0
+    SIGNEXTEND
     SWAP1
     ADD
     PUSH1 [5]  // v2.i8 = sub v1 5.i8;
@@ -15,4 +17,5 @@ simple:
     SUB
     SWAP1  // return v2;
     JUMP
+
 

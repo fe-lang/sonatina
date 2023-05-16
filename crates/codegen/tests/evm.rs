@@ -1,13 +1,17 @@
 use dir_test::{dir_test, Fixture};
-
 use sonatina_codegen::{
-    cfg::ControlFlowGraph, isa::evm::EvmBackend, liveness::Liveness, machinst::lower::Lower,
+    cfg::ControlFlowGraph,
+    isa::evm::{opcode::OpCode, EvmBackend},
+    liveness::Liveness,
+    machinst::{lower::Lower, vcode::VCode},
     stackalloc::SimpleAlloc,
 };
+use sonatina_ir::Function;
 use sonatina_parser::{
     parser::{ParsedModule, Parser},
     ErrorKind,
 };
+use std::io::Write;
 
 // XXX copied from fe test-utils
 #[macro_export]
@@ -70,7 +74,16 @@ fn test_evm(fixture: Fixture<&str>) {
         Err(err) => panic!("{}", err),
     };
 
-    let function = module.module.funcs.values().next().unwrap();
+    let mut v = Vec::new();
+    for function in module.module.funcs.values() {
+        let vcode = vcode_for_fn(function);
+        vcode.print(&mut v, function).unwrap();
+        write!(v, "\n").unwrap();
+    }
+    snap_test!(String::from_utf8(v).unwrap(), fixture.path());
+}
+
+fn vcode_for_fn(function: &Function) -> VCode<OpCode> {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
     let mut liveness = Liveness::new();
@@ -79,12 +92,8 @@ fn test_evm(fixture: Fixture<&str>) {
     let lower = Lower::new(function);
     let backend = EvmBackend::default();
 
-    let vcode = match lower.lower(&backend, &mut alloc) {
+    match lower.lower(&backend, &mut alloc) {
         Ok(vcode) => vcode,
         Err(err) => panic!("{:?}", err),
-    };
-
-    let mut v = Vec::new();
-    vcode.print(&mut v, function).unwrap();
-    snap_test!(String::from_utf8(v).unwrap(), fixture.path());
+    }
 }
