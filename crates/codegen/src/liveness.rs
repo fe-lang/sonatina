@@ -259,7 +259,7 @@ mod tests {
         parser.parse(content).unwrap().module
     }
 
-    const SRC: &'static str = r#"
+    const SRC: &str = r#"
 target = "evm-ethereum-london"
 func public %complex_loop(v0.i8, v20.i8) -> i8:
     block1:

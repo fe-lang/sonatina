@@ -1,6 +1,7 @@
 use super::local_stack::{LocalStack, MemSlot};
 use super::{Action, Actions, Allocator};
 use crate::{bitset::BitSet, cfg::ControlFlowGraph, liveness::Liveness};
+use cranelift_entity::packed_option::PackedOption;
 use cranelift_entity::SecondaryMap;
 use smallvec::{smallvec, SmallVec};
 use sonatina_ir::{Block, Function, Insn, InsnData, Value};
@@ -13,6 +14,7 @@ pub struct SimpleAlloc {
     /// The actions that must be performed to arrange the stack prior to the
     /// execution of each instruction.
     actions: SecondaryMap<Insn, Actions>,
+    brtable_actions: BTreeMap<(Insn, PackedOption<Value>, Block), (Actions, Actions)>,
     edge_actions: BTreeMap<(Block, Block), Actions>,
     /// Memory slot assignments are fn-global.
     /// Slots can be shared by values with non-overlapping liveness.
@@ -116,13 +118,14 @@ impl<'a> SimpleAllocBuilder<'a> {
                         break;
                     }
                     InsnData::Jump { dests: [dest], .. } => {
-                        self.compute_edge_actions(
+                        let act = self.compute_edge_actions(
                             block,
                             *dest,
                             &mut stack,
                             inherited_stack.get(dest),
-                            &live_out,
+                            live_out,
                         );
+                        self.alloc.edge_actions.insert((block, *dest), act);
 
                         inherited_stack.insert(*dest, stack);
                         break;
@@ -145,27 +148,86 @@ impl<'a> SimpleAllocBuilder<'a> {
 
                         let mut left_stack = stack.clone();
 
-                        self.compute_edge_actions(
+                        let lact = self.compute_edge_actions(
                             block,
                             *left,
                             &mut left_stack,
                             inherited_stack.get(left),
                             self.liveness.block_live_ins(*left),
                         );
-                        self.compute_edge_actions(
+                        self.alloc.edge_actions.insert((block, *left), lact);
+
+                        let ract = self.compute_edge_actions(
                             block,
                             *right,
                             &mut stack,
                             inherited_stack.get(right),
                             self.liveness.block_live_ins(*right),
                         );
+                        self.alloc.edge_actions.insert((block, *right), ract);
 
                         inherited_stack.insert(*left, left_stack);
                         inherited_stack.insert(*right, stack);
                         break;
                     }
-                    InsnData::BrTable { .. } => {
-                        todo!()
+                    InsnData::BrTable {
+                        args,
+                        default,
+                        table,
+                    } => {
+                        let mut args_iter = args.iter();
+                        let comp = args_iter.next().unwrap();
+
+                        for (idx, (arg, dest)) in args_iter.zip(table.iter()).enumerate() {
+                            let case_args = &[*arg, *comp];
+                            let mut dead = dead_set(case_args, live_out);
+                            // The first arg (`comp`) needs to be available
+                            // for each case. The last case can consume it.
+                            if idx != table.len() - 1 {
+                                dead.remove(*comp);
+                            }
+                            let mut v_act = Actions::new();
+                            let spills = stack.step(
+                                case_args,
+                                &dead,
+                                None,
+                                &mut v_act,
+                                &self.alloc.memory,
+                                &self.func.dfg,
+                            );
+                            if !spills.is_empty() {
+                                todo!("handle spills");
+                            }
+
+                            let mut st = stack.clone();
+                            let e_act = self.compute_edge_actions(
+                                block,
+                                *dest,
+                                &mut st,
+                                inherited_stack.get(dest),
+                                self.liveness.block_live_ins(*dest),
+                            );
+                            inherited_stack.insert(*dest, st);
+
+                            self.alloc
+                                .brtable_actions
+                                .insert((insn, Some(*arg).into(), *dest), (v_act, e_act));
+                        }
+
+                        if let Some(dest) = default {
+                            let e_act = self.compute_edge_actions(
+                                block,
+                                *dest,
+                                &mut stack,
+                                inherited_stack.get(dest),
+                                self.liveness.block_live_ins(*dest),
+                            );
+                            self.alloc
+                                .brtable_actions
+                                .insert((insn, None.into(), *dest), (smallvec![], e_act));
+                            inherited_stack.insert(*dest, stack);
+                        }
+                        break;
                     }
                     _ => {}
                 };
@@ -175,7 +237,7 @@ impl<'a> SimpleAllocBuilder<'a> {
                     .iter()
                     .copied()
                     .filter(|v| {
-                        if let Some(count) = local_uses_remaining.get_mut(&v) {
+                        if let Some(count) = local_uses_remaining.get_mut(v) {
                             *count -= 1;
                             *count == 0
                         } else {
@@ -185,7 +247,7 @@ impl<'a> SimpleAllocBuilder<'a> {
                     .collect::<BitSet<Value>>();
 
                 let spills = stack.step(
-                    &args,
+                    args,
                     &consumable,
                     result,
                     &mut self.alloc.actions[insn],
@@ -211,6 +273,7 @@ impl<'a> SimpleAllocBuilder<'a> {
         self.alloc
     }
 
+    #[must_use]
     pub fn compute_edge_actions(
         &mut self,
         from: Block,
@@ -218,7 +281,7 @@ impl<'a> SimpleAllocBuilder<'a> {
         stack: &mut LocalStack,
         to_match: Option<&LocalStack>,
         live: &BitSet<Value>,
-    ) {
+    ) -> Actions {
         let mut act = Actions::new();
         let args = phi_args_for_edge(self.func, from, to);
         // xxx remove everything that's not live-in
@@ -244,12 +307,12 @@ impl<'a> SimpleAllocBuilder<'a> {
             stack.reconcile_with(&mut act, to_match, live, args.len());
         }
 
-        self.alloc.edge_actions.insert((from, to), act);
+        act
     }
 
     fn allocate_slot(&mut self, val: Value) {
         for slot in self.alloc.memory.iter_mut() {
-            if slot_can_hold(&slot, val, self.liveness) {
+            if slot_can_hold(slot, val, self.liveness) {
                 slot.push(val);
                 return;
             }
@@ -263,11 +326,7 @@ fn phi_args_for_edge(func: &Function, from: Block, to: Block) -> SmallVec<[Value
         .iter_insn(to)
         .map_while(|insn| match func.dfg.insn_data(insn) {
             InsnData::Phi { values, blocks, .. } => {
-                if let Some(i) = blocks.iter().position(|b| *b == from) {
-                    Some(values[i])
-                } else {
-                    None
-                }
+                blocks.iter().position(|b| *b == from).map(|i| values[i])
             }
             _ => None,
         })
@@ -289,16 +348,24 @@ fn slot_can_hold(slot: &[Value], val: Value, liveness: &Liveness) -> bool {
 }
 
 impl Allocator for SimpleAlloc {
-    fn read(&mut self, insn: Insn, _vals: &[Value]) -> Actions {
+    fn read(&self, insn: Insn, _vals: &[Value]) -> Actions {
         self.actions[insn].clone()
     }
-    fn write(&mut self, _insn: Insn, val: Value) -> Actions {
+    fn write(&self, _insn: Insn, val: Value) -> Actions {
         if let Some(pos) = self.memory.iter().position(|slot| slot.contains(&val)) {
             return smallvec![Action::MemStoreFrameSlot(pos as u32)];
         }
         smallvec![]
     }
-    fn traverse_edge(&mut self, from: Block, to: Block) -> Actions {
-        self.edge_actions.remove(&(from, to)).unwrap_or_default()
+
+    fn brtable_case(&self, insn: Insn, value: Option<Value>, block: Block) -> (Actions, Actions) {
+        self.brtable_actions[&(insn, value.into(), block)].clone()
+    }
+
+    fn traverse_edge(&self, from: Block, to: Block) -> Actions {
+        self.edge_actions
+            .get(&(from, to))
+            .cloned()
+            .unwrap_or_default()
     }
 }

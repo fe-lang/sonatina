@@ -130,7 +130,7 @@ impl LowerBackend for EvmBackend {
                 let push_pc = ctx.push(OpCode::PUSH1);
 
                 // Move fn args onto stack
-                perform_actions(ctx, &alloc.read(insn, &args));
+                perform_actions(ctx, &alloc.read(insn, args));
                 // Push fn address onto stack and jump
                 let p = ctx.push(OpCode::PUSH1);
                 ctx.add_jump_fixup_inst(p, Label::Function(*func));
@@ -160,6 +160,7 @@ impl LowerBackend for EvmBackend {
                 // JUMPI: dest is top of stack, bool val is next
                 perform_actions(ctx, &alloc.read(insn, args));
 
+                // Jump to `left` case
                 let from = ctx.insn_block(insn);
                 let jumpi_target = ctx.push(OpCode::PUSH1);
                 ctx.push(OpCode::JUMPI); // Fixup handled below.
@@ -192,7 +193,39 @@ impl LowerBackend for EvmBackend {
                 default,
                 table,
             } => {
-                todo!()
+                // `args[0]` is the lhs of each case comparison.
+                for (arg, dest) in args.iter().skip(1).zip(table.iter()) {
+                    let (read_actions, edge_actions) = alloc.brtable_case(insn, Some(*arg), *dest);
+                    perform_actions(ctx, &read_actions);
+                    ctx.push(OpCode::EQ);
+
+                    if edge_actions.is_empty() {
+                        let p = ctx.push(OpCode::PUSH1);
+                        ctx.add_jump_fixup_inst(p, Label::Block(*dest));
+                        ctx.push(OpCode::JUMPI);
+                    } else {
+                        // If this case doesn't match, we jump to the next one.
+                        // Otherwise, we perform the required edge actions and
+                        // jump to the dest block.
+                        ctx.push(OpCode::NOT);
+                        let p_next_case = ctx.push(OpCode::PUSH1);
+                        ctx.push(OpCode::JUMPI);
+                        perform_actions(ctx, &edge_actions);
+                        let p_dest = ctx.push(OpCode::PUSH1);
+                        ctx.push(OpCode::JUMP);
+                        ctx.add_jump_fixup_inst(p_dest, Label::Block(*dest));
+                        ctx.add_jump_fixup_inst(p_next_case, Label::Insn(ctx.next_insn()));
+                    }
+                }
+
+                if let Some(dest) = default {
+                    let (_a, edge_actions) = alloc.brtable_case(insn, None, *dest);
+                    assert!(_a.is_empty());
+                    perform_actions(ctx, &edge_actions);
+                    let p = ctx.push(OpCode::PUSH1);
+                    ctx.add_jump_fixup_inst(p, Label::Block(*dest));
+                    ctx.push(OpCode::JUMP);
+                }
             }
 
             InsnData::Alloca { ty } => {
@@ -302,7 +335,7 @@ fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
 
 fn push_bytes(ctx: &mut Lower<OpCode>, bytes: &[u8]) {
     assert!(!bytes.is_empty());
-    if bytes == &[0] {
+    if bytes == [0] {
         ctx.push(OpCode::PUSH0);
     } else {
         ctx.push_with_imm(push_op(bytes.len()), bytes);
@@ -317,7 +350,7 @@ fn shrink_bytes(bytes: &[u8]) -> SmallVec<[u8; 8]> {
     let is_neg = bytes[0].leading_ones() > 0;
     let skip = if is_neg { 0xff } else { 0x00 };
     let mut bytes = bytes
-        .into_iter()
+        .iter()
         .copied()
         .skip_while(|b| *b == skip)
         .collect::<SmallVec<[u8; 8]>>();

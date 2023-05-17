@@ -78,7 +78,7 @@ fn test_evm(fixture: Fixture<&str>) {
     for function in module.module.funcs.values() {
         let vcode = vcode_for_fn(function);
         vcode.print(&mut v, function).unwrap();
-        write!(v, "\n").unwrap();
+        writeln!(v).unwrap();
     }
     snap_test!(String::from_utf8(v).unwrap(), fixture.path());
 }

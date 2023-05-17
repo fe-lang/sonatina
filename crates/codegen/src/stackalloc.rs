@@ -12,10 +12,11 @@ pub trait Allocator {
     /// Return the actions required to place `vals` on the stack,
     /// in the specified order. I.e. the first `Value` in `vals`
     /// will be on the top of the stack.
-    fn read(&mut self, insn: Insn, vals: &[Value]) -> Actions;
-    fn write(&mut self, insn: Insn, val: Value) -> Actions;
+    fn read(&self, insn: Insn, vals: &[Value]) -> Actions;
+    fn write(&self, insn: Insn, val: Value) -> Actions;
 
-    fn traverse_edge(&mut self, from: Block, to: Block) -> Actions;
+    fn brtable_case(&self, insn: Insn, val: Option<Value>, block: Block) -> (Actions, Actions);
+    fn traverse_edge(&self, from: Block, to: Block) -> Actions;
 }
 
 #[derive(Copy, Clone, Debug)]
