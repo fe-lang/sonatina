@@ -1,0 +1,128 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(v).unwrap()"
+input_file: crates/codegen/test_files/evm/spill.sntn
+---
+// func public %sum8(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64) -> i64
+sum8:
+  block0:
+    JUMPDEST
+    ADD  // v8.i64 = add v0 v1;
+    SWAP2  // v9.i64 = add v2 v3;
+    SWAP1
+    ADD
+    SWAP3  // v10.i64 = add v4 v5;
+    DUP3
+    ADD
+    SWAP5  // v11.i64 = add v6 v7;
+    DUP5
+    ADD
+    SWAP3  // v12.i64 = add v8 v9;
+    SWAP1
+    ADD
+    SWAP1  // v13.i64 = add v10 v11;
+    POP
+    SWAP1
+    DUP4
+    ADD
+    SWAP1  // v14.i64 = add v12 v13;
+    ADD
+    SWAP2  // return v14;
+    POP
+    POP
+    SWAP1
+    JUMP
+
+// func public %spill(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64) -> i64
+spill:
+  block1:
+    DUP8
+    PUSH1 [64]
+    MLOAD
+    MSTORE
+    JUMPDEST
+    DUP2  // v8.i64 = add v0 v1;
+    DUP2
+    ADD
+    DUP5  // v9.i64 = add v2 v3;
+    DUP5
+    ADD
+    DUP8  // v10.i64 = add v4 v5;
+    DUP8
+    ADD
+    DUP11  // v11.i64 = add v6 v7;
+    DUP11
+    ADD
+    DUP3  // v12.i64 = add v8 v9;
+    DUP5
+    ADD
+    DUP2  // v13.i64 = add v10 v11;
+    DUP4
+    ADD
+    DUP1  // v14.i64 = add v12 v13;
+    DUP3
+    ADD
+    DUP1  // fallthrough block2;
+  block2:
+    JUMPDEST
+    PUSH1 `pc + (11)`  // v16.i64 = call %sum8 v0 v1 v2 v3 v4 v5 v6 v7;
+    DUP16
+    DUP16
+    DUP16
+    DUP16
+    DUP16
+    DUP16
+    DUP16
+    DUP16
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    PUSH1 `pc + (11)`  // v17.i64 = call %sum8 v8 v9 v10 v11 v12 v13 v14 v15;
+    SWAP1
+    DUP3
+    DUP5
+    DUP7
+    DUP9
+    DUP11
+    DUP13
+    DUP15
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    SWAP1  // v18.i64 = add v16 v17;
+    ADD
+    DUP1  // v19.i64 = add v7 v18;
+    PUSH1 [64]
+    MLOAD
+    MLOAD
+    ADD
+    PUSH2 [3, 232]  // v20.i1 = gt v19 1000.i64;
+    DUP2
+    GT
+    PUSH1 block3  // br v20 block3 block2;
+    JUMPI
+    PUSH1 block2
+    JUMP
+  block3:
+    JUMPDEST
+    POP  // return v18;
+    SWAP15
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    SWAP1
+    JUMP
+
+

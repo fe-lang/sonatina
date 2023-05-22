@@ -1,5 +1,5 @@
 use smallvec::SmallVec;
-use sonatina_ir::{Block, Immediate, Insn, Value};
+use sonatina_ir::{Block, Function, Immediate, Insn, Value};
 
 mod edge_sets;
 mod local_stack;
@@ -9,6 +9,8 @@ pub use simple::SimpleAlloc;
 pub type Actions = SmallVec<[Action; 2]>;
 
 pub trait Allocator {
+    fn enter_function(&self, function: &Function) -> Actions;
+
     /// Return the actions required to place `vals` on the stack,
     /// in the specified order. I.e. the first `Value` in `vals`
     /// will be on the top of the stack.

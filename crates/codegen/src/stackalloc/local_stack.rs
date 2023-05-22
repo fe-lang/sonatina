@@ -1,5 +1,5 @@
 use super::{Action, Actions};
-use crate::bitset::BitSet;
+use crate::{bitset::BitSet, liveness::Liveness};
 use if_chain::if_chain;
 use smallvec::{smallvec, SmallVec};
 use sonatina_ir::{DataFlowGraph, Immediate, Value};
@@ -126,9 +126,10 @@ impl LocalStack {
         args: &[Value],
         last_use: &BitSet<Value>,
         act: &mut Actions,
-        memory: &[MemSlot],
+        memory: &mut Vec<MemSlot>,
         dfg: &DataFlowGraph,
-    ) -> SmallVec<[Value; 2]> {
+        liveness: &Liveness,
+    ) {
         self.remove_leading_deads(act);
 
         let consumable: BitSet<Value> = args
@@ -142,7 +143,6 @@ impl LocalStack {
             })
             .collect();
 
-        let mut spills = smallvec![];
         // if there are deads following the top val, swap it down and pop them off
         let swap_to = self
             .stack
@@ -189,6 +189,9 @@ impl LocalStack {
         } else {
             // Default behavior: dupe all args to the top.
 
+            // If any args are unreachable in the stack, try to remove enough
+            // unnecessary values from the stack to make them reachable.
+
             while args.iter().any(|&v| self.is_buried(v, memory, dfg)) {
                 if !self.shrink_stack(act, memory, dfg, |v| !args.contains(&v)) {
                     break;
@@ -211,17 +214,15 @@ impl LocalStack {
                             && args.last() == Some(&self.stack[0])
                             && consumable.contains(val)
                         {
-                            // stack is [last_arg, this_arg, ..]; swap.
+                            // stack is [prev_arg, this_arg, ..]; swap.
                             self.swap(act, 1);
                         } else if pos >= 16 {
-                            // Value is unreachable in the stack,
-                            // so we need to spill it to memory.
-                            // TODO: We could instead spill earlier items in the stack,
-                            // if they're less used.
-                            spills.push(val);
-
-                            // Push the val to the top of the stack, as though
-                            // it were loaded from mem.
+                            // Value is unreachable in the stack, so we allocate
+                            // a slot for the value in the stack. At the val def
+                            // point, we'll duplicate it and store it in this
+                            // slot, while leaving a copy on the stack.
+                            let slot = allocate_slot(memory, val, liveness);
+                            act.push(Action::MemLoadFrameSlot(slot as u32));
                             self.stack.push_front(val);
                         } else {
                             self.dup(act, pos);
@@ -239,7 +240,6 @@ impl LocalStack {
         }
         // pop consumed args off stack, and mark other copies as dead
         self.dead.union_with(last_use);
-        spills
     }
 
     pub fn step(
@@ -248,18 +248,17 @@ impl LocalStack {
         consumable: &BitSet<Value>,
         result: Option<Value>,
         act: &mut Actions,
-        memory: &[MemSlot],
+        memory: &mut Vec<MemSlot>,
         dfg: &DataFlowGraph,
-    ) -> SmallVec<[Value; 2]> {
-        let spills = self.move_to_top(args, consumable, act, memory, dfg);
+        liveness: &Liveness,
+    ) {
+        self.move_to_top(args, consumable, act, memory, dfg, liveness);
         for _ in args {
             self.stack.pop_front();
         }
         if let Some(res) = result {
             self.stack.push_front(res);
         }
-
-        spills
     }
 
     fn shrink_stack<F>(
@@ -272,6 +271,7 @@ impl LocalStack {
     where
         F: Fn(Value) -> bool,
     {
+        // TODO: prioritize popping deads
         if let Some(pos) = self.stack.iter().take(16).position(|v| {
             poppable(*v)
                 && (self.dead.contains(*v)
@@ -378,8 +378,26 @@ fn items_not_in_set(stack: impl Iterator<Item = Value>, set: &BitSet<Value>) -> 
     stack.filter(|v| !set.contains(*v)).collect()
 }
 
-fn memory_slot_of(val: Value, memory: &[MemSlot]) -> Option<usize> {
+pub fn memory_slot_of(val: Value, memory: &[MemSlot]) -> Option<usize> {
     memory.iter().position(|vs| vs.contains(&val))
+}
+
+fn allocate_slot(mem: &mut Vec<MemSlot>, val: Value, liveness: &Liveness) -> usize {
+    for (i, slot) in mem.iter_mut().enumerate() {
+        if slot_can_hold(slot, val, liveness) {
+            slot.push(val);
+            return i;
+        }
+    }
+    mem.push(smallvec![val]);
+    mem.len() - 1
+}
+
+fn slot_can_hold(slot: &[Value], val: Value, liveness: &Liveness) -> bool {
+    // xxx use insn-level liveness for single-block conflict case
+    let live = &liveness.val_live_blocks[val];
+    slot.iter()
+        .all(|v| live.is_disjoint(&liveness.val_live_blocks[*v]))
 }
 
 /// Generate SWAP operations required to reverse the top `n` items of the stack

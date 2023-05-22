@@ -1,4 +1,4 @@
-use super::local_stack::{LocalStack, MemSlot};
+use super::local_stack::{memory_slot_of, LocalStack, MemSlot};
 use super::{Action, Actions, Allocator};
 use crate::{bitset::BitSet, cfg::ControlFlowGraph, liveness::Liveness};
 use cranelift_entity::packed_option::PackedOption;
@@ -134,17 +134,15 @@ impl<'a> SimpleAllocBuilder<'a> {
                         args,
                         dests: [left, right],
                     } => {
-                        let spills = stack.step(
+                        stack.step(
                             args,
                             &dead_set(args, live_out),
                             None,
                             &mut self.alloc.actions[insn],
-                            &self.alloc.memory,
+                            &mut self.alloc.memory,
                             &self.func.dfg,
+                            &self.liveness,
                         );
-                        if !spills.is_empty() {
-                            todo!("handle spills");
-                        }
 
                         let mut left_stack = stack.clone();
 
@@ -187,17 +185,15 @@ impl<'a> SimpleAllocBuilder<'a> {
                                 dead.remove(*comp);
                             }
                             let mut v_act = Actions::new();
-                            let spills = stack.step(
+                            stack.step(
                                 case_args,
                                 &dead,
                                 None,
                                 &mut v_act,
-                                &self.alloc.memory,
+                                &mut self.alloc.memory,
                                 &self.func.dfg,
+                                &self.liveness,
                             );
-                            if !spills.is_empty() {
-                                todo!("handle spills");
-                            }
 
                             let mut st = stack.clone();
                             let e_act = self.compute_edge_actions(
@@ -246,21 +242,15 @@ impl<'a> SimpleAllocBuilder<'a> {
                     })
                     .collect::<BitSet<Value>>();
 
-                let spills = stack.step(
+                stack.step(
                     args,
                     &consumable,
                     result,
                     &mut self.alloc.actions[insn],
-                    &self.alloc.memory,
+                    &mut self.alloc.memory,
                     &self.func.dfg,
+                    &self.liveness,
                 );
-                if !spills.is_empty() {
-                    self.alloc.actions[insn].clear();
-                    for val in spills {
-                        self.allocate_slot(val);
-                    }
-                    todo!("redo block after spill")
-                }
 
                 if let Some(val) = result {
                     if !live_out.contains(val) {
@@ -287,37 +277,20 @@ impl<'a> SimpleAllocBuilder<'a> {
         // xxx remove everything that's not live-in
         //     (only if `to` has multiple preds?)
         if !args.is_empty() {
-            let spills = stack.move_to_top(
+            stack.move_to_top(
                 &args,
                 &dead_set(&args, live),
                 &mut act,
-                &self.alloc.memory,
+                &mut self.alloc.memory,
                 &self.func.dfg,
+                &self.liveness,
             );
-
-            if !spills.is_empty() {
-                for val in spills {
-                    self.allocate_slot(val);
-                }
-                todo!("redo block after spill")
-            }
         }
-
         if let Some(to_match) = to_match {
             stack.reconcile_with(&mut act, to_match, live, args.len());
         }
 
         act
-    }
-
-    fn allocate_slot(&mut self, val: Value) {
-        for slot in self.alloc.memory.iter_mut() {
-            if slot_can_hold(slot, val, self.liveness) {
-                slot.push(val);
-                return;
-            }
-        }
-        self.alloc.memory.push(smallvec![val]);
     }
 }
 
@@ -340,20 +313,24 @@ fn dead_set(args: &[Value], live: &BitSet<Value>) -> BitSet<Value> {
         .collect()
 }
 
-fn slot_can_hold(slot: &[Value], val: Value, liveness: &Liveness) -> bool {
-    // xxx use insn-level liveness for single-block conflict case
-    let live = &liveness.val_live_blocks[val];
-    slot.iter()
-        .all(|v| live.is_disjoint(&liveness.val_live_blocks[*v]))
-}
-
 impl Allocator for SimpleAlloc {
+    fn enter_function(&self, function: &Function) -> Actions {
+        let mut act = Actions::new();
+        for (i, arg) in function.arg_values.iter().enumerate() {
+            if let Some(slot) = memory_slot_of(*arg, &self.memory) {
+                act.push(Action::StackDup(i as u8));
+                act.push(Action::MemStoreFrameSlot(slot as u32));
+            }
+        }
+        act
+    }
+
     fn read(&self, insn: Insn, _vals: &[Value]) -> Actions {
         self.actions[insn].clone()
     }
     fn write(&self, _insn: Insn, val: Value) -> Actions {
-        if let Some(pos) = self.memory.iter().position(|slot| slot.contains(&val)) {
-            return smallvec![Action::MemStoreFrameSlot(pos as u32)];
+        if let Some(pos) = memory_slot_of(val, &self.memory) {
+            return smallvec![Action::StackDup(0), Action::MemStoreFrameSlot(pos as u32)];
         }
         smallvec![]
     }

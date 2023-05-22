@@ -8,6 +8,12 @@ pub trait LowerBackend {
     fn lower(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, inst: Insn);
     // -> Option<InstOutput> == SmallVec<[ValueRegs<Reg>; 2]>
 
+    fn enter_function(
+        &self,
+        ctx: &mut Lower<Self::MInst>,
+        alloc: &mut dyn Allocator,
+        function: &Function,
+    );
     fn enter_block(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, block: Block);
 }
 
@@ -38,8 +44,11 @@ impl<'a, Op: Default> Lower<'a, Op> {
         backend: &B,
         alloc: &mut dyn Allocator,
     ) -> CodegenResult<VCode<Op>> {
+        self.cur_block = self.function.layout.entry_block();
+        let f = self.function;
+        backend.enter_function(&mut self, alloc, f);
+
         for block in self.function.layout.iter_block() {
-            // XXX insert JUMPDEST op if block has preds
             self.cur_block = Some(block);
             backend.enter_block(&mut self, alloc, block);
 
@@ -88,5 +97,9 @@ impl<'a, Op: Default> Lower<'a, Op> {
 
     pub fn insn_block(&self, insn: Insn) -> Block {
         self.function.layout.insn_block(insn)
+    }
+
+    pub fn is_entry(&self, block: Block) -> bool {
+        self.function.layout.entry_block() == Some(block)
     }
 }

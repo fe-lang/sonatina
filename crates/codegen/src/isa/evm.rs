@@ -13,7 +13,7 @@ use crate::{
 use smallvec::{smallvec, SmallVec};
 use sonatina_ir::{
     insn::{BinaryOp, CastOp, JumpOp, UnaryOp},
-    Block, Immediate, Insn, InsnData, Value, U256,
+    Block, Function, Immediate, Insn, InsnData, Value, U256,
 };
 
 const FRAME_POINTER_OFFSET: u8 = 0x40;
@@ -25,6 +25,15 @@ pub struct EvmBackend {
 
 impl LowerBackend for EvmBackend {
     type MInst = OpCode;
+
+    fn enter_function(
+        &self,
+        ctx: &mut Lower<Self::MInst>,
+        alloc: &mut dyn Allocator,
+        function: &Function,
+    ) {
+        perform_actions(ctx, &alloc.enter_function(function));
+    }
 
     fn enter_block(&self, ctx: &mut Lower<Self::MInst>, _alloc: &mut dyn Allocator, block: Block) {
         // Every block start is a jumpdest unless
@@ -311,9 +320,11 @@ fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
             Action::MemLoadFrameSlot(offset) => {
                 ctx.push_with_imm(OpCode::PUSH1, &[FRAME_POINTER_OFFSET]);
                 ctx.push(OpCode::MLOAD);
-                let bytes = u32_to_be(*offset);
-                push_bytes(ctx, &bytes);
-                ctx.push(OpCode::ADD);
+                if *offset != 0 {
+                    let bytes = u32_to_be(*offset);
+                    push_bytes(ctx, &bytes);
+                    ctx.push(OpCode::ADD);
+                }
                 ctx.push(OpCode::MLOAD);
             }
             Action::MemStoreAbs(offset) => {
@@ -324,9 +335,11 @@ fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
             Action::MemStoreFrameSlot(offset) => {
                 ctx.push_with_imm(OpCode::PUSH1, &[FRAME_POINTER_OFFSET]);
                 ctx.push(OpCode::MLOAD);
-                let bytes = u32_to_be(*offset);
-                push_bytes(ctx, &bytes);
-                ctx.push(OpCode::ADD);
+                if *offset != 0 {
+                    let bytes = u32_to_be(*offset);
+                    push_bytes(ctx, &bytes);
+                    ctx.push(OpCode::ADD);
+                }
                 ctx.push(OpCode::MSTORE);
             }
         }
