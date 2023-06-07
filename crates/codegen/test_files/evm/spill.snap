@@ -164,9 +164,9 @@ spill:
     PUSH2 [3, 232]  // v20.i1 = gt v19 1000.i64;
     DUP2
     GT
-    PUSH1 block3  // br v20 block3 block2;
+    PUSH1 block3  // br v20 block3 block4;
     JUMPI
-    PUSH1 block2
+    PUSH1 block4
     JUMP
   block3:
     JUMPDEST
@@ -191,6 +191,10 @@ spill:
     SWAP1
     POP
     SWAP1
+    JUMP
+  block4:
+    JUMPDEST
+    PUSH1 block2  // jump block2;
     JUMP
 
 

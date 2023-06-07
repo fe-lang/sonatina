@@ -1,6 +1,7 @@
 use dir_test::{dir_test, Fixture};
 use sonatina_codegen::{
     cfg::ControlFlowGraph,
+    critical_edge::CriticalEdgeSplitter,
     isa::evm::{opcode::OpCode, EvmBackend},
     liveness::Liveness,
     machinst::{lower::Lower, vcode::VCode},
@@ -69,13 +70,13 @@ fn parse_sona(content: &str) -> Result<ParsedModule, String> {
     glob: "*.sntn"
 )]
 fn test_evm(fixture: Fixture<&str>) {
-    let module = match parse_sona(fixture.content()) {
+    let mut module = match parse_sona(fixture.content()) {
         Ok(m) => m,
         Err(err) => panic!("{}", err),
     };
 
     let mut v = Vec::new();
-    for function in module.module.funcs.values() {
+    for function in module.module.funcs.values_mut() {
         let vcode = vcode_for_fn(function);
         vcode.print(&mut v, function).unwrap();
         writeln!(v).unwrap();
@@ -83,9 +84,12 @@ fn test_evm(fixture: Fixture<&str>) {
     snap_test!(String::from_utf8(v).unwrap(), fixture.path());
 }
 
-fn vcode_for_fn(function: &Function) -> VCode<OpCode> {
+fn vcode_for_fn(function: &mut Function) -> VCode<OpCode> {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
+    let mut splitter = CriticalEdgeSplitter::new();
+    splitter.run(function, &mut cfg);
+
     let mut liveness = Liveness::new();
     liveness.compute(function, &cfg);
     let mut alloc = SimpleAlloc::for_function(function, &cfg, &liveness, 16);

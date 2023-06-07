@@ -16,12 +16,17 @@ const_loop:
     SWAP1  // v3.i1 = gt v2 v1;
     DUP2
     GT
-    PUSH1 block3  // br v3 block3 block2;
+    PUSH1 block3  // br v3 block3 block4;
     JUMPI
-    PUSH1 block2
+    PUSH1 block4
     JUMP
   block3:
     JUMPDEST
     SWAP1  // return v2;
     JUMP
+  block4:
+    JUMPDEST
+    PUSH1 block2  // jump block2;
+    JUMP
+
 

@@ -210,33 +210,15 @@ impl LowerBackend for EvmBackend {
             } => {
                 // `args[0]` is the lhs of each case comparison.
                 for (arg, dest) in args.iter().skip(1).zip(table.iter()) {
-                    let (read_actions, edge_actions) = alloc.brtable_case(insn, Some(*arg), *dest);
-                    perform_actions(ctx, &read_actions);
+                    perform_actions(ctx, &alloc.read(insn, &[*arg]));
                     ctx.push(OpCode::EQ);
 
-                    if edge_actions.is_empty() {
-                        let p = ctx.push(OpCode::PUSH1);
-                        ctx.add_jump_fixup_inst(p, Label::Block(*dest));
-                        ctx.push(OpCode::JUMPI);
-                    } else {
-                        // If this case doesn't match, we jump to the next one.
-                        // Otherwise, we perform the required edge actions and
-                        // jump to the dest block.
-                        ctx.push(OpCode::NOT);
-                        let p_next_case = ctx.push(OpCode::PUSH1);
-                        ctx.push(OpCode::JUMPI);
-                        perform_actions(ctx, &edge_actions);
-                        let p_dest = ctx.push(OpCode::PUSH1);
-                        ctx.push(OpCode::JUMP);
-                        ctx.add_jump_fixup_inst(p_dest, Label::Block(*dest));
-                        ctx.add_jump_fixup_inst(p_next_case, Label::Insn(ctx.next_insn()));
-                    }
+                    let p = ctx.push(OpCode::PUSH1);
+                    ctx.add_jump_fixup_inst(p, Label::Block(*dest));
+                    ctx.push(OpCode::JUMPI);
                 }
 
                 if let Some(dest) = default {
-                    let (_a, edge_actions) = alloc.brtable_case(insn, None, *dest);
-                    assert!(_a.is_empty());
-                    perform_actions(ctx, &edge_actions);
                     let p = ctx.push(OpCode::PUSH1);
                     ctx.add_jump_fixup_inst(p, Label::Block(*dest));
                     ctx.push(OpCode::JUMP);

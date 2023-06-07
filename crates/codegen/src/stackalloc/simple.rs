@@ -1,7 +1,6 @@
 use super::local_stack::{memory_slot_of, LocalStack, MemSlot};
 use super::{Action, Actions, Allocator};
 use crate::{bitset::BitSet, cfg::ControlFlowGraph, liveness::Liveness};
-use cranelift_entity::packed_option::PackedOption;
 use cranelift_entity::SecondaryMap;
 use smallvec::{smallvec, SmallVec};
 use sonatina_ir::{Block, Function, Insn, InsnData, Value};
@@ -14,7 +13,7 @@ pub struct SimpleAlloc {
     /// The actions that must be performed to arrange the stack prior to the
     /// execution of each instruction.
     actions: SecondaryMap<Insn, Actions>,
-    brtable_actions: BTreeMap<(Insn, PackedOption<Value>, Block), (Actions, Actions)>,
+    brtable_actions: BTreeMap<(Insn, Value), Actions>,
     edge_actions: BTreeMap<(Block, Block), Actions>,
     /// Memory slot assignments are fn-global.
     /// Slots can be shared by values with non-overlapping liveness.
@@ -67,6 +66,13 @@ impl<'a> SimpleAllocBuilder<'a> {
         inherited_stack.insert(entry, LocalStack::with_values(&self.func.arg_values));
 
         for block in rpo {
+            // xxx allow crit edges, but no actions on crit edge
+            debug_assert!(
+                !has_critical_edge(self.func, self.cfg, block),
+                "stack_alloc assumes no critical edges. \
+                 Please run `CriticalEdgeSplitter` prior to `Liveness` analysis"
+            );
+
             let mut stack = inherited_stack.remove(&block).unwrap_or_else(|| {
                 let mut stack = LocalStack::default();
                 for phi in self
@@ -109,11 +115,13 @@ impl<'a> SimpleAllocBuilder<'a> {
                         }
                         continue;
                     }
+
                     InsnData::Return { args } => {
                         // Put return val on top of stack.
                         stack.ret(&mut self.alloc.actions[insn], &self.alloc.memory, *args);
                         break;
                     }
+
                     InsnData::Jump { dests: [dest], .. } => {
                         let act = self.compute_edge_actions(
                             block,
@@ -127,6 +135,7 @@ impl<'a> SimpleAllocBuilder<'a> {
                         inherited_stack.insert(*dest, stack);
                         break;
                     }
+
                     InsnData::Branch {
                         args,
                         dests: [left, right],
@@ -141,30 +150,18 @@ impl<'a> SimpleAllocBuilder<'a> {
                             &self.liveness,
                         );
 
-                        let mut left_stack = stack.clone();
+                        // These things only happen on critical edges, which
+                        // must be split before stack alloc is performed.
+                        debug_assert!(!inherited_stack.contains_key(left));
+                        debug_assert!(!inherited_stack.contains_key(right));
+                        debug_assert!(phi_args_for_edge(self.func, block, *left).is_empty());
+                        debug_assert!(phi_args_for_edge(self.func, block, *right).is_empty());
 
-                        let lact = self.compute_edge_actions(
-                            block,
-                            *left,
-                            &mut left_stack,
-                            inherited_stack.get(left),
-                            self.liveness.block_live_ins(*left),
-                        );
-                        self.alloc.edge_actions.insert((block, *left), lact);
-
-                        let ract = self.compute_edge_actions(
-                            block,
-                            *right,
-                            &mut stack,
-                            inherited_stack.get(right),
-                            self.liveness.block_live_ins(*right),
-                        );
-                        self.alloc.edge_actions.insert((block, *right), ract);
-
-                        inherited_stack.insert(*left, left_stack);
+                        inherited_stack.insert(*left, stack.clone());
                         inherited_stack.insert(*right, stack);
                         break;
                     }
+
                     InsnData::BrTable {
                         args,
                         default,
@@ -181,43 +178,28 @@ impl<'a> SimpleAllocBuilder<'a> {
                             if idx != table.len() - 1 {
                                 dead.remove(*comp);
                             }
-                            let mut v_act = Actions::new();
+                            let mut act = Actions::new();
                             stack.step(
                                 case_args,
                                 &dead,
                                 None,
-                                &mut v_act,
+                                &mut act,
                                 &mut self.alloc.memory,
                                 &self.func.dfg,
                                 &self.liveness,
                             );
 
-                            let mut st = stack.clone();
-                            let e_act = self.compute_edge_actions(
-                                block,
-                                *dest,
-                                &mut st,
-                                inherited_stack.get(dest),
-                                self.liveness.block_live_ins(*dest),
-                            );
-                            inherited_stack.insert(*dest, st);
+                            // Assert that this is not a critical edge
+                            debug_assert!(!inherited_stack.contains_key(dest));
+                            debug_assert!(phi_args_for_edge(self.func, block, *dest).is_empty());
 
-                            self.alloc
-                                .brtable_actions
-                                .insert((insn, Some(*arg).into(), *dest), (v_act, e_act));
+                            inherited_stack.insert(*dest, stack.clone());
+                            self.alloc.brtable_actions.insert((insn, *arg), act);
                         }
 
                         if let Some(dest) = default {
-                            let e_act = self.compute_edge_actions(
-                                block,
-                                *dest,
-                                &mut stack,
-                                inherited_stack.get(dest),
-                                self.liveness.block_live_ins(*dest),
-                            );
-                            self.alloc
-                                .brtable_actions
-                                .insert((insn, None.into(), *dest), (smallvec![], e_act));
+                            debug_assert!(!inherited_stack.contains_key(dest));
+                            debug_assert!(phi_args_for_edge(self.func, block, *dest).is_empty());
                             inherited_stack.insert(*dest, stack);
                         }
                         break;
@@ -330,6 +312,19 @@ fn dead_set(args: &[Value], live: &BitSet<Value>) -> BitSet<Value> {
         .collect()
 }
 
+fn has_critical_edge(func: &Function, cfg: &ControlFlowGraph, block: Block) -> bool {
+    let Some(insn) = func.layout.last_insn_of(block) else {
+        return false;
+    };
+
+    let branch = func.dfg.analyze_branch(insn);
+    if branch.dests_num() > 2 {
+        branch.iter_dests().any(|d| cfg.pred_num_of(d) > 1)
+    } else {
+        false
+    }
+}
+
 impl Allocator for SimpleAlloc {
     fn enter_function(&self, function: &Function) -> Actions {
         let mut act = Actions::new();
@@ -342,7 +337,12 @@ impl Allocator for SimpleAlloc {
         act
     }
 
-    fn read(&self, insn: Insn, _vals: &[Value]) -> Actions {
+    fn read(&self, insn: Insn, vals: &[Value]) -> Actions {
+        if let [val] = vals {
+            if let Some(act) = self.brtable_actions.get(&(insn, *val)) {
+                return act.clone();
+            }
+        }
         self.actions[insn].clone()
     }
     fn write(&self, _insn: Insn, val: Value) -> Actions {
@@ -350,10 +350,6 @@ impl Allocator for SimpleAlloc {
             return smallvec![Action::StackDup(0), Action::MemStoreFrameSlot(pos as u32)];
         }
         smallvec![]
-    }
-
-    fn brtable_case(&self, insn: Insn, value: Option<Value>, block: Block) -> (Actions, Actions) {
-        self.brtable_actions[&(insn, value.into(), block)].clone()
     }
 
     fn traverse_edge(&self, from: Block, to: Block) -> Actions {
