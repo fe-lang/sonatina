@@ -16,7 +16,7 @@ use sonatina_ir::{
     Block, Function, Immediate, Insn, InsnData, Value, U256,
 };
 
-const FRAME_POINTER_OFFSET: u8 = 0x40;
+const FRAME_POINTER_OFFSET: u8 = 0x0;
 
 #[derive(Default)]
 pub struct EvmBackend {
@@ -135,11 +135,17 @@ impl LowerBackend for EvmBackend {
             InsnData::Call { func, args, ret_ty } => {
                 // xxx if func uses memory, store new fp
 
-                // Push return pc onto stack (determined below)
-                let push_pc = ctx.push(OpCode::PUSH1);
+                let actions = alloc.read(insn, args);
 
+                let mut split = actions.split(|a| *a == Action::PushContinuationOffset);
                 // Move fn args onto stack
-                perform_actions(ctx, &alloc.read(insn, args));
+                perform_actions(ctx, split.next().unwrap());
+
+                // Push return offset onto stack (determined below)
+                let push_callback = ctx.push(OpCode::PUSH1);
+
+                perform_actions(ctx, split.next().unwrap());
+
                 // Push fn address onto stack and jump
                 let p = ctx.push(OpCode::PUSH1);
                 ctx.add_jump_fixup_inst(p, Label::Function(*func));
@@ -147,7 +153,7 @@ impl LowerBackend for EvmBackend {
 
                 // Mark return pc as jumpdest
                 let jumpdest_op = ctx.push(OpCode::JUMPDEST);
-                ctx.add_jump_fixup_inst(push_pc, Label::Insn(jumpdest_op));
+                ctx.add_jump_fixup_inst(push_callback, Label::Insn(jumpdest_op));
             }
 
             InsnData::Jump {
@@ -318,7 +324,7 @@ fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
                 ctx.push(OpCode::MLOAD);
             }
             Action::MemLoadFrameSlot(offset) => {
-                ctx.push_with_imm(OpCode::PUSH1, &[FRAME_POINTER_OFFSET]);
+                push_bytes(ctx, &[FRAME_POINTER_OFFSET]);
                 ctx.push(OpCode::MLOAD);
                 if *offset != 0 {
                     let bytes = u32_to_be(*offset);
@@ -333,7 +339,7 @@ fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
                 ctx.push(OpCode::MSTORE);
             }
             Action::MemStoreFrameSlot(offset) => {
-                ctx.push_with_imm(OpCode::PUSH1, &[FRAME_POINTER_OFFSET]);
+                push_bytes(ctx, &[FRAME_POINTER_OFFSET]);
                 ctx.push(OpCode::MLOAD);
                 if *offset != 0 {
                     let bytes = u32_to_be(*offset);
@@ -341,6 +347,9 @@ fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
                     ctx.push(OpCode::ADD);
                 }
                 ctx.push(OpCode::MSTORE);
+            }
+            Action::PushContinuationOffset => {
+                panic!("handle PushContinuationOffset elsewhere");
             }
         }
     }

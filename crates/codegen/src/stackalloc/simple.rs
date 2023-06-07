@@ -63,9 +63,6 @@ impl<'a> SimpleAllocBuilder<'a> {
         rpo.reverse();
 
         // The inherited stack of the entry block contains the fn args.
-        // A non-entry block can have an "inherited" stack if it has one
-        // predecessor.
-        // FUTURE: allow inherited stacks in two-pred blocks, with backedge given priority
         let mut inherited_stack = BTreeMap::new();
         inherited_stack.insert(entry, LocalStack::with_values(&self.func.arg_values));
 
@@ -228,7 +225,7 @@ impl<'a> SimpleAllocBuilder<'a> {
                     _ => {}
                 };
 
-                let args = insn_data.args();
+                let mut args = insn_data.args();
                 let consumable = args
                     .iter()
                     .copied()
@@ -242,15 +239,35 @@ impl<'a> SimpleAllocBuilder<'a> {
                     })
                     .collect::<BitSet<Value>>();
 
+                // Silly calling convention:
+                //  1) Place args on top of stack in order [a2, a3, ..., aN, a1]
+                //  2) Push continuation code offset location
+                //  3) Swap continuation code offset with a1
+                let mut call_args: SmallVec<[Value; 4]> = smallvec![];
+                if args.len() > 1 && matches!(insn_data, InsnData::Call { .. }) {
+                    call_args.extend_from_slice(&args[1..]);
+                    call_args.push(args[0]);
+                    args = &call_args;
+                }
+
+                let act = &mut self.alloc.actions[insn];
                 stack.step(
                     args,
                     &consumable,
                     result,
-                    &mut self.alloc.actions[insn],
+                    act,
                     &mut self.alloc.memory,
                     &self.func.dfg,
                     &self.liveness,
                 );
+
+                if matches!(insn_data, InsnData::Call { .. }) {
+                    act.push(Action::PushContinuationOffset);
+                    if !args.is_empty() {
+                        act.push(Action::StackSwap(args.len() as u8));
+                        stack.force_rotate_up(args.len() - 1);
+                    }
+                }
 
                 if let Some(val) = result {
                     if !live_out.contains(val) {

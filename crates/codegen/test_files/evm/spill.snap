@@ -36,8 +36,44 @@ sum8:
 // func public %spill(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64) -> i64
 spill:
   block1:
+    DUP2
+    PUSH0
+    MLOAD
+    PUSH1 [6]
+    ADD
+    MSTORE
+    DUP3
+    PUSH0
+    MLOAD
+    PUSH1 [5]
+    ADD
+    MSTORE
+    DUP4
+    PUSH0
+    MLOAD
+    PUSH1 [4]
+    ADD
+    MSTORE
+    DUP5
+    PUSH0
+    MLOAD
+    PUSH1 [3]
+    ADD
+    MSTORE
+    DUP6
+    PUSH0
+    MLOAD
+    PUSH1 [2]
+    ADD
+    MSTORE
+    DUP7
+    PUSH0
+    MLOAD
+    PUSH1 [1]
+    ADD
+    MSTORE
     DUP8
-    PUSH1 [64]
+    PUSH0
     MLOAD
     MSTORE
     JUMPDEST
@@ -65,34 +101,63 @@ spill:
     DUP1  // fallthrough block2;
   block2:
     JUMPDEST
-    PUSH1 `pc + (11)`  // v16.i64 = call %sum8 v0 v1 v2 v3 v4 v5 v6 v7;
-    DUP16
-    DUP16
-    DUP16
-    DUP16
-    DUP16
-    DUP16
-    DUP16
-    DUP16
+    DUP9  // v16.i64 = call %sum8 v0 v1 v2 v3 v4 v5 v6 v7;
+    PUSH0
+    MLOAD
+    MLOAD
+    PUSH0
+    MLOAD
+    PUSH1 [1]
+    ADD
+    MLOAD
+    PUSH0
+    MLOAD
+    PUSH1 [2]
+    ADD
+    MLOAD
+    PUSH0
+    MLOAD
+    PUSH1 [3]
+    ADD
+    MLOAD
+    PUSH0
+    MLOAD
+    PUSH1 [4]
+    ADD
+    MLOAD
+    PUSH0
+    MLOAD
+    PUSH1 [5]
+    ADD
+    MLOAD
+    PUSH0
+    MLOAD
+    PUSH1 [6]
+    ADD
+    MLOAD
+    PUSH1 `pc + (4)`
+    SWAP8
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    PUSH1 `pc + (11)`  // v17.i64 = call %sum8 v8 v9 v10 v11 v12 v13 v14 v15;
-    SWAP1
-    DUP3
-    DUP5
-    DUP7
-    DUP9
-    DUP11
-    DUP13
-    DUP15
+    DUP9  // v17.i64 = call %sum8 v8 v9 v10 v11 v12 v13 v14 v15;
+    DUP4
+    DUP6
+    DUP8
+    DUP10
+    DUP12
+    DUP14
+    DUP8
+    PUSH1 `pc + (4)`
+    SWAP8
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
     SWAP1  // v18.i64 = add v16 v17;
+    DUP4
     ADD
     DUP1  // v19.i64 = add v7 v18;
-    PUSH1 [64]
+    PUSH0
     MLOAD
     MLOAD
     ADD
@@ -106,7 +171,7 @@ spill:
   block3:
     JUMPDEST
     POP  // return v18;
-    SWAP15
+    SWAP16
     POP
     POP
     POP
@@ -121,6 +186,9 @@ spill:
     POP
     POP
     POP
+    POP
+    POP
+    SWAP1
     POP
     SWAP1
     JUMP

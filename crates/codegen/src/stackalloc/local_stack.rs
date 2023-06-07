@@ -25,6 +25,10 @@ impl LocalStack {
     pub fn push_bottom(&mut self, val: Value) {
         self.stack.push_back(val)
     }
+    pub fn force_rotate_up(&mut self, index: usize) {
+        let val = self.stack.remove(index).unwrap();
+        self.stack.push_front(val);
+    }
 
     /// "Rename" the value in a given stack slot; for phi values.
     /// Panics if slot >= stack.len().

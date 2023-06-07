@@ -21,11 +21,13 @@ pub trait Allocator {
     fn traverse_edge(&self, from: Block, to: Block) -> Actions;
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     StackDup(u8),
     StackSwap(u8),
     Push(Immediate),
+    /// For CALL: Push code offset that callee should jump to upon return
+    PushContinuationOffset,
     Pop,
     MemLoadAbs(u32),
     /// Relative to `LowerBackend`-defined frame pointer
