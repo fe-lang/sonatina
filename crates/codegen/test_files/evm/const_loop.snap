@@ -1,0 +1,32 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(v).unwrap()"
+input_file: crates/codegen/test_files/evm/const_loop.sntn
+---
+// func public %const_loop() -> i8
+const_loop:
+  block1:
+    JUMPDEST
+    PUSH1 [1]  // fallthrough block2;
+  block2:
+    JUMPDEST
+    PUSH1 [10]  // v2.i8 = add v1 10.i8;
+    DUP2
+    ADD
+    SWAP1  // v3.i1 = gt v2 v1;
+    DUP2
+    GT
+    PUSH1 block3  // br v3 block3 block4;
+    JUMPI
+    PUSH1 block4
+    JUMP
+  block3:
+    JUMPDEST
+    SWAP1  // return v2;
+    JUMP
+  block4:
+    JUMPDEST
+    PUSH1 block2  // jump block2;
+    JUMP
+
+

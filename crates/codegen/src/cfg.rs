@@ -8,6 +8,7 @@ use sonatina_ir::{Block, Function, Insn};
 pub struct ControlFlowGraph {
     entry: PackedOption<Block>,
     blocks: SecondaryMap<Block, BlockNode>,
+    edges: BTreeSet<(Block, Block)>,
     pub(super) exits: smallvec::SmallVec<[Block; 8]>,
 }
 
@@ -53,11 +54,13 @@ impl ControlFlowGraph {
     }
 
     pub fn add_edge(&mut self, from: Block, to: Block) {
+        self.edges.insert((from, to));
         self.blocks[to].push_pred(from);
         self.blocks[from].push_succ(to);
     }
 
     pub fn remove_edge(&mut self, from: Block, to: Block) {
+        self.edges.remove(&(from, to));
         self.blocks[to].remove_pred(from);
         self.blocks[from].remove_succ(to);
     }
@@ -68,12 +71,19 @@ impl ControlFlowGraph {
         }
         self.entry = new_entry.into();
         self.exits = new_exits.into();
+
+        self.edges = self.edges.iter().copied().map(|(a, b)| (b, a)).collect();
+    }
+
+    pub fn iter_edges(&self) -> impl Iterator<Item = &(Block, Block)> {
+        self.edges.iter()
     }
 
     pub fn clear(&mut self) {
         self.entry = None.into();
         self.blocks.clear();
         self.exits.clear();
+        self.edges.clear();
     }
 
     fn analyze_insn(&mut self, func: &Function, insn: Insn) {

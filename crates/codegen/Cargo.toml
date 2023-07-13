@@ -8,7 +8,7 @@ readme = "../../README.md"
 homepage = "https://github.com/fe-lang/sonatina/tree/main/crates/codegen"
 repository = "https://github.com/fe-lang/sonatina"
 description = "High-performance code generator for smart contract"
-categories = ["compilers", "wasm"] 
+categories = ["compilers", "wasm"]
 keywords = ["compiler", "evm", "wasm", "smart-contract"]
 
 
@@ -20,3 +20,12 @@ smallvec = "1.7.0"
 fxhash = "0.2.1"
 sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
 sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
+drain_filter_polyfill = "0.1.3"
+bs = "0.1.0"
+if_chain = "1.0.2"
+indexmap = "1.9.3"
+
+[dev-dependencies]
+sonatina-parser = {path = "../parser"}
+dir-test = "0.1.1"
+insta = { default-features = false, version = "1.7.1" }

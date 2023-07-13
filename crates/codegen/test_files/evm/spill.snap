@@ -1,0 +1,200 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(v).unwrap()"
+input_file: crates/codegen/test_files/evm/spill.sntn
+---
+// func public %sum8(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64) -> i64
+sum8:
+  block0:
+    JUMPDEST
+    ADD  // v8.i64 = add v0 v1;
+    SWAP2  // v9.i64 = add v2 v3;
+    SWAP1
+    ADD
+    SWAP3  // v10.i64 = add v4 v5;
+    DUP3
+    ADD
+    SWAP5  // v11.i64 = add v6 v7;
+    DUP5
+    ADD
+    SWAP3  // v12.i64 = add v8 v9;
+    SWAP1
+    ADD
+    SWAP1  // v13.i64 = add v10 v11;
+    POP
+    SWAP1
+    DUP4
+    ADD
+    SWAP1  // v14.i64 = add v12 v13;
+    ADD
+    SWAP2  // return v14;
+    POP
+    POP
+    SWAP1
+    JUMP
+
+// func public %spill(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64) -> i64
+spill:
+  block1:
+    DUP2
+    PUSH0
+    MLOAD
+    PUSH1 [6]
+    ADD
+    MSTORE
+    DUP3
+    PUSH0
+    MLOAD
+    PUSH1 [5]
+    ADD
+    MSTORE
+    DUP4
+    PUSH0
+    MLOAD
+    PUSH1 [4]
+    ADD
+    MSTORE
+    DUP5
+    PUSH0
+    MLOAD
+    PUSH1 [3]
+    ADD
+    MSTORE
+    DUP6
+    PUSH0
+    MLOAD
+    PUSH1 [2]
+    ADD
+    MSTORE
+    DUP7
+    PUSH0
+    MLOAD
+    PUSH1 [1]
+    ADD
+    MSTORE
+    DUP8
+    PUSH0
+    MLOAD
+    MSTORE
+    JUMPDEST
+    DUP2  // v8.i64 = add v0 v1;
+    DUP2
+    ADD
+    DUP5  // v9.i64 = add v2 v3;
+    DUP5
+    ADD
+    DUP8  // v10.i64 = add v4 v5;
+    DUP8
+    ADD
+    DUP11  // v11.i64 = add v6 v7;
+    DUP11
+    ADD
+    DUP3  // v12.i64 = add v8 v9;
+    DUP5
+    ADD
+    DUP2  // v13.i64 = add v10 v11;
+    DUP4
+    ADD
+    DUP1  // v14.i64 = add v12 v13;
+    DUP3
+    ADD
+    DUP1  // fallthrough block2;
+  block2:
+    JUMPDEST
+    DUP9  // v16.i64 = call %sum8 v0 v1 v2 v3 v4 v5 v6 v7;
+    PUSH0
+    MLOAD
+    MLOAD
+    PUSH0
+    MLOAD
+    PUSH1 [1]
+    ADD
+    MLOAD
+    PUSH0
+    MLOAD
+    PUSH1 [2]
+    ADD
+    MLOAD
+    PUSH0
+    MLOAD
+    PUSH1 [3]
+    ADD
+    MLOAD
+    PUSH0
+    MLOAD
+    PUSH1 [4]
+    ADD
+    MLOAD
+    PUSH0
+    MLOAD
+    PUSH1 [5]
+    ADD
+    MLOAD
+    PUSH0
+    MLOAD
+    PUSH1 [6]
+    ADD
+    MLOAD
+    PUSH1 `pc + (4)`
+    SWAP8
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    DUP9  // v17.i64 = call %sum8 v8 v9 v10 v11 v12 v13 v14 v15;
+    DUP4
+    DUP6
+    DUP8
+    DUP10
+    DUP12
+    DUP14
+    DUP8
+    PUSH1 `pc + (4)`
+    SWAP8
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    SWAP1  // v18.i64 = add v16 v17;
+    DUP4
+    ADD
+    DUP1  // v19.i64 = add v7 v18;
+    PUSH0
+    MLOAD
+    MLOAD
+    ADD
+    PUSH2 [3, 232]  // v20.i1 = gt v19 1000.i64;
+    DUP2
+    GT
+    PUSH1 block3  // br v20 block3 block4;
+    JUMPI
+    PUSH1 block4
+    JUMP
+  block3:
+    JUMPDEST
+    POP  // return v18;
+    SWAP16
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    SWAP1
+    POP
+    SWAP1
+    JUMP
+  block4:
+    JUMPDEST
+    PUSH1 block2  // jump block2;
+    JUMP
+
+
