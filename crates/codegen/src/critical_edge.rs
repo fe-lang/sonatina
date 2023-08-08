@@ -1,4 +1,4 @@
-use super::cfg::ControlFlowGraph;
+use sonatina_ir::ControlFlowGraph;
 
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},

@@ -2,9 +2,9 @@ use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, Sec
 use fxhash::FxHashMap;
 use smallvec::SmallVec;
 
-use crate::{cfg::ControlFlowGraph, domtree::DomTree};
+use crate::domtree::DomTree;
 
-use sonatina_ir::Block;
+use sonatina_ir::{Block, ControlFlowGraph};
 
 #[derive(Debug, Default)]
 pub struct LoopTree {

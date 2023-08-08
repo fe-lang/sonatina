@@ -12,15 +12,12 @@ use std::collections::BTreeSet;
 use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use fxhash::{FxHashMap, FxHashSet};
 
-use crate::{
-    cfg::ControlFlowGraph,
-    domtree::{DomTree, DominatorTreeTraversable},
-};
+use crate::domtree::{DomTree, DominatorTreeTraversable};
 
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     insn::{BinaryOp, CastOp, InsnData, UnaryOp},
-    Block, DataFlowGraph, Function, Immediate, Insn, Type, Value,
+    Block, ControlFlowGraph, DataFlowGraph, Function, Immediate, Insn, Type, Value,
 };
 
 use super::{constant_folding, simplify_impl};

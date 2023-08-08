@@ -1,8 +1,10 @@
 pub mod builder;
+pub mod cfg;
 pub mod dfg;
 pub mod func_cursor;
 pub mod function;
 pub mod global_variable;
+pub mod graphviz;
 pub mod insn;
 pub mod ir_writer;
 pub mod isa;
@@ -16,9 +18,11 @@ mod bigint;
 
 pub use bigint::{I256, U256};
 pub use builder::Variable;
+pub use cfg::ControlFlowGraph;
 pub use dfg::{Block, BlockData, DataFlowGraph};
 pub use function::{Function, Signature};
 pub use global_variable::{GlobalVariable, GlobalVariableData};
+pub use graphviz::render_to;
 pub use insn::{BranchInfo, DataLocationKind, Insn, InsnData};
 pub use layout::Layout;
 pub use linkage::Linkage;

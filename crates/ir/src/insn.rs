@@ -1,11 +1,14 @@
 //! This module contains Sonatine IR instructions definitions.
 
 // TODO: Add type checker for instruction arguments.
-use std::fmt;
+use std::fmt::{self, Write};
 
 use smallvec::SmallVec;
 
-use crate::types::CompoundTypeData;
+use crate::{
+    types::{CompoundTypeData, DisplayType},
+    value::{DisplayArgValues, DisplayResultValue},
+};
 
 use super::{module::FuncRef, Block, DataFlowGraph, Type, Value, ValueData};
 
@@ -13,6 +16,31 @@ use super::{module::FuncRef, Block, DataFlowGraph, Type, Value, ValueData};
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub struct Insn(pub u32);
 cranelift_entity::entity_impl!(Insn);
+
+pub struct DisplayInsn<'a> {
+    insn: Insn,
+    dfg: &'a DataFlowGraph,
+}
+
+impl<'a> DisplayInsn<'a> {
+    pub fn new(insn: Insn, dfg: &'a DataFlowGraph) -> Self {
+        Self { insn, dfg }
+    }
+}
+
+impl<'a> fmt::Display for DisplayInsn<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let Self { insn, dfg } = *self;
+
+        let mut result_string = String::new();
+        let display_result = DisplayResultValue::new(insn, dfg);
+        write!(&mut result_string, "{display_result}")?;
+
+        let display_insn = DisplayInsnData::new(insn, dfg);
+
+        write!(f, "{result_string}{display_insn}")
+    }
+}
 
 /// An instruction data definition.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -103,6 +131,20 @@ pub enum DataLocationKind {
     Memory,
     /// Non-volatile storage.
     Storage,
+}
+
+impl fmt::Display for DataLocationKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use DataLocationKind::*;
+        write!(
+            f,
+            "{}",
+            match self {
+                Memory => "mem",
+                Storage => "store",
+            }
+        )
+    }
 }
 
 impl InsnData {
@@ -376,6 +418,114 @@ impl InsnData {
     }
 }
 
+pub struct DisplayInsnData<'a> {
+    insn: Insn,
+    dfg: &'a DataFlowGraph,
+}
+
+impl<'a> DisplayInsnData<'a> {
+    pub fn new(insn: Insn, dfg: &'a DataFlowGraph) -> Self {
+        Self { insn, dfg }
+    }
+}
+
+impl<'a> fmt::Display for DisplayInsnData<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use InsnData::*;
+        let Self { insn, dfg } = *self;
+        let insn_data = dfg.insn_data(insn);
+        match insn_data {
+            Unary { code, args } => {
+                let v = DisplayArgValues::new(args, dfg);
+                write!(f, "{} v{v}.;", code.as_str())
+            }
+            Binary { code, args } => {
+                let v = DisplayArgValues::new(args, dfg);
+                write!(f, "{} {v};", code.as_str(),)
+            }
+            Cast { code, args, ty } => {
+                let v = DisplayArgValues::new(args, dfg);
+                let display_ty = DisplayType::new(*ty, dfg);
+                write!(f, "{} {v} {display_ty};", code.as_str())
+            }
+            Load { args, loc } => {
+                let v = DisplayArgValues::new(args, dfg);
+                write!(f, "load {v} {loc};")
+            }
+            Store { args, loc } => {
+                let v = DisplayArgValues::new(args, dfg);
+                write!(f, "store {v} {loc};")
+            }
+            Call {
+                args,
+                func,
+                ret_ty: ty,
+            } => {
+                let v = DisplayArgValues::new(args, dfg);
+                let display_ty = DisplayType::new(*ty, dfg);
+                write!(f, "call %{func} {v} {display_ty};")
+            }
+            Jump { code, dests } => {
+                let block = dests[0];
+                write!(f, "{code} {block};")
+            }
+            Branch { args, dests } => {
+                let v = DisplayArgValues::new(args, dfg);
+                write!(f, "branch {v} {} {};", dests[0], dests[1])
+            }
+            BrTable {
+                args,
+                default,
+                table,
+            } => {
+                let v = DisplayArgValues::new(args, dfg);
+
+                let mut default_string = String::new();
+                if let Some(block) = default {
+                    write!(&mut default_string, "{block} ")?;
+                }
+
+                let mut blocks_string = String::new();
+                write!(&mut blocks_string, "{}", table[0])?;
+                for block in &table[1..] {
+                    write!(&mut blocks_string, ",{block}")?;
+                }
+
+                write!(f, "br_table {v} {default_string} {blocks_string};")
+            }
+            Alloca { ty } => {
+                let display_ty = DisplayType::new(*ty, dfg);
+                write!(f, "alloca {display_ty};")
+            }
+            Return { args } => {
+                let mut args_string = String::new();
+                if let Some(arg) = *args {
+                    let arg = [arg];
+                    let v = DisplayArgValues::new(&arg, dfg);
+                    write!(&mut args_string, "{v}")?;
+                }
+
+                write!(f, "ret {args_string};")
+            }
+            Gep { args } => {
+                let v = DisplayArgValues::new(args, dfg);
+                write!(f, "gep {v};")
+            }
+            Phi { values, blocks, .. } => {
+                let mut values_string = String::new();
+                let v = DisplayArgValues::new(values, dfg);
+                write!(&mut values_string, "{}", v)?;
+
+                let mut args_string = String::new();
+                for (value, block) in values_string.split_whitespace().zip(blocks.into_iter()) {
+                    write!(&mut args_string, " ({value} {block})")?;
+                }
+
+                write!(f, "phi{args_string};",)
+            }
+        }
+    }
+}
 /// Unary operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryOp {

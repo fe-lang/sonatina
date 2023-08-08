@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    fmt,
+    sync::{Arc, Mutex},
+};
 
 use cranelift_entity::{entity_impl, PrimaryMap};
 
@@ -86,3 +89,9 @@ impl ModuleCtx {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FuncRef(u32);
 entity_impl!(FuncRef);
+
+impl fmt::Display for FuncRef {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}

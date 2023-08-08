@@ -1,10 +1,14 @@
 //! This module contains Sonatina IR types definitions.
-
-use std::cmp;
+use std::{
+    cmp,
+    fmt::{self, Write},
+};
 
 use cranelift_entity::PrimaryMap;
 use fxhash::FxHashMap;
 use indexmap::IndexMap;
+
+use crate::DataFlowGraph;
 
 #[derive(Debug, Default)]
 pub struct TypeStore {
@@ -137,6 +141,69 @@ pub enum Type {
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub struct CompoundType(u32);
 cranelift_entity::entity_impl!(CompoundType);
+
+struct DisplayCompoundType<'a> {
+    cmpd_ty: CompoundType,
+    dfg: &'a DataFlowGraph,
+}
+
+impl<'a> fmt::Display for DisplayCompoundType<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use CompoundTypeData::*;
+        let dfg = self.dfg;
+        dfg.ctx
+            .with_ty_store(|s| match s.resolve_compound(self.cmpd_ty) {
+                Array { elem: ty, len } => {
+                    let display_ty = DisplayType::new(*ty, dfg);
+                    write!(f, "[{display_ty};{len}]")
+                }
+                Ptr(ty) => {
+                    let display_ty = DisplayType::new(*ty, dfg);
+                    write!(f, "*{display_ty}")
+                }
+                Struct(StructData { name, packed, .. }) => {
+                    let mut struct_string = String::new();
+                    write!(&mut struct_string, "{{{name}}}")?;
+                    if *packed {
+                        write!(f, "<{struct_string}>")
+                    } else {
+                        write!(f, "{struct_string}")
+                    }
+                }
+            })
+    }
+}
+
+pub struct DisplayType<'a> {
+    ty: Type,
+    dfg: &'a DataFlowGraph,
+}
+
+impl<'a> DisplayType<'a> {
+    pub fn new(ty: Type, dfg: &'a DataFlowGraph) -> Self {
+        Self { ty, dfg }
+    }
+}
+
+impl<'a> fmt::Display for DisplayType<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use Type::*;
+        match self.ty {
+            I1 => write!(f, "i1"),
+            I8 => write!(f, "i8"),
+            I16 => write!(f, "i16"),
+            I32 => write!(f, "i32"),
+            I64 => write!(f, "i64"),
+            I128 => write!(f, "i128"),
+            I256 => write!(f, "i256"),
+            Compound(cmpd_ty) => {
+                let dfg = self.dfg;
+                write!(f, "{}", DisplayCompoundType { cmpd_ty, dfg })
+            }
+            Void => write!(f, "()"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CompoundTypeData {

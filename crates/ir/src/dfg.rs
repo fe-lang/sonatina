@@ -1,8 +1,8 @@
 //! This module contains Sonatine IR data flow graph.
+use std::{collections::BTreeSet, fmt};
 
 use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use fxhash::FxHashMap;
-use std::collections::BTreeSet;
 
 use crate::{global_variable::ConstantValue, module::ModuleCtx, GlobalVariable};
 
@@ -307,6 +307,12 @@ pub enum ValueDef {
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub struct Block(pub u32);
 cranelift_entity::entity_impl!(Block);
+
+impl fmt::Display for Block {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "block{}", self.0)
+    }
+}
 
 /// A block data definition.
 /// A Block data doesn't hold any information for layout of a program. It is managed by
