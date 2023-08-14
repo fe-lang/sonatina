@@ -440,34 +440,30 @@ impl<'a> fmt::Display for DisplayInsnData<'a> {
         match insn_data {
             Unary { code, args } => {
                 let v = DisplayArgValues::new(args, dfg);
-                write!(f, "{} v{v}.;", code.as_str())
+                write!(f, "{} {v};", code.as_str())
             }
             Binary { code, args } => {
                 let v = DisplayArgValues::new(args, dfg);
                 write!(f, "{} {v};", code.as_str(),)
             }
-            Cast { code, args, ty } => {
+            Cast { code, args, .. } => {
                 let v = DisplayArgValues::new(args, dfg);
-                let display_ty = DisplayType::new(*ty, dfg);
-                write!(f, "{} {v} {display_ty};", code.as_str())
+                write!(f, "{} {v};", code.as_str())
             }
             Load { args, loc } => {
                 let v = DisplayArgValues::new(args, dfg);
-                write!(f, "load {v} {loc};")
+                write!(f, "{loc} load {v};")
             }
             Store { args, loc } => {
                 let v = DisplayArgValues::new(args, dfg);
-                write!(f, "store {v} {loc};")
+                write!(f, "store {loc} {v};")
             }
             Call {
-                args,
-                func: callee,
-                ret_ty: ty,
+                args, func: callee, ..
             } => {
                 let v = DisplayArgValues::new(args, dfg);
                 let callee = DisplayCalleeFuncRef::new(callee, func);
-                let display_ty = DisplayType::new(*ty, dfg);
-                write!(f, "call %{callee} {v} {display_ty};")
+                write!(f, "call %{callee} {v};")
             }
             Jump { code, dests } => {
                 let block = dests[0];
