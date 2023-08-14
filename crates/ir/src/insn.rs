@@ -6,11 +6,15 @@ use std::fmt;
 use smallvec::SmallVec;
 
 use crate::{
+    function::Function,
     types::{CompoundTypeData, DisplayType},
     value::{DisplayArgValues, DisplayResultValue},
 };
 
-use super::{module::FuncRef, Block, DataFlowGraph, Type, Value, ValueData};
+use super::{
+    module::{DisplayCalleeFuncRef, FuncRef},
+    Block, DataFlowGraph, Type, Value, ValueData,
+};
 
 /// An opaque reference to [`InsnData`]
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
@@ -19,23 +23,23 @@ cranelift_entity::entity_impl!(Insn);
 
 pub struct DisplayInsn<'a> {
     insn: Insn,
-    dfg: &'a DataFlowGraph,
+    func: &'a Function,
 }
 
 impl<'a> DisplayInsn<'a> {
-    pub fn new(insn: Insn, dfg: &'a DataFlowGraph) -> Self {
-        Self { insn, dfg }
+    pub fn new(insn: Insn, func: &'a Function) -> Self {
+        Self { insn, func }
     }
 }
 
 impl<'a> fmt::Display for DisplayInsn<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let Self { insn, dfg } = *self;
+        let Self { insn, func } = *self;
 
-        let display_result = DisplayResultValue::new(insn, dfg);
+        let display_result = DisplayResultValue::new(insn, &func.dfg);
         write!(f, "{display_result}")?;
 
-        let display_insn = DisplayInsnData::new(insn, dfg);
+        let display_insn = DisplayInsnData::new(insn, func);
         write!(f, "{display_insn}")
     }
 }
@@ -418,19 +422,20 @@ impl InsnData {
 
 pub struct DisplayInsnData<'a> {
     insn: Insn,
-    dfg: &'a DataFlowGraph,
+    func: &'a Function,
 }
 
 impl<'a> DisplayInsnData<'a> {
-    pub fn new(insn: Insn, dfg: &'a DataFlowGraph) -> Self {
-        Self { insn, dfg }
+    pub fn new(insn: Insn, func: &'a Function) -> Self {
+        Self { insn, func }
     }
 }
 
 impl<'a> fmt::Display for DisplayInsnData<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use InsnData::*;
-        let Self { insn, dfg } = *self;
+        let Self { insn, func } = *self;
+        let dfg = &func.dfg;
         let insn_data = dfg.insn_data(insn);
         match insn_data {
             Unary { code, args } => {
@@ -456,12 +461,13 @@ impl<'a> fmt::Display for DisplayInsnData<'a> {
             }
             Call {
                 args,
-                func,
+                func: callee,
                 ret_ty: ty,
             } => {
                 let v = DisplayArgValues::new(args, dfg);
+                let callee = DisplayCalleeFuncRef::new(callee, func);
                 let display_ty = DisplayType::new(*ty, dfg);
-                write!(f, "call %{func} {v} {display_ty};")
+                write!(f, "call %{callee} {v} {display_ty};")
             }
             Jump { code, dests } => {
                 let block = dests[0];
