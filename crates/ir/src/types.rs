@@ -151,12 +151,12 @@ impl<'a> fmt::Display for DisplayCompoundType<'a> {
         dfg.ctx
             .with_ty_store(|s| match s.resolve_compound(self.cmpd_ty) {
                 Array { elem: ty, len } => {
-                    let display_ty = DisplayType::new(*ty, dfg);
-                    write!(f, "[{display_ty};{len}]")
+                    let ty = DisplayType::new(*ty, dfg);
+                    write!(f, "[{ty};{len}]")
                 }
                 Ptr(ty) => {
-                    let display_ty = DisplayType::new(*ty, dfg);
-                    write!(f, "*{display_ty}")
+                    let ty = DisplayType::new(*ty, dfg);
+                    write!(f, "*{ty}")
                 }
                 Struct(StructData { name, packed, .. }) => {
                     if *packed {

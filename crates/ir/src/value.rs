@@ -27,8 +27,8 @@ impl<'a> fmt::Display for DisplayResultValue<'a> {
         let Self { insn, dfg } = *self;
         if let Some(value) = dfg.insn_result(insn) {
             let ty = dfg.insn_result_ty(insn).unwrap();
-            let display_ty = DisplayType::new(ty, dfg);
-            return write!(f, "v{}.{display_ty} = ", value.0);
+            let ty = DisplayType::new(ty, dfg);
+            return write!(f, "v{}.{ty} = ", value.0);
         }
         Ok(())
     }
@@ -48,8 +48,8 @@ impl<'a, 'b> DisplayArgValues<'a, 'b> {
         let dfg = self.dfg;
         match *dfg.value_data(*arg) {
             ValueData::Immediate { imm, ty } => {
-                let display_ty = DisplayType::new(ty, dfg);
-                write!(w, "{imm}.{display_ty}")
+                let ty = DisplayType::new(ty, dfg);
+                write!(w, "{imm}.{ty}")
             }
             _ => write!(w, "v{}", arg.0),
         }

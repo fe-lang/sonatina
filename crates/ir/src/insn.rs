@@ -36,11 +36,11 @@ impl<'a> fmt::Display for DisplayInsn<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let Self { insn, func } = *self;
 
-        let display_result = DisplayResultValue::new(insn, &func.dfg);
-        write!(f, "{display_result}")?;
+        let result = DisplayResultValue::new(insn, &func.dfg);
+        write!(f, "{result}")?;
 
-        let display_insn = DisplayInsnData::new(insn, func);
-        write!(f, "{display_insn}")
+        let insn = DisplayInsnData::new(insn, func);
+        write!(f, "{insn}")
     }
 }
 
@@ -489,8 +489,8 @@ impl<'a> fmt::Display for DisplayInsnData<'a> {
                 write!(f, " {};", table[table.len() - 1])
             }
             Alloca { ty } => {
-                let display_ty = DisplayType::new(*ty, dfg);
-                write!(f, "alloca {display_ty};")
+                let ty = DisplayType::new(*ty, dfg);
+                write!(f, "alloca {ty};")
             }
             Return { args } => {
                 write!(f, "ret")?;
