@@ -5,8 +5,10 @@ use crate::Function;
 mod block;
 mod function;
 
+use function::FunctionGraph;
+
 pub fn render_to<W: io::Write>(func: &Function, output: &mut W) -> io::Result<()> {
-    let func_graph = function::FunctionGraph(func);
+    let func_graph = FunctionGraph(func);
     dot2::render(&func_graph, output).map_err(|err| match err {
         dot2::Error::Io(err) => err,
         _ => panic!("invalid graphviz id"),

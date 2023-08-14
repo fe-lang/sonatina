@@ -6,9 +6,7 @@ use crate::{value::DisplayArgValues, Block, ControlFlowGraph, Function, InsnData
 
 use super::block::BlockNode;
 
-pub(super) struct FunctionGraph<'a>(pub &'a Function)
-where
-    Self: 'a;
+pub(super) struct FunctionGraph<'a>(pub(super) &'a Function);
 
 impl<'a> FunctionGraph<'a> {
     pub(super) fn blocks(&self) -> Vec<BlockNode<'a>> {
@@ -106,10 +104,7 @@ impl<'a> GraphWalk<'a> for FunctionGraph<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct BlockEdge<'a>
-where
-    Self: 'a,
-{
+pub(super) struct BlockEdge<'a> {
     from: BlockNode<'a>,
     to: BlockNode<'a>,
     func: &'a Function,

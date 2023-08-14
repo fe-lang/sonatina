@@ -5,12 +5,9 @@ use dot2::label;
 use crate::{function::DisplaySignature, insn::DisplayInsn, Block, ControlFlowGraph, Function};
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct BlockNode<'a>
-where
-    Self: 'a,
-{
-    pub func: &'a Function,
-    pub block: Block,
+pub(super) struct BlockNode<'a> {
+    pub(super) func: &'a Function,
+    pub(super) block: Block,
 }
 
 impl<'a> BlockNode<'a> {
