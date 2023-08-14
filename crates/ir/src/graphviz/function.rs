@@ -8,18 +8,25 @@ use super::block::BlockNode;
 
 pub(super) const DUMMY_BLOCK: Block = Block(u32::MAX);
 
-pub(super) struct FunctionGraph<'a>(pub(super) &'a Function);
+pub(super) struct FunctionGraph<'a> {
+    func: &'a Function,
+    cfg: &'a ControlFlowGraph,
+}
+
+impl<'a> FunctionGraph<'a> {
+    pub fn new(func: &'a Function, cfg: &'a ControlFlowGraph) -> Self {
+        Self { func, cfg }
+    }
+}
 
 impl<'a> FunctionGraph<'a> {
     pub(super) fn blocks(&self) -> Vec<BlockNode<'a>> {
-        let Self(func) = *self;
-        let mut cfg = ControlFlowGraph::new();
-        cfg.compute(func);
+        let Self { func, cfg } = self;
         // Dummy block is needed to label the graph with the function signature. Returns a vector
         // with the dummy block as a last element.
         cfg.post_order()
-            .map(|block| BlockNode::new(func, block))
-            .chain(iter::once(BlockNode::new(func, DUMMY_BLOCK)))
+            .map(|block| BlockNode::new(func, cfg, block))
+            .chain(iter::once(BlockNode::new(func, cfg, DUMMY_BLOCK)))
             .collect()
     }
 }
@@ -30,7 +37,7 @@ impl<'a> Labeller<'a> for FunctionGraph<'a> {
     type Subgraph = ();
 
     fn graph_id(&self) -> dot2::Result<Id<'a>> {
-        let Self(func) = *self;
+        let Self { func, cfg } = *self;
         let sig_name = func.sig.name().to_string();
         Id::new(sig_name)
     }
@@ -74,13 +81,13 @@ impl<'a> GraphWalk<'a> for FunctionGraph<'a> {
     }
 
     fn edges(&'a self) -> dot2::Edges<'a, Self::Edge> {
-        let Self(func) = *self;
+        let Self { func, cfg } = self;
         let mut blocks = self.blocks();
 
         let dummy_block = blocks.pop().unwrap();
         let mut edges = vec![BlockEdge {
             from: dummy_block,
-            to: BlockNode::new(func, Block(0u32)),
+            to: BlockNode::new(func, cfg, Block(0u32)),
             func,
         }];
         for block in blocks {

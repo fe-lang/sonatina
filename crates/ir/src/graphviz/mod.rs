@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::Function;
+use crate::{ControlFlowGraph, Function};
 
 mod block;
 mod function;
@@ -8,7 +8,9 @@ mod function;
 use function::FunctionGraph;
 
 pub fn render_to<W: io::Write>(func: &Function, output: &mut W) -> io::Result<()> {
-    let func_graph = FunctionGraph(func);
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(func);
+    let func_graph = FunctionGraph::new(func, &cfg);
     dot2::render(&func_graph, output).map_err(|err| match err {
         dot2::Error::Io(err) => err,
         _ => panic!("invalid graphviz id"),
