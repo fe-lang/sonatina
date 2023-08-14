@@ -44,25 +44,26 @@ impl<'a, 'b> DisplayArgValues<'a, 'b> {
         Self { args, dfg }
     }
 
-    fn write_arg<W: fmt::Write>(&self, w: &mut W, arg: &Value) -> fmt::Result {
+    pub fn write_arg<W: fmt::Write>(&self, w: &mut W, arg: &Value) -> fmt::Result {
         let dfg = self.dfg;
         match *dfg.value_data(*arg) {
             ValueData::Immediate { imm, ty } => {
                 let display_ty = DisplayType::new(ty, dfg);
-                write!(w, "{imm}.{display_ty} ")
+                write!(w, "{imm}.{display_ty}")
             }
-            _ => write!(w, "v{} ", arg.0),
+            _ => write!(w, "v{}", arg.0),
         }
     }
 }
 
 impl<'a, 'b> fmt::Display for DisplayArgValues<'a, 'b> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut args_string = String::new();
-        for arg in self.args {
-            self.write_arg(&mut args_string, arg)?;
+        self.write_arg(f, &self.args[0])?;
+        for arg in &self.args[1..] {
+            write!(f, " ")?;
+            self.write_arg(f, arg)?;
         }
-        write!(f, "{}", args_string.trim())
+        Ok(())
     }
 }
 

@@ -1,8 +1,5 @@
 //! This module contains Sonatina IR types definitions.
-use std::{
-    cmp,
-    fmt::{self, Write},
-};
+use std::{cmp, fmt};
 
 use cranelift_entity::PrimaryMap;
 use fxhash::FxHashMap;
@@ -162,12 +159,10 @@ impl<'a> fmt::Display for DisplayCompoundType<'a> {
                     write!(f, "*{display_ty}")
                 }
                 Struct(StructData { name, packed, .. }) => {
-                    let mut struct_string = String::new();
-                    write!(&mut struct_string, "{{{name}}}")?;
                     if *packed {
-                        write!(f, "<{struct_string}>")
+                        write!(f, "<{{{name}}}>")
                     } else {
-                        write!(f, "{struct_string}")
+                        write!(f, "{{{name}}}")
                     }
                 }
             })

@@ -1,7 +1,7 @@
 //! This module contains Sonatine IR instructions definitions.
 
 // TODO: Add type checker for instruction arguments.
-use std::fmt::{self, Write};
+use std::fmt;
 
 use smallvec::SmallVec;
 
@@ -32,13 +32,11 @@ impl<'a> fmt::Display for DisplayInsn<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let Self { insn, dfg } = *self;
 
-        let mut result_string = String::new();
         let display_result = DisplayResultValue::new(insn, dfg);
-        write!(&mut result_string, "{display_result}")?;
+        write!(f, "{display_result}")?;
 
         let display_insn = DisplayInsnData::new(insn, dfg);
-
-        write!(f, "{result_string}{display_insn}")
+        write!(f, "{display_insn}")
     }
 }
 
@@ -479,49 +477,40 @@ impl<'a> fmt::Display for DisplayInsnData<'a> {
                 table,
             } => {
                 let v = DisplayArgValues::new(args, dfg);
-
-                let mut default_string = String::new();
+                write!(f, "br_table {v}")?;
                 if let Some(block) = default {
-                    write!(&mut default_string, "{block} ")?;
+                    write!(f, " {block}")?;
                 }
-
-                let mut blocks_string = String::new();
-                write!(&mut blocks_string, "{}", table[0])?;
-                for block in &table[1..] {
-                    write!(&mut blocks_string, ",{block}")?;
+                for block in &table[..table.len() - 2] {
+                    write!(f, " {block}")?;
                 }
-
-                write!(f, "br_table {v} {default_string} {blocks_string};")
+                write!(f, " {};", table[table.len() - 1])
             }
             Alloca { ty } => {
                 let display_ty = DisplayType::new(*ty, dfg);
                 write!(f, "alloca {display_ty};")
             }
             Return { args } => {
-                let mut args_string = String::new();
-                if let Some(arg) = *args {
-                    let arg = [arg];
+                write!(f, "ret")?;
+                if let Some(arg) = args {
+                    let arg = [*arg];
                     let v = DisplayArgValues::new(&arg, dfg);
-                    write!(&mut args_string, "{v}")?;
+                    write!(f, " {v}")?;
                 }
-
-                write!(f, "ret {args_string};")
+                write!(f, ";")
             }
             Gep { args } => {
                 let v = DisplayArgValues::new(args, dfg);
                 write!(f, "gep {v};")
             }
             Phi { values, blocks, .. } => {
-                let mut values_string = String::new();
-                let v = DisplayArgValues::new(values, dfg);
-                write!(&mut values_string, "{}", v)?;
-
-                let mut args_string = String::new();
-                for (value, block) in values_string.split_whitespace().zip(blocks.into_iter()) {
-                    write!(&mut args_string, " ({value} {block})")?;
+                write!(f, "phi")?;
+                for (value, block) in values.iter().zip(blocks.iter()) {
+                    let value = [*value];
+                    let v = DisplayArgValues::new(&value, dfg);
+                    write!(f, " ({v} {block})")?;
                 }
-
-                write!(f, "phi{args_string};",)
+                write!(f, ";")
             }
         }
     }

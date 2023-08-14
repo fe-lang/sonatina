@@ -59,7 +59,7 @@ mod test {
         assert_eq!(
             text,
             b"digraph test_func {
-    block3[label=<<table border=\"0\" cellborder=\"1\" cellspacing=\"0\"><tr><td bgcolor=\"gray\" align=\"center\" colspan=\"1\">block3</td></tr><tr><td align=\"left\" balign=\"left\">v3.i64 = phi (1.i64 block1) (2.i64 block2);<br/>v4.i64 = add v3 v0;<br/>ret ;<br/></td></tr></table>>][shape=\"none\"];
+    block3[label=<<table border=\"0\" cellborder=\"1\" cellspacing=\"0\"><tr><td bgcolor=\"gray\" align=\"center\" colspan=\"1\">block3</td></tr><tr><td align=\"left\" balign=\"left\">v3.i64 = phi (1.i64 block1) (2.i64 block2);<br/>v4.i64 = add v3 v0;<br/>ret;<br/></td></tr></table>>][shape=\"none\"];
     block2[label=<<table border=\"0\" cellborder=\"1\" cellspacing=\"0\"><tr><td bgcolor=\"gray\" align=\"center\" colspan=\"1\">block2</td></tr><tr><td align=\"left\" balign=\"left\">jump block3;<br/></td></tr></table>>][shape=\"none\"];
     block1[label=<<table border=\"0\" cellborder=\"1\" cellspacing=\"0\"><tr><td bgcolor=\"gray\" align=\"center\" colspan=\"1\">block1</td></tr><tr><td align=\"left\" balign=\"left\">jump block3;<br/></td></tr></table>>][shape=\"none\"];
     block0[label=<<table border=\"0\" cellborder=\"1\" cellspacing=\"0\"><tr><td bgcolor=\"gray\" align=\"center\" colspan=\"1\">block0</td></tr><tr><td align=\"left\" balign=\"left\">branch v0 block1 block2;<br/></td></tr></table>>][shape=\"none\"];
