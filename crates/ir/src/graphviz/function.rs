@@ -6,17 +6,20 @@ use crate::{value::DisplayArgValues, Block, ControlFlowGraph, Function, InsnData
 
 use super::block::BlockNode;
 
+pub(super) const DUMMY_BLOCK: Block = Block(u32::MAX);
+
 pub(super) struct FunctionGraph<'a>(pub(super) &'a Function);
 
 impl<'a> FunctionGraph<'a> {
     pub(super) fn blocks(&self) -> Vec<BlockNode<'a>> {
         let Self(func) = *self;
-        let dummy_block = Block(u32::MAX);
         let mut cfg = ControlFlowGraph::new();
         cfg.compute(func);
+        // Dummy block is needed to label the graph with the function signature. Returns a vector
+        // with the dummy block as a last element.
         cfg.post_order()
             .map(|block| BlockNode::new(func, block))
-            .chain(iter::once(BlockNode::new(func, dummy_block)))
+            .chain(iter::once(BlockNode::new(func, DUMMY_BLOCK)))
             .collect()
     }
 }
@@ -34,7 +37,7 @@ impl<'a> Labeller<'a> for FunctionGraph<'a> {
 
     fn node_id(&self, n: &Self::Node) -> dot2::Result<Id<'a>> {
         let block = n.block;
-        if block.0 == u32::MAX {
+        if block == DUMMY_BLOCK {
             return dot2::Id::new("dummy_block");
         }
         dot2::Id::new(format!("{block}"))
@@ -45,7 +48,7 @@ impl<'a> Labeller<'a> for FunctionGraph<'a> {
     }
 
     fn edge_style(&'a self, e: &Self::Edge) -> Style {
-        if e.from.block.0 == u32::MAX {
+        if e.from.block == DUMMY_BLOCK {
             Style::Invisible
         } else {
             Style::None

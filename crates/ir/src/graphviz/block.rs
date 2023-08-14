@@ -4,6 +4,8 @@ use dot2::label;
 
 use crate::{function::DisplaySignature, insn::DisplayInsn, Block, ControlFlowGraph, Function};
 
+use super::function::DUMMY_BLOCK;
+
 #[derive(Debug, Clone, Copy)]
 pub(super) struct BlockNode<'a> {
     pub(super) func: &'a Function,
@@ -30,7 +32,7 @@ impl<'a> BlockNode<'a> {
         let Function {
             sig, dfg, layout, ..
         } = func;
-        if block.0 == u32::MAX {
+        if block == DUMMY_BLOCK {
             let sig = DisplaySignature::new(sig, dfg);
             return label::Text::LabelStr(format!("{sig}").into());
         }
