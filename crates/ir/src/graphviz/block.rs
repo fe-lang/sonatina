@@ -29,7 +29,7 @@ impl<'a> BlockNode<'a> {
 
 impl<'a> BlockNode<'a> {
     pub(super) fn label(self) -> label::Text<'static> {
-        let Self { block, cfg, func } = self;
+        let Self { block, func, .. } = self;
         let Function {
             sig, dfg, layout, ..
         } = func;
