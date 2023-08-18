@@ -19,9 +19,7 @@ impl<'a> BlockNode<'a> {
     }
 
     pub(super) fn succs(self) -> Vec<Self> {
-        let mut cfg = ControlFlowGraph::new();
-        cfg.compute(self.func);
-        cfg.succs_of(self.block)
+        self.cfg.succs_of(self.block)
             .map(|block| BlockNode::new(self.func, self.cfg, *block))
             .collect()
     }
