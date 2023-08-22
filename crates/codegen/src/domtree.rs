@@ -7,9 +7,7 @@ use std::collections::BTreeSet;
 
 use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 
-use sonatina_ir::Block;
-
-use super::cfg::ControlFlowGraph;
+use sonatina_ir::{Block, ControlFlowGraph};
 
 #[derive(Default, Debug)]
 pub struct DomTree {

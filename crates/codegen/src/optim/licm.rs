@@ -1,14 +1,11 @@
 // TODO: Add control flow hoisting.
 use fxhash::{FxHashMap, FxHashSet};
 
-use crate::{
-    cfg::ControlFlowGraph,
-    loop_analysis::{Loop, LoopTree},
-};
+use crate::loop_analysis::{Loop, LoopTree};
 
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    Block, Function, Insn, InsnData, Value,
+    Block, ControlFlowGraph, Function, Insn, InsnData, Value,
 };
 
 #[derive(Debug)]

@@ -2,13 +2,13 @@ use std::collections::BTreeSet;
 
 use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 
-use sonatina_ir::{Block, Function, Insn};
+use crate::{Block, Function, Insn};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct ControlFlowGraph {
     entry: PackedOption<Block>,
     blocks: SecondaryMap<Block, BlockNode>,
-    pub(super) exits: smallvec::SmallVec<[Block; 8]>,
+    pub exits: smallvec::SmallVec<[Block; 8]>,
 }
 
 impl ControlFlowGraph {
@@ -62,7 +62,7 @@ impl ControlFlowGraph {
         self.blocks[from].remove_succ(to);
     }
 
-    pub(super) fn reverse_edges(&mut self, new_entry: Block, new_exits: &[Block]) {
+    pub fn reverse_edges(&mut self, new_entry: Block, new_exits: &[Block]) {
         for node in self.blocks.values_mut() {
             node.reverse_edge();
         }

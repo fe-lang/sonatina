@@ -2,7 +2,7 @@
 
 use std::{fmt, ops};
 
-use crate::GlobalVariable;
+use crate::{types::DisplayType, DataFlowGraph, GlobalVariable};
 
 use super::{Insn, Type, I256, U256};
 
@@ -10,6 +10,62 @@ use super::{Insn, Type, I256, U256};
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
 pub struct Value(pub u32);
 cranelift_entity::entity_impl!(Value);
+
+pub struct DisplayResultValue<'a> {
+    insn: Insn,
+    dfg: &'a DataFlowGraph,
+}
+
+impl<'a> DisplayResultValue<'a> {
+    pub fn new(insn: Insn, dfg: &'a DataFlowGraph) -> Self {
+        Self { insn, dfg }
+    }
+}
+
+impl<'a> fmt::Display for DisplayResultValue<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let Self { insn, dfg } = *self;
+        if let Some(value) = dfg.insn_result(insn) {
+            let ty = dfg.insn_result_ty(insn).unwrap();
+            let ty = DisplayType::new(ty, dfg);
+            return write!(f, "v{}.{ty} = ", value.0);
+        }
+        Ok(())
+    }
+}
+
+pub struct DisplayArgValues<'a, 'b> {
+    args: &'a [Value],
+    dfg: &'b DataFlowGraph,
+}
+
+impl<'a, 'b> DisplayArgValues<'a, 'b> {
+    pub fn new(args: &'a [Value], dfg: &'b DataFlowGraph) -> Self {
+        Self { args, dfg }
+    }
+
+    pub fn write_arg<W: fmt::Write>(&self, w: &mut W, arg: &Value) -> fmt::Result {
+        let dfg = self.dfg;
+        match *dfg.value_data(*arg) {
+            ValueData::Immediate { imm, ty } => {
+                let ty = DisplayType::new(ty, dfg);
+                write!(w, "{imm}.{ty}")
+            }
+            _ => write!(w, "v{}", arg.0),
+        }
+    }
+}
+
+impl<'a, 'b> fmt::Display for DisplayArgValues<'a, 'b> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.write_arg(f, &self.args[0])?;
+        for arg in &self.args[1..] {
+            write!(f, " ")?;
+            self.write_arg(f, arg)?;
+        }
+        Ok(())
+    }
+}
 
 /// An value data definition.
 #[derive(Debug, Clone)]

@@ -1,11 +1,8 @@
 //! This module contains implementation of `Post Dominator Tree`.
 
-use super::{
-    cfg::ControlFlowGraph,
-    domtree::{DFSet, DomTree},
-};
+use super::domtree::{DFSet, DomTree};
 
-use sonatina_ir::{Block, Function};
+use sonatina_ir::{Block, ControlFlowGraph, Function};
 
 #[derive(Debug)]
 pub struct PostDomTree {

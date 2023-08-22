@@ -5,14 +5,44 @@ use std::fmt;
 
 use smallvec::SmallVec;
 
-use crate::types::CompoundTypeData;
+use crate::{
+    function::Function,
+    types::{CompoundTypeData, DisplayType},
+    value::{DisplayArgValues, DisplayResultValue},
+};
 
-use super::{module::FuncRef, Block, DataFlowGraph, Type, Value, ValueData};
+use super::{
+    module::{DisplayCalleeFuncRef, FuncRef},
+    Block, DataFlowGraph, Type, Value, ValueData,
+};
 
 /// An opaque reference to [`InsnData`]
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub struct Insn(pub u32);
 cranelift_entity::entity_impl!(Insn);
+
+pub struct DisplayInsn<'a> {
+    insn: Insn,
+    func: &'a Function,
+}
+
+impl<'a> DisplayInsn<'a> {
+    pub fn new(insn: Insn, func: &'a Function) -> Self {
+        Self { insn, func }
+    }
+}
+
+impl<'a> fmt::Display for DisplayInsn<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let Self { insn, func } = *self;
+
+        let result = DisplayResultValue::new(insn, &func.dfg);
+        write!(f, "{result}")?;
+
+        let insn = DisplayInsnData::new(insn, func);
+        write!(f, "{insn}")
+    }
+}
 
 /// An instruction data definition.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -103,6 +133,20 @@ pub enum DataLocationKind {
     Memory,
     /// Non-volatile storage.
     Storage,
+}
+
+impl fmt::Display for DataLocationKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use DataLocationKind::*;
+        write!(
+            f,
+            "{}",
+            match self {
+                Memory => "mem",
+                Storage => "store",
+            }
+        )
+    }
 }
 
 impl InsnData {
@@ -376,6 +420,103 @@ impl InsnData {
     }
 }
 
+pub struct DisplayInsnData<'a> {
+    insn: Insn,
+    func: &'a Function,
+}
+
+impl<'a> DisplayInsnData<'a> {
+    pub fn new(insn: Insn, func: &'a Function) -> Self {
+        Self { insn, func }
+    }
+}
+
+impl<'a> fmt::Display for DisplayInsnData<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use InsnData::*;
+        let Self { insn, func } = *self;
+        let dfg = &func.dfg;
+        let insn_data = dfg.insn_data(insn);
+        match insn_data {
+            Unary { code, args } => {
+                let v = DisplayArgValues::new(args, dfg);
+                write!(f, "{} {v};", code.as_str())
+            }
+            Binary { code, args } => {
+                let v = DisplayArgValues::new(args, dfg);
+                write!(f, "{} {v};", code.as_str(),)
+            }
+            Cast { code, args, .. } => {
+                let v = DisplayArgValues::new(args, dfg);
+                write!(f, "{} {v};", code.as_str())
+            }
+            Load { args, loc } => {
+                let v = DisplayArgValues::new(args, dfg);
+                write!(f, "{loc} load {v};")
+            }
+            Store { args, loc } => {
+                let v = DisplayArgValues::new(args, dfg);
+                write!(f, "store {loc} {v};")
+            }
+            Call {
+                args, func: callee, ..
+            } => {
+                let v = DisplayArgValues::new(args, dfg);
+                let callee = DisplayCalleeFuncRef::new(callee, func);
+                write!(f, "call %{callee} {v};")
+            }
+            Jump { code, dests } => {
+                let block = dests[0];
+                write!(f, "{code} {block};")
+            }
+            Branch { args, dests } => {
+                let v = DisplayArgValues::new(args, dfg);
+                write!(f, "branch {v} {} {};", dests[0], dests[1])
+            }
+            BrTable {
+                args,
+                default,
+                table,
+            } => {
+                let v = DisplayArgValues::new(args, dfg);
+                write!(f, "br_table {v}")?;
+                if let Some(block) = default {
+                    write!(f, " {block}")?;
+                }
+                for block in &table[..table.len() - 2] {
+                    write!(f, " {block}")?;
+                }
+                write!(f, " {};", table[table.len() - 1])
+            }
+            Alloca { ty } => {
+                let ty = DisplayType::new(*ty, dfg);
+                write!(f, "alloca {ty};")
+            }
+            Return { args } => {
+                write!(f, "ret")?;
+                if let Some(arg) = args {
+                    let arg = [*arg];
+                    let v = DisplayArgValues::new(&arg, dfg);
+                    write!(f, " {v}")?;
+                }
+                write!(f, ";")
+            }
+            Gep { args } => {
+                let v = DisplayArgValues::new(args, dfg);
+                write!(f, "gep {v};")
+            }
+            Phi { values, blocks, .. } => {
+                write!(f, "phi")?;
+                for (value, block) in values.iter().zip(blocks.iter()) {
+                    let value = [*value];
+                    let v = DisplayArgValues::new(&value, dfg);
+                    write!(f, " ({v} {block})")?;
+                }
+                write!(f, ";")
+            }
+        }
+    }
+}
 /// Unary operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryOp {
