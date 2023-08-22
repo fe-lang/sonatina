@@ -19,7 +19,8 @@ impl<'a> BlockNode<'a> {
     }
 
     pub(super) fn succs(self) -> Vec<Self> {
-        self.cfg.succs_of(self.block)
+        self.cfg
+            .succs_of(self.block)
             .map(|block| BlockNode::new(self.func, self.cfg, *block))
             .collect()
     }
