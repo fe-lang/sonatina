@@ -80,6 +80,7 @@ impl I256 {
     }
 
     pub fn trunc_to_i8(self) -> i8 {
+        println!("{:?}", self.to_u256().low_u32() as i8);
         self.to_u256().low_u32() as i8
     }
 
@@ -276,3 +277,4 @@ impl_from!(u16, unsigned);
 impl_from!(u32, unsigned);
 impl_from!(u64, unsigned);
 impl_from!(u128, unsigned);
+impl_from!(usize, unsigned);

@@ -251,7 +251,7 @@ impl Immediate {
         self.as_i256().to_u256().as_usize()
     }
 
-    fn from_i256(val: I256, ty: Type) -> Self {
+    pub fn from_i256(val: I256, ty: Type) -> Self {
         match ty {
             Type::I1 => Self::I1(val.trunc_to_i1()),
             Type::I8 => Self::I8(val.trunc_to_i8()),

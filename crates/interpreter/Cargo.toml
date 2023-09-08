@@ -1,11 +1,21 @@
 [package]
 name = "interpreter"
-version = "0.1.0"
+version = "0.0.3-alpha"
 edition = "2021"
+authors = ["Sonatina Developers"]
+license = "Apache-2.0"
+readme = "../../README.md"
+homepage = "https://github.com/fe-lang/sonatina/tree/main/crates/interpreter"
+repository = "https://github.com/fe-lang/sonatina"
+description = "Interpreter of sonatina intermediate representation"
+categories = ["compilers", "wasm"]
+keywords = ["compiler", "evm", "wasm", "smart-contract"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 cranelift-entity = "0.99.1"
-sonatina-codegen = { path = "../codegen" }
-sonatina-ir = { path = "../ir" }
+sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
+
+[dev-dependencies]
+sonatina-parser = { path = "../parser", version = "0.0.3-alpha"  }

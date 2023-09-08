@@ -1,6 +1,6 @@
 use sonatina_ir::{module::FuncRef, Block, Insn, Layout};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct ProgramCounter {
     pub func_ref: FuncRef,
     pub insn: Insn,
@@ -18,7 +18,7 @@ impl ProgramCounter {
     }
 
     pub fn call(&mut self, callee_ref: FuncRef, callee_layout: &Layout) {
-        *self = ProgramCounter::new(callee_ref, &callee_layout)
+        *self = ProgramCounter::new(callee_ref, callee_layout)
     }
 
     pub fn next_insn(&mut self, layout: &Layout) {

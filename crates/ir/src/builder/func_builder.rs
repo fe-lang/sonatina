@@ -91,6 +91,10 @@ impl<'a> FunctionBuilder<'a> {
         self.func_mut().dfg.make_global_value(gv)
     }
 
+    pub fn declare_array_type(&mut self, elem: Type, len: usize) -> Type {
+        self.module_builder.declare_array_type(elem, len)
+    }
+
     pub fn declare_struct_type(&mut self, name: &str, fields: &[Type], packed: bool) -> Type {
         self.module_builder
             .declare_struct_type(name, fields, packed)
@@ -242,6 +246,11 @@ impl<'a> FunctionBuilder<'a> {
     pub fn ret(&mut self, args: Option<Value>) {
         let insn_data = InsnData::Return { args };
         self.insert_insn(insn_data);
+    }
+
+    pub fn gep(&mut self, args: &[Value]) -> Option<Value> {
+        let insn_data = InsnData::Gep { args: args.into() };
+        self.insert_insn(insn_data)
     }
 
     pub fn phi(&mut self, args: &[(Value, Block)]) -> Value {

@@ -5,4 +5,4 @@ pub mod value;
 
 pub use frame::Frame;
 pub use pc::ProgramCounter;
-pub use value::Literal;
+pub use state::State;

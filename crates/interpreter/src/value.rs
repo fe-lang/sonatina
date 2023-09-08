@@ -1,25 +1,30 @@
 use sonatina_ir::{module::ModuleCtx, Type, I256, U256};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Literal(pub I256);
-
-impl Default for Literal {
-    fn default() -> Self {
-        Literal(I256::zero())
-    }
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum EvalValue {
+    Literal(I256),
+    #[default]
+    Undefined,
 }
 
-impl Literal {
-    pub fn from_usize(addr: usize) -> Self {
-        Self(I256::from_u256(U256::from(addr)))
+impl EvalValue {
+    pub fn from_i256(i256: I256) -> Self {
+        Self::Literal(i256)
     }
 
-    pub fn as_usize(&self) -> usize {
-        self.0.to_u256().as_usize()
+    pub fn from_usize(addr: usize) -> Self {
+        Self::Literal(addr.into())
+    }
+
+    pub fn i256(&self) -> I256 {
+        match self {
+            Self::Literal(i256) => *i256,
+            _ => panic!(),
+        }
     }
 
     pub fn deserialize(ctx: &ModuleCtx, ty: Type, b: Vec<u8>) -> Option<Self> {
-        Some(Self(match ty {
+        Some(Self::Literal(match ty {
             Type::I1 => (b[0] & 0b1).into(),
             Type::I8 => i8::from_be_bytes(b.try_into().unwrap()).into(),
             Type::I16 => i16::from_be_bytes(b.try_into().unwrap()).into(),
@@ -57,9 +62,5 @@ impl Literal {
             }
             Type::Void => Vec::new(),
         }
-    }
-
-    pub fn i256(&self) -> I256 {
-        self.0
     }
 }
