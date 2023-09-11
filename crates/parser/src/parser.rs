@@ -933,9 +933,10 @@ mod tests {
     #[test]
     fn test_gep() {
         assert!(test_func_parser(
-            "func public %test(v0.**i32) -> **i32:
+            "func public %test(v0.*i32, v1.*[*i64; 10]) -> *i32:
     block0:
-        v1.*i32 = gep v0 10.i32;
+        v2.*i32 = gep v0 10.i32;
+        v3.**i64 = gep v1 10.i32;
         return v1;"
         ));
     }
