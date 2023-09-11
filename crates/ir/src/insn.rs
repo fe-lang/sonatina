@@ -289,7 +289,8 @@ impl InsnData {
 
             Self::Call { args, .. }
             | Self::BrTable { args, .. }
-            | Self::Phi { values: args, .. } => args,
+            | Self::Phi { values: args, .. }
+            | Self::Gep { args } => args,
 
             Self::Return { args } => args.as_ref().map(core::slice::from_ref).unwrap_or_default(),
 
@@ -308,7 +309,8 @@ impl InsnData {
 
             Self::Call { args, .. }
             | Self::BrTable { args, .. }
-            | Self::Phi { values: args, .. } => args,
+            | Self::Phi { values: args, .. }
+            | Self::Gep { args } => args,
 
             Self::Return { args } => args.as_mut().map(core::slice::from_mut).unwrap_or_default(),
 
