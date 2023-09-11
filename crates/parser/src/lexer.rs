@@ -223,6 +223,7 @@ impl<'a> Lexer<'a> {
     fn try_eat_opcode(&mut self) -> Option<Code> {
         try_eat_variant! {
             self,
+            (b"gep", Code::Gep),
             (b"not", Code::Not),
             (b"neg", Code::Neg),
             (b"add", Code::Add),
@@ -254,7 +255,6 @@ impl<'a> Lexer<'a> {
             (b"fallthrough", Code::FallThrough),
             (b"br_table", Code::BrTable),
             (b"br", Code::Br),
-            (b"gep", Code::Gep),
             (b"alloca", Code::Alloca),
             (b"return", Code::Return),
             (b"phi", Code::Phi),
