@@ -931,6 +931,17 @@ mod tests {
     }
 
     #[test]
+    fn test_gep() {
+        assert!(test_func_parser(
+            "func public %test(v0.*i32, v1.*[*i64; 10]) -> *i32:
+    block0:
+        v2.*i32 = gep v0 10.i32;
+        v3.**i64 = gep v1 10.i32;
+        return v1;"
+        ));
+    }
+
+    #[test]
     fn parser_with_phi() {
         assert!(test_func_parser(
             "func private %test_func() -> void:

@@ -289,7 +289,8 @@ impl InsnData {
 
             Self::Call { args, .. }
             | Self::BrTable { args, .. }
-            | Self::Phi { values: args, .. } => args,
+            | Self::Phi { values: args, .. }
+            | Self::Gep { args } => args,
 
             Self::Return { args } => args.as_ref().map(core::slice::from_ref).unwrap_or_default(),
 
@@ -308,7 +309,8 @@ impl InsnData {
 
             Self::Call { args, .. }
             | Self::BrTable { args, .. }
-            | Self::Phi { values: args, .. } => args,
+            | Self::Phi { values: args, .. }
+            | Self::Gep { args } => args,
 
             Self::Return { args } => args.as_mut().map(core::slice::from_mut).unwrap_or_default(),
 
@@ -768,13 +770,18 @@ fn get_gep_result_type(dfg: &DataFlowGraph, base: Value, indices: &[Value]) -> T
     });
 
     let mut result_ty = base_ty;
-    for &index in indices {
+    for (i, &index) in indices.iter().enumerate() {
         let Type::Compound(compound) = result_ty else {
-            unreachable!()
+            if indices.len() - i == 1 {
+                break;
+            } else {
+                unreachable!()
+            }
         };
 
         result_ty = ctx.with_ty_store(|s| match s.resolve_compound(compound) {
-            CompoundTypeData::Array { elem, .. } | CompoundTypeData::Ptr(elem) => *elem,
+            CompoundTypeData::Array { elem, .. } => *elem,
+            CompoundTypeData::Ptr(_) => result_ty,
             CompoundTypeData::Struct(s) => {
                 let index = match dfg.value_data(index) {
                     ValueData::Immediate { imm, .. } => imm.as_usize(),
