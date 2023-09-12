@@ -242,7 +242,7 @@ macro_rules! impl_from {
                 } else if val == <$ty>::MIN {
                     Self {
                         is_negative: true,
-                        abs: U256::one() << std::mem::size_of::<$ty>() * 8,
+                        abs: U256::one() << std::mem::size_of::<$ty>() * 8 - 1,
                     }
                 } else {
                     Self {
