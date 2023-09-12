@@ -238,9 +238,22 @@ impl<'a, 'b> FuncParser<'a, 'b> {
         inserter.func.sig.set_ret_ty(ret_ty);
         expect_token!(self.lexer, Token::Colon, ":")?;
 
+        let signature_line = self.lexer.line();
         self.parse_body(&mut inserter)?;
 
-        let func_ref = self.module_builder.declare_function(func.sig.clone());
+        let func_ref = match self.module_builder.get_func_ref(func.sig.name()) {
+            Some(declared) if self.module_builder.sig(declared) == &func.sig => declared,
+            Some(_) => {
+                return Err(Error::new(
+                    ErrorKind::SemanticError(
+                        "signature mismatch with the corresponding declared function".to_string(),
+                    ),
+                    signature_line,
+                ))
+            }
+            None => self.module_builder.declare_function(func.sig.clone()),
+        };
+
         std::mem::swap(&mut self.module_builder.funcs[func_ref], &mut func);
         Ok(Some(ParsedFunction { func_ref, comments }))
     }
