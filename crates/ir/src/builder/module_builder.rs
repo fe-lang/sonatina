@@ -39,6 +39,14 @@ impl ModuleBuilder {
         }
     }
 
+    pub fn sig(&self, func: FuncRef) -> &Signature {
+        &self.funcs[func].sig
+    }
+
+    pub fn get_func(&self, func: &str) -> Option<FuncRef> {
+        self.declared_funcs.get(func).copied()
+    }
+
     pub fn make_global(&self, global: GlobalVariableData) -> GlobalVariable {
         self.ctx.with_gv_store_mut(|s| s.make_gv(global))
     }
