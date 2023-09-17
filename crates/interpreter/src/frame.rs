@@ -2,7 +2,7 @@ use cranelift_entity::SecondaryMap;
 
 use sonatina_ir::{module::ModuleCtx, DataFlowGraph, Type, Value, I256};
 
-use crate::{types, value::EvalValue, ProgramCounter};
+use crate::{types, EvalValue, ProgramCounter};
 
 pub struct Frame {
     pub ret_addr: ProgramCounter,

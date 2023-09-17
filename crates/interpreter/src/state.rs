@@ -6,10 +6,10 @@ use std::{
 use sonatina_ir::{
     insn::{BinaryOp, CastOp, UnaryOp},
     module::FuncRef,
-    Block, DataLocationKind, Immediate, InsnData, Module, I256,
+    Block, DataLocationKind, Immediate, InsnData, Module,
 };
 
-use crate::{types, Frame, ProgramCounter};
+use crate::{types, EvalResult, Frame, ProgramCounter};
 
 pub struct State {
     module: Module,
@@ -34,7 +34,7 @@ impl State {
         }
     }
 
-    pub fn run(mut self) -> Option<I256> {
+    pub fn run(mut self) -> EvalResult {
         loop {
             if let Some(arg) = self.step() {
                 return arg;
@@ -42,7 +42,7 @@ impl State {
         }
     }
 
-    pub fn step(&mut self) -> Option<Option<I256>> {
+    pub fn step(&mut self) -> Option<EvalResult> {
         let frame = self.frames.last_mut().unwrap();
         let insn = self.pc.insn;
         let ctx = &self.module.ctx;
@@ -205,9 +205,8 @@ impl State {
                 None
             }
             Return { args } => {
-                let arg = args.map(|arg| frame.load(ctx, arg, dfg));
+                let mut frame = self.frames.pop().unwrap(); // pop returning frame
 
-                let frame = self.frames.pop().unwrap(); // pop returning frame
                 match self.frames.last_mut() {
                     Some(caller_frame) => {
                         // Function epilogue
@@ -215,15 +214,23 @@ impl State {
                         self.pc.resume_frame_at(frame.ret_addr);
 
                         let caller = &self.module.funcs[self.pc.func_ref];
-                        if let Some(lit) = arg {
+                        if let Some(arg) = *args {
+                            let arg_literal = frame.load(ctx, arg, dfg);
                             let v = caller.dfg.insn_result(self.pc.insn).unwrap();
-                            caller_frame.map(lit, v);
+                            caller_frame.map(arg_literal, v);
                         }
 
                         self.pc.next_insn(&caller.layout);
                         None
                     }
-                    None => Some(arg),
+                    None => {
+                        let Some(arg) = *args else {
+                            return Some(EvalResult::Void);
+                        };
+                        let arg_literal = frame.load(ctx, arg, dfg);
+                        let ty = dfg.value_ty(arg);
+                        Some(EvalResult::from_i256(ctx, arg_literal, ty))
+                    }
                 }
             }
             Gep { args } => {
@@ -259,7 +266,6 @@ impl State {
 
 #[cfg(test)]
 mod test {
-    use sonatina_ir::I256;
     use sonatina_parser::parser::Parser;
 
     use super::*;
@@ -288,7 +294,7 @@ mod test {
 
         let result = state.run();
 
-        assert_eq!(result.unwrap(), I256::all_one().neg());
+        assert_eq!(result.into_i32(), 1i32);
     }
 
     #[test]
@@ -309,7 +315,7 @@ mod test {
 
         let result = state.run();
 
-        assert_eq!(result.unwrap(), (-3).into());
+        assert_eq!(result.into_i16(), -3i16);
     }
 
     #[test]
@@ -327,9 +333,7 @@ mod test {
 
         let result = state.run();
 
-        const NEG_128: i16 = i16::from_be_bytes([0xff, 0x80]);
-
-        assert_eq!(result.unwrap(), NEG_128.into());
+        assert_eq!(result.into_i16(), -128i16);
     }
 
     #[test]
@@ -347,9 +351,7 @@ mod test {
 
         let elem_ptr = state.run();
 
-        let result = i16::from_be_bytes([0x0, 0x80]);
-
-        assert_eq!(elem_ptr.unwrap(), result.into());
+        assert_eq!(elem_ptr.into_i16(), 128i16);
     }
 
     #[test]
@@ -369,7 +371,7 @@ mod test {
 
         let data = state.run();
 
-        assert_eq!(data.unwrap(), 1.into());
+        assert_eq!(data.into_i32(), 1i32);
     }
 
     #[test]
@@ -396,7 +398,7 @@ mod test {
 
         let data = state.run();
 
-        assert_eq!(data.unwrap(), 0.into());
+        assert_eq!(data.into_i8(), 0i8);
     }
 
     #[test]
@@ -415,9 +417,9 @@ mod test {
 
         let state = parse_module_make_state(input);
 
-        let boolean = state.run().unwrap();
+        let boolean = state.run();
 
-        assert_eq!(boolean, I256::zero())
+        assert!(!boolean.into_bool())
     }
 
     #[test]
@@ -436,9 +438,9 @@ mod test {
 
         let state = parse_module_make_state(input);
 
-        let result = state.run().unwrap();
+        let result = state.run();
 
-        assert_eq!(result, 1.into());
+        assert_eq!(result.into_i8(), 1i8);
     }
 
     #[test]
@@ -459,9 +461,9 @@ mod test {
 
         let state = parse_module_make_state(input);
 
-        let result = state.run().unwrap();
+        let result = state.run();
 
-        assert_eq!(result, 2.into());
+        assert_eq!(result.into_i64(), 2i64);
     }
 
     #[test]
@@ -481,9 +483,9 @@ mod test {
 
         let state = parse_module_make_state(input);
 
-        let result = state.run().unwrap();
+        let result = state.run();
 
-        assert_eq!(result, (-1).into());
+        assert_eq!(result.into_i8(), -1i8);
     }
 
     #[test]
@@ -504,7 +506,7 @@ mod test {
 
         let elem_ptr = state.run();
 
-        assert_eq!(elem_ptr.unwrap(), 12.into());
+        assert_eq!(elem_ptr.into_usize(), 12usize);
     }
 
     #[test]
@@ -523,7 +525,7 @@ mod test {
 
         let arg = state.run();
 
-        assert!(arg.is_none());
+        arg.into_void();
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -543,7 +545,7 @@ mod test {
 
         let elem_ptr = state.run();
 
-        assert_eq!(elem_ptr.unwrap(), 16.into());
+        assert_eq!(elem_ptr.into_usize(), 16usize);
     }
 
     #[test]
@@ -564,6 +566,6 @@ mod test {
 
         let elem_ptr = state.run();
 
-        assert_eq!(elem_ptr.unwrap(), 11.into());
+        assert_eq!(elem_ptr.into_usize(), 11usize);
     }
 }
