@@ -1,6 +1,6 @@
 use cranelift_entity::SecondaryMap;
 
-use sonatina_ir::{module::ModuleCtx, DataFlowGraph, Function, Type, Value, I256};
+use sonatina_ir::{module::ModuleCtx, DataFlowGraph, Type, Value, I256};
 
 use crate::{types, value::EvalValue, ProgramCounter};
 
@@ -11,10 +11,14 @@ pub struct Frame {
 }
 
 impl Frame {
-    pub fn new(func: &Function, ret_addr: ProgramCounter, args: Vec<I256>) -> Self {
+    pub fn new(
+        ret_addr: ProgramCounter,
+        args: impl Iterator<Item = Value>,
+        arg_literals: impl Iterator<Item = I256>,
+    ) -> Self {
         let mut local_values = SecondaryMap::new();
-        for (v, literal_value) in func.arg_values.iter().zip(args.into_iter()) {
-            local_values[*v] = EvalValue::from_i256(literal_value)
+        for (v, literal_value) in args.zip(arg_literals) {
+            local_values[v] = EvalValue::from_i256(literal_value)
         }
         let alloca_region = Vec::new();
 

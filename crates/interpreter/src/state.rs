@@ -1,4 +1,7 @@
-use std::ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Sub};
+use std::{
+    iter,
+    ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Sub},
+};
 
 use sonatina_ir::{
     insn::{BinaryOp, CastOp, UnaryOp},
@@ -19,7 +22,8 @@ impl State {
     pub fn new(module: Module, entry_func: FuncRef) -> Self {
         let func = &module.funcs[entry_func];
         let pc = ProgramCounter::new(entry_func, &func.layout);
-        let entry_frame = Frame::new(func, pc, vec![]);
+        debug_assert!(func.arg_values.is_empty());
+        let entry_frame = Frame::new(pc, iter::empty(), iter::empty());
         let frames = vec![entry_frame];
 
         Self {
@@ -142,18 +146,16 @@ impl State {
                 None
             }
             Call { func, args, .. } => {
-                let mut literal_args = Vec::with_capacity(args.len());
-                for arg in args {
-                    let arg = frame.load(ctx, *arg, dfg);
-                    literal_args.push(arg)
-                }
+                let arg_literals = args.iter().map(|arg| frame.load(ctx, *arg, dfg));
 
                 // Function prologue
 
                 let ret_addr = self.pc;
 
                 let callee = &self.module.funcs[*func];
-                let new_frame = Frame::new(callee, ret_addr, literal_args);
+                debug_assert!(callee.arg_values.len() == args.len());
+                let new_frame =
+                    Frame::new(ret_addr, callee.arg_values.iter().copied(), arg_literals);
                 self.frames.push(new_frame);
 
                 self.pc.call(*func, &callee.layout);
