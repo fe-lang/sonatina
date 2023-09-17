@@ -52,7 +52,7 @@ impl State {
         use InsnData::*;
         match insn_data {
             Unary { code, args } => {
-                let arg = frame.load(args[0], dfg);
+                let arg = frame.load(ctx, args[0], dfg);
                 use UnaryOp::*;
                 let result = match code {
                     Not => arg.not(),
@@ -65,8 +65,8 @@ impl State {
                 None
             }
             Binary { code, args } => {
-                let lhs: Immediate = frame.load(args[0], dfg).into();
-                let rhs: Immediate = frame.load(args[1], dfg).into();
+                let lhs: Immediate = frame.load(ctx, args[0], dfg).into();
+                let rhs: Immediate = frame.load(ctx, args[1], dfg).into();
                 use BinaryOp::*;
                 let result = match code {
                     Add => lhs.add(rhs),
@@ -96,7 +96,7 @@ impl State {
                 None
             }
             Cast { code, args, .. } => {
-                let arg = frame.load(args[0], dfg);
+                let arg = frame.load(ctx, args[0], dfg);
                 use CastOp::*;
                 let result = match code {
                     Zext => arg.neg(),
@@ -135,7 +135,7 @@ impl State {
             Call { func, args, .. } => {
                 let mut literal_args = Vec::with_capacity(args.len());
                 for arg in args {
-                    let arg = frame.load(*arg, dfg);
+                    let arg = frame.load(ctx, *arg, dfg);
                     literal_args.push(arg)
                 }
 
@@ -158,7 +158,7 @@ impl State {
                 None
             }
             Branch { args, dests } => {
-                let arg = frame.load(args[0], dfg);
+                let arg = frame.load(ctx, args[0], dfg);
                 let idx = arg.not().to_u256().as_usize();
 
                 let block = layout.insn_block(insn);
@@ -176,7 +176,7 @@ impl State {
 
                 let cond = args[0];
                 for (idx, arg) in args[1..].iter().enumerate() {
-                    if frame.eq(cond, *arg, dfg) {
+                    if frame.eq(ctx, cond, *arg, dfg) {
                         self.pc.branch_to(table[idx], layout);
                         return None;
                     }
@@ -193,7 +193,7 @@ impl State {
                 None
             }
             Return { args } => {
-                let arg = args.map(|arg| frame.load(arg, dfg));
+                let arg = args.map(|arg| frame.load(ctx, arg, dfg));
 
                 let frame = self.frames.pop().unwrap(); // pop returning frame
                 match self.frames.last_mut() {
@@ -225,7 +225,7 @@ impl State {
                 let prev_block = self.prev_block.unwrap();
                 for (v, block) in values.iter().zip(blocks.iter()) {
                     if prev_block == *block {
-                        let lit = frame.load(*v, dfg);
+                        let lit = frame.load(ctx, *v, dfg);
                         frame.map(lit, insn, dfg);
                         break;
                     }

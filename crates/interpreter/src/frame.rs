@@ -5,7 +5,7 @@ use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     module::ModuleCtx,
     types::{CompoundType, CompoundTypeData},
-    DataFlowGraph, Function, Insn, Type, Value, ValueData, I256,
+    DataFlowGraph, Function, Insn, Type, Value, I256,
 };
 
 use crate::{value::EvalValue, ProgramCounter};
@@ -31,18 +31,15 @@ impl Frame {
         }
     }
 
-    pub fn load(&mut self, /*ctx: Context,*/ v: Value, dfg: &DataFlowGraph) -> I256 {
+    pub fn load(&mut self, ctx: &ModuleCtx, v: Value, dfg: &DataFlowGraph) -> I256 {
         if !self.is_assigned(v) {
-            let v = match dfg.value_data(v) {
-                ValueData::Insn { insn, .. } => {
-                    let result_v = dfg.insn_result(*insn).unwrap();
-                    if self.is_assigned(result_v) {
-                        return self.local_values[result_v].i256();
+            if let Some(gv) = dfg.value_gv(v) {
+                ctx.with_gv_store(|s| {
+                    if !s.is_const(gv) {
+                        todo!()
                     }
-                    result_v
-                }
-                _ => v,
-            };
+                })
+            }
             let i256 = dfg.value_imm(v).unwrap().as_i256();
             self.local_values[v] = EvalValue::from_i256(i256);
         }
@@ -71,7 +68,7 @@ impl Frame {
 
     pub fn gep(&mut self, ctx: &ModuleCtx, args: &[Value], dfg: &DataFlowGraph) -> I256 {
         let ptr_v = args[0];
-        let ptr = self.load(ptr_v, dfg);
+        let ptr = self.load(ctx, ptr_v, dfg);
         let base_addr = ptr.to_u256().as_usize();
         let ptr_ty = dfg.value_ty(ptr_v);
         debug_assert!(ctx.with_ty_store(|s| s.is_ptr(ptr_ty)));
@@ -83,7 +80,7 @@ impl Frame {
         let mut offset = 0usize;
 
         for arg in &args[1..] {
-            let index = self.load(*arg, dfg).to_u256().as_usize();
+            let index = self.load(ctx, *arg, dfg).to_u256().as_usize();
             let cmpd_ty_data = ctx.with_ty_store(|s| s.resolve_compound(cmpd_ty.unwrap()).clone());
             match cmpd_ty_data {
                 CompoundTypeData::Array { elem, .. } => {
@@ -103,7 +100,7 @@ impl Frame {
     }
 
     pub fn ldr(&mut self, ctx: &ModuleCtx, ptr: Value, insn: Insn, dfg: &DataFlowGraph) {
-        let addr = self.load(ptr, dfg).to_u256().as_usize();
+        let addr = self.load(ctx, ptr, dfg).to_u256().as_usize();
         debug_assert!(self.is_alloca(addr));
 
         let ty = dfg.insn_result_ty(insn).unwrap();
@@ -119,8 +116,8 @@ impl Frame {
     }
 
     pub fn str(&mut self, ctx: &ModuleCtx, ptr: Value, v: Value, dfg: &DataFlowGraph) {
-        let addr = self.load(ptr, dfg).to_u256().as_usize();
-        let data = self.load(v, dfg);
+        let addr = self.load(ctx, ptr, dfg).to_u256().as_usize();
+        let data = self.load(ctx, v, dfg);
         let data_ty = dfg.value_ty(v);
         let data_b = EvalValue::from_i256(data).serialize(ctx, data_ty);
         for (i, b) in data_b.into_iter().enumerate() {
@@ -128,8 +125,8 @@ impl Frame {
         }
     }
 
-    pub fn eq(&mut self, lhs: Value, rhs: Value, dfg: &DataFlowGraph) -> bool {
-        self.load(lhs, dfg) == self.load(rhs, dfg)
+    pub fn eq(&mut self, ctx: &ModuleCtx, lhs: Value, rhs: Value, dfg: &DataFlowGraph) -> bool {
+        self.load(ctx, lhs, dfg) == self.load(ctx, rhs, dfg)
     }
 
     pub fn is_assigned(&self, v: Value) -> bool {
