@@ -34,7 +34,7 @@ impl State {
         }
     }
 
-    pub fn repl(mut self) -> Option<I256> {
+    pub fn run(mut self) -> Option<I256> {
         loop {
             if let Some(arg) = self.step() {
                 return arg;
@@ -286,7 +286,7 @@ mod test {
 
         let state = parse_module_make_state(input);
 
-        let result = state.repl();
+        let result = state.run();
 
         assert_eq!(result.unwrap(), I256::all_one().neg());
     }
@@ -307,7 +307,7 @@ mod test {
 
         let state = parse_module_make_state(input);
 
-        let result = state.repl();
+        let result = state.run();
 
         assert_eq!(result.unwrap(), (-3).into());
     }
@@ -325,7 +325,7 @@ mod test {
 
         let state = parse_module_make_state(input);
 
-        let result = state.repl();
+        let result = state.run();
 
         const NEG_128: i16 = i16::from_be_bytes([0xff, 0x80]);
 
@@ -345,7 +345,7 @@ mod test {
 
         let state = parse_module_make_state(input);
 
-        let elem_ptr = state.repl();
+        let elem_ptr = state.run();
 
         let result = i16::from_be_bytes([0x0, 0x80]);
 
@@ -367,7 +367,7 @@ mod test {
 
         let state = parse_module_make_state(input);
 
-        let data = state.repl();
+        let data = state.run();
 
         assert_eq!(data.unwrap(), 1.into());
     }
@@ -394,7 +394,7 @@ mod test {
 
         let state = State::new(module, func_ref);
 
-        let data = state.repl();
+        let data = state.run();
 
         assert_eq!(data.unwrap(), 0.into());
     }
@@ -415,7 +415,7 @@ mod test {
 
         let state = parse_module_make_state(input);
 
-        let boolean = state.repl().unwrap();
+        let boolean = state.run().unwrap();
 
         assert_eq!(boolean, I256::zero())
     }
@@ -436,7 +436,7 @@ mod test {
 
         let state = parse_module_make_state(input);
 
-        let result = state.repl().unwrap();
+        let result = state.run().unwrap();
 
         assert_eq!(result, 1.into());
     }
@@ -459,7 +459,7 @@ mod test {
 
         let state = parse_module_make_state(input);
 
-        let result = state.repl().unwrap();
+        let result = state.run().unwrap();
 
         assert_eq!(result, 2.into());
     }
@@ -481,7 +481,7 @@ mod test {
 
         let state = parse_module_make_state(input);
 
-        let result = state.repl().unwrap();
+        let result = state.run().unwrap();
 
         assert_eq!(result, (-1).into());
     }
@@ -502,7 +502,7 @@ mod test {
 
         let state = parse_module_make_state(input);
 
-        let elem_ptr = state.repl();
+        let elem_ptr = state.run();
 
         assert_eq!(elem_ptr.unwrap(), 12.into());
     }
@@ -521,7 +521,7 @@ mod test {
 
         let state = parse_module_make_state(input);
 
-        let arg = state.repl();
+        let arg = state.run();
 
         assert!(arg.is_none());
     }
@@ -541,7 +541,7 @@ mod test {
 
         let state = parse_module_make_state(input);
 
-        let elem_ptr = state.repl();
+        let elem_ptr = state.run();
 
         assert_eq!(elem_ptr.unwrap(), 16.into());
     }
@@ -562,7 +562,7 @@ mod test {
 
         let state = parse_module_make_state(input);
 
-        let elem_ptr = state.repl();
+        let elem_ptr = state.run();
 
         assert_eq!(elem_ptr.unwrap(), 11.into());
     }
