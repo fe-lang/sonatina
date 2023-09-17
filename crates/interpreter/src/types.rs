@@ -1,6 +1,10 @@
 use std::mem;
 
-use sonatina_ir::{I256, module::ModuleCtx, Type, types::{CompoundTypeData, CompoundType}};
+use sonatina_ir::{
+    module::ModuleCtx,
+    types::{CompoundType, CompoundTypeData},
+    Type, I256,
+};
 
 pub fn byte_size_of_ty(ctx: &ModuleCtx, ty: Type) -> usize {
     match ty {
@@ -33,14 +37,19 @@ fn to_cmpd_ty(ty: Type) -> Option<CompoundType> {
     }
 }
 
-pub fn gep(ctx: &ModuleCtx, base_addr: I256, ptr_ty: Type, args: &[I256]) -> I256 {
+pub fn gep(
+    ctx: &ModuleCtx,
+    base_addr: I256,
+    ptr_ty: Type,
+    args: impl Iterator<Item = I256>,
+) -> I256 {
     let pointee_ty = ctx.with_ty_store(|s| s.deref(ptr_ty)).unwrap();
     debug_assert!(!pointee_ty.is_integral() && !ctx.with_ty_store(|s| s.is_ptr(pointee_ty)));
     let mut cmpd_ty = to_cmpd_ty(pointee_ty);
 
     let mut offset = 0usize;
 
-    for arg in &args[1..] {
+    for arg in args {
         let index = arg.to_u256().as_usize();
         let cmpd_ty_data = ctx.with_ty_store(|s| s.resolve_compound(cmpd_ty.unwrap()).clone());
         match cmpd_ty_data {

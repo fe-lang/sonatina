@@ -6,7 +6,7 @@ use sonatina_ir::{
     Block, DataLocationKind, Immediate, InsnData, Module, I256,
 };
 
-use crate::{Frame, ProgramCounter};
+use crate::{types, Frame, ProgramCounter};
 
 pub struct State {
     module: Module,
@@ -59,7 +59,8 @@ impl State {
                     Neg => arg.neg(),
                 };
 
-                frame.map(result, insn, dfg);
+                let v = dfg.insn_result(insn).unwrap();
+                frame.map(result, v);
 
                 self.pc.next_insn(layout);
                 None
@@ -90,7 +91,8 @@ impl State {
                 }
                 .as_i256();
 
-                frame.map(result, insn, dfg);
+                let v = dfg.insn_result(insn).unwrap();
+                frame.map(result, v);
 
                 self.pc.next_insn(layout);
                 None
@@ -103,7 +105,8 @@ impl State {
                     Sext | Trunc | BitCast => arg,
                 };
 
-                frame.map(result, insn, dfg);
+                let v = dfg.insn_result(insn).unwrap();
+                frame.map(result, v);
 
                 self.pc.next_insn(layout);
                 None
@@ -112,7 +115,10 @@ impl State {
                 use DataLocationKind::*;
                 match loc {
                     Memory => {
-                        frame.ldr(ctx, args[0], insn, dfg);
+                        let addr = frame.load(ctx, args[0], dfg);
+                        let v = dfg.insn_result(insn).unwrap();
+                        let ty = dfg.insn_result_ty(insn).unwrap();
+                        frame.ldr(ctx, addr, v, ty);
                     }
                     Storage => todo!(),
                 }
@@ -124,7 +130,10 @@ impl State {
                 use DataLocationKind::*;
                 match loc {
                     Memory => {
-                        frame.str(ctx, args[0], args[1], dfg);
+                        let addr = frame.load(ctx, args[0], dfg);
+                        let data = frame.load(ctx, args[1], dfg);
+                        let ty = dfg.value_ty(args[1]);
+                        frame.str(ctx, addr, data, ty);
                     }
                     Storage => todo!(),
                 }
@@ -187,7 +196,8 @@ impl State {
                 None
             }
             Alloca { ty } => {
-                frame.alloca(ctx, *ty, insn, dfg);
+                let v = dfg.insn_result(insn).unwrap();
+                frame.alloca(ctx, *ty, v);
 
                 self.pc.next_insn(layout);
                 None
@@ -204,7 +214,8 @@ impl State {
 
                         let caller = &self.module.funcs[self.pc.func_ref];
                         if let Some(lit) = arg {
-                            caller_frame.map(lit, self.pc.insn, &caller.dfg);
+                            let v = caller.dfg.insn_result(self.pc.insn).unwrap();
+                            caller_frame.map(lit, v);
                         }
 
                         self.pc.next_insn(&caller.layout);
@@ -214,9 +225,15 @@ impl State {
                 }
             }
             Gep { args } => {
-                let ptr = frame.gep(ctx, args, dfg);
+                let mut arg_literals = args.iter().map(|arg| frame.load(ctx, *arg, dfg));
+                let base_addr = arg_literals.next().unwrap();
+                let ty = dfg.value_ty(args[0]);
+                debug_assert!(ctx.with_ty_store(|s| s.is_ptr(ty)));
 
-                frame.map(ptr, insn, dfg);
+                let elem_ptr = types::gep(ctx, base_addr, ty, arg_literals);
+
+                let v = dfg.insn_result(insn).unwrap();
+                frame.map(elem_ptr, v);
 
                 self.pc.next_insn(layout);
                 None
@@ -226,7 +243,8 @@ impl State {
                 for (v, block) in values.iter().zip(blocks.iter()) {
                     if prev_block == *block {
                         let lit = frame.load(ctx, *v, dfg);
-                        frame.map(lit, insn, dfg);
+                        let v = dfg.insn_result(insn).unwrap();
+                        frame.map(lit, v);
                         break;
                     }
                 }
