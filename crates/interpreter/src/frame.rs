@@ -1,31 +1,28 @@
-use cranelift_entity::SecondaryMap;
+use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 
 use sonatina_ir::{module::ModuleCtx, DataFlowGraph, Type, Value, I256};
 
 use crate::{types, EvalValue, ProgramCounter};
 
+#[derive(Default)]
 pub struct Frame {
-    pub ret_addr: ProgramCounter,
+    pub ret_addr: PackedOption<ProgramCounter>,
     local_values: SecondaryMap<Value, EvalValue>, // 256-bit register
     alloca_region: Vec<u8>,                       // big endian
 }
 
 impl Frame {
-    pub fn new(
-        ret_addr: ProgramCounter,
-        args: impl Iterator<Item = Value>,
-        arg_literals: impl Iterator<Item = I256>,
-    ) -> Self {
-        let mut local_values = SecondaryMap::new();
-        for (v, literal_value) in args.zip(arg_literals) {
-            local_values[v] = EvalValue::from_i256(literal_value)
-        }
-        let alloca_region = Vec::new();
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-        Self {
-            ret_addr,
-            local_values,
-            alloca_region,
+    pub fn set_ret_addr(&mut self, ret_addr: ProgramCounter) {
+        self.ret_addr = ret_addr.into();
+    }
+
+    pub fn load_args(&mut self, args: &[Value], arg_literals: impl Iterator<Item = I256>) {
+        for (v, literal_value) in args.iter().zip(arg_literals) {
+            self.local_values[*v] = EvalValue::from_i256(literal_value)
         }
     }
 

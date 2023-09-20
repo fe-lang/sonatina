@@ -1,12 +1,9 @@
-use std::{
-    iter,
-    ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Sub},
-};
+use std::ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Sub};
 
 use sonatina_ir::{
     insn::{BinaryOp, CastOp, UnaryOp},
     module::FuncRef,
-    Block, DataLocationKind, Immediate, InsnData, Module,
+    Block, DataLocationKind, Immediate, InsnData, Module, Value,
 };
 
 use crate::{types, EvalResult, Frame, ProgramCounter};
@@ -19,11 +16,15 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(module: Module, entry_func: FuncRef) -> Self {
+    pub fn new(module: Module, entry_func: FuncRef, args: &[Value]) -> Self {
         let func = &module.funcs[entry_func];
         let pc = ProgramCounter::new(entry_func, &func.layout);
-        debug_assert!(func.arg_values.is_empty());
-        let entry_frame = Frame::new(pc, iter::empty(), iter::empty());
+
+        let mut entry_frame = Frame::new();
+        debug_assert!(func.arg_values.len() == args.len());
+        for arg in args {
+            entry_frame.load(&module.ctx, *arg, &func.dfg);
+        }
         let frames = vec![entry_frame];
 
         Self {
@@ -153,9 +154,10 @@ impl State {
                 let ret_addr = self.pc;
 
                 let callee = &self.module.funcs[*func];
+                let mut new_frame = Frame::new();
                 debug_assert!(callee.arg_values.len() == args.len());
-                let new_frame =
-                    Frame::new(ret_addr, callee.arg_values.iter().copied(), arg_literals);
+                new_frame.load_args(&callee.arg_values, arg_literals);
+                new_frame.set_ret_addr(ret_addr);
                 self.frames.push(new_frame);
 
                 self.pc.call(*func, &callee.layout);
@@ -211,7 +213,7 @@ impl State {
                     Some(caller_frame) => {
                         // Function epilogue
 
-                        self.pc.resume_frame_at(frame.ret_addr);
+                        self.pc.resume_frame_at(frame.ret_addr.unwrap());
 
                         let caller = &self.module.funcs[self.pc.func_ref];
                         if let Some(arg) = *args {
@@ -275,7 +277,7 @@ mod test {
         let module = parser.parse(input).unwrap().module;
         let func_ref = module.iter_functions().next().unwrap();
 
-        State::new(module, func_ref)
+        State::new(module, func_ref, &[])
     }
 
     #[test]
@@ -394,7 +396,7 @@ mod test {
         let module = parser.parse(input).unwrap().module;
         let func_ref = module.iter_functions().nth(1).unwrap();
 
-        let state = State::new(module, func_ref);
+        let state = State::new(module, func_ref, &[]);
 
         let data = state.run();
 

@@ -1,9 +1,22 @@
+use cranelift_entity::packed_option::ReservedValue;
 use sonatina_ir::{module::FuncRef, Block, Insn, Layout};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProgramCounter {
     pub func_ref: FuncRef,
     pub insn: Insn,
+}
+
+impl ReservedValue for ProgramCounter {
+    fn reserved_value() -> Self {
+        let func_ref = FuncRef::reserved_value();
+        let insn = Insn::reserved_value();
+        ProgramCounter { func_ref, insn }
+    }
+
+    fn is_reserved_value(&self) -> bool {
+        self.func_ref == FuncRef::reserved_value() && self.insn == Insn::reserved_value()
+    }
 }
 
 impl ProgramCounter {
