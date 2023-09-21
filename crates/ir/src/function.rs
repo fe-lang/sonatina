@@ -90,18 +90,18 @@ impl Signature {
     }
 }
 
-pub struct DisplaySignature<'a> {
+pub struct DisplaySignature<'a, 'b> {
     sig: &'a Signature,
-    dfg: &'a DataFlowGraph,
+    dfg: &'b DataFlowGraph,
 }
 
-impl<'a> DisplaySignature<'a> {
-    pub fn new(sig: &'a Signature, dfg: &'a DataFlowGraph) -> Self {
+impl<'a, 'b> DisplaySignature<'a, 'b> {
+    pub fn new(sig: &'a Signature, dfg: &'b DataFlowGraph) -> Self {
         Self { sig, dfg }
     }
 }
 
-impl<'a> fmt::Display for DisplaySignature<'a> {
+impl<'a, 'b> fmt::Display for DisplaySignature<'a, 'b> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let Self { sig, dfg } = *self;
         let Signature {
