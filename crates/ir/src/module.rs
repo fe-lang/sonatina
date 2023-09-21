@@ -91,12 +91,12 @@ pub struct FuncRef(u32);
 entity_impl!(FuncRef);
 
 pub struct DisplayCalleeFuncRef<'a> {
-    callee: &'a FuncRef,
+    callee: FuncRef,
     func: &'a Function,
 }
 
 impl<'a> DisplayCalleeFuncRef<'a> {
-    pub fn new(callee: &'a FuncRef, func: &'a Function) -> Self {
+    pub fn new(callee: FuncRef, func: &'a Function) -> Self {
         Self { callee, func }
     }
 }
@@ -104,7 +104,7 @@ impl<'a> DisplayCalleeFuncRef<'a> {
 impl<'a> fmt::Display for DisplayCalleeFuncRef<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let Self { callee, func } = *self;
-        let sig = func.callees.get(callee).unwrap();
+        let sig = func.callees.get(&callee).unwrap();
         write!(f, "{}", sig.name())
     }
 }
