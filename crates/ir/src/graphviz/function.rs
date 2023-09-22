@@ -2,7 +2,7 @@ use std::iter;
 
 use dot2::{label::Text, GraphWalk, Id, Labeller, Style};
 
-use crate::{value::DisplayArgValues, Block, ControlFlowGraph, Function, InsnData};
+use crate::{value::DisplayArgValue, Block, ControlFlowGraph, Function, InsnData};
 
 use super::block::BlockNode;
 
@@ -129,8 +129,8 @@ impl<'a> BlockEdge<'a> {
             if let InsnData::Phi { values, blocks, .. } = func.dfg.insn_data(insn) {
                 for (i, block) in blocks.into_iter().enumerate() {
                     if *block == from {
-                        let flow_arg = [values[i]];
-                        let v = DisplayArgValues::new(&flow_arg, &func.dfg);
+                        let flow_arg = values[i];
+                        let v = DisplayArgValue::new(flow_arg, &func.dfg);
                         return Text::LabelStr(format!("{v}").into());
                     }
                 }

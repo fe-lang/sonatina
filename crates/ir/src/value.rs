@@ -34,37 +34,42 @@ impl<'a> fmt::Display for DisplayResultValue<'a> {
     }
 }
 
-pub struct DisplayArgValues<'a, 'b> {
-    args: &'a [Value],
-    dfg: &'b DataFlowGraph,
+pub struct DisplayArgValue<'a> {
+    arg: Value,
+    dfg: &'a DataFlowGraph,
 }
 
-impl<'a, 'b> DisplayArgValues<'a, 'b> {
-    pub fn new(args: &'a [Value], dfg: &'b DataFlowGraph) -> Self {
-        Self { args, dfg }
+impl<'a> DisplayArgValue<'a> {
+    pub fn new(arg: Value, dfg: &'a DataFlowGraph) -> Self {
+        Self { arg, dfg }
     }
+}
 
-    pub fn write_arg<W: fmt::Write>(&self, w: &mut W, arg: &Value) -> fmt::Result {
-        let dfg = self.dfg;
-        match *dfg.value_data(*arg) {
+impl<'a> fmt::Display for DisplayArgValue<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { arg, dfg } = *self;
+        match *dfg.value_data(arg) {
             ValueData::Immediate { imm, ty } => {
                 let ty = DisplayType::new(ty, dfg);
-                write!(w, "{imm}.{ty}")
+                write!(f, "{imm}.{ty}")
             }
-            _ => write!(w, "v{}", arg.0),
+            _ => write!(f, "v{}", arg.0),
         }
     }
 }
 
-impl<'a, 'b> fmt::Display for DisplayArgValues<'a, 'b> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.write_arg(f, &self.args[0])?;
-        for arg in &self.args[1..] {
-            write!(f, " ")?;
-            self.write_arg(f, arg)?;
-        }
-        Ok(())
+pub fn display_arg_values(
+    f: &mut fmt::Formatter,
+    args: &[Value],
+    dfg: &DataFlowGraph,
+) -> fmt::Result {
+    let arg0 = DisplayArgValue::new(args[0], dfg);
+    write!(f, "{arg0}")?;
+    for arg in &args[1..] {
+        let arg = DisplayArgValue::new(*arg, dfg);
+        write!(f, " {arg}")?;
     }
+    Ok(())
 }
 
 /// An value data definition.
