@@ -23,7 +23,7 @@ impl State {
         let mut entry_frame = Frame::new();
         debug_assert!(func.arg_values.len() == args.len());
         for arg in args {
-            entry_frame.load(&module.ctx, *arg, &func.dfg);
+            entry_frame.load(*arg, &func.dfg);
         }
         let frames = vec![entry_frame];
 
@@ -57,7 +57,7 @@ impl State {
         use InsnData::*;
         match insn_data {
             Unary { code, args } => {
-                let arg = frame.load(ctx, args[0], dfg);
+                let arg = frame.load(args[0], dfg);
                 use UnaryOp::*;
                 let result = match code {
                     Not => arg.not(),
@@ -71,8 +71,8 @@ impl State {
                 None
             }
             Binary { code, args } => {
-                let lhs: Immediate = frame.load(ctx, args[0], dfg).into();
-                let rhs: Immediate = frame.load(ctx, args[1], dfg).into();
+                let lhs: Immediate = frame.load(args[0], dfg).into();
+                let rhs: Immediate = frame.load(args[1], dfg).into();
                 use BinaryOp::*;
                 let result = match code {
                     Add => lhs.add(rhs),
@@ -103,7 +103,7 @@ impl State {
                 None
             }
             Cast { code, args, .. } => {
-                let arg = frame.load(ctx, args[0], dfg);
+                let arg = frame.load(args[0], dfg);
                 use CastOp::*;
                 let result = match code {
                     Zext => arg.neg(),
@@ -120,7 +120,7 @@ impl State {
                 use DataLocationKind::*;
                 match loc {
                     Memory => {
-                        let addr = frame.load(ctx, args[0], dfg);
+                        let addr = frame.load(args[0], dfg);
                         let v = dfg.insn_result(insn).unwrap();
                         let ty = dfg.insn_result_ty(insn).unwrap();
                         frame.ldr(ctx, addr, v, ty);
@@ -135,8 +135,8 @@ impl State {
                 use DataLocationKind::*;
                 match loc {
                     Memory => {
-                        let addr = frame.load(ctx, args[0], dfg);
-                        let data = frame.load(ctx, args[1], dfg);
+                        let addr = frame.load(args[0], dfg);
+                        let data = frame.load(args[1], dfg);
                         let ty = dfg.value_ty(args[1]);
                         frame.str(ctx, addr, data, ty);
                     }
@@ -147,7 +147,7 @@ impl State {
                 None
             }
             Call { func, args, .. } => {
-                let arg_literals = args.iter().map(|arg| frame.load(ctx, *arg, dfg));
+                let arg_literals = args.iter().map(|arg| frame.load(*arg, dfg));
 
                 // Function prologue
 
@@ -171,7 +171,7 @@ impl State {
                 None
             }
             Branch { args, dests } => {
-                let arg = frame.load(ctx, args[0], dfg);
+                let arg = frame.load(args[0], dfg);
                 let idx = arg.not().to_u256().as_usize();
 
                 let block = layout.insn_block(insn);
@@ -189,7 +189,9 @@ impl State {
 
                 let cond = args[0];
                 for (idx, arg) in args[1..].iter().enumerate() {
-                    if frame.eq(ctx, cond, *arg, dfg) {
+                    let cond = frame.load(cond, dfg);
+                    let arg = frame.load(*arg, dfg);
+                    if cond == arg {
                         self.pc.branch_to(table[idx], layout);
                         return None;
                     }
@@ -217,7 +219,7 @@ impl State {
 
                         let caller = &self.module.funcs[self.pc.func_ref];
                         if let Some(arg) = *args {
-                            let arg_literal = frame.load(ctx, arg, dfg);
+                            let arg_literal = frame.load(arg, dfg);
                             let v = caller.dfg.insn_result(self.pc.insn).unwrap();
                             caller_frame.map(arg_literal, v);
                         }
@@ -229,14 +231,14 @@ impl State {
                         let Some(arg) = *args else {
                             return Some(EvalResult::Void);
                         };
-                        let arg_literal = frame.load(ctx, arg, dfg);
+                        let arg_literal = frame.load(arg, dfg);
                         let ty = dfg.value_ty(arg);
                         Some(EvalResult::from_i256(ctx, arg_literal, ty))
                     }
                 }
             }
             Gep { args } => {
-                let mut arg_literals = args.iter().map(|arg| frame.load(ctx, *arg, dfg));
+                let mut arg_literals = args.iter().map(|arg| frame.load(*arg, dfg));
                 let base_addr = arg_literals.next().unwrap();
                 let ty = dfg.value_ty(args[0]);
                 debug_assert!(ctx.with_ty_store(|s| s.is_ptr(ty)));
@@ -253,7 +255,7 @@ impl State {
                 let prev_block = self.prev_block.unwrap();
                 for (v, block) in values.iter().zip(blocks.iter()) {
                     if prev_block == *block {
-                        let lit = frame.load(ctx, *v, dfg);
+                        let lit = frame.load(*v, dfg);
                         let v = dfg.insn_result(insn).unwrap();
                         frame.map(lit, v);
                         break;

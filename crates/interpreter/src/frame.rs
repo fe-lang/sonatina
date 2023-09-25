@@ -26,10 +26,10 @@ impl Frame {
         }
     }
 
-    pub fn load(&mut self, ctx: &ModuleCtx, v: Value, dfg: &DataFlowGraph) -> I256 {
+    pub fn load(&mut self, v: Value, dfg: &DataFlowGraph) -> I256 {
         if !self.is_assigned(v) {
             if let Some(gv) = dfg.value_gv(v) {
-                ctx.with_gv_store(|s| {
+                dfg.ctx.with_gv_store(|s| {
                     if !s.is_const(gv) {
                         todo!()
                     }
@@ -78,10 +78,6 @@ impl Frame {
         for (i, b) in data_b.into_iter().enumerate() {
             self.alloca_region[addr + i] = b;
         }
-    }
-
-    pub fn eq(&mut self, ctx: &ModuleCtx, lhs: Value, rhs: Value, dfg: &DataFlowGraph) -> bool {
-        self.load(ctx, lhs, dfg) == self.load(ctx, rhs, dfg)
     }
 
     pub fn is_assigned(&self, v: Value) -> bool {
