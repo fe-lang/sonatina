@@ -8,7 +8,7 @@ use smallvec::SmallVec;
 use crate::{
     function::Function,
     types::{CompoundTypeData, DisplayType},
-    value::{DisplayArgValues, DisplayResultValue},
+    value::{display_arg_values, DisplayArgValue, DisplayResultValue},
 };
 
 use super::{
@@ -17,7 +17,7 @@ use super::{
 };
 
 /// An opaque reference to [`InsnData`]
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord, Default)]
 pub struct Insn(pub u32);
 cranelift_entity::entity_impl!(Insn);
 
@@ -441,84 +441,91 @@ impl<'a> fmt::Display for DisplayInsnData<'a> {
         let insn_data = dfg.insn_data(insn);
         match insn_data {
             Unary { code, args } => {
-                let v = DisplayArgValues::new(args, dfg);
-                write!(f, "{} {v};", code.as_str())
+                write!(f, "{} ", code.as_str())?;
+                display_arg_values(f, args, dfg)?;
+                ";".fmt(f)
             }
             Binary { code, args } => {
-                let v = DisplayArgValues::new(args, dfg);
-                write!(f, "{} {v};", code.as_str(),)
+                write!(f, "{} ", code.as_str())?;
+                display_arg_values(f, args, dfg)?;
+                ";".fmt(f)
             }
             Cast { code, args, .. } => {
-                let v = DisplayArgValues::new(args, dfg);
-                write!(f, "{} {v};", code.as_str())
+                write!(f, "{} ", code.as_str())?;
+                display_arg_values(f, args, dfg)?;
+                ";".fmt(f)
             }
             Load { args, loc } => {
-                let v = DisplayArgValues::new(args, dfg);
-                write!(f, "{loc} load {v};")
+                write!(f, "{loc} load ")?;
+                display_arg_values(f, args, dfg)?;
+                ";".fmt(f)
             }
             Store { args, loc } => {
-                let v = DisplayArgValues::new(args, dfg);
-                write!(f, "store {loc} {v};")
+                write!(f, "store {loc} ")?;
+                display_arg_values(f, args, dfg)?;
+                ";".fmt(f)
             }
             Call {
                 args, func: callee, ..
             } => {
-                let v = DisplayArgValues::new(args, dfg);
                 let callee = DisplayCalleeFuncRef::new(callee, func);
-                write!(f, "call %{callee} {v};")
+                write!(f, "call %{callee} ")?;
+                display_arg_values(f, args, dfg)?;
+                ";".fmt(f)
             }
             Jump { code, dests } => {
                 let block = dests[0];
                 write!(f, "{code} {block};")
             }
             Branch { args, dests } => {
-                let v = DisplayArgValues::new(args, dfg);
-                write!(f, "branch {v} {} {};", dests[0], dests[1])
+                "branch ".fmt(f)?;
+                display_arg_values(f, args, dfg)?;
+                write!(f, " {} {};", dests[0], dests[1])
             }
             BrTable {
                 args,
                 default,
                 table,
             } => {
-                let v = DisplayArgValues::new(args, dfg);
-                write!(f, "br_table {v}")?;
+                "br_table ".fmt(f)?;
+                display_arg_values(f, args, dfg)?;
                 if let Some(block) = default {
                     write!(f, " {block}")?;
                 }
-                for block in &table[..table.len() - 2] {
+                for block in table {
                     write!(f, " {block}")?;
                 }
-                write!(f, " {};", table[table.len() - 1])
+                ";".fmt(f)
             }
             Alloca { ty } => {
                 let ty = DisplayType::new(*ty, dfg);
                 write!(f, "alloca {ty};")
             }
             Return { args } => {
-                write!(f, "ret")?;
+                "ret".fmt(f)?;
                 if let Some(arg) = args {
-                    let arg = [*arg];
-                    let v = DisplayArgValues::new(&arg, dfg);
+                    let v = DisplayArgValue::new(*arg, dfg);
                     write!(f, " {v}")?;
                 }
-                write!(f, ";")
+                ";".fmt(f)
             }
             Gep { args } => {
-                let v = DisplayArgValues::new(args, dfg);
-                write!(f, "gep {v};")
+                "gep ".fmt(f)?;
+                display_arg_values(f, args, dfg)?;
+                ";".fmt(f)
             }
             Phi { values, blocks, .. } => {
-                write!(f, "phi")?;
+                "phi".fmt(f)?;
                 for (value, block) in values.iter().zip(blocks.iter()) {
-                    let value = [*value];
-                    let v = DisplayArgValues::new(&value, dfg);
+                    let v = DisplayArgValue::new(*value, dfg);
                     write!(f, " ({v} {block})")?;
                 }
-                write!(f, ";")
+                ";".fmt(f)
             }
         }
     }
 }
+
 /// Unary operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryOp {
