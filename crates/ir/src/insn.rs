@@ -468,7 +468,7 @@ impl<'a> fmt::Display for DisplayInsnData<'a> {
             Call {
                 args, func: callee, ..
             } => {
-                let callee = DisplayCalleeFuncRef::new(callee, func);
+                let callee = DisplayCalleeFuncRef::new(*callee, func);
                 write!(f, "call %{callee} ")?;
                 display_arg_values(f, args, dfg)?;
                 ";".fmt(f)
