@@ -1,0 +1,22 @@
+[package]
+name = "sonatina-interpreter"
+version = "0.0.3-alpha"
+edition = "2021"
+authors = ["Sonatina Developers"]
+license = "Apache-2.0"
+readme = "../../README.md"
+homepage = "https://github.com/fe-lang/sonatina/tree/main/crates/interpreter"
+repository = "https://github.com/fe-lang/sonatina"
+description = "Interpreter of sonatina intermediate representation"
+categories = ["compilers", "wasm"]
+keywords = ["compiler", "evm", "wasm", "smart-contract"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+byteorder = { version = "1.4.3", default-features = false }
+cranelift-entity = "0.100"
+sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
+
+[dev-dependencies]
+sonatina-parser = { path = "../parser", version = "0.0.3-alpha"  }

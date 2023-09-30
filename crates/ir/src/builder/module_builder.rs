@@ -60,6 +60,10 @@ impl ModuleBuilder {
             .with_ty_store_mut(|s| s.make_struct(name, fields, packed))
     }
 
+    pub fn declare_array_type(&mut self, elem: Type, len: usize) -> Type {
+        self.ctx.with_ty_store_mut(|s| s.make_array(elem, len))
+    }
+
     pub fn get_func_ref(&self, name: &str) -> Option<FuncRef> {
         self.declared_funcs.get(name).copied()
     }
