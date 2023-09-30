@@ -9,8 +9,10 @@ Sonatina is really early stage in development, so do NOT use it for production!
 `sonatina` consists of several crates.
 * `codegen`: The main crate of `sonatina`, providing builder for IR modules and functions, optimization passes, instruction selection DAG, and binary code emitting.
 * `filecheck`: Provides test runner for `filecheck` and test fixtures.
-* `parser`: Parser for `sonatina` IR, this is mainly for `filecheck` test.
+* `interpreter`: Interpreter for `sonatina` IR, this is mainly for testing transformation passes.
+* `ir`: `sonatina` intermediate representation.
 * `object`: Provides abstract object file format for linker.
+* `parser`: Parser for `sonatina` IR, this is mainly for `filecheck` test.
 * `triple`: Provides target triple for smart contracts.
 
 ## TODO
