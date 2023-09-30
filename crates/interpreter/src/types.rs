@@ -6,7 +6,7 @@ use sonatina_ir::{
     Type, I256,
 };
 
-pub fn byte_size_of_ty(ctx: &ModuleCtx, ty: Type) -> usize {
+pub fn size_of_ty_data(ctx: &ModuleCtx, ty: Type) -> usize {
     match ty {
         Type::I1 => mem::size_of::<bool>(),
         Type::I8 => mem::size_of::<i8>(),
@@ -14,15 +14,15 @@ pub fn byte_size_of_ty(ctx: &ModuleCtx, ty: Type) -> usize {
         Type::I32 => mem::size_of::<i32>(),
         Type::I64 => mem::size_of::<i64>(),
         Type::I128 => mem::size_of::<i128>(),
-        Type::I256 => mem::size_of::<I256>(),
+        Type::I256 => 32,
         Type::Compound(cmpd_ty) => {
             use CompoundTypeData::*;
             let cmpd_ty_data = ctx.with_ty_store(|s| s.resolve_compound(cmpd_ty).clone());
             match cmpd_ty_data {
-                Array { len, elem } => len * byte_size_of_ty(ctx, elem),
+                Array { len, elem } => len * size_of_ty_data(ctx, elem),
                 Ptr(_) => mem::size_of::<usize>(),
                 Struct(data) => data.fields.iter().fold(0usize, |acc, field_ty| {
-                    acc + byte_size_of_ty(ctx, *field_ty)
+                    acc + size_of_ty_data(ctx, *field_ty)
                 }),
             }
         }
@@ -54,12 +54,12 @@ pub fn gep(
         let cmpd_ty_data = ctx.with_ty_store(|s| s.resolve_compound(cmpd_ty.unwrap()).clone());
         match cmpd_ty_data {
             CompoundTypeData::Array { elem, .. } => {
-                offset += index * byte_size_of_ty(ctx, elem);
+                offset += index * size_of_ty_data(ctx, elem);
                 cmpd_ty = to_cmpd_ty(elem);
             }
             CompoundTypeData::Struct(data) => {
                 for ty in &data.fields[..index] {
-                    offset += byte_size_of_ty(ctx, *ty);
+                    offset += size_of_ty_data(ctx, *ty);
                 }
                 cmpd_ty = to_cmpd_ty(data.fields[index]);
             }

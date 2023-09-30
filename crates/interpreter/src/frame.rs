@@ -51,7 +51,7 @@ impl Frame {
 
         let addr = self.alloca_region.len();
 
-        let size = types::byte_size_of_ty(ctx, ty);
+        let size = types::size_of_ty_data(ctx, ty);
         self.alloca_region.resize(addr + size, 0);
         self.local_values[v] = EvalValue::from_usize(addr);
     }
@@ -60,7 +60,7 @@ impl Frame {
         let addr = addr.to_u256().as_usize();
         debug_assert!(addr < self.alloca_region.len());
 
-        let size = types::byte_size_of_ty(ctx, ty);
+        let size = types::size_of_ty_data(ctx, ty);
         let literal_b = &self.alloca_region[addr..addr + size];
         let Some(data) = EvalValue::deserialize(ctx, ty, literal_b) else {
             return;
@@ -70,7 +70,7 @@ impl Frame {
 
     pub fn str(&mut self, ctx: &ModuleCtx, addr: I256, data: I256, ty: Type) {
         let addr = addr.to_u256().as_usize();
-        let size = types::byte_size_of_ty(ctx, ty);
+        let size = types::size_of_ty_data(ctx, ty);
         let reg_value = EvalValue::from_i256(data);
         reg_value.serialize(ctx, ty, &mut self.alloca_region[addr..size]);
     }
