@@ -27,25 +27,31 @@ impl EvalValue {
     }
 
     pub fn deserialize(ctx: &ModuleCtx, ty: Type, b: &[u8]) -> Option<Self> {
+        macro_rules! from_be_bytes {
+            ($integral:ty) => {
+                <$integral>::from_be_bytes(b.try_into().unwrap()).into()
+            };
+        }
+
         Some(Self::Literal(match ty {
             Type::I1 => (b[0] & 0b1).into(),
-            Type::I8 => i8::from_be_bytes(b.try_into().unwrap()).into(),
-            Type::I16 => i16::from_be_bytes(b.try_into().unwrap()).into(),
-            Type::I32 => i32::from_be_bytes(b.try_into().unwrap()).into(),
-            Type::I64 => i64::from_be_bytes(b.try_into().unwrap()).into(),
-            Type::I128 => i128::from_be_bytes(b.try_into().unwrap()).into(),
+            Type::I8 => from_be_bytes!(i8),
+            Type::I16 => from_be_bytes!(i16),
+            Type::I32 => from_be_bytes!(i32),
+            Type::I64 => from_be_bytes!(i64),
+            Type::I128 => from_be_bytes!(i128),
             Type::I256 => I256::from_u256(U256::from_big_endian(b)),
             Type::Compound(ty) => {
                 debug_assert!(ctx.with_ty_store(|s| s.resolve_compound(ty).is_ptr()));
-                debug_assert!(b.len() == std::mem::size_of::<usize>());
-                U256::from(usize::from_be_bytes(b.try_into().unwrap())).into()
+                debug_assert!(b.len() == mem::size_of::<usize>());
+                from_be_bytes!(usize)
             }
             Type::Void => return None,
         }))
     }
 
     pub fn serialize(&self, ctx: &ModuleCtx, ty: Type, mut buff: &mut [u8]) {
-        macro_rules! write_be_bytes {
+        macro_rules! to_be_bytes {
             ($bytes:expr) => {{
                 let data = self.i256().trunc_to_i128();
                 buff.write_int128::<BigEndian>(data, $bytes).unwrap()
@@ -53,16 +59,16 @@ impl EvalValue {
         }
 
         match ty {
-            Type::I1 => write_be_bytes!(1),
-            Type::I8 => write_be_bytes!(1),
-            Type::I16 => write_be_bytes!(2),
-            Type::I32 => write_be_bytes!(4),
-            Type::I64 => write_be_bytes!(8),
-            Type::I128 => write_be_bytes!(16),
+            Type::I1 => to_be_bytes!(1),
+            Type::I8 => to_be_bytes!(1),
+            Type::I16 => to_be_bytes!(2),
+            Type::I32 => to_be_bytes!(4),
+            Type::I64 => to_be_bytes!(8),
+            Type::I128 => to_be_bytes!(16),
             Type::I256 => self.i256().to_u256().to_big_endian(buff),
             Type::Compound(ty) => {
                 debug_assert!(ctx.with_ty_store(|s| s.resolve_compound(ty).is_ptr()));
-                write_be_bytes!(mem::size_of::<usize>());
+                to_be_bytes!(mem::size_of::<usize>());
             }
             Type::Void => (),
         }
