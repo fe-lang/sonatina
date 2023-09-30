@@ -61,10 +61,7 @@ impl Frame {
         debug_assert!(addr < self.alloca_region.len());
 
         let size = types::byte_size_of_ty(ctx, ty);
-        let mut literal_b = Vec::new();
-        for b in &self.alloca_region[addr..addr + size] {
-            literal_b.push(*b)
-        }
+        let literal_b = &self.alloca_region[addr..addr + size];
         let Some(data) = EvalValue::deserialize(ctx, ty, literal_b) else {
             return;
         };
@@ -73,10 +70,9 @@ impl Frame {
 
     pub fn str(&mut self, ctx: &ModuleCtx, addr: I256, data: I256, ty: Type) {
         let addr = addr.to_u256().as_usize();
-        let data_b = EvalValue::from_i256(data).serialize(ctx, ty);
-        for (i, b) in data_b.into_iter().enumerate() {
-            self.alloca_region[addr + i] = b;
-        }
+        let size = types::byte_size_of_ty(ctx, ty);
+        let reg_value = EvalValue::from_i256(data);
+        reg_value.serialize(ctx, ty, &mut self.alloca_region[addr..size]);
     }
 
     pub fn is_assigned(&self, v: Value) -> bool {

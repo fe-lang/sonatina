@@ -1,3 +1,6 @@
+use std::mem;
+
+use byteorder::{BigEndian, WriteBytesExt};
 use sonatina_ir::{module::ModuleCtx, Type, I256, U256};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -23,7 +26,7 @@ impl EvalValue {
         i256
     }
 
-    pub fn deserialize(ctx: &ModuleCtx, ty: Type, b: Vec<u8>) -> Option<Self> {
+    pub fn deserialize(ctx: &ModuleCtx, ty: Type, b: &[u8]) -> Option<Self> {
         Some(Self::Literal(match ty {
             Type::I1 => (b[0] & 0b1).into(),
             Type::I8 => i8::from_be_bytes(b.try_into().unwrap()).into(),
@@ -31,7 +34,7 @@ impl EvalValue {
             Type::I32 => i32::from_be_bytes(b.try_into().unwrap()).into(),
             Type::I64 => i64::from_be_bytes(b.try_into().unwrap()).into(),
             Type::I128 => i128::from_be_bytes(b.try_into().unwrap()).into(),
-            Type::I256 => I256::from_u256(U256::from_big_endian(&b)),
+            Type::I256 => I256::from_u256(U256::from_big_endian(b)),
             Type::Compound(ty) => {
                 debug_assert!(ctx.with_ty_store(|s| s.resolve_compound(ty).is_ptr()));
                 debug_assert!(b.len() == std::mem::size_of::<usize>());
@@ -41,26 +44,27 @@ impl EvalValue {
         }))
     }
 
-    pub fn serialize(&self, ctx: &ModuleCtx, ty: Type) -> Vec<u8> {
+    pub fn serialize(&self, ctx: &ModuleCtx, ty: Type, mut buff: &mut [u8]) {
+        macro_rules! write_be_bytes {
+            ($bytes:expr) => {{
+                let data = self.i256().trunc_to_i128();
+                buff.write_int128::<BigEndian>(data, $bytes).unwrap()
+            }};
+        }
+
         match ty {
-            Type::I1 => self.i256().trunc_to_i8().to_be_bytes().to_vec(),
-            Type::I8 => self.i256().trunc_to_i8().to_be_bytes().to_vec(),
-            Type::I16 => self.i256().trunc_to_i16().to_be_bytes().to_vec(),
-            Type::I32 => self.i256().trunc_to_i32().to_be_bytes().to_vec(),
-            Type::I64 => self.i256().trunc_to_i64().to_be_bytes().to_vec(),
-            Type::I128 => self.i256().trunc_to_i128().to_be_bytes().to_vec(),
-            Type::I256 => {
-                let mut b = [0u8; 32];
-                self.i256().to_u256().to_big_endian(&mut b);
-                b.to_vec()
-            }
+            Type::I1 => write_be_bytes!(1),
+            Type::I8 => write_be_bytes!(1),
+            Type::I16 => write_be_bytes!(2),
+            Type::I32 => write_be_bytes!(4),
+            Type::I64 => write_be_bytes!(8),
+            Type::I128 => write_be_bytes!(16),
+            Type::I256 => self.i256().to_u256().to_big_endian(buff),
             Type::Compound(ty) => {
                 debug_assert!(ctx.with_ty_store(|s| s.resolve_compound(ty).is_ptr()));
-                let mut b = [0u8; 32];
-                self.i256().to_u256().to_big_endian(&mut b);
-                b[32 - std::mem::size_of::<usize>()..].to_vec()
+                write_be_bytes!(mem::size_of::<usize>());
             }
-            Type::Void => Vec::new(),
+            Type::Void => (),
         }
     }
 }
