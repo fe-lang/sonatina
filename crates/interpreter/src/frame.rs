@@ -51,9 +51,8 @@ impl Frame {
 
         let addr = self.alloca_region.len();
 
-        for _ in 0..types::byte_size_of_ty(ctx, ty) {
-            self.alloca_region.push(0u8);
-        }
+        let size = types::byte_size_of_ty(ctx, ty);
+        self.alloca_region.resize(addr + size, 0);
         self.local_values[v] = EvalValue::from_usize(addr);
     }
 
