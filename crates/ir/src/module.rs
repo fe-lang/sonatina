@@ -1,6 +1,6 @@
 use std::{
     fmt,
-    sync::{Arc, Mutex},
+    sync::{Arc, RwLock},
 };
 
 use cranelift_entity::{entity_impl, PrimaryMap};
@@ -43,17 +43,17 @@ impl Module {
 pub struct ModuleCtx {
     pub isa: TargetIsa,
     // TODO: Consider using `RwLock` instead of `Mutex`.
-    type_store: Arc<Mutex<TypeStore>>,
+    type_store: Arc<RwLock<TypeStore>>,
     // TODO: Consider using `RwLock` instead of `Mutex`.
-    gv_store: Arc<Mutex<GlobalVariableStore>>,
+    gv_store: Arc<RwLock<GlobalVariableStore>>,
 }
 
 impl ModuleCtx {
     pub fn new(isa: TargetIsa) -> Self {
         Self {
             isa,
-            type_store: Arc::new(Mutex::new(TypeStore::default())),
-            gv_store: Arc::new(Mutex::new(GlobalVariableStore::default())),
+            type_store: Arc::new(RwLock::new(TypeStore::default())),
+            gv_store: Arc::new(RwLock::new(GlobalVariableStore::default())),
         }
     }
 
@@ -61,28 +61,28 @@ impl ModuleCtx {
     where
         F: FnOnce(&TypeStore) -> R,
     {
-        f(&self.type_store.lock().unwrap())
+        f(&self.type_store.read().unwrap())
     }
 
     pub fn with_ty_store_mut<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut TypeStore) -> R,
     {
-        f(&mut self.type_store.lock().unwrap())
+        f(&mut self.type_store.write().unwrap())
     }
 
     pub fn with_gv_store<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&GlobalVariableStore) -> R,
     {
-        f(&self.gv_store.lock().unwrap())
+        f(&self.gv_store.read().unwrap())
     }
 
     pub fn with_gv_store_mut<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut GlobalVariableStore) -> R,
     {
-        f(&mut self.gv_store.lock().unwrap())
+        f(&mut self.gv_store.write().unwrap())
     }
 }
 

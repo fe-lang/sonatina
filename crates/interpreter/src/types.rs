@@ -17,14 +17,13 @@ pub fn size_of_ty_data(ctx: &ModuleCtx, ty: Type) -> usize {
         Type::I256 => 32,
         Type::Compound(cmpd_ty) => {
             use CompoundTypeData::*;
-            let cmpd_ty_data = ctx.with_ty_store(|s| s.resolve_compound(cmpd_ty).clone());
-            match cmpd_ty_data {
-                Array { len, elem } => len * size_of_ty_data(ctx, elem),
+            ctx.with_ty_store(|s| match s.resolve_compound(cmpd_ty) {
+                Array { len, elem } => len * size_of_ty_data(ctx, *elem),
                 Ptr(_) => mem::size_of::<usize>(),
                 Struct(data) => data.fields.iter().fold(0usize, |acc, field_ty| {
                     acc + size_of_ty_data(ctx, *field_ty)
                 }),
-            }
+            })
         }
         Type::Void => mem::size_of::<()>(),
     }
