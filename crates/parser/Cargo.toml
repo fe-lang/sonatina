@@ -17,4 +17,4 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
 sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
 smallvec = "1.7.0"
-cranelift-entity = "0.101"
+cranelift-entity = "0.103"
