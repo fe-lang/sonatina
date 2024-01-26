@@ -15,7 +15,7 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 
 [dependencies]
 byteorder = { version = "1.4.3", default-features = false }
-cranelift-entity = "0.101"
+cranelift-entity = "0.104"
 sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
 
 [dev-dependencies]
