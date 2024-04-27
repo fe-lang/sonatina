@@ -2,6 +2,7 @@ use dir_test::{dir_test, Fixture};
 use sonatina_codegen::{
     cfg::ControlFlowGraph,
     critical_edge::CriticalEdgeSplitter,
+    domtree::DomTree,
     isa::evm::{opcode::OpCode, EvmBackend},
     liveness::Liveness,
     machinst::{lower::Lower, vcode::VCode},
@@ -92,7 +93,9 @@ fn vcode_for_fn(function: &mut Function) -> VCode<OpCode> {
 
     let mut liveness = Liveness::new();
     liveness.compute(function, &cfg);
-    let mut alloc = SimpleAlloc::for_function(function, &cfg, &liveness, 16);
+    let mut dom = DomTree::new();
+    dom.compute(&cfg);
+    let mut alloc = SimpleAlloc::for_function(function, &cfg, &dom, &liveness, 16);
     let lower = Lower::new(function);
     let backend = EvmBackend::default();
 

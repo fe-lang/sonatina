@@ -71,6 +71,11 @@ impl<'a, Op: Default> Lower<'a, Op> {
         self.add_immediate(i, bytes);
     }
 
+    pub fn push_jump_target(&mut self, op: Op, dest: Label) {
+        let op = self.push(op);
+        self.add_jump_fixup_inst(op, dest);
+    }
+
     pub fn next_insn(&self) -> VCodeInst {
         self.vcode.insts.next_key()
     }

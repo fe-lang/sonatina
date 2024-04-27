@@ -21,9 +21,6 @@
 //! their associated predecessor blocks, *not* by the block containing the phi.
 //! The result of a phi instruction is live-in for the block containing the phi,
 //! but *not* live-out for the predecessor blocks (so no block defines the result).
-//!
-//! This might change; it might make more sense to consider the result of a phi
-//! to be defined by each of the predecessor blocks, or by the block containing the phi.
 
 use std::collections::{btree_map::Entry, BTreeMap};
 
@@ -225,6 +222,20 @@ enum ValDef {
     Phi(Block),
 }
 
+pub fn value_uses_in_block_matching_predicate(
+    func: &Function,
+    block: Block,
+    pred: impl Fn(Value) -> bool,
+) -> BTreeMap<Value, u32> {
+    let mut counts = BTreeMap::new();
+    for_each_use(func, block, |val, _| {
+        if pred(val) {
+            counts.entry(val).and_modify(|n| *n += 1).or_insert(1);
+        }
+    });
+    counts
+}
+
 fn for_each_use(func: &Function, block: Block, mut f: impl FnMut(Value, Option<Block>)) {
     for insn in func.layout.iter_insn(block) {
         match func.dfg.insn_data(insn) {
@@ -247,7 +258,7 @@ fn for_each_def(func: &Function, block: Block, mut f: impl FnMut(Value, bool)) {
 
 #[cfg(test)]
 mod tests {
-    use sonatina_ir::{Block, Module};
+    use sonatina_ir::{Block, Module, Value};
     use sonatina_parser::parser::Parser;
 
     use crate::cfg::ControlFlowGraph;
@@ -303,23 +314,50 @@ func public %complex_loop(v0.i8, v20.i8) -> i8:
         let mut live = Liveness::default();
         live.compute(function, &cfg);
 
-        assert_eq!(live.block_live_ins(Block(1)), &[0].as_slice().into());
-        assert_eq!(live.block_live_outs(Block(1)), &[0].as_slice().into());
+        assert_eq!(live.block_live_ins(Block(1)), &[Value(0)].as_slice().into());
+        assert_eq!(
+            live.block_live_outs(Block(1)),
+            &[Value(0)].as_slice().into()
+        );
 
-        assert_eq!(live.block_live_ins(Block(2)), &[0, 2, 3].as_slice().into());
-        assert_eq!(live.block_live_outs(Block(2)), &[0, 2, 3].as_slice().into());
+        assert_eq!(
+            live.block_live_ins(Block(2)),
+            &[Value(0), Value(2), Value(3)].as_slice().into()
+        );
+        assert_eq!(
+            live.block_live_outs(Block(2)),
+            &[Value(0), Value(2), Value(3)].as_slice().into()
+        );
 
-        assert_eq!(live.block_live_ins(Block(3)), &[0, 2, 3].as_slice().into());
-        assert_eq!(live.block_live_outs(Block(3)), &[0, 3].as_slice().into());
+        assert_eq!(
+            live.block_live_ins(Block(3)),
+            &[Value(0), Value(2), Value(3)].as_slice().into()
+        );
+        assert_eq!(
+            live.block_live_outs(Block(3)),
+            &[Value(0), Value(3)].as_slice().into()
+        );
 
-        assert_eq!(live.block_live_ins(Block(4)), &[2].as_slice().into());
+        assert_eq!(live.block_live_ins(Block(4)), &[Value(2)].as_slice().into());
         assert_eq!(live.block_live_outs(Block(4)), &[].as_slice().into());
 
-        assert_eq!(live.block_live_ins(Block(5)), &[0, 3].as_slice().into());
-        assert_eq!(live.block_live_outs(Block(5)), &[0].as_slice().into());
+        assert_eq!(
+            live.block_live_ins(Block(5)),
+            &[Value(0), Value(3)].as_slice().into()
+        );
+        assert_eq!(
+            live.block_live_outs(Block(5)),
+            &[Value(0)].as_slice().into()
+        );
 
-        assert_eq!(live.block_live_ins(Block(6)), &[0, 3].as_slice().into());
-        assert_eq!(live.block_live_outs(Block(6)), &[0].as_slice().into());
+        assert_eq!(
+            live.block_live_ins(Block(6)),
+            &[Value(0), Value(3)].as_slice().into()
+        );
+        assert_eq!(
+            live.block_live_outs(Block(6)),
+            &[Value(0)].as_slice().into()
+        );
     }
 
     #[test]
@@ -336,35 +374,35 @@ func public %complex_loop(v0.i8, v20.i8) -> i8:
 
         assert_eq!(
             edges.remove(&(Block(1), Block(2))).unwrap(),
-            [0, 2, 3].as_slice().into(),
+            [Value(0), Value(2), Value(3)].as_slice().into(),
         );
         assert_eq!(
             edges.remove(&(Block(2), Block(3))).unwrap(),
-            [0, 2, 3].as_slice().into()
+            [Value(0), Value(2), Value(3)].as_slice().into()
         );
         assert_eq!(
             edges.remove(&(Block(2), Block(4))).unwrap(),
-            [2].as_slice().into()
+            [Value(2)].as_slice().into()
         );
         assert_eq!(
             edges.remove(&(Block(3), Block(5))).unwrap(),
-            [0, 3].as_slice().into()
+            [Value(0), Value(3)].as_slice().into()
         );
         assert_eq!(
             edges.remove(&(Block(3), Block(6))).unwrap(),
-            [0, 3].as_slice().into()
+            [Value(0), Value(3)].as_slice().into()
         );
         assert_eq!(
             edges.remove(&(Block(5), Block(7))).unwrap(),
-            [0, 8, 9].as_slice().into()
+            [Value(0), Value(8), Value(9)].as_slice().into()
         );
         assert_eq!(
             edges.remove(&(Block(6), Block(7))).unwrap(),
-            [0, 8, 9].as_slice().into()
+            [Value(0), Value(8), Value(9)].as_slice().into()
         );
         assert_eq!(
             edges.remove(&(Block(7), Block(2))).unwrap(),
-            [0, 2, 3].as_slice().into()
+            [Value(0), Value(2), Value(3)].as_slice().into()
         );
         assert!(edges.is_empty());
     }

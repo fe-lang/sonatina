@@ -21,9 +21,9 @@ fxhash = "0.2.1"
 sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
 sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
 drain_filter_polyfill = "0.1.3"
-bs = "0.1.0"
 if_chain = "1.0.2"
 indexmap = "1.9.3"
+bit-set = "0.5.3"
 
 [dev-dependencies]
 sonatina-parser = {path = "../parser"}

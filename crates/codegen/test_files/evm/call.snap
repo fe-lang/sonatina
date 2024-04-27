@@ -41,31 +41,35 @@ main:
     JUMP
   block1:
     JUMPDEST
-    DUP2  // v2.i64 = call %square v1;
+    SWAP1  // v2.i64 = call %square v1;
     PUSH1 `pc + (4)`
     SWAP1
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    PUSH1 block4  // jump block4;
+    SWAP1  // jump block4;
+    POP
+    PUSH1 block4
     JUMP
   block2:
     JUMPDEST
-    DUP2  // v3.i64 = call %invert v1;
+    SWAP1  // v3.i64 = call %invert v1;
     PUSH1 `pc + (4)`
     SWAP1
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    PUSH1 block4  // jump block4;
+    SWAP1  // jump block4;
+    POP
+    PUSH1 block4
     JUMP
   block3:
     JUMPDEST
-  block4:
-    JUMPDEST  // fallthrough block4;
-    SWAP1  // return v4;
+    SWAP1  // fallthrough block4;
     POP
-    SWAP1
+  block4:
+    JUMPDEST
+    SWAP1  // return v4;
     JUMP
 
 

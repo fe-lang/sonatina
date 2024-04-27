@@ -160,7 +160,7 @@ impl LowerBackend for EvmBackend {
                 code,
                 dests: [dest],
             } => {
-                perform_actions(ctx, &alloc.traverse_edge(ctx.insn_block(insn), *dest));
+                perform_actions(ctx, &alloc.read(insn, &[]));
                 if *code == JumpOp::Jump {
                     let push_op = ctx.push(OpCode::PUSH1);
                     ctx.add_jump_fixup_inst(push_op, Label::Block(*dest));
@@ -176,31 +176,11 @@ impl LowerBackend for EvmBackend {
                 perform_actions(ctx, &alloc.read(insn, args));
 
                 // Jump to `left` case
-                let from = ctx.insn_block(insn);
-                let jumpi_target = ctx.push(OpCode::PUSH1);
-                ctx.push(OpCode::JUMPI); // Fixup handled below.
+                ctx.push_jump_target(OpCode::PUSH1, Label::Block(*left));
+                ctx.push(OpCode::JUMPI);
 
-                // Perform stack-prep actions for the right branch, and jump.
-                perform_actions(ctx, &alloc.traverse_edge(ctx.insn_block(insn), *right));
-                let right_jump_target = ctx.push(OpCode::PUSH1);
-                ctx.add_jump_fixup_inst(right_jump_target, Label::Block(*right));
+                ctx.push_jump_target(OpCode::PUSH1, Label::Block(*right));
                 ctx.push(OpCode::JUMP);
-
-                // If there are any stack-prep actions for the left branch,
-                // perform them, then jump left.
-                let left_actions = alloc.traverse_edge(from, *left);
-                if !left_actions.is_empty() {
-                    let jd = ctx.push(OpCode::JUMPDEST);
-                    ctx.add_jump_fixup_inst(jumpi_target, Label::Insn(jd));
-                    perform_actions(ctx, &left_actions);
-
-                    let left_jump_target = ctx.push(OpCode::PUSH1);
-                    ctx.add_jump_fixup_inst(left_jump_target, Label::Block(*left));
-                    ctx.push(OpCode::JUMP);
-                } else {
-                    // Otherwise, we can jump directly to the left block.
-                    ctx.add_jump_fixup_inst(jumpi_target, Label::Block(*left));
-                }
             }
 
             InsnData::BrTable {

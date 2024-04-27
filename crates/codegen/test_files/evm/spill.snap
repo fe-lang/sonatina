@@ -194,7 +194,9 @@ spill:
     JUMP
   block4:
     JUMPDEST
-    PUSH1 block2  // jump block2;
+    SWAP1  // jump block2;
+    POP
+    PUSH1 block2
     JUMP
 
 

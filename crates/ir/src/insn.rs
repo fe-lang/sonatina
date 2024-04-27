@@ -18,16 +18,10 @@ cranelift_entity::entity_impl!(Insn);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InsnData {
     /// Unary instructions.
-    Unary {
-        code: UnaryOp,
-        args: [Value; 1],
-    },
+    Unary { code: UnaryOp, args: [Value; 1] },
 
     /// Binary instructions.
-    Binary {
-        code: BinaryOp,
-        args: [Value; 2],
-    },
+    Binary { code: BinaryOp, args: [Value; 2] },
 
     /// Cast operations.
     Cast {
@@ -56,16 +50,10 @@ pub enum InsnData {
     },
 
     /// Unconditional jump instruction.
-    Jump {
-        code: JumpOp,
-        dests: [Block; 1],
-    },
+    Jump { code: JumpOp, dests: [Block; 1] },
 
     /// Conditional jump instruction.
-    Branch {
-        args: [Value; 1],
-        dests: [Block; 2],
-    },
+    Branch { args: [Value; 1], dests: [Block; 2] },
 
     /// Indirect jump instruction.
     BrTable {
@@ -75,18 +63,13 @@ pub enum InsnData {
     },
 
     /// Allocate a memory on the stack frame for the given type.
-    Alloca {
-        ty: Type,
-    },
+    Alloca { ty: Type },
 
     /// Return.
-    Return {
-        args: Option<Value>,
-    },
+    Return { args: Option<Value> },
 
-    Gep {
-        args: SmallVec<[Value; 8]>,
-    },
+    /// Get element pointer.
+    Gep { args: SmallVec<[Value; 8]> },
 
     /// Phi function.
     Phi {
