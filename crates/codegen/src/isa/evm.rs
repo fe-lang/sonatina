@@ -13,7 +13,7 @@ use crate::{
 use smallvec::{smallvec, SmallVec};
 use sonatina_ir::{
     insn::{BinaryOp, CastOp, JumpOp, UnaryOp},
-    Block, Function, Immediate, Insn, InsnData, Value, U256,
+    Block, DataLocationKind, Function, Immediate, Insn, InsnData, Value, U256,
 };
 
 const FRAME_POINTER_OFFSET: u8 = 0x0;
@@ -125,11 +125,15 @@ impl LowerBackend for EvmBackend {
                 todo!()
             }
 
-            InsnData::Store {
-                args, // what's the arg order?
-                loc,
-            } => {
-                todo!()
+            InsnData::Store { args, loc } => {
+                perform_actions(ctx, &alloc.read(insn, args));
+                let [ptr, val] = args;
+
+                let op = match loc {
+                    DataLocationKind::Memory => OpCode::MSTORE,
+                    DataLocationKind::Storage => OpCode::SSTORE,
+                };
+                ctx.push(op);
             }
 
             InsnData::Call { func, args, ret_ty } => {
@@ -148,12 +152,12 @@ impl LowerBackend for EvmBackend {
 
                 // Push fn address onto stack and jump
                 let p = ctx.push(OpCode::PUSH1);
-                ctx.add_jump_fixup_inst(p, Label::Function(*func));
+                ctx.add_label_reference(p, Label::Function(*func));
                 ctx.push(OpCode::JUMP);
 
                 // Mark return pc as jumpdest
                 let jumpdest_op = ctx.push(OpCode::JUMPDEST);
-                ctx.add_jump_fixup_inst(push_callback, Label::Insn(jumpdest_op));
+                ctx.add_label_reference(push_callback, Label::Insn(jumpdest_op));
             }
 
             InsnData::Jump {
@@ -163,7 +167,7 @@ impl LowerBackend for EvmBackend {
                 perform_actions(ctx, &alloc.read(insn, &[]));
                 if *code == JumpOp::Jump {
                     let push_op = ctx.push(OpCode::PUSH1);
-                    ctx.add_jump_fixup_inst(push_op, Label::Block(*dest));
+                    ctx.add_label_reference(push_op, Label::Block(*dest));
                     ctx.push(OpCode::JUMP);
                 }
             }
@@ -194,13 +198,13 @@ impl LowerBackend for EvmBackend {
                     ctx.push(OpCode::EQ);
 
                     let p = ctx.push(OpCode::PUSH1);
-                    ctx.add_jump_fixup_inst(p, Label::Block(*dest));
+                    ctx.add_label_reference(p, Label::Block(*dest));
                     ctx.push(OpCode::JUMPI);
                 }
 
                 if let Some(dest) = default {
                     let p = ctx.push(OpCode::PUSH1);
-                    ctx.add_jump_fixup_inst(p, Label::Block(*dest));
+                    ctx.add_label_reference(p, Label::Block(*dest));
                     ctx.push(OpCode::JUMP);
                 }
             }
@@ -231,7 +235,46 @@ impl LowerBackend for EvmBackend {
             InsnData::Phi { values, blocks, ty } => {}
         }
     }
+
+    fn update_opcode_with_immediate_bytes(
+        &self,
+        opcode: &mut OpCode,
+        bytes: &mut SmallVec<[u8; 8]>,
+    ) {
+        while bytes.first() == Some(&0) {
+            bytes.pop();
+        }
+        *opcode = push_op(bytes.len());
+    }
+
+    fn update_opcode_with_label(
+        &self,
+        opcode: &mut OpCode,
+        label_offset: u32,
+    ) -> SmallVec<[u8; 4]> {
+        let bytes = label_offset
+            .to_be_bytes()
+            .into_iter()
+            .skip_while(|b| *b == 0)
+            .collect::<SmallVec<_>>();
+
+        *opcode = push_op(bytes.len());
+        bytes
+    }
+
+    fn emit_opcode(&self, opcode: &OpCode, buf: &mut Vec<u8>) {
+        buf.push(*opcode as u8);
+    }
+
+    fn emit_immediate_bytes(&self, bytes: &[u8], buf: &mut Vec<u8>) {
+        buf.extend_from_slice(bytes);
+    }
+    fn emit_label(&self, address: u32, buf: &mut Vec<u8>) {
+        buf.extend(address.to_be_bytes().into_iter().skip_while(|b| *b == 0));
+    }
 }
+
+// impl AssembleBackend for EvmBackend {}
 
 fn read_vals(ctx: &mut Lower<OpCode>, alloc: &mut dyn Allocator, insn: Insn, vals: &[Value]) {}
 
@@ -424,6 +467,7 @@ fn swap_op(n: u8) -> OpCode {
 
 fn push_op(bytes: usize) -> OpCode {
     match bytes {
+        0 => OpCode::PUSH0,
         1 => OpCode::PUSH1,
         2 => OpCode::PUSH2,
         3 => OpCode::PUSH3,

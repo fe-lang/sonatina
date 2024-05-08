@@ -106,15 +106,12 @@ impl<'a> SimpleAllocBuilder<'a> {
 
         let dom_frontiers = self.dom.compute_df(self.cfg);
 
-        let mut rpo = self.cfg.post_order().collect::<SmallVec<[Block; 8]>>();
-        rpo.reverse();
-
         // The inherited stack of the entry block contains the fn args.
         // xxx store SplitStack
         let mut inherited_stack = BTreeMap::new();
         inherited_stack.insert(entry, LocalStack::with_values(&self.func.arg_values));
 
-        for block in rpo {
+        for block in self.dom.rpo().iter().copied() {
             // xxx allow crit edges, but no actions on crit edge
             debug_assert!(
                 !has_critical_edge(self.func, self.cfg, block),

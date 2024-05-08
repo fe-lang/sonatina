@@ -1,5 +1,6 @@
 use super::vcode::{Label, VCode, VCodeInst};
 use crate::stackalloc::Allocator;
+use smallvec::SmallVec;
 use sonatina_ir::{Block, Function, Immediate, Insn, InsnData, Value};
 
 pub trait LowerBackend {
@@ -15,6 +16,22 @@ pub trait LowerBackend {
         function: &Function,
     );
     fn enter_block(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, block: Block);
+
+    fn update_opcode_with_immediate_bytes(
+        &self,
+        opcode: &mut Self::MInst,
+        bytes: &mut SmallVec<[u8; 8]>,
+    );
+
+    fn update_opcode_with_label(
+        &self,
+        opcode: &mut Self::MInst,
+        label_offset: u32,
+    ) -> SmallVec<[u8; 4]>;
+
+    fn emit_opcode(&self, opcode: &Self::MInst, buf: &mut Vec<u8>);
+    fn emit_immediate_bytes(&self, bytes: &[u8], buf: &mut Vec<u8>);
+    fn emit_label(&self, address: u32, buf: &mut Vec<u8>);
 }
 
 #[derive(Debug)]
@@ -73,7 +90,7 @@ impl<'a, Op: Default> Lower<'a, Op> {
 
     pub fn push_jump_target(&mut self, op: Op, dest: Label) {
         let op = self.push(op);
-        self.add_jump_fixup_inst(op, dest);
+        self.add_label_reference(op, dest);
     }
 
     pub fn next_insn(&self) -> VCodeInst {
@@ -81,11 +98,12 @@ impl<'a, Op: Default> Lower<'a, Op> {
     }
 
     pub fn add_immediate(&mut self, inst: VCodeInst, bytes: &[u8]) {
-        self.vcode.inst_imm_bytes.insert(inst, bytes.into());
+        self.vcode.inst_imm_bytes.insert((inst, bytes.into()));
     }
 
-    pub fn add_jump_fixup_inst(&mut self, inst: VCodeInst, dest: Label) {
-        self.vcode.jump_fixups.insert(inst, dest);
+    pub fn add_label_reference(&mut self, inst: VCodeInst, dest: Label) {
+        let label = self.vcode.labels.push(dest);
+        self.vcode.label_uses.insert((inst, label));
     }
 
     pub fn insn_data(&self, insn: Insn) -> &InsnData {

@@ -3,19 +3,39 @@ source: crates/codegen/tests/evm.rs
 expression: "String::from_utf8(v).unwrap()"
 input_file: crates/codegen/test_files/evm/add.sntn
 ---
-// func public %simple(v0.i8) -> i8
-simple:
+// func public %add() -> i32
+add:
   block0:
     JUMPDEST
-    PUSH1 [156]  // v1.i8 = add v0 -100.i8;
+    PUSH1 0x9c (156)  // v1.i32 = add 100000.i32 -100.i32;
     PUSH0
     SIGNEXTEND
-    SWAP1
+    PUSH3 0x186a0 (100000)
     ADD
-    PUSH1 [5]  // v2.i8 = sub v1 5.i8;
+    PUSH2 0x384 (900)  // v2.i32 = sub v1 900.i32;
     SWAP1
     SUB
-    SWAP1  // return v2;
-    JUMP
+    PUSH0  // store @memory 0.i32 v2;
+    MSTORE
 
 
+
+---------------
+
+// func public %add() -> i32
+add:
+  block0:
+    0    JUMPDEST
+    1    PUSH1 0x9c (156)  // v1.i32 = add 100000.i32 -100.i32;
+    3    PUSH0
+    4    SIGNEXTEND
+    5    PUSH3 0x186a0 (100000)
+    9    ADD
+   10    PUSH2 0x384 (900)  // v2.i32 = sub v1 900.i32;
+   13    SWAP1
+   14    SUB
+   15    PUSH0  // store @memory 0.i32 v2;
+   16    MSTORE
+
+
+0x5b609c5f0b620186a00161038490035f52

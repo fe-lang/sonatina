@@ -1,14 +1,16 @@
 use dir_test::{dir_test, Fixture};
+
+use hex::ToHex;
 use sonatina_codegen::{
     cfg::ControlFlowGraph,
     critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
     isa::evm::{opcode::OpCode, EvmBackend},
     liveness::Liveness,
-    machinst::{lower::Lower, vcode::VCode},
+    machinst::{assemble::ObjectLayout, lower::Lower, vcode::VCode},
     stackalloc::SimpleAlloc,
 };
-use sonatina_ir::Function;
+use sonatina_ir::{Block, Function};
 use sonatina_parser::{
     parser::{ParsedModule, Parser},
     ErrorKind,
@@ -76,16 +78,41 @@ fn test_evm(fixture: Fixture<&str>) {
         Err(err) => panic!("{}", err),
     };
 
+    let backend = EvmBackend::default();
+
     let mut v = Vec::new();
-    for function in module.module.funcs.values_mut() {
-        let vcode = vcode_for_fn(function);
-        vcode.print(&mut v, function).unwrap();
-        writeln!(v).unwrap();
+    let funcs = module
+        .module
+        .funcs
+        .iter_mut()
+        .map(|(fref, function)| {
+            let (vcode, block_order) = vcode_for_fn(function, &backend);
+            vcode.print(&mut v, function).unwrap();
+            writeln!(v).unwrap();
+            (fref, vcode, block_order)
+        })
+        .collect();
+
+    write!(&mut v, "\n\n---------------\n\n").unwrap();
+
+    let mut layout = ObjectLayout::new(funcs, 0);
+    let mut i = 0;
+    while layout.resize(&backend, 0) {
+        i += 1;
+        println!("resize iteration {i}");
     }
+    layout.print(&mut v, &module.module.funcs).unwrap();
+
+    let mut bytecode = Vec::new();
+    layout.emit(&backend, &mut bytecode);
+    let hex = bytecode.encode_hex::<String>();
+
+    write!(&mut v, "\n\n0x{hex}").unwrap();
+
     snap_test!(String::from_utf8(v).unwrap(), fixture.path());
 }
 
-fn vcode_for_fn(function: &mut Function) -> VCode<OpCode> {
+fn vcode_for_fn(function: &mut Function, backend: &EvmBackend) -> (VCode<OpCode>, Vec<Block>) {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
     let mut splitter = CriticalEdgeSplitter::new();
@@ -97,10 +124,9 @@ fn vcode_for_fn(function: &mut Function) -> VCode<OpCode> {
     dom.compute(&cfg);
     let mut alloc = SimpleAlloc::for_function(function, &cfg, &dom, &liveness, 16);
     let lower = Lower::new(function);
-    let backend = EvmBackend::default();
 
-    match lower.lower(&backend, &mut alloc) {
-        Ok(vcode) => vcode,
+    match lower.lower(backend, &mut alloc) {
+        Ok(vcode) => (vcode, dom.rpo().to_owned()),
         Err(err) => panic!("{:?}", err),
     }
 }

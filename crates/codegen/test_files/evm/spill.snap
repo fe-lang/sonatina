@@ -39,37 +39,37 @@ spill:
     DUP2
     PUSH0
     MLOAD
-    PUSH1 [6]
+    PUSH1 0x6 (6)
     ADD
     MSTORE
     DUP3
     PUSH0
     MLOAD
-    PUSH1 [5]
+    PUSH1 0x5 (5)
     ADD
     MSTORE
     DUP4
     PUSH0
     MLOAD
-    PUSH1 [4]
+    PUSH1 0x4 (4)
     ADD
     MSTORE
     DUP5
     PUSH0
     MLOAD
-    PUSH1 [3]
+    PUSH1 0x3 (3)
     ADD
     MSTORE
     DUP6
     PUSH0
     MLOAD
-    PUSH1 [2]
+    PUSH1 0x2 (2)
     ADD
     MSTORE
     DUP7
     PUSH0
     MLOAD
-    PUSH1 [1]
+    PUSH1 0x1 (1)
     ADD
     MSTORE
     DUP8
@@ -107,32 +107,32 @@ spill:
     MLOAD
     PUSH0
     MLOAD
-    PUSH1 [1]
+    PUSH1 0x1 (1)
     ADD
     MLOAD
     PUSH0
     MLOAD
-    PUSH1 [2]
+    PUSH1 0x2 (2)
     ADD
     MLOAD
     PUSH0
     MLOAD
-    PUSH1 [3]
+    PUSH1 0x3 (3)
     ADD
     MLOAD
     PUSH0
     MLOAD
-    PUSH1 [4]
+    PUSH1 0x4 (4)
     ADD
     MLOAD
     PUSH0
     MLOAD
-    PUSH1 [5]
+    PUSH1 0x5 (5)
     ADD
     MLOAD
     PUSH0
     MLOAD
-    PUSH1 [6]
+    PUSH1 0x6 (6)
     ADD
     MLOAD
     PUSH1 `pc + (4)`
@@ -161,7 +161,7 @@ spill:
     MLOAD
     MLOAD
     ADD
-    PUSH2 [3, 232]  // v20.i1 = gt v19 1000.i64;
+    PUSH2 0x3e8 (1000)  // v20.i1 = gt v19 1000.i64;
     DUP2
     GT
     PUSH1 block3  // br v20 block3 block4;
@@ -200,3 +200,203 @@ spill:
     JUMP
 
 
+
+---------------
+
+// func public %sum8(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64) -> i64
+sum8:
+  block0:
+    0    JUMPDEST
+    1    ADD  // v8.i64 = add v0 v1;
+    2    SWAP2  // v9.i64 = add v2 v3;
+    3    SWAP1
+    4    ADD
+    5    SWAP3  // v10.i64 = add v4 v5;
+    6    DUP3
+    7    ADD
+    8    SWAP5  // v11.i64 = add v6 v7;
+    9    DUP5
+   10    ADD
+   11    SWAP3  // v12.i64 = add v8 v9;
+   12    SWAP1
+   13    ADD
+   14    SWAP1  // v13.i64 = add v10 v11;
+   15    POP
+   16    SWAP1
+   17    DUP4
+   18    ADD
+   19    SWAP1  // v14.i64 = add v12 v13;
+   20    ADD
+   21    SWAP2  // return v14;
+   22    POP
+   23    POP
+   24    SWAP1
+   25    JUMP
+// func public %spill(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64) -> i64
+spill:
+  block1:
+   26    DUP2
+   27    PUSH0
+   28    MLOAD
+   29    PUSH1 0x6 (6)
+   31    ADD
+   32    MSTORE
+   33    DUP3
+   34    PUSH0
+   35    MLOAD
+   36    PUSH1 0x5 (5)
+   38    ADD
+   39    MSTORE
+   40    DUP4
+   41    PUSH0
+   42    MLOAD
+   43    PUSH1 0x4 (4)
+   45    ADD
+   46    MSTORE
+   47    DUP5
+   48    PUSH0
+   49    MLOAD
+   50    PUSH1 0x3 (3)
+   52    ADD
+   53    MSTORE
+   54    DUP6
+   55    PUSH0
+   56    MLOAD
+   57    PUSH1 0x2 (2)
+   59    ADD
+   60    MSTORE
+   61    DUP7
+   62    PUSH0
+   63    MLOAD
+   64    PUSH1 0x1 (1)
+   66    ADD
+   67    MSTORE
+   68    DUP8
+   69    PUSH0
+   70    MLOAD
+   71    MSTORE
+   72    JUMPDEST
+   73    DUP2  // v8.i64 = add v0 v1;
+   74    DUP2
+   75    ADD
+   76    DUP5  // v9.i64 = add v2 v3;
+   77    DUP5
+   78    ADD
+   79    DUP8  // v10.i64 = add v4 v5;
+   80    DUP8
+   81    ADD
+   82    DUP11  // v11.i64 = add v6 v7;
+   83    DUP11
+   84    ADD
+   85    DUP3  // v12.i64 = add v8 v9;
+   86    DUP5
+   87    ADD
+   88    DUP2  // v13.i64 = add v10 v11;
+   89    DUP4
+   90    ADD
+   91    DUP1  // v14.i64 = add v12 v13;
+   92    DUP3
+   93    ADD
+   94    DUP1  // fallthrough block2;
+  block2:
+   95    JUMPDEST
+   96    DUP9  // v16.i64 = call %sum8 v0 v1 v2 v3 v4 v5 v6 v7;
+   97    PUSH0
+   98    MLOAD
+   99    MLOAD
+  100    PUSH0
+  101    MLOAD
+  102    PUSH1 0x1 (1)
+  104    ADD
+  105    MLOAD
+  106    PUSH0
+  107    MLOAD
+  108    PUSH1 0x2 (2)
+  110    ADD
+  111    MLOAD
+  112    PUSH0
+  113    MLOAD
+  114    PUSH1 0x3 (3)
+  116    ADD
+  117    MLOAD
+  118    PUSH0
+  119    MLOAD
+  120    PUSH1 0x4 (4)
+  122    ADD
+  123    MLOAD
+  124    PUSH0
+  125    MLOAD
+  126    PUSH1 0x5 (5)
+  128    ADD
+  129    MLOAD
+  130    PUSH0
+  131    MLOAD
+  132    PUSH1 0x6 (6)
+  134    ADD
+  135    MLOAD
+  136    PUSH1 141
+  138    SWAP8
+  139    PUSH0 0 (FuncRef(0))
+  140    JUMP
+  141    JUMPDEST
+  142    DUP9  // v17.i64 = call %sum8 v8 v9 v10 v11 v12 v13 v14 v15;
+  143    DUP4
+  144    DUP6
+  145    DUP8
+  146    DUP10
+  147    DUP12
+  148    DUP14
+  149    DUP8
+  150    PUSH1 155
+  152    SWAP8
+  153    PUSH0 0 (FuncRef(0))
+  154    JUMP
+  155    JUMPDEST
+  156    SWAP1  // v18.i64 = add v16 v17;
+  157    DUP4
+  158    ADD
+  159    DUP1  // v19.i64 = add v7 v18;
+  160    PUSH0
+  161    MLOAD
+  162    MLOAD
+  163    ADD
+  164    PUSH2 0x3e8 (1000)  // v20.i1 = gt v19 1000.i64;
+  167    DUP2
+  168    GT
+  169    PUSH1 175 (block3)  // br v20 block3 block4;
+  171    JUMPI
+  172    PUSH1 198 (block4)
+  174    JUMP
+  block3:
+  175    JUMPDEST
+  176    POP  // return v18;
+  177    SWAP16
+  178    POP
+  179    POP
+  180    POP
+  181    POP
+  182    POP
+  183    POP
+  184    POP
+  185    POP
+  186    POP
+  187    POP
+  188    POP
+  189    POP
+  190    POP
+  191    POP
+  192    POP
+  193    POP
+  194    SWAP1
+  195    POP
+  196    SWAP1
+  197    JUMP
+  block4:
+  198    JUMPDEST
+  199    SWAP1  // jump block2;
+  200    POP
+  201    PUSH1 95 (block2)
+  203    JUMP
+
+
+0x5b01919001928201948401929001905090830190019150509056815f5160060152825f5160050152835f5160040152845f5160030152855f5160020152865f5160010152875f51525b8181018484018787018a8a01828401818301808201805b885f51515f51600101515f51600201515f51600301515f51600401515f51600501515f5160060151608d975f565b88838587898b8d87609b975f565b908301805f5151016103e8811160af5760c6565b509f50505050505050505050505050505050905090565b9050605f56

@@ -1,4 +1,4 @@
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 #[repr(u8)]
 pub enum OpCode {
     STOP = 0x00,

@@ -429,12 +429,13 @@ impl LocalStack {
 
         eprintln!("retain 3 {:?} {:?}", &self, act);
 
-        if let Some(arg) = args.first() {
-            let pos = self
-                .position_within_reach(|v| v == *arg)
-                .expect("`retain` arg must be reachable");
-            self.swap(act, pos);
-        }
+        // xxx remove
+        // if let Some(arg) = args.first() {
+        //     let pos = self
+        //         .position_within_reach(|v| v == *arg)
+        //         .expect("`retain` arg must be reachable");
+        //     self.swap(act, pos);
+        // }
     }
 
     fn position_within_reach<F>(&self, predicate: F) -> Option<usize>

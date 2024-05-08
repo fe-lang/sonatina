@@ -29,3 +29,4 @@ bit-set = "0.5.3"
 sonatina-parser = {path = "../parser"}
 dir-test = "0.1.1"
 insta = { default-features = false, version = "1.7.1" }
+hex = "0.4.3"

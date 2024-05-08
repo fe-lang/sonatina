@@ -3,11 +3,18 @@ use cranelift_entity::{
     entity_impl, packed_option::ReservedValue, EntityList, EntityRef, ListPool, PrimaryMap,
     SecondaryMap,
 };
-use indexmap::IndexMap;
+use cranelift_entity::{SparseMap, SparseMapValue};
 use smallvec::SmallVec;
+use sonatina_ir::U256;
 use sonatina_ir::{module::FuncRef, Block, Function, Insn};
-use std::collections::BTreeMap;
 use std::fmt;
+
+// xxx offset reference graph?
+//  fn call graph
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
+pub struct LabelId(pub u32);
+entity_impl!(LabelId);
 
 #[derive(Debug, Copy, Clone)]
 pub enum Label {
@@ -20,22 +27,21 @@ pub enum Label {
 pub struct VCodeInst(pub u32);
 entity_impl!(VCodeInst);
 
-#[derive(Default)]
 pub struct VCode<Op> {
     pub insts: PrimaryMap<VCodeInst, Op>,
     pub inst_ir: SecondaryMap<VCodeInst, PackedOption<Insn>>,
 
     /// Immediate bytes for PUSH* ops
-    pub inst_imm_bytes: BTreeMap<VCodeInst, SmallVec<[u8; 8]>>,
+    pub inst_imm_bytes: SparseMap<VCodeInst, (VCodeInst, SmallVec<[u8; 8]>)>,
 
+    pub labels: PrimaryMap<LabelId, Label>,
     /// Instructions that contain label offsets that will need to updated
     /// when the bytecode is emitted
-    pub jump_fixups: IndexMap<VCodeInst, Label>,
+    pub label_uses: SparseMap<VCodeInst, (VCodeInst, LabelId)>,
 
-    // Or PrimaryMap<VCodeBlock, ..>?
-    blocks: SecondaryMap<Block, EntityList<VCodeInst>>,
+    pub blocks: SecondaryMap<Block, EntityList<VCodeInst>>,
 
-    insts_pool: ListPool<VCodeInst>,
+    pub insts_pool: ListPool<VCodeInst>,
 }
 
 impl<Op> VCode<Op> {
@@ -82,15 +88,18 @@ where
             }
             for (idx, insn) in self.block_insns(block).enumerate() {
                 write!(w, "    {:?}", self.insts[insn])?;
-                if let Some(bytes) = self.inst_imm_bytes.get(&insn) {
-                    write!(w, " {bytes:?}")?;
-                } else if let Some(label) = self.jump_fixups.get(&insn) {
-                    match label {
+                if let Some((_, bytes)) = self.inst_imm_bytes.get(insn) {
+                    let mut be = [0; 32];
+                    be[32 - bytes.len()..].copy_from_slice(&bytes);
+                    let imm = U256::from_big_endian(&be);
+                    write!(w, " 0x{imm:x} ({imm})")?;
+                } else if let Some((_, label)) = self.label_uses.get(insn) {
+                    match self.labels[*label] {
                         Label::Block(Block(n)) => write!(w, " block{n}"),
                         Label::Insn(insn) => {
                             let pos = self
                                 .block_insns(block)
-                                .position(|i| i == *insn)
+                                .position(|i| i == insn)
                                 .expect("Label::Insn must be in same block");
                             let offset: i32 = pos as i32 - idx as i32;
                             write!(w, " `pc + ({offset})`")
@@ -110,6 +119,26 @@ where
             }
         }
         Ok(())
+    }
+}
+
+impl<Op> Default for VCode<Op> {
+    fn default() -> Self {
+        Self {
+            insts: Default::default(),
+            inst_ir: Default::default(),
+            inst_imm_bytes: SparseMap::new(), // no `Default` impl
+            labels: PrimaryMap::default(),
+            label_uses: SparseMap::new(),
+            blocks: Default::default(),
+            insts_pool: Default::default(),
+        }
+    }
+}
+
+impl<T> SparseMapValue<VCodeInst> for (VCodeInst, T) {
+    fn key(&self) -> VCodeInst {
+        self.0
     }
 }
 
