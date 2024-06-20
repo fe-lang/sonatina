@@ -1,0 +1,79 @@
+---
+source: crates/parser2/tests/syntax.rs
+expression: s
+input_file: crates/parser2/test_files/syntax/func/simple.sntn
+---
+function "func %foo() -> i32 {
+block0:
+    jump block1;
+block1:
+    v0.i32 = phi (v1 block2) (100.i32 block0);
+    v1.i32 = add 1.i32 1.i32;
+block2:
+    jump block1;
+}"
+  function_signature "func %foo() -> i32"
+    function_identifier "%foo"
+      function_name "foo"
+    function_params "()"
+    function_ret_type "-> i32"
+      type_name "i32"
+        primitive_type "i32"
+  block "block0:
+      jump block1;"
+    block_ident "block0"
+      block_number "0"
+    stmt "jump block1;"
+      jump_stmt "jump block1"
+        block_ident "block1"
+          block_number "1"
+  block "block1:
+      v0.i32 = phi (v1 block2) (100.i32 block0);
+      v1.i32 = add 1.i32 1.i32;"
+    block_ident "block1"
+      block_number "1"
+    stmt "v0.i32 = phi (v1 block2) (100.i32 block0);"
+      define_stmt "v0.i32 = phi (v1 block2) (100.i32 block0)"
+        value_declaration "v0.i32"
+          value_name "v0"
+          type_name "i32"
+            primitive_type "i32"
+        expr "phi (v1 block2) (100.i32 block0)"
+          phi_expr "phi (v1 block2) (100.i32 block0)"
+            phi_value "(v1 block2)"
+              value "v1"
+                value_name "v1"
+              block_ident "block2"
+                block_number "2"
+            phi_value "(100.i32 block0)"
+              value "100.i32"
+                imm_number "100.i32"
+                  decimal "100"
+                  primitive_type "i32"
+              block_ident "block0"
+                block_number "0"
+    stmt "v1.i32 = add 1.i32 1.i32;"
+      define_stmt "v1.i32 = add 1.i32 1.i32"
+        value_declaration "v1.i32"
+          value_name "v1"
+          type_name "i32"
+            primitive_type "i32"
+        expr "add 1.i32 1.i32"
+          bin_expr "add 1.i32 1.i32"
+            bin_op "add"
+            value "1.i32"
+              imm_number "1.i32"
+                decimal "1"
+                primitive_type "i32"
+            value "1.i32"
+              imm_number "1.i32"
+                decimal "1"
+                primitive_type "i32"
+  block "block2:
+      jump block1;"
+    block_ident "block2"
+      block_number "2"
+    stmt "jump block1;"
+      jump_stmt "jump block1"
+        block_ident "block1"
+          block_number "1"

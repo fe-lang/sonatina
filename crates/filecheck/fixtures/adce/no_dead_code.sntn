@@ -21,7 +21,7 @@ declare external %external_add(i8, i8) -> i8;
 # nextln:     v6.i8 = phi (v3 block1) (v5 block2);
 # nextln:     v7.i8 = call %external_add v6 1.i8;
 # nextln:     return v7;
-func public %no_dead_code() -> i8:
+func public %no_dead_code() -> i8 {
     block0:
         v0.i1 = sgt 1.i8 2.i8;
         v1.i8 = sext v0;
@@ -41,3 +41,4 @@ func public %no_dead_code() -> i8:
         v6.i8 = phi (v3 block1) (v5 block2);
         v7.i8 = call %external_add v6 1.i8;
         return v7;
+}

@@ -27,7 +27,7 @@ target = "evm-ethereum-london"
 # nextln:        $(var2=$VALUE).i32 = phi (v10 block3) (v42 block4);
 # nextln:        v50.i32 = phi ($var1 block3) (v40 block4);
 # nextln:        return $var2;
-func public %value_phi_loop(v100.i32, v101.i32, v102.i1, v103.i1, v104.i32, v105.i32) -> i32:
+func public %value_phi_loop(v100.i32, v101.i32, v102.i1, v103.i1, v104.i32, v105.i32) -> i32 {
     block0:
         v1.i32 = add v100 v101;
         jump block1;
@@ -55,3 +55,4 @@ func public %value_phi_loop(v100.i32, v101.i32, v102.i1, v103.i1, v104.i32, v105
         v50.i32 = phi (v11 block3) (v40 block4);
         v51.i32 = sub v50 v101;
         return v51;
+}

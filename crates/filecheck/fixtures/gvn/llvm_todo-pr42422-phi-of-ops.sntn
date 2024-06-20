@@ -56,7 +56,7 @@ target = "evm-ethereum-london"
 # nextln:     jump block16;
 # nextln: 
 # nextln: block16:
-# nextln:     $(var1=$VALUE).i1 = phi (0.i1 block5) (0.i1 block14) (-1.i1 block15);
+# nextln:     $(var1=$VALUE).i1 = phi (0.i1 block5) (0.i1 block14) (1.i1 block15);
 # nextln:     v8.i32 = phi (0.i32 block15) (v7 block14) (1.i32 block5);
 # nextln:     br $var1 block17 block19;
 # nextln: 
@@ -68,13 +68,13 @@ target = "evm-ethereum-london"
 # nextln:     jump block19;
 # nextln: 
 # nextln: block19:
-# nextln:     $(var2=$VALUE).i1 = phi ($var1 block16) (-1.i1 block18);
+# nextln:     $(var2=$VALUE).i1 = phi ($var1 block16) (1.i1 block18);
 # nextln:     v11.i32 = phi (v8 block16) (0.i32 block18);
 # nextln:     br $var2 block1 block20;
 # nextln: 
 # nextln: block20:
 # nextln:     return;
-func public %llvm_d(v0.i1, v1.i1) -> void:
+func public %llvm_d(v0.i1, v1.i1) -> void {
     block0:
         jump block1;
 
@@ -114,7 +114,7 @@ func public %llvm_d(v0.i1, v1.i1) -> void:
         jump block9;
 
     block11:
-        br -1.i1 block12 block13;
+        br 1.i1 block12 block13;
 
     block12:
         jump block14;
@@ -148,3 +148,4 @@ func public %llvm_d(v0.i1, v1.i1) -> void:
 
     block20:
         return;
+}

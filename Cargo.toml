@@ -1,3 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/ir", "crates/codegen", "crates/object", "crates/parser", "crates/filecheck", "crates/triple", "crates/interpreter"]
+members = [
+    "crates/ir",
+    "crates/codegen",
+    "crates/object",
+    "crates/parser2",
+    "crates/filecheck",
+    "crates/triple",
+    "crates/interpreter",
+]

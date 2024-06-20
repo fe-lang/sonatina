@@ -2,12 +2,13 @@
 
 target = "evm-ethereum-london"
 
-# sameln: func public %unary() -> i8:
+# sameln: func public %unary() -> i8 {
 # nextln:     block0:
 # nextln:         return 1.i8;
-func public %unary() -> i8:
+func public %unary() -> i8 {
     block0:
         v0.i8 = neg -10.i8;
         v1.i8 = not -10.i8;
         v2.i8 = sub v0 v1;
         return v2;
+}

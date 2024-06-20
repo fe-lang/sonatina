@@ -6,7 +6,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln: block2:
 # nextln:     return v1;
-func public %rewrite_dest(v0.i1) -> i32:
+func public %rewrite_dest(v0.i1) -> i32 {
     block0:
         v1.i32 = sext v0;
         br v0 block1 block2;
@@ -18,6 +18,7 @@ func public %rewrite_dest(v0.i1) -> i32:
 
     block2:
         return v1;
+}
 
 # check:  block0:
 # nextln:     v1.i32 = add v0 1.i32;
@@ -25,7 +26,7 @@ func public %rewrite_dest(v0.i1) -> i32:
 # nextln: 
 # nextln: block3:
 # nextln:     return v1;
-func public %rewrite_dest2(v0.i32) -> i32:
+func public %rewrite_dest2(v0.i32) -> i32 {
     block0:
         v1.i32 = add v0 1.i32;
         v2.i32 = add v0 2.i32;
@@ -40,6 +41,7 @@ func public %rewrite_dest2(v0.i32) -> i32:
 
     block3:
         return v1;
+}
 
 # check:  block0:
 # nextln:     v1.i32 = add v0 1.i32;
@@ -51,7 +53,7 @@ func public %rewrite_dest2(v0.i32) -> i32:
 # nextln: 
 # nextln: block3:
 # nextln:     return v1;
-func public %rewrite_dest3(v0.i32) -> i32:
+func public %rewrite_dest3(v0.i32) -> i32 {
     block0:
         v1.i32 = add v0 1.i32;
         v2.i32 = add v0 2.i32;
@@ -66,3 +68,4 @@ func public %rewrite_dest3(v0.i32) -> i32:
 
     block3:
         return v1;
+}

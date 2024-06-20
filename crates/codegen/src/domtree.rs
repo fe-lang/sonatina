@@ -1,6 +1,6 @@
 //! This module contains dominantor tree related structs.
 //!
-//! The algorithm is based on Keith D. Cooper., Timothy J. Harvey., and Ken Kennedy.: A Simple, Fast Dominance Algorithm:  
+//! The algorithm is based on Keith D. Cooper., Timothy J. Harvey., and Ken Kennedy.: A Simple, Fast Dominance Algorithm:
 //! <https://www.cs.rice.edu/~keith/EMBED/dom.pdf>
 
 use std::collections::BTreeSet;
@@ -230,8 +230,7 @@ mod tests {
 
     #[test]
     fn dom_tree_if_else() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], Type::Void);
+        let mut builder = test_func_builder(&[], Type::Void);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -252,9 +251,9 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
 
-        let module = test_module_builder.build();
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         let func = &module.funcs[func_ref];
 
         let (dom_tree, df) = calc_dom(func);
@@ -271,8 +270,7 @@ mod tests {
 
     #[test]
     fn unreachable_edge() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], Type::Void);
+        let mut builder = test_func_builder(&[], Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -297,9 +295,9 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
 
-        let module = test_module_builder.build();
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         let func = &module.funcs[func_ref];
 
         let (dom_tree, df) = calc_dom(func);
@@ -319,8 +317,7 @@ mod tests {
 
     #[test]
     fn dom_tree_complex() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], Type::Void);
+        let mut builder = test_func_builder(&[], Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -377,9 +374,9 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
 
-        let module = test_module_builder.build();
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         let func = &module.funcs[func_ref];
 
         let (dom_tree, df) = calc_dom(func);
@@ -412,8 +409,7 @@ mod tests {
 
     #[test]
     fn dom_tree_br_table() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], Type::Void);
+        let mut builder = test_func_builder(&[], Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -445,9 +441,9 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
 
-        let module = test_module_builder.build();
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         let func = &module.funcs[func_ref];
 
         let (dom_tree, df) = calc_dom(func);

@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, SecondaryMap};
-use fxhash::{FxHashMap, FxHashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::domtree::{DomTree, DominatorTreeTraversable};
 
@@ -504,7 +504,7 @@ impl GvnSolver {
         value: Value,
         edge: Edge,
     ) -> Value {
-        let mut rep_value = self.leader(value);
+        let mut rep_value = self.leader(func.dfg.resolve_alias(value));
 
         if let Some(inferred_value) = self.infer_value_impl(edge, rep_value) {
             rep_value = inferred_value;
@@ -641,7 +641,7 @@ impl GvnSolver {
                 let edges = &self.blocks[block].in_edges;
 
                 let mut phi_args = Vec::with_capacity(values.len());
-                for (&value, &from) in (values).iter().zip(blocks.iter()) {
+                for (&value, &from) in values.iter().zip(blocks.iter()) {
                     let edge = self.find_edge(edges, from, block);
                     // Ignore an argument from an unreachable block.
                     if !self.edge_data(edge).reachable {
@@ -1403,11 +1403,11 @@ impl<'a> RedundantCodeRemover<'a> {
             self.avail_set[idom].clone()
         };
 
-        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(block));
+        let mut inserter = InsnInserter::at_location(CursorLocation::BlockTop(block));
         loop {
             match inserter.loc() {
                 CursorLocation::BlockTop(_) => {
-                    inserter.proceed();
+                    inserter.proceed(func);
                 }
 
                 CursorLocation::BlockBottom(..) | CursorLocation::NoWhere => {
@@ -1415,23 +1415,23 @@ impl<'a> RedundantCodeRemover<'a> {
                 }
 
                 CursorLocation::At(insn) => {
-                    let block = inserter.block().unwrap();
-                    if let Some(insn_result) = inserter.func().dfg.insn_result(insn) {
+                    let block = inserter.block(func).unwrap();
+                    if let Some(insn_result) = func.dfg.insn_result(insn) {
                         let class = self.solver.value_class(insn_result);
 
                         // Use representative value if the class is in avail set.
                         if let Some(value) = avails.get(&class) {
-                            inserter.func_mut().dfg.change_to_alias(insn_result, *value);
-                            inserter.remove_insn();
+                            func.dfg.change_to_alias(insn_result, *value);
+                            inserter.remove_insn(func);
                             continue;
                         }
 
                         // Try rewrite phi insn to reflect edge's reachability.
-                        self.rewrite_phi(inserter.func_mut(), insn, block);
+                        self.rewrite_phi(func, insn, block);
                         avails.insert(class, insn_result);
                     }
 
-                    inserter.proceed();
+                    inserter.proceed(func);
                 }
             }
         }
@@ -1442,11 +1442,11 @@ impl<'a> RedundantCodeRemover<'a> {
 
     /// Resolve value phis in the block.
     fn resolve_value_phi_in_block(&mut self, func: &mut Function, block: Block) {
-        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(block));
+        let mut inserter = InsnInserter::at_location(CursorLocation::BlockTop(block));
         loop {
             match inserter.loc() {
                 CursorLocation::BlockTop(_) => {
-                    inserter.proceed();
+                    inserter.proceed(func);
                 }
 
                 CursorLocation::BlockBottom(..) | CursorLocation::NoWhere => {
@@ -1454,24 +1454,29 @@ impl<'a> RedundantCodeRemover<'a> {
                 }
 
                 CursorLocation::At(insn) => {
-                    let block = inserter.block().unwrap();
-                    if let Some(insn_result) = inserter.func().dfg.insn_result(insn) {
+                    let block = inserter.block(func).unwrap();
+                    if let Some(insn_result) = func.dfg.insn_result(insn) {
                         // If value phi exists for the `insn_result` and its resolution succeeds,
                         // then use resolved phi value and remove insn.
                         let class = self.solver.value_class(insn_result);
                         if let Some(value_phi) = &self.solver.classes[class].value_phi {
-                            let ty = inserter.func().dfg.value_ty(insn_result);
+                            let ty = func.dfg.value_ty(insn_result);
                             if self.is_value_phi_resolvable(value_phi, block) {
-                                let value =
-                                    self.resolve_value_phi(&mut inserter, value_phi, ty, block);
-                                inserter.func_mut().dfg.change_to_alias(insn_result, value);
-                                inserter.remove_insn();
+                                let value = self.resolve_value_phi(
+                                    func,
+                                    &mut inserter,
+                                    value_phi,
+                                    ty,
+                                    block,
+                                );
+                                func.dfg.change_to_alias(insn_result, value);
+                                inserter.remove_insn(func);
                                 continue;
                             }
                         }
                     }
 
-                    inserter.proceed();
+                    inserter.proceed(func);
                 }
             }
         }
@@ -1505,6 +1510,7 @@ impl<'a> RedundantCodeRemover<'a> {
     /// the inserted phi insn.
     fn resolve_value_phi(
         &mut self,
+        func: &mut Function,
         inserter: &mut InsnInserter,
         value_phi: &ValuePhi,
         ty: Type,
@@ -1529,18 +1535,19 @@ impl<'a> RedundantCodeRemover<'a> {
                 // Resolve phi value's arguments and append them to the newly `InsnData::Phi`.
                 let mut phi = InsnData::phi(ty);
                 for (value_phi, phi_block) in &phi_insn.args {
-                    let resolved = self.resolve_value_phi(inserter, value_phi, ty, *phi_block);
+                    let resolved =
+                        self.resolve_value_phi(func, inserter, value_phi, ty, *phi_block);
                     phi.append_phi_arg(resolved, *phi_block);
                 }
 
                 // Insert new phi insn to top of the phi_insn block.
-                inserter.set_loc(CursorLocation::BlockTop(phi_insn.block));
-                let insn = inserter.insert_insn_data(phi);
-                let result = inserter.make_result(insn).unwrap();
-                inserter.attach_result(insn, result);
+                inserter.set_location(CursorLocation::BlockTop(phi_insn.block));
+                let insn = inserter.insert_insn_data(func, phi);
+                let result = inserter.make_result(func, insn).unwrap();
+                inserter.attach_result(func, insn, result);
 
                 // Restore the inserter loc.
-                inserter.set_loc(current_inserter_loc);
+                inserter.set_location(current_inserter_loc);
 
                 // Store resolved value phis.
                 self.resolved_value_phis.insert(value_phi.clone(), result);
@@ -1554,32 +1561,29 @@ impl<'a> RedundantCodeRemover<'a> {
     /// Remove unreachable edges and blocks.
     fn remove_unreachable_edges(&self, func: &mut Function) {
         let entry_block = func.layout.entry_block().unwrap();
-        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(entry_block));
+        let mut inserter = InsnInserter::at_location(CursorLocation::BlockTop(entry_block));
 
         loop {
             match inserter.loc() {
                 CursorLocation::BlockTop(block) => {
                     if !self.solver.blocks[block].reachable {
-                        inserter.remove_block();
+                        inserter.remove_block(func);
                     } else {
-                        inserter.proceed();
+                        inserter.proceed(func);
                     }
                 }
 
-                CursorLocation::BlockBottom(..) => inserter.proceed(),
+                CursorLocation::BlockBottom(..) => inserter.proceed(func),
 
                 CursorLocation::At(insn) => {
-                    if inserter.func().dfg.is_branch(insn) {
-                        let block = inserter.block().unwrap();
+                    if func.dfg.is_branch(insn) {
+                        let block = inserter.block(func).unwrap();
                         for &out_edge in self.solver.unreachable_out_edges(block) {
                             let edge_data = self.solver.edge_data(out_edge);
-                            inserter
-                                .func_mut()
-                                .dfg
-                                .remove_branch_dest(insn, edge_data.to);
+                            func.dfg.remove_branch_dest(insn, edge_data.to);
                         }
                     }
-                    inserter.proceed();
+                    inserter.proceed(func);
                 }
 
                 CursorLocation::NoWhere => break,

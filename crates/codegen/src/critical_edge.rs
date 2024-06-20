@@ -1,7 +1,7 @@
-use sonatina_ir::ControlFlowGraph;
+use sonatina_ir::{func_cursor::FuncCursor, ControlFlowGraph};
 
 use sonatina_ir::{
-    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
+    func_cursor::{CursorLocation, InsnInserter},
     insn::InsnData,
     Block, Function, Insn,
 };
@@ -65,10 +65,10 @@ impl CriticalEdgeSplitter {
         // critical edge.
         let inserted_dest = func.dfg.make_block();
         let jump = func.dfg.make_insn(InsnData::jump(original_dest));
-        let mut cursor = InsnInserter::new(func, CursorLocation::BlockTop(original_dest));
-        cursor.append_block(inserted_dest);
-        cursor.set_loc(CursorLocation::BlockTop(inserted_dest));
-        cursor.append_insn(jump);
+        let mut cursor = InsnInserter::at_location(CursorLocation::BlockTop(original_dest));
+        cursor.append_block(func, inserted_dest);
+        cursor.set_location(CursorLocation::BlockTop(inserted_dest));
+        cursor.append_insn(func, jump);
 
         // Rewrite branch destination to the new block.
         func.dfg
@@ -123,8 +123,7 @@ mod tests {
 
     #[test]
     fn critical_edge_basic() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], Type::Void);
+        let mut builder = test_func_builder(&[], Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -141,9 +140,8 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
-
-        let mut module = test_module_builder.build();
+        let mut module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         let func = &mut module.funcs[func_ref];
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(func);
@@ -151,7 +149,7 @@ mod tests {
 
         assert_eq!(
             dump_func(func),
-            "func public %test_func() -> void:
+            "func public %test_func() -> void {
     block0:
         br 1.i32 block3 block1;
 
@@ -164,6 +162,7 @@ mod tests {
     block3:
         jump block2;
 
+}
 "
         );
 
@@ -175,8 +174,7 @@ mod tests {
     #[test]
     #[allow(clippy::many_single_char_names)]
     fn critical_edge_to_same_block() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], Type::Void);
+        let mut builder = test_func_builder(&[], Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -201,9 +199,8 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
-
-        let mut module = test_module_builder.build();
+        let mut module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         let func = &mut module.funcs[func_ref];
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(func);
@@ -211,7 +208,7 @@ mod tests {
 
         assert_eq!(
             dump_func(func),
-            "func public %test_func() -> void:
+            "func public %test_func() -> void {
     block0:
         br 1.i8 block5 block1;
 
@@ -233,6 +230,7 @@ mod tests {
     block6:
         jump block3;
 
+}
 "
         );
 
@@ -243,8 +241,7 @@ mod tests {
 
     #[test]
     fn critical_edge_phi() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], Type::Void);
+        let mut builder = test_func_builder(&[], Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -255,7 +252,7 @@ mod tests {
         builder.jump(b);
 
         builder.switch_to_block(b);
-        let phi_value = builder.phi(&[(v1, a)]);
+        let phi_value = builder.phi(Type::I8, &[(v1, a)]);
         let v2 = builder.add(phi_value, v1);
         builder.append_phi_arg(phi_value, v2, b);
         builder.br(phi_value, c, b);
@@ -264,9 +261,8 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
-
-        let mut module = test_module_builder.build();
+        let mut module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         let func = &mut module.funcs[func_ref];
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(func);
@@ -274,7 +270,7 @@ mod tests {
 
         assert_eq!(
             dump_func(func),
-            "func public %test_func() -> void:
+            "func public %test_func() -> void {
     block0:
         jump block1;
 
@@ -289,6 +285,7 @@ mod tests {
     block3:
         jump block1;
 
+}
 "
         );
 
@@ -299,8 +296,7 @@ mod tests {
 
     #[test]
     fn critical_edge_br_table() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], Type::Void);
+        let mut builder = test_func_builder(&[], Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -328,9 +324,8 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
-
-        let mut module = test_module_builder.build();
+        let mut module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         let func = &mut module.funcs[func_ref];
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(func);
@@ -338,9 +333,9 @@ mod tests {
 
         assert_eq!(
             dump_func(func),
-            "func public %test_func() -> void:
+            "func public %test_func() -> void {
     block0:
-        br -1.i1 block5 block6;
+        br 1.i1 block5 block6;
 
     block1:
         br_table 0.i32 block2 (1.i32 block3) (2.i32 block7);
@@ -363,6 +358,7 @@ mod tests {
     block7:
         jump block4;
 
+}
 "
         );
 

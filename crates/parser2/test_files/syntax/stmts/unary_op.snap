@@ -1,0 +1,27 @@
+---
+source: crates/parser2/tests/syntax.rs
+expression: s
+input_file: crates/parser2/test_files/syntax/stmts/unary_op.sntn
+---
+stmt "v1.i1 = not v0;"
+  define_stmt "v1.i1 = not v0"
+    value_declaration "v1.i1"
+      value_name "v1"
+      type_name "i1"
+        primitive_type "i1"
+    expr "not v0"
+      una_expr "not v0"
+        una_op "not"
+        value "v0"
+          value_name "v0"
+stmt "v3.i8 = neg v2;"
+  define_stmt "v3.i8 = neg v2"
+    value_declaration "v3.i8"
+      value_name "v3"
+      type_name "i8"
+        primitive_type "i8"
+    expr "neg v2"
+      una_expr "neg v2"
+        una_op "neg"
+        value "v2"
+          value_name "v2"

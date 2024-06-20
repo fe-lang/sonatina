@@ -1,7 +1,7 @@
 use std::fmt;
 
 use cranelift_entity::PrimaryMap;
-use fxhash::FxHashMap;
+use rustc_hash::FxHashMap;
 
 use crate::{Immediate, Linkage, Type};
 

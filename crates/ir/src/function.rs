@@ -1,22 +1,27 @@
-use std::fmt::{self, Write};
-
-use fxhash::FxHashMap;
-use smallvec::SmallVec;
-
-use crate::{module::ModuleCtx, types::DisplayType, Linkage};
-
 use super::{module::FuncRef, DataFlowGraph, Layout, Type, Value};
+use crate::{module::ModuleCtx, types::DisplayType, Linkage};
+use rustc_hash::{FxHashMap, FxHasher};
+use smallvec::SmallVec;
+use smol_str::SmolStr;
+use std::{
+    fmt::{self, Write},
+    hash::BuildHasherDefault,
+};
+
+type Bimap<K, V> = bimap::BiHashMap<K, V, BuildHasherDefault<FxHasher>>;
 
 #[derive(Debug, Clone)]
 pub struct Function {
     /// Signature of the function.
     pub sig: Signature,
     pub arg_values: smallvec::SmallVec<[Value; 8]>,
-
     pub dfg: DataFlowGraph,
     pub layout: Layout,
 
-    /// Stores signatures of all functions that called by the function.
+    // xxx move
+    pub value_names: Bimap<Value, SmolStr>,
+
+    /// Stores signatures of all functions that are called by the function.
     pub callees: FxHashMap<FuncRef, Signature>,
 }
 
@@ -38,12 +43,13 @@ impl Function {
             arg_values,
             dfg,
             layout: Layout::default(),
+            value_names: Bimap::default(),
             callees: FxHashMap::default(),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Signature {
     /// Name of the function.
     name: String,
@@ -72,6 +78,7 @@ impl Signature {
         self.linkage
     }
 
+    // xxx remove
     pub fn append_arg(&mut self, arg: Type) {
         self.args.push(arg);
     }

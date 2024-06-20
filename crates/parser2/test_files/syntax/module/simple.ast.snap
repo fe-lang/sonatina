@@ -1,0 +1,564 @@
+---
+source: crates/parser2/tests/syntax.rs
+expression: "format!(\"{:#?}\", module)"
+input_file: crates/parser2/test_files/syntax/module/simple.sntn
+---
+Module {
+    target: Some(
+        TargetTriple {
+            architecture: Evm,
+            chain: Ethereum,
+            version: EvmVersion(
+                London,
+            ),
+        },
+    ),
+    declared_functions: [
+        FuncDeclaration {
+            linkage: External,
+            name: FunctionName(
+                "add_i8",
+            ),
+            params: [
+                Int(
+                    I8,
+                ),
+                Int(
+                    I8,
+                ),
+            ],
+            ret_type: Some(
+                Int(
+                    I8,
+                ),
+            ),
+        },
+    ],
+    functions: [
+        Func {
+            signature: FuncSignature {
+                linkage: Public,
+                name: FunctionName(
+                    "main",
+                ),
+                params: [],
+                ret_type: None,
+            },
+            blocks: [
+                Block {
+                    id: BlockId(
+                        Some(
+                            0,
+                        ),
+                    ),
+                    stmts: [
+                        Stmt {
+                            kind: Define(
+                                ValueDeclaration(
+                                    ValueName(
+                                        "v0",
+                                    ),
+                                    Int(
+                                        I8,
+                                    ),
+                                ),
+                                Call(
+                                    Call(
+                                        FunctionName(
+                                            "foo",
+                                        ),
+                                        [
+                                            Immediate(
+                                                I8(
+                                                    100,
+                                                ),
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                            ),
+                        },
+                        Stmt {
+                            kind: Return(
+                                None,
+                            ),
+                        },
+                    ],
+                },
+            ],
+            comments: [],
+        },
+        Func {
+            signature: FuncSignature {
+                linkage: Private,
+                name: FunctionName(
+                    "foo",
+                ),
+                params: [
+                    ValueDeclaration(
+                        ValueName(
+                            "v0",
+                        ),
+                        Int(
+                            I8,
+                        ),
+                    ),
+                ],
+                ret_type: Some(
+                    Int(
+                        I8,
+                    ),
+                ),
+            },
+            blocks: [
+                Block {
+                    id: BlockId(
+                        Some(
+                            0,
+                        ),
+                    ),
+                    stmts: [
+                        Stmt {
+                            kind: Define(
+                                ValueDeclaration(
+                                    ValueName(
+                                        "v1",
+                                    ),
+                                    Int(
+                                        I8,
+                                    ),
+                                ),
+                                Binary(
+                                    Mul,
+                                    Named(
+                                        ValueName(
+                                            "v0",
+                                        ),
+                                    ),
+                                    Immediate(
+                                        I8(
+                                            2,
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        },
+                        Stmt {
+                            kind: Define(
+                                ValueDeclaration(
+                                    ValueName(
+                                        "v2",
+                                    ),
+                                    Int(
+                                        I8,
+                                    ),
+                                ),
+                                Call(
+                                    Call(
+                                        FunctionName(
+                                            "add_i8",
+                                        ),
+                                        [
+                                            Named(
+                                                ValueName(
+                                                    "v0",
+                                                ),
+                                            ),
+                                            Named(
+                                                ValueName(
+                                                    "v1",
+                                                ),
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                            ),
+                        },
+                        Stmt {
+                            kind: Return(
+                                Some(
+                                    Named(
+                                        ValueName(
+                                            "v2",
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        },
+                    ],
+                },
+            ],
+            comments: [
+                "# multiplies arg by 2",
+            ],
+        },
+        Func {
+            signature: FuncSignature {
+                linkage: Private,
+                name: FunctionName(
+                    "types",
+                ),
+                params: [
+                    ValueDeclaration(
+                        ValueName(
+                            "v0",
+                        ),
+                        Ptr(
+                            Int(
+                                I8,
+                            ),
+                        ),
+                    ),
+                    ValueDeclaration(
+                        ValueName(
+                            "v1",
+                        ),
+                        Array(
+                            Int(
+                                I8,
+                            ),
+                            2,
+                        ),
+                    ),
+                    ValueDeclaration(
+                        ValueName(
+                            "v2",
+                        ),
+                        Array(
+                            Ptr(
+                                Int(
+                                    I8,
+                                ),
+                            ),
+                            2,
+                        ),
+                    ),
+                    ValueDeclaration(
+                        ValueName(
+                            "v3",
+                        ),
+                        Array(
+                            Array(
+                                Int(
+                                    I8,
+                                ),
+                                2,
+                            ),
+                            2,
+                        ),
+                    ),
+                ],
+                ret_type: None,
+            },
+            blocks: [
+                Block {
+                    id: BlockId(
+                        Some(
+                            0,
+                        ),
+                    ),
+                    stmts: [
+                        Stmt {
+                            kind: Return(
+                                None,
+                            ),
+                        },
+                    ],
+                },
+            ],
+            comments: [],
+        },
+        Func {
+            signature: FuncSignature {
+                linkage: Private,
+                name: FunctionName(
+                    "table",
+                ),
+                params: [
+                    ValueDeclaration(
+                        ValueName(
+                            "v0",
+                        ),
+                        Int(
+                            I8,
+                        ),
+                    ),
+                ],
+                ret_type: None,
+            },
+            blocks: [
+                Block {
+                    id: BlockId(
+                        Some(
+                            0,
+                        ),
+                    ),
+                    stmts: [
+                        Stmt {
+                            kind: BranchTable(
+                                Named(
+                                    ValueName(
+                                        "v0",
+                                    ),
+                                ),
+                                Some(
+                                    BlockId(
+                                        Some(
+                                            0,
+                                        ),
+                                    ),
+                                ),
+                                [
+                                    (
+                                        Immediate(
+                                            I8(
+                                                1,
+                                            ),
+                                        ),
+                                        BlockId(
+                                            Some(
+                                                1,
+                                            ),
+                                        ),
+                                    ),
+                                    (
+                                        Immediate(
+                                            I8(
+                                                2,
+                                            ),
+                                        ),
+                                        BlockId(
+                                            Some(
+                                                2,
+                                            ),
+                                        ),
+                                    ),
+                                ],
+                            ),
+                        },
+                    ],
+                },
+                Block {
+                    id: BlockId(
+                        Some(
+                            1,
+                        ),
+                    ),
+                    stmts: [
+                        Stmt {
+                            kind: Return(
+                                Some(
+                                    Immediate(
+                                        I8(
+                                            1,
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        },
+                    ],
+                },
+                Block {
+                    id: BlockId(
+                        Some(
+                            2,
+                        ),
+                    ),
+                    stmts: [
+                        Stmt {
+                            kind: Return(
+                                Some(
+                                    Immediate(
+                                        I8(
+                                            2,
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        },
+                    ],
+                },
+            ],
+            comments: [],
+        },
+        Func {
+            signature: FuncSignature {
+                linkage: Private,
+                name: FunctionName(
+                    "flow",
+                ),
+                params: [
+                    ValueDeclaration(
+                        ValueName(
+                            "v0",
+                        ),
+                        Int(
+                            I64,
+                        ),
+                    ),
+                ],
+                ret_type: Some(
+                    Int(
+                        I64,
+                    ),
+                ),
+            },
+            blocks: [
+                Block {
+                    id: BlockId(
+                        Some(
+                            0,
+                        ),
+                    ),
+                    stmts: [
+                        Stmt {
+                            kind: Jump(
+                                BlockId(
+                                    Some(
+                                        1,
+                                    ),
+                                ),
+                            ),
+                        },
+                    ],
+                },
+                Block {
+                    id: BlockId(
+                        Some(
+                            1,
+                        ),
+                    ),
+                    stmts: [
+                        Stmt {
+                            kind: Define(
+                                ValueDeclaration(
+                                    ValueName(
+                                        "v1",
+                                    ),
+                                    Int(
+                                        I64,
+                                    ),
+                                ),
+                                Phi(
+                                    [
+                                        (
+                                            Named(
+                                                ValueName(
+                                                    "v0",
+                                                ),
+                                            ),
+                                            BlockId(
+                                                Some(
+                                                    0,
+                                                ),
+                                            ),
+                                        ),
+                                        (
+                                            Immediate(
+                                                I64(
+                                                    100,
+                                                ),
+                                            ),
+                                            BlockId(
+                                                Some(
+                                                    2,
+                                                ),
+                                            ),
+                                        ),
+                                    ],
+                                ),
+                            ),
+                        },
+                        Stmt {
+                            kind: Define(
+                                ValueDeclaration(
+                                    ValueName(
+                                        "v2",
+                                    ),
+                                    Int(
+                                        I1,
+                                    ),
+                                ),
+                                Binary(
+                                    Gt,
+                                    Named(
+                                        ValueName(
+                                            "v1",
+                                        ),
+                                    ),
+                                    Immediate(
+                                        I64(
+                                            10,
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        },
+                        Stmt {
+                            kind: Branch(
+                                Named(
+                                    ValueName(
+                                        "v2",
+                                    ),
+                                ),
+                                BlockId(
+                                    Some(
+                                        2,
+                                    ),
+                                ),
+                                BlockId(
+                                    Some(
+                                        3,
+                                    ),
+                                ),
+                            ),
+                        },
+                    ],
+                },
+                Block {
+                    id: BlockId(
+                        Some(
+                            2,
+                        ),
+                    ),
+                    stmts: [
+                        Stmt {
+                            kind: Jump(
+                                BlockId(
+                                    Some(
+                                        1,
+                                    ),
+                                ),
+                            ),
+                        },
+                    ],
+                },
+                Block {
+                    id: BlockId(
+                        Some(
+                            3,
+                        ),
+                    ),
+                    stmts: [
+                        Stmt {
+                            kind: Return(
+                                Some(
+                                    Named(
+                                        ValueName(
+                                            "v1",
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        },
+                    ],
+                },
+            ],
+            comments: [],
+        },
+    ],
+    comments: [
+        "#! this is a module",
+        "#! with two functions",
+    ],
+}

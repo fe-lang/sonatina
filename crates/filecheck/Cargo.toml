@@ -9,9 +9,9 @@ publish = false
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-filecheck = "0.5.0"
-sonatina-ir = {path = "../ir"}
-sonatina-codegen = {path = "../codegen"}
-sonatina-parser = {path = "../parser"}
+filecheck = "0.5.0" # { path = "/Users/sean/src/filecheck" }
+sonatina-ir = { path = "../ir" }
+sonatina-codegen = { path = "../codegen" }
+sonatina-parser2 = { path = "../parser2" }
 termcolor = "1.1.2"
 walkdir = "2"

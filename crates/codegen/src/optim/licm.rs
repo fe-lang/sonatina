@@ -1,5 +1,5 @@
 // TODO: Add control flow hoisting.
-use fxhash::{FxHashMap, FxHashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::loop_analysis::{Loop, LoopTree};
 
@@ -112,12 +112,12 @@ impl LicmSolver {
 
         // Create preheader and insert it before the loop header.
         let new_preheader = func.dfg.make_block();
-        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(lp_header));
-        inserter.insert_block_before(new_preheader);
+        let mut inserter = InsnInserter::at_location(CursorLocation::BlockTop(lp_header));
+        inserter.insert_block_before(func, new_preheader);
 
         // Insert jump insn of which destination is the loop header.
-        inserter.set_loc(CursorLocation::BlockTop(new_preheader));
-        inserter.insert_insn_data(InsnData::jump(lp_header));
+        inserter.set_location(CursorLocation::BlockTop(new_preheader));
+        inserter.insert_insn_data(func, InsnData::jump(lp_header));
         cfg.add_edge(new_preheader, lp_header);
 
         // Rewrite branch destination of original preheaders and modify cfg.
@@ -183,10 +183,10 @@ impl LicmSolver {
                 None => {
                     // Insert new phi insn to the preheader.
                     let mut inserter =
-                        InsnInserter::new(func, CursorLocation::BlockTop(new_preheader));
-                    let new_phi_insn = inserter.insert_insn_data(phi_insn_data.clone());
-                    let result = inserter.make_result(new_phi_insn).unwrap();
-                    inserter.attach_result(new_phi_insn, result);
+                        InsnInserter::at_location(CursorLocation::BlockTop(new_preheader));
+                    let new_phi_insn = inserter.insert_insn_data(func, phi_insn_data.clone());
+                    let result = inserter.make_result(func, new_phi_insn).unwrap();
+                    inserter.attach_result(func, new_phi_insn, result);
 
                     // Add phi_insn_data to `inserted_phis` for reusing.
                     inserted_phis.insert(phi_insn_data, result);

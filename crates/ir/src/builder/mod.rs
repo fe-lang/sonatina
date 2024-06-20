@@ -13,9 +13,10 @@ pub mod test_util {
     use sonatina_triple::TargetTriple;
 
     use crate::{
+        func_cursor::InsnInserter,
         ir_writer::FuncWriter,
         isa::{IsaBuilder, TargetIsa},
-        module::{FuncRef, Module, ModuleCtx},
+        module::ModuleCtx,
         Function, Linkage, Signature, Type,
     };
 
@@ -24,40 +25,17 @@ pub mod test_util {
         IsaBuilder::new(triple).build()
     }
 
-    pub struct TestModuleBuilder {
-        module_builder: ModuleBuilder,
-        func_ref: Option<FuncRef>,
-    }
+    pub fn test_func_builder(args: &[Type], ret_ty: Type) -> FunctionBuilder<InsnInserter> {
+        let ctx = ModuleCtx::new(build_test_isa());
+        let mut mb = ModuleBuilder::new(ctx);
 
-    impl TestModuleBuilder {
-        pub fn new() -> Self {
-            Self::default()
-        }
-
-        pub fn func_builder(&mut self, args: &[Type], ret_ty: Type) -> FunctionBuilder {
-            let sig = Signature::new("test_func", Linkage::Public, args, ret_ty);
-            let func_ref = self.module_builder.declare_function(sig);
-            self.func_ref = Some(func_ref);
-            self.module_builder.func_builder(func_ref)
-        }
-
-        pub fn build(self) -> Module {
-            self.module_builder.build()
-        }
+        let sig = Signature::new("test_func", Linkage::Public, args, ret_ty);
+        let func_ref = mb.declare_function(sig);
+        mb.build_function(func_ref)
     }
 
     pub fn dump_func(func: &Function) -> String {
         let mut writer = FuncWriter::new(func);
         writer.dump_string().unwrap()
-    }
-
-    impl Default for TestModuleBuilder {
-        fn default() -> Self {
-            let ctx = ModuleCtx::new(build_test_isa());
-            Self {
-                module_builder: ModuleBuilder::new(ctx),
-                func_ref: None,
-            }
-        }
     }
 }

@@ -2,8 +2,8 @@
 use std::{cmp, fmt};
 
 use cranelift_entity::PrimaryMap;
-use fxhash::FxHashMap;
 use indexmap::IndexMap;
+use rustc_hash::FxHashMap;
 
 use crate::DataFlowGraph;
 
@@ -121,7 +121,7 @@ impl TypeStore {
 }
 
 /// Sonatina IR types definition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Type {
     I1,
     I8,
@@ -131,6 +131,7 @@ pub enum Type {
     I128,
     I256,
     Compound(CompoundType),
+    #[default]
     Void,
 }
 

@@ -42,9 +42,7 @@ impl Module {
 #[derive(Debug, Clone)]
 pub struct ModuleCtx {
     pub isa: TargetIsa,
-    // TODO: Consider using `RwLock` instead of `Mutex`.
     type_store: Arc<RwLock<TypeStore>>,
-    // TODO: Consider using `RwLock` instead of `Mutex`.
     gv_store: Arc<RwLock<GlobalVariableStore>>,
 }
 

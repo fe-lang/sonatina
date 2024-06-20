@@ -1,5 +1,5 @@
 #! This test case is translated from
-#! <https://github.com/llvm/llvm-project/blob/main/llvm/test/Transforms/NewGVN/phi-of-ops-move-block.ll>
+#! <https://github.com/llvm/llvm-project/blob/main/llvm/test/Transforms/NewGVN/cyclic-phi-handling.ll>
 
 target = "evm-ethereum-london"
 
@@ -19,7 +19,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln: block3:
 # nextln:     return;
-func public %llvm_foo(v0.i32, v1.i32) -> void:
+func public %llvm_foo(v0.i32, v1.i32) -> void {
     block0:
         jump block1;
 
@@ -35,3 +35,4 @@ func public %llvm_foo(v0.i32, v1.i32) -> void:
 
     block3:
         return;
+}

@@ -1,10 +1,10 @@
 use smallvec::SmallVec;
 
 use crate::{
-    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
+    func_cursor::{CursorLocation, FuncCursor},
     insn::{BinaryOp, CastOp, DataLocationKind, InsnData, UnaryOp},
     module::FuncRef,
-    Block, Function, GlobalVariable, Immediate, Type, Value,
+    Block, Function, GlobalVariable, Immediate, Type, Value, ValueData,
 };
 
 use super::{
@@ -12,35 +12,19 @@ use super::{
     ModuleBuilder,
 };
 
-pub struct FunctionBuilder<'a> {
-    module_builder: &'a mut ModuleBuilder,
+pub struct FunctionBuilder<C> {
+    pub module_builder: ModuleBuilder,
+    pub func: Function,
     func_ref: FuncRef,
-    loc: CursorLocation,
+    pub cursor: C,
     ssa_builder: SsaBuilder,
-}
-
-macro_rules! impl_unary_insn {
-    ($name:ident, $code:path) => {
-        pub fn $name(&mut self, lhs: Value) -> Value {
-            let insn_data = InsnData::Unary {
-                code: $code,
-                args: [lhs],
-            };
-
-            self.insert_insn(insn_data).unwrap()
-        }
-    };
+    undefined: Vec<Value>,
 }
 
 macro_rules! impl_binary_insn {
     ($name:ident, $code:path) => {
         pub fn $name(&mut self, lhs: Value, rhs: Value) -> Value {
-            let insn_data = InsnData::Binary {
-                code: $code,
-                args: [lhs, rhs],
-            };
-
-            self.insert_insn(insn_data).unwrap()
+            self.binary_op($code, lhs, rhs)
         }
     };
 }
@@ -48,47 +32,109 @@ macro_rules! impl_binary_insn {
 macro_rules! impl_cast_insn {
     ($name:ident, $code:path) => {
         pub fn $name(&mut self, lhs: Value, ty: Type) -> Value {
-            let insn_data = InsnData::Cast {
-                code: $code,
-                args: [lhs],
-                ty,
-            };
-
-            self.insert_insn(insn_data).unwrap()
+            self.cast_op($code, lhs, ty)
         }
     };
 }
 
-impl<'a> FunctionBuilder<'a> {
-    pub fn new(module_builder: &'a mut ModuleBuilder, func_ref: FuncRef) -> Self {
+impl<C> FunctionBuilder<C>
+where
+    C: FuncCursor,
+{
+    pub fn new(module_builder: ModuleBuilder, func_ref: FuncRef, cursor: C) -> Self {
+        let func = module_builder.funcs[func_ref].clone();
         Self {
             module_builder,
+            func,
             func_ref,
-            loc: CursorLocation::NoWhere,
+            cursor,
             ssa_builder: SsaBuilder::new(),
+            undefined: Default::default(),
         }
     }
 
+    pub fn finish(self) -> ModuleBuilder {
+        if cfg!(debug_assertions) {
+            for block in self.func.layout.iter_block() {
+                debug_assert!(self.is_sealed(block), "all blocks must be sealed");
+            }
+        }
+
+        let Self {
+            mut module_builder,
+            func,
+            func_ref,
+            undefined,
+            ..
+        } = self;
+
+        debug_assert!(undefined.is_empty()); // xxx
+
+        module_builder.funcs[func_ref] = func;
+        module_builder
+    }
+
+    pub fn append_parameter(&mut self, ty: Type) -> Value {
+        let idx = self.func.arg_values.len();
+
+        let value_data = self.func.dfg.make_arg_value(ty, idx);
+        let value = self.func.dfg.make_value(value_data);
+        self.func.arg_values.push(value);
+        value
+    }
+
     pub fn append_block(&mut self) -> Block {
-        let block = self.cursor().make_block();
-        self.cursor().append_block(block);
+        let block = self.cursor.make_block(&mut self.func);
+        self.cursor.append_block(&mut self.func, block);
         block
     }
 
     pub fn switch_to_block(&mut self, block: Block) {
-        self.loc = CursorLocation::BlockBottom(block);
+        self.cursor.set_location(CursorLocation::BlockBottom(block));
+    }
+
+    pub fn name_value(&mut self, value: Value, name: &str) {
+        if let Some(v) = self.func.value_names.get_by_right(name) {
+            if let Some(pos) = self.undefined.iter().position(|u| u == v) {
+                self.func.dfg.change_to_alias(*v, value);
+                // self.func.dfg.values[*v] = ValueData::Alias { alias: value };
+                self.undefined.remove(pos);
+            } else {
+                panic!("value names must be unique");
+            }
+        }
+        self.func.value_names.insert(value, name.into());
+    }
+
+    pub fn get_named_value(&mut self, name: &str) -> Value {
+        if let Some(v) = self.func.value_names.get_by_right(name).copied() {
+            v
+        } else {
+            let v = self.func.dfg.make_value(ValueData::Immediate {
+                imm: Immediate::I128(424242),
+                ty: Type::I128,
+            });
+
+            self.undefined.push(v);
+            self.name_value(v, name);
+            v
+        }
     }
 
     pub fn make_imm_value<Imm>(&mut self, imm: Imm) -> Value
     where
         Imm: Into<Immediate>,
     {
-        self.func_mut().dfg.make_imm_value(imm)
+        self.func.dfg.make_imm_value(imm)
     }
 
     /// Return pointer value to the global variable.
     pub fn make_global_value(&mut self, gv: GlobalVariable) -> Value {
-        self.func_mut().dfg.make_global_value(gv)
+        self.func.dfg.make_global_value(gv)
+    }
+
+    pub fn ptr_type(&mut self, ty: Type) -> Type {
+        self.module_builder.ptr_type(ty)
     }
 
     pub fn declare_array_type(&mut self, elem: Type, len: usize) -> Type {
@@ -100,8 +146,29 @@ impl<'a> FunctionBuilder<'a> {
             .declare_struct_type(name, fields, packed)
     }
 
-    impl_unary_insn!(not, UnaryOp::Not);
-    impl_unary_insn!(neg, UnaryOp::Neg);
+    pub fn unary_op(&mut self, op: UnaryOp, lhs: Value) -> Value {
+        let insn_data = InsnData::Unary {
+            code: op,
+            args: [lhs],
+        };
+        self.insert_insn(insn_data).unwrap()
+    }
+
+    pub fn not(&mut self, lhs: Value) -> Value {
+        self.unary_op(UnaryOp::Not, lhs)
+    }
+
+    pub fn neg(&mut self, lhs: Value) -> Value {
+        self.unary_op(UnaryOp::Neg, lhs)
+    }
+
+    pub fn binary_op(&mut self, op: BinaryOp, lhs: Value, rhs: Value) -> Value {
+        let insn_data = InsnData::Binary {
+            code: op,
+            args: [lhs, rhs],
+        };
+        self.insert_insn(insn_data).unwrap()
+    }
 
     impl_binary_insn!(add, BinaryOp::Add);
     impl_binary_insn!(sub, BinaryOp::Sub);
@@ -121,58 +188,51 @@ impl<'a> FunctionBuilder<'a> {
     impl_binary_insn!(and, BinaryOp::And);
     impl_binary_insn!(or, BinaryOp::Or);
 
+    pub fn cast_op(&mut self, op: CastOp, value: Value, ty: Type) -> Value {
+        let insn_data = InsnData::Cast {
+            code: op,
+            args: [value],
+            ty,
+        };
+        self.insert_insn(insn_data).unwrap()
+    }
+
     impl_cast_insn!(sext, CastOp::Sext);
     impl_cast_insn!(zext, CastOp::Zext);
     impl_cast_insn!(trunc, CastOp::Trunc);
     impl_cast_insn!(bitcast, CastOp::BitCast);
 
+    pub fn load(&mut self, loc: DataLocationKind, addr: Value) -> Value {
+        let insn_data = InsnData::Load { args: [addr], loc };
+        self.insert_insn(insn_data).unwrap()
+    }
+
+    pub fn store(&mut self, loc: DataLocationKind, addr: Value, data: Value) {
+        let insn_data = InsnData::Store {
+            args: [addr, data],
+            loc,
+        };
+        self.insert_insn(insn_data);
+    }
+
     /// Build memory load instruction.
     pub fn memory_load(&mut self, addr: Value) -> Value {
-        let insn_data = InsnData::Load {
-            args: [addr],
-            loc: DataLocationKind::Memory,
-        };
-        self.insert_insn(insn_data).unwrap()
+        self.load(DataLocationKind::Memory, addr)
     }
 
     /// Build memory store instruction.
     pub fn memory_store(&mut self, addr: Value, data: Value) {
-        let insn_data = InsnData::Store {
-            args: [addr, data],
-            loc: DataLocationKind::Memory,
-        };
-        self.insert_insn(insn_data);
+        self.store(DataLocationKind::Memory, addr, data)
     }
 
     /// Build storage load instruction.
     pub fn storage_load(&mut self, addr: Value) -> Value {
-        let insn_data = InsnData::Load {
-            args: [addr],
-            loc: DataLocationKind::Storage,
-        };
-        self.insert_insn(insn_data).unwrap()
-    }
-
-    pub fn call(&mut self, func: FuncRef, args: &[Value]) -> Value {
-        let sig = self.module_builder.funcs[func].sig.clone();
-        let ret_ty = sig.ret_ty();
-        self.func_mut().callees.insert(func, sig);
-
-        let insn_data = InsnData::Call {
-            func,
-            args: args.into(),
-            ret_ty,
-        };
-        self.insert_insn(insn_data).unwrap()
+        self.load(DataLocationKind::Storage, addr)
     }
 
     /// Build storage store instruction.
     pub fn storage_store(&mut self, addr: Value, data: Value) {
-        let insn_data = InsnData::Store {
-            args: [addr, data],
-            loc: DataLocationKind::Storage,
-        };
-        self.insert_insn(insn_data);
+        self.store(DataLocationKind::Storage, addr, data)
     }
 
     /// Build alloca instruction.
@@ -185,7 +245,7 @@ impl<'a> FunctionBuilder<'a> {
         debug_assert!(!self.ssa_builder.is_sealed(dest));
         let insn_data = InsnData::Jump { dests: [dest] };
 
-        let pred = self.cursor().block();
+        let pred = self.cursor.block(&self.func);
         self.ssa_builder.append_pred(dest, pred.unwrap());
         self.insert_insn(insn_data);
     }
@@ -214,7 +274,7 @@ impl<'a> FunctionBuilder<'a> {
             default,
             table: blocks,
         };
-        let block = self.cursor().block().unwrap();
+        let block = self.cursor.block(&self.func).unwrap();
 
         if let Some(default) = default {
             self.ssa_builder.append_pred(default, block);
@@ -234,10 +294,21 @@ impl<'a> FunctionBuilder<'a> {
             dests: [then, else_],
         };
 
-        let block = self.cursor().block().unwrap();
+        let block = self.cursor.block(&self.func).unwrap();
         self.ssa_builder.append_pred(then, block);
         self.ssa_builder.append_pred(else_, block);
         self.insert_insn(insn_data);
+    }
+
+    pub fn call(&mut self, func: FuncRef, args: &[Value]) -> Option<Value> {
+        let sig = self.module_builder.get_sig(func).clone();
+        let insn_data = InsnData::Call {
+            func,
+            args: args.into(),
+            ret_ty: sig.ret_ty(),
+        };
+        self.func.callees.insert(func, sig);
+        self.insert_insn(insn_data)
     }
 
     pub fn ret(&mut self, args: Option<Value>) {
@@ -250,8 +321,7 @@ impl<'a> FunctionBuilder<'a> {
         self.insert_insn(insn_data)
     }
 
-    pub fn phi(&mut self, args: &[(Value, Block)]) -> Value {
-        let ty = self.func().dfg.value_ty(args[0].0);
+    pub fn phi(&mut self, ty: Type, args: &[(Value, Block)]) -> Value {
         let insn_data = InsnData::Phi {
             values: args.iter().map(|(val, _)| *val).collect(),
             blocks: args.iter().map(|(_, block)| *block).collect(),
@@ -262,15 +332,15 @@ impl<'a> FunctionBuilder<'a> {
 
     pub fn append_phi_arg(&mut self, phi_value: Value, value: Value, block: Block) {
         let insn = self
-            .func()
+            .func
             .dfg
             .value_insn(phi_value)
             .expect("value must be the result of phi function");
         debug_assert!(
-            self.func().dfg.is_phi(insn),
+            self.func.dfg.is_phi(insn),
             "value must be the result of phi function"
         );
-        self.func_mut().dfg.append_phi_arg(insn, value, block);
+        self.func.dfg.append_phi_arg(insn, value, block);
     }
 
     pub fn declare_var(&mut self, ty: Type) -> Variable {
@@ -278,51 +348,36 @@ impl<'a> FunctionBuilder<'a> {
     }
 
     pub fn use_var(&mut self, var: Variable) -> Value {
-        let block = self.cursor().block().unwrap();
-        self.ssa_builder
-            .use_var(&mut self.module_builder.funcs[self.func_ref], var, block)
+        let block = self.cursor.block(&self.func).unwrap();
+        self.ssa_builder.use_var(&mut self.func, var, block)
     }
 
     pub fn def_var(&mut self, var: Variable, value: Value) {
-        debug_assert_eq!(
-            self.module_builder.funcs[self.func_ref].dfg.value_ty(value),
-            self.ssa_builder.var_ty(var)
-        );
+        debug_assert_eq!(self.func.dfg.value_ty(value), self.ssa_builder.var_ty(var));
 
-        let block = self.cursor().block().unwrap();
+        let block = self.cursor.block(&self.func).unwrap();
         self.ssa_builder.def_var(var, value, block);
     }
 
     pub fn seal_block(&mut self) {
-        let block = self.cursor().block().unwrap();
-        self.ssa_builder
-            .seal_block(&mut self.module_builder.funcs[self.func_ref], block);
+        let block = self.cursor.block(&self.func).unwrap();
+        self.ssa_builder.seal_block(&mut self.func, block);
     }
 
     pub fn seal_all(&mut self) {
-        self.ssa_builder
-            .seal_all(&mut self.module_builder.funcs[self.func_ref]);
+        self.ssa_builder.seal_all(&mut self.func);
     }
 
     pub fn is_sealed(&self, block: Block) -> bool {
         self.ssa_builder.is_sealed(block)
     }
 
-    pub fn finish(self) -> FuncRef {
-        if cfg!(debug_assertions) {
-            for block in self.func().layout.iter_block() {
-                debug_assert!(self.is_sealed(block), "all blocks must be sealed");
-            }
-        }
-        self.func_ref
-    }
-
     pub fn type_of(&self, value: Value) -> Type {
-        self.func().dfg.value_ty(value)
+        self.func.dfg.value_ty(value)
     }
 
     pub fn args(&self) -> &[Value] {
-        &self.func().arg_values
+        &self.func.arg_values
     }
 
     pub fn address_type(&self) -> Type {
@@ -337,27 +392,18 @@ impl<'a> FunctionBuilder<'a> {
         self.module_builder.ctx.isa.type_provider().gas_type()
     }
 
-    fn cursor(&mut self) -> InsnInserter {
-        InsnInserter::new(&mut self.module_builder.funcs[self.func_ref], self.loc)
-    }
+    // fn cursor(&mut self) -> InsnInserter {
+    //     InsnInserter::new(&mut self.func, self.loc)
+    // }
 
     fn insert_insn(&mut self, insn_data: InsnData) -> Option<Value> {
-        let mut cursor = self.cursor();
-        let insn = cursor.insert_insn_data(insn_data);
-        let result = cursor.make_result(insn);
+        let insn = self.cursor.insert_insn_data(&mut self.func, insn_data);
+        let result = self.cursor.make_result(&mut self.func, insn);
         if let Some(result) = result {
-            cursor.attach_result(insn, result);
+            self.cursor.attach_result(&mut self.func, insn, result);
         }
-        self.loc = CursorLocation::At(insn);
+        self.cursor.set_location(CursorLocation::At(insn));
         result
-    }
-
-    fn func(&self) -> &Function {
-        &self.module_builder.funcs[self.func_ref]
-    }
-
-    fn func_mut(&mut self) -> &mut Function {
-        &mut self.module_builder.funcs[self.func_ref]
     }
 }
 
@@ -367,8 +413,7 @@ mod tests {
 
     #[test]
     fn entry_block() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], Type::Void);
+        let mut builder = test_func_builder(&[], Type::Void);
 
         let b0 = builder.append_block();
         builder.switch_to_block(b0);
@@ -379,25 +424,25 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
 
-        let module = test_module_builder.build();
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         assert_eq!(
             dump_func(&module.funcs[func_ref]),
-            "func public %test_func() -> void:
+            "func public %test_func() -> void {
     block0:
         v2.i8 = add 1.i8 2.i8;
         v3.i8 = sub v2 1.i8;
         return;
 
+}
 "
         );
     }
 
     #[test]
     fn entry_block_with_args() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[Type::I32, Type::I64], Type::Void);
+        let mut builder = test_func_builder(&[Type::I32, Type::I64], Type::Void);
 
         let entry_block = builder.append_block();
         builder.switch_to_block(entry_block);
@@ -409,25 +454,25 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
 
-        let module = test_module_builder.build();
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         assert_eq!(
             dump_func(&module.funcs[func_ref]),
-            "func public %test_func(v0.i32, v1.i64) -> void:
+            "func public %test_func(v0.i32, v1.i64) -> void {
     block0:
         v2.i64 = sext v0;
         v3.i64 = mul v2 v1;
         return;
 
+}
 "
         );
     }
 
     #[test]
     fn entry_block_with_return() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], Type::I32);
+        let mut builder = test_func_builder(&[], Type::I32);
 
         let entry_block = builder.append_block();
 
@@ -435,23 +480,23 @@ mod tests {
         let v0 = builder.make_imm_value(1i32);
         builder.ret(Some(v0));
         builder.seal_all();
-        let func_ref = builder.finish();
 
-        let module = test_module_builder.build();
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         assert_eq!(
             dump_func(&module.funcs[func_ref]),
-            "func public %test_func() -> i32:
+            "func public %test_func() -> i32 {
     block0:
         return 1.i32;
 
+}
 "
         );
     }
 
     #[test]
     fn then_else_merge_block() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[Type::I64], Type::Void);
+        let mut builder = test_func_builder(&[Type::I64], Type::Void);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -472,17 +517,17 @@ mod tests {
         builder.jump(merge_block);
 
         builder.switch_to_block(merge_block);
-        let v3 = builder.phi(&[(v1, then_block), (v2, else_block)]);
+        let v3 = builder.phi(Type::I64, &[(v1, then_block), (v2, else_block)]);
         builder.add(v3, arg0);
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
 
-        let module = test_module_builder.build();
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         assert_eq!(
             dump_func(&module.funcs[func_ref]),
-            "func public %test_func(v0.i64) -> void:
+            "func public %test_func(v0.i64) -> void {
     block0:
         br v0 block1 block2;
 
@@ -497,6 +542,7 @@ mod tests {
         v4.i64 = add v3 v0;
         return;
 
+}
 "
         );
     }

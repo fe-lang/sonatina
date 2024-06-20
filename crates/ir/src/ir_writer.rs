@@ -47,6 +47,12 @@ impl<'a> ModuleWriter<'a> {
 
         Ok(())
     }
+
+    pub fn dump_string(&mut self) -> io::Result<String> {
+        let mut s = Vec::new();
+        self.write(&mut s)?;
+        unsafe { Ok(String::from_utf8_unchecked(s)) }
+    }
 }
 
 pub struct FuncWriter<'a> {
@@ -60,6 +66,8 @@ impl<'a> FuncWriter<'a> {
     }
 
     pub fn write(&mut self, mut w: impl io::Write) -> io::Result<()> {
+        // TODO: extern declarations aren't printed correctly
+
         w.write_fmt(format_args!(
             "func {} %{}(",
             self.func.sig.linkage(),
@@ -73,13 +81,17 @@ impl<'a> FuncWriter<'a> {
         write!(w, ") -> ")?;
         self.func.sig.ret_ty().ir_write(self.ctx(), &mut w)?;
 
-        self.enter(&mut w)?;
+        writeln!(w, " {{")?;
+        self.level += 1;
+
         for block in self.func.layout.iter_block() {
             self.write_block_with_insn(block, &mut w)?;
             self.newline(&mut w)?;
             self.newline(&mut w)?;
         }
-        self.leave();
+
+        self.level -= 1;
+        writeln!(w, "}}")?;
 
         Ok(())
     }
@@ -167,6 +179,8 @@ impl IrWrite for Value {
             writer
                 .ctx()
                 .with_gv_store(|s| write!(w, "%{}", s.gv_data(gv).symbol))
+        } else if let Some(name) = writer.func.value_names.get_by_left(&value) {
+            write!(w, "{name}")
         } else {
             write!(w, "v{}", value.0)
         }

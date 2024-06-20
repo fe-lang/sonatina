@@ -8,7 +8,7 @@ target = "evm-ethereum-london"
 # nextln:  v20.i8 = sub v0 v1;
 # nextln:  v22.i8 = sub v1 v0;
 # nextln:  return;
-func public %commutativity(v0.i8, v1.i8) -> void:
+func public %commutativity(v0.i8, v1.i8) -> void {
     block1:
         v10.i8 = add v0 v1;
         v11.i8 = add v0 v1;
@@ -20,3 +20,4 @@ func public %commutativity(v0.i8, v1.i8) -> void:
         v21.i8 = sub v0 v1;
         v22.i8 = sub v1 v0;
         return;
+}

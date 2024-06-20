@@ -8,7 +8,7 @@ target = "evm-ethereum-london"
 # nextln:    jump block1;
 # nextln: 
 # nextln: block1:
-# nextln:     $(var1=$VALUE).i1 = phi (0.i1 block0) (-1.i1 block7);
+# nextln:     $(var1=$VALUE).i1 = phi (0.i1 block0) (1.i1 block7);
 # nextln:     v1.i32 = phi (-2022207984.i32 block0) (0.i32 block7);
 # nextln:     br v0 block3 block2;
 # nextln: 
@@ -24,13 +24,13 @@ target = "evm-ethereum-london"
 # nextln:     jump block7;
 # nextln: 
 # nextln: block7:
-# nextln:     $(var3=$VALUE).i1 = phi ($var2 block3) (-1.i1 block6);
+# nextln:     $(var3=$VALUE).i1 = phi ($var2 block3) (1.i1 block6);
 # nextln:     v4.i32 = phi (v2 block3) (0.i32 block6);
 # nextln:     br $var3 block8 block1;
 # nextln: 
 # nextln: block8:
 # nextln:     return;
-func public %llvm_pr36501(v0.i1) -> void:
+func public %llvm_pr36501(v0.i1) -> void {
     block0:
         jump block1;
 
@@ -56,6 +56,7 @@ func public %llvm_pr36501(v0.i1) -> void:
 
     block8:
         return;
+}
 
 # regex: VALUE=\bv\d+\b
 # check:  block0
@@ -88,7 +89,7 @@ func public %llvm_pr36501(v0.i1) -> void:
 # nextln:     v9.i32 = phi (v5 block11) (1.i32 block18);
 # nextln:     store @memory v31 $var;
 # nextln:     return;
-func public %llvm_PR42557(v0.i32, v1.i1, v2.i1, v31.*i32) -> void:
+func public %llvm_PR42557(v0.i32, v1.i1, v2.i1, v31.*i32) -> void {
     block0:
         jump block1;
 
@@ -119,3 +120,4 @@ func public %llvm_PR42557(v0.i32, v1.i1, v2.i1, v31.*i32) -> void:
         v10.i1 = eq v9 0.i32;
         store @memory v31 v10;
         return;
+}

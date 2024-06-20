@@ -2,168 +2,186 @@ target = "evm-ethereum-london"
 
 # v0 | -1 => -1
 # check: return -1.i8;
-func public %or0(v0.i8) -> i8:
+func public %or0(v0.i8) -> i8  {
     block0:
         v1.i8 = or v0 -1.i8;
         return v1;
+}
 
 # v0 | v0 => v0
 # check: return v0;
-func public %or1(v0.i8) -> i8:
+func public %or1(v0.i8) -> i8  {
     block0:
         v1.i8 = or v0 v0;
         return v1;
+}
 
 # v0 | 0 => v0
 # check: return v0;
-func public %or2(v0.i8) -> i8:
+func public %or2(v0.i8) -> i8  {
     block0:
         v1.i8 = or v0 0.i8;
         return v1;
+}
 
 # v0 | !v0 => -1
 # check: return -1.i8;
-func public %or3(v0.i8) -> i8:
+func public %or3(v0.i8) -> i8  {
     block0:
         v1.i8 = not v0;
         v2.i8 = or v0 v1;
         return v2;
+}
 
 # v0 | (v0 & v1) => v0
 # check: return v0;
-func public %or4(v0.i8, v1.i8) -> i8:
+func public %or4(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = and v0 v1;
         v3.i8 = or v0 v2;
         return v3;
+}
 
 # v0 | (v1 & v0) => v0
 # check: return v0;
-func public %or5(v0.i8, v1.i8) -> i8:
+func public %or5(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = and v1 v0;
         v3.i8 = or v0 v2;
         return v3;
+}
 
 # v0 | !(v0 & v1) => -1
 # check: return -1.i8;
-func public %or6(v0.i8, v1.i8) -> i8:
+func public %or6(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = and v0 v1;
         v3.i8 = not v2;
         v4.i8 = or v0 v3;
         return v4;
+}
 
 # v0 | !(v1 & v0) => -1
 # check: return -1.i8;
-func public %or7(v0.i8, v1.i8) -> i8:
+func public %or7(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = and v1 v0;
         v3.i8 = not v2;
         v4.i8 = or v0 v3;
         return v4;
+}
 
 # (v0 ^ v1) | (v0 & !v1) => (v0 ^ v1)
 # check: return v2;
-func public %or8(v0.i8, v1.i8) -> i8:
+func public %or8(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = xor v0 v1;
         v3.i8 = not v1;
         v4.i8 = and v0 v3;
         v5.i8 = or v2 v4;
         return v5;
+}
 
 # (v0 ^ 1) | (!v1 & v0) => (v0 ^ v1)
 # check: return v2;
-func public %or9(v0.i8, v1.i8) -> i8:
+func public %or9(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = xor v0 v1;
         v3.i8 = not v1;
         v4.i8 = and v3 v0;
         v5.i8 = or v2 v4;
         return v5;
+}
 
 # (v0 ^ v1) | (!v0 & v1) => (v0 ^ v1)
 # check: return v2;
-func public %or10(v0.i8, v1.i8) -> i8:
+func public %or10(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = xor v0 v1;
         v3.i8 = not v0;
         v4.i8 = and v3 v1;
         v5.i8 = or v2 v4;
         return v5;
+}
 
 # (v0 ^ v1) | (v1 & !v0) => (v0 ^ v1)
 # check: return v2;
-func public %or11(v0.i8, v1.i8) -> i8:
+func public %or11(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = xor v0 v1;
         v3.i8 = not v0;
         v4.i8 = and v1 v3;
         v5.i8 = or v2 v4;
         return v5;
+}
 
 # (!v0 ^ v1) | (v0 & v1) => (!v0 ^ v1)
 # check: return v3;
-func public %or12(v0.i8, v1.i8) -> i8:
+func public %or12(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = not v0;
         v3.i8 = xor v2 v1;
         v4.i8 = and v0 v1;
         v5.i8 = or v3 v4;
         return v5;
+}
 
 # (!v0 ^ v1) | (v1 & v0) => (!v0 ^ v1)
 # check: return v3;
-func public %or13(v0.i8, v1.i8) -> i8:
+func public %or13(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = not v0;
         v3.i8 = xor v2 v1;
         v4.i8 = and v1 v0;
         v5.i8 = or v3 v4;
         return v5;
+}
 
 # (v0 ^ !v1) | (v0 & v1) => (v0 ^ !v1)
 # check: return v3;
-func public %or14(v0.i8, v1.i8) -> i8:
+func public %or14(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = not v1;
         v3.i8 = xor v0 v2;
         v4.i8 = and v0 v1;
         v5.i8 = or v3 v4;
         return v5;
+}
 
 # (v0 ^ !v1) | (v1 & v0) => (v0 ^ !v1)
 # check: return v3;
-func public %or15(v0.i8, v1.i8) -> i8:
+func public %or15(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = not v1;
         v3.i8 = xor v0 v2;
         v4.i8 = and v1 v0;
         v5.i8 = or v3 v4;
         return v5;
+}
 
 # (v0 | v1) | (v0 ^ v1) => (v0 | v1)
 # check: return v2;
-func public %or16(v0.i8, v1.i8) -> i8:
+func public %or16(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = or v0 v1;
         v3.i8 = xor v0 v1;
         v4.i8 = or v2 v3;
         return v4;
+}
 
 # (v0 | v1) | (v1 ^ v0) => (v0 | v1)
 # check: return v2;
-func public %or17(v0.i8, v1.i8) -> i8:
+func public %or17(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = or v0 v1;
         v3.i8 = xor v1 v0;
         v4.i8 = or v2 v3;
         return v4;
+}
 
 # (!v0 & v1) | !(v0 | v1) => !v0
 # check: return v2;
-func public %or18(v0.i8, v1.i8) -> i8:
+func public %or18(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = not v0;
         v3.i8 = and v2 v1;
@@ -171,10 +189,11 @@ func public %or18(v0.i8, v1.i8) -> i8:
         v5.i8 = not v4;
         v6.i8 = or v3 v5;
         return v6;
+}
 
 # (!v0 & v1) | !(v1 | v0) => !v0
 # check: return v2;
-func public %or19(v0.i8, v1.i8) -> i8:
+func public %or19(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = not v0;
         v3.i8 = and v2 v1;
@@ -182,10 +201,11 @@ func public %or19(v0.i8, v1.i8) -> i8:
         v5.i8 = not v4;
         v6.i8 = or v3 v5;
         return v6;
+}
 
 # (v0 & !v1) | !(v0 | v1) => !v1
 # check: return v2;
-func public %or20(v0.i8, v1.i8) -> i8:
+func public %or20(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = not v1;
         v3.i8 = and v0 v2;
@@ -193,10 +213,11 @@ func public %or20(v0.i8, v1.i8) -> i8:
         v5.i8 = not v4;
         v6.i8 = or v3 v5;
         return v6;
+}
 
 # (v0 & !v1) | !(v1 | v0) => !v1
 # check: return v2;
-func public %or21(v0.i8, v1.i8) -> i8:
+func public %or21(v0.i8, v1.i8) -> i8  {
     block0:
         v2.i8 = not v1;
         v3.i8 = and v0 v2;
@@ -204,3 +225,4 @@ func public %or21(v0.i8, v1.i8) -> i8:
         v5.i8 = not v4;
         v6.i8 = or v3 v5;
         return v6;
+}

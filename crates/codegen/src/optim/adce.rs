@@ -133,27 +133,27 @@ impl AdceSolver {
             return false;
         };
 
-        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(entry));
+        let mut inserter = InsnInserter::at_location(CursorLocation::BlockTop(entry));
         loop {
             match inserter.loc() {
                 CursorLocation::At(insn) => {
                     if self.does_insn_live(insn) {
-                        inserter.proceed();
+                        inserter.proceed(func);
                     } else {
-                        inserter.remove_insn()
+                        inserter.remove_insn(func)
                     }
                 }
 
                 CursorLocation::BlockTop(block) => {
                     if self.does_block_live(block) {
-                        inserter.proceed()
+                        inserter.proceed(func)
                     } else {
-                        inserter.remove_block()
+                        inserter.remove_block(func)
                     }
                 }
 
                 CursorLocation::BlockBottom(_) => {
-                    inserter.proceed();
+                    inserter.proceed(func);
                 }
 
                 CursorLocation::NoWhere => break,
@@ -161,11 +161,11 @@ impl AdceSolver {
         }
 
         // Modify branch insns to remove unreachable edges.
-        inserter.set_to_entry();
+        inserter.set_to_entry(func);
         let mut br_insn_modified = false;
-        while let Some(block) = inserter.block() {
-            br_insn_modified |= self.modify_branch(&mut inserter, block);
-            inserter.proceed_block();
+        while let Some(block) = inserter.block(func) {
+            br_insn_modified |= self.modify_branch(func, &mut inserter, block);
+            inserter.proceed_block(func);
         }
 
         br_insn_modified
@@ -183,19 +183,19 @@ impl AdceSolver {
     }
 
     /// Returns `true` if branch insn is modified.
-    fn modify_branch(&self, inserter: &mut InsnInserter, block: Block) -> bool {
-        let last_insn = match inserter.func().layout.last_insn_of(block) {
+    fn modify_branch(
+        &self,
+        func: &mut Function,
+        inserter: &mut InsnInserter,
+        block: Block,
+    ) -> bool {
+        let last_insn = match func.layout.last_insn_of(block) {
             Some(insn) => insn,
             None => return false,
         };
-        inserter.set_loc(CursorLocation::At(last_insn));
+        inserter.set_location(CursorLocation::At(last_insn));
 
-        let dests: Vec<_> = inserter
-            .func()
-            .dfg
-            .analyze_branch(last_insn)
-            .iter_dests()
-            .collect();
+        let dests: Vec<_> = func.dfg.analyze_branch(last_insn).iter_dests().collect();
 
         let mut changed = false;
         for dest in dests {
@@ -206,14 +206,11 @@ impl AdceSolver {
             match self.living_post_dom(dest) {
                 // If the destination is dead but its post dominator is living, then change the
                 // destination to the post dominator.
-                Some(postdom) => inserter
-                    .func_mut()
-                    .dfg
-                    .rewrite_branch_dest(last_insn, dest, postdom),
+                Some(postdom) => func.dfg.rewrite_branch_dest(last_insn, dest, postdom),
 
                 // If the block doesn't have post dominator, then remove the dest.
                 None => {
-                    inserter.func_mut().dfg.remove_branch_dest(last_insn, dest);
+                    func.dfg.remove_branch_dest(last_insn, dest);
                 }
             }
 
@@ -221,13 +218,13 @@ impl AdceSolver {
         }
 
         // Turn branch insn to `jump` if all dests is the same.
-        let branch_info = inserter.func().dfg.analyze_branch(last_insn);
+        let branch_info = func.dfg.analyze_branch(last_insn);
         if branch_info.dests_num() > 1 {
             let mut branch_dests = branch_info.iter_dests();
             let first_dest = branch_dests.next().unwrap();
             if branch_dests.all(|dest| dest == first_dest) {
                 changed = true;
-                inserter.replace(InsnData::jump(first_dest));
+                inserter.replace(func, InsnData::jump(first_dest));
             }
         }
 
