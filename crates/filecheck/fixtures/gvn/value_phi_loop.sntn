@@ -3,12 +3,12 @@ target = "evm-ethereum-london"
 # regex: VALUE=\bv\d+\b
 # check:    block0:
 # nextln:        v1.i32 = add v100 v101;
-# nextln:        fallthrough block1;
+# nextln:        jump block1;
 # nextln: 
 # nextln:    block1:
 # nextln:        $(var1=$VALUE).i32 = phi (v1 block0) (v31 block3);
 # nextln:        v10.i32 = phi (v100 block0) (v30 block3);
-# nextln:        fallthrough block2;
+# nextln:        jump block2;
 # nextln: 
 # nextln:    block2:
 # nextln:        br v102 block3 block4;
@@ -30,12 +30,12 @@ target = "evm-ethereum-london"
 func public %value_phi_loop(v100.i32, v101.i32, v102.i1, v103.i1, v104.i32, v105.i32) -> i32:
     block0:
         v1.i32 = add v100 v101;
-        fallthrough block1;
+        jump block1;
 
     block1:
         v10.i32 = phi (v100 block0) (v30 block3);
         v11.i32 = add v10 v101;
-        fallthrough block2;
+        jump block2;
 
     block2:
         v22.i32 = sub v11 v101;

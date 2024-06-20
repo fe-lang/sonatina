@@ -2,7 +2,7 @@ target = "evm-ethereum-london"
 
 # check: block1:
 # nextln:  v10.i8 = add v0 v1;
-# nextln:  fallthrough block2;
+# nextln:  jump block2;
 # nextln: 
 # check: block2:
 # nextln:  v20.i8 = sub v0 v1;
@@ -13,7 +13,7 @@ func public %commutativity(v0.i8, v1.i8) -> void:
         v10.i8 = add v0 v1;
         v11.i8 = add v0 v1;
         v12.i8 = add v1 v0;
-        fallthrough block2;
+        jump block2;
 
     block2:
         v20.i8 = sub v0 v1;

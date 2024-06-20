@@ -2,7 +2,7 @@ target = "evm-ethereum-london"
 
 # check:  block0:
 # nextln:      v3.i32 = add v0 v1;
-# nextln:      fallthrough block1;
+# nextln:      jump block1;
 # nextln: 
 # nextln:  block1:
 # nextln:      v2.i32 = phi (0.i32 block0) (v4 block2);
@@ -17,7 +17,7 @@ target = "evm-ethereum-london"
 # nextln:      return;
 func public %basic(v0.i32, v1.i32) -> void:
     block0:
-        fallthrough block1;
+        jump block1;
 
     block1:
         v2.i32 = phi (0.i32 block0) (v4 block2);

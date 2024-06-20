@@ -8,7 +8,7 @@ use sonatina_ir::{
     builder::ModuleBuilder,
     func_cursor::{CursorLocation, FuncCursor},
     global_variable::ConstantValue,
-    insn::{BinaryOp, CastOp, DataLocationKind, JumpOp, UnaryOp},
+    insn::{BinaryOp, CastOp, DataLocationKind, UnaryOp},
     isa::IsaBuilder,
     module::{FuncRef, ModuleCtx},
     Block, BlockData, Function, GlobalVariableData, Immediate, Insn, InsnData, Linkage, Module,
@@ -622,13 +622,10 @@ macro_rules! make_cast {
 }
 
 macro_rules! make_jump {
-    ($parser:ident, $code:path) => {{
+    ($parser:ident) => {{
         let dest = $parser.expect_block()?;
         expect_token!($parser.lexer, Token::SemiColon, ";")?;
-        InsnData::Jump {
-            code: $code,
-            dests: [dest],
-        }
+        InsnData::Jump { dests: [dest] }
     }};
 }
 
@@ -722,8 +719,7 @@ impl Code {
                 InsnData::Call { func, args, ret_ty }
             }
 
-            Self::Jump => make_jump!(parser, JumpOp::Jump),
-            Self::FallThrough => make_jump!(parser, JumpOp::FallThrough),
+            Self::Jump => make_jump!(parser),
 
             Self::Br => {
                 let cond = parser.expect_insn_arg(inserter, 0, &mut undefs)?;
@@ -1044,7 +1040,7 @@ mod tests {
     fn test_with_struct_type() {
         let input = "
             target = \"evm-ethereum-london\"
-            
+
             type %s1 = {i32, i64};
             type %s2_packed = <{i32, i64, *%s1}>;
 
@@ -1084,7 +1080,7 @@ mod tests {
     fn test_with_gv() {
         let input = "
             target = \"evm-ethereum-london\"
-            
+
             gv public const %CONST_PUBLIC: i32 = 1;
             gv external %GLOBAL_EXTERNAL: i32;
 
