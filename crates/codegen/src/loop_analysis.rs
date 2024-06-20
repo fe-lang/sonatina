@@ -224,7 +224,7 @@ impl<'a, 'b> Iterator for BlocksInLoopPostOrder<'a, 'b> {
                 None => {
                     self.block_state.insert(block, BlockState::Visited);
                     for &succ in self.cfg.succs_of(block) {
-                        if self.block_state.get(&succ).is_none()
+                        if !self.block_state.contains_key(&succ)
                             && self.lpt.is_in_loop(succ, self.lp)
                         {
                             self.stack.push(succ);
