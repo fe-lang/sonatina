@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
 
 use sonatina_ir::{
-    insn::{BinaryOp, CastOp, DataLocationKind, JumpOp, UnaryOp},
+    insn::{BinaryOp, CastOp, DataLocationKind, UnaryOp},
     module::FuncRef,
     Block, DataFlowGraph, Immediate, Insn, InsnData, Type, Value,
 };
@@ -135,7 +135,6 @@ pub enum ExprData {
 
     /// Unconditional jump operations.
     Jump {
-        code: JumpOp,
         dests: BlockArray1,
     },
 
@@ -208,10 +207,7 @@ impl ExprData {
                 ret_ty: *ret_ty,
             },
 
-            InsnData::Jump { code, dests } => Self::Jump {
-                code: *code,
-                dests: *dests,
-            },
+            InsnData::Jump { dests } => Self::Jump { dests: *dests },
 
             InsnData::Branch { args, dests } => Self::Branch {
                 args: [args[0].into()],
@@ -281,10 +277,7 @@ impl ExprData {
                 ret_ty: *ret_ty,
             },
 
-            Self::Jump { code, dests } => InsnData::Jump {
-                code: *code,
-                dests: *dests,
-            },
+            Self::Jump { dests } => InsnData::Jump { dests: *dests },
 
             Self::Branch { args, dests } => InsnData::Branch {
                 args: [args[0].as_value()?],

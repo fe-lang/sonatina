@@ -87,7 +87,6 @@ pub enum InsnData {
 
     /// Unconditional jump instruction.
     Jump {
-        code: JumpOp,
         dests: [Block; 1],
     },
 
@@ -174,10 +173,7 @@ impl InsnData {
     }
 
     pub fn jump(dest: Block) -> InsnData {
-        InsnData::Jump {
-            code: JumpOp::Jump,
-            dests: [dest],
-        }
+        InsnData::Jump { dests: [dest] }
     }
 
     pub fn phi(ty: Type) -> InsnData {
@@ -473,9 +469,9 @@ impl<'a> fmt::Display for DisplayInsnData<'a> {
                 display_arg_values(f, args, dfg)?;
                 ";".fmt(f)
             }
-            Jump { code, dests } => {
+            Jump { dests } => {
                 let block = dests[0];
-                write!(f, "{code} {block};")
+                write!(f, "jump {block};")
             }
             Branch { args, dests } => {
                 "branch ".fmt(f)?;
@@ -653,28 +649,6 @@ impl CastOp {
 }
 
 impl fmt::Display for CastOp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// Unconditional jump operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum JumpOp {
-    Jump,
-    FallThrough,
-}
-
-impl JumpOp {
-    pub(super) fn as_str(self) -> &'static str {
-        match self {
-            Self::Jump => "jump",
-            Self::FallThrough => "fallthrough",
-        }
-    }
-}
-
-impl fmt::Display for JumpOp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(self.as_str())
     }

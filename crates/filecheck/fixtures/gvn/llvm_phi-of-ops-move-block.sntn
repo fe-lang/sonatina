@@ -60,7 +60,7 @@ func public %llvm_test(v0.*i32, v100.*i64) -> void:
 
 # regex: VALUE=\bv\d+\b
 # check:    block0:
-# nextln:       fallthrough block1;
+# nextln:       jump block1;
 # nextln: 
 # nextln:   block1:
 # nextln:       v1.i32 = phi (0.i32 block0) (v6 block5);
@@ -87,7 +87,7 @@ func public %llvm_test(v0.*i32, v100.*i64) -> void:
 # nextln:       return;
 func public %llvm_test2(v0.i1) -> void:
     block0:
-        fallthrough block1;
+        jump block1;
 
     block1:
         v1.i32 = phi (0.i32 block0) (v6 block5);

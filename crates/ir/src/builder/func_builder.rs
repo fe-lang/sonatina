@@ -2,7 +2,7 @@ use smallvec::SmallVec;
 
 use crate::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    insn::{BinaryOp, CastOp, DataLocationKind, InsnData, JumpOp, UnaryOp},
+    insn::{BinaryOp, CastOp, DataLocationKind, InsnData, UnaryOp},
     module::FuncRef,
     Block, Function, GlobalVariable, Immediate, Type, Value,
 };
@@ -183,10 +183,7 @@ impl<'a> FunctionBuilder<'a> {
 
     pub fn jump(&mut self, dest: Block) {
         debug_assert!(!self.ssa_builder.is_sealed(dest));
-        let insn_data = InsnData::Jump {
-            code: JumpOp::Jump,
-            dests: [dest],
-        };
+        let insn_data = InsnData::Jump { dests: [dest] };
 
         let pred = self.cursor().block();
         self.ssa_builder.append_pred(dest, pred.unwrap());

@@ -89,13 +89,6 @@
     Trunc
   )
 )
-(type
-  JumpOp extern
-  (enum
-    Jump
-    FallThrough
-  )
-)
 
 (type
   DataLocationKind extern
@@ -114,7 +107,7 @@
     (Load (args ArgArray1) (loc DataLocationKind))
     (Store (args ArgArray2) (ty Type) (loc DataLocationKind))
     (Call (func FuncRef) (args ArgList) (ret_ty Type))
-    (Jump (code JumpOp) (dests BlockArray1))
+    (Jump (dests BlockArray1))
     (Branch (args ArgArray1) (dests BlockArray2))
     (BrTable (args ArgList) (default BrTableDefaultDest) (table BlockList))
     (Alloca (ty Type))

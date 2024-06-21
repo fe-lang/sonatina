@@ -4,7 +4,7 @@ target = "evm-ethereum-london"
 
 # sameln: func public %const_loop() -> i8:
 # nextln:     block1:
-# nextln:         fallthrough block2;
+# nextln:         jump block2;
 # nextln: 
 # nextln:     block2:
 # nextln:         jump block3;
@@ -13,7 +13,7 @@ target = "evm-ethereum-london"
 # nextln:         return 11.i8;
 func public %const_loop() -> i8:
     block1:
-        fallthrough block2;
+        jump block2;
 
     block2:
         v1.i8 = phi (1.i8 block1) (v2 block2);

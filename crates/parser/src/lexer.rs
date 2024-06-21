@@ -252,7 +252,6 @@ impl<'a> Lexer<'a> {
             (b"store", Code::Store),
             (b"call", Code::Call),
             (b"jump", Code::Jump),
-            (b"fallthrough", Code::FallThrough),
             (b"br_table", Code::BrTable),
             (b"br", Code::Br),
             (b"alloca", Code::Alloca),
@@ -504,7 +503,6 @@ pub(super) enum Code {
 
     // Jump ops.
     Jump,
-    FallThrough,
 
     // Branch ops.
     Br,
@@ -552,7 +550,6 @@ impl fmt::Display for Code {
             Store => "store",
             Call => "call",
             Jump => "jump",
-            FallThrough => "fallthrough",
             Gep => "gep",
             Alloca => "alloca",
             Br => "br",

@@ -317,8 +317,8 @@ impl IrWrite for Insn {
                 writer.write_insn_args(args, &mut *w)?;
             }
 
-            Jump { code, dests } => {
-                write!(w, "{}", code)?;
+            Jump { dests } => {
+                write!(w, "jump")?;
                 writer.space(&mut *w)?;
                 writer.write_iter_with_delim(dests.iter(), " ", &mut *w)?;
             }
