@@ -425,6 +425,32 @@ pub enum Value {
     Error,
 }
 
+macro_rules! parse_dec {
+    ($node:ident, $imm:expr, $ity:ty, $uty:ty) => {
+        if let Ok(v) = $node
+            .txt
+            .parse::<$ity>()
+            .or_else(|_| $node.txt.parse::<$uty>().map(|v| v as $ity))
+        {
+            Value::Immediate($imm(v))
+        } else {
+            let span = $node.span.clone();
+            $node.error(Error::NumberOutOfBounds(span));
+            Value::Error
+        }
+    };
+}
+
+macro_rules! parse_hex {
+    ($node:ident, $imm:expr, $ity:ty) => {
+        if let Some(bytes) = hex_bytes($node.txt) {
+            Value::Immediate($imm(<$ity>::from_be_bytes(bytes)))
+        } else {
+            Value::Error
+        }
+    };
+}
+
 impl FromSyntax<Error> for Value {
     fn from_syntax(node: &mut Node<Error>) -> Self {
         node.descend();
@@ -444,19 +470,12 @@ impl FromSyntax<Error> for Value {
                             };
                             Some(Immediate::I1(b))
                         }),
-                        IntType::I8 => imm_or_err(node, || Some(Immediate::I8(txt.parse().ok()?))),
-                        IntType::I16 => {
-                            imm_or_err(node, || Some(Immediate::I16(txt.parse().ok()?)))
-                        }
-                        IntType::I32 => {
-                            imm_or_err(node, || Some(Immediate::I32(txt.parse().ok()?)))
-                        }
-                        IntType::I64 => {
-                            imm_or_err(node, || Some(Immediate::I64(txt.parse().ok()?)))
-                        }
-                        IntType::I128 => {
-                            imm_or_err(node, || Some(Immediate::I128(txt.parse().ok()?)))
-                        }
+                        IntType::I8 => parse_dec!(node, Immediate::I8, i8, u8),
+                        IntType::I16 => parse_dec!(node, Immediate::I16, i16, u16),
+                        IntType::I32 => parse_dec!(node, Immediate::I32, i32, u32),
+                        IntType::I64 => parse_dec!(node, Immediate::I64, i64, u64),
+                        IntType::I128 => parse_dec!(node, Immediate::I128, i128, u128),
+
                         IntType::I256 => {
                             let s = txt.strip_prefix('-');
                             let is_negative = s.is_some();
@@ -477,33 +496,27 @@ impl FromSyntax<Error> for Value {
                             node.error(Error::NumberOutOfBounds(node.span.clone()));
                             Value::Error
                         }
-                        IntType::I8 => imm_or_err(node, || {
-                            Some(Immediate::I8(i8::from_be_bytes(hex_bytes(txt)?)))
-                        }),
-                        IntType::I16 => imm_or_err(node, || {
-                            Some(Immediate::I16(i16::from_be_bytes(hex_bytes(txt)?)))
-                        }),
-                        IntType::I32 => imm_or_err(node, || {
-                            Some(Immediate::I32(i32::from_be_bytes(hex_bytes(txt)?)))
-                        }),
-                        IntType::I64 => imm_or_err(node, || {
-                            Some(Immediate::I64(i64::from_be_bytes(hex_bytes(txt)?)))
-                        }),
-                        IntType::I128 => imm_or_err(node, || {
-                            Some(Immediate::I128(i128::from_be_bytes(hex_bytes(txt)?)))
-                        }),
+                        IntType::I8 => parse_hex!(node, Immediate::I8, i8),
+                        IntType::I16 => parse_hex!(node, Immediate::I16, i16),
+                        IntType::I32 => parse_hex!(node, Immediate::I32, i32),
+                        IntType::I64 => parse_hex!(node, Immediate::I64, i64),
+                        IntType::I128 => parse_hex!(node, Immediate::I128, i128),
                         IntType::I256 => {
                             let s = txt.strip_prefix('-');
                             let is_negative = s.is_some();
                             txt = s.unwrap_or(txt);
 
-                            imm_or_err(node, || {
-                                let mut i256 = U256::from_big_endian(&hex_bytes::<32>(txt)?).into();
+                            if let Some(bytes) = hex_bytes::<32>(txt) {
+                                let mut i256 = U256::from_big_endian(&bytes).into();
                                 if is_negative {
                                     i256 = I256::zero().overflowing_sub(i256).0;
                                 }
-                                Some(Immediate::I256(i256))
-                            })
+                                Value::Immediate(Immediate::I256(i256))
+                            } else {
+                                let span = node.span.clone();
+                                node.error(Error::NumberOutOfBounds(span));
+                                Value::Error
+                            }
                         }
                     },
                     _ => unreachable!(),
