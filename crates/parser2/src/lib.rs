@@ -19,6 +19,15 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
     let ctx = ModuleCtx::new(isa);
     let mut builder = ModuleBuilder::new(ctx);
 
+    for st in ast.struct_types {
+        let fields = st
+            .fields
+            .iter()
+            .map(|t| build_type(&mut builder, t))
+            .collect::<Vec<_>>();
+        builder.declare_struct_type(&st.name.0, &fields, false);
+    }
+
     for func in ast.declared_functions {
         let params = func
             .params
@@ -225,6 +234,11 @@ fn build_type(builder: &mut ModuleBuilder, t: &ast::Type) -> ir::Type {
             builder.declare_array_type(elem, *n)
         }
         ast::Type::Void => ir::Type::Void,
+        ast::Type::Struct(name) => builder.get_struct_type(name).unwrap_or_else(|| {
+            // xxx error on undeclared struct
+            eprintln!("struct type not found: {name}");
+            ir::Type::Void
+        }),
         ast::Type::Error => todo!(),
     }
 }

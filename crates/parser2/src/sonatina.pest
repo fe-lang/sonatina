@@ -1,34 +1,42 @@
-module = { SOI ~ NEWLINE* ~ target_specifier ~ (NEWLINE+ ~ function_declaration)* ~ (NEWLINE+ ~ function)* ~ NEWLINE* ~ EOI }
+module = { SOI ~ NEWLINE* ~ target_specifier ~ (NEWLINE+ ~ declaration)* ~ (NEWLINE+ ~ function)* ~ NEWLINE* ~ EOI }
 
 WHITESPACE = _{ " " | "\t" }
 COMMENT    =  { "#" ~ (!NEWLINE ~ ANY)* }
 
+ident_start_char = { ASCII_ALPHA | "_" }
+ident_body_char  = { ASCII_ALPHANUMERIC | "_" }
+
 target_specifier = _{ "target" ~ "=" ~ "\"" ~ target_triple ~ "\"" }
 target_triple    = @{ ASCII_ALPHA* ~ "-" ~ ASCII_ALPHA* ~ "-" ~ ASCII_ALPHA* }
 
-ident_start_char = { ASCII_ALPHA | "_" }
-ident_body_char  = { ASCII_ALPHANUMERIC | "_" }
+declaration              = _{ function_declaration | struct_declaration }
+function_declaration     =  { "declare" ~ function_linkage? ~ function_identifier ~ function_param_type_list ~ function_ret_type? ~ ";" }
+function_param_type_list =  { "(" ~ (type_name ~ ",")* ~ type_name? ~ ")" }
+struct_declaration       =  { "type" ~ struct_identifier ~ "=" ~ struct_fields ~ ";" }
+struct_identifier        = ${ "%" ~ struct_name }
+struct_fields            = _{ normal_field_list | packed_field_list }
+normal_field_list        =  { "{" ~ type_list ~ "}" }
+packed_field_list        =  { "<{" ~ type_list ~ "}>" }
+type_list                = _{ (type_name ~ ",")* ~ type_name? }
+struct_name              = @{ ident_start_char ~ ident_body_char* }
 
 function            =  { function_signature ~ function_body }
 _functions          = _{ (NEWLINE* ~ function ~ NEWLINE*)* }
 function_signature  =  { "func" ~ function_linkage? ~ function_identifier ~ function_params ~ function_ret_type? }
 function_ret_type   =  { "->" ~ type_name }
 function_linkage    =  { "public" | "private" | "external" }
-function_name       = @{ ident_start_char ~ ident_body_char* }
 function_identifier = ${ "%" ~ function_name }
+function_name       = @{ ident_start_char ~ ident_body_char* }
 function_params     =  { "(" ~ (value_declaration ~ ",")* ~ value_declaration? ~ ")" }
 function_body       = _{ "{" ~ (NEWLINE+ ~ block?)* ~ "}" }
 block               =  { block_ident ~ ":" ~ (NEWLINE+ ~ stmt)* }
 _stmts              = _{ (stmt ~ NEWLINE+)* }
 
-function_declaration     = { "declare" ~ function_linkage? ~ function_identifier ~ function_param_type_list ~ function_ret_type? ~ ";" }
-function_param_type_list = { "(" ~ (type_name ~ ",")* ~ type_name? ~ ")" }
-
 block_ident  = ${ "block" ~ block_number }
 block_number =  { ASCII_DIGIT+ }
 value_name   = ${ "v" ~ ASCII_DIGIT+ }
 
-type_name      =  { primitive_type | ptr_type | array_type | void_type }
+type_name      =  { primitive_type | ptr_type | array_type | void_type | struct_identifier }
 primitive_type =  { "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "i1" }
 ptr_type       = ${ "*" ~ type_name }
 array_type     = !{ "[" ~ type_name ~ ";" ~ array_size ~ "]" }

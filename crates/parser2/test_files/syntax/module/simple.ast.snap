@@ -34,6 +34,44 @@ Module {
             ),
         },
     ],
+    struct_types: [
+        Struct {
+            name: StructName(
+                "foo",
+            ),
+            fields: [
+                Int(
+                    I8,
+                ),
+                Int(
+                    I16,
+                ),
+                Ptr(
+                    Int(
+                        I64,
+                    ),
+                ),
+            ],
+            packed: false,
+        },
+        Struct {
+            name: StructName(
+                "bar",
+            ),
+            fields: [
+                Int(
+                    I8,
+                ),
+                Array(
+                    Int(
+                        I8,
+                    ),
+                    31,
+                ),
+            ],
+            packed: true,
+        },
+    ],
     functions: [
         Func {
             signature: FuncSignature {
@@ -245,6 +283,24 @@ Module {
                                 2,
                             ),
                             2,
+                        ),
+                    ),
+                    ValueDeclaration(
+                        ValueName(
+                            "v4",
+                        ),
+                        Struct(
+                            "foo",
+                        ),
+                    ),
+                    ValueDeclaration(
+                        ValueName(
+                            "v5",
+                        ),
+                        Ptr(
+                            Struct(
+                                "foo",
+                            ),
                         ),
                     ),
                 ],

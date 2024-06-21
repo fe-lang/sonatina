@@ -57,6 +57,10 @@ impl ModuleBuilder {
             .with_ty_store_mut(|s| s.make_struct(name, fields, packed))
     }
 
+    pub fn get_struct_type(&self, name: &str) -> Option<Type> {
+        self.ctx.with_ty_store(|s| s.struct_type_by_name(name))
+    }
+
     pub fn declare_array_type(&mut self, elem: Type, len: usize) -> Type {
         self.ctx.with_ty_store_mut(|s| s.make_array(elem, len))
     }

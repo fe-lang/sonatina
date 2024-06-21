@@ -46,23 +46,14 @@ pub fn parse(input: &str) -> Result<Module, Vec<Error>> {
 pub struct Module {
     pub target: Option<TargetTriple>,
     pub declared_functions: Vec<FuncDeclaration>,
+    pub struct_types: Vec<Struct>,
     pub functions: Vec<Func>,
     pub comments: Vec<String>,
 }
 
 impl FromSyntax<Error> for Module {
     fn from_syntax(node: &mut Node<Error>) -> Self {
-        let target = match node
-            .get_opt(Rule::target_triple)
-            .map(|p| TargetTriple::parse(p.as_str()))
-        {
-            Some(Ok(t)) => Some(t),
-            Some(Err(e)) => {
-                node.error(Error::InvalidTarget(e, node.span.clone()));
-                None
-            }
-            None => None,
-        };
+        let target = node.single_opt(Rule::target_triple).flatten();
 
         let module_comments = node.map_while(|p| {
             if p.as_rule() == Rule::COMMENT && p.as_str().starts_with("#!") {
@@ -72,8 +63,10 @@ impl FromSyntax<Error> for Module {
             }
         });
 
+        let mut struct_types = vec![];
         let mut declared_functions = vec![];
         let mut functions = vec![];
+
         loop {
             let comments = node.map_while(|p| {
                 if p.as_rule() == Rule::COMMENT {
@@ -83,7 +76,9 @@ impl FromSyntax<Error> for Module {
                 }
             });
 
-            if let Some(func) = node.single_opt(Rule::function_declaration) {
+            if let Some(struct_) = node.single_opt(Rule::struct_declaration) {
+                struct_types.push(struct_);
+            } else if let Some(func) = node.single_opt(Rule::function_declaration) {
                 declared_functions.push(func);
             } else {
                 match node.single_opt::<Func>(Rule::function) {
@@ -98,9 +93,85 @@ impl FromSyntax<Error> for Module {
         Module {
             target,
             declared_functions,
+            struct_types,
             functions,
             comments: module_comments,
         }
+    }
+}
+
+impl FromSyntax<Error> for Option<TargetTriple> {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        match TargetTriple::parse(node.txt) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                node.error(Error::InvalidTarget(e, node.span.clone()));
+                None
+            }
+        }
+    }
+}
+
+impl FromSyntax<Error> for SmolStr {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        node.txt.into()
+    }
+}
+
+#[derive(Debug)]
+pub struct FuncDeclaration {
+    pub linkage: Linkage,
+    pub name: FunctionName,
+    pub params: Vec<Type>,
+    pub ret_type: Option<Type>,
+}
+
+impl FromSyntax<Error> for FuncDeclaration {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        let linkage = node
+            .parse_str_opt(Rule::function_linkage)
+            .unwrap_or(Linkage::Private);
+
+        FuncDeclaration {
+            linkage,
+            name: node.single(Rule::function_identifier),
+            params: node.descend_into(Rule::function_param_type_list, |n| n.multi(Rule::type_name)),
+            ret_type: node.descend_into_opt(Rule::function_ret_type, |n| n.single(Rule::type_name)),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Struct {
+    pub name: StructName,
+    pub fields: Vec<Type>,
+    pub packed: bool,
+}
+
+impl FromSyntax<Error> for Struct {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        let name = node.single(Rule::struct_identifier);
+        node.descend();
+        let (fields, packed) = match node.rule {
+            Rule::normal_field_list => (node.multi(Rule::type_name), false),
+            Rule::packed_field_list => (node.multi(Rule::type_name), true),
+            _ => unreachable!(),
+        };
+
+        Self {
+            name,
+            fields,
+            packed,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct StructName(pub SmolStr);
+
+impl FromSyntax<Error> for StructName {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        Self(node.single(Rule::struct_name))
     }
 }
 
@@ -144,26 +215,13 @@ impl FromSyntax<Error> for FuncSignature {
     }
 }
 
+/// Doesn't include `%` prefix.
 #[derive(Debug)]
-pub struct FuncDeclaration {
-    pub linkage: Linkage,
-    pub name: FunctionName,
-    pub params: Vec<Type>,
-    pub ret_type: Option<Type>,
-}
+pub struct FunctionName(pub SmolStr);
 
-impl FromSyntax<Error> for FuncDeclaration {
+impl FromSyntax<Error> for FunctionName {
     fn from_syntax(node: &mut Node<Error>) -> Self {
-        let linkage = node
-            .parse_str_opt(Rule::function_linkage)
-            .unwrap_or(Linkage::Private);
-
-        FuncDeclaration {
-            linkage,
-            name: node.single(Rule::function_identifier),
-            params: node.descend_into(Rule::function_param_type_list, |n| n.multi(Rule::type_name)),
-            ret_type: node.descend_into_opt(Rule::function_ret_type, |n| n.single(Rule::type_name)),
-        }
+        FunctionName(node.parse_str(Rule::function_name))
     }
 }
 
@@ -252,6 +310,7 @@ pub enum Type {
     Int(IntType),
     Ptr(Box<Type>),
     Array(Box<Type>, usize),
+    Struct(SmolStr),
     Void,
     Error,
 }
@@ -270,6 +329,7 @@ impl FromSyntax<Error> for Type {
                 Type::Array(Box::new(node.single(Rule::type_name)), size)
             }
             Rule::void_type => Type::Void,
+            Rule::struct_identifier => Type::Struct(node.parse_str(Rule::struct_name)),
             _ => unreachable!(),
         }
     }
@@ -339,16 +399,6 @@ impl FromSyntax<Error> for Expr {
 
 #[derive(Debug)]
 pub struct Call(pub FunctionName, pub Vec<Value>);
-
-/// Doesn't include `%` prefix.
-#[derive(Debug)]
-pub struct FunctionName(pub SmolStr);
-
-impl FromSyntax<Error> for FunctionName {
-    fn from_syntax(node: &mut Node<Error>) -> Self {
-        FunctionName(node.parse_str(Rule::function_name))
-    }
-}
 
 #[derive(Debug)]
 pub struct ValueName(pub SmolStr);

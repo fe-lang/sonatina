@@ -261,9 +261,9 @@ impl StructData {
         }
 
         if self.packed {
-            write!(w, "}}>;")
+            writeln!(w, "}}>;")
         } else {
-            write!(w, "}};")
+            writeln!(w, "}};")
         }
     }
 }
