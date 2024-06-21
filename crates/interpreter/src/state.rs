@@ -273,7 +273,7 @@ mod test {
     use super::*;
 
     fn parse_module(input: &str) -> Module {
-        match sonatina_parser2::parse_module(input) {
+        match sonatina_parser::parse_module(input) {
             Ok(pm) => pm.module,
             Err(errs) => {
                 for err in errs {

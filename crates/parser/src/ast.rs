@@ -1,4 +1,4 @@
-use super::syntax::Node;
+use super::{syntax::Node, Error};
 use crate::syntax::{FromSyntax, Parser, Rule};
 use annotate_snippets::{Level, Renderer, Snippet};
 use either::Either;
@@ -12,14 +12,6 @@ use pest::Parser as _;
 use smol_str::SmolStr;
 pub use sonatina_triple::{InvalidTriple, TargetTriple};
 use std::{io, ops::Range, str::FromStr};
-
-#[derive(Debug)]
-#[allow(clippy::large_enum_variant)]
-pub enum Error {
-    NumberOutOfBounds(Range<usize>),
-    InvalidTarget(InvalidTriple, Range<usize>),
-    SyntaxError(pest::error::Error<Rule>),
-}
 
 pub fn parse(input: &str) -> Result<Module, Vec<Error>> {
     pest::set_error_detail(true); // xxx

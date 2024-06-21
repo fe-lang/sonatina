@@ -1,17 +1,13 @@
-use ariadne::{Label, Report, ReportKind, Source};
 use dir_test::{dir_test, Fixture};
 use indenter::indented;
 use ir::ir_writer::ModuleWriter;
-use pest::{error::InputLocation, iterators::Pairs, Parser as _};
-use sonatina_parser2::{
+use pest::{iterators::Pairs, Parser as _};
+use sonatina_parser::{
     ast, parse_module,
     syntax::{Parser, Rule},
+    Error,
 };
-
-use std::{
-    fmt::{self, Write},
-    ops::Range,
-};
+use std::fmt::{self, Write};
 
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/test_files/syntax/stmts",
@@ -69,28 +65,9 @@ fn test_rule(rule: Rule, fixture: Fixture<&str>) {
     }
 }
 
-fn location_range(loc: InputLocation) -> Range<usize> {
-    match loc {
-        InputLocation::Pos(pos) => pos..pos,
-        InputLocation::Span((s, e)) => s..e,
-    }
-}
-
 fn report_error(err: pest::error::Error<Rule>, fixture: &Fixture<&str>) {
-    let mut s = Vec::new();
-
-    Report::build(ReportKind::Error, fixture.path(), 12)
-        .with_code(3)
-        .with_message("parse error".to_string())
-        .with_label(
-            Label::new((fixture.path(), location_range(err.location)))
-                .with_message(format!("{}", err.variant.message())),
-        )
-        .finish()
-        .write_for_stdout((fixture.path(), Source::from(fixture.content())), &mut s)
-        .unwrap();
-
-    eprintln!("{}", std::str::from_utf8(&s).unwrap());
+    let s = Error::SyntaxError(err).print_to_string(fixture.path(), fixture.content());
+    eprintln!("{s}");
 }
 
 struct PairsWrapper<'i>(Pairs<'i, Rule>);

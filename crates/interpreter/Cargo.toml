@@ -19,4 +19,4 @@ cranelift-entity = "0.104"
 sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
 
 [dev-dependencies]
-sonatina-parser2 = { path = "../parser2" }
+sonatina-parser = { path = "../parser" }

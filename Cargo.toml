@@ -4,7 +4,7 @@ members = [
     "crates/ir",
     "crates/codegen",
     "crates/object",
-    "crates/parser2",
+    "crates/parser",
     "crates/filecheck",
     "crates/triple",
     "crates/interpreter",

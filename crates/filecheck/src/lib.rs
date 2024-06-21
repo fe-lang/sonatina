@@ -13,7 +13,7 @@ use std::{
 
 use sonatina_ir::{ir_writer::FuncWriter, module::FuncRef, Function};
 
-use sonatina_parser2::{parse_module, ParsedModule};
+use sonatina_parser::{parse_module, ParsedModule};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use walkdir::WalkDir;
 
