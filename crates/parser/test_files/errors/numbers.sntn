@@ -1,0 +1,9 @@
+target = "evm-ethereum-london"
+
+func public %main() {
+    block0:
+        v0.i8 = call %foo 1000.i8;
+        v129830918203.i8 = add v0 v0;
+        v2.i16 = add 1.i16 -50000.i16;
+        jump block203948029830482;
+}

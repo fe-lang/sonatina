@@ -277,7 +277,7 @@ mod test {
             Ok(pm) => pm.module,
             Err(errs) => {
                 for err in errs {
-                    eprintln!("{}", err.print_to_string("[test]", input));
+                    eprintln!("{}", err.print_to_string("[test]", input, true));
                 }
                 panic!("parsing failed");
             }

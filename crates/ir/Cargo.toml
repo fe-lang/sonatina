@@ -17,7 +17,7 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 primitive-types = { version = "0.12", default-features = false }
 cranelift-entity = "0.104"
 smallvec = "1.7.0"
-rustc-hash = "1.1.0"
+rustc-hash = "2.0.0"
 dyn-clone = "1.0.4"
 sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
 indexmap = "2.0.0"

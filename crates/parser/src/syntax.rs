@@ -7,6 +7,50 @@ use pest::iterators::Pair;
 #[grammar = "sonatina.pest"]
 pub struct Parser;
 
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct Span(pub u32, pub u32);
+
+impl Span {
+    pub fn from_range(r: Range<usize>) -> Self {
+        Self(r.start as u32, r.end as u32)
+    }
+
+    pub fn as_range(&self) -> Range<usize> {
+        self.0 as usize..self.1 as usize
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Spanned<T> {
+    pub span: Span,
+    pub inner: T,
+}
+
+impl<T> AsRef<T> for Spanned<T> {
+    fn as_ref(&self) -> &T {
+        &self.inner
+    }
+}
+
+impl<T> AsMut<T> for Spanned<T> {
+    fn as_mut(&mut self) -> &mut T {
+        &mut self.inner
+    }
+}
+
+impl<T, E> FromSyntax<E> for Spanned<T>
+where
+    T: FromSyntax<E>,
+{
+    fn from_syntax(node: &mut Node<E>) -> Self {
+        let inner = T::from_syntax(node);
+        Self {
+            span: node.span,
+            inner,
+        }
+    }
+}
+
 pub trait FromSyntax<E> {
     fn from_syntax(node: &mut Node<E>) -> Self;
 }
@@ -14,7 +58,7 @@ pub trait FromSyntax<E> {
 pub struct Node<'i, E> {
     pub rule: Rule,
     pub txt: &'i str,
-    pub span: Range<usize>,
+    pub span: Span,
     pairs: Vec<Option<Pair<'i, Rule>>>,
     pub errors: Vec<E>,
     child: Option<Box<Self>>,
@@ -31,7 +75,7 @@ impl<'i, E> Node<'i, E> {
         self.rule = pair.as_rule();
         self.txt = pair.as_str();
         let s = pair.as_span();
-        self.span = s.start()..s.end();
+        self.span = Span::from_range(s.start()..s.end());
         self.pairs.clear();
         self.pairs.extend(pair.into_inner().map(Some));
         debug_assert!(self.errors.is_empty());
@@ -201,50 +245,3 @@ impl<'i, E> std::default::Default for Node<'i, E> {
         }
     }
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-
-//     #[test]
-//     fn test_with_module_comment() {
-//         let input = "
-//             #! Module comment 1
-//             #! Module comment 2
-
-//             target = \"evm-ethereum-london\"
-
-//             # f1 start 1
-//             # f1 start 2
-//             func private %f1() -> i32 {
-//                 block0:
-//                     return 311.i32;
-//             }
-
-//             # f2 start 1
-//             # f2 start 2
-//             func public %f2() -> i32 {
-//                 block0:
-//                     return 311.i32;
-//             }";
-
-//         let parsed_module = parse_module2(input).unwrap();
-//         let module_comments = parsed_module.module_comments;
-//         assert_eq!(module_comments[0], "#! Module comment 1");
-//         assert_eq!(module_comments[1], "#! Module comment 2");
-
-//         let module = parsed_module.module;
-//         let mut funcs = module.iter_functions();
-//         let func1 = funcs.next().unwrap();
-//         let func1_comment = &parsed_module.func_comments[func1];
-//         assert_eq!(func1_comment.len(), 2);
-//         assert_eq!(func1_comment[0], "# f1 start 1");
-//         assert_eq!(func1_comment[1], "# f1 start 2");
-
-//         let func2 = funcs.next().unwrap();
-//         let func2_comment = &parsed_module.func_comments[func2];
-//         assert_eq!(func2_comment.len(), 2);
-//         assert_eq!(func2_comment[0], "# f2 start 1");
-//         assert_eq!(func2_comment[1], "# f2 start 2");
-//     }
-// }

@@ -1,0 +1,16 @@
+---
+source: crates/parser/tests/errors.rs
+expression: s
+input_file: crates/parser/test_files/errors/parse_error.sntn
+---
+error: parse error
+ --> parse_error.sntn:3:5
+  |
+3 |     v0.i8 = call %foo 100.i8;
+  |     ^  --> 4:5
+  |
+4 |     v0.i8 = call %foo 100.i8;
+  |     ^---
+  |
+  = expected COMMENT or block_ident
+  |

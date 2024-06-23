@@ -145,10 +145,12 @@ impl<'a> FileChecker<'a> {
         func_ref: FuncRef,
     ) -> FileCheckResult {
         let func = &mut parsed_module.module.funcs[func_ref];
-        let comments = &parsed_module.func_comments[func_ref];
+        let comments = &parsed_module.debug.func_comments[func_ref];
 
         self.transformer.transform(func);
-        let func_ir = FuncWriter::new(func).dump_string().unwrap();
+        let func_ir = FuncWriter::new(func_ref, func, Some(&parsed_module.debug))
+            .dump_string()
+            .unwrap();
 
         let checker = self.build_checker(comments);
 
@@ -171,7 +173,7 @@ impl<'a> FileChecker<'a> {
             Err(errs) => {
                 let mut v = vec![];
                 for e in errs {
-                    e.print(&mut v, self.file_path.to_str().unwrap(), &input)
+                    e.print(&mut v, self.file_path.to_str().unwrap(), &input, true)
                         .unwrap()
                 }
                 Err(String::from_utf8(v).unwrap())

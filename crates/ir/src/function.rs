@@ -1,14 +1,8 @@
 use super::{module::FuncRef, DataFlowGraph, Layout, Type, Value};
 use crate::{module::ModuleCtx, types::DisplayType, Linkage};
-use rustc_hash::{FxHashMap, FxHasher};
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
-use smol_str::SmolStr;
-use std::{
-    fmt::{self, Write},
-    hash::BuildHasherDefault,
-};
-
-type Bimap<K, V> = bimap::BiHashMap<K, V, BuildHasherDefault<FxHasher>>;
+use std::fmt::{self, Write};
 
 #[derive(Debug, Clone)]
 pub struct Function {
@@ -17,9 +11,6 @@ pub struct Function {
     pub arg_values: smallvec::SmallVec<[Value; 8]>,
     pub dfg: DataFlowGraph,
     pub layout: Layout,
-
-    // xxx move
-    pub value_names: Bimap<Value, SmolStr>,
 
     /// Stores signatures of all functions that are called by the function.
     pub callees: FxHashMap<FuncRef, Signature>,
@@ -43,7 +34,6 @@ impl Function {
             arg_values,
             dfg,
             layout: Layout::default(),
-            value_names: Bimap::default(),
             callees: FxHashMap::default(),
         }
     }
@@ -76,11 +66,6 @@ impl Signature {
 
     pub fn linkage(&self) -> Linkage {
         self.linkage
-    }
-
-    // xxx remove
-    pub fn append_arg(&mut self, arg: Type) {
-        self.args.push(arg);
     }
 
     pub fn args(&self) -> &[Type] {

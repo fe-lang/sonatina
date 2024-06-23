@@ -1,41 +1,45 @@
-use std::ops::Range;
-
 use ast::ValueDeclaration;
 use cranelift_entity::SecondaryMap;
 use ir::{
     self,
     builder::{FunctionBuilder, ModuleBuilder},
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
+    ir_writer::DebugProvider,
     isa::IsaBuilder,
     module::{FuncRef, ModuleCtx},
     Module, Signature,
 };
-use sonatina_triple::InvalidTriple;
-use syntax::Rule;
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
+use smol_str::SmolStr;
+use std::hash::BuildHasherDefault;
+use syntax::Spanned;
 
 pub mod ast;
+mod error;
 pub mod syntax;
+pub use error::{Error, UndefinedKind};
+pub use syntax::Span;
 
-#[derive(Debug)]
-#[allow(clippy::large_enum_variant)]
-pub enum Error {
-    NumberOutOfBounds(Range<usize>),
-    InvalidTarget(InvalidTriple, Range<usize>),
-    SyntaxError(pest::error::Error<Rule>),
+type Bimap<K, V> = bimap::BiHashMap<K, V, BuildHasherDefault<FxHasher>>;
+
+pub struct ParsedModule {
+    pub module: Module,
+    pub debug: DebugInfo,
 }
 
 pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
     let ast = ast::parse(input)?;
 
-    let isa = IsaBuilder::new(ast.target.unwrap()).build(); // xxx
-    let ctx = ModuleCtx::new(isa);
-    let mut builder = ModuleBuilder::new(ctx);
+    let isa = IsaBuilder::new(ast.target.unwrap()).build();
+    let mut builder = ModuleBuilder::new(ModuleCtx::new(isa));
+
+    let mut ctx = BuildCtx::default();
 
     for st in ast.struct_types {
         let fields = st
             .fields
             .iter()
-            .map(|t| build_type(&mut builder, t))
+            .map(|t| ctx.type_(&mut builder, t))
             .collect::<Vec<_>>();
         builder.declare_struct_type(&st.name.0, &fields, false);
     }
@@ -44,12 +48,12 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
         let params = func
             .params
             .iter()
-            .map(|t| build_type(&mut builder, t))
+            .map(|t| ctx.type_(&mut builder, t))
             .collect::<Vec<_>>();
         let ret_ty = func
             .ret_type
             .as_ref()
-            .map(|t| build_type(&mut builder, t))
+            .map(|t| ctx.type_(&mut builder, t))
             .unwrap_or(ir::Type::Void);
 
         let sig = Signature::new(&func.name.0, func.linkage, &params, ret_ty);
@@ -61,13 +65,13 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
         let args = sig
             .params
             .iter()
-            .map(|decl| build_type(&mut builder, &decl.1))
+            .map(|decl| ctx.type_(&mut builder, &decl.1))
             .collect::<Vec<_>>();
 
         let ret_ty = sig
             .ret_type
             .as_ref()
-            .map(|t| build_type(&mut builder, t))
+            .map(|t| ctx.type_(&mut builder, t))
             .unwrap_or(ir::Type::Void);
         let sig = Signature::new(&sig.name.0, sig.linkage, &args, ret_ty);
 
@@ -78,179 +82,269 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
 
     for func in ast.functions {
         let id = builder.get_func_ref(&func.signature.name.0).unwrap();
-        let mut fb = builder.build_function(id);
-        build_func(&mut fb, &func);
-        fb.seal_all();
-        builder = fb.finish();
+        builder = ctx.build_func(builder.build_function(id), id, &func);
 
         func_comments[id] = func.comments;
     }
 
-    let module = builder.build();
-    Ok(ParsedModule {
-        module,
-        module_comments: ast.comments,
-        func_comments,
-    })
+    if ctx.errors.is_empty() {
+        let module = builder.build();
+        Ok(ParsedModule {
+            module,
+            debug: DebugInfo {
+                module_comments: ast.comments,
+                func_comments,
+                value_names: ctx.value_names,
+            },
+        })
+    } else {
+        Err(ctx.errors)
+    }
 }
 
-pub struct ParsedModule {
-    pub module: Module,
+pub struct DebugInfo {
     pub module_comments: Vec<String>,
     pub func_comments: SecondaryMap<FuncRef, Vec<String>>,
+    pub value_names: FxHashMap<FuncRef, Bimap<ir::Value, SmolStr>>,
 }
 
-fn build_func(builder: &mut FunctionBuilder<InsnInserter>, func: &ast::Func) {
-    for (i, ValueDeclaration(name, _ty)) in func.signature.params.iter().enumerate() {
-        builder.name_value(builder.func.arg_values[i], &name.0);
+impl DebugProvider for DebugInfo {
+    fn value_name(&self, func: FuncRef, value: ir::Value) -> Option<&str> {
+        let names = self.value_names.get(&func)?;
+        names.get_by_left(&value).map(|s| s.as_str())
     }
+}
 
-    // "forward declare" all block ids
-    if let Some(max_block_id) = func.blocks.iter().map(|b| b.id.0.unwrap()).max() {
-        while builder.func.dfg.blocks.len() <= max_block_id as usize {
-            builder.cursor.make_block(&mut builder.func);
+#[derive(Default)]
+struct BuildCtx {
+    errors: Vec<Error>,
+    blocks: FxHashSet<ir::Block>,
+    undefined: FxHashMap<ir::Value, Span>,
+    value_names: FxHashMap<FuncRef, Bimap<ir::Value, SmolStr>>,
+    func_value_names: Bimap<ir::Value, SmolStr>,
+}
+
+impl BuildCtx {
+    fn build_func(
+        &mut self,
+        mut fb: FunctionBuilder<InsnInserter>,
+        func_ref: FuncRef,
+        func: &ast::Func,
+    ) -> ModuleBuilder {
+        self.blocks.clear();
+        self.undefined.clear();
+
+        for (i, ValueDeclaration(name, _ty)) in func.signature.params.iter().enumerate() {
+            let value = fb.func.arg_values[i];
+            self.name_value(&mut fb.func, value, name);
         }
-    }
 
-    for block in &func.blocks {
-        let block_id = ir::Block(block.id.0.unwrap());
-        builder.cursor.append_block(&mut builder.func, block_id);
-        builder
-            .cursor
-            .set_location(CursorLocation::BlockTop(block_id));
+        // collect all defined block ids
+        self.blocks
+            .extend(func.blocks.iter().map(|b| ir::Block(b.id())));
+        if let Some(max) = self.blocks.iter().max() {
+            while fb.func.dfg.blocks.len() <= max.0 as usize {
+                fb.cursor.make_block(&mut fb.func);
+            }
+        }
 
-        for stmt in &block.stmts {
-            match &stmt.kind {
-                ast::StmtKind::Define(ValueDeclaration(val, ty), expr) => {
-                    let ty = build_type(&mut builder.module_builder, ty);
+        for block in &func.blocks {
+            let block_id = ir::Block(block.id());
+            fb.cursor.append_block(&mut fb.func, block_id);
+            fb.cursor.set_location(CursorLocation::BlockTop(block_id));
 
-                    let result_val = match expr {
-                        ast::Expr::Binary(op, lhs, rhs) => {
-                            let lhs = build_value(builder, lhs);
-                            let rhs = build_value(builder, rhs);
-                            builder.binary_op(*op, lhs, rhs)
-                        }
-                        ast::Expr::Unary(op, val) => {
-                            let val = build_value(builder, val);
-                            builder.unary_op(*op, val)
-                        }
-                        ast::Expr::Cast(op, val) => {
-                            let val = build_value(builder, val);
-                            builder.cast_op(*op, val, ty)
-                        }
-                        ast::Expr::Load(location, addr) => {
-                            let addr = build_value(builder, addr);
-                            match location {
-                                ir::DataLocationKind::Memory => builder.memory_load(addr),
-                                ir::DataLocationKind::Storage => builder.storage_load(addr),
+            for stmt in &block.stmts {
+                match &stmt.kind {
+                    ast::StmtKind::Define(ValueDeclaration(val, ty), expr) => {
+                        let ty = self.type_(&mut fb.module_builder, ty);
+
+                        let result_val = match expr {
+                            ast::Expr::Binary(op, lhs, rhs) => {
+                                let lhs = self.value(&mut fb, lhs);
+                                let rhs = self.value(&mut fb, rhs);
+                                fb.binary_op(*op, lhs, rhs)
                             }
-                        }
-                        ast::Expr::Alloca(ty) => {
-                            let ty = build_type(&mut builder.module_builder, ty);
-                            builder.alloca(ty)
-                        }
-                        ast::Expr::Call(ast::Call(name, args)) => {
-                            let func_ref = builder.module_builder.get_func_ref(&name.0).unwrap();
-                            let args = args
-                                .iter()
-                                .map(|val| build_value(builder, val))
-                                .collect::<Vec<_>>();
-                            builder.call(func_ref, &args).unwrap()
-                        }
-                        ast::Expr::Gep(vals) => {
-                            let vals = vals
-                                .iter()
-                                .map(|val| build_value(builder, val))
-                                .collect::<Vec<_>>();
-                            builder.gep(&vals).unwrap()
-                        }
-                        ast::Expr::Phi(vals) => {
-                            let args = vals
-                                .iter()
-                                .map(|(val, block)| {
-                                    // xxx declare block
-                                    let b = ir::Block(block.0.unwrap());
-                                    let v = build_value(builder, val);
-                                    (v, b)
-                                })
-                                .collect::<Vec<_>>();
-                            builder.phi(ty, &args)
-                        }
-                    };
-                    builder.name_value(result_val, &val.0)
-                }
-                ast::StmtKind::Store(loc, addr, val) => {
-                    let addr = build_value(builder, addr);
-                    let val = build_value(builder, val);
+                            ast::Expr::Unary(op, val) => {
+                                let val = self.value(&mut fb, val);
+                                fb.unary_op(*op, val)
+                            }
+                            ast::Expr::Cast(op, val) => {
+                                let val = self.value(&mut fb, val);
+                                fb.cast_op(*op, val, ty)
+                            }
+                            ast::Expr::Load(location, addr) => {
+                                let addr = self.value(&mut fb, addr);
+                                match location {
+                                    ir::DataLocationKind::Memory => fb.memory_load(addr),
+                                    ir::DataLocationKind::Storage => fb.storage_load(addr),
+                                }
+                            }
+                            ast::Expr::Alloca(ty) => {
+                                let ty = self.type_(&mut fb.module_builder, ty);
+                                fb.alloca(ty)
+                            }
+                            ast::Expr::Call(ast::Call(name, args)) => {
+                                let func = self.func_ref(&mut fb.module_builder, name);
 
-                    match loc {
-                        ir::DataLocationKind::Memory => builder.memory_store(addr, val),
-                        ir::DataLocationKind::Storage => builder.storage_store(addr, val),
+                                let args = args
+                                    .iter()
+                                    .map(|val| self.value(&mut fb, val))
+                                    .collect::<Vec<_>>();
+                                fb.call(func, &args).unwrap()
+                            }
+                            ast::Expr::Gep(vals) => {
+                                let vals = vals
+                                    .iter()
+                                    .map(|val| self.value(&mut fb, val))
+                                    .collect::<Vec<_>>();
+                                fb.gep(&vals).unwrap()
+                            }
+                            ast::Expr::Phi(vals) => {
+                                let args = vals
+                                    .iter()
+                                    .map(|(val, block)| {
+                                        let b = self.block(block);
+                                        let v = self.value(&mut fb, val);
+                                        (v, b)
+                                    })
+                                    .collect::<Vec<_>>();
+                                fb.phi(ty, &args)
+                            }
+                        };
+                        self.name_value(&mut fb.func, result_val, val)
                     }
-                }
-                ast::StmtKind::Return(val) => {
-                    let val = val.as_ref().map(|v| build_value(builder, v));
-                    builder.ret(val);
-                }
-                ast::StmtKind::Jump(block_id) => {
-                    let block_id = ir::Block(block_id.0.unwrap());
-                    builder.jump(block_id);
-                }
-                ast::StmtKind::Branch(cond, true_block, false_block) => {
-                    let cond = build_value(builder, cond);
-                    let true_block = ir::Block(true_block.0.unwrap());
-                    let false_block = ir::Block(false_block.0.unwrap());
-                    builder.br(cond, true_block, false_block);
-                }
-                ast::StmtKind::BranchTable(index, default_block, table) => {
-                    let index = build_value(builder, index);
-                    let default_block = default_block.as_ref().map(|b| ir::Block(b.0.unwrap()));
-                    let table = table
-                        .iter()
-                        .map(|(val, block)| {
-                            (build_value(builder, val), ir::Block(block.0.unwrap()))
-                        })
-                        .collect::<Vec<_>>();
-                    builder.br_table(index, default_block, &table);
-                }
-                ast::StmtKind::Call(ast::Call(name, args)) => {
-                    let func_ref = builder.module_builder.get_func_ref(&name.0).unwrap();
-                    let args = args
-                        .iter()
-                        .map(|val| build_value(builder, val))
-                        .collect::<Vec<_>>();
-                    builder.call(func_ref, &args).unwrap();
+                    ast::StmtKind::Store(loc, addr, val) => {
+                        let addr = self.value(&mut fb, addr);
+                        let val = self.value(&mut fb, val);
+
+                        match loc {
+                            ir::DataLocationKind::Memory => fb.memory_store(addr, val),
+                            ir::DataLocationKind::Storage => fb.storage_store(addr, val),
+                        }
+                    }
+                    ast::StmtKind::Return(val) => {
+                        let val = val.as_ref().map(|v| self.value(&mut fb, v));
+                        fb.ret(val);
+                    }
+                    ast::StmtKind::Jump(block_id) => {
+                        let block_id = self.block(block_id);
+                        fb.jump(block_id);
+                    }
+                    ast::StmtKind::Branch(cond, true_block, false_block) => {
+                        let cond = self.value(&mut fb, cond);
+                        let true_block = self.block(true_block);
+                        let false_block = self.block(false_block);
+                        fb.br(cond, true_block, false_block);
+                    }
+                    ast::StmtKind::BranchTable(index, default_block, table) => {
+                        let index = self.value(&mut fb, index);
+                        let default_block = default_block.as_ref().map(|b| self.block(b));
+
+                        let table = table
+                            .iter()
+                            .map(|(val, block)| {
+                                let block = self.block(block);
+                                (self.value(&mut fb, val), block)
+                            })
+                            .collect::<Vec<_>>();
+                        fb.br_table(index, default_block, &table);
+                    }
+                    ast::StmtKind::Call(ast::Call(name, args)) => {
+                        let func_ref = self.func_ref(&mut fb.module_builder, name);
+
+                        let args = args
+                            .iter()
+                            .map(|val| self.value(&mut fb, val))
+                            .collect::<Vec<_>>();
+                        fb.call(func_ref, &args).unwrap();
+                    }
                 }
             }
         }
-    }
-}
 
-fn build_value(builder: &mut FunctionBuilder<InsnInserter>, val: &ast::Value) -> ir::Value {
-    match val {
-        ast::Value::Immediate(imm) => builder.make_imm_value(*imm),
-        ast::Value::Named(v) => builder.get_named_value(&v.0),
-        ast::Value::Error => unreachable!(),
+        for (val, span) in self.undefined.drain() {
+            let name = self.func_value_names.get_by_left(&val).unwrap();
+            self.errors
+                .push(Error::Undefined(UndefinedKind::Value(name.clone()), span));
+        }
+        let names = std::mem::take(&mut self.func_value_names);
+        self.value_names.insert(func_ref, names);
+        fb.seal_all();
+        fb.finish()
     }
-}
 
-fn build_type(builder: &mut ModuleBuilder, t: &ast::Type) -> ir::Type {
-    match t {
-        ast::Type::Int(i) => (*i).into(),
-        ast::Type::Ptr(t) => {
-            let t = build_type(builder, t);
-            builder.ptr_type(t)
+    fn func_ref(&mut self, mb: &mut ModuleBuilder, name: &Spanned<ast::FunctionName>) -> FuncRef {
+        mb.get_func_ref(&name.inner.0).unwrap_or_else(|| {
+            self.errors.push(Error::Undefined(
+                UndefinedKind::Func(name.inner.0.clone()),
+                name.span,
+            ));
+            FuncRef::from_u32(0)
+        })
+    }
+
+    fn block(&mut self, b: &ast::BlockId) -> ir::Block {
+        let block = ir::Block(b.id.unwrap());
+        if !self.blocks.contains(&block) {
+            self.errors
+                .push(Error::Undefined(UndefinedKind::Block(block), b.span));
         }
-        ast::Type::Array(t, n) => {
-            let elem = build_type(builder, t);
-            builder.declare_array_type(elem, *n)
+        block
+    }
+
+    pub fn name_value(&mut self, func: &mut ir::Function, value: ir::Value, name: &ast::ValueName) {
+        if let Some(v) = self.func_value_names.get_by_right(&name.string) {
+            if self.undefined.remove(v).is_some() {
+                func.dfg.change_to_alias(*v, value);
+            } else {
+                self.errors
+                    .push(Error::DuplicateValueName(name.string.clone(), name.span));
+            }
         }
-        ast::Type::Void => ir::Type::Void,
-        ast::Type::Struct(name) => builder.get_struct_type(name).unwrap_or_else(|| {
-            // xxx error on undeclared struct
-            eprintln!("struct type not found: {name}");
-            ir::Type::Void
-        }),
-        ast::Type::Error => todo!(),
+        self.func_value_names.insert(value, name.string.clone());
+    }
+
+    pub fn get_named_value(&mut self, func: &mut ir::Function, name: &ast::ValueName) -> ir::Value {
+        if let Some(v) = self.func_value_names.get_by_right(&name.string).copied() {
+            v
+        } else {
+            let v = func.dfg.make_value(ir::ValueData::Immediate {
+                imm: ir::Immediate::I128(424242),
+                ty: ir::Type::I128,
+            });
+
+            self.undefined.insert(v, name.span);
+            self.name_value(func, v, name);
+            v
+        }
+    }
+
+    fn value(&mut self, fb: &mut FunctionBuilder<InsnInserter>, val: &ast::Value) -> ir::Value {
+        match &val.kind {
+            ast::ValueKind::Immediate(imm) => fb.make_imm_value(*imm),
+            ast::ValueKind::Named(v) => self.get_named_value(&mut fb.func, v),
+            ast::ValueKind::Error => unreachable!(),
+        }
+    }
+
+    fn type_(&mut self, mb: &mut ModuleBuilder, t: &ast::Type) -> ir::Type {
+        match &t.kind {
+            ast::TypeKind::Int(i) => (*i).into(),
+            ast::TypeKind::Ptr(t) => {
+                let t = self.type_(mb, t);
+                mb.ptr_type(t)
+            }
+            ast::TypeKind::Array(t, n) => {
+                let elem = self.type_(mb, t);
+                mb.declare_array_type(elem, *n)
+            }
+            ast::TypeKind::Void => ir::Type::Void,
+            ast::TypeKind::Struct(name) => mb.get_struct_type(name).unwrap_or_else(|| {
+                self.errors
+                    .push(Error::Undefined(UndefinedKind::Type(name.clone()), t.span));
+                ir::Type::Void
+            }),
+            ast::TypeKind::Error => unreachable!(),
+        }
     }
 }

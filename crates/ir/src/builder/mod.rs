@@ -16,8 +16,8 @@ pub mod test_util {
         func_cursor::InsnInserter,
         ir_writer::FuncWriter,
         isa::{IsaBuilder, TargetIsa},
-        module::ModuleCtx,
-        Function, Linkage, Signature, Type,
+        module::{FuncRef, ModuleCtx},
+        Linkage, Module, Signature, Type,
     };
 
     pub fn build_test_isa() -> TargetIsa {
@@ -34,8 +34,9 @@ pub mod test_util {
         mb.build_function(func_ref)
     }
 
-    pub fn dump_func(func: &Function) -> String {
-        let mut writer = FuncWriter::new(func);
+    pub fn dump_func(module: &Module, func_ref: FuncRef) -> String {
+        let func = &module.funcs[func_ref];
+        let mut writer = FuncWriter::new(func_ref, func, None);
         writer.dump_string().unwrap()
     }
 }

@@ -1,7 +1,7 @@
 ---
-source: crates/parser2/tests/syntax.rs
+source: crates/parser/tests/syntax.rs
 expression: "format!(\"{:#?}\", module)"
-input_file: crates/parser2/test_files/syntax/module/simple.sntn
+input_file: crates/parser/test_files/syntax/module/simple.sntn
 ---
 Module {
     target: Some(
@@ -20,17 +20,35 @@ Module {
                 "add_i8",
             ),
             params: [
-                Int(
-                    I8,
-                ),
-                Int(
-                    I8,
-                ),
+                Type {
+                    kind: Int(
+                        I8,
+                    ),
+                    span: Span(
+                        100,
+                        102,
+                    ),
+                },
+                Type {
+                    kind: Int(
+                        I8,
+                    ),
+                    span: Span(
+                        104,
+                        106,
+                    ),
+                },
             ],
             ret_type: Some(
-                Int(
-                    I8,
-                ),
+                Type {
+                    kind: Int(
+                        I8,
+                    ),
+                    span: Span(
+                        111,
+                        113,
+                    ),
+                },
             ),
         },
     ],
@@ -40,17 +58,41 @@ Module {
                 "foo",
             ),
             fields: [
-                Int(
-                    I8,
-                ),
-                Int(
-                    I16,
-                ),
-                Ptr(
-                    Int(
-                        I64,
+                Type {
+                    kind: Int(
+                        I8,
                     ),
-                ),
+                    span: Span(
+                        130,
+                        132,
+                    ),
+                },
+                Type {
+                    kind: Int(
+                        I16,
+                    ),
+                    span: Span(
+                        134,
+                        137,
+                    ),
+                },
+                Type {
+                    kind: Ptr(
+                        Type {
+                            kind: Int(
+                                I64,
+                            ),
+                            span: Span(
+                                140,
+                                143,
+                            ),
+                        },
+                    ),
+                    span: Span(
+                        139,
+                        143,
+                    ),
+                },
             ],
             packed: false,
         },
@@ -59,15 +101,33 @@ Module {
                 "bar",
             ),
             fields: [
-                Int(
-                    I8,
-                ),
-                Array(
-                    Int(
+                Type {
+                    kind: Int(
                         I8,
                     ),
-                    31,
-                ),
+                    span: Span(
+                        162,
+                        164,
+                    ),
+                },
+                Type {
+                    kind: Array(
+                        Type {
+                            kind: Int(
+                                I8,
+                            ),
+                            span: Span(
+                                167,
+                                169,
+                            ),
+                        },
+                        31,
+                    ),
+                    span: Span(
+                        166,
+                        174,
+                    ),
+                },
             ],
             packed: true,
         },
@@ -84,33 +144,59 @@ Module {
             },
             blocks: [
                 Block {
-                    id: BlockId(
-                        Some(
+                    id: BlockId {
+                        id: Some(
                             0,
                         ),
-                    ),
+                        span: Span(
+                            206,
+                            212,
+                        ),
+                    },
                     stmts: [
                         Stmt {
                             kind: Define(
                                 ValueDeclaration(
-                                    ValueName(
-                                        "v0",
-                                    ),
-                                    Int(
-                                        I8,
-                                    ),
+                                    ValueName {
+                                        string: "v0",
+                                        span: Span(
+                                            222,
+                                            224,
+                                        ),
+                                    },
+                                    Type {
+                                        kind: Int(
+                                            I8,
+                                        ),
+                                        span: Span(
+                                            225,
+                                            227,
+                                        ),
+                                    },
                                 ),
                                 Call(
                                     Call(
-                                        FunctionName(
-                                            "foo",
-                                        ),
-                                        [
-                                            Immediate(
-                                                I8(
-                                                    100,
-                                                ),
+                                        Spanned {
+                                            span: Span(
+                                                235,
+                                                239,
                                             ),
+                                            inner: FunctionName(
+                                                "foo",
+                                            ),
+                                        },
+                                        [
+                                            Value {
+                                                kind: Immediate(
+                                                    I8(
+                                                        100,
+                                                    ),
+                                                ),
+                                                span: Span(
+                                                    240,
+                                                    243,
+                                                ),
+                                            },
                                         ],
                                     ),
                                 ),
@@ -134,79 +220,161 @@ Module {
                 ),
                 params: [
                     ValueDeclaration(
-                        ValueName(
-                            "v0",
-                        ),
-                        Int(
-                            I8,
-                        ),
+                        ValueName {
+                            string: "v0",
+                            span: Span(
+                                307,
+                                309,
+                            ),
+                        },
+                        Type {
+                            kind: Int(
+                                I8,
+                            ),
+                            span: Span(
+                                310,
+                                312,
+                            ),
+                        },
                     ),
                 ],
                 ret_type: Some(
-                    Int(
-                        I8,
-                    ),
+                    Type {
+                        kind: Int(
+                            I8,
+                        ),
+                        span: Span(
+                            317,
+                            319,
+                        ),
+                    },
                 ),
             },
             blocks: [
                 Block {
-                    id: BlockId(
-                        Some(
+                    id: BlockId {
+                        id: Some(
                             0,
                         ),
-                    ),
+                        span: Span(
+                            322,
+                            328,
+                        ),
+                    },
                     stmts: [
                         Stmt {
                             kind: Define(
                                 ValueDeclaration(
-                                    ValueName(
-                                        "v1",
-                                    ),
-                                    Int(
-                                        I8,
-                                    ),
+                                    ValueName {
+                                        string: "v1",
+                                        span: Span(
+                                            330,
+                                            332,
+                                        ),
+                                    },
+                                    Type {
+                                        kind: Int(
+                                            I8,
+                                        ),
+                                        span: Span(
+                                            333,
+                                            335,
+                                        ),
+                                    },
                                 ),
                                 Binary(
                                     Mul,
-                                    Named(
-                                        ValueName(
-                                            "v0",
+                                    Value {
+                                        kind: Named(
+                                            ValueName {
+                                                string: "v0",
+                                                span: Span(
+                                                    342,
+                                                    344,
+                                                ),
+                                            },
                                         ),
-                                    ),
-                                    Immediate(
-                                        I8(
-                                            2,
+                                        span: Span(
+                                            342,
+                                            344,
                                         ),
-                                    ),
+                                    },
+                                    Value {
+                                        kind: Immediate(
+                                            I8(
+                                                2,
+                                            ),
+                                        ),
+                                        span: Span(
+                                            345,
+                                            346,
+                                        ),
+                                    },
                                 ),
                             ),
                         },
                         Stmt {
                             kind: Define(
                                 ValueDeclaration(
-                                    ValueName(
-                                        "v2",
-                                    ),
-                                    Int(
-                                        I8,
-                                    ),
+                                    ValueName {
+                                        string: "v2",
+                                        span: Span(
+                                            351,
+                                            353,
+                                        ),
+                                    },
+                                    Type {
+                                        kind: Int(
+                                            I8,
+                                        ),
+                                        span: Span(
+                                            354,
+                                            356,
+                                        ),
+                                    },
                                 ),
                                 Call(
                                     Call(
-                                        FunctionName(
-                                            "add_i8",
-                                        ),
+                                        Spanned {
+                                            span: Span(
+                                                364,
+                                                371,
+                                            ),
+                                            inner: FunctionName(
+                                                "add_i8",
+                                            ),
+                                        },
                                         [
-                                            Named(
-                                                ValueName(
-                                                    "v0",
+                                            Value {
+                                                kind: Named(
+                                                    ValueName {
+                                                        string: "v0",
+                                                        span: Span(
+                                                            372,
+                                                            374,
+                                                        ),
+                                                    },
                                                 ),
-                                            ),
-                                            Named(
-                                                ValueName(
-                                                    "v1",
+                                                span: Span(
+                                                    372,
+                                                    374,
                                                 ),
-                                            ),
+                                            },
+                                            Value {
+                                                kind: Named(
+                                                    ValueName {
+                                                        string: "v1",
+                                                        span: Span(
+                                                            375,
+                                                            377,
+                                                        ),
+                                                    },
+                                                ),
+                                                span: Span(
+                                                    375,
+                                                    377,
+                                                ),
+                                            },
                                         ],
                                     ),
                                 ),
@@ -215,11 +383,21 @@ Module {
                         Stmt {
                             kind: Return(
                                 Some(
-                                    Named(
-                                        ValueName(
-                                            "v2",
+                                    Value {
+                                        kind: Named(
+                                            ValueName {
+                                                string: "v2",
+                                                span: Span(
+                                                    386,
+                                                    388,
+                                                ),
+                                            },
                                         ),
-                                    ),
+                                        span: Span(
+                                            386,
+                                            388,
+                                        ),
+                                    },
                                 ),
                             ),
                         },
@@ -238,81 +416,187 @@ Module {
                 ),
                 params: [
                     ValueDeclaration(
-                        ValueName(
-                            "v0",
-                        ),
-                        Ptr(
-                            Int(
-                                I8,
+                        ValueName {
+                            string: "v0",
+                            span: Span(
+                                405,
+                                407,
                             ),
-                        ),
+                        },
+                        Type {
+                            kind: Ptr(
+                                Type {
+                                    kind: Int(
+                                        I8,
+                                    ),
+                                    span: Span(
+                                        409,
+                                        411,
+                                    ),
+                                },
+                            ),
+                            span: Span(
+                                408,
+                                411,
+                            ),
+                        },
                     ),
                     ValueDeclaration(
-                        ValueName(
-                            "v1",
-                        ),
-                        Array(
-                            Int(
-                                I8,
+                        ValueName {
+                            string: "v1",
+                            span: Span(
+                                413,
+                                415,
                             ),
-                            2,
-                        ),
-                    ),
-                    ValueDeclaration(
-                        ValueName(
-                            "v2",
-                        ),
-                        Array(
-                            Ptr(
-                                Int(
-                                    I8,
-                                ),
-                            ),
-                            2,
-                        ),
-                    ),
-                    ValueDeclaration(
-                        ValueName(
-                            "v3",
-                        ),
-                        Array(
-                            Array(
-                                Int(
-                                    I8,
-                                ),
+                        },
+                        Type {
+                            kind: Array(
+                                Type {
+                                    kind: Int(
+                                        I8,
+                                    ),
+                                    span: Span(
+                                        417,
+                                        419,
+                                    ),
+                                },
                                 2,
                             ),
-                            2,
-                        ),
+                            span: Span(
+                                416,
+                                423,
+                            ),
+                        },
                     ),
                     ValueDeclaration(
-                        ValueName(
-                            "v4",
-                        ),
-                        Struct(
-                            "foo",
-                        ),
+                        ValueName {
+                            string: "v2",
+                            span: Span(
+                                425,
+                                427,
+                            ),
+                        },
+                        Type {
+                            kind: Array(
+                                Type {
+                                    kind: Ptr(
+                                        Type {
+                                            kind: Int(
+                                                I8,
+                                            ),
+                                            span: Span(
+                                                430,
+                                                432,
+                                            ),
+                                        },
+                                    ),
+                                    span: Span(
+                                        429,
+                                        432,
+                                    ),
+                                },
+                                2,
+                            ),
+                            span: Span(
+                                428,
+                                436,
+                            ),
+                        },
                     ),
                     ValueDeclaration(
-                        ValueName(
-                            "v5",
-                        ),
-                        Ptr(
-                            Struct(
+                        ValueName {
+                            string: "v3",
+                            span: Span(
+                                438,
+                                440,
+                            ),
+                        },
+                        Type {
+                            kind: Array(
+                                Type {
+                                    kind: Array(
+                                        Type {
+                                            kind: Int(
+                                                I8,
+                                            ),
+                                            span: Span(
+                                                443,
+                                                445,
+                                            ),
+                                        },
+                                        2,
+                                    ),
+                                    span: Span(
+                                        442,
+                                        449,
+                                    ),
+                                },
+                                2,
+                            ),
+                            span: Span(
+                                441,
+                                453,
+                            ),
+                        },
+                    ),
+                    ValueDeclaration(
+                        ValueName {
+                            string: "v4",
+                            span: Span(
+                                455,
+                                457,
+                            ),
+                        },
+                        Type {
+                            kind: Struct(
                                 "foo",
                             ),
-                        ),
+                            span: Span(
+                                458,
+                                462,
+                            ),
+                        },
+                    ),
+                    ValueDeclaration(
+                        ValueName {
+                            string: "v5",
+                            span: Span(
+                                464,
+                                466,
+                            ),
+                        },
+                        Type {
+                            kind: Ptr(
+                                Type {
+                                    kind: Struct(
+                                        "foo",
+                                    ),
+                                    span: Span(
+                                        468,
+                                        472,
+                                    ),
+                                },
+                            ),
+                            span: Span(
+                                467,
+                                472,
+                            ),
+                        },
                     ),
                 ],
                 ret_type: None,
             },
             blocks: [
                 Block {
-                    id: BlockId(
-                        Some(
+                    id: BlockId {
+                        id: Some(
                             0,
                         ),
-                    ),
+                        span: Span(
+                            480,
+                            486,
+                        ),
+                    },
                     stmts: [
                         Stmt {
                             kind: Return(
@@ -332,62 +616,110 @@ Module {
                 ),
                 params: [
                     ValueDeclaration(
-                        ValueName(
-                            "v0",
-                        ),
-                        Int(
-                            I8,
-                        ),
+                        ValueName {
+                            string: "v0",
+                            span: Span(
+                                519,
+                                521,
+                            ),
+                        },
+                        Type {
+                            kind: Int(
+                                I8,
+                            ),
+                            span: Span(
+                                522,
+                                524,
+                            ),
+                        },
                     ),
                 ],
                 ret_type: None,
             },
             blocks: [
                 Block {
-                    id: BlockId(
-                        Some(
+                    id: BlockId {
+                        id: Some(
                             0,
                         ),
-                    ),
+                        span: Span(
+                            532,
+                            538,
+                        ),
+                    },
                     stmts: [
                         Stmt {
                             kind: BranchTable(
-                                Named(
-                                    ValueName(
-                                        "v0",
+                                Value {
+                                    kind: Named(
+                                        ValueName {
+                                            string: "v0",
+                                            span: Span(
+                                                557,
+                                                559,
+                                            ),
+                                        },
                                     ),
-                                ),
+                                    span: Span(
+                                        557,
+                                        559,
+                                    ),
+                                },
                                 Some(
-                                    BlockId(
-                                        Some(
+                                    BlockId {
+                                        id: Some(
                                             0,
                                         ),
-                                    ),
+                                        span: Span(
+                                            560,
+                                            566,
+                                        ),
+                                    },
                                 ),
                                 [
                                     (
-                                        Immediate(
-                                            I8(
+                                        Value {
+                                            kind: Immediate(
+                                                I8(
+                                                    1,
+                                                ),
+                                            ),
+                                            span: Span(
+                                                568,
+                                                569,
+                                            ),
+                                        },
+                                        BlockId {
+                                            id: Some(
                                                 1,
                                             ),
-                                        ),
-                                        BlockId(
-                                            Some(
-                                                1,
+                                            span: Span(
+                                                573,
+                                                579,
                                             ),
-                                        ),
+                                        },
                                     ),
                                     (
-                                        Immediate(
-                                            I8(
+                                        Value {
+                                            kind: Immediate(
+                                                I8(
+                                                    2,
+                                                ),
+                                            ),
+                                            span: Span(
+                                                582,
+                                                583,
+                                            ),
+                                        },
+                                        BlockId {
+                                            id: Some(
                                                 2,
                                             ),
-                                        ),
-                                        BlockId(
-                                            Some(
-                                                2,
+                                            span: Span(
+                                                587,
+                                                593,
                                             ),
-                                        ),
+                                        },
                                     ),
                                 ],
                             ),
@@ -395,40 +727,60 @@ Module {
                     ],
                 },
                 Block {
-                    id: BlockId(
-                        Some(
+                    id: BlockId {
+                        id: Some(
                             1,
                         ),
-                    ),
+                        span: Span(
+                            600,
+                            606,
+                        ),
+                    },
                     stmts: [
                         Stmt {
                             kind: Return(
                                 Some(
-                                    Immediate(
-                                        I8(
-                                            1,
+                                    Value {
+                                        kind: Immediate(
+                                            I8(
+                                                1,
+                                            ),
                                         ),
-                                    ),
+                                        span: Span(
+                                            623,
+                                            624,
+                                        ),
+                                    },
                                 ),
                             ),
                         },
                     ],
                 },
                 Block {
-                    id: BlockId(
-                        Some(
+                    id: BlockId {
+                        id: Some(
                             2,
                         ),
-                    ),
+                        span: Span(
+                            633,
+                            639,
+                        ),
+                    },
                     stmts: [
                         Stmt {
                             kind: Return(
                                 Some(
-                                    Immediate(
-                                        I8(
-                                            2,
+                                    Value {
+                                        kind: Immediate(
+                                            I8(
+                                                2,
+                                            ),
                                         ),
-                                    ),
+                                        span: Span(
+                                            656,
+                                            657,
+                                        ),
+                                    },
                                 ),
                             ),
                         },
@@ -445,81 +797,143 @@ Module {
                 ),
                 params: [
                     ValueDeclaration(
-                        ValueName(
-                            "v0",
-                        ),
-                        Int(
-                            I64,
-                        ),
+                        ValueName {
+                            string: "v0",
+                            span: Span(
+                                676,
+                                678,
+                            ),
+                        },
+                        Type {
+                            kind: Int(
+                                I64,
+                            ),
+                            span: Span(
+                                679,
+                                682,
+                            ),
+                        },
                     ),
                 ],
                 ret_type: Some(
-                    Int(
-                        I64,
-                    ),
+                    Type {
+                        kind: Int(
+                            I64,
+                        ),
+                        span: Span(
+                            687,
+                            690,
+                        ),
+                    },
                 ),
             },
             blocks: [
                 Block {
-                    id: BlockId(
-                        Some(
+                    id: BlockId {
+                        id: Some(
                             0,
                         ),
-                    ),
+                        span: Span(
+                            697,
+                            703,
+                        ),
+                    },
                     stmts: [
                         Stmt {
                             kind: Jump(
-                                BlockId(
-                                    Some(
+                                BlockId {
+                                    id: Some(
                                         1,
                                     ),
-                                ),
+                                    span: Span(
+                                        718,
+                                        724,
+                                    ),
+                                },
                             ),
                         },
                     ],
                 },
                 Block {
-                    id: BlockId(
-                        Some(
+                    id: BlockId {
+                        id: Some(
                             1,
                         ),
-                    ),
+                        span: Span(
+                            730,
+                            736,
+                        ),
+                    },
                     stmts: [
                         Stmt {
                             kind: Define(
                                 ValueDeclaration(
-                                    ValueName(
-                                        "v1",
-                                    ),
-                                    Int(
-                                        I64,
-                                    ),
+                                    ValueName {
+                                        string: "v1",
+                                        span: Span(
+                                            746,
+                                            748,
+                                        ),
+                                    },
+                                    Type {
+                                        kind: Int(
+                                            I64,
+                                        ),
+                                        span: Span(
+                                            749,
+                                            752,
+                                        ),
+                                    },
                                 ),
                                 Phi(
                                     [
                                         (
-                                            Named(
-                                                ValueName(
-                                                    "v0",
+                                            Value {
+                                                kind: Named(
+                                                    ValueName {
+                                                        string: "v0",
+                                                        span: Span(
+                                                            760,
+                                                            762,
+                                                        ),
+                                                    },
                                                 ),
-                                            ),
-                                            BlockId(
-                                                Some(
+                                                span: Span(
+                                                    760,
+                                                    762,
+                                                ),
+                                            },
+                                            BlockId {
+                                                id: Some(
                                                     0,
                                                 ),
-                                            ),
+                                                span: Span(
+                                                    763,
+                                                    769,
+                                                ),
+                                            },
                                         ),
                                         (
-                                            Immediate(
-                                                I64(
-                                                    100,
+                                            Value {
+                                                kind: Immediate(
+                                                    I64(
+                                                        100,
+                                                    ),
                                                 ),
-                                            ),
-                                            BlockId(
-                                                Some(
+                                                span: Span(
+                                                    772,
+                                                    775,
+                                                ),
+                                            },
+                                            BlockId {
+                                                id: Some(
                                                     2,
                                                 ),
-                                            ),
+                                                span: Span(
+                                                    780,
+                                                    786,
+                                                ),
+                                            },
                                         ),
                                     ],
                                 ),
@@ -528,82 +942,148 @@ Module {
                         Stmt {
                             kind: Define(
                                 ValueDeclaration(
-                                    ValueName(
-                                        "v2",
-                                    ),
-                                    Int(
-                                        I1,
-                                    ),
+                                    ValueName {
+                                        string: "v2",
+                                        span: Span(
+                                            797,
+                                            799,
+                                        ),
+                                    },
+                                    Type {
+                                        kind: Int(
+                                            I1,
+                                        ),
+                                        span: Span(
+                                            800,
+                                            802,
+                                        ),
+                                    },
                                 ),
                                 Binary(
                                     Gt,
-                                    Named(
-                                        ValueName(
-                                            "v1",
+                                    Value {
+                                        kind: Named(
+                                            ValueName {
+                                                string: "v1",
+                                                span: Span(
+                                                    808,
+                                                    810,
+                                                ),
+                                            },
                                         ),
-                                    ),
-                                    Immediate(
-                                        I64(
-                                            10,
+                                        span: Span(
+                                            808,
+                                            810,
                                         ),
-                                    ),
+                                    },
+                                    Value {
+                                        kind: Immediate(
+                                            I64(
+                                                10,
+                                            ),
+                                        ),
+                                        span: Span(
+                                            811,
+                                            813,
+                                        ),
+                                    },
                                 ),
                             ),
                         },
                         Stmt {
                             kind: Branch(
-                                Named(
-                                    ValueName(
-                                        "v2",
+                                Value {
+                                    kind: Named(
+                                        ValueName {
+                                            string: "v2",
+                                            span: Span(
+                                                830,
+                                                832,
+                                            ),
+                                        },
                                     ),
-                                ),
-                                BlockId(
-                                    Some(
+                                    span: Span(
+                                        830,
+                                        832,
+                                    ),
+                                },
+                                BlockId {
+                                    id: Some(
                                         2,
                                     ),
-                                ),
-                                BlockId(
-                                    Some(
+                                    span: Span(
+                                        833,
+                                        839,
+                                    ),
+                                },
+                                BlockId {
+                                    id: Some(
                                         3,
                                     ),
-                                ),
+                                    span: Span(
+                                        840,
+                                        846,
+                                    ),
+                                },
                             ),
                         },
                     ],
                 },
                 Block {
-                    id: BlockId(
-                        Some(
+                    id: BlockId {
+                        id: Some(
                             2,
                         ),
-                    ),
+                        span: Span(
+                            852,
+                            858,
+                        ),
+                    },
                     stmts: [
                         Stmt {
                             kind: Jump(
-                                BlockId(
-                                    Some(
+                                BlockId {
+                                    id: Some(
                                         1,
                                     ),
-                                ),
+                                    span: Span(
+                                        873,
+                                        879,
+                                    ),
+                                },
                             ),
                         },
                     ],
                 },
                 Block {
-                    id: BlockId(
-                        Some(
+                    id: BlockId {
+                        id: Some(
                             3,
                         ),
-                    ),
+                        span: Span(
+                            885,
+                            891,
+                        ),
+                    },
                     stmts: [
                         Stmt {
                             kind: Return(
                                 Some(
-                                    Named(
-                                        ValueName(
-                                            "v1",
+                                    Value {
+                                        kind: Named(
+                                            ValueName {
+                                                string: "v1",
+                                                span: Span(
+                                                    908,
+                                                    910,
+                                                ),
+                                            },
                                         ),
-                                    ),
+                                        span: Span(
+                                            908,
+                                            910,
+                                        ),
+                                    },
                                 ),
                             ),
                         },

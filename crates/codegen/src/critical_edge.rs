@@ -148,7 +148,7 @@ mod tests {
         CriticalEdgeSplitter::new().run(func, &mut cfg);
 
         assert_eq!(
-            dump_func(func),
+            dump_func(&module, func_ref),
             "func public %test_func() -> void {
     block0:
         br 1.i32 block3 block1;
@@ -166,6 +166,7 @@ mod tests {
 "
         );
 
+        let func = &mut module.funcs[func_ref];
         let mut cfg_split = ControlFlowGraph::default();
         cfg_split.compute(func);
         assert_eq!(cfg, cfg_split);
@@ -207,7 +208,7 @@ mod tests {
         CriticalEdgeSplitter::new().run(func, &mut cfg);
 
         assert_eq!(
-            dump_func(func),
+            dump_func(&module, func_ref),
             "func public %test_func() -> void {
     block0:
         br 1.i8 block5 block1;
@@ -234,6 +235,7 @@ mod tests {
 "
         );
 
+        let func = &mut module.funcs[func_ref];
         let mut cfg_split = ControlFlowGraph::default();
         cfg_split.compute(func);
         assert_eq!(cfg, cfg_split);
@@ -269,7 +271,7 @@ mod tests {
         CriticalEdgeSplitter::new().run(func, &mut cfg);
 
         assert_eq!(
-            dump_func(func),
+            dump_func(&module, func_ref),
             "func public %test_func() -> void {
     block0:
         jump block1;
@@ -289,6 +291,7 @@ mod tests {
 "
         );
 
+        let func = &mut module.funcs[func_ref];
         let mut cfg_split = ControlFlowGraph::default();
         cfg_split.compute(func);
         assert_eq!(cfg, cfg_split);
@@ -332,7 +335,7 @@ mod tests {
         CriticalEdgeSplitter::new().run(func, &mut cfg);
 
         assert_eq!(
-            dump_func(func),
+            dump_func(&module, func_ref),
             "func public %test_func() -> void {
     block0:
         br 1.i1 block5 block6;
@@ -362,6 +365,7 @@ mod tests {
 "
         );
 
+        let func = &mut module.funcs[func_ref];
         let mut cfg_split = ControlFlowGraph::default();
         cfg_split.compute(func);
         assert_eq!(cfg, cfg_split);

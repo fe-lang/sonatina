@@ -228,10 +228,9 @@ mod tests {
 
         let module = builder.finish().build();
         let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
 
         assert_eq!(
-            dump_func(func),
+            dump_func(&module, func_ref),
             "func public %test_func() -> void {
     block0:
         v1.i32 = add 1.i32 1.i32;
@@ -277,10 +276,9 @@ mod tests {
 
         let module = builder.finish().build();
         let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
 
         assert_eq!(
-            dump_func(func),
+            dump_func(&module, func_ref),
             "func public %test_func() -> void {
     block0:
         br 1.i32 block2 block1;
@@ -358,10 +356,9 @@ mod tests {
 
         let module = builder.finish().build();
         let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
 
         assert_eq!(
-            dump_func(func),
+            dump_func(&module, func_ref),
             "func public %test_func() -> void {
     block0:
         br 0.i32 block1 block2;
@@ -432,10 +429,9 @@ mod tests {
 
         let module = builder.finish().build();
         let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
 
         assert_eq!(
-            dump_func(func),
+            dump_func(&module, func_ref),
             "func public %test_func() -> void {
     block0:
         jump block1;
@@ -508,10 +504,9 @@ mod tests {
 
         let module = builder.finish().build();
         let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
 
         assert_eq!(
-            dump_func(func),
+            dump_func(&module, func_ref),
             "func public %test_func() -> void {
     block0:
         jump block1;
@@ -589,10 +584,9 @@ mod tests {
 
         let module = builder.finish().build();
         let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
 
         assert_eq!(
-            dump_func(func),
+            dump_func(&module, func_ref),
             "func public %test_func() -> void {
     block0:
         jump block1;
@@ -668,10 +662,9 @@ mod tests {
 
         let module = builder.finish().build();
         let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
 
         assert_eq!(
-            dump_func(func),
+            dump_func(&module, func_ref),
             "func public %test_func(v0.i32) -> i32 {
     block0:
         br_table v0 block4 (1.i32 block1) (2.i32 block2) (3.i32 block3);

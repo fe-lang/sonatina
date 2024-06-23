@@ -4,7 +4,7 @@ use crate::{
     func_cursor::{CursorLocation, FuncCursor},
     insn::{BinaryOp, CastOp, DataLocationKind, InsnData, UnaryOp},
     module::FuncRef,
-    Block, Function, GlobalVariable, Immediate, Type, Value, ValueData,
+    Block, Function, GlobalVariable, Immediate, Type, Value,
 };
 
 use super::{
@@ -18,7 +18,6 @@ pub struct FunctionBuilder<C> {
     func_ref: FuncRef,
     pub cursor: C,
     ssa_builder: SsaBuilder,
-    undefined: Vec<Value>,
 }
 
 macro_rules! impl_binary_insn {
@@ -49,7 +48,6 @@ where
             func_ref,
             cursor,
             ssa_builder: SsaBuilder::new(),
-            undefined: Default::default(),
         }
     }
 
@@ -64,11 +62,8 @@ where
             mut module_builder,
             func,
             func_ref,
-            undefined,
             ..
         } = self;
-
-        debug_assert!(undefined.is_empty()); // xxx
 
         module_builder.funcs[func_ref] = func;
         module_builder
@@ -91,34 +86,6 @@ where
 
     pub fn switch_to_block(&mut self, block: Block) {
         self.cursor.set_location(CursorLocation::BlockBottom(block));
-    }
-
-    pub fn name_value(&mut self, value: Value, name: &str) {
-        if let Some(v) = self.func.value_names.get_by_right(name) {
-            if let Some(pos) = self.undefined.iter().position(|u| u == v) {
-                self.func.dfg.change_to_alias(*v, value);
-                // self.func.dfg.values[*v] = ValueData::Alias { alias: value };
-                self.undefined.remove(pos);
-            } else {
-                panic!("value names must be unique");
-            }
-        }
-        self.func.value_names.insert(value, name.into());
-    }
-
-    pub fn get_named_value(&mut self, name: &str) -> Value {
-        if let Some(v) = self.func.value_names.get_by_right(name).copied() {
-            v
-        } else {
-            let v = self.func.dfg.make_value(ValueData::Immediate {
-                imm: Immediate::I128(424242),
-                ty: Type::I128,
-            });
-
-            self.undefined.push(v);
-            self.name_value(v, name);
-            v
-        }
     }
 
     pub fn make_imm_value<Imm>(&mut self, imm: Imm) -> Value
@@ -428,7 +395,7 @@ mod tests {
         let module = builder.finish().build();
         let func_ref = module.iter_functions().next().unwrap();
         assert_eq!(
-            dump_func(&module.funcs[func_ref]),
+            dump_func(&module, func_ref),
             "func public %test_func() -> void {
     block0:
         v2.i8 = add 1.i8 2.i8;
@@ -458,7 +425,7 @@ mod tests {
         let module = builder.finish().build();
         let func_ref = module.iter_functions().next().unwrap();
         assert_eq!(
-            dump_func(&module.funcs[func_ref]),
+            dump_func(&module, func_ref),
             "func public %test_func(v0.i32, v1.i64) -> void {
     block0:
         v2.i64 = sext v0;
@@ -484,7 +451,7 @@ mod tests {
         let module = builder.finish().build();
         let func_ref = module.iter_functions().next().unwrap();
         assert_eq!(
-            dump_func(&module.funcs[func_ref]),
+            dump_func(&module, func_ref),
             "func public %test_func() -> i32 {
     block0:
         return 1.i32;
@@ -526,7 +493,7 @@ mod tests {
         let module = builder.finish().build();
         let func_ref = module.iter_functions().next().unwrap();
         assert_eq!(
-            dump_func(&module.funcs[func_ref]),
+            dump_func(&module, func_ref),
             "func public %test_func(v0.i64) -> void {
     block0:
         br v0 block1 block2;

@@ -1,6 +1,8 @@
 use super::{syntax::Node, Error};
-use crate::syntax::{FromSyntax, Parser, Rule};
-use annotate_snippets::{Level, Renderer, Snippet};
+use crate::{
+    syntax::{FromSyntax, Parser, Rule, Spanned},
+    Span,
+};
 use either::Either;
 use hex::FromHex;
 pub use ir::{
@@ -11,11 +13,9 @@ use ir::{I256, U256};
 use pest::Parser as _;
 use smol_str::SmolStr;
 pub use sonatina_triple::{InvalidTriple, TargetTriple};
-use std::{io, ops::Range, str::FromStr};
+use std::str::FromStr;
 
 pub fn parse(input: &str) -> Result<Module, Vec<Error>> {
-    pest::set_error_detail(true); // xxx
-
     match Parser::parse(Rule::module, input) {
         Err(err) => Err(vec![Error::SyntaxError(err)]),
         Ok(mut pairs) => {
@@ -45,7 +45,7 @@ pub struct Module {
 
 impl FromSyntax<Error> for Module {
     fn from_syntax(node: &mut Node<Error>) -> Self {
-        let target = node.single_opt(Rule::target_triple).flatten();
+        let target = node.single(Rule::target_triple);
 
         let module_comments = node.map_while(|p| {
             if p.as_rule() == Rule::COMMENT && p.as_str().starts_with("#!") {
@@ -97,7 +97,7 @@ impl FromSyntax<Error> for Option<TargetTriple> {
         match TargetTriple::parse(node.txt) {
             Ok(t) => Some(t),
             Err(e) => {
-                node.error(Error::InvalidTarget(e, node.span.clone()));
+                node.error(Error::InvalidTarget(e, node.span));
                 None
             }
         }
@@ -223,6 +223,11 @@ pub struct Block {
     pub stmts: Vec<Stmt>,
 }
 
+impl Block {
+    pub fn id(&self) -> u32 {
+        self.id.id.unwrap()
+    }
+}
 impl FromSyntax<Error> for Block {
     fn from_syntax(node: &mut Node<Error>) -> Self {
         Self {
@@ -233,20 +238,27 @@ impl FromSyntax<Error> for Block {
 }
 
 #[derive(Debug)]
-pub struct BlockId(pub Option<u32>);
+pub struct BlockId {
+    pub id: Option<u32>,
+    pub span: Span,
+}
 
 impl FromSyntax<Error> for BlockId {
     fn from_syntax(node: &mut Node<Error>) -> Self {
+        let span = node.span;
         node.descend();
         debug_assert_eq!(node.rule, Rule::block_number);
-        BlockId(node.txt.parse().ok())
+        let id = node.txt.parse().ok();
+        if id.is_none() {
+            node.error(Error::NumberOutOfBounds(node.span));
+        }
+        BlockId { id, span }
     }
 }
 
 #[derive(Debug)]
 pub struct Stmt {
     pub kind: StmtKind,
-    // pub comments: Vec<SmolStr>,
 }
 
 impl FromSyntax<Error> for Stmt {
@@ -298,7 +310,13 @@ impl FromSyntax<Error> for (Value, BlockId) {
 }
 
 #[derive(Debug)]
-pub enum Type {
+pub struct Type {
+    pub kind: TypeKind,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub enum TypeKind {
     Int(IntType),
     Ptr(Box<Type>),
     Array(Box<Type>, usize),
@@ -310,19 +328,26 @@ pub enum Type {
 impl FromSyntax<Error> for Type {
     fn from_syntax(node: &mut Node<Error>) -> Self {
         node.descend();
-        match node.rule {
-            Rule::primitive_type => Type::Int(IntType::from_str(node.txt).unwrap()),
-            Rule::ptr_type => Type::Ptr(Box::new(node.single(Rule::type_name))),
+        let kind = match node.rule {
+            Rule::primitive_type => TypeKind::Int(IntType::from_str(node.txt).unwrap()),
+            Rule::ptr_type => TypeKind::Ptr(Box::new(node.single(Rule::type_name))),
             Rule::array_type => {
                 let Ok(size) = usize::from_str(node.get(Rule::array_size).as_str()) else {
-                    node.error(Error::NumberOutOfBounds(node.span.clone()));
-                    return Type::Error;
+                    node.error(Error::NumberOutOfBounds(node.span));
+                    return Type {
+                        kind: TypeKind::Error,
+                        span: node.span,
+                    };
                 };
-                Type::Array(Box::new(node.single(Rule::type_name)), size)
+                TypeKind::Array(Box::new(node.single(Rule::type_name)), size)
             }
-            Rule::void_type => Type::Void,
-            Rule::struct_identifier => Type::Struct(node.parse_str(Rule::struct_name)),
+            Rule::void_type => TypeKind::Void,
+            Rule::struct_identifier => TypeKind::Struct(node.parse_str(Rule::struct_name)),
             _ => unreachable!(),
+        };
+        Type {
+            kind,
+            span: node.span,
         }
     }
 }
@@ -390,14 +415,20 @@ impl FromSyntax<Error> for Expr {
 }
 
 #[derive(Debug)]
-pub struct Call(pub FunctionName, pub Vec<Value>);
+pub struct Call(pub Spanned<FunctionName>, pub Vec<Value>);
 
 #[derive(Debug)]
-pub struct ValueName(pub SmolStr);
+pub struct ValueName {
+    pub string: SmolStr,
+    pub span: Span,
+}
 
 impl FromSyntax<Error> for ValueName {
     fn from_syntax(node: &mut Node<Error>) -> Self {
-        Self(node.txt.into())
+        Self {
+            string: node.txt.into(),
+            span: node.span,
+        }
     }
 }
 
@@ -411,7 +442,13 @@ impl FromSyntax<Error> for ValueDeclaration {
 }
 
 #[derive(Debug)]
-pub enum Value {
+pub struct Value {
+    pub kind: ValueKind,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub enum ValueKind {
     Immediate(Immediate),
     Named(ValueName),
     Error,
@@ -419,16 +456,16 @@ pub enum Value {
 
 macro_rules! parse_dec {
     ($node:ident, $imm:expr, $ity:ty, $uty:ty) => {
-        if let Ok(v) = $node
+        match $node
             .txt
             .parse::<$ity>()
             .or_else(|_| $node.txt.parse::<$uty>().map(|v| v as $ity))
         {
-            Value::Immediate($imm(v))
-        } else {
-            let span = $node.span.clone();
-            $node.error(Error::NumberOutOfBounds(span));
-            Value::Error
+            Ok(v) => ValueKind::Immediate($imm(v)),
+            Err(_) => {
+                $node.error(Error::NumberOutOfBounds($node.span));
+                ValueKind::Error
+            }
         }
     };
 }
@@ -436,9 +473,9 @@ macro_rules! parse_dec {
 macro_rules! parse_hex {
     ($node:ident, $imm:expr, $ity:ty) => {
         if let Some(bytes) = hex_bytes($node.txt) {
-            Value::Immediate($imm(<$ity>::from_be_bytes(bytes)))
+            ValueKind::Immediate($imm(<$ity>::from_be_bytes(bytes)))
         } else {
-            Value::Error
+            ValueKind::Error
         }
     };
 }
@@ -446,8 +483,8 @@ macro_rules! parse_hex {
 impl FromSyntax<Error> for Value {
     fn from_syntax(node: &mut Node<Error>) -> Self {
         node.descend();
-        match node.rule {
-            Rule::value_name => Value::Named(ValueName(node.txt.into())),
+        let kind = match node.rule {
+            Rule::value_name => ValueKind::Named(ValueName::from_syntax(node)),
             Rule::imm_number => {
                 let ty: IntType = node.parse_str(Rule::primitive_type);
                 node.descend();
@@ -485,8 +522,8 @@ impl FromSyntax<Error> for Value {
 
                     Rule::hex => match ty {
                         IntType::I1 => {
-                            node.error(Error::NumberOutOfBounds(node.span.clone()));
-                            Value::Error
+                            node.error(Error::NumberOutOfBounds(node.span));
+                            ValueKind::Error
                         }
                         IntType::I8 => parse_hex!(node, Immediate::I8, i8),
                         IntType::I16 => parse_hex!(node, Immediate::I16, i16),
@@ -503,11 +540,10 @@ impl FromSyntax<Error> for Value {
                                 if is_negative {
                                     i256 = I256::zero().overflowing_sub(i256).0;
                                 }
-                                Value::Immediate(Immediate::I256(i256))
+                                ValueKind::Immediate(Immediate::I256(i256))
                             } else {
-                                let span = node.span.clone();
-                                node.error(Error::NumberOutOfBounds(span));
-                                Value::Error
+                                node.error(Error::NumberOutOfBounds(node.span));
+                                ValueKind::Error
                             }
                         }
                     },
@@ -515,6 +551,10 @@ impl FromSyntax<Error> for Value {
                 }
             }
             _ => unreachable!(),
+        };
+        Value {
+            kind,
+            span: node.span,
         }
     }
 }
@@ -536,53 +576,16 @@ impl FromStr for IntType {
     }
 }
 
-impl Error {
-    pub fn span(&self) -> Range<usize> {
-        match self {
-            Error::NumberOutOfBounds(span) => span.clone(),
-            Error::InvalidTarget(_, span) => span.clone(),
-            Error::SyntaxError(err) => match err.location {
-                pest::error::InputLocation::Pos(p) => p..p,
-                pest::error::InputLocation::Span((s, e)) => s..e,
-            },
-        }
-    }
-
-    pub fn print(&self, mut w: impl io::Write, path: &str, content: &str) -> io::Result<()> {
-        let label = match self {
-            Error::NumberOutOfBounds(_) => "number out of bounds".into(),
-            Error::InvalidTarget(err, _) => err.to_string(),
-            Error::SyntaxError(err) => err.to_string(),
-        };
-        let snippet = Level::Error.title("parse error").snippet(
-            Snippet::source(content)
-                .line_start(0)
-                .origin(path)
-                .fold(true)
-                .annotation(Level::Error.span(self.span()).label(&label)),
-        );
-        let rend = Renderer::styled();
-        let disp = rend.render(snippet);
-        write!(w, "{}", disp)
-    }
-
-    pub fn print_to_string(&self, path: &str, content: &str) -> String {
-        let mut v = vec![];
-        self.print(&mut v, path, content).unwrap();
-        String::from_utf8(v).unwrap()
-    }
-}
-
-fn imm_or_err<F>(node: &mut Node<Error>, f: F) -> Value
+fn imm_or_err<F>(node: &mut Node<Error>, f: F) -> ValueKind
 where
     F: Fn() -> Option<Immediate>,
 {
     let Some(imm) = f() else {
-        let span = node.span.clone();
+        let span = node.span;
         node.error(Error::NumberOutOfBounds(span));
-        return Value::Error;
+        return ValueKind::Error;
     };
-    Value::Immediate(imm)
+    ValueKind::Immediate(imm)
 }
 
 fn hex_bytes<const N: usize>(mut s: &str) -> Option<[u8; N]> {
@@ -597,39 +600,3 @@ fn hex_bytes<const N: usize>(mut s: &str) -> Option<[u8; N]> {
     out[N - bytes.len()..].copy_from_slice(&bytes);
     Some(out)
 }
-
-// xxx remove
-// pub fn parse_immediate<L, T>(
-//     val: &str,
-//     loc: Range<usize>,
-// ) -> Result<Value, ParseError<L, T, Error>> {
-//     let mut chunks = val.split('.');
-//     let num = chunks.next().unwrap();
-//     let t = chunks.next().unwrap();
-
-//     let imm = match t {
-//         "i1" => Immediate::I1(parse_num(num, loc)?),
-//         "i8" => Immediate::I8(parse_num(num, loc)?),
-//         "i16" => Immediate::I16(parse_num(num, loc)?),
-//         "i32" => Immediate::I32(parse_num(num, loc)?),
-//         "i64" => Immediate::I64(parse_num(num, loc)?),
-//         "i128" => Immediate::I128(parse_num(num, loc)?),
-//         "i256" => todo!(),
-//         _ => {
-//             unreachable!()
-//         }
-//     };
-//     Ok(Value::Immediate(imm))
-// }
-
-// pub fn parse_num<T, E, Loc, Tok>(
-//     s: &str,
-//     loc: Range<usize>,
-// ) -> Result<T, ParseError<Loc, Tok, Error>>
-// where
-//     T: FromStr<Err = E>,
-// {
-//     T::from_str(s).map_err(|_| ParseError::User {
-//         error: Error::NumberOutOfBounds(loc),
-//     })
-// }
