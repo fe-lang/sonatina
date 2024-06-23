@@ -1,7 +1,7 @@
-use std::{ops::Range, str::FromStr};
-
+use derive_more::Debug as Dbg;
 use either::Either;
 use pest::iterators::Pair;
+use std::{ops::Range, str::FromStr};
 
 #[derive(pest_derive::Parser)]
 #[grammar = "sonatina.pest"]
@@ -20,8 +20,9 @@ impl Span {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Dbg, Clone)]
 pub struct Spanned<T> {
+    #[debug(skip)]
     pub span: Span,
     pub inner: T,
 }

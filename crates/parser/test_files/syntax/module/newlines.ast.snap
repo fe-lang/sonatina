@@ -1,0 +1,84 @@
+---
+source: crates/parser/tests/syntax.rs
+expression: "format!(\"{:#?}\", module)"
+input_file: crates/parser/test_files/syntax/module/newlines.sntn
+---
+Module {
+    target: Some(
+        TargetTriple {
+            architecture: Evm,
+            chain: Ethereum,
+            version: EvmVersion(
+                London,
+            ),
+        },
+    ),
+    declared_functions: [],
+    struct_types: [],
+    functions: [
+        Func {
+            signature: FuncSignature {
+                linkage: Public,
+                name: FunctionName(
+                    "main",
+                ),
+                params: [],
+                ret_type: None,
+            },
+            blocks: [
+                Block {
+                    id: BlockId {
+                        id: Some(
+                            0,
+                        ),
+                        ..
+                    },
+                    stmts: [
+                        Stmt {
+                            kind: Define(
+                                ValueDeclaration(
+                                    ValueName {
+                                        string: "v0",
+                                        ..
+                                    },
+                                    Type {
+                                        kind: Int(
+                                            I8,
+                                        ),
+                                        ..
+                                    },
+                                ),
+                                Binary(
+                                    Add,
+                                    Value {
+                                        kind: Immediate(
+                                            I8(
+                                                1,
+                                            ),
+                                        ),
+                                        ..
+                                    },
+                                    Value {
+                                        kind: Immediate(
+                                            I8(
+                                                2,
+                                            ),
+                                        ),
+                                        ..
+                                    },
+                                ),
+                            ),
+                        },
+                        Stmt {
+                            kind: Return(
+                                None,
+                            ),
+                        },
+                    ],
+                },
+            ],
+            comments: [],
+        },
+    ],
+    comments: [],
+}

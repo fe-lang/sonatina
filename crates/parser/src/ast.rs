@@ -15,6 +15,10 @@ use smol_str::SmolStr;
 pub use sonatina_triple::{InvalidTriple, TargetTriple};
 use std::str::FromStr;
 
+// `Span`s aren't printed in the Debug output because the pest
+// code locations differ on windows vs *nix, which breaks the ast tests.
+use derive_more::Debug as Dbg;
+
 pub fn parse(input: &str) -> Result<Module, Vec<Error>> {
     match Parser::parse(Rule::module, input) {
         Err(err) => Err(vec![Error::SyntaxError(err)]),
@@ -237,9 +241,10 @@ impl FromSyntax<Error> for Block {
     }
 }
 
-#[derive(Debug)]
+#[derive(Dbg)]
 pub struct BlockId {
     pub id: Option<u32>,
+    #[debug(skip)]
     pub span: Span,
 }
 
@@ -309,9 +314,10 @@ impl FromSyntax<Error> for (Value, BlockId) {
     }
 }
 
-#[derive(Debug)]
+#[derive(Dbg)]
 pub struct Type {
     pub kind: TypeKind,
+    #[debug(skip)]
     pub span: Span,
 }
 
@@ -417,9 +423,10 @@ impl FromSyntax<Error> for Expr {
 #[derive(Debug)]
 pub struct Call(pub Spanned<FunctionName>, pub Vec<Value>);
 
-#[derive(Debug)]
+#[derive(Dbg)]
 pub struct ValueName {
     pub string: SmolStr,
+    #[debug(skip)]
     pub span: Span,
 }
 
@@ -441,9 +448,10 @@ impl FromSyntax<Error> for ValueDeclaration {
     }
 }
 
-#[derive(Debug)]
+#[derive(Dbg)]
 pub struct Value {
     pub kind: ValueKind,
+    #[debug(skip)]
     pub span: Span,
 }
 

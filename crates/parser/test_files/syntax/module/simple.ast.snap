@@ -24,19 +24,13 @@ Module {
                     kind: Int(
                         I8,
                     ),
-                    span: Span(
-                        100,
-                        102,
-                    ),
+                    ..
                 },
                 Type {
                     kind: Int(
                         I8,
                     ),
-                    span: Span(
-                        104,
-                        106,
-                    ),
+                    ..
                 },
             ],
             ret_type: Some(
@@ -44,10 +38,7 @@ Module {
                     kind: Int(
                         I8,
                     ),
-                    span: Span(
-                        111,
-                        113,
-                    ),
+                    ..
                 },
             ),
         },
@@ -62,19 +53,13 @@ Module {
                     kind: Int(
                         I8,
                     ),
-                    span: Span(
-                        130,
-                        132,
-                    ),
+                    ..
                 },
                 Type {
                     kind: Int(
                         I16,
                     ),
-                    span: Span(
-                        134,
-                        137,
-                    ),
+                    ..
                 },
                 Type {
                     kind: Ptr(
@@ -82,16 +67,10 @@ Module {
                             kind: Int(
                                 I64,
                             ),
-                            span: Span(
-                                140,
-                                143,
-                            ),
+                            ..
                         },
                     ),
-                    span: Span(
-                        139,
-                        143,
-                    ),
+                    ..
                 },
             ],
             packed: false,
@@ -105,10 +84,7 @@ Module {
                     kind: Int(
                         I8,
                     ),
-                    span: Span(
-                        162,
-                        164,
-                    ),
+                    ..
                 },
                 Type {
                     kind: Array(
@@ -116,17 +92,11 @@ Module {
                             kind: Int(
                                 I8,
                             ),
-                            span: Span(
-                                167,
-                                169,
-                            ),
+                            ..
                         },
                         31,
                     ),
-                    span: Span(
-                        166,
-                        174,
-                    ),
+                    ..
                 },
             ],
             packed: true,
@@ -148,10 +118,7 @@ Module {
                         id: Some(
                             0,
                         ),
-                        span: Span(
-                            206,
-                            212,
-                        ),
+                        ..
                     },
                     stmts: [
                         Stmt {
@@ -159,31 +126,22 @@ Module {
                                 ValueDeclaration(
                                     ValueName {
                                         string: "v0",
-                                        span: Span(
-                                            222,
-                                            224,
-                                        ),
+                                        ..
                                     },
                                     Type {
                                         kind: Int(
                                             I8,
                                         ),
-                                        span: Span(
-                                            225,
-                                            227,
-                                        ),
+                                        ..
                                     },
                                 ),
                                 Call(
                                     Call(
                                         Spanned {
-                                            span: Span(
-                                                235,
-                                                239,
-                                            ),
                                             inner: FunctionName(
                                                 "foo",
                                             ),
+                                            ..
                                         },
                                         [
                                             Value {
@@ -192,10 +150,7 @@ Module {
                                                         100,
                                                     ),
                                                 ),
-                                                span: Span(
-                                                    240,
-                                                    243,
-                                                ),
+                                                ..
                                             },
                                         ],
                                     ),
@@ -222,19 +177,13 @@ Module {
                     ValueDeclaration(
                         ValueName {
                             string: "v0",
-                            span: Span(
-                                307,
-                                309,
-                            ),
+                            ..
                         },
                         Type {
                             kind: Int(
                                 I8,
                             ),
-                            span: Span(
-                                310,
-                                312,
-                            ),
+                            ..
                         },
                     ),
                 ],
@@ -243,10 +192,7 @@ Module {
                         kind: Int(
                             I8,
                         ),
-                        span: Span(
-                            317,
-                            319,
-                        ),
+                        ..
                     },
                 ),
             },
@@ -256,10 +202,7 @@ Module {
                         id: Some(
                             0,
                         ),
-                        span: Span(
-                            322,
-                            328,
-                        ),
+                        ..
                     },
                     stmts: [
                         Stmt {
@@ -267,19 +210,13 @@ Module {
                                 ValueDeclaration(
                                     ValueName {
                                         string: "v1",
-                                        span: Span(
-                                            330,
-                                            332,
-                                        ),
+                                        ..
                                     },
                                     Type {
                                         kind: Int(
                                             I8,
                                         ),
-                                        span: Span(
-                                            333,
-                                            335,
-                                        ),
+                                        ..
                                     },
                                 ),
                                 Binary(
@@ -288,16 +225,10 @@ Module {
                                         kind: Named(
                                             ValueName {
                                                 string: "v0",
-                                                span: Span(
-                                                    342,
-                                                    344,
-                                                ),
+                                                ..
                                             },
                                         ),
-                                        span: Span(
-                                            342,
-                                            344,
-                                        ),
+                                        ..
                                     },
                                     Value {
                                         kind: Immediate(
@@ -305,10 +236,7 @@ Module {
                                                 2,
                                             ),
                                         ),
-                                        span: Span(
-                                            345,
-                                            346,
-                                        ),
+                                        ..
                                     },
                                 ),
                             ),
@@ -318,62 +246,41 @@ Module {
                                 ValueDeclaration(
                                     ValueName {
                                         string: "v2",
-                                        span: Span(
-                                            351,
-                                            353,
-                                        ),
+                                        ..
                                     },
                                     Type {
                                         kind: Int(
                                             I8,
                                         ),
-                                        span: Span(
-                                            354,
-                                            356,
-                                        ),
+                                        ..
                                     },
                                 ),
                                 Call(
                                     Call(
                                         Spanned {
-                                            span: Span(
-                                                364,
-                                                371,
-                                            ),
                                             inner: FunctionName(
                                                 "add_i8",
                                             ),
+                                            ..
                                         },
                                         [
                                             Value {
                                                 kind: Named(
                                                     ValueName {
                                                         string: "v0",
-                                                        span: Span(
-                                                            372,
-                                                            374,
-                                                        ),
+                                                        ..
                                                     },
                                                 ),
-                                                span: Span(
-                                                    372,
-                                                    374,
-                                                ),
+                                                ..
                                             },
                                             Value {
                                                 kind: Named(
                                                     ValueName {
                                                         string: "v1",
-                                                        span: Span(
-                                                            375,
-                                                            377,
-                                                        ),
+                                                        ..
                                                     },
                                                 ),
-                                                span: Span(
-                                                    375,
-                                                    377,
-                                                ),
+                                                ..
                                             },
                                         ],
                                     ),
@@ -387,16 +294,10 @@ Module {
                                         kind: Named(
                                             ValueName {
                                                 string: "v2",
-                                                span: Span(
-                                                    386,
-                                                    388,
-                                                ),
+                                                ..
                                             },
                                         ),
-                                        span: Span(
-                                            386,
-                                            388,
-                                        ),
+                                        ..
                                     },
                                 ),
                             ),
@@ -418,10 +319,7 @@ Module {
                     ValueDeclaration(
                         ValueName {
                             string: "v0",
-                            span: Span(
-                                405,
-                                407,
-                            ),
+                            ..
                         },
                         Type {
                             kind: Ptr(
@@ -429,25 +327,16 @@ Module {
                                     kind: Int(
                                         I8,
                                     ),
-                                    span: Span(
-                                        409,
-                                        411,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                408,
-                                411,
-                            ),
+                            ..
                         },
                     ),
                     ValueDeclaration(
                         ValueName {
                             string: "v1",
-                            span: Span(
-                                413,
-                                415,
-                            ),
+                            ..
                         },
                         Type {
                             kind: Array(
@@ -455,26 +344,17 @@ Module {
                                     kind: Int(
                                         I8,
                                     ),
-                                    span: Span(
-                                        417,
-                                        419,
-                                    ),
+                                    ..
                                 },
                                 2,
                             ),
-                            span: Span(
-                                416,
-                                423,
-                            ),
+                            ..
                         },
                     ),
                     ValueDeclaration(
                         ValueName {
                             string: "v2",
-                            span: Span(
-                                425,
-                                427,
-                            ),
+                            ..
                         },
                         Type {
                             kind: Array(
@@ -484,32 +364,20 @@ Module {
                                             kind: Int(
                                                 I8,
                                             ),
-                                            span: Span(
-                                                430,
-                                                432,
-                                            ),
+                                            ..
                                         },
                                     ),
-                                    span: Span(
-                                        429,
-                                        432,
-                                    ),
+                                    ..
                                 },
                                 2,
                             ),
-                            span: Span(
-                                428,
-                                436,
-                            ),
+                            ..
                         },
                     ),
                     ValueDeclaration(
                         ValueName {
                             string: "v3",
-                            span: Span(
-                                438,
-                                440,
-                            ),
+                            ..
                         },
                         Type {
                             kind: Array(
@@ -519,51 +387,33 @@ Module {
                                             kind: Int(
                                                 I8,
                                             ),
-                                            span: Span(
-                                                443,
-                                                445,
-                                            ),
+                                            ..
                                         },
                                         2,
                                     ),
-                                    span: Span(
-                                        442,
-                                        449,
-                                    ),
+                                    ..
                                 },
                                 2,
                             ),
-                            span: Span(
-                                441,
-                                453,
-                            ),
+                            ..
                         },
                     ),
                     ValueDeclaration(
                         ValueName {
                             string: "v4",
-                            span: Span(
-                                455,
-                                457,
-                            ),
+                            ..
                         },
                         Type {
                             kind: Struct(
                                 "foo",
                             ),
-                            span: Span(
-                                458,
-                                462,
-                            ),
+                            ..
                         },
                     ),
                     ValueDeclaration(
                         ValueName {
                             string: "v5",
-                            span: Span(
-                                464,
-                                466,
-                            ),
+                            ..
                         },
                         Type {
                             kind: Ptr(
@@ -571,16 +421,10 @@ Module {
                                     kind: Struct(
                                         "foo",
                                     ),
-                                    span: Span(
-                                        468,
-                                        472,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                467,
-                                472,
-                            ),
+                            ..
                         },
                     ),
                 ],
@@ -592,10 +436,7 @@ Module {
                         id: Some(
                             0,
                         ),
-                        span: Span(
-                            480,
-                            486,
-                        ),
+                        ..
                     },
                     stmts: [
                         Stmt {
@@ -618,19 +459,13 @@ Module {
                     ValueDeclaration(
                         ValueName {
                             string: "v0",
-                            span: Span(
-                                519,
-                                521,
-                            ),
+                            ..
                         },
                         Type {
                             kind: Int(
                                 I8,
                             ),
-                            span: Span(
-                                522,
-                                524,
-                            ),
+                            ..
                         },
                     ),
                 ],
@@ -642,10 +477,7 @@ Module {
                         id: Some(
                             0,
                         ),
-                        span: Span(
-                            532,
-                            538,
-                        ),
+                        ..
                     },
                     stmts: [
                         Stmt {
@@ -654,26 +486,17 @@ Module {
                                     kind: Named(
                                         ValueName {
                                             string: "v0",
-                                            span: Span(
-                                                557,
-                                                559,
-                                            ),
+                                            ..
                                         },
                                     ),
-                                    span: Span(
-                                        557,
-                                        559,
-                                    ),
+                                    ..
                                 },
                                 Some(
                                     BlockId {
                                         id: Some(
                                             0,
                                         ),
-                                        span: Span(
-                                            560,
-                                            566,
-                                        ),
+                                        ..
                                     },
                                 ),
                                 [
@@ -684,19 +507,13 @@ Module {
                                                     1,
                                                 ),
                                             ),
-                                            span: Span(
-                                                568,
-                                                569,
-                                            ),
+                                            ..
                                         },
                                         BlockId {
                                             id: Some(
                                                 1,
                                             ),
-                                            span: Span(
-                                                573,
-                                                579,
-                                            ),
+                                            ..
                                         },
                                     ),
                                     (
@@ -706,19 +523,13 @@ Module {
                                                     2,
                                                 ),
                                             ),
-                                            span: Span(
-                                                582,
-                                                583,
-                                            ),
+                                            ..
                                         },
                                         BlockId {
                                             id: Some(
                                                 2,
                                             ),
-                                            span: Span(
-                                                587,
-                                                593,
-                                            ),
+                                            ..
                                         },
                                     ),
                                 ],
@@ -731,10 +542,7 @@ Module {
                         id: Some(
                             1,
                         ),
-                        span: Span(
-                            600,
-                            606,
-                        ),
+                        ..
                     },
                     stmts: [
                         Stmt {
@@ -746,10 +554,7 @@ Module {
                                                 1,
                                             ),
                                         ),
-                                        span: Span(
-                                            623,
-                                            624,
-                                        ),
+                                        ..
                                     },
                                 ),
                             ),
@@ -761,10 +566,7 @@ Module {
                         id: Some(
                             2,
                         ),
-                        span: Span(
-                            633,
-                            639,
-                        ),
+                        ..
                     },
                     stmts: [
                         Stmt {
@@ -776,10 +578,7 @@ Module {
                                                 2,
                                             ),
                                         ),
-                                        span: Span(
-                                            656,
-                                            657,
-                                        ),
+                                        ..
                                     },
                                 ),
                             ),
@@ -799,19 +598,13 @@ Module {
                     ValueDeclaration(
                         ValueName {
                             string: "v0",
-                            span: Span(
-                                676,
-                                678,
-                            ),
+                            ..
                         },
                         Type {
                             kind: Int(
                                 I64,
                             ),
-                            span: Span(
-                                679,
-                                682,
-                            ),
+                            ..
                         },
                     ),
                 ],
@@ -820,10 +613,7 @@ Module {
                         kind: Int(
                             I64,
                         ),
-                        span: Span(
-                            687,
-                            690,
-                        ),
+                        ..
                     },
                 ),
             },
@@ -833,10 +623,7 @@ Module {
                         id: Some(
                             0,
                         ),
-                        span: Span(
-                            697,
-                            703,
-                        ),
+                        ..
                     },
                     stmts: [
                         Stmt {
@@ -845,10 +632,7 @@ Module {
                                     id: Some(
                                         1,
                                     ),
-                                    span: Span(
-                                        718,
-                                        724,
-                                    ),
+                                    ..
                                 },
                             ),
                         },
@@ -859,10 +643,7 @@ Module {
                         id: Some(
                             1,
                         ),
-                        span: Span(
-                            730,
-                            736,
-                        ),
+                        ..
                     },
                     stmts: [
                         Stmt {
@@ -870,19 +651,13 @@ Module {
                                 ValueDeclaration(
                                     ValueName {
                                         string: "v1",
-                                        span: Span(
-                                            746,
-                                            748,
-                                        ),
+                                        ..
                                     },
                                     Type {
                                         kind: Int(
                                             I64,
                                         ),
-                                        span: Span(
-                                            749,
-                                            752,
-                                        ),
+                                        ..
                                     },
                                 ),
                                 Phi(
@@ -892,25 +667,16 @@ Module {
                                                 kind: Named(
                                                     ValueName {
                                                         string: "v0",
-                                                        span: Span(
-                                                            760,
-                                                            762,
-                                                        ),
+                                                        ..
                                                     },
                                                 ),
-                                                span: Span(
-                                                    760,
-                                                    762,
-                                                ),
+                                                ..
                                             },
                                             BlockId {
                                                 id: Some(
                                                     0,
                                                 ),
-                                                span: Span(
-                                                    763,
-                                                    769,
-                                                ),
+                                                ..
                                             },
                                         ),
                                         (
@@ -920,19 +686,13 @@ Module {
                                                         100,
                                                     ),
                                                 ),
-                                                span: Span(
-                                                    772,
-                                                    775,
-                                                ),
+                                                ..
                                             },
                                             BlockId {
                                                 id: Some(
                                                     2,
                                                 ),
-                                                span: Span(
-                                                    780,
-                                                    786,
-                                                ),
+                                                ..
                                             },
                                         ),
                                     ],
@@ -944,19 +704,13 @@ Module {
                                 ValueDeclaration(
                                     ValueName {
                                         string: "v2",
-                                        span: Span(
-                                            797,
-                                            799,
-                                        ),
+                                        ..
                                     },
                                     Type {
                                         kind: Int(
                                             I1,
                                         ),
-                                        span: Span(
-                                            800,
-                                            802,
-                                        ),
+                                        ..
                                     },
                                 ),
                                 Binary(
@@ -965,16 +719,10 @@ Module {
                                         kind: Named(
                                             ValueName {
                                                 string: "v1",
-                                                span: Span(
-                                                    808,
-                                                    810,
-                                                ),
+                                                ..
                                             },
                                         ),
-                                        span: Span(
-                                            808,
-                                            810,
-                                        ),
+                                        ..
                                     },
                                     Value {
                                         kind: Immediate(
@@ -982,10 +730,7 @@ Module {
                                                 10,
                                             ),
                                         ),
-                                        span: Span(
-                                            811,
-                                            813,
-                                        ),
+                                        ..
                                     },
                                 ),
                             ),
@@ -996,34 +741,22 @@ Module {
                                     kind: Named(
                                         ValueName {
                                             string: "v2",
-                                            span: Span(
-                                                830,
-                                                832,
-                                            ),
+                                            ..
                                         },
                                     ),
-                                    span: Span(
-                                        830,
-                                        832,
-                                    ),
+                                    ..
                                 },
                                 BlockId {
                                     id: Some(
                                         2,
                                     ),
-                                    span: Span(
-                                        833,
-                                        839,
-                                    ),
+                                    ..
                                 },
                                 BlockId {
                                     id: Some(
                                         3,
                                     ),
-                                    span: Span(
-                                        840,
-                                        846,
-                                    ),
+                                    ..
                                 },
                             ),
                         },
@@ -1034,10 +767,7 @@ Module {
                         id: Some(
                             2,
                         ),
-                        span: Span(
-                            852,
-                            858,
-                        ),
+                        ..
                     },
                     stmts: [
                         Stmt {
@@ -1046,10 +776,7 @@ Module {
                                     id: Some(
                                         1,
                                     ),
-                                    span: Span(
-                                        873,
-                                        879,
-                                    ),
+                                    ..
                                 },
                             ),
                         },
@@ -1060,10 +787,7 @@ Module {
                         id: Some(
                             3,
                         ),
-                        span: Span(
-                            885,
-                            891,
-                        ),
+                        ..
                     },
                     stmts: [
                         Stmt {
@@ -1073,16 +797,10 @@ Module {
                                         kind: Named(
                                             ValueName {
                                                 string: "v1",
-                                                span: Span(
-                                                    908,
-                                                    910,
-                                                ),
+                                                ..
                                             },
                                         ),
-                                        span: Span(
-                                            908,
-                                            910,
-                                        ),
+                                        ..
                                     },
                                 ),
                             ),
