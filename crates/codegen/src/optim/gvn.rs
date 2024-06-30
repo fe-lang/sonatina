@@ -504,7 +504,7 @@ impl GvnSolver {
         value: Value,
         edge: Edge,
     ) -> Value {
-        let mut rep_value = self.leader(func.dfg.resolve_alias(value));
+        let mut rep_value = self.leader(value);
 
         if let Some(inferred_value) = self.infer_value_impl(edge, rep_value) {
             rep_value = inferred_value;
