@@ -13,10 +13,7 @@ use std::{
 
 use sonatina_ir::{ir_writer::FuncWriter, module::FuncRef, Function};
 
-use sonatina_parser::{
-    parser::{ParsedModule, Parser},
-    ErrorKind,
-};
+use sonatina_parser::{parse_module, ParsedModule};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use walkdir::WalkDir;
 
@@ -148,10 +145,12 @@ impl<'a> FileChecker<'a> {
         func_ref: FuncRef,
     ) -> FileCheckResult {
         let func = &mut parsed_module.module.funcs[func_ref];
-        let comments = &parsed_module.func_comments[func_ref];
+        let comments = &parsed_module.debug.func_comments[func_ref];
 
         self.transformer.transform(func);
-        let func_ir = FuncWriter::new(func).dump_string().unwrap();
+        let func_ir = FuncWriter::new(func_ref, func, Some(&parsed_module.debug))
+            .dump_string()
+            .unwrap();
 
         let checker = self.build_checker(comments);
 
@@ -168,32 +167,26 @@ impl<'a> FileChecker<'a> {
 
     fn parse_file(&self) -> Result<ParsedModule, String> {
         let input = fs::read_to_string(self.file_path).unwrap();
-        let parser = Parser::default();
-        match parser.parse(&input) {
+
+        match parse_module(&input) {
             Ok(module) => Ok(module),
-            Err(err) => match err.kind {
-                ErrorKind::InvalidToken(msg) => Err(format!(
-                    "failed to parse file: invalid token: {}. line: {}",
-                    msg, err.line
-                )),
-
-                ErrorKind::SyntaxError(msg) => Err(format!(
-                    "failed to parse file: invalid syntax: {}. line: {}",
-                    msg, err.line
-                )),
-
-                ErrorKind::SemanticError(msg) => Err(format!(
-                    "failed to parse file: invalid semantics: {}. line: {}",
-                    msg, err.line
-                )),
-            },
+            Err(errs) => {
+                let mut v = vec![];
+                for e in errs {
+                    e.print(&mut v, self.file_path.to_str().unwrap(), &input, true)
+                        .unwrap()
+                }
+                Err(String::from_utf8(v).unwrap())
+            }
         }
     }
 
     fn build_checker(&self, directives: &[String]) -> filecheck::Checker {
         let mut builder = filecheck::CheckerBuilder::new();
         for d in directives {
-            builder.directive(d).unwrap();
+            if !builder.directive(d).unwrap() && d.contains("nextln") {
+                panic!("not a directive: `{}`", d);
+            }
         }
         builder.finish()
     }

@@ -13,7 +13,7 @@ target = "evm-ethereum-london"
 # nextln:     jump block1;
 # nextln: 
 # nextln: 
-func public %llvm_foo(v100.i8, v101.*i8) -> void:
+func public %llvm_foo(v100.i8, v101.*i8) -> void {
     block0:
         v0.i8 = load @memory v101;
         jump block1;
@@ -27,3 +27,4 @@ func public %llvm_foo(v100.i8, v101.*i8) -> void:
         v3.i8 = phi (v2 block1);
         store @memory v101 v3;
         return;
+}

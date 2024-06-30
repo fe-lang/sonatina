@@ -1,0 +1,4 @@
+v0.i32 = sext v1;
+v0.i32 = zext v1;
+v0.i32 = bitcast v1;
+v0.i32 = trunc v1;

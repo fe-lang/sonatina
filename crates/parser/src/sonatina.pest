@@ -1,0 +1,96 @@
+module = { SOI ~ NEWLINE* ~ target_specifier ~ (NEWLINE+ ~ declaration)* ~ (NEWLINE+ ~ function)* ~ NEWLINE* ~ EOI }
+
+WHITESPACE = _{ " " | "\t" }
+COMMENT    =  { "#" ~ (!NEWLINE ~ ANY)* }
+
+ident_start_char = { ASCII_ALPHA | "_" }
+ident_body_char  = { ASCII_ALPHANUMERIC | "_" }
+
+target_specifier = _{ "target" ~ "=" ~ "\"" ~ target_triple ~ "\"" }
+target_triple    = @{ ASCII_ALPHA* ~ "-" ~ ASCII_ALPHA* ~ "-" ~ ASCII_ALPHA* }
+
+declaration              = _{ function_declaration | struct_declaration }
+function_declaration     =  { "declare" ~ function_linkage? ~ function_identifier ~ function_param_type_list ~ function_ret_type? ~ ";" }
+function_param_type_list =  { "(" ~ (type_name ~ ",")* ~ type_name? ~ ")" }
+struct_declaration       =  { "type" ~ struct_identifier ~ "=" ~ struct_fields ~ ";" }
+struct_identifier        = ${ "%" ~ struct_name }
+struct_fields            = _{ normal_field_list | packed_field_list }
+normal_field_list        =  { "{" ~ type_list ~ "}" }
+packed_field_list        =  { "<{" ~ type_list ~ "}>" }
+type_list                = _{ (type_name ~ ",")* ~ type_name? }
+struct_name              = @{ ident_start_char ~ ident_body_char* }
+
+function            =  { function_signature ~ function_body }
+_functions          = _{ (NEWLINE* ~ function ~ NEWLINE*)* }
+function_signature  =  { "func" ~ function_linkage? ~ function_identifier ~ function_params ~ function_ret_type? }
+function_ret_type   =  { "->" ~ type_name }
+function_linkage    =  { "public" | "private" | "external" }
+function_identifier = ${ "%" ~ function_name }
+function_name       = @{ ident_start_char ~ ident_body_char* }
+function_params     =  { "(" ~ (value_declaration ~ ",")* ~ value_declaration? ~ ")" }
+function_body       = _{ "{" ~ (NEWLINE+ ~ block?)* ~ "}" }
+block               =  { block_ident ~ ":" ~ (NEWLINE+ ~ stmt)* }
+_stmts              = _{ (stmt ~ NEWLINE+)* }
+
+block_ident  = ${ "block" ~ block_number }
+block_number =  { ASCII_DIGIT+ }
+value_name   = ${ "v" ~ ASCII_DIGIT+ }
+
+type_name      =  { primitive_type | ptr_type | array_type | void_type | struct_identifier }
+primitive_type =  { "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "i1" }
+ptr_type       = ${ "*" ~ type_name }
+array_type     = !{ "[" ~ type_name ~ ";" ~ array_size ~ "]" }
+array_size     =  { ASCII_DIGIT+ }
+void_type      =  { "void" }
+
+value_declaration = ${ value_name ~ "." ~ type_name }
+
+// Stmts
+stmt          = { (define_stmt | store_stmt | return_stmt | jump_stmt | br_stmt | br_table_stmt) ~ ";" }
+store_stmt    = { "store" ~ location ~ value ~ value }
+location      = { "@memory" | "@storage" }
+return_stmt   = { "return" ~ value? }
+jump_stmt     = { "jump" ~ block_ident }
+br_stmt       = { "br" ~ value ~ block_ident ~ block_ident }
+br_table_stmt = { "br_table" ~ value ~ block_ident? ~ ("(" ~ br_table_case ~ ")")+ }
+br_table_case = { value ~ block_ident }
+
+define_stmt =  { value_declaration ~ "=" ~ expr }
+expr        =  { bin_expr | una_expr | alloca_expr | call_expr | cast_expr | gep_expr | load_expr | phi_expr }
+bin_expr    =  { bin_op ~ value ~ value }
+bin_op      =  {
+    "add"
+  | "sub"
+  | "mul"
+  | "udiv"
+  | "sdiv"
+  | "lt"
+  | "gt"
+  | "slt"
+  | "sgt"
+  | "le"
+  | "ge"
+  | "sle"
+  | "sge"
+  | "eq"
+  | "ne"
+  | "and"
+  | "or"
+  | "xor"
+}
+una_expr    =  { una_op ~ value }
+una_op      =  { "not" | "neg" }
+value       =  { value_name | imm_number }
+imm_number  = ${ number ~ "." ~ primitive_type }
+number      = _{ hex | decimal }
+decimal     = @{ "-"? ~ ASCII_DIGIT+ }
+hex         = @{ "0x" ~ ASCII_HEX_DIGIT+ }
+
+alloca_expr = { "alloca" ~ type_name }
+call_expr   = { "call" ~ function_identifier ~ value* }
+load_expr   = { "load" ~ location ~ value }
+gep_expr    = { "gep" ~ value{2, } }
+cast_expr   = { cast_op ~ value }
+cast_op     = { "sext" | "zext" | "bitcast" | "trunc" }
+phi_expr    = { "phi" ~ phi_value+ }
+phi_value   = { "(" ~ value ~ block_ident ~ ")" }

@@ -31,7 +31,7 @@ target = "evm-ethereum-london"
 # nextln:     v5.i32 = add v1 1.i32;
 # nextln:     store @memory v10 v5;
 # nextln:     jump block4;
-func public %llvm_test1(v0.i1, v10.*i32) -> void:
+func public %llvm_test1(v0.i1, v10.*i32) -> void {
     block0:
         jump block1;
 
@@ -58,14 +58,14 @@ func public %llvm_test1(v0.i1, v10.*i32) -> void:
         v5.i32 = add v1 1.i32;
         store @memory v10 v5;
         jump block4;
-
+}
 
 # regex: VALUE=\bv\d+\b
 # check:  block0:
 # nextln:     jump block1;
 # nextln: 
 # nextln: block1:
-# nextln:     v15.i64 = phi (-1.i64 block0) (v3 block5);
+# nextln:     $(var1=$VALUE).i64 = phi (-1.i64 block0) (v3 block5);
 # nextln:     v3.i64 = phi (v7 block5) (0.i64 block0);
 # nextln:     br v0 block2 block4;
 # nextln: 
@@ -79,7 +79,7 @@ func public %llvm_test1(v0.i1, v10.*i32) -> void:
 # nextln:     return;
 # nextln: 
 # nextln: block4:
-# nextln:     store @memory v1 v15;
+# nextln:     store @memory v1 $var1;
 # nextln:     jump block5;
 # nextln: 
 # nextln: block5:
@@ -89,7 +89,7 @@ func public %llvm_test1(v0.i1, v10.*i32) -> void:
 # nextln: 
 # nextln: block6:
 # nextln:     return;
-func public %llvm_test2(v0.i1, v1.*i64, v2.i64) -> void:
+func public %llvm_test2(v0.i1, v1.*i64, v2.i64) -> void {
     block0:
         jump block1;
 
@@ -118,6 +118,7 @@ func public %llvm_test2(v0.i1, v1.*i64, v2.i64) -> void:
 
     block6:
         return;
+}
 
 # check:  block0:
 # nextln:     jump block1;
@@ -142,7 +143,7 @@ func public %llvm_test2(v0.i1, v1.*i64, v2.i64) -> void:
 # nextln: 
 # nextln: block5:
 # nextln:     return;
-func public %llvm_pr49873_cmp_simplification_dependency(v0.*i32, v1.i1) -> void:
+func public %llvm_pr49873_cmp_simplification_dependency(v0.*i32, v1.i1) -> void {
     block0:
         jump block1;
 
@@ -167,3 +168,4 @@ func public %llvm_pr49873_cmp_simplification_dependency(v0.*i32, v1.i1) -> void:
 
     block5:
         return;
+}

@@ -1,7 +1,7 @@
 //! This module contains a solver for Sparse Conditional Constant Propagation.
 //!
-//! The algorithm is based on Mark N. Wegman., Frank Kcnncth Zadeck.: Constant propagation with conditional branches:  
-//! ACM Transactions on Programming Languages and Systems Volume 13 Issue 2 April 1991 pp 181–210:  
+//! The algorithm is based on Mark N. Wegman., Frank Kcnncth Zadeck.: Constant propagation with conditional branches:
+//! ACM Transactions on Programming Languages and Systems Volume 13 Issue 2 April 1991 pp 181–210:
 //! <https://doi.org/10.1145/103135.103136>
 
 use std::{collections::BTreeSet, ops};
@@ -140,6 +140,8 @@ impl SccpSolver {
         for (i, from) in func.dfg.phi_blocks(insn).iter().enumerate() {
             if self.is_reachable(func, *from, block) {
                 let phi_arg = func.dfg.insn_arg(insn, i);
+                let phi_arg = func.dfg.resolve_alias(phi_arg);
+
                 let v_cell = self.lattice[phi_arg];
                 eval_result = eval_result.join(v_cell);
             }
@@ -312,30 +314,30 @@ impl SccpSolver {
     /// Remove unreachable edges and blocks.
     fn remove_unreachable_edges(&self, func: &mut Function) {
         let entry_block = func.layout.entry_block().unwrap();
-        let mut inserter = InsnInserter::new(func, CursorLocation::BlockTop(entry_block));
+        let mut inserter = InsnInserter::at_location(CursorLocation::BlockTop(entry_block));
 
         loop {
             match inserter.loc() {
                 CursorLocation::BlockTop(block) => {
                     if !self.reachable_blocks.contains(&block) {
-                        inserter.remove_block();
+                        inserter.remove_block(func);
                     } else {
-                        inserter.proceed();
+                        inserter.proceed(func);
                     }
                 }
 
-                CursorLocation::BlockBottom(..) => inserter.proceed(),
+                CursorLocation::BlockBottom(..) => inserter.proceed(func),
 
                 CursorLocation::At(insn) => {
-                    if inserter.func().dfg.is_branch(insn) {
-                        let branch_info = inserter.func().dfg.analyze_branch(insn);
+                    if func.dfg.is_branch(insn) {
+                        let branch_info = func.dfg.analyze_branch(insn);
                         for dest in branch_info.iter_dests().collect::<Vec<_>>() {
                             if !self.is_reachable_edge(insn, dest) {
-                                inserter.func_mut().dfg.remove_branch_dest(insn, dest);
+                                func.dfg.remove_branch_dest(insn, dest);
                             }
                         }
                     }
-                    inserter.proceed();
+                    inserter.proceed(func);
                 }
 
                 CursorLocation::NoWhere => break,
@@ -368,7 +370,7 @@ impl SccpSolver {
 
         match self.lattice[insn_result].to_imm() {
             Some(imm) => {
-                InsnInserter::new(func, CursorLocation::At(insn)).remove_insn();
+                InsnInserter::at_location(CursorLocation::At(insn)).remove_insn(func);
                 let new_value = func.dfg.make_imm_value(imm);
                 func.dfg.change_to_alias(insn_result, new_value);
             }
@@ -394,7 +396,7 @@ impl SccpSolver {
             let phi_value = func.dfg.insn_result(insn).unwrap();
             func.dfg
                 .change_to_alias(phi_value, func.dfg.insn_arg(insn, 0));
-            InsnInserter::new(func, CursorLocation::At(insn)).remove_insn();
+            InsnInserter::at_location(CursorLocation::At(insn)).remove_insn(func);
         }
     }
 

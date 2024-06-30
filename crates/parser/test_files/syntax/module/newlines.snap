@@ -1,0 +1,48 @@
+---
+source: crates/parser/tests/syntax.rs
+expression: s
+input_file: crates/parser/test_files/syntax/module/newlines.sntn
+---
+module "target = "evm-ethereum-london"
+func public %main() {
+    block0:
+        v0.i8 = add 1.i8 2.i8;
+        return;
+}
+"
+  target_triple "evm-ethereum-london"
+  function "func public %main() {
+      block0:
+          v0.i8 = add 1.i8 2.i8;
+          return;
+  }"
+    function_signature "func public %main() "
+      function_linkage "public"
+      function_identifier "%main"
+        function_name "main"
+      function_params "()"
+    block "block0:
+            v0.i8 = add 1.i8 2.i8;
+            return;"
+      block_ident "block0"
+        block_number "0"
+      stmt "v0.i8 = add 1.i8 2.i8;"
+        define_stmt "v0.i8 = add 1.i8 2.i8"
+          value_declaration "v0.i8"
+            value_name "v0"
+            type_name "i8"
+              primitive_type "i8"
+          expr "add 1.i8 2.i8"
+            bin_expr "add 1.i8 2.i8"
+              bin_op "add"
+              value "1.i8"
+                imm_number "1.i8"
+                  decimal "1"
+                  primitive_type "i8"
+              value "2.i8"
+                imm_number "2.i8"
+                  decimal "2"
+                  primitive_type "i8"
+      stmt "return;"
+        return_stmt "return"
+  EOI ""

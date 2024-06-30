@@ -3,8 +3,9 @@ target = "evm-ethereum-london"
 # check:     block0:
 # nextln:         v1.i8 = add v0 10.i8;
 # nextln:         return v1;
-func public %no_branch(v0.i8) -> i8:
+func public %no_branch(v0.i8) -> i8 {
     block0:
         v1.i8 = add v0 10.i8;
         v2.i8 = add v0 10.i8;
         return v2;
+}

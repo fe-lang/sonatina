@@ -1,0 +1,10 @@
+---
+source: crates/parser2/tests/syntax.rs
+expression: s
+input_file: crates/parser2/test_files/syntax/func/empty.sntn
+---
+function "func %foo() {}"
+  function_signature "func %foo() "
+    function_identifier "%foo"
+      function_name "foo"
+    function_params "()"

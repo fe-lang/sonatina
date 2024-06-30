@@ -15,7 +15,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln:  block3:
 # nextln:      return;
-func public %basic(v0.i32, v1.i32) -> void:
+func public %basic(v0.i32, v1.i32) -> void {
     block0:
         jump block1;
 
@@ -31,3 +31,4 @@ func public %basic(v0.i32, v1.i32) -> void:
 
     block3:
         return;
+}

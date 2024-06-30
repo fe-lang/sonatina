@@ -10,8 +10,8 @@ publish = false
 
 [dependencies]
 filecheck = "0.5.0"
-sonatina-ir = {path = "../ir"}
-sonatina-codegen = {path = "../codegen"}
-sonatina-parser = {path = "../parser"}
+sonatina-ir = { path = "../ir" }
+sonatina-codegen = { path = "../codegen" }
+sonatina-parser = { path = "../parser" }
 termcolor = "1.1.2"
 walkdir = "2"

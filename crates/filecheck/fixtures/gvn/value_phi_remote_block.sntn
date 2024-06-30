@@ -22,7 +22,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln: block5:
 # nextln:     return $var;
-func public %phi_value_remote_block(v0.i1, v1.i1, v2.i32) -> i32:
+func public %phi_value_remote_block(v0.i1, v1.i1, v2.i32) -> i32 {
     block0:
         br v0 block1 block2;
 
@@ -45,3 +45,4 @@ func public %phi_value_remote_block(v0.i1, v1.i1, v2.i32) -> i32:
     block5:
         v7.i32 = add v5 v2;
         return v7;
+}

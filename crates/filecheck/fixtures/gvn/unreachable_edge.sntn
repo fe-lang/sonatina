@@ -6,8 +6,8 @@ target = "evm-ethereum-london"
 # nextln:   return 0.i1;
 # nextln: 
 # nextln: block4:
-# nextln:   return -1.i1;
-func public %unreachable_edge(v0.i1) -> i1:
+# nextln:   return 1.i1;
+func public %unreachable_edge(v0.i1) -> i1 {
     block0:
         br v0 block1 block2;
 
@@ -25,6 +25,7 @@ func public %unreachable_edge(v0.i1) -> i1:
     block4:
         v4.i1 = or v0 v0;
         return v4;
+}
 
 # check: block0:
 # nextln:   jump block1;
@@ -34,7 +35,7 @@ func public %unreachable_edge(v0.i1) -> i1:
 # nextln: 
 # nextln: block3:
 # nextln:   return v1;
-func public %unreachable_edge2(v0.i8) -> i8:
+func public %unreachable_edge2(v0.i8) -> i8 {
     block0:
         br 1.i1 block1 block2;
 
@@ -49,6 +50,7 @@ func public %unreachable_edge2(v0.i8) -> i8:
     block3:
         v3.i8 = phi (v1 block1) (v2 block2);
         return v3;
+}
 
 # check: block0:
 # nextln:   jump block1;
@@ -65,7 +67,7 @@ func public %unreachable_edge2(v0.i8) -> i8:
 # nextln: block4:
 # nextln:   v5.i8 = phi (v1 block1) (v4 block3);
 # nextln:   return v5;
-func public %unreachable_edge3(v0.i8) -> i8:
+func public %unreachable_edge3(v0.i8) -> i8 {
     block0:
         br 1.i1 block1 block2;
 
@@ -85,3 +87,4 @@ func public %unreachable_edge3(v0.i8) -> i8:
     block4:
         v5.i8 = phi (v1 block1) (v3 block2) (v4 block3);
         return v5;
+}

@@ -20,18 +20,28 @@ impl TargetTriple {
     pub fn parse(s: &str) -> Result<Self, InvalidTriple> {
         let mut triple = s.split('-');
 
-        let arch = Architecture::parse(triple.next().ok_or(InvalidTriple::InvalidFormat(s))?)?;
-        let chain = Chain::parse(triple.next().ok_or(InvalidTriple::InvalidFormat(s))?)?;
+        let arch = Architecture::parse(
+            triple
+                .next()
+                .ok_or_else(|| InvalidTriple::InvalidFormat(s.to_string()))?,
+        )?;
+        let chain = Chain::parse(
+            triple
+                .next()
+                .ok_or_else(|| InvalidTriple::InvalidFormat(s.to_string()))?,
+        )?;
         let version = Version::parse(
             arch,
             chain,
-            triple.next().ok_or(InvalidTriple::InvalidFormat(s))?,
+            triple
+                .next()
+                .ok_or_else(|| InvalidTriple::InvalidFormat(s.to_string()))?,
         )?;
 
         if triple.next().is_none() {
             Ok(Self::new(arch, chain, version))
         } else {
-            Err(InvalidTriple::InvalidFormat(s))
+            Err(InvalidTriple::InvalidFormat(s.to_string()))
         }
     }
 }
@@ -127,10 +137,10 @@ pub enum EvmVersion {
     Istanbul,
     London,
 }
-#[derive(Debug, Clone, Copy, Error)]
-pub enum InvalidTriple<'a> {
+#[derive(Debug, Clone, Error)]
+pub enum InvalidTriple {
     #[error("the format of triple must be `architecture-chain-version: but got `{0}`")]
-    InvalidFormat(&'a str),
+    InvalidFormat(String),
 
     #[error("given architecture is not supported")]
     ArchitectureNotSupported,

@@ -10,7 +10,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln: block3:
 # nextln:     return 12.i8;
-func public %const_branch() -> i8:
+func public %const_branch() -> i8 {
     block0:
         v0.i1 = sgt -1.i8 0.i8;
         br v0 block1 block2;
@@ -23,13 +23,14 @@ func public %const_branch() -> i8:
 
     block3:
         return 12.i8;
+}
 
 # check:  block0:
 # nextln:     jump block2;
 # nextln: 
 # nextln: block2:
 # nextln:     return 2.i32;
-func public %const_branch2() -> i32:
+func public %const_branch2() -> i32 {
     block0:
         br_table 1.i32 block1 (1.i32 block2) (2.i32 block3);
 
@@ -41,3 +42,4 @@ func public %const_branch2() -> i32:
 
     block3:
         return 3.i32;
+}

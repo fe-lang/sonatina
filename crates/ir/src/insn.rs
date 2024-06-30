@@ -1,7 +1,7 @@
 //! This module contains Sonatine IR instructions definitions.
 
 // TODO: Add type checker for instruction arguments.
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 use smallvec::SmallVec;
 
@@ -134,17 +134,30 @@ pub enum DataLocationKind {
     Storage,
 }
 
+impl DataLocationKind {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Memory => "@memory",
+            Self::Storage => "@storage",
+        }
+    }
+}
+
+impl FromStr for DataLocationKind {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "@memory" => Ok(Self::Memory),
+            "@storage" => Ok(Self::Storage),
+            _ => Err(()),
+        }
+    }
+}
+
 impl fmt::Display for DataLocationKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use DataLocationKind::*;
-        write!(
-            f,
-            "{}",
-            match self {
-                Memory => "mem",
-                Storage => "store",
-            }
-        )
+        f.write_str(self.as_str())
     }
 }
 
@@ -538,6 +551,18 @@ impl UnaryOp {
     }
 }
 
+impl FromStr for UnaryOp {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "not" => Ok(Self::Not),
+            "neg" => Ok(Self::Neg),
+            _ => Err(()),
+        }
+    }
+}
+
 impl fmt::Display for UnaryOp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(self.as_str())
@@ -629,6 +654,34 @@ impl fmt::Display for BinaryOp {
     }
 }
 
+impl FromStr for BinaryOp {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "add" => Ok(Self::Add),
+            "sub" => Ok(Self::Sub),
+            "mul" => Ok(Self::Mul),
+            "udiv" => Ok(Self::Udiv),
+            "sdiv" => Ok(Self::Sdiv),
+            "lt" => Ok(Self::Lt),
+            "gt" => Ok(Self::Gt),
+            "slt" => Ok(Self::Slt),
+            "sgt" => Ok(Self::Sgt),
+            "le" => Ok(Self::Le),
+            "ge" => Ok(Self::Ge),
+            "sle" => Ok(Self::Sle),
+            "sge" => Ok(Self::Sge),
+            "eq" => Ok(Self::Eq),
+            "ne" => Ok(Self::Ne),
+            "and" => Ok(Self::And),
+            "or" => Ok(Self::Or),
+            "xor" => Ok(Self::Xor),
+            _ => Err(()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CastOp {
     Sext,
@@ -643,7 +696,7 @@ impl CastOp {
             Self::Sext => "sext",
             Self::Zext => "zext",
             Self::Trunc => "trunc",
-            Self::BitCast => "BitCast",
+            Self::BitCast => "bitcast",
         }
     }
 }
@@ -651,6 +704,20 @@ impl CastOp {
 impl fmt::Display for CastOp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for CastOp {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "sext" => Ok(Self::Sext),
+            "zext" => Ok(Self::Zext),
+            "trunc" => Ok(Self::Trunc),
+            "bitcast" => Ok(Self::BitCast),
+            _ => Err(()),
+        }
     }
 }
 

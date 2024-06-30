@@ -1,0 +1,21 @@
+---
+source: crates/parser/tests/errors.rs
+expression: s
+input_file: crates/parser/test_files/errors/numbers.sntn
+---
+error: parse error
+ --> numbers.sntn:4:27
+  |
+4 |         v0.i8 = call %foo 1000.i8;
+  |                           ^^^^ number out of bounds
+  |error: parse error
+ --> numbers.sntn:6:28
+  |
+6 |         v2.i16 = add 1.i16 -50000.i16;
+  |                            ^^^^^^ number out of bounds
+  |error: parse error
+ --> numbers.sntn:7:19
+  |
+7 |         jump block203948029830482;
+  |                   ^^^^^^^^^^^^^^^ number out of bounds
+  |

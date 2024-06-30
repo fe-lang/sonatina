@@ -11,10 +11,21 @@ description = "Parser for sonatina-ir text format"
 categories = ["compilers", "parser", "wasm"]
 keywords = ["compiler", "evm", "wasm", "smart-contract"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
+ir = { package = "sonatina-ir", path = "../ir", version = "0.0.3-alpha" }
 sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
-smallvec = "1.7.0"
 cranelift-entity = "0.104"
+pest = "2.7.10"
+pest_derive = "2.7.10"
+smol_str = "0.2.2"
+hex = "0.4.3"
+either = { version = "1.12.0", default-features = false }
+annotate-snippets = "0.11.4"
+rustc-hash = "2.0.0"
+bimap = "0.6.3"
+derive_more = { version = "=1.0.0-beta.6", default-features = false, features = ["debug"] }
+
+[dev-dependencies]
+dir-test = "0.3"
+insta = { version = "1.38.0" }
+indenter = "0.3.3"

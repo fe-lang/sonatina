@@ -1,0 +1,8 @@
+jump block0;
+jump block100;
+return 100.i32;
+return v0;
+return;
+br v0 block1 block2;
+br_table v0 block1 (1.i32 block2) (2.i32 block3);
+br_table 1.i8 (1.i8 block2) (2.i8 block3);

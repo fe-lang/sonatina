@@ -19,14 +19,13 @@ pub fn render_to<W: io::Write>(func: &Function, output: &mut W) -> io::Result<()
 
 #[cfg(test)]
 mod test {
-    use crate::{builder, Type};
+    use crate::{builder::test_util::test_func_builder, Type};
 
     use super::*;
 
     #[test]
     fn test_dump_ir() {
-        let mut test_module_builder = builder::test_util::TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[Type::I64], Type::Void);
+        let mut builder = test_func_builder(&[Type::I64], Type::Void);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -47,13 +46,13 @@ mod test {
         builder.jump(merge_block);
 
         builder.switch_to_block(merge_block);
-        let v3 = builder.phi(&[(v1, then_block), (v2, else_block)]);
+        let v3 = builder.phi(Type::I64, &[(v1, then_block), (v2, else_block)]);
         builder.add(v3, arg0);
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
-        let module = test_module_builder.build();
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
 
         let mut text = vec![];
         render_to(&module.funcs[func_ref], &mut text).unwrap();

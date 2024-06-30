@@ -2,7 +2,7 @@
 use std::collections::BTreeSet;
 
 use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, SecondaryMap};
-use fxhash::FxHashMap;
+use rustc_hash::FxHashMap;
 
 use crate::{global_variable::ConstantValue, module::ModuleCtx, GlobalVariable};
 

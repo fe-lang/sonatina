@@ -1,32 +1,32 @@
 target = "evm-ethereum-london"
 
 # check:  block0:
-# nextln:       v5.i32 = add v0 v1;
-# nextln:       jump block1;
+# nextln:     v5.i32 = add v0 v1;
+# nextln:     jump block1;
 # nextln: 
-# nextln:   block1:
-# nextln:       v2.i32 = phi (0.i32 block0) (v9 block5);
-# nextln:       v4.i32 = add v0 v2;
-# nextln:       v6.i32 = mul v4 v5;
-# nextln:       jump block2;
+# nextln: block1:
+# nextln:     v2.i32 = phi (0.i32 block0) (v9 block5);
+# nextln:     v4.i32 = add v0 v2;
+# nextln:     v6.i32 = mul v4 v5;
+# nextln:     jump block2;
 # nextln: 
-# nextln:   block2:
-# nextln:       v3.i32 = phi (0.i32 block1) (v7 block3);
-# nextln:       jump block3;
+# nextln: block2:
+# nextln:     v3.i32 = phi (0.i32 block1) (v7 block3);
+# nextln:     jump block3;
 # nextln: 
-# nextln:   block3:
-# nextln:       v7.i32 = sub v6 v3;
-# nextln:       v8.i1 = slt v7 10.i32;
-# nextln:       br v8 block4 block2;
+# nextln: block3:
+# nextln:     v7.i32 = sub v6 v3;
+# nextln:     v8.i1 = slt v7 10.i32;
+# nextln:     br v8 block4 block2;
 # nextln: 
-# nextln:   block4:
-# nextln:       v9.i32 = add v2 1.i32;
-# nextln:       v10.i1 = slt v9 100.i32;
-# nextln:       br v10 block1 block5;
+# nextln: block4:
+# nextln:     v9.i32 = add v2 1.i32;
+# nextln:     v10.i1 = slt v9 100.i32;
+# nextln:     br v10 block1 block5;
 # nextln: 
-# nextln:   block5:
-# nextln:       return;
-func public %nested_loops(v0.i32, v1.i32) -> void:
+# nextln: block5:
+# nextln:     return;
+func public %nested_loops(v0.i32, v1.i32) -> void {
     block0:
         jump block1;
 
@@ -53,3 +53,4 @@ func public %nested_loops(v0.i32, v1.i32) -> void:
 
     block5:
         return;
+}

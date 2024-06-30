@@ -1,0 +1,50 @@
+target = "evm-ethereum-london"
+
+#! this is a module
+#! with two functions
+
+declare external %add_i8(i8, i8) -> i8;
+
+type %foo = { i8, i16, *i64 };
+type %bar = <{ i8, [i8; 31] }>;
+
+func public %main() {
+    block0:
+        v0.i8 = call %foo 100.i8;
+        return;
+}
+
+# multiplies arg by 2
+func private %foo(v0.i8) -> i8 {
+block0:
+v1.i8 = mul v0 2.i8;
+v2.i8 = call %add_i8 v0 v1;
+return v2;
+}
+
+func %types(v0.*i8, v1.[i8; 2], v2.[*i8; 2], v3.[[i8; 2]; 2], v4.%foo, v5.*%foo) {
+    block0:
+        return;
+}
+
+func %table(v0.i8) {
+    block0:
+        br_table v0 block0 (1.i8 block1) (2.i8 block2);
+    block1:
+        return 1.i8;
+    block2:
+        return 2.i8;
+}
+
+func %flow(v0.i64) -> i64 {
+    block0:
+        jump block1;
+    block1:
+        v1.i64 = phi (v0 block0) (100.i64 block2);
+        v2.i1 = gt v1 10.i64;
+        br v2 block2 block3;
+    block2:
+        jump block1;
+    block3:
+        return v1;
+}

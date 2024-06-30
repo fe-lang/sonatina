@@ -1,0 +1,9 @@
+func %foo() -> i32 {
+block0:
+    jump block1;
+block1:
+    v0.i32 = phi (v1 block2) (100.i32 block0);
+    v1.i32 = add 1.i32 1.i32;
+block2:
+    jump block1;
+}

@@ -1,0 +1,11 @@
+---
+source: crates/parser/tests/errors.rs
+expression: s
+input_file: crates/parser/test_files/errors/duplicate_val.sntn
+---
+error: parse error
+ --> duplicate_val.sntn:5:9
+  |
+5 |         v0.i8 = add 2.i8 3.i8;
+  |         ^^ value name `v0` is already defined
+  |

@@ -1,20 +1,40 @@
 use std::io;
 
 use crate::{
-    module::ModuleCtx,
+    module::{FuncRef, ModuleCtx},
     types::{CompoundType, CompoundTypeData, StructData},
     DataLocationKind, GlobalVariableData, Module,
 };
 
 use super::{Block, Function, Insn, InsnData, Type, Value};
 
+pub trait DebugProvider {
+    fn value_name(&self, _func: FuncRef, _value: Value) -> Option<&str> {
+        None
+    }
+}
+impl DebugProvider for () {}
+
 pub struct ModuleWriter<'a> {
     module: &'a Module,
+    debug: Option<&'a dyn DebugProvider>,
 }
+
+impl<'a> ModuleWriter<'a> {}
 
 impl<'a> ModuleWriter<'a> {
     pub fn new(module: &'a Module) -> Self {
-        Self { module }
+        Self {
+            module,
+            debug: None,
+        }
+    }
+
+    pub fn with_debug_provider(module: &'a Module, debug: &'a dyn DebugProvider) -> Self {
+        Self {
+            module,
+            debug: Some(debug),
+        }
     }
 
     pub fn write(&mut self, mut w: impl io::Write) -> io::Result<()> {
@@ -40,26 +60,45 @@ impl<'a> ModuleWriter<'a> {
 
         for func_ref in self.module.funcs.keys() {
             let func = &self.module.funcs[func_ref];
-            let mut func_writer = FuncWriter::new(func);
+            let mut func_writer = FuncWriter::new(func_ref, func, self.debug);
             func_writer.write(&mut w)?;
             writeln!(w)?;
         }
 
         Ok(())
     }
+
+    pub fn dump_string(&mut self) -> io::Result<String> {
+        let mut s = Vec::new();
+        self.write(&mut s)?;
+        unsafe { Ok(String::from_utf8_unchecked(s)) }
+    }
 }
 
 pub struct FuncWriter<'a> {
+    func_ref: FuncRef,
     func: &'a Function,
     level: u8,
+    debug: Option<&'a dyn DebugProvider>,
 }
 
 impl<'a> FuncWriter<'a> {
-    pub fn new(func: &'a Function) -> Self {
-        Self { func, level: 0 }
+    pub fn new(
+        func_ref: FuncRef,
+        func: &'a Function,
+        debug: Option<&'a dyn DebugProvider>,
+    ) -> Self {
+        Self {
+            func_ref,
+            func,
+            level: 0,
+            debug,
+        }
     }
 
     pub fn write(&mut self, mut w: impl io::Write) -> io::Result<()> {
+        // TODO: extern declarations aren't printed correctly
+
         w.write_fmt(format_args!(
             "func {} %{}(",
             self.func.sig.linkage(),
@@ -73,13 +112,17 @@ impl<'a> FuncWriter<'a> {
         write!(w, ") -> ")?;
         self.func.sig.ret_ty().ir_write(self.ctx(), &mut w)?;
 
-        self.enter(&mut w)?;
+        writeln!(w, " {{")?;
+        self.level += 1;
+
         for block in self.func.layout.iter_block() {
             self.write_block_with_insn(block, &mut w)?;
             self.newline(&mut w)?;
             self.newline(&mut w)?;
         }
-        self.leave();
+
+        self.level -= 1;
+        writeln!(w, "}}")?;
 
         Ok(())
     }
@@ -92,6 +135,10 @@ impl<'a> FuncWriter<'a> {
         let mut s = Vec::new();
         self.write(&mut s)?;
         unsafe { Ok(String::from_utf8_unchecked(s)) }
+    }
+
+    pub fn value_name(&self, value: Value) -> Option<&str> {
+        self.debug.and_then(|d| d.value_name(self.func_ref, value))
     }
 
     fn write_block_with_insn(&mut self, block: Block, mut w: impl io::Write) -> io::Result<()> {
@@ -167,6 +214,8 @@ impl IrWrite for Value {
             writer
                 .ctx()
                 .with_gv_store(|s| write!(w, "%{}", s.gv_data(gv).symbol))
+        } else if let Some(name) = writer.value_name(value) {
+            write!(w, "{name}")
         } else {
             write!(w, "v{}", value.0)
         }
@@ -247,9 +296,9 @@ impl StructData {
         }
 
         if self.packed {
-            write!(w, "}}>;")
+            writeln!(w, "}}>;")
         } else {
-            write!(w, "}};")
+            writeln!(w, "}};")
         }
     }
 }

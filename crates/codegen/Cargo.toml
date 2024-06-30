@@ -17,6 +17,6 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 [dependencies]
 cranelift-entity = "0.104"
 smallvec = "1.7.0"
-fxhash = "0.2.1"
+rustc-hash = "2.0.0"
 sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
 sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }

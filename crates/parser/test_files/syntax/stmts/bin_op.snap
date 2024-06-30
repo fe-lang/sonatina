@@ -1,0 +1,20 @@
+---
+source: crates/parser2/tests/syntax.rs
+expression: s
+input_file: crates/parser2/test_files/syntax/stmts/bin_op.sntn
+---
+stmt "v1.i64 = add 0x10.i64 v0;"
+  define_stmt "v1.i64 = add 0x10.i64 v0"
+    value_declaration "v1.i64"
+      value_name "v1"
+      type_name "i64"
+        primitive_type "i64"
+    expr "add 0x10.i64 v0"
+      bin_expr "add 0x10.i64 v0"
+        bin_op "add"
+        value "0x10.i64"
+          imm_number "0x10.i64"
+            hex "0x10"
+            primitive_type "i64"
+        value "v0"
+          value_name "v0"

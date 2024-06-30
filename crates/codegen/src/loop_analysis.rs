@@ -1,5 +1,5 @@
 use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, SecondaryMap};
-use fxhash::FxHashMap;
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::domtree::DomTree;
@@ -261,8 +261,7 @@ mod tests {
 
     #[test]
     fn simple_loop() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], Type::Void);
+        let mut builder = test_func_builder(&[], Type::Void);
 
         let b0 = builder.append_block();
         let b1 = builder.append_block();
@@ -274,7 +273,7 @@ mod tests {
         builder.jump(b1);
 
         builder.switch_to_block(b1);
-        let v1 = builder.phi(&[(v0, b0)]);
+        let v1 = builder.phi(Type::I32, &[(v0, b0)]);
         let c0 = builder.make_imm_value(10i32);
         let v2 = builder.eq(v1, c0);
         builder.br(v2, b3, b2);
@@ -289,9 +288,9 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
 
-        let module = test_module_builder.build();
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         let func = &module.funcs[func_ref];
         let lpt = compute_loop(func);
 
@@ -307,8 +306,7 @@ mod tests {
 
     #[test]
     fn continue_loop() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], Type::Void);
+        let mut builder = test_func_builder(&[], Type::Void);
 
         let b0 = builder.append_block();
         let b1 = builder.append_block();
@@ -323,7 +321,7 @@ mod tests {
         builder.jump(b1);
 
         builder.switch_to_block(b1);
-        let v1 = builder.phi(&[(v0, b0)]);
+        let v1 = builder.phi(Type::I32, &[(v0, b0)]);
         let c0 = builder.make_imm_value(10i32);
         let v2 = builder.eq(v1, c0);
         builder.br(v2, b5, b2);
@@ -352,9 +350,9 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
 
-        let module = test_module_builder.build();
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         let func = &module.funcs[func_ref];
         let lpt = compute_loop(func);
 
@@ -374,8 +372,7 @@ mod tests {
 
     #[test]
     fn single_block_loop() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[Type::I1], Type::Void);
+        let mut builder = test_func_builder(&[Type::I1], Type::Void);
         let b0 = builder.append_block();
         let b1 = builder.append_block();
         let b2 = builder.append_block();
@@ -392,9 +389,9 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
 
-        let module = test_module_builder.build();
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         let func = &module.funcs[func_ref];
         let lpt = compute_loop(func);
 
@@ -408,8 +405,7 @@ mod tests {
 
     #[test]
     fn nested_loop() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[Type::I1], Type::Void);
+        let mut builder = test_func_builder(&[Type::I1], Type::Void);
 
         let b0 = builder.append_block();
         let b1 = builder.append_block();
@@ -463,9 +459,9 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
 
-        let module = test_module_builder.build();
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         let func = &module.funcs[func_ref];
         let lpt = compute_loop(func);
 

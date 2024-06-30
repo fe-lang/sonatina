@@ -1,6 +1,6 @@
 target = "evm-ethereum-london"
-    
-# sameln: func public %basic_empty_block() -> i8:
+
+# sameln: func public %basic_empty_block() -> i8 {
 # nextln:    block0:
 # nextln:        v0.i8 = or 1.i8 0.i8;
 # nextln:        br v0 block2 block3;
@@ -10,7 +10,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln:    block3:
 # nextln:        return v0;
-func public %basic_empty_block() -> i8:
+func public %basic_empty_block() -> i8 {
     block0:
         v0.i8 = or 1.i8 0.i8;
         br v0 block1 block3;
@@ -24,3 +24,4 @@ func public %basic_empty_block() -> i8:
 
     block3:
         return v0;
+}

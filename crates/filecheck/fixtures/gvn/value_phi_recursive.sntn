@@ -8,7 +8,7 @@ target = "evm-ethereum-london"
 # nextln:     $(var2=$VALUE).i8 = phi (v5 block5) ($var1 block6);
 # nextln:     v7.i8 = phi (v6 block6) (5.i8 block5);
 # check:      return $var2;
-func public %value_phi_recursive(v0.i1, v1.i1, v2.i8) -> i8:
+func public %value_phi_recursive(v0.i1, v1.i1, v2.i8) -> i8 {
     block0:
         br v0 block1 block2;
 
@@ -38,6 +38,7 @@ func public %value_phi_recursive(v0.i1, v1.i1, v2.i8) -> i8:
         v7.i8 = phi (v6 block6) (5.i8 block5);
         v8.i8 = add v7 v2;
         return v8;
+}
 
 # regex: VALUE=\bv\d+\b
 # check:  block0:
@@ -76,7 +77,7 @@ func public %value_phi_recursive(v0.i1, v1.i1, v2.i8) -> i8:
 # nextln:     $(var3=$VALUE).i8 = phi (v52 block5) ($var2 block6);
 # nextln:     v70.i8 = phi ($var1 block6) (v50 block5);
 # nextln:     return $var3;
-func public %value_phi_recursive2(v0.i1, v1.i1, v2.i8, v3.i8) -> i8:
+func public %value_phi_recursive2(v0.i1, v1.i1, v2.i8, v3.i8) -> i8 {
     block0:
         br v0 block1 block2;
 
@@ -112,3 +113,4 @@ func public %value_phi_recursive2(v0.i1, v1.i1, v2.i8, v3.i8) -> i8:
         v70.i8 = phi (v61 block6) (v50 block5);
         v72.i8 = add v70 v3;
         return v72;
+}

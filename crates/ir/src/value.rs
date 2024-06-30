@@ -370,7 +370,7 @@ impl fmt::Display for Immediate {
         match self {
             Self::I1(v) => {
                 if *v {
-                    write!(f, "-1")
+                    write!(f, "1")
                 } else {
                     write!(f, "0")
                 }

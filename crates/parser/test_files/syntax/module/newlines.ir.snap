@@ -1,0 +1,12 @@
+---
+source: crates/parser/tests/syntax.rs
+expression: w.dump_string().unwrap()
+input_file: crates/parser/test_files/syntax/module/newlines.sntn
+---
+target = evm-ethereum-london
+func public %main() -> void {
+    block0:
+        v0.i8 = add 1.i8 2.i8;
+        return;
+
+}

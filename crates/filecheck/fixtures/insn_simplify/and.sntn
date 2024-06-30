@@ -2,102 +2,114 @@ target = "evm-ethereum-london"
 
 # v0 & v0 => v0
 # check: return v0;
-func public %and0(v0.i8) -> i8:
+func public %and0(v0.i8) -> i8 {
     block0:
         v1.i8 = and v0 v0;
         return v1;
+}
 
 # v0 & 0 => 0
 # check: return 0.i8;
-func public %and1(v0.i8) -> i8:
+func public %and1(v0.i8) -> i8 {
     block0:
         v1.i8 = and 0.i8 v0;
         return v1;
+}
 
 # v0 & -1 => v0
 # check: return v0;
-func public %and2(v0.i8) -> i8:
+func public %and2(v0.i8) -> i8 {
     block0:
         v1.i8 = and -1.i8 v0;
         return v1;
+}
 
 # v0 & !v0 => 0
 # check: return 0.i8;
-func public %and3(v0.i8) -> i8:
+func public %and3(v0.i8) -> i8 {
     block0:
         v1.i8 = not v0;
         v2.i8 = and v0 v1;
         return v2;
+}
 
 # v0 & (v0 | _) => v0
 # check: return v0;
-func public %and4(v0.i8, v1.i8) -> i8:
+func public %and4(v0.i8, v1.i8) -> i8 {
     block0:
         v2.i8 = or v0 v1;
         v3.i8 = and v2 v0;
         return v3;
+}
 
 # v0 & (v1 | v0) => v0
 # check: return v0;
-func public %and5(v0.i8, v1.i8) -> i8:
+func public %and5(v0.i8, v1.i8) -> i8 {
     block0:
         v2.i8 = or v1 v0;
         v3.i8 = and v0 v2;
         return v3;
+}
 
 
 # (v0 | v1) & (v0 | !v1) => v0
 # check: return v0;
-func public %and6(v0.i8, v1.i8) -> i8:
+func public %and6(v0.i8, v1.i8) -> i8 {
     block0:
         v2.i8 = not v1;
         v3.i8 = or v0 v1;
         v4.i8 = or v0 v2;
         v5.i8 = and v3 v4;
         return v5;
+}
 
 # (v0 | v1) & (!v1 | v0) => v0
 # check: return v0;
-func public %and7(v0.i8, v1.i8) -> i8:
+func public %and7(v0.i8, v1.i8) -> i8 {
     block0:
         v2.i8 = not v1;
         v3.i8 = or v0 v1;
         v4.i8 = or v2 v0;
         v5.i8 = and v3 v4;
         return v5;
+}
 
 # (v0 | v1) & (!v0 | v1) => b
 # check: return v1;
-func public %and9(v0.i8, v1.i8) -> i8:
+func public %and9(v0.i8, v1.i8) -> i8 {
     block0:
         v2.i8 = not v0;
         v3.i8 = or v0 v1;
         v4.i8 = or v2 v1;
         v5.i8 = and v3 v4;
         return v5;
+}
 
 # (v0 | v1) & (v1 | !v0) => b
 # check: return v1;
-func public %and10(v0.i8, v1.i8) -> i8:
+func public %and10(v0.i8, v1.i8) -> i8 {
     block0:
         v2.i8 = not v0;
         v3.i8 = or v0 v1;
         v4.i8 = or v1 v2;
         v5.i8 = and v3 v4;
         return v5;
+}
 
 # v0 & (-v0) => v0 where v0: is_power_of_two.
 # check: return 8.i8;
-func public %and11() -> i8:
+func public %and11() -> i8 {
     block0:
         v0.i8 = neg 8.i8;
         v1.i8 = and 8.i8 v0;
         return v1;
+}
 
 # v0 & (v0 - 1) => 0 where v0: is_power_of_two.
 # check: return 0.i8;
-func public %and12() -> i8:
+func public %and12() -> i8 {
     block0:
         v0.i8 = sub 8.i8 1.i8;
         v1.i8 = and 8.i8 v0;
         return v1;
+}

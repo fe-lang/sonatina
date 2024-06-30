@@ -170,8 +170,7 @@ mod tests {
 
     #[test]
     fn pd_if_else() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[Type::I64], Type::Void);
+        let mut builder = test_func_builder(&[Type::I64], Type::Void);
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -192,14 +191,14 @@ mod tests {
         builder.jump(merge_block);
 
         builder.switch_to_block(merge_block);
-        let v3 = builder.phi(&[(v1, then_block), (v2, else_block)]);
+        let v3 = builder.phi(Type::I64, &[(v1, then_block), (v2, else_block)]);
         builder.add(v3, arg0);
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
 
-        let module = test_module_builder.build();
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         let func = &module.funcs[func_ref];
         let (post_dom_tree, pdf) = calc_dom(func);
 
@@ -216,17 +215,16 @@ mod tests {
 
     #[test]
     fn infinite_loop() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], Type::Void);
+        let mut builder = test_func_builder(&[], Type::Void);
 
         let a = builder.append_block();
         builder.switch_to_block(a);
         builder.jump(a);
 
         builder.seal_all();
-        let func_ref = builder.finish();
 
-        let module = test_module_builder.build();
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         let func = &module.funcs[func_ref];
         let (post_dom_tree, pdf) = calc_dom(func);
 
@@ -236,8 +234,7 @@ mod tests {
 
     #[test]
     fn test_multiple_return() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], Type::Void);
+        let mut builder = test_func_builder(&[], Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -262,9 +259,9 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
 
-        let module = test_module_builder.build();
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         let func = &module.funcs[func_ref];
         let (post_dom_tree, pdf) = calc_dom(func);
 
@@ -283,8 +280,7 @@ mod tests {
 
     #[test]
     fn pd_complex() {
-        let mut test_module_builder = TestModuleBuilder::new();
-        let mut builder = test_module_builder.func_builder(&[], Type::Void);
+        let mut builder = test_func_builder(&[], Type::Void);
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -321,9 +317,9 @@ mod tests {
         builder.ret(None);
 
         builder.seal_all();
-        let func_ref = builder.finish();
 
-        let module = test_module_builder.build();
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
         let func = &module.funcs[func_ref];
         let (post_dom_tree, pdf) = calc_dom(func);
 

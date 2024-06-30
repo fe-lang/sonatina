@@ -1,7 +1,8 @@
 use cranelift_entity::PrimaryMap;
-use fxhash::FxHashMap;
+use rustc_hash::FxHashMap;
 
 use crate::{
+    func_cursor::{CursorLocation, FuncCursor},
     module::{FuncRef, ModuleCtx},
     Function, GlobalVariable, GlobalVariableData, Module, Signature, Type,
 };
@@ -43,10 +44,6 @@ impl ModuleBuilder {
         &self.funcs[func].sig
     }
 
-    pub fn get_func(&self, func: &str) -> Option<FuncRef> {
-        self.declared_funcs.get(func).copied()
-    }
-
     pub fn make_global(&self, global: GlobalVariableData) -> GlobalVariable {
         self.ctx.with_gv_store_mut(|s| s.make_gv(global))
     }
@@ -60,8 +57,16 @@ impl ModuleBuilder {
             .with_ty_store_mut(|s| s.make_struct(name, fields, packed))
     }
 
+    pub fn get_struct_type(&self, name: &str) -> Option<Type> {
+        self.ctx.with_ty_store(|s| s.struct_type_by_name(name))
+    }
+
     pub fn declare_array_type(&mut self, elem: Type, len: usize) -> Type {
         self.ctx.with_ty_store_mut(|s| s.make_array(elem, len))
+    }
+
+    pub fn ptr_type(&mut self, ty: Type) -> Type {
+        self.ctx.with_ty_store_mut(|s| s.make_ptr(ty))
     }
 
     pub fn get_func_ref(&self, name: &str) -> Option<FuncRef> {
@@ -72,8 +77,12 @@ impl ModuleBuilder {
         &self.funcs[func].sig
     }
 
-    pub fn func_builder(&mut self, func: FuncRef) -> FunctionBuilder {
-        FunctionBuilder::new(self, func)
+    pub fn build_function<C>(self, func: FuncRef) -> FunctionBuilder<C>
+    where
+        C: FuncCursor,
+    {
+        let cursor = C::at_location(CursorLocation::NoWhere);
+        FunctionBuilder::new(self, func, cursor)
     }
 
     pub fn build(self) -> Module {
