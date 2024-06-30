@@ -22,5 +22,3 @@ dyn-clone = "1.0.4"
 sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
 indexmap = "2.0.0"
 dot2 = { git = "https://github.com/sanpii/dot2.rs.git" }
-bimap = "0.6.3"
-smol_str = "0.2.2"

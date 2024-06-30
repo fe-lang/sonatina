@@ -359,10 +359,6 @@ where
         self.module_builder.ctx.isa.type_provider().gas_type()
     }
 
-    // fn cursor(&mut self) -> InsnInserter {
-    //     InsnInserter::new(&mut self.func, self.loc)
-    // }
-
     fn insert_insn(&mut self, insn_data: InsnData) -> Option<Value> {
         let insn = self.cursor.insert_insn_data(&mut self.func, insn_data);
         let result = self.cursor.make_result(&mut self.func, insn);
