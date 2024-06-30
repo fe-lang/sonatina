@@ -14,13 +14,23 @@ error: parse error
 6 |         v0.i8 = call %foo 100.i8;
   |                      ^^^^ undefined function: `%foo`
   |error: parse error
- --> undefined.sntn:9:14
-  |
-9 |         jump block2;
-  |              ^^^^^^ undefined block: `block2`
-  |error: parse error
  --> undefined.sntn:7:24
   |
 7 |         v2.i8 = add v0 v1;
   |                        ^^ undefined value: `v1`
+  |error: parse error
+ --> undefined.sntn:8:21
+  |
+8 |         v3.i8 = add v1 v1;
+  |                     ^^ undefined value: `v1`
+  |error: parse error
+ --> undefined.sntn:8:24
+  |
+8 |         v3.i8 = add v1 v1;
+  |                        ^^ undefined value: `v1`
+  |error: parse error
+ --> undefined.sntn:9:14
+  |
+9 |         jump block2;
+  |              ^^^^^^ undefined block: `block2`
   |

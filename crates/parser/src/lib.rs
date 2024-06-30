@@ -1,4 +1,4 @@
-use ast::ValueDeclaration;
+use ast::{StmtKind, ValueDeclaration};
 use cranelift_entity::SecondaryMap;
 use ir::{
     self,
@@ -7,9 +7,10 @@ use ir::{
     ir_writer::DebugProvider,
     isa::IsaBuilder,
     module::{FuncRef, ModuleCtx},
-    Module, Signature,
+    InsnData, Module, Signature,
 };
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
+use smallvec::SmallVec;
 use smol_str::SmolStr;
 use std::hash::BuildHasherDefault;
 use syntax::Spanned;
@@ -119,7 +120,6 @@ impl DebugProvider for DebugInfo {
 struct BuildCtx {
     errors: Vec<Error>,
     blocks: FxHashSet<ir::Block>,
-    undefined: FxHashMap<ir::Value, Span>,
     value_names: FxHashMap<FuncRef, Bimap<ir::Value, SmolStr>>,
     func_value_names: Bimap<ir::Value, SmolStr>,
 }
@@ -132,11 +132,17 @@ impl BuildCtx {
         func: &ast::Func,
     ) -> ModuleBuilder {
         self.blocks.clear();
-        self.undefined.clear();
 
         for (i, ValueDeclaration(name, _ty)) in func.signature.params.iter().enumerate() {
             let value = fb.func.arg_values[i];
-            self.name_value(&mut fb.func, value, name);
+            self.name_value(value, name);
+        }
+
+        for stmt in func.blocks.iter().flat_map(|b| b.stmts.iter()) {
+            if let StmtKind::Define(ValueDeclaration(name, ty), _) = &stmt.kind {
+                let ty = self.type_(&mut fb.module_builder, ty);
+                self.declare_value(&mut fb.func, name, ty);
+            }
         }
 
         // collect all defined block ids
@@ -155,63 +161,88 @@ impl BuildCtx {
 
             for stmt in &block.stmts {
                 match &stmt.kind {
-                    ast::StmtKind::Define(ValueDeclaration(val, ty), expr) => {
-                        let ty = self.type_(&mut fb.module_builder, ty);
+                    ast::StmtKind::Define(ValueDeclaration(name, type_), expr) => {
+                        let ty = self.type_(&mut fb.module_builder, type_);
+                        let err_count = self.errors.len();
 
-                        let result_val = match expr {
+                        let insn_data = match expr {
                             ast::Expr::Binary(op, lhs, rhs) => {
                                 let lhs = self.value(&mut fb, lhs);
                                 let rhs = self.value(&mut fb, rhs);
-                                fb.binary_op(*op, lhs, rhs)
+                                InsnData::Binary {
+                                    code: *op,
+                                    args: [lhs, rhs],
+                                }
                             }
                             ast::Expr::Unary(op, val) => {
                                 let val = self.value(&mut fb, val);
-                                fb.unary_op(*op, val)
+                                InsnData::Unary {
+                                    code: *op,
+                                    args: [val],
+                                }
                             }
                             ast::Expr::Cast(op, val) => {
                                 let val = self.value(&mut fb, val);
-                                fb.cast_op(*op, val, ty)
+                                InsnData::Cast {
+                                    code: *op,
+                                    args: [val],
+                                    ty,
+                                }
                             }
                             ast::Expr::Load(location, addr) => {
                                 let addr = self.value(&mut fb, addr);
-                                match location {
-                                    ir::DataLocationKind::Memory => fb.memory_load(addr),
-                                    ir::DataLocationKind::Storage => fb.storage_load(addr),
+                                InsnData::Load {
+                                    args: [addr],
+                                    loc: *location,
                                 }
                             }
                             ast::Expr::Alloca(ty) => {
                                 let ty = self.type_(&mut fb.module_builder, ty);
-                                fb.alloca(ty)
+                                InsnData::Alloca { ty }
                             }
                             ast::Expr::Call(ast::Call(name, args)) => {
                                 let func = self.func_ref(&mut fb.module_builder, name);
 
-                                let args = args
-                                    .iter()
-                                    .map(|val| self.value(&mut fb, val))
-                                    .collect::<Vec<_>>();
-                                fb.call(func, &args).unwrap()
+                                let args: smallvec::SmallVec<[ir::Value; 8]> =
+                                    args.iter().map(|val| self.value(&mut fb, val)).collect();
+
+                                let sig = fb.module_builder.get_sig(func).clone();
+                                let ret_ty = sig.ret_ty();
+                                fb.func.callees.insert(func, sig);
+
+                                InsnData::Call { func, args, ret_ty }
                             }
                             ast::Expr::Gep(vals) => {
-                                let vals = vals
-                                    .iter()
-                                    .map(|val| self.value(&mut fb, val))
-                                    .collect::<Vec<_>>();
-                                fb.gep(&vals).unwrap()
+                                let args: SmallVec<[ir::Value; 8]> =
+                                    vals.iter().map(|val| self.value(&mut fb, val)).collect();
+                                InsnData::Gep { args }
                             }
-                            ast::Expr::Phi(vals) => {
-                                let args = vals
+                            ast::Expr::Phi(vals) => InsnData::Phi {
+                                values: vals
                                     .iter()
-                                    .map(|(val, block)| {
-                                        let b = self.block(block);
-                                        let v = self.value(&mut fb, val);
-                                        (v, b)
-                                    })
-                                    .collect::<Vec<_>>();
-                                fb.phi(ty, &args)
-                            }
+                                    .map(|(val, _)| self.value(&mut fb, val))
+                                    .collect(),
+                                blocks: vals.iter().map(|(_, block)| self.block(block)).collect(),
+                                ty,
+                            },
                         };
-                        self.name_value(&mut fb.func, result_val, val)
+
+                        // Report declared type mismatch if no error has been reported for this stmt
+                        let inferred_ty = insn_data.result_type(&fb.func.dfg).unwrap();
+                        if self.errors.len() == err_count && ty != inferred_ty {
+                            self.errors.push(Error::TypeMismatch {
+                                specified: ty.to_string(&fb.func.dfg).into(),
+                                inferred: inferred_ty.to_string(&fb.func.dfg).into(),
+                                span: type_.span,
+                            });
+                        }
+
+                        // xxx cleanup
+                        let value = *self.func_value_names.get_by_right(&name.string).unwrap();
+                        let insn = fb.cursor.insert_insn_data(&mut fb.func, insn_data);
+                        fb.func.dfg.values[value] = ir::ValueData::Insn { insn, ty };
+                        fb.cursor.attach_result(&mut fb.func, insn, value);
+                        fb.cursor.set_location(CursorLocation::At(insn));
                     }
                     ast::StmtKind::Store(loc, addr, val) => {
                         let addr = self.value(&mut fb, addr);
@@ -262,11 +293,6 @@ impl BuildCtx {
             }
         }
 
-        for (val, span) in self.undefined.drain() {
-            let name = self.func_value_names.get_by_left(&val).unwrap();
-            self.errors
-                .push(Error::Undefined(UndefinedKind::Value(name.clone()), span));
-        }
         let names = std::mem::take(&mut self.func_value_names);
         self.value_names.insert(func_ref, names);
         fb.seal_all();
@@ -292,37 +318,45 @@ impl BuildCtx {
         block
     }
 
-    pub fn name_value(&mut self, func: &mut ir::Function, value: ir::Value, name: &ast::ValueName) {
-        if let Some(v) = self.func_value_names.get_by_right(&name.string) {
-            if self.undefined.remove(v).is_some() {
-                func.dfg.change_to_alias(*v, value);
-            } else {
-                self.errors
-                    .push(Error::DuplicateValueName(name.string.clone(), name.span));
-            }
+    fn declare_value(&mut self, func: &mut ir::Function, name: &ast::ValueName, ty: ir::Type) {
+        // Abusing Immediate here; we just need a dummy value with a given type.
+        // The ValueData will be replaced when create the Insn that defines the value.
+        let value = func.dfg.make_value(ir::ValueData::Immediate {
+            imm: ir::Immediate::I128(424242),
+            ty,
+        });
+        if self
+            .func_value_names
+            .insert_no_overwrite(value, name.string.clone())
+            .is_err()
+        {
+            self.errors
+                .push(Error::DuplicateValueName(name.string.clone(), name.span));
         }
-        self.func_value_names.insert(value, name.string.clone());
     }
 
-    pub fn get_named_value(&mut self, func: &mut ir::Function, name: &ast::ValueName) -> ir::Value {
-        if let Some(v) = self.func_value_names.get_by_right(&name.string).copied() {
-            v
-        } else {
-            let v = func.dfg.make_value(ir::ValueData::Immediate {
-                imm: ir::Immediate::I128(424242),
-                ty: ir::Type::I128,
-            });
-
-            self.undefined.insert(v, name.span);
-            self.name_value(func, v, name);
-            v
+    fn name_value(&mut self, value: ir::Value, name: &ast::ValueName) {
+        if self.func_value_names.contains_right(&name.string) {
+            self.errors
+                .push(Error::DuplicateValueName(name.string.clone(), name.span));
         }
+        self.func_value_names.insert(value, name.string.clone());
     }
 
     fn value(&mut self, fb: &mut FunctionBuilder<InsnInserter>, val: &ast::Value) -> ir::Value {
         match &val.kind {
             ast::ValueKind::Immediate(imm) => fb.make_imm_value(*imm),
-            ast::ValueKind::Named(v) => self.get_named_value(&mut fb.func, v),
+            ast::ValueKind::Named(name) => self
+                .func_value_names
+                .get_by_right(&name.string)
+                .copied()
+                .unwrap_or_else(|| {
+                    self.errors.push(Error::Undefined(
+                        UndefinedKind::Value(name.string.clone()),
+                        name.span,
+                    ));
+                    ir::Value(0)
+                }),
             ast::ValueKind::Error => unreachable!(),
         }
     }
