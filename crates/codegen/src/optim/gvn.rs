@@ -1334,6 +1334,8 @@ struct RedundantCodeRemover<'a> {
 
     /// Record resolved value phis.
     resolved_value_phis: FxHashMap<ValuePhi, Value>,
+
+    renames: FxHashMap<Value, Value>,
 }
 
 impl<'a> RedundantCodeRemover<'a> {
@@ -1342,7 +1344,23 @@ impl<'a> RedundantCodeRemover<'a> {
             solver,
             avail_set: SecondaryMap::default(),
             resolved_value_phis: FxHashMap::default(),
+            renames: FxHashMap::default(),
         }
+    }
+
+    fn change_to_alias(&mut self, func: &mut Function, value: Value, target: Value) {
+        func.dfg.change_to_alias(value, target);
+        self.renames.insert(value, target);
+    }
+
+    fn resolve_alias(&self, mut value: Value) -> Value {
+        for _ in 0..1 + self.renames.len() {
+            match self.renames.get(&value) {
+                Some(v) => value = *v,
+                None => return value,
+            }
+        }
+        panic!("alias loop detected");
     }
 
     /// The entry function of redundant code removal.
@@ -1421,7 +1439,7 @@ impl<'a> RedundantCodeRemover<'a> {
 
                         // Use representative value if the class is in avail set.
                         if let Some(value) = avails.get(&class) {
-                            func.dfg.change_to_alias(insn_result, *value);
+                            self.change_to_alias(func, insn_result, *value);
                             inserter.remove_insn(func);
                             continue;
                         }
@@ -1469,7 +1487,8 @@ impl<'a> RedundantCodeRemover<'a> {
                                     ty,
                                     block,
                                 );
-                                func.dfg.change_to_alias(insn_result, value);
+
+                                self.change_to_alias(func, insn_result, value);
                                 inserter.remove_insn(func);
                                 continue;
                             }
@@ -1537,7 +1556,7 @@ impl<'a> RedundantCodeRemover<'a> {
                 for (value_phi, phi_block) in &phi_insn.args {
                     let resolved =
                         self.resolve_value_phi(func, inserter, value_phi, ty, *phi_block);
-                    phi.append_phi_arg(resolved, *phi_block);
+                    phi.append_phi_arg(self.resolve_alias(resolved), *phi_block);
                 }
 
                 // Insert new phi insn to top of the phi_insn block.

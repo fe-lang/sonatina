@@ -249,6 +249,7 @@ impl DataFlowGraph {
     }
 
     pub fn remove_branch_dest(&mut self, insn: Insn, dest: Block) {
+        // xxx remove user
         self.insns[insn].remove_branch_dest(dest)
     }
 

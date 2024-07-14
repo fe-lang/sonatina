@@ -48,16 +48,10 @@ impl<'a> fmt::Display for DisplayInsn<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InsnData {
     /// Unary instructions.
-    Unary {
-        code: UnaryOp,
-        args: [Value; 1],
-    },
+    Unary { code: UnaryOp, args: [Value; 1] },
 
     /// Binary instructions.
-    Binary {
-        code: BinaryOp,
-        args: [Value; 2],
-    },
+    Binary { code: BinaryOp, args: [Value; 2] },
 
     /// Cast operations.
     Cast {
@@ -86,15 +80,10 @@ pub enum InsnData {
     },
 
     /// Unconditional jump instruction.
-    Jump {
-        dests: [Block; 1],
-    },
+    Jump { dests: [Block; 1] },
 
     /// Conditional jump instruction.
-    Branch {
-        args: [Value; 1],
-        dests: [Block; 2],
-    },
+    Branch { args: [Value; 1], dests: [Block; 2] },
 
     /// Indirect jump instruction.
     BrTable {
@@ -104,18 +93,13 @@ pub enum InsnData {
     },
 
     /// Allocate a memory on the stack frame for the given type.
-    Alloca {
-        ty: Type,
-    },
+    Alloca { ty: Type },
 
     /// Return.
-    Return {
-        args: Option<Value>,
-    },
+    Return { args: Option<Value> },
 
-    Gep {
-        args: SmallVec<[Value; 8]>,
-    },
+    /// Get element pointer.
+    Gep { args: SmallVec<[Value; 8]> },
 
     /// Phi function.
     Phi {
@@ -239,6 +223,7 @@ impl InsnData {
                 if Some(dest) == *default {
                     *default = None;
                 } else {
+                    // xxx remove user
                     table.retain(|block| dest != *block);
                 }
 
@@ -372,10 +357,6 @@ impl InsnData {
             InsnData::Phi { blocks, .. } => blocks,
             _ => panic!("insn is not a phi function"),
         }
-    }
-
-    pub fn replace_arg(&mut self, new_arg: Value, idx: usize) {
-        self.args_mut()[idx] = new_arg;
     }
 
     pub fn is_phi(&self) -> bool {
