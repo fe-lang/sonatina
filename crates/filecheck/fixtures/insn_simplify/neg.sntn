@@ -13,7 +13,7 @@ func public %neg0(v0.i8) -> i8 {
 # check: v2.i16 = add v0 1.i16;
 func public %neg1(v0.i16) -> i16 {
     block0:
-        v1.i8 = not v0;
-        v2.i8 = neg v1;
+        v1.i16 = not v0;
+        v2.i16 = neg v1;
         return v2;
 }

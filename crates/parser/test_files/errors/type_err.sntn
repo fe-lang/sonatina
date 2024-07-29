@@ -1,0 +1,13 @@
+target = "evm-ethereum-london"
+
+func public %main() -> i8 {
+    block0:
+        v0.i16 = add 2.i8 3.i8;
+        v1.i8 = call %foo;
+        return 1.i8;
+}
+
+func %foo() -> i16 {
+    block0:
+        return 100.i16;
+}

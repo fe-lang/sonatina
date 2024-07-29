@@ -1,0 +1,16 @@
+---
+source: crates/parser/tests/errors.rs
+expression: s
+input_file: crates/parser/test_files/errors/type_err.sntn
+---
+error: parse error
+ --> type_err.sntn:4:12
+  |
+4 |         v0.i16 = add 2.i8 3.i8;
+  |            ^^^ type mismatch: value declared as `i16`, but inferred type is `i8`
+  |error: parse error
+ --> type_err.sntn:5:12
+  |
+5 |         v1.i8 = call %foo;
+  |            ^^ type mismatch: value declared as `i8`, but inferred type is `i16`
+  |

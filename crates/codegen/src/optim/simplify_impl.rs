@@ -17,7 +17,7 @@ use generated_code::{Context, SimplifyRawResult};
 
 pub fn simplify_insn(dfg: &mut DataFlowGraph, insn: Insn) -> Option<SimplifyResult> {
     if dfg.is_phi(insn) {
-        return simplify_phi(dfg, dfg.insn_data(insn));
+        return simplify_phi(dfg.insn_data(insn));
     }
 
     let mut ctx = SimplifyContext::new(dfg);
@@ -27,7 +27,7 @@ pub fn simplify_insn(dfg: &mut DataFlowGraph, insn: Insn) -> Option<SimplifyResu
 
 pub fn simplify_insn_data(dfg: &mut DataFlowGraph, data: InsnData) -> Option<SimplifyResult> {
     if matches!(data, InsnData::Phi { .. }) {
-        return simplify_phi(dfg, &data);
+        return simplify_phi(&data);
     }
 
     let mut ctx = SimplifyContext::new(dfg);
@@ -40,12 +40,12 @@ pub enum SimplifyResult {
     Insn(InsnData),
 }
 
-fn simplify_phi(dfg: &DataFlowGraph, insn_data: &InsnData) -> Option<SimplifyResult> {
+fn simplify_phi(insn_data: &InsnData) -> Option<SimplifyResult> {
     match insn_data {
         InsnData::Phi { values, .. } => {
             let mut values = values.iter().copied();
             let first_value = values.next().unwrap();
-            if values.all(|value| dfg.is_same_value(first_value, value)) {
+            if values.all(|value| value == first_value) {
                 Some(SimplifyResult::Value(first_value))
             } else {
                 None
@@ -499,7 +499,7 @@ impl<'a> generated_code::Context for SimplifyContext<'a> {
 
     fn is_eq(&mut self, arg0: ExprValue, arg1: ExprValue) -> Option<()> {
         match (arg0.as_value(), arg1.as_value()) {
-            (Some(val1), Some(val2)) => self.dfg.is_same_value(val1, val2),
+            (Some(val1), Some(val2)) => val1 == val2,
             _ => arg0 == arg1,
         }
         .then_some(())

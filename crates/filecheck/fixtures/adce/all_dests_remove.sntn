@@ -29,15 +29,15 @@ func public %all_dests_removed() -> i8 {
 }
 
 # check:    block0:
-# nextln:        v1.i32 = add v0 v0;
+# nextln:        v1.i8 = add v0 v0;
 # nextln:        jump block3;
 # nextln: 
 # nextln:    block3:
 # nextln:        return v1;
-func public %all_dests_removed2(v0.i32) -> i8 {
+func public %all_dests_removed2(v0.i8) -> i8 {
     block0:
-        v1.i32 = add v0 v0;
-        br_table v0 (v1 block1) (2.i32 block2);
+        v1.i8 = add v0 v0;
+        br_table v0 (v1 block1) (2.i8 block2);
 
     block1:
         v3.i8 = add v0 -10.i8;

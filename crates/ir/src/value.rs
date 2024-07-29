@@ -80,8 +80,6 @@ pub enum ValueData {
 
     /// The value is a function argument.
     Arg { ty: Type, idx: usize },
-    /// The value is alias to another value.
-    Alias { alias: Value },
 
     /// The value is immediate value.
     Immediate { imm: Immediate, ty: Type },

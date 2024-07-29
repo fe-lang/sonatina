@@ -87,7 +87,7 @@ impl LicmSolver {
 
     /// Returns preheader of the loop.
     /// 1. If there is natural preheader for the loop, then returns it without any modification of
-    /// function.
+    ///    function.
     /// 2. If no natural preheader for the loop, then create the preheader and modify function
     ///    layout, `cfg`, and `lpt`.
     fn create_preheader(

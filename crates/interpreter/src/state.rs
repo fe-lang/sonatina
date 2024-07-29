@@ -321,7 +321,7 @@ mod test {
                 v0.i16 = add 3.i16 4.i16;
                 v1.i16 = sub v0 1.i16;
                 v2.i16 = udiv v1 2.i16;
-                v3.i8 =  sdiv v2 65535.i16;
+                v3.i16 =  sdiv v2 65535.i16;
                 return v3;
         }
         ";
@@ -380,7 +380,7 @@ mod test {
             block0:
                 v0.*i32 = alloca i32;
                 store @memory v0 1.i32;
-                v1.*i32 = load @memory v0;
+                v1.i32 = load @memory v0;
                 return v1;
         }
         ";
@@ -559,10 +559,10 @@ mod test {
         let input = "
         target = \"evm-ethereum-london\"
 
-        func private %test() -> *i1 {
+        func private %test() -> **i32 {
             block0:
                 v0.*[*i32; 3] = alloca [*i32; 3];
-                v1.*i32 = gep v0 2.i8;
+                v1.**i32 = gep v0 2.i8;
                 return v1;
         }
         ";
@@ -581,10 +581,10 @@ mod test {
 
         type %s1 = {i32, [i16; 3], [i8; 2]};
 
-        func private %test() -> *i1 {
+        func private %test() -> *i8 {
             block0:
                 v0.*%s1 = alloca %s1;
-                v1.*i1 = gep v0 2.i8 1.i8;
+                v1.*i8 = gep v0 2.i8 1.i8;
                 return v1;
         }
         ";

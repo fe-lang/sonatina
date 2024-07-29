@@ -232,6 +232,10 @@ impl Type {
             Self::I1 | Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::I128 | Self::I256
         )
     }
+
+    pub fn to_string(&self, dfg: &DataFlowGraph) -> String {
+        DisplayType { ty: *self, dfg }.to_string()
+    }
 }
 
 impl cmp::PartialOrd for Type {

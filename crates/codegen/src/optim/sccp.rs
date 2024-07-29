@@ -140,8 +140,6 @@ impl SccpSolver {
         for (i, from) in func.dfg.phi_blocks(insn).iter().enumerate() {
             if self.is_reachable(func, *from, block) {
                 let phi_arg = func.dfg.insn_arg(insn, i);
-                let phi_arg = func.dfg.resolve_alias(phi_arg);
-
                 let v_cell = self.lattice[phi_arg];
                 eval_result = eval_result.join(v_cell);
             }

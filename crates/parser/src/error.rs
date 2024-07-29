@@ -13,6 +13,11 @@ pub enum Error {
     SyntaxError(pest::error::Error<Rule>),
     Undefined(UndefinedKind, Span),
     DuplicateValueName(SmolStr, Span),
+    TypeMismatch {
+        specified: SmolStr,
+        inferred: SmolStr,
+        span: Span,
+    },
 }
 
 #[derive(Debug)]
@@ -35,6 +40,7 @@ impl Error {
                 pest::error::InputLocation::Pos(p) => Span(p as u32, p as u32),
                 pest::error::InputLocation::Span((s, e)) => Span(s as u32, e as u32),
             },
+            Error::TypeMismatch { span, .. } => *span,
         }
     }
 
@@ -56,6 +62,13 @@ impl Error {
                 UndefinedKind::Value(name) => format!("undefined value: `{name}`"),
             },
             Error::DuplicateValueName(name, _) => format!("value name `{name}` is already defined"),
+            Error::TypeMismatch {
+                specified,
+                inferred,
+                ..
+            } => format!(
+                "type mismatch: value declared as `{specified}`, but inferred type is `{inferred}`",
+            ),
         };
         let snippet = Level::Error.title("parse error").snippet(
             Snippet::source(content)
