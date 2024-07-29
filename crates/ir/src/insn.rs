@@ -183,7 +183,7 @@ impl InsnData {
 
     pub fn analyze_branch(&self) -> BranchInfo {
         match self {
-            Self::Jump { dests, .. } => BranchInfo::Jump { dest: dests[0] },
+            Self::Jump { dests } => BranchInfo::Jump { dest: dests[0] },
 
             Self::Branch { args, dests } => BranchInfo::Br {
                 cond: args[0],
@@ -201,39 +201,6 @@ impl InsnData {
             },
 
             _ => BranchInfo::NotBranch,
-        }
-    }
-
-    pub fn remove_branch_dest(&mut self, dest: Block) {
-        match self {
-            Self::Jump { .. } => panic!("can't remove destination from `Jump` insn"),
-
-            Self::Branch { dests, .. } => {
-                let remain = if dests[0] == dest {
-                    dests[1]
-                } else if dests[1] == dest {
-                    dests[0]
-                } else {
-                    panic!("no dests found in the branch destination")
-                };
-                *self = Self::jump(remain);
-            }
-
-            Self::BrTable { default, table, .. } => {
-                if Some(dest) == *default {
-                    *default = None;
-                } else {
-                    // xxx remove user
-                    table.retain(|block| dest != *block);
-                }
-
-                let branch_info = self.analyze_branch();
-                if branch_info.dests_num() == 1 {
-                    *self = Self::jump(branch_info.iter_dests().next().unwrap());
-                }
-            }
-
-            _ => panic!("not a branch"),
         }
     }
 

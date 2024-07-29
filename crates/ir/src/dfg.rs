@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 
 use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 use crate::{global_variable::ConstantValue, module::ModuleCtx, GlobalVariable};
 
@@ -249,8 +250,57 @@ impl DataFlowGraph {
     }
 
     pub fn remove_branch_dest(&mut self, insn: Insn, dest: Block) {
-        // xxx remove user
-        self.insns[insn].remove_branch_dest(dest)
+        let this = &mut self.insns[insn];
+        match this {
+            InsnData::Jump { .. } => panic!("can't remove destination from `Jump` insn"),
+
+            InsnData::Branch { dests, args } => {
+                let remain = if dests[0] == dest {
+                    dests[1]
+                } else if dests[1] == dest {
+                    dests[0]
+                } else {
+                    panic!("no dests found in the branch destination")
+                };
+                self.users[args[0]].remove(&insn);
+                *this = InsnData::jump(remain);
+            }
+
+            InsnData::BrTable {
+                default,
+                table,
+                args,
+            } => {
+                if Some(dest) == *default {
+                    *default = None;
+                } else if let Some((lhs, rest)) = args.split_first() {
+                    type V<T> = SmallVec<[T; 8]>;
+                    let (keep, drop): (V<_>, V<_>) = table
+                        .iter()
+                        .copied()
+                        .zip(rest.iter().copied())
+                        .partition(|(b, _)| *b != dest);
+                    let (b, mut a): (V<_>, V<_>) = keep.into_iter().unzip();
+                    a.insert(0, *lhs);
+                    *args = a;
+                    *table = b;
+
+                    for (_, val) in drop {
+                        self.users[val].remove(&insn);
+                    }
+                }
+
+                let branch_info = this.analyze_branch();
+                if branch_info.dests_num() == 1 {
+                    for val in this.args() {
+                        self.users[*val].remove(&insn);
+                    }
+                    *this = InsnData::jump(branch_info.iter_dests().next().unwrap());
+                }
+            }
+
+            _ => panic!("not a branch"),
+        }
     }
 
     pub fn rewrite_branch_dest(&mut self, insn: Insn, from: Block, to: Block) {
