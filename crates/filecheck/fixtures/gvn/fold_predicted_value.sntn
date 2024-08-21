@@ -4,15 +4,15 @@ target = "evm-ethereum-london"
 # nextln:   return 1.i1;
 # check:  block2:
 # nextln:   return 0.i1;
-func public %fold_with_predicted_value(v0.i1) -> i8 {
+func public %fold_with_predicted_value(v0.i1) -> i1 {
     block0:
         br v0 block1 block2;
 
     block1:
-        v1.i8 = or v0 v0;
+        v1.i1 = or v0 v0;
         return v1;
 
     block2:
-        v2.i8 = or v0 v0;
+        v2.i1 = or v0 v0;
         return v2;
 }

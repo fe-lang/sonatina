@@ -205,7 +205,7 @@ trait IrWrite {
 
 impl IrWrite for Value {
     fn write(&self, writer: &mut FuncWriter, w: &mut impl io::Write) -> io::Result<()> {
-        let value = writer.func.dfg.resolve_alias(*self);
+        let value = *self;
         if let Some(imm) = writer.func.dfg.value_imm(value) {
             write!(w, "{}.", imm)?;
             let ty = writer.func.dfg.value_ty(value);
