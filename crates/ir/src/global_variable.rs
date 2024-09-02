@@ -3,7 +3,7 @@ use std::fmt;
 use cranelift_entity::PrimaryMap;
 use rustc_hash::FxHashMap;
 
-use crate::{Immediate, Linkage, Type};
+use crate::{types::DisplayType, DataFlowGraph, Immediate, Linkage, Type};
 
 #[derive(Debug, Default)]
 pub struct GlobalVariableStore {
@@ -55,6 +55,27 @@ impl GlobalVariableStore {
 pub struct GlobalVariable(pub u32);
 cranelift_entity::entity_impl!(GlobalVariable);
 
+pub struct DisplayGlobalVariable<'a> {
+    gv: GlobalVariable,
+    dfg: &'a DataFlowGraph,
+}
+
+impl<'a> DisplayGlobalVariable<'a> {
+    pub fn new(gv: GlobalVariable, dfg: &'a DataFlowGraph) -> Self {
+        Self { gv, dfg }
+    }
+}
+
+impl<'a> fmt::Display for DisplayGlobalVariable<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { gv, dfg } = self;
+        dfg.ctx.with_gv_store(|s| {
+            let gv_data = s.gv_data(*gv);
+            DisplayGlobalVariableData { gv_data, dfg }.fmt(f)
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GlobalVariableData {
     pub symbol: String,
@@ -89,6 +110,33 @@ impl GlobalVariableData {
             is_const: true,
             data: Some(data),
         }
+    }
+}
+
+pub struct DisplayGlobalVariableData<'a, 'b> {
+    gv_data: &'a GlobalVariableData,
+    dfg: &'b DataFlowGraph,
+}
+
+impl<'a, 'b> fmt::Display for DisplayGlobalVariableData<'a, 'b> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let GlobalVariableData {
+            symbol: _,
+            ty,
+            linkage,
+            is_const,
+            data,
+        } = &self.gv_data;
+        let ty = DisplayType::new(*ty, self.dfg);
+        ty.fmt(f)?;
+        if *is_const {
+            write!(f, " const")?;
+        }
+        write!(f, " {linkage}")?;
+        if let Some(data) = data {
+            write!(f, " {}", data)?;
+        }
+        Ok(())
     }
 }
 
@@ -138,5 +186,58 @@ impl fmt::Display for ConstantValue {
                 write!(f, "}}")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{builder::test_util::build_test_isa, module::ModuleCtx, I256};
+
+    use super::*;
+
+    #[test]
+    fn display_gv() {
+        let ctx = ModuleCtx::new(build_test_isa());
+
+        let cv = ConstantValue::make_imm(1618i32);
+        let gv = ctx.with_gv_store_mut(|s| {
+            s.make_gv(GlobalVariableData::new(
+                String::from("foo"),
+                Type::I32,
+                Linkage::Public,
+                true,
+                Some(cv),
+            ))
+        });
+
+        let dfg = DataFlowGraph::new(ctx);
+        let display_gv = DisplayGlobalVariable::new(gv, &dfg);
+
+        assert_eq!(display_gv.to_string(), "i32 const public 1618");
+    }
+
+    #[test]
+    fn display_gv_array() {
+        let ctx = ModuleCtx::new(build_test_isa());
+
+        let cv0 = ConstantValue::make_imm(8i32);
+        let cv1 = ConstantValue::make_imm(4i32);
+        let cv2 = ConstantValue::make_imm(2i32);
+        let const_arr = ConstantValue::make_array(vec![cv0, cv1, cv2]);
+        let ty = ctx.with_ty_store_mut(|s| s.make_array(Type::I32, 3));
+        let gv = ctx.with_gv_store_mut(|s| {
+            s.make_gv(GlobalVariableData::new(
+                String::from("foo"),
+                ty,
+                Linkage::Private,
+                true,
+                Some(const_arr),
+            ))
+        });
+
+        let dfg = DataFlowGraph::new(ctx);
+        let display_gv = DisplayGlobalVariable::new(gv, &dfg);
+
+        assert_eq!(display_gv.to_string(), "[i32;3] const private [8, 4, 2]");
     }
 }
