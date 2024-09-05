@@ -1,7 +1,7 @@
 //! This module contains Sonatina IR types definitions.
 use std::{cmp, fmt};
 
-use cranelift_entity::PrimaryMap;
+use cranelift_entity::{EntityRef, PrimaryMap};
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
@@ -135,6 +135,46 @@ pub enum Type {
     Void,
 }
 
+impl EntityRef for Type {
+    fn new(i: usize) -> Self {
+        if i == 0 {
+            Type::Void
+        } else if i == 1 {
+            Type::I1
+        } else if i == 8 {
+            Type::I8
+        } else if i == 16 {
+            Type::I16
+        } else if i == 32 {
+            Type::I32
+        } else if i == 64 {
+            Type::I64
+        } else if i == 128 {
+            Type::I128
+        } else if i == 256 {
+            Type::I256
+        } else if i > 256 {
+            Type::Compound(CompoundType::new(i - 256))
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Type::Void => 0,
+            Type::I1 => 1,
+            Type::I8 => 8,
+            Type::I16 => 16,
+            Type::I32 => 32,
+            Type::I64 => 64,
+            Type::I128 => 128,
+            Type::I256 => 256,
+            Type::Compound(cmpd_ty) => 256 + cmpd_ty.index(),
+        }
+    }
+}
+
 /// An opaque reference to [`CompoundTypeData`].
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub struct CompoundType(u32);
@@ -265,5 +305,28 @@ impl cmp::PartialOrd for Type {
             (I256, _) => Some(cmp::Ordering::Greater),
             (_, _) => unreachable!(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cranelift_entity::SecondaryMap;
+
+    use super::*;
+
+    #[test]
+    fn type_as_entity() {
+        let mut map = SecondaryMap::new();
+        assert_eq!(map.capacity(), 0);
+
+        map[Type::I1] = 1;
+        map[Type::I32] = 32;
+
+        let cmpd_ty = CompoundType(1);
+        map[Type::Compound(cmpd_ty)] = 257;
+
+        assert_eq!(map[Type::Void], 0);
+        assert_eq!(map[Type::I32], 32);
+        assert_eq!(map[Type::Compound(cmpd_ty)], 257);
     }
 }
