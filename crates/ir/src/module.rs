@@ -84,9 +84,9 @@ impl ModuleCtx {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FuncRef(u32);
-entity_impl!(FuncRef);
+entity_impl!(FuncRef, "%");
 
 pub struct DisplayCalleeFuncRef<'a> {
     callee: FuncRef,
