@@ -191,7 +191,7 @@ impl fmt::Display for ConstantValue {
 
 #[cfg(test)]
 mod test {
-    use crate::{builder::test_util::build_test_isa, module::ModuleCtx, I256};
+    use crate::{builder::test_util::build_test_isa, module::ModuleCtx};
 
     use super::*;
 
