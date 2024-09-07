@@ -6,6 +6,7 @@ pub mod function;
 pub mod global_variable;
 pub mod graphviz;
 pub mod insn;
+pub mod inst;
 pub mod ir_writer;
 pub mod isa;
 pub mod layout;
