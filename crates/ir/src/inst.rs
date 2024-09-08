@@ -1,12 +1,22 @@
+use std::any::{Any, TypeId};
+
 use smallvec::SmallVec;
 
 use crate::{module::FuncRef, Block, Type, Value};
 
-pub trait Inst {
+pub trait Inst: Any {
     fn visit_values(&self, f: &mut dyn FnMut(Value));
     fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut Value));
     fn has_side_effect(&self) -> bool;
     fn as_str(&self) -> &'static str;
+}
+
+/// This trait works as a "proof" that a specific ISA contains `I`,
+/// and then allows a construction and reflection of type `I` in that specific ISA context.
+pub trait HasInst<I: Inst> {
+    fn is(&self, inst: &dyn Inst) -> bool {
+        inst.type_id() == TypeId::of::<I>()
+    }
 }
 
 macro_rules! define_inst {
