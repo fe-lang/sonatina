@@ -25,6 +25,7 @@ pub use function::{Function, Signature};
 pub use global_variable::{GlobalVariable, GlobalVariableData};
 pub use graphviz::render_to;
 pub use insn::{BranchInfo, DataLocationKind, Insn, InsnData};
+pub use inst::HasInst;
 pub use layout::Layout;
 pub use linkage::Linkage;
 pub use module::Module;

@@ -275,7 +275,7 @@ pub struct Gep {
 }
 impl Inst for Gep {
     fn visit_values(&self, f: &mut dyn FnMut(Value)) {
-        self.values.iter().copied().for_each(f)
+        self.values.visit_with(f)
     }
 
     fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut Value)) {
@@ -298,11 +298,11 @@ pub struct Phi {
 }
 impl Inst for Phi {
     fn visit_values(&self, f: &mut dyn FnMut(Value)) {
-        self.values.iter().for_each(|(v, _)| f(*v))
+        self.values.visit_with(f)
     }
 
     fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut Value)) {
-        self.values.iter_mut().for_each(|(v, _)| f(v))
+        self.values.visit_mut_with(f)
     }
 
     fn has_side_effect(&self) -> bool {
@@ -311,5 +311,73 @@ impl Inst for Phi {
 
     fn as_str(&self) -> &'static str {
         "phi"
+    }
+}
+
+pub(crate) trait ValueVisitable {
+    fn visit_with(&self, f: &mut dyn FnMut(Value));
+    fn visit_mut_with(&mut self, f: &mut dyn FnMut(&mut Value));
+}
+
+impl ValueVisitable for Value {
+    fn visit_with(&self, f: &mut dyn FnMut(Value)) {
+        f(*self)
+    }
+
+    fn visit_mut_with(&mut self, f: &mut dyn FnMut(&mut Value)) {
+        f(self)
+    }
+}
+
+impl ValueVisitable for Option<Value> {
+    fn visit_with(&self, f: &mut dyn FnMut(Value)) {
+        if let Some(value) = *self {
+            f(value)
+        }
+    }
+
+    fn visit_mut_with(&mut self, f: &mut dyn FnMut(&mut Value)) {
+        if let Some(value) = self.as_mut() {
+            f(value)
+        }
+    }
+}
+
+impl<V, T> ValueVisitable for (V, T)
+where
+    V: ValueVisitable,
+{
+    fn visit_with(&self, f: &mut dyn FnMut(Value)) {
+        self.0.visit_with(f)
+    }
+
+    fn visit_mut_with(&mut self, f: &mut dyn FnMut(&mut Value)) {
+        self.0.visit_mut_with(f)
+    }
+}
+
+impl<V> ValueVisitable for Vec<V>
+where
+    V: ValueVisitable,
+{
+    fn visit_with(&self, f: &mut dyn FnMut(Value)) {
+        self.iter().for_each(|v| v.visit_with(f))
+    }
+
+    fn visit_mut_with(&mut self, f: &mut dyn FnMut(&mut Value)) {
+        self.iter_mut().for_each(|v| v.visit_mut_with(f))
+    }
+}
+
+impl<V> ValueVisitable for [V]
+where
+    V: ValueVisitable,
+{
+    fn visit_with(&self, f: &mut dyn FnMut(Value)) {
+        self.iter().for_each(|v| v.visit_with(f))
+    }
+
+    fn visit_mut_with(&mut self, f: &mut dyn FnMut(&mut Value)) {
+        self.iter_mut().for_each(|v| v.visit_mut_with(f))
     }
 }
