@@ -1,3 +1,4 @@
+use sonatina_macros::Inst;
 use std::any::{Any, TypeId};
 
 use smallvec::SmallVec;
@@ -8,7 +9,7 @@ pub trait Inst: Any {
     fn visit_values(&self, f: &mut dyn FnMut(Value));
     fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut Value));
     fn has_side_effect(&self) -> bool;
-    fn as_str(&self) -> &'static str;
+    fn as_text(&self) -> &'static str;
 }
 
 /// This trait works as a "proof" that a specific ISA contains `I`,
@@ -19,299 +20,292 @@ pub trait HasInst<I: Inst> {
     }
 }
 
-macro_rules! define_inst {
-    ($(($purity:ident, $ty:ident, $name:literal, $arity:literal)),* $(,)?) => {
-        $(
-            define_inst!($purity, $ty, $name, $arity);
-        )*
-    };
-
-    ($purity: ident, $ty: ident, $name:literal, $arity:literal) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub struct $ty {
-            args: define_inst!(__arg_ty $arity),
-        }
-
-        impl Inst for $ty {
-            fn visit_values(&self, f: &mut dyn FnMut(Value)) {
-                for &v in &self.args {
-                    f(v)
-                }
-            }
-
-            fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut Value)) {
-                for v in &mut self.args {
-                    f(v)
-                }
-            }
-
-            fn has_side_effect(&self) -> bool {
-                define_inst!(__has_side_effect_impl $purity)
-            }
-
-            fn as_str(&self) -> &'static str {
-                $name
-            }
-        }
-    };
-
-    ($purity: ident, $ty: ident, $name:literal, $arity:literal) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub struct $ty {
-            pub args: define_inst!(__arg_ty $arity),
-        }
-
-        impl Inst for $ty {
-            fn visit_values(&self, f: &mut dyn FnMut(Value)) {
-                self.args.iter().copied().for_each(f)
-            }
-
-            fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut Value)) {
-                self.args.iter_mut().for_each(f)
-            }
-
-            fn has_side_effect(&self) -> bool {
-                define_inst!(__has_side_effect_impl $purity)
-            }
-
-            fn as_str(&self) -> &'static str {
-                $name
-            }
-        }
-    };
-
-    (__arg_ty 1) => {
-        Value
-    };
-
-    (__arg_ty $arity:literal) => {
-        [Value; $arity]
-    };
-
-    (__has_side_effect_impl pure) => {
-       true
-    };
-
-    (__has_side_effect_impl non_pure) => {
-       true
-    };
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Not {
+    #[inst(visit_value)]
+    arg: Value,
 }
 
-define_inst! {
-    (pure, Not, "not", 1),
-    (pure, Neg, "neg", 1),
-    // Arithmetic instructions.
-    (pure, Add, "add", 2),
-    (pure, Mul, "mul", 2),
-    (pure, Sub, "sub", 2),
-    (non_pure, Sdiv, "sdiv", 2),
-    (non_pure, Udiv, "udiv", 2),
-    // Comp instructions.
-    (pure, Lt, "lt", 2),
-    (pure, Gt, "gt", 2),
-    (pure, Slt, "slt", 2),
-    (pure, Sgt, "sgt", 2),
-    (pure, Le, "le", 2),
-    (pure, Ge, "ge", 2),
-    (pure, Sle, "sle", 2),
-    (pure, Sge, "sge", 2),
-    (pure, Eq, "eq", 2),
-    (pure, Ne, "ne", 2),
-    (pure, And, "And", 2),
-    (pure, Or, "Or", 2),
-    (pure, Xor, "xor", 2),
-    // Cast instructions.
-    (pure, Sext, "sext", 2),
-    (pure, Zext, "zext", 2),
-    (pure, Trunc, "trunc", 2),
-    (pure, BitCast, "bitcast", 2),
-    // Memory operations.
-    (non_pure, Mload, "mload", 1),
-    (non_pure, Mstore, "mstore", 2),
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Neg {
+    #[inst(visit_value)]
+    arg: Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Add {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Mul {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Sub {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = true)]
+pub struct Sdiv {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = true)]
+pub struct Udiv {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Lt {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Gt {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Slt {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Sgt {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Le {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Ge {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Sle {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Sge {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Eq {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Ne {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct And {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Or {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Xor {
+    #[inst(visit_value)]
+    lhs: Value,
+    #[inst(visit_value)]
+    rhs: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Sext {
+    #[inst(visit_value)]
+    from: Value,
+    ty: Type,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Zext {
+    #[inst(visit_value)]
+    from: Value,
+    ty: Type,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct Trunc {
+    #[inst(visit_value)]
+    from: Value,
+    ty: Type,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
+pub struct BitCast {
+    #[inst(visit_value)]
+    from: Value,
+    ty: Type,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = true)]
+pub struct Mload {
+    #[inst(visit_value)]
+    addr: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = true)]
+pub struct Sload {
+    #[inst(visit_value)]
+    value: Value,
+    #[inst(visit_value)]
+    addr: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = true)]
 pub struct Call {
-    pub args: SmallVec<[Value; 8]>,
-    pub callee: FuncRef,
-    pub ret_ty: Type,
+    #[inst(visit_value)]
+    args: SmallVec<[Value; 8]>,
+    callee: FuncRef,
+    ret_ty: Type,
 }
 
-impl Inst for Call {
-    fn visit_values(&self, f: &mut dyn FnMut(Value)) {
-        self.args.iter().copied().for_each(f)
-    }
-
-    fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut Value)) {
-        self.args.iter_mut().for_each(f)
-    }
-
-    fn has_side_effect(&self) -> bool {
-        // TODO: We need to add funciton attribute that can specify a purity of function.
-        true
-    }
-
-    fn as_str(&self) -> &'static str {
-        "call"
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
 pub struct Jump {
-    pub dest: Block,
-}
-impl Inst for Jump {
-    fn visit_values(&self, _f: &mut dyn FnMut(Value)) {}
-
-    fn visit_values_mut(&mut self, _f: &mut dyn FnMut(&mut Value)) {}
-
-    fn has_side_effect(&self) -> bool {
-        false
-    }
-
-    fn as_str(&self) -> &'static str {
-        "jump"
-    }
+    dest: Block,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
 pub struct Br {
-    pub cond: Value,
-    pub z_dest: Block,
-    pub nz_dest: Block,
-}
-impl Inst for Br {
-    fn visit_values(&self, f: &mut dyn FnMut(Value)) {
-        f(self.cond)
-    }
+    #[inst(visit_value)]
+    cond: Value,
 
-    fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut Value)) {
-        f(&mut self.cond)
-    }
-
-    fn has_side_effect(&self) -> bool {
-        false
-    }
-
-    fn as_str(&self) -> &'static str {
-        "br"
-    }
+    z_dest: Block,
+    nz_dest: Block,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
 pub struct BrTable {
-    pub scrutinee: Value,
-    pub table: Vec<(Value, Block)>,
-    pub default: Option<Block>,
+    #[inst(visit_value)]
+    scrutinee: Value,
+    #[inst(visit_value)]
+    table: Vec<(Value, Block)>,
+
+    default: Option<Block>,
 }
 
-impl Inst for BrTable {
-    fn visit_values(&self, f: &mut dyn FnMut(Value)) {
-        f(self.scrutinee);
-        self.table.iter().for_each(|(v, _)| f(*v))
-    }
-
-    fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut Value)) {
-        f(&mut self.scrutinee);
-        self.table.iter_mut().for_each(|(v, _)| f(v))
-    }
-
-    fn has_side_effect(&self) -> bool {
-        false
-    }
-
-    fn as_str(&self) -> &'static str {
-        "br_table"
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = true)]
 pub struct Alloca {
-    pub ty: Type,
-}
-impl Inst for Alloca {
-    fn visit_values(&self, _f: &mut dyn FnMut(Value)) {}
-
-    fn visit_values_mut(&mut self, _f: &mut dyn FnMut(&mut Value)) {}
-
-    fn has_side_effect(&self) -> bool {
-        true
-    }
-
-    fn as_str(&self) -> &'static str {
-        "alloca"
-    }
+    ty: Type,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = true)]
 pub struct Return {
-    pub arg: Option<Value>,
-}
-impl Inst for Return {
-    fn visit_values(&self, f: &mut dyn FnMut(Value)) {
-        if let Some(v) = self.arg {
-            f(v)
-        }
-    }
-
-    fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut Value)) {
-        if let Some(v) = self.arg.as_mut() {
-            f(v)
-        }
-    }
-
-    fn has_side_effect(&self) -> bool {
-        true
-    }
-
-    fn as_str(&self) -> &'static str {
-        "return"
-    }
+    #[inst(visit_value)]
+    arg: Option<Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
 pub struct Gep {
+    #[inst(visit_value)]
     values: SmallVec<[Value; 8]>,
 }
-impl Inst for Gep {
-    fn visit_values(&self, f: &mut dyn FnMut(Value)) {
-        self.values.visit_with(f)
-    }
 
-    fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut Value)) {
-        self.values.iter_mut().for_each(f)
-    }
-
-    fn has_side_effect(&self) -> bool {
-        false
-    }
-
-    fn as_str(&self) -> &'static str {
-        "gep"
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect = false)]
 pub struct Phi {
-    pub values: Vec<(Value, Block)>,
-    pub ty: Type,
-}
-impl Inst for Phi {
-    fn visit_values(&self, f: &mut dyn FnMut(Value)) {
-        self.values.visit_with(f)
-    }
-
-    fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut Value)) {
-        self.values.visit_mut_with(f)
-    }
-
-    fn has_side_effect(&self) -> bool {
-        true
-    }
-
-    fn as_str(&self) -> &'static str {
-        "phi"
-    }
+    #[inst(visit_value)]
+    values: Vec<(Value, Block)>,
+    ty: Type,
 }
 
 pub(crate) trait ValueVisitable {
@@ -329,16 +323,19 @@ impl ValueVisitable for Value {
     }
 }
 
-impl ValueVisitable for Option<Value> {
+impl<V> ValueVisitable for Option<V>
+where
+    V: ValueVisitable,
+{
     fn visit_with(&self, f: &mut dyn FnMut(Value)) {
-        if let Some(value) = *self {
-            f(value)
+        if let Some(value) = self {
+            value.visit_with(f)
         }
     }
 
     fn visit_mut_with(&mut self, f: &mut dyn FnMut(&mut Value)) {
         if let Some(value) = self.as_mut() {
-            f(value)
+            value.visit_mut_with(f)
         }
     }
 }
@@ -372,6 +369,20 @@ where
 impl<V> ValueVisitable for [V]
 where
     V: ValueVisitable,
+{
+    fn visit_with(&self, f: &mut dyn FnMut(Value)) {
+        self.iter().for_each(|v| v.visit_with(f))
+    }
+
+    fn visit_mut_with(&mut self, f: &mut dyn FnMut(&mut Value)) {
+        self.iter_mut().for_each(|v| v.visit_mut_with(f))
+    }
+}
+
+impl<V, const N: usize> ValueVisitable for SmallVec<[V; N]>
+where
+    V: ValueVisitable,
+    [V; N]: smallvec::Array<Item = V>,
 {
     fn visit_with(&self, f: &mut dyn FnMut(Value)) {
         self.iter().for_each(|v| v.visit_with(f))
