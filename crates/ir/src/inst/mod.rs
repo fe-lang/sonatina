@@ -1,4 +1,5 @@
 pub mod basic;
+pub mod inst_group;
 
 use std::any::{Any, TypeId};
 
@@ -6,7 +7,7 @@ use smallvec::SmallVec;
 
 use crate::Value;
 
-pub trait Inst: Any {
+pub trait Inst: inst_group::sealed::Registered + Any {
     fn visit_values(&self, f: &mut dyn FnMut(Value));
     fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut Value));
     fn has_side_effect(&self) -> bool;

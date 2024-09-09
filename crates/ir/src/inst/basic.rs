@@ -205,7 +205,7 @@ pub struct Trunc {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect = false)]
-pub struct BitCast {
+pub struct Bitcast {
     #[inst(visit_value)]
     from: Value,
     ty: Type,
@@ -220,7 +220,7 @@ pub struct Mload {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect = true)]
-pub struct Sload {
+pub struct Mstore {
     #[inst(visit_value)]
     value: Value,
     #[inst(visit_value)]
