@@ -186,20 +186,20 @@ impl InstStruct {
 
     fn make_cast_fn(&self) -> proc_macro2::TokenStream {
         quote! {
-            pub fn cast<'i>(hi: &dyn crate::HasInst<Self>, inst: &'i dyn Inst) -> Option<&'i Self> {
+            pub fn cast<'i>(hi: &dyn crate::HasInst<Self>, inst: &'i dyn crate::Inst) -> Option<&'i Self> {
                 if hi.is(inst) {
-                    unsafe { Some(&*(inst as *const dyn Inst as *const Self)) }
+                    unsafe { Some(&*(inst as *const dyn crate::Inst as *const Self)) }
                 } else {
                     None
                 }
             }
 
             pub fn cast_mut<'i>(
-                hi: &dyn HasInst<Self>,
-                inst: &'i mut dyn Inst,
+                hi: &dyn crate::HasInst<Self>,
+                inst: &'i mut dyn crate::Inst,
             ) -> Option<&'i mut Self> {
                 if hi.is(inst) {
-                    unsafe { Some(&mut *(inst as *mut dyn Inst as *mut Self)) }
+                    unsafe { Some(&mut *(inst as *mut dyn crate::Inst as *mut Self)) }
                 } else {
                     None
                 }
