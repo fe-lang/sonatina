@@ -7,5 +7,6 @@ members = [
     "crates/parser",
     "crates/filecheck",
     "crates/triple",
+    "crates/macros",
     "crates/interpreter",
 ]
