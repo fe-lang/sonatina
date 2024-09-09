@@ -1,10 +1,10 @@
 use quote::quote;
 
-#[proc_macro_derive(Inst)]
+#[proc_macro_derive(Inst, attributes(inst))]
 pub fn derive_inst(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let item_struct = syn::parse_macro_input!(item as syn::ItemStruct);
 
-    match InstBuilder::new(item_struct).and_then(InstBuilder::build) {
+    match InstStruct::new(item_struct).and_then(InstStruct::build) {
         Ok(impls) => quote! {
             #impls
         }
@@ -14,53 +14,124 @@ pub fn derive_inst(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     }
 }
 
-struct InstBuilder {
+struct InstStruct {
     struct_name: syn::Ident,
-    fields: syn::FieldsNamed,
+    has_side_effect: bool,
+    fields: Vec<InstField>,
 }
 
-impl InstBuilder {
+struct InstField {
+    ident: syn::Ident,
+    ty: syn::Type,
+    visit_value: bool,
+}
+
+impl InstStruct {
     fn new(item_struct: syn::ItemStruct) -> syn::Result<Self> {
+        let has_side_effect = Self::check_side_effect_attr(&item_struct)?;
+
         let struct_ident = item_struct.ident;
-        let syn::Fields::Named(fields) = item_struct.fields else {
+
+        let fields = Self::parse_fields(&item_struct.fields)?;
+
+        if item_struct.generics.lt_token.is_some() {
             return Err(syn::Error::new_spanned(
-                item_struct.fields,
+                item_struct.generics,
+                "generics is not allowed for inst types",
+            ));
+        }
+
+        Ok(Self {
+            struct_name: struct_ident,
+            has_side_effect,
+            fields,
+        })
+    }
+
+    fn check_side_effect_attr(item_struct: &syn::ItemStruct) -> syn::Result<bool> {
+        let mut has_side_effect = None;
+
+        for attr in &item_struct.attrs {
+            if attr.path.is_ident("inst") {
+                let meta = attr.parse_args::<syn::Meta>()?;
+                if let syn::Meta::NameValue(name_value) = meta {
+                    if name_value.path.is_ident("side_effect") {
+                        if has_side_effect.is_some() {
+                            return Err(syn::Error::new_spanned(
+                                item_struct,
+                                "only one #[inst(side_effect = ...)]` attribute is allowed",
+                            ));
+                        }
+
+                        if let syn::Lit::Bool(bool_lit) = name_value.lit {
+                            has_side_effect = Some(bool_lit.value);
+                        }
+                    }
+                }
+            }
+        }
+
+        has_side_effect.ok_or_else(|| {
+            syn::Error::new_spanned(
+                item_struct,
+                "unique #[inst(side_effect = ...)]` attributed is required",
+            )
+        })
+    }
+
+    fn parse_fields(fields: &syn::Fields) -> syn::Result<Vec<InstField>> {
+        let syn::Fields::Named(fields) = fields else {
+            return Err(syn::Error::new_spanned(
+                fields,
                 "tuple struct is not allowed for inst types",
             ));
         };
 
-        if item_struct.generics.lt_token.is_some() {
-            Err(syn::Error::new_spanned(
-                item_struct.generics,
-                "generics is not allowed for inst types",
-            ))
-        } else {
-            Ok(Self {
-                struct_name: struct_ident,
-                fields,
-            })
+        let mut inst_fields = Vec::new();
+
+        for field in &fields.named {
+            let mut visit_value = false;
+
+            if !matches!(field.vis, syn::Visibility::Inherited) {
+                return Err(syn::Error::new_spanned(
+                    field,
+                    "public visibility is not allowed",
+                ));
+            }
+
+            for attr in &field.attrs {
+                if attr.path.is_ident("inst") {
+                    let meta = attr.parse_args::<syn::Meta>()?;
+                    if let syn::Meta::Path(path) = meta {
+                        if path.is_ident("visit_value") {
+                            visit_value = true;
+                        } else {
+                            return Err(syn::Error::new_spanned(
+                                attr,
+                                "only `visit_value` is allowed",
+                            ));
+                        }
+                    }
+                }
+            }
+
+            inst_fields.push(InstField {
+                ident: field.ident.clone().unwrap(),
+                ty: field.ty.clone(),
+                visit_value,
+            });
         }
+
+        Ok(inst_fields)
     }
 
     fn build(self) -> syn::Result<proc_macro2::TokenStream> {
-        let mut fields = Vec::with_capacity(self.fields.named.len());
-
-        for f in &self.fields.named {
-            if !matches!(f.vis, syn::Visibility::Inherited) {
-                return Err(syn::Error::new_spanned(
-                    &f.vis,
-                    "all members of inst types should be private",
-                ));
-            };
-
-            fields.push((f.ident.clone().unwrap(), f.ty.clone()));
-        }
-
-        let ctor = self.make_ctor(&fields);
-        let accessors = self.make_accessors(&fields);
+        let ctor = self.make_ctor();
+        let accessors = self.make_accessors();
         let cast_fn = self.make_cast_fn();
 
         let struct_name = &self.struct_name;
+        let impl_inst = self.impl_inst();
         Ok(quote! {
             impl #struct_name {
                 #ctor
@@ -69,18 +140,47 @@ impl InstBuilder {
 
                 #cast_fn
             }
+
+            #impl_inst
         })
     }
 
-    fn make_ctor(&self, fields: &[(syn::Ident, syn::Type)]) -> proc_macro2::TokenStream {
-        let ctor_args = fields.iter().map(|(ident, ty)| quote! {#ident: #ty});
-        let field_names = fields.iter().map(|(ident, _)| ident);
+    fn make_ctor(&self) -> proc_macro2::TokenStream {
+        let ctor_args = self.fields.iter().map(|f| {
+            let ident = &f.ident;
+            let ty = &f.ty;
+            quote! {#ident: #ty}
+        });
+
+        let field_names = self.fields.iter().map(|f| &f.ident);
         quote! {
             pub fn new(hi: &dyn crate::HasInst<Self>, #(#ctor_args),*) -> Self {
                 Self {
                     #(#field_names: #field_names),*
                 }
             }
+        }
+    }
+
+    fn make_accessors(&self) -> proc_macro2::TokenStream {
+        let accessors = self.fields.iter().map(|f| {
+            let ident = &f.ident;
+            let ty = &f.ty;
+            let getter = quote::format_ident!("{ident}");
+            let get_mut = quote::format_ident!("{ident}_mut");
+            quote! {
+                pub fn #getter(&self) -> &#ty {
+                    &self.#ident
+                }
+
+                pub fn #get_mut(&mut self) -> &mut #ty{
+                    &mut self.#ident
+                }
+            }
+        });
+
+        quote! {
+            #(#accessors)*
         }
     }
 
@@ -107,23 +207,73 @@ impl InstBuilder {
         }
     }
 
-    fn make_accessors(&self, fields: &[(syn::Ident, syn::Type)]) -> proc_macro2::TokenStream {
-        let accessors = fields.iter().map(|(ident, ty)| {
-            let getter = quote::format_ident!("{ident}");
-            let get_mut = quote::format_ident!("{ident}_mut");
-            quote! {
-                pub fn #getter(&self) -> &#ty {
-                    &self.#ident
-                }
-
-                pub fn #get_mut(&mut self) -> &mut #ty{
-                    &mut self.#ident
-                }
-            }
-        });
+    fn impl_inst(&self) -> proc_macro2::TokenStream {
+        let struct_name = &self.struct_name;
+        let has_side_effect = self.has_side_effect;
+        let visit_fields: Vec<_> = self
+            .fields
+            .iter()
+            .filter(|f| f.visit_value)
+            .map(|f| &f.ident)
+            .collect();
+        let text_form = convert_to_snake(&self.struct_name.to_string());
 
         quote! {
-            #(#accessors)*
+            impl crate::Inst for #struct_name {
+                fn visit_values(&self, f: &mut dyn FnMut(crate::Value)) {
+                    #(crate::ValueVisitable::visit_with(&self.#visit_fields, (f));)*
+                }
+
+                fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut crate::Value)) {
+                    #(crate::ValueVisitable::visit_mut_with(&mut self.#visit_fields, (f));)*
+                }
+
+                fn has_side_effect(&self) -> bool {
+                    #has_side_effect
+                }
+
+                fn as_text(&self) -> &'static str {
+                    #text_form
+                }
+            }
         }
+    }
+}
+
+fn convert_to_snake(s: &str) -> String {
+    let mut res = String::new();
+    let mut is_upper = false;
+    for (i, c) in s.chars().enumerate() {
+        if c.is_uppercase() {
+            if !is_upper && i != 0 {
+                res.push('_');
+            }
+            is_upper = true;
+        } else {
+            is_upper = false;
+        }
+
+        res.push(c.to_ascii_lowercase());
+    }
+
+    res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_convert_to_snake() {
+        let snake = "foo_bar_baz";
+        assert_eq!(convert_to_snake("FooBarBaz"), snake);
+        assert_eq!(convert_to_snake("FOoBarBaz"), snake);
+        assert_eq!(convert_to_snake("FOoBArBAZ"), snake);
+    }
+
+    #[test]
+    fn test_convert_to_snake2() {
+        let snake = "foo";
+        assert_eq!(convert_to_snake("Foo"), snake);
     }
 }
