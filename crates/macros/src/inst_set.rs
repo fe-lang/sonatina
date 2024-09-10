@@ -1,12 +1,12 @@
 use quote::quote;
 
-use crate::inst_set_base;
+use crate::{convert_to_snake, inst_set_base};
 
 pub fn define_inst_set(
-    _attr: proc_macro::TokenStream,
+    attr: proc_macro::TokenStream,
     item: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-    let attr_args = syn::parse_macro_input!(_attr as syn::AttributeArgs);
+    let attr_args = syn::parse_macro_input!(attr as syn::AttributeArgs);
     let item_struct = syn::parse_macro_input!(item as syn::ItemStruct);
 
     match InstSet::new(attr_args, item_struct).and_then(InstSet::build) {
@@ -24,6 +24,7 @@ struct InstSet {
     ident: syn::Ident,
     insts: Vec<syn::Path>,
     inst_kind_name: syn::Ident,
+    inst_kind_mut_name: syn::Ident,
 }
 
 impl InstSet {
@@ -31,27 +32,36 @@ impl InstSet {
         let ident = s.ident;
         let vis = s.vis;
         let insts = Self::parse_insts(&s.fields)?;
-        let inst_kind_name = Self::parse_inst_kind_name(&args)?;
+        let inst_kind_ident = Self::parse_inst_kind_name(&args)?;
+        let inst_kind_mut_ident = quote::format_ident!("{inst_kind_ident}Mut");
 
         Ok(Self {
             vis,
             ident,
             insts,
-            inst_kind_name,
+            inst_kind_name: inst_kind_ident,
+            inst_kind_mut_name: inst_kind_mut_ident,
         })
     }
 
     fn build(self) -> syn::Result<proc_macro2::TokenStream> {
         let inst_set = self.define_inst_set();
+        let inherent_methods = self.impl_inherent_methods();
+
         let has_inst_impls = self.impl_has_inst();
         let inst_set_base_impl = self.impl_inst_set_base();
+        let inst_set_ext_impl = self.impl_inst_set_ext();
 
         let inst_kind = self.define_inst_kind();
 
         Ok(quote! {
             #inst_set
+            #inherent_methods
+
             #has_inst_impls
             #inst_set_base_impl
+            #inst_set_ext_impl
+
             #inst_kind
         })
     }
@@ -109,7 +119,95 @@ impl InstSet {
         let ident = &self.ident;
         let vis = &self.vis;
         quote! {
-            #vis struct #ident {}
+            #vis struct #ident {
+                #[allow(clippy::type_complexity)]
+                table: ::rustc_hash::FxHashMap<
+                    std::any::TypeId,
+                    (
+                        &'static for<'i> fn(&Self, &'i dyn Inst) -> <Self as crate::InstSetExt>::InstKind<'i>,
+                        &'static for<'i> fn(
+                            &Self,
+                            &'i mut dyn Inst,
+                        ) -> <Self as crate::InstSetExt>::InstKindMut<'i>,
+                    ),
+                >,
+
+            }
+        }
+    }
+
+    fn define_inst_kind(&self) -> proc_macro2::TokenStream {
+        let lt = syn::Lifetime::new("'i", proc_macro2::Span::call_site());
+
+        let variants = self.insts.iter().map(|p| {
+            let variant_name = self.variant_name_from_inst_path(p);
+            quote! { #variant_name(&#lt #p) }
+        });
+        let variants_mut = self.insts.iter().map(|p| {
+            let variant_name = self.variant_name_from_inst_path(p);
+            quote! { #variant_name(&#lt mut #p) }
+        });
+
+        let inst_kind_name = &self.inst_kind_name;
+        let inst_kind_mut_name = quote::format_ident!("{inst_kind_name}Mut");
+
+        let vis = &self.vis;
+
+        quote! {
+             #vis enum #inst_kind_name<#lt> {
+                 #(#variants),*
+             }
+
+             #vis enum #inst_kind_mut_name<#lt> {
+                 #(#variants_mut),*
+             }
+        }
+    }
+
+    fn impl_inherent_methods(&self) -> proc_macro2::TokenStream {
+        let insert_table_ent = |p: &syn::Path| {
+            let inst_name_snake = convert_to_snake(&p.segments.last().unwrap().ident.to_string());
+            let cast_fn_name = quote::format_ident!("cast_{inst_name_snake}");
+            let cast_mut_fn_name = quote::format_ident!("{cast_fn_name}_mut");
+            let ident = &self.ident;
+            let inst_kind_name = &self.inst_kind_name;
+            let inst_kind_mut_name = &self.inst_kind_mut_name;
+            let variant_name = self.variant_name_from_inst_path(p);
+
+            quote! {
+                let tid = std::any::TypeId::of::<#p>();
+                fn #cast_fn_name<'i>(self_: &#ident, inst: &'i dyn Inst) -> #inst_kind_name<'i> {
+                    let inst = #p::cast(self_, inst).unwrap();
+                    #inst_kind_name::#variant_name(inst)
+                }
+                fn #cast_mut_fn_name<'i>(self_: &#ident, inst: &'i mut dyn Inst) -> #inst_kind_mut_name<'i> {
+                    let inst = #p::cast_mut(self_, inst).unwrap();
+                    #inst_kind_mut_name::#variant_name(inst)
+                }
+
+                let f: &'static for<'a, 'i> fn(&'a #ident, &'i dyn Inst) -> #inst_kind_name<'i> =
+                    &(#cast_fn_name as for<'a, 'i> fn(&'a #ident, &'i dyn Inst) -> #inst_kind_name<'i>);
+                let f_mut: &'static for<'a, 'i> fn(&'a #ident, &'i mut dyn Inst) -> #inst_kind_mut_name<'i> =
+                    &(#cast_mut_fn_name as for<'a, 'i> fn(&'a #ident, &'i mut dyn Inst) -> #inst_kind_mut_name<'i>);
+                table.insert(tid, (f, f_mut));
+
+            }
+        };
+
+        let insert_ents = self.insts.iter().map(insert_table_ent);
+        let ctor = quote! {
+            pub(crate) fn new() -> Self {
+                let mut table = ::rustc_hash::FxHashMap::default();
+                #(#insert_ents)*
+                Self { table }
+            }
+        };
+
+        let ident = &self.ident;
+        quote! {
+            impl #ident {
+                #ctor
+            }
         }
     }
 
@@ -144,32 +242,32 @@ impl InstSet {
         }
     }
 
-    fn define_inst_kind(&self) -> proc_macro2::TokenStream {
-        let lt = syn::Lifetime::new("'i", proc_macro2::Span::call_site());
-
-        let variants = self.insts.iter().map(|p| {
-            let variant_name = p.segments.last().unwrap();
-            quote! { #variant_name(&#lt #p) }
-        });
-
-        let variants_mut = self.insts.iter().map(|p| {
-            let variant_name = p.segments.last().unwrap();
-            quote! { #variant_name(&#lt mut #p) }
-        });
-
+    fn impl_inst_set_ext(&self) -> proc_macro2::TokenStream {
+        let ident = &self.ident;
         let inst_kind_name = &self.inst_kind_name;
-        let inst_kind_mut_name = quote::format_ident!("{inst_kind_name}Mut");
-
-        let vis = &self.vis;
+        let inst_kind_mut_name = &self.inst_kind_mut_name;
 
         quote! {
-             #vis enum #inst_kind_name<#lt> {
-                 #(#variants),*
-             }
+            impl crate::prelude::InstSetExt for #ident {
+                type InstKind<'i> = #inst_kind_name<'i>;
+                type InstKindMut<'i> = #inst_kind_mut_name<'i>;
 
-             #vis enum #inst_kind_mut_name<#lt> {
-                 #(#variants_mut),*
-             }
+                fn resolve_inst<'i>(&self, inst: &'i dyn Inst) -> Self::InstKind<'i> {
+                    let tid = inst.type_id();
+                    debug_assert!(self.table.contains_key(&tid));
+                    self.table[&tid].0(self, inst)
+                }
+
+                fn resolve_inst_mut<'i>(&self, inst: &'i mut dyn Inst) -> Self::InstKindMut<'i> {
+                    let tid = inst.type_id();
+                    debug_assert!(self.table.contains_key(&tid));
+                    self.table[&tid].1(self, inst)
+                }
+            }
         }
+    }
+
+    fn variant_name_from_inst_path<'a>(&self, p: &'a syn::Path) -> &'a syn::Ident {
+        &p.segments.last().unwrap().ident
     }
 }
