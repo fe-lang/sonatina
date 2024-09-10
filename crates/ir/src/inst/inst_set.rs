@@ -1,6 +1,6 @@
 use super::{basic, Inst};
 
-use sonatina_macros::define_dyn_inst_group;
+use sonatina_macros::define_inst_set_base;
 
 pub(super) mod sealed {
     /// This trait has two roles,
@@ -9,7 +9,8 @@ pub(super) mod sealed {
     pub trait Registered {}
 }
 
-define_dyn_inst_group! {
+// All instructions defined in the IR must be listed(otherwise, you'll get a compile error).
+define_inst_set_base! {
     basic::Not,
     basic::Neg,
     basic::Add,
@@ -45,13 +46,12 @@ define_dyn_inst_group! {
     basic::Gep,
     basic::Phi,
     basic::Nop,
-
 }
 
-pub trait ConcreteInstGroup: DynInstGroup {
-    type InstSet;
-    type InstSetMut;
+pub trait StaticInstSet: InstSetBase {
+    type InstSetKind;
+    type InstSetKindMut;
 
-    fn downcast(inst: &dyn Inst) -> Self::InstSet;
-    fn downcast_mut(inst: &mut dyn Inst) -> Self::InstSetMut;
+    fn resolve_inst(inst: &dyn Inst) -> Self::InstSetKind;
+    fn resolve_inst_mut(inst: &mut dyn Inst) -> Self::InstSetKindMut;
 }
