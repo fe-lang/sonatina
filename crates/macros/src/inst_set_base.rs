@@ -2,7 +2,7 @@ use quote::quote;
 
 use crate::convert_to_snake;
 
-pub fn define_dyn_inst_group(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+pub fn define_inst_set_base(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let def = syn::parse_macro_input! {input as TraitDefinition};
     match def.build() {
         Ok(ts) => quote! {#ts}.into(),
@@ -31,7 +31,7 @@ impl TraitDefinition {
             }
         });
         quote! {
-            pub trait DynInstGroup {
+            pub trait InstSetBase {
                 #(#methods)*
             }
         }
@@ -40,7 +40,7 @@ impl TraitDefinition {
     fn impl_registered(&self) -> proc_macro2::TokenStream {
         let impls = self.0.iter().map(|path| {
             quote! {
-                impl crate::inst::inst_group::sealed::Registered for #path {}
+                impl crate::inst::inst_set::sealed::Registered for #path {}
             }
         });
 
@@ -58,7 +58,7 @@ impl syn::parse::Parse for TraitDefinition {
     }
 }
 
-fn path_to_method_name(p: &syn::Path) -> syn::Ident {
+pub(super) fn path_to_method_name(p: &syn::Path) -> syn::Ident {
     let ident = &p.segments.last().as_ref().unwrap().ident;
     let s_ident = convert_to_snake(&ident.to_string());
     quote::format_ident!("has_{s_ident}")

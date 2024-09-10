@@ -1,5 +1,6 @@
 mod inst;
-mod inst_group;
+mod inst_set;
+mod inst_set_base;
 
 #[proc_macro_derive(Inst, attributes(inst))]
 pub fn derive_inst(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -7,8 +8,16 @@ pub fn derive_inst(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
 }
 
 #[proc_macro]
-pub fn define_dyn_inst_group(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    inst_group::define_dyn_inst_group(input)
+pub fn define_inst_set_base(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    inst_set_base::define_inst_set_base(input)
+}
+
+#[proc_macro_attribute]
+pub fn inst_set(
+    attr: proc_macro::TokenStream,
+    input: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    inst_set::define_inst_set(attr, input)
 }
 
 fn convert_to_snake(s: &str) -> String {
