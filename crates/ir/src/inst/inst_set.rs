@@ -1,6 +1,6 @@
 use super::{basic, Inst};
 
-use sonatina_macros::define_inst_set_base;
+use macros::define_inst_set_base;
 
 pub(super) mod sealed {
     /// This trait has two roles,
@@ -49,9 +49,9 @@ define_inst_set_base! {
 }
 
 pub trait StaticInstSet: InstSetBase {
-    type InstSetKind;
-    type InstSetKindMut;
+    type InstKind;
+    type InstKindMut;
 
-    fn resolve_inst(inst: &dyn Inst) -> Self::InstSetKind;
-    fn resolve_inst_mut(inst: &mut dyn Inst) -> Self::InstSetKindMut;
+    fn resolve_inst(inst: &dyn Inst) -> Self::InstKind;
+    fn resolve_inst_mut(inst: &mut dyn Inst) -> Self::InstKindMut;
 }

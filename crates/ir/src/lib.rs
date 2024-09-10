@@ -36,3 +36,10 @@ pub use types::Type;
 pub use value::{Immediate, Value, ValueData};
 
 pub(crate) use inst::ValueVisitable;
+
+pub mod prelude {
+    pub use crate::inst::{
+        inst_set::{InstSetBase, StaticInstSet},
+        HasInst, Inst,
+    };
+}

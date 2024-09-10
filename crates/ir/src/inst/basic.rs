@@ -1,7 +1,7 @@
 use crate::{module::FuncRef, Block, Type, Value};
 use smallvec::SmallVec;
 
-use sonatina_macros::Inst;
+use macros::Inst;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect = false)]
