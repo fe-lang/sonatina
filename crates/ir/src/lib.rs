@@ -26,7 +26,7 @@ pub use global_variable::{GlobalVariable, GlobalVariableData};
 pub use graphviz::render_to;
 pub use insn::{BranchInfo, DataLocationKind, Insn, InsnData};
 pub use inst::{
-    inst_set::{InstSetBase, StaticInstSet},
+    inst_set::{InstSetBase, InstSetExt},
     HasInst, Inst,
 };
 pub use layout::Layout;
@@ -39,7 +39,7 @@ pub(crate) use inst::ValueVisitable;
 
 pub mod prelude {
     pub use crate::inst::{
-        inst_set::{InstSetBase, StaticInstSet},
+        inst_set::{InstSetBase, InstSetExt},
         HasInst, Inst,
     };
 }
