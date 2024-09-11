@@ -4,6 +4,7 @@ pub mod cast;
 pub mod cmp;
 pub mod control_flow;
 pub mod data;
+pub mod evm;
 pub mod inst_set;
 pub mod logic;
 

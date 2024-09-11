@@ -1,4 +1,4 @@
-use super::{arith, basic, cast, cmp, control_flow, data, logic, Inst};
+use super::{arith, cast, cmp, control_flow, data, evm, logic, Inst};
 
 use macros::define_inst_set_base;
 
@@ -18,6 +18,11 @@ define_inst_set_base! {
         arith::Sub,
         arith::Sdiv,
         arith::Udiv,
+        arith::Umod,
+        arith::Smod,
+        arith::Shl,
+        arith::Shr,
+        arith::Sar,
         cmp::Lt,
         cmp::Gt,
         cmp::Slt,
@@ -28,6 +33,7 @@ define_inst_set_base! {
         cmp::Sge,
         cmp::Eq,
         cmp::Ne,
+        cmp::IsZero,
         logic::Not,
         logic::And,
         logic::Or,
@@ -47,6 +53,59 @@ define_inst_set_base! {
         control_flow::Return,
         control_flow::Phi,
         control_flow::Nop,
+        // Evm specific
+        evm::EvmStop,
+        evm::EvmAddMod,
+        evm::EvmMulMod,
+        evm::EvmExp,
+        evm::EvmByte,
+        evm::EvmKeccak256,
+        evm::EvmAddress,
+        evm::EvmBalance,
+        evm::EvmOrigin,
+        evm::EvmCaller,
+        evm::EvmCallValue,
+        evm::EvmCallDataLoad,
+        evm::EvmCallDataCopy,
+        evm::EvmCodeSize,
+        evm::EvmCodeCopy,
+        evm::EvmGasPrice,
+        evm::EvmExtCodeSize,
+        evm::EvmExtCodeCopy,
+        evm::EvmReturnDataSize,
+        evm::EvmReturnDataCopy,
+        evm::EvmExtCodeHash,
+        evm::EvmBlockHash,
+        evm::EvmCoinBase,
+        evm::EvmTimestamp,
+        evm::EvmNumber,
+        evm::EvmPrevRandao,
+        evm::EvmGasLimit,
+        evm::EvmChainId,
+        evm::EvmSelfBalance,
+        evm::EvmBaseFee,
+        evm::EvmBlobHash,
+        evm::EvmBlobBaseFee,
+        evm::EvmMstore8,
+        evm::EvmSload,
+        evm::EvmSstore,
+        evm::EvmMsize,
+        evm::EvmGas,
+        evm::EvmTload,
+        evm::EvmTstore,
+        evm::EvmLog0,
+        evm::EvmLog1,
+        evm::EvmLog2,
+        evm::EvmLog3,
+        evm::EvmLog4,
+        evm::EvmCreate,
+        evm::EvmCall,
+        evm::EvmReturn,
+        evm::EvmDelegateCall,
+        evm::EvmCreate2,
+        evm::EvmStaticCall,
+        evm::EvmRevert,
+        evm::EvmSelfDestruct,
     }
 }
 
@@ -62,7 +121,7 @@ define_inst_set_base! {
 /// defines
 ///
 /// ```rust
-/// use sonatina_ir::inst::basic::*;
+/// use sonatina_ir::inst::arith::*;
 /// enum InstKind<'i> {
 ///     Add(&'i Add),
 ///     Sub(&'i Sub),

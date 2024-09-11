@@ -81,3 +81,9 @@ pub struct Ne {
     #[inst(value)]
     rhs: Value,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct IsZero {
+    #[inst(value)]
+    lhs: Value,
+}
