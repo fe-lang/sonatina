@@ -10,7 +10,10 @@ pub fn define_inst_set_base(input: proc_macro::TokenStream) -> proc_macro::Token
     }
 }
 
-struct TraitDefinition(syn::punctuated::Punctuated<syn::Path, syn::Token!(,)>);
+struct TraitDefinition {
+    attrs: Vec<syn::Attribute>,
+    insts: syn::punctuated::Punctuated<syn::Path, syn::Token!(,)>,
+}
 
 impl TraitDefinition {
     fn build(self) -> syn::Result<proc_macro2::TokenStream> {
@@ -24,13 +27,16 @@ impl TraitDefinition {
     }
 
     fn define_trait(&self) -> proc_macro2::TokenStream {
-        let methods = self.0.iter().map(|path| {
+        let methods = self.insts.iter().map(|path| {
             let method_name = path_to_method_name(path);
             quote! {
                 fn #method_name(&self) -> Option<&dyn crate::HasInst<#path>> { None }
             }
         });
+        let attrs = &self.attrs;
+
         quote! {
+            #(#attrs)*
             pub trait InstSetBase {
                 #(#methods)*
             }
@@ -38,7 +44,7 @@ impl TraitDefinition {
     }
 
     fn impl_registered(&self) -> proc_macro2::TokenStream {
-        let impls = self.0.iter().map(|path| {
+        let impls = self.insts.iter().map(|path| {
             quote! {
                 impl crate::inst::inst_set::sealed::Registered for #path {}
             }
@@ -52,9 +58,22 @@ impl TraitDefinition {
 
 impl syn::parse::Parse for TraitDefinition {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let attrs = input.call(syn::Attribute::parse_outer)?;
+        input.parse::<syn::Token![trait]>()?;
+        let ident = input.parse::<syn::Ident>()?;
+        if ident != "InstSetBase" {
+            return Err(syn::Error::new_spanned(
+                ident,
+                "the trait name must be `InstSetBase`",
+            ));
+        }
+        let content;
+        syn::braced!(content in input);
+
         let insts =
-            syn::punctuated::Punctuated::<syn::Path, syn::Token!(,)>::parse_terminated(input)?;
-        Ok(Self(insts))
+            syn::punctuated::Punctuated::<syn::Path, syn::Token!(,)>::parse_terminated(&content)?;
+
+        Ok(Self { attrs, insts })
     }
 }
 
