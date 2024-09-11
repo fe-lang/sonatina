@@ -1,4 +1,4 @@
-use super::{basic, Inst};
+use super::{arith, basic, cast, cmp, control_flow, data, logic, Inst};
 
 use macros::define_inst_set_base;
 
@@ -12,41 +12,41 @@ define_inst_set_base! {
     ///
     /// NOTE: Do NOT implement this trait manually, use `sonatina-macro::inst_set` instead.
     trait InstSetBase {
-        basic::Not,
-        basic::Neg,
-        basic::Add,
-        basic::Mul,
-        basic::Sub,
-        basic::Sdiv,
-        basic::Udiv,
-        basic::Lt,
-        basic::Gt,
-        basic::Slt,
-        basic::Sgt,
-        basic::Le,
-        basic::Ge,
-        basic::Sle,
-        basic::Sge,
-        basic::Eq,
-        basic::Ne,
-        basic::And,
-        basic::Or,
-        basic::Xor,
-        basic::Sext,
-        basic::Zext,
-        basic::Trunc,
-        basic::Bitcast,
-        basic::Mload,
-        basic::Mstore,
-        basic::Call,
-        basic::Jump,
-        basic::Br,
-        basic::BrTable,
-        basic::Alloca,
-        basic::Return,
-        basic::Gep,
-        basic::Phi,
-        basic::Nop,
+        arith::Neg,
+        arith::Add,
+        arith::Mul,
+        arith::Sub,
+        arith::Sdiv,
+        arith::Udiv,
+        cmp::Lt,
+        cmp::Gt,
+        cmp::Slt,
+        cmp::Sgt,
+        cmp::Le,
+        cmp::Ge,
+        cmp::Sle,
+        cmp::Sge,
+        cmp::Eq,
+        cmp::Ne,
+        logic::Not,
+        logic::And,
+        logic::Or,
+        logic::Xor,
+        cast::Sext,
+        cast::Zext,
+        cast::Trunc,
+        cast::Bitcast,
+        data::Mload,
+        data::Mstore,
+        data::Alloca,
+        data::Gep,
+        control_flow::Call,
+        control_flow::Jump,
+        control_flow::Br,
+        control_flow::BrTable,
+        control_flow::Return,
+        control_flow::Phi,
+        control_flow::Nop,
     }
 }
 
@@ -91,7 +91,9 @@ pub trait InstSetExt: InstSetBase {
 mod tests {
     use super::*;
     use crate::Value;
-    use basic::*;
+    use arith::*;
+    use control_flow::*;
+    use logic::*;
     use macros::inst_set;
 
     #[inst_set(InstKind = "TestInstKind")]

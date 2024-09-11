@@ -1,5 +1,11 @@
-pub mod basic;
+pub mod access;
+pub mod arith;
+pub mod cast;
+pub mod cmp;
+pub mod control_flow;
+pub mod data;
 pub mod inst_set;
+pub mod logic;
 
 use std::any::{Any, TypeId};
 
