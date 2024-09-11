@@ -2,15 +2,16 @@ use super::{basic, Inst};
 
 use macros::define_inst_set_base;
 
-pub(super) mod sealed {
-    /// This trait has two roles,
-    /// 1. works as a sealed trait.
-    /// 2. ensure that an `Inst` is definitely registered to the `InstGroup`.
-    pub trait Registered {}
-}
-
-// All instructions defined in the IR must be listed(otherwise, you'll get a compile error).
 define_inst_set_base! {
+    /// This trait is used to determine whether a certain instruction set includes a specific inst in runtime.
+    /// If a certain instruction set `IS` implements `HasInst<I>`,
+    /// the corresponding `has_i(&self) -> Option<&dyn HasInst<I>>` method always returns `Some`.
+    ///
+    /// Since all instruction set implements `HasInst<Inst>` if it containst `Inst`,
+    /// this trait is naturally intened to be used as a trait object.
+    ///
+    /// NOTE: Do NOT implement this trait manually, use `sonatina-macro::inst_set` instead.
+    trait InstSetBase {
         basic::Not,
         basic::Neg,
         basic::Add,
@@ -47,7 +48,37 @@ define_inst_set_base! {
         basic::Phi,
         basic::Nop,
     }
+}
 
+/// This trait provides the concrete mapping from `Inst` to corresponding enum variant.
+/// All instruction set that are defined by `sonatina_macros::inst_set` automatically defines an enum which represents all instructions in the set.
+/// e.g.
+///
+/// ```rust,ignore
+/// use sonatina_ir::inst::basic::*;
+/// #[inst_set(InstKind = "InstKind")]
+/// struct InstSet(Add, Sub);
+/// ```
+/// defines
+///
+/// ```rust
+/// use sonatina_ir::inst::basic::*;
+/// enum InstKind<'i> {
+///     Add(&'i Add),
+///     Sub(&'i Sub),
+/// }
+/// enum InstKindMut<'i> {
+///     Add(&'i mut Add),
+///     Sub(&'i mut Sub),
+/// }
+/// ```
+///
+/// Assuming that the all instructions are created with this instruction set,
+/// the cast(resolution) from dynamic inst object to this enum always succeed.
+///
+/// This macro provides the way to these safe downcast, and allow us to focus on the
+/// restricted concrete instruction set, instead of "all possible" instructions.
+///
 pub trait InstSetExt: InstSetBase {
     type InstKind<'i>;
     type InstKindMut<'i>;
@@ -63,7 +94,7 @@ mod tests {
     use basic::*;
     use macros::inst_set;
 
-    #[inst_set(InstKind = "TestInstSetKind")]
+    #[inst_set(InstKind = "TestInstKind")]
     struct TestInstSet(Add, Sub, Not, Phi, Jump);
 
     #[test]
@@ -106,17 +137,24 @@ mod tests {
         insts.push(Box::new(not));
 
         let resolved = inst_set.resolve_inst(insts[0].as_ref());
-        assert!(matches!(resolved, TestInstSetKind::Add(_)));
+        assert!(matches!(resolved, TestInstKind::Add(_)));
         let resolved = inst_set.resolve_inst(insts[1].as_ref());
-        assert!(matches!(resolved, TestInstSetKind::Sub(_)));
+        assert!(matches!(resolved, TestInstKind::Sub(_)));
         let resolved = inst_set.resolve_inst(insts[2].as_ref());
-        assert!(matches!(resolved, TestInstSetKind::Not(_)));
+        assert!(matches!(resolved, TestInstKind::Not(_)));
 
         let resolved = inst_set.resolve_inst_mut(insts[0].as_mut());
-        assert!(matches!(resolved, TestInstSetKindMut::Add(_)));
+        assert!(matches!(resolved, TestInstKindMut::Add(_)));
         let resolved = inst_set.resolve_inst_mut(insts[1].as_mut());
-        assert!(matches!(resolved, TestInstSetKindMut::Sub(_)));
+        assert!(matches!(resolved, TestInstKindMut::Sub(_)));
         let resolved = inst_set.resolve_inst_mut(insts[2].as_mut());
-        assert!(matches!(resolved, TestInstSetKindMut::Not(_)));
+        assert!(matches!(resolved, TestInstKindMut::Not(_)));
     }
+}
+
+pub(super) mod sealed {
+    /// This trait has two roles,
+    /// 1. works as a sealed trait.
+    /// 2. ensure that an `Inst` is definitely registered to the `InstGroup`.
+    pub trait Registered {}
 }
