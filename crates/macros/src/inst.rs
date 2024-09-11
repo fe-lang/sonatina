@@ -138,6 +138,7 @@ impl InstStruct {
 
         let field_names = self.fields.iter().map(|f| &f.ident);
         quote! {
+            #[allow(clippy::too_many_arguments)]
             pub fn new(hi: &dyn crate::HasInst<Self>, #(#ctor_args),*) -> Self {
                 Self {
                     #(#field_names: #field_names),*
