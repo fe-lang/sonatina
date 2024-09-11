@@ -24,7 +24,7 @@ struct InstStruct {
 struct InstField {
     ident: syn::Ident,
     ty: syn::Type,
-    visit_value: bool,
+    value: bool,
 }
 
 impl InstStruct {
@@ -97,7 +97,7 @@ impl InstStruct {
         let mut inst_fields = Vec::new();
 
         for field in &fields.named {
-            let mut visit_value = false;
+            let mut value = false;
 
             if !matches!(field.vis, syn::Visibility::Inherited) {
                 return Err(syn::Error::new_spanned(
@@ -110,13 +110,10 @@ impl InstStruct {
                 if attr.path.is_ident("inst") {
                     let meta = attr.parse_args::<syn::Meta>()?;
                     if let syn::Meta::Path(path) = meta {
-                        if path.is_ident("visit_value") {
-                            visit_value = true;
+                        if path.is_ident("value") {
+                            value = true;
                         } else {
-                            return Err(syn::Error::new_spanned(
-                                attr,
-                                "only `visit_value` is allowed",
-                            ));
+                            return Err(syn::Error::new_spanned(attr, "only `value` is allowed"));
                         }
                     }
                 }
@@ -125,7 +122,7 @@ impl InstStruct {
             inst_fields.push(InstField {
                 ident: field.ident.clone().unwrap(),
                 ty: field.ty.clone(),
-                visit_value,
+                value,
             });
         }
 
@@ -200,7 +197,7 @@ impl InstStruct {
         let visit_fields: Vec<_> = self
             .fields
             .iter()
-            .filter(|f| f.visit_value)
+            .filter(|f| f.value)
             .map(|f| &f.ident)
             .collect();
         let text_form = convert_to_snake(&self.struct_name.to_string());
