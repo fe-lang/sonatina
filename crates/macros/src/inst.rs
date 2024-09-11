@@ -70,34 +70,20 @@ impl InstStruct {
     }
 
     fn check_side_effect_attr(item_struct: &syn::ItemStruct) -> syn::Result<bool> {
-        let mut has_side_effect = None;
+        let mut has_side_effect = false;
 
         for attr in &item_struct.attrs {
             if attr.path.is_ident("inst") {
                 let meta = attr.parse_args::<syn::Meta>()?;
-                if let syn::Meta::NameValue(name_value) = meta {
-                    if name_value.path.is_ident("side_effect") {
-                        if has_side_effect.is_some() {
-                            return Err(syn::Error::new_spanned(
-                                item_struct,
-                                "only one #[inst(side_effect = ...)]` attribute is allowed",
-                            ));
-                        }
-
-                        if let syn::Lit::Bool(bool_lit) = name_value.lit {
-                            has_side_effect = Some(bool_lit.value);
-                        }
+                if let syn::Meta::Path(path) = meta {
+                    if path.is_ident("has_side_effect") {
+                        has_side_effect = true;
                     }
                 }
             }
         }
 
-        has_side_effect.ok_or_else(|| {
-            syn::Error::new_spanned(
-                item_struct,
-                "unique #[inst(side_effect = ...)]` attributed is required",
-            )
-        })
+        Ok(has_side_effect)
     }
 
     fn parse_fields(fields: &syn::Fields) -> syn::Result<Vec<InstField>> {
