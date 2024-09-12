@@ -6,6 +6,7 @@ pub mod function;
 pub mod global_variable;
 pub mod graphviz;
 pub mod insn;
+pub mod inst;
 pub mod ir_writer;
 pub mod isa;
 pub mod layout;
@@ -24,8 +25,21 @@ pub use function::{Function, Signature};
 pub use global_variable::{GlobalVariable, GlobalVariableData};
 pub use graphviz::render_to;
 pub use insn::{BranchInfo, DataLocationKind, Insn, InsnData};
+pub use inst::{
+    inst_set::{InstSetBase, InstSetExt},
+    HasInst, Inst,
+};
 pub use layout::Layout;
 pub use linkage::Linkage;
 pub use module::Module;
 pub use types::Type;
 pub use value::{Immediate, Value, ValueData};
+
+pub(crate) use inst::ValueVisitable;
+
+pub mod prelude {
+    pub use crate::inst::{
+        inst_set::{InstSetBase, InstSetExt},
+        HasInst, Inst,
+    };
+}
