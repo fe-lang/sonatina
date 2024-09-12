@@ -28,6 +28,13 @@ pub struct BrTable {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+pub struct Phi {
+    #[inst(value)]
+    values: Vec<(Value, Block)>,
+    ty: Type,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(has_side_effect)]
 pub struct Call {
     #[inst(value)]
@@ -42,13 +49,3 @@ pub struct Return {
     #[inst(value)]
     arg: Option<Value>,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
-pub struct Phi {
-    #[inst(value)]
-    values: Vec<(Value, Block)>,
-    ty: Type,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-pub struct Nop {}

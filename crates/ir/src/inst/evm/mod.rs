@@ -1,4 +1,5 @@
 use macros::Inst;
+pub mod inst_set;
 
 use crate::Value;
 

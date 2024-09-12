@@ -1,7 +1,7 @@
 use macros::Inst;
 use smallvec::SmallVec;
 
-use crate::{Type, Value};
+use crate::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Mload {
@@ -16,12 +16,6 @@ pub struct Mstore {
     value: Value,
     #[inst(value)]
     addr: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
-#[inst(has_side_effect)]
-pub struct Alloca {
-    ty: Type,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]

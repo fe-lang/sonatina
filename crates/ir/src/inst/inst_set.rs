@@ -44,7 +44,6 @@ define_inst_set_base! {
         cast::Bitcast,
         data::Mload,
         data::Mstore,
-        data::Alloca,
         data::Gep,
         control_flow::Call,
         control_flow::Jump,
@@ -52,7 +51,6 @@ define_inst_set_base! {
         control_flow::BrTable,
         control_flow::Return,
         control_flow::Phi,
-        control_flow::Nop,
         // Evm specific
         evm::EvmStop,
         evm::EvmAddMod,
