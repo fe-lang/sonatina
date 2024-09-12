@@ -124,10 +124,10 @@ impl InstSet {
                 table: ::rustc_hash::FxHashMap<
                     std::any::TypeId,
                     (
-                        &'static for<'i> fn(&Self, &'i dyn Inst) -> <Self as crate::InstSetExt>::InstKind<'i>,
+                        &'static for<'i> fn(&Self, &'i dyn crate::Inst) -> <Self as crate::InstSetExt>::InstKind<'i>,
                         &'static for<'i> fn(
                             &Self,
-                            &'i mut dyn Inst,
+                            &'i mut dyn crate::Inst,
                         ) -> <Self as crate::InstSetExt>::InstKindMut<'i>,
                     ),
                 >,
@@ -176,19 +176,19 @@ impl InstSet {
 
             quote! {
                 let tid = std::any::TypeId::of::<#p>();
-                fn #cast_fn_name<'i>(self_: &#ident, inst: &'i dyn Inst) -> #inst_kind_name<'i> {
+                fn #cast_fn_name<'i>(self_: &#ident, inst: &'i dyn crate::Inst) -> #inst_kind_name<'i> {
                     let inst = #p::cast(self_, inst).unwrap();
                     #inst_kind_name::#variant_name(inst)
                 }
-                fn #cast_mut_fn_name<'i>(self_: &#ident, inst: &'i mut dyn Inst) -> #inst_kind_mut_name<'i> {
+                fn #cast_mut_fn_name<'i>(self_: &#ident, inst: &'i mut dyn crate::Inst) -> #inst_kind_mut_name<'i> {
                     let inst = #p::cast_mut(self_, inst).unwrap();
                     #inst_kind_mut_name::#variant_name(inst)
                 }
 
-                let f: &'static for<'a, 'i> fn(&'a #ident, &'i dyn Inst) -> #inst_kind_name<'i> =
-                    &(#cast_fn_name as for<'a, 'i> fn(&'a #ident, &'i dyn Inst) -> #inst_kind_name<'i>);
-                let f_mut: &'static for<'a, 'i> fn(&'a #ident, &'i mut dyn Inst) -> #inst_kind_mut_name<'i> =
-                    &(#cast_mut_fn_name as for<'a, 'i> fn(&'a #ident, &'i mut dyn Inst) -> #inst_kind_mut_name<'i>);
+                let f: &'static for<'a, 'i> fn(&'a #ident, &'i dyn crate::Inst) -> #inst_kind_name<'i> =
+                    &(#cast_fn_name as for<'a, 'i> fn(&'a #ident, &'i dyn crate::Inst) -> #inst_kind_name<'i>);
+                let f_mut: &'static for<'a, 'i> fn(&'a #ident, &'i mut dyn crate::Inst) -> #inst_kind_mut_name<'i> =
+                    &(#cast_mut_fn_name as for<'a, 'i> fn(&'a #ident, &'i mut dyn crate::Inst) -> #inst_kind_mut_name<'i>);
                 table.insert(tid, (f, f_mut));
 
             }
@@ -252,14 +252,14 @@ impl InstSet {
                 type InstKind<'i> = #inst_kind_name<'i>;
                 type InstKindMut<'i> = #inst_kind_mut_name<'i>;
 
-                fn resolve_inst<'i>(&self, inst: &'i dyn Inst) -> Self::InstKind<'i> {
+                fn resolve_inst<'i>(&self, inst: &'i dyn crate::Inst) -> Self::InstKind<'i> {
                     let tid = inst.type_id();
                     debug_assert!(self.table.contains_key(&tid));
                     self.table[&tid].0(self, inst)
                 }
 
-                fn resolve_inst_mut<'i>(&self, inst: &'i mut dyn Inst) -> Self::InstKindMut<'i> {
-                    let tid = inst.type_id();
+                fn resolve_inst_mut<'i>(&self, inst: &'i mut dyn crate::Inst) -> Self::InstKindMut<'i> {
+                    let tid = (*inst).type_id();
                     debug_assert!(self.table.contains_key(&tid));
                     self.table[&tid].1(self, inst)
                 }
