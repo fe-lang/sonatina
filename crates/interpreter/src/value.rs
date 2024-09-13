@@ -65,7 +65,7 @@ impl EvalValue {
             Type::I32 => to_be_bytes!(4),
             Type::I64 => to_be_bytes!(8),
             Type::I128 => to_be_bytes!(16),
-            Type::I256 => self.i256().to_u256().to_big_endian(buff),
+            Type::I256 => self.i256().to_u256().write_as_big_endian(buff),
             Type::Compound(ty) => {
                 debug_assert!(ctx.with_ty_store(|s| s.resolve_compound(ty).is_ptr()));
                 to_be_bytes!(mem::size_of::<usize>());
