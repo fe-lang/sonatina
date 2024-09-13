@@ -73,7 +73,7 @@ impl InstStruct {
         let mut has_side_effect = false;
 
         for attr in &item_struct.attrs {
-            if attr.path.is_ident("inst") {
+            if attr.path().is_ident("inst") {
                 let meta = attr.parse_args::<syn::Meta>()?;
                 if let syn::Meta::Path(path) = meta {
                     if path.is_ident("has_side_effect") {
@@ -107,7 +107,7 @@ impl InstStruct {
             }
 
             for attr in &field.attrs {
-                if attr.path.is_ident("inst") {
+                if attr.path().is_ident("inst") {
                     let meta = attr.parse_args::<syn::Meta>()?;
                     if let syn::Meta::Path(path) = meta {
                         if path.is_ident("value") {

@@ -6,10 +6,10 @@ pub fn define_inst_set(
     attr: proc_macro::TokenStream,
     item: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-    let attr_args = syn::parse_macro_input!(attr as syn::AttributeArgs);
+    let arg = syn::parse_macro_input!(attr as syn::Meta);
     let item_struct = syn::parse_macro_input!(item as syn::ItemStruct);
 
-    match InstSet::new(attr_args, item_struct).and_then(InstSet::build) {
+    match InstSet::new(arg, item_struct).and_then(InstSet::build) {
         Ok(impls) => quote! {
             #impls
         }
@@ -28,11 +28,11 @@ struct InstSet {
 }
 
 impl InstSet {
-    fn new(args: Vec<syn::NestedMeta>, s: syn::ItemStruct) -> syn::Result<Self> {
+    fn new(arg: syn::Meta, s: syn::ItemStruct) -> syn::Result<Self> {
         let ident = s.ident;
         let vis = s.vis;
         let insts = Self::parse_insts(&s.fields)?;
-        let inst_kind_ident = Self::parse_inst_kind_name(&args)?;
+        let inst_kind_ident = Self::parse_inst_kind_name(arg)?;
         let inst_kind_mut_ident = quote::format_ident!("{inst_kind_ident}Mut");
 
         Ok(Self {
@@ -66,7 +66,7 @@ impl InstSet {
         })
     }
 
-    fn parse_inst_kind_name(args: &[syn::NestedMeta]) -> syn::Result<syn::Ident> {
+    fn parse_inst_kind_name(args: syn::Meta) -> syn::Result<syn::Ident> {
         let make_err = || {
             Err(syn::Error::new(
                 proc_macro2::Span::call_site(),
@@ -74,21 +74,23 @@ impl InstSet {
             ))
         };
 
-        if args.len() != 1 {
-            return make_err();
-        }
-
-        let syn::NestedMeta::Meta(syn::Meta::NameValue(name_value)) = &args[0] else {
+        let syn::Meta::NameValue(name_value) = args else {
             return make_err();
         };
 
-        let inst_kind_name = match (name_value.path.get_ident(), &name_value.lit) {
-            (Some(ident), syn::Lit::Str(s)) if ident == "InstKind" => s.value(),
+        let inst_kind_name = match (name_value.path.get_ident(), &name_value.value) {
+            (Some(ident), syn::Expr::Lit(lit)) if ident == "InstKind" => {
+                if let syn::Lit::Str(s) = &lit.lit {
+                    s
+                } else {
+                    return make_err();
+                }
+            }
             _ => return make_err(),
         };
 
         Ok(syn::Ident::new(
-            &inst_kind_name,
+            &inst_kind_name.value(),
             proc_macro2::Span::call_site(),
         ))
     }
