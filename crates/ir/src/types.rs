@@ -1,7 +1,7 @@
 //! This module contains Sonatina IR types definitions.
 use std::{cmp, fmt};
 
-use cranelift_entity::PrimaryMap;
+use cranelift_entity::{packed_option::ReservedValue, PrimaryMap};
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
@@ -135,14 +135,31 @@ pub enum Type {
     Void,
 }
 
+impl ReservedValue for Type {
+    fn reserved_value() -> Self {
+        Type::Compound(CompoundType::reserved_value())
+    }
+
+    fn is_reserved_value(&self) -> bool {
+        matches!(self,
+            Type::Compound(cmpd_ty) if cmpd_ty.is_reserved_value())
+    }
+}
+
 /// An opaque reference to [`CompoundTypeData`].
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub struct CompoundType(u32);
 cranelift_entity::entity_impl!(CompoundType);
 
-struct DisplayCompoundType<'a> {
+pub struct DisplayCompoundType<'a> {
     cmpd_ty: CompoundType,
     dfg: &'a DataFlowGraph,
+}
+
+impl<'a> DisplayCompoundType<'a> {
+    pub fn new(cmpd_ty: CompoundType, dfg: &'a DataFlowGraph) -> Self {
+        Self { cmpd_ty, dfg }
+    }
 }
 
 impl<'a> fmt::Display for DisplayCompoundType<'a> {
