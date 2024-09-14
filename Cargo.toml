@@ -9,4 +9,5 @@ members = [
     "crates/triple",
     "crates/macros",
     "crates/interpreter",
+    "crates/verifier",
 ]

@@ -14,6 +14,7 @@ Sonatina is really early stage in development, so do NOT use it for production!
 * `object`: Provides abstract object file format for linker.
 * `parser`: Parser for `sonatina` IR, this is mainly for `filecheck` test.
 * `triple`: Provides target triple for smart contracts.
+* `verifier`: Verifier for `sonatina` IR, this is mainly for testing transformation passes.
 
 ## TODO
 * [ ] IR verifier

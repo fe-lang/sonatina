@@ -1,0 +1,15 @@
+[package]
+name = "sonatina-verifier"
+version = "0.0.3-alpha"
+edition = "2021"
+authors = ["Sonatina Developers"]
+license = "Apache-2.0"
+readme = "../../README.md"
+homepage = "https://github.com/fe-lang/sonatina/tree/main/crates/verifier"
+repository = "https://github.com/fe-lang/sonatina"
+description = "Verifier for sonatina intermediate representation"
+categories = ["compilers", "wasm"]
+keywords = ["compiler", "evm", "wasm", "smart-contract"]
+
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
