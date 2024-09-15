@@ -84,7 +84,7 @@ impl<'a, 'b> fmt::Display for DisplayTraceInfo<'a, 'b> {
 
         let dfg = &func.dfg;
 
-        "trace_info".fmt(f)?;
+        "trace_info:".fmt(f)?;
 
         let mut line = 0;
 

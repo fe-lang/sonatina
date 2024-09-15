@@ -91,7 +91,7 @@ mod test {
 
         assert_eq!(
             "argument type inconsistent with instruction, i8
-trace_info
+trace_info:
 0: i8
 1: 0.i8
 2: v2.i32 = add 28.i32 0.i8;
