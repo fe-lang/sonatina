@@ -33,6 +33,30 @@ pub enum ErrorKind {
     CalleeResultWrongType(Type),
 }
 
+impl ErrorKind {
+    pub fn ir_source(&self) -> IrSource {
+        use ErrorKind::*;
+
+        match *self {
+            PhiInEntryBlock(i) => IrSource::Insn(i),
+            EmptyBlock(b) => IrSource::Block(b),
+            TerminatorBeforeEnd(i)
+            | NotEndedByTerminator(i)
+            | InstructionMapMismatched(i)
+            | BranchBrokenLink(i) => IrSource::Insn(i),
+            ValueIsNullReference(v) => IrSource::Value(v),
+            BlockIsNullReference(b) | BranchToEntryBlock(b) => IrSource::Block(b),
+            FunctionIsNullReference(f) => IrSource::Callee(f),
+            CompoundTypeIsNullReference(cmpd_ty) => IrSource::CompoundType(cmpd_ty),
+            ValueLeak(v) => IrSource::Value(v),
+            InsnArgWrongType(_)
+            | InsnResultWrongType(_)
+            | CalleeArgWrongType(_)
+            | CalleeResultWrongType(_) => IrSource::Type,
+        }
+    }
+}
+
 pub struct DisplayErrorKind<'a> {
     kind: ErrorKind,
     func: &'a Function,
@@ -113,4 +137,14 @@ impl<'a> fmt::Display for DisplayErrorKind<'a> {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum IrSource {
+    Callee(FuncRef),
+    Block(Block),
+    Insn(Insn),
+    Value(Value),
+    Type,
+    CompoundType(CompoundType),
 }

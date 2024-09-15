@@ -1,21 +1,26 @@
-mod kind;
+pub mod kind;
+
 mod trace_info;
 
 pub use kind::ErrorKind;
 pub use trace_info::{TraceInfo, TraceInfoBuilder};
 
+use kind::DisplayErrorKind;
 use trace_info::DisplayTraceInfo;
 
 use std::{error, fmt};
 
+use cranelift_entity::entity_impl;
 use sonatina_ir::Function;
 
-use crate::error::kind::DisplayErrorKind;
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ErrorRef(u32);
+entity_impl!(ErrorRef, "err");
 
 /// Verifier error.
 #[derive(Debug, Clone, Copy)]
 pub struct ErrorData {
-    kind: ErrorKind,
+    pub kind: ErrorKind,
     trace_info: TraceInfo,
 }
 
