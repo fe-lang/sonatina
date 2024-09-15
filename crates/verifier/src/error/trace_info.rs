@@ -11,8 +11,9 @@ use sonatina_ir::{
     Block, Function, GlobalVariable, Insn, Type, Value,
 };
 
+/// Execution context.
 #[derive(Debug, Clone, Copy)]
-pub struct Stacktrace {
+pub struct TraceInfo {
     func: PackedOption<FuncRef>,
     block: PackedOption<Block>,
     insn: PackedOption<Insn>,
@@ -23,7 +24,7 @@ pub struct Stacktrace {
     cmpd_ty: PackedOption<CompoundType>,
 }
 
-impl Stacktrace {
+impl TraceInfo {
     pub fn func(&self) -> Option<FuncRef> {
         self.func.expand()
     }
@@ -57,21 +58,21 @@ impl Stacktrace {
     }
 }
 
-pub struct DisplayStacktrace<'a, 'b> {
-    stacktrace: &'a Stacktrace,
+pub struct DisplayTraceInfo<'a, 'b> {
+    trace_info: &'a TraceInfo,
     func: &'b Function,
 }
 
-impl<'a, 'b> DisplayStacktrace<'a, 'b> {
-    pub fn new(stacktrace: &'a Stacktrace, func: &'b Function) -> Self {
-        Self { stacktrace, func }
+impl<'a, 'b> DisplayTraceInfo<'a, 'b> {
+    pub fn new(trace_info: &'a TraceInfo, func: &'b Function) -> Self {
+        Self { trace_info, func }
     }
 }
 
-impl<'a, 'b> fmt::Display for DisplayStacktrace<'a, 'b> {
+impl<'a, 'b> fmt::Display for DisplayTraceInfo<'a, 'b> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { stacktrace, func } = *self;
-        let Stacktrace {
+        let Self { trace_info, func } = *self;
+        let TraceInfo {
             block,
             insn,
             value,
@@ -79,11 +80,11 @@ impl<'a, 'b> fmt::Display for DisplayStacktrace<'a, 'b> {
             ty,
             cmpd_ty,
             ..
-        } = stacktrace;
+        } = trace_info;
 
         let dfg = &func.dfg;
 
-        "stacktrace".fmt(f)?;
+        "trace_info".fmt(f)?;
 
         let mut line = 0;
 
@@ -107,7 +108,7 @@ impl<'a, 'b> fmt::Display for DisplayStacktrace<'a, 'b> {
             write!(f, "\n{line}: {value}")?;
             line += 1;
         }
-        if let Some(callee) = stacktrace.callee.expand() {
+        if let Some(callee) = trace_info.callee.expand() {
             let callee = DisplayCalleeFuncRef::new(callee, func);
             write!(f, "\n{line}: {callee}")?;
             line += 1;
@@ -127,7 +128,7 @@ impl<'a, 'b> fmt::Display for DisplayStacktrace<'a, 'b> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct StacktraceBuilder {
+pub struct TraceInfoBuilder {
     func: PackedOption<FuncRef>,
     block: PackedOption<Block>,
     insn: PackedOption<Insn>,
@@ -138,7 +139,7 @@ pub struct StacktraceBuilder {
     cmpd_ty: PackedOption<CompoundType>,
 }
 
-impl StacktraceBuilder {
+impl TraceInfoBuilder {
     pub fn new(func: FuncRef) -> Self {
         Self {
             func: func.into(),
@@ -192,7 +193,7 @@ impl StacktraceBuilder {
         self
     }
 
-    pub fn build(self) -> Stacktrace {
+    pub fn build(self) -> TraceInfo {
         let Self {
             func,
             block,
@@ -204,7 +205,7 @@ impl StacktraceBuilder {
             cmpd_ty,
         } = self;
 
-        Stacktrace {
+        TraceInfo {
             func,
             block,
             insn,

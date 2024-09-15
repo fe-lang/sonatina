@@ -1,10 +1,10 @@
 mod kind;
-mod stacktrace;
+mod trace_info;
 
 pub use kind::ErrorKind;
-pub use stacktrace::{Stacktrace, StacktraceBuilder};
+pub use trace_info::{TraceInfo, TraceInfoBuilder};
 
-use stacktrace::DisplayStacktrace;
+use trace_info::DisplayTraceInfo;
 
 use std::{error, fmt};
 
@@ -16,12 +16,12 @@ use crate::error::kind::DisplayErrorKind;
 #[derive(Debug, Clone, Copy)]
 pub struct ErrorData {
     kind: ErrorKind,
-    pub stacktrace: Stacktrace,
+    trace_info: TraceInfo,
 }
 
 impl ErrorData {
-    pub fn new(kind: ErrorKind, stacktrace: Stacktrace) -> Self {
-        Self { kind, stacktrace }
+    pub fn new(kind: ErrorKind, trace_info: TraceInfo) -> Self {
+        Self { kind, trace_info }
     }
 }
 
@@ -41,11 +41,11 @@ impl<'a> Error<'a> {
 impl<'a> fmt::Display for Error<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { err, func } = *self;
-        let ErrorData { kind, stacktrace } = err;
+        let ErrorData { kind, trace_info } = err;
         let kind = DisplayErrorKind::new(kind, func);
-        let stacktrace = DisplayStacktrace::new(&stacktrace, func);
+        let trace_info = DisplayTraceInfo::new(&trace_info, func);
 
-        write!(f, "{kind}\n{stacktrace}")
+        write!(f, "{kind}\n{trace_info}")
     }
 }
 
@@ -54,7 +54,7 @@ impl<'a> error::Error for Error<'a> {}
 #[cfg(test)]
 mod test {
     use sonatina_ir::{builder::test_util::test_func_builder, Type};
-    use stacktrace::StacktraceBuilder;
+    use trace_info::TraceInfoBuilder;
 
     use super::*;
 
@@ -78,20 +78,20 @@ mod test {
         let func = &module.funcs[func_ref];
         let insn = func.layout.iter_insn(b0).next().unwrap();
 
-        let stacktrace = StacktraceBuilder::new(func_ref)
+        let trace_info = TraceInfoBuilder::new(func_ref)
             .block(b0)
             .insn(insn)
             .value(value1)
             .ty(Type::I8)
             .build();
 
-        let err = ErrorData::new(ErrorKind::InsnArgWrongType(Type::I8), stacktrace);
+        let err = ErrorData::new(ErrorKind::InsnArgWrongType(Type::I8), trace_info);
 
         let err = Error::new(err, func);
 
         assert_eq!(
             "argument type inconsistent with instruction, i8
-stacktrace
+trace_info
 0: i8
 1: 0.i8
 2: v2.i32 = add 28.i32 0.i8;
