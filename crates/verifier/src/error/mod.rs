@@ -8,7 +8,7 @@ use stacktrace::DisplayStacktrace;
 
 use std::{error, fmt};
 
-use sonatina_ir::{Function, Insn};
+use sonatina_ir::Function;
 
 use crate::error::kind::DisplayErrorKind;
 
@@ -17,16 +17,11 @@ use crate::error::kind::DisplayErrorKind;
 pub struct ErrorData {
     kind: ErrorKind,
     pub stacktrace: Stacktrace,
-    _parent: Option<Insn>, // origin if use of insn result is root of error
 }
 
 impl ErrorData {
     pub fn new(kind: ErrorKind, stacktrace: Stacktrace) -> Self {
-        Self {
-            kind,
-            stacktrace,
-            _parent: None,
-        }
+        Self { kind, stacktrace }
     }
 }
 
@@ -46,11 +41,7 @@ impl<'a> Error<'a> {
 impl<'a> fmt::Display for Error<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { err, func } = *self;
-        let ErrorData {
-            kind,
-            stacktrace,
-            _parent,
-        } = err;
+        let ErrorData { kind, stacktrace } = err;
         let kind = DisplayErrorKind::new(kind, func);
         let stacktrace = DisplayStacktrace::new(&stacktrace, func);
 
