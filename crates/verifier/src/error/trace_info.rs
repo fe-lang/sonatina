@@ -20,7 +20,7 @@ pub struct TraceInfo {
     callee: PackedOption<FuncRef>,
     value: PackedOption<Value>,
     gv: PackedOption<GlobalVariable>,
-    ty: PackedOption<Type>,
+    ty: Option<Type>,
     cmpd_ty: PackedOption<CompoundType>,
 }
 
@@ -50,7 +50,7 @@ impl TraceInfo {
     }
 
     pub fn ty(&self) -> Option<Type> {
-        self.ty.expand()
+        self.ty
     }
 
     pub fn cmpd_ty(&self) -> Option<CompoundType> {
@@ -93,8 +93,8 @@ impl<'a, 'b> fmt::Display for DisplayTraceInfo<'a, 'b> {
             write!(f, "\n{line}: {cmpd_ty}")?;
             line += 1;
         }
-        if let Some(ty) = ty.expand() {
-            let cmpd_ty = DisplayType::new(ty, dfg);
+        if let Some(ty) = ty {
+            let cmpd_ty = DisplayType::new(*ty, dfg);
             write!(f, "\n{line}: {cmpd_ty}")?;
             line += 1;
         }
@@ -135,7 +135,7 @@ pub struct TraceInfoBuilder {
     callee: PackedOption<FuncRef>,
     value: PackedOption<Value>,
     gv: PackedOption<GlobalVariable>,
-    ty: PackedOption<Type>,
+    ty: Option<Type>,
     cmpd_ty: PackedOption<CompoundType>,
 }
 
@@ -148,7 +148,7 @@ impl TraceInfoBuilder {
             callee: None.into(),
             value: None.into(),
             gv: None.into(),
-            ty: None.into(),
+            ty: None,
             cmpd_ty: None.into(),
         }
     }

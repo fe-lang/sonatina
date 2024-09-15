@@ -1,7 +1,7 @@
 //! This module contains Sonatina IR types definitions.
 use std::{cmp, fmt};
 
-use cranelift_entity::{packed_option::ReservedValue, PrimaryMap};
+use cranelift_entity::PrimaryMap;
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
@@ -133,17 +133,6 @@ pub enum Type {
     Compound(CompoundType),
     #[default]
     Void,
-}
-
-impl ReservedValue for Type {
-    fn reserved_value() -> Self {
-        Type::Compound(CompoundType::reserved_value())
-    }
-
-    fn is_reserved_value(&self) -> bool {
-        matches!(self,
-            Type::Compound(cmpd_ty) if cmpd_ty.is_reserved_value())
-    }
 }
 
 /// An opaque reference to [`CompoundTypeData`].
