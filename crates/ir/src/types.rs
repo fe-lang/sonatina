@@ -151,9 +151,15 @@ impl ReservedValue for Type {
 pub struct CompoundType(u32);
 cranelift_entity::entity_impl!(CompoundType);
 
-struct DisplayCompoundType<'a> {
+pub struct DisplayCompoundType<'a> {
     cmpd_ty: CompoundType,
     dfg: &'a DataFlowGraph,
+}
+
+impl<'a> DisplayCompoundType<'a> {
+    pub fn new(cmpd_ty: CompoundType, dfg: &'a DataFlowGraph) -> Self {
+        Self { cmpd_ty, dfg }
+    }
 }
 
 impl<'a> fmt::Display for DisplayCompoundType<'a> {

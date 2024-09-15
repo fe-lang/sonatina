@@ -13,3 +13,7 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
+cranelift-entity = "0.111"
