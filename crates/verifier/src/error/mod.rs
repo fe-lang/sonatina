@@ -6,20 +6,21 @@ pub use stacktrace::{Stacktrace, StacktraceBuilder};
 
 use stacktrace::DisplayStacktrace;
 
-use std::fmt;
+use std::{error, fmt};
 
 use sonatina_ir::{Function, Insn};
 
 use crate::error::kind::DisplayErrorKind;
 
+/// Verifier error.
 #[derive(Debug, Clone, Copy)]
-pub struct Error {
+pub struct ErrorData {
     kind: ErrorKind,
     pub stacktrace: Stacktrace,
     _parent: Option<Insn>, // origin if use of insn result is root of error
 }
 
-impl Error {
+impl ErrorData {
     pub fn new(kind: ErrorKind, stacktrace: Stacktrace) -> Self {
         Self {
             kind,
@@ -29,21 +30,23 @@ impl Error {
     }
 }
 
-pub struct DisplayVerifierError<'a> {
-    err: Error,
+/// Reportable verifier error.
+#[derive(Debug)]
+pub struct Error<'a> {
+    err: ErrorData,
     func: &'a Function,
 }
 
-impl<'a> DisplayVerifierError<'a> {
-    pub fn new(err: Error, func: &'a Function) -> Self {
+impl<'a> Error<'a> {
+    pub fn new(err: ErrorData, func: &'a Function) -> Self {
         Self { err, func }
     }
 }
 
-impl<'a> fmt::Display for DisplayVerifierError<'a> {
+impl<'a> fmt::Display for Error<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { err, func } = *self;
-        let Error {
+        let ErrorData {
             kind,
             stacktrace,
             _parent,
@@ -54,6 +57,8 @@ impl<'a> fmt::Display for DisplayVerifierError<'a> {
         write!(f, "{kind}\n{stacktrace}")
     }
 }
+
+impl<'a> error::Error for Error<'a> {}
 
 #[cfg(test)]
 mod test {
@@ -89,9 +94,9 @@ mod test {
             .ty(Type::I8)
             .build();
 
-        let err = Error::new(ErrorKind::InsnArgWrongType(Type::I8), stacktrace);
+        let err = ErrorData::new(ErrorKind::InsnArgWrongType(Type::I8), stacktrace);
 
-        let err = DisplayVerifierError::new(err, func);
+        let err = Error::new(err, func);
 
         assert_eq!(
             "argument type inconsistent with instruction, i8
