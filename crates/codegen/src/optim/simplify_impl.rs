@@ -7,7 +7,7 @@ use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
 use sonatina_ir::{
     insn::{BinaryOp, CastOp, DataLocationKind, UnaryOp},
     module::FuncRef,
-    Block, DataFlowGraph, Immediate, Insn, InsnData, Type, Value,
+    Block, DataFlowGraph, Immediate, Insn, InsnData, Type, ValueId,
 };
 
 #[allow(clippy::all)]
@@ -36,7 +36,7 @@ pub fn simplify_insn_data(dfg: &mut DataFlowGraph, data: InsnData) -> Option<Sim
 }
 
 pub enum SimplifyResult {
-    Value(Value),
+    Value(ValueId),
     Insn(InsnData),
 }
 
@@ -157,7 +157,7 @@ pub enum ExprData {
 
     /// Return.
     Return {
-        args: Option<Value>,
+        args: Option<ValueId>,
     },
 
     Gep {
@@ -323,13 +323,13 @@ impl ExprData {
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExprValue {
-    Value(Value),
+    Value(ValueId),
     #[allow(unused)]
     Expr(Expr),
 }
 
 impl ExprValue {
-    fn as_value(&self) -> Option<Value> {
+    fn as_value(&self) -> Option<ValueId> {
         match self {
             Self::Value(val) => Some(*val),
             Self::Expr(_) => None,
@@ -337,8 +337,8 @@ impl ExprValue {
     }
 }
 
-impl From<Value> for ExprValue {
-    fn from(val: Value) -> Self {
+impl From<ValueId> for ExprValue {
+    fn from(val: ValueId) -> Self {
         Self::Value(val)
     }
 }

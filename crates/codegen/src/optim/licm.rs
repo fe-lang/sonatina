@@ -5,7 +5,7 @@ use crate::loop_analysis::{Loop, LoopTree};
 
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    Block, ControlFlowGraph, Function, Insn, InsnData, Value,
+    Block, ControlFlowGraph, Function, Insn, InsnData, ValueId,
 };
 
 #[derive(Debug)]
@@ -63,7 +63,7 @@ impl LicmSolver {
     }
 
     /// Returns `true` if the insn is loop invariant.
-    fn is_invariant(&self, func: &Function, loop_var: &FxHashSet<Value>, insn: Insn) -> bool {
+    fn is_invariant(&self, func: &Function, loop_var: &FxHashSet<ValueId>, insn: Insn) -> bool {
         if !self.is_safe_to_hoist(func, insn) {
             return false;
         }

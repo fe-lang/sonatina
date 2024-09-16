@@ -3,7 +3,7 @@ use std::ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Sub};
 use sonatina_ir::{
     insn::{BinaryOp, CastOp, UnaryOp},
     module::FuncRef,
-    Block, DataLocationKind, Immediate, InsnData, Module, Value,
+    Block, DataLocationKind, Immediate, InsnData, Module, ValueId,
 };
 
 use crate::{types, EvalResult, Frame, ProgramCounter};
@@ -16,7 +16,7 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(module: Module, entry_func: FuncRef, args: &[Value]) -> Self {
+    pub fn new(module: Module, entry_func: FuncRef, args: &[ValueId]) -> Self {
         let func = &module.funcs[entry_func];
         let pc = ProgramCounter::new(entry_func, &func.layout);
 

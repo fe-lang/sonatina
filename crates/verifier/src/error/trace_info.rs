@@ -8,7 +8,7 @@ use sonatina_ir::{
     module::{DisplayCalleeFuncRef, FuncRef},
     types::{CompoundType, DisplayCompoundType, DisplayType},
     value::DisplayArgValue,
-    Block, Function, GlobalVariable, Insn, Type, Value,
+    Block, Function, GlobalVariable, Insn, Type, ValueId,
 };
 
 /// Execution context.
@@ -18,7 +18,7 @@ pub struct TraceInfo {
     block: PackedOption<Block>,
     insn: PackedOption<Insn>,
     callee: PackedOption<FuncRef>,
-    value: PackedOption<Value>,
+    value: PackedOption<ValueId>,
     gv: PackedOption<GlobalVariable>,
     ty: Option<Type>,
     cmpd_ty: PackedOption<CompoundType>,
@@ -41,7 +41,7 @@ impl TraceInfo {
         self.callee.expand()
     }
 
-    pub fn value(&self) -> Option<Value> {
+    pub fn value(&self) -> Option<ValueId> {
         self.value.expand()
     }
 
@@ -133,7 +133,7 @@ pub struct TraceInfoBuilder {
     block: PackedOption<Block>,
     insn: PackedOption<Insn>,
     callee: PackedOption<FuncRef>,
-    value: PackedOption<Value>,
+    value: PackedOption<ValueId>,
     gv: PackedOption<GlobalVariable>,
     ty: Option<Type>,
     cmpd_ty: PackedOption<CompoundType>,
@@ -163,7 +163,7 @@ impl TraceInfoBuilder {
         self
     }
 
-    pub fn value(mut self, v: Value) -> Self {
+    pub fn value(mut self, v: ValueId) -> Self {
         self.value = v.into();
         self
     }

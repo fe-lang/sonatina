@@ -7,7 +7,7 @@ use smallvec::SmallVec;
 
 use crate::{global_variable::ConstantValue, module::ModuleCtx, GlobalVariable};
 
-use super::{BranchInfo, Immediate, Insn, InsnData, Type, Value, ValueData};
+use super::{BranchInfo, Immediate, Insn, InsnData, Type, ValueData, ValueId};
 
 #[derive(Debug, Clone)]
 pub struct DataFlowGraph {
@@ -15,12 +15,12 @@ pub struct DataFlowGraph {
     #[doc(hidden)]
     pub blocks: PrimaryMap<Block, BlockData>,
     #[doc(hidden)]
-    pub values: PrimaryMap<Value, ValueData>,
+    pub values: PrimaryMap<ValueId, ValueData>,
     insns: PrimaryMap<Insn, InsnData>,
-    insn_results: SecondaryMap<Insn, PackedOption<Value>>,
+    insn_results: SecondaryMap<Insn, PackedOption<ValueId>>,
     #[doc(hidden)]
-    pub immediates: FxHashMap<Immediate, Value>,
-    users: SecondaryMap<Value, BTreeSet<Insn>>,
+    pub immediates: FxHashMap<Immediate, ValueId>,
+    users: SecondaryMap<ValueId, BTreeSet<Insn>>,
 }
 
 impl DataFlowGraph {
@@ -40,7 +40,7 @@ impl DataFlowGraph {
         self.blocks.push(BlockData::new())
     }
 
-    pub fn make_value(&mut self, value: ValueData) -> Value {
+    pub fn make_value(&mut self, value: ValueData) -> ValueId {
         self.values.push(value)
     }
 
@@ -50,7 +50,7 @@ impl DataFlowGraph {
         insn
     }
 
-    pub fn make_imm_value<Imm>(&mut self, imm: Imm) -> Value
+    pub fn make_imm_value<Imm>(&mut self, imm: Imm) -> ValueId
     where
         Imm: Into<Immediate>,
     {
@@ -66,7 +66,7 @@ impl DataFlowGraph {
         value
     }
 
-    pub fn make_global_value(&mut self, gv: GlobalVariable) -> Value {
+    pub fn make_global_value(&mut self, gv: GlobalVariable) -> ValueId {
         let gv_ty = self.ctx.with_gv_store(|s| s.ty(gv));
         let ty = self.ctx.with_ty_store_mut(|s| s.make_ptr(gv_ty));
         let value_data = ValueData::Global { gv, ty };
@@ -82,7 +82,7 @@ impl DataFlowGraph {
         self.attach_user(insn);
     }
 
-    pub fn change_to_alias(&mut self, value: Value, alias: Value) {
+    pub fn change_to_alias(&mut self, value: ValueId, alias: ValueId) {
         let mut users = std::mem::take(&mut self.users[value]);
         for insn in &users {
             for arg in self.insns[*insn].args_mut() {
@@ -99,7 +99,7 @@ impl DataFlowGraph {
         Some(ValueData::Insn { insn, ty })
     }
 
-    pub fn attach_result(&mut self, insn: Insn, value: Value) {
+    pub fn attach_result(&mut self, insn: Insn, value: ValueId) {
         debug_assert!(self.insn_results[insn].is_none());
         self.insn_results[insn] = value.into();
     }
@@ -112,7 +112,7 @@ impl DataFlowGraph {
         &self.insns[insn]
     }
 
-    pub fn value_data(&self, value: Value) -> &ValueData {
+    pub fn value_data(&self, value: ValueId) -> &ValueData {
         &self.values[value]
     }
 
@@ -131,19 +131,19 @@ impl DataFlowGraph {
         }
     }
 
-    pub fn users(&self, value: Value) -> impl Iterator<Item = &Insn> {
+    pub fn users(&self, value: ValueId) -> impl Iterator<Item = &Insn> {
         self.users[value].iter()
     }
 
-    pub fn users_num(&self, value: Value) -> usize {
+    pub fn users_num(&self, value: ValueId) -> usize {
         self.users[value].len()
     }
 
-    pub fn remove_user(&mut self, value: Value, user: Insn) {
+    pub fn remove_user(&mut self, value: ValueId, user: Insn) {
         self.users[value].remove(&user);
     }
 
-    pub fn user(&self, value: Value, idx: usize) -> Insn {
+    pub fn user(&self, value: ValueId, idx: usize) -> Insn {
         *self.users(value).nth(idx).unwrap()
     }
 
@@ -151,14 +151,14 @@ impl DataFlowGraph {
         &self.blocks[block]
     }
 
-    pub fn value_insn(&self, value: Value) -> Option<Insn> {
+    pub fn value_insn(&self, value: ValueId) -> Option<Insn> {
         match self.value_data(value) {
             ValueData::Insn { insn, .. } => Some(*insn),
             _ => None,
         }
     }
 
-    pub fn value_ty(&self, value: Value) -> Type {
+    pub fn value_ty(&self, value: ValueId) -> Type {
         match &self.values[value] {
             ValueData::Insn { ty, .. }
             | ValueData::Arg { ty, .. }
@@ -171,7 +171,7 @@ impl DataFlowGraph {
         self.insn_result(insn).map(|value| self.value_ty(value))
     }
 
-    pub fn value_imm(&self, value: Value) -> Option<Immediate> {
+    pub fn value_imm(&self, value: ValueId) -> Option<Immediate> {
         match self.value_data(value) {
             ValueData::Immediate { imm, .. } => Some(*imm),
             ValueData::Global { gv, .. } => self.ctx.with_gv_store(|s| {
@@ -187,7 +187,7 @@ impl DataFlowGraph {
         }
     }
 
-    pub fn value_gv(&self, value: Value) -> Option<GlobalVariable> {
+    pub fn value_gv(&self, value: ValueId) -> Option<GlobalVariable> {
         match self.value_data(value) {
             ValueData::Global { gv, .. } => Some(*gv),
             _ => None,
@@ -202,7 +202,7 @@ impl DataFlowGraph {
         self.insns[insn].phi_blocks_mut()
     }
 
-    pub fn append_phi_arg(&mut self, insn: Insn, value: Value, block: Block) {
+    pub fn append_phi_arg(&mut self, insn: Insn, value: ValueId, block: Block) {
         self.insns[insn].append_phi_arg(value, block);
         self.attach_user(insn);
     }
@@ -211,13 +211,13 @@ impl DataFlowGraph {
     ///
     /// # Panics
     /// If `insn` is not a phi insn or there is no phi argument from the block, then the function panics.
-    pub fn remove_phi_arg(&mut self, insn: Insn, from: Block) -> Value {
+    pub fn remove_phi_arg(&mut self, insn: Insn, from: Block) -> ValueId {
         let removed = self.insns[insn].remove_phi_arg(from);
         self.remove_user(removed, insn);
         removed
     }
 
-    pub fn insn_args(&self, insn: Insn) -> &[Value] {
+    pub fn insn_args(&self, insn: Insn) -> &[ValueId] {
         self.insn_data(insn).args()
     }
 
@@ -225,11 +225,11 @@ impl DataFlowGraph {
         self.insn_args(insn).len()
     }
 
-    pub fn insn_arg(&self, insn: Insn, idx: usize) -> Value {
+    pub fn insn_arg(&self, insn: Insn, idx: usize) -> ValueId {
         self.insn_args(insn)[idx]
     }
 
-    pub fn replace_insn_arg(&mut self, insn: Insn, new_arg: Value, idx: usize) -> Value {
+    pub fn replace_insn_arg(&mut self, insn: Insn, new_arg: ValueId, idx: usize) -> ValueId {
         let data = &mut self.insns[insn];
         let args = data.args_mut();
         self.users[new_arg].insert(insn);
@@ -241,7 +241,7 @@ impl DataFlowGraph {
         old_arg
     }
 
-    pub fn insn_result(&self, insn: Insn) -> Option<Value> {
+    pub fn insn_result(&self, insn: Insn) -> Option<ValueId> {
         self.insn_results[insn].expand()
     }
 
@@ -320,12 +320,12 @@ impl DataFlowGraph {
     }
 
     /// Returns `true` if `value` is an immediate.
-    pub fn is_imm(&self, value: Value) -> bool {
+    pub fn is_imm(&self, value: ValueId) -> bool {
         self.value_imm(value).is_some()
     }
 
     /// Returns `true` if `value` is a function argument.
-    pub fn is_arg(&self, value: Value) -> bool {
+    pub fn is_arg(&self, value: ValueId) -> bool {
         matches!(self.value_data(value), ValueData::Arg { .. })
     }
 }

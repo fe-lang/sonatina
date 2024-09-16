@@ -1,4 +1,4 @@
-use super::{module::FuncRef, DataFlowGraph, Layout, Type, Value};
+use super::{module::FuncRef, DataFlowGraph, Layout, Type, ValueId};
 use crate::{module::ModuleCtx, types::DisplayType, Linkage};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -8,7 +8,7 @@ use std::fmt::{self, Write};
 pub struct Function {
     /// Signature of the function.
     pub sig: Signature,
-    pub arg_values: smallvec::SmallVec<[Value; 8]>,
+    pub arg_values: smallvec::SmallVec<[ValueId; 8]>,
     pub dfg: DataFlowGraph,
     pub layout: Layout,
 

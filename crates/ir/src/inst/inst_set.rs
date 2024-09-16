@@ -146,7 +146,7 @@ pub trait InstSetExt: InstSetBase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Value;
+    use crate::ValueId;
     use arith::*;
     use control_flow::*;
     use logic::*;
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn inst_creation() {
         let inst_set = TestInstSet::new();
-        let v = Value::from_u32(1);
+        let v = ValueId::from_u32(1);
         let _add = Add::new(&inst_set, v, v);
         let _sub = Sub::new(&inst_set, v, v);
     }
@@ -186,7 +186,7 @@ mod tests {
         let inst_set = TestInstSet::new();
         let mut insts: Vec<Box<dyn Inst>> = Vec::new();
 
-        let value = Value::from_u32(1);
+        let value = ValueId::from_u32(1);
         let add = Add::new(&inst_set, value, value);
         insts.push(Box::new(add));
         let sub = Sub::new(&inst_set, value, value);

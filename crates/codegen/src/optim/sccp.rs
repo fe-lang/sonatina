@@ -11,17 +11,17 @@ use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     insn::{BinaryOp, CastOp, InsnData, UnaryOp},
-    Block, ControlFlowGraph, Function, Immediate, Insn, Type, Value,
+    Block, ControlFlowGraph, Function, Immediate, Insn, Type, ValueId,
 };
 
 #[derive(Debug)]
 pub struct SccpSolver {
-    lattice: SecondaryMap<Value, LatticeCell>,
+    lattice: SecondaryMap<ValueId, LatticeCell>,
     reachable_edges: BTreeSet<FlowEdge>,
     reachable_blocks: BTreeSet<Block>,
 
     flow_work: Vec<FlowEdge>,
-    ssa_work: Vec<Value>,
+    ssa_work: Vec<ValueId>,
 }
 
 impl SccpSolver {
@@ -416,7 +416,7 @@ impl SccpSolver {
         false
     }
 
-    fn set_lattice_cell(&mut self, value: Value, cell: LatticeCell) {
+    fn set_lattice_cell(&mut self, value: ValueId, cell: LatticeCell) {
         let old_cell = &self.lattice[value];
         if old_cell != &cell {
             self.lattice[value] = cell;

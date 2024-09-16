@@ -17,7 +17,7 @@ use crate::domtree::{DomTree, DominatorTreeTraversable};
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     insn::{BinaryOp, CastOp, InsnData, UnaryOp},
-    Block, ControlFlowGraph, DataFlowGraph, Function, Immediate, Insn, Type, Value,
+    Block, ControlFlowGraph, DataFlowGraph, Function, Immediate, Insn, Type, ValueId,
 };
 
 use super::{constant_folding, simplify_impl};
@@ -37,7 +37,7 @@ pub struct GvnSolver {
     classes: PrimaryMap<Class, ClassData>,
 
     /// Maps [`Value`] to [`GvnValueData`].
-    values: SecondaryMap<Value, GvnValueData>,
+    values: SecondaryMap<ValueId, GvnValueData>,
 
     /// Maps [`GvnInsn`] to [`Class`].
     insn_table: FxHashMap<GvnInsn, Class>,
@@ -51,7 +51,7 @@ pub struct GvnSolver {
     value_phi_table: FxHashMap<ValuePhi, Class>,
 
     /// Hold always available values, i.e. immediates or function arguments.
-    always_avail: Vec<Value>,
+    always_avail: Vec<ValueId>,
 }
 
 impl GvnSolver {
@@ -79,7 +79,7 @@ impl GvnSolver {
         // Make dummy INITIAL_CLASS to which all values belong before congruence finding.
         self.classes.push(ClassData {
             values: BTreeSet::new(),
-            gvn_insn: GvnInsn::Value(Value(u32::MAX)),
+            gvn_insn: GvnInsn::Value(ValueId(u32::MAX)),
             value_phi: None,
         });
         debug_assert!(self.classes.len() == 1);
@@ -317,7 +317,7 @@ impl GvnSolver {
         func: &mut Function,
         domtree: &DomTree,
         insn: Insn,
-        insn_result: Value,
+        insn_result: ValueId,
     ) -> bool {
         // Perform symbolic evaluation for the insn.
         let block = func.layout.insn_block(insn);
@@ -380,7 +380,7 @@ impl GvnSolver {
         &mut self,
         func: &mut Function,
         insn_data: &GvnInsn,
-        insn_result: Value,
+        insn_result: ValueId,
     ) -> bool {
         let value_phi = ValuePhiFinder::new(self, insn_result).compute_value_phi(func, insn_data);
         let class = self.value_class(insn_result);
@@ -419,7 +419,7 @@ impl GvnSolver {
     fn infer_edge_reachability(
         &self,
         func: &Function,
-        cond: Value,
+        cond: ValueId,
         edge: Edge,
         domtree: &DomTree,
     ) -> bool {
@@ -459,9 +459,9 @@ impl GvnSolver {
         &self,
         func: &Function,
         domtree: &DomTree,
-        value: Value,
+        value: ValueId,
         target_block: Block,
-    ) -> Value {
+    ) -> ValueId {
         let mut rep_value = self.leader(value);
 
         let mut current_block = Some(target_block);
@@ -501,9 +501,9 @@ impl GvnSolver {
         &self,
         func: &Function,
         domtree: &DomTree,
-        value: Value,
+        value: ValueId,
         edge: Edge,
-    ) -> Value {
+    ) -> ValueId {
         let mut rep_value = self.leader(value);
 
         if let Some(inferred_value) = self.infer_value_impl(edge, rep_value) {
@@ -519,7 +519,7 @@ impl GvnSolver {
     /// 1. The predicate of the `edge` is represented as `value1 == value2`.
     /// 2. `value` is congruent to value1
     /// 3. `value2`.rank < `value`.rank.
-    fn infer_value_impl(&self, edge: Edge, value: Value) -> Option<Value> {
+    fn infer_value_impl(&self, edge: Edge, value: ValueId) -> Option<ValueId> {
         let edge_data = self.edge_data(edge);
         let edge_cond = edge_data.cond.expand()?;
         // If value is congruent to edge cond value, then return resolved cond of the edge.
@@ -580,7 +580,7 @@ impl GvnSolver {
 
     /// Returns `true` if two values are congruent.
     /// NOTE: Returns `false` if both values belong to `INITIAL_CLASS`.
-    fn is_congruent_value(&self, lhs: Value, rhs: Value) -> bool {
+    fn is_congruent_value(&self, lhs: ValueId, rhs: ValueId) -> bool {
         let lhs_class = self.values[lhs].class;
         let rhs_class = self.values[rhs].class;
         (lhs_class == rhs_class) && (lhs_class != INITIAL_CLASS)
@@ -679,7 +679,7 @@ impl GvnSolver {
         &mut self,
         func: &mut Function,
         insn_data: &InsnData,
-    ) -> Option<Value> {
+    ) -> Option<ValueId> {
         constant_folding::fold_constant(&func.dfg, insn_data)
             .map(|imm| self.make_imm(&mut func.dfg, imm))
     }
@@ -722,9 +722,9 @@ impl GvnSolver {
         &mut self,
         from: Block,
         to: Block,
-        cond: Option<Value>,
+        cond: Option<ValueId>,
         predicate: Option<InsnData>,
-        resolved_cond: Option<Value>,
+        resolved_cond: Option<ValueId>,
     ) {
         let edge_data = EdgeData {
             from,
@@ -742,7 +742,7 @@ impl GvnSolver {
     }
 
     /// Assign `class` to `value`.
-    fn assign_class(&mut self, value: Value, class: Class) {
+    fn assign_class(&mut self, value: ValueId, class: Class) {
         let old_class = self.value_class(value);
         if old_class == class {
             return;
@@ -772,7 +772,7 @@ impl GvnSolver {
 
     /// Make value from immediate, also make a corresponding congruence class and update
     /// `insn_table` for the immediate value if they don't exist yet.
-    fn make_imm(&mut self, dfg: &mut DataFlowGraph, imm: impl Into<Immediate>) -> Value {
+    fn make_imm(&mut self, dfg: &mut DataFlowGraph, imm: impl Into<Immediate>) -> ValueId {
         // `make_imm_value` return always same value for the same immediate.
         let value = dfg.make_imm_value(imm);
 
@@ -783,7 +783,7 @@ impl GvnSolver {
     }
 
     /// Make and assign class to immediate value.
-    fn assign_class_to_imm_value(&mut self, value: Value) {
+    fn assign_class_to_imm_value(&mut self, value: ValueId) {
         let class = self.values[value].class;
         let gvn_insn = GvnInsn::Value(value);
 
@@ -813,7 +813,7 @@ impl GvnSolver {
     }
 
     /// Returns the leader value of the congruent class to which `value` belongs.
-    fn leader(&self, value: Value) -> Value {
+    fn leader(&self, value: ValueId) -> ValueId {
         let class = self.values[value].class;
 
         self.class_data(class).values.iter().next().unwrap().1
@@ -821,7 +821,7 @@ impl GvnSolver {
 
     /// Returns the leader value of the congruent class.
     /// This method is mainly for [`ValuePhiFinder`], use [`Self::leader`] whenever possible.
-    fn class_leader(&self, class: Class) -> Value {
+    fn class_leader(&self, class: Class) -> ValueId {
         self.class_data(class).values.iter().next().unwrap().1
     }
 
@@ -836,12 +836,12 @@ impl GvnSolver {
     }
 
     /// Returns the class of the value.
-    fn value_class(&self, value: Value) -> Class {
+    fn value_class(&self, value: ValueId) -> Class {
         self.values[value].class
     }
 
     /// Returns the rank of the value.
-    fn value_rank(&self, value: Value) -> u32 {
+    fn value_rank(&self, value: ValueId) -> u32 {
         self.values[value].rank
     }
 
@@ -898,7 +898,7 @@ entity_impl!(Class);
 struct ClassData {
     /// Values the class includes.
     /// NOTE: We need sort the value by rank.
-    values: BTreeSet<(u32, Value)>,
+    values: BTreeSet<(u32, ValueId)>,
 
     /// Representative insn of the class.
     gvn_insn: GvnInsn,
@@ -932,13 +932,13 @@ impl Default for GvnValueData {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum GvnInsn {
     /// A value which occurs when insn is simplified/folded to value.
-    Value(Value),
+    Value(ValueId),
     /// An insn data.
     Insn(InsnData),
 }
 
-impl From<Value> for GvnInsn {
-    fn from(value: Value) -> Self {
+impl From<ValueId> for GvnInsn {
+    fn from(value: ValueId) -> Self {
         Self::Value(value)
     }
 }
@@ -962,13 +962,13 @@ struct EdgeData {
     to: Block,
 
     /// Hold a condition value if branch is conditional.
-    cond: PackedOption<Value>,
+    cond: PackedOption<ValueId>,
 
     /// Hold a predicate insn if branch is conditional.
     predicate: Option<InsnData>,
 
     /// An immediate to which cond is resolved if the edge is selected.
-    resolved_cond: PackedOption<Value>,
+    resolved_cond: PackedOption<ValueId>,
 
     /// `true` if the edge is reachable.
     reachable: bool,
@@ -995,11 +995,11 @@ struct GvnBlockData {
 struct ValuePhiFinder<'a> {
     solver: &'a mut GvnSolver,
     /// Hold visited values to prevent infinite loop.
-    visited: FxHashSet<Value>,
+    visited: FxHashSet<ValueId>,
 }
 
 impl<'a> ValuePhiFinder<'a> {
-    fn new(solver: &'a mut GvnSolver, insn_result: Value) -> Self {
+    fn new(solver: &'a mut GvnSolver, insn_result: ValueId) -> Self {
         let mut visited = FxHashSet::default();
         visited.insert(insn_result);
         Self { solver, visited }
@@ -1241,7 +1241,7 @@ impl<'a> ValuePhiFinder<'a> {
     /// are omitted from the result.
     ///
     /// The result is sorted in the block order.
-    fn get_phi_of(&mut self, func: &Function, value: Value) -> Option<ValuePhi> {
+    fn get_phi_of(&mut self, func: &Function, value: ValueId) -> Option<ValuePhi> {
         if !self.visited.insert(value) {
             return None;
         }
@@ -1282,7 +1282,7 @@ impl<'a> ValuePhiFinder<'a> {
 enum ValuePhi {
     /// `ValuePhi` may become value itself if the all arguments of the `ValuePhiInsn` is the same
     /// value.
-    Value(Value),
+    Value(ValueId),
     /// Phi instruction which is resolved to a "normal" phi insn in the later pass of `GvnSolver`.
     PhiInsn(ValuePhiInsn),
 }
@@ -1330,12 +1330,12 @@ struct RedundantCodeRemover<'a> {
     /// Record pairs of available class and representative value in bottom of blocks.
     /// This is necessary to decide whether the args of inserted phi functions are dominated by its
     /// definitions.
-    avail_set: SecondaryMap<Block, FxHashMap<Class, Value>>,
+    avail_set: SecondaryMap<Block, FxHashMap<Class, ValueId>>,
 
     /// Record resolved value phis.
-    resolved_value_phis: FxHashMap<ValuePhi, Value>,
+    resolved_value_phis: FxHashMap<ValuePhi, ValueId>,
 
-    renames: FxHashMap<Value, Value>,
+    renames: FxHashMap<ValueId, ValueId>,
 }
 
 impl<'a> RedundantCodeRemover<'a> {
@@ -1348,12 +1348,12 @@ impl<'a> RedundantCodeRemover<'a> {
         }
     }
 
-    fn change_to_alias(&mut self, func: &mut Function, value: Value, target: Value) {
+    fn change_to_alias(&mut self, func: &mut Function, value: ValueId, target: ValueId) {
         func.dfg.change_to_alias(value, target);
         self.renames.insert(value, target);
     }
 
-    fn resolve_alias(&self, mut value: Value) -> Value {
+    fn resolve_alias(&self, mut value: ValueId) -> ValueId {
         for _ in 0..1 + self.renames.len() {
             match self.renames.get(&value) {
                 Some(v) => value = *v,
@@ -1534,7 +1534,7 @@ impl<'a> RedundantCodeRemover<'a> {
         value_phi: &ValuePhi,
         ty: Type,
         block: Block,
-    ) -> Value {
+    ) -> ValueId {
         debug_assert!(self.is_value_phi_resolvable(value_phi, block));
 
         if let Some(value) = self.resolved_value_phis.get(value_phi) {

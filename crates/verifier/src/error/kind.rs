@@ -5,7 +5,7 @@ use sonatina_ir::{
     module::FuncRef,
     types::{CompoundType, DisplayCompoundType, DisplayType},
     value::DisplayArgValue,
-    Block, Function, Insn, Type, Value,
+    Block, Function, Insn, Type, ValueId,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -19,13 +19,13 @@ pub enum ErrorKind {
     InstructionMapMismatched(Insn),
     BranchBrokenLink(Insn),
     // Instruction errors
-    ValueIsNullReference(Value),
+    ValueIsNullReference(ValueId),
     BlockIsNullReference(Block),
     FunctionIsNullReference(FuncRef),
     CompoundTypeIsNullReference(CompoundType),
     BranchToEntryBlock(Block),
     // SSA form errors
-    ValueLeak(Value),
+    ValueLeak(ValueId),
     // Type errors
     InsnArgWrongType(Type),
     InsnResultWrongType(Type),

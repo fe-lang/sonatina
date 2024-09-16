@@ -1,14 +1,14 @@
 use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 
-use sonatina_ir::{module::ModuleCtx, DataFlowGraph, Type, Value, I256};
+use sonatina_ir::{module::ModuleCtx, DataFlowGraph, Type, ValueId, I256};
 
 use crate::{types, EvalValue, ProgramCounter};
 
 #[derive(Default)]
 pub struct Frame {
     pub ret_addr: PackedOption<ProgramCounter>,
-    local_values: SecondaryMap<Value, EvalValue>, // 256-bit register
-    alloca_region: Vec<u8>,                       // big endian
+    local_values: SecondaryMap<ValueId, EvalValue>, // 256-bit register
+    alloca_region: Vec<u8>,                         // big endian
 }
 
 impl Frame {
@@ -20,13 +20,13 @@ impl Frame {
         self.ret_addr = ret_addr.into();
     }
 
-    pub fn load_args(&mut self, args: &[Value], arg_literals: impl Iterator<Item = I256>) {
+    pub fn load_args(&mut self, args: &[ValueId], arg_literals: impl Iterator<Item = I256>) {
         for (v, literal_value) in args.iter().zip(arg_literals) {
             self.local_values[*v] = EvalValue::from_i256(literal_value)
         }
     }
 
-    pub fn load(&mut self, v: Value, dfg: &DataFlowGraph) -> I256 {
+    pub fn load(&mut self, v: ValueId, dfg: &DataFlowGraph) -> I256 {
         if !self.is_assigned(v) {
             if let Some(gv) = dfg.value_gv(v) {
                 dfg.ctx.with_gv_store(|s| {
@@ -41,12 +41,12 @@ impl Frame {
         self.local_values[v].i256()
     }
 
-    pub fn map(&mut self, literal: I256, v: Value) {
+    pub fn map(&mut self, literal: I256, v: ValueId) {
         debug_assert!(!self.is_assigned(v));
         self.local_values[v] = EvalValue::from_i256(literal)
     }
 
-    pub fn alloca(&mut self, ctx: &ModuleCtx, ty: Type, v: Value) {
+    pub fn alloca(&mut self, ctx: &ModuleCtx, ty: Type, v: ValueId) {
         debug_assert!(!self.is_assigned(v));
 
         let addr = self.alloca_region.len();
@@ -56,7 +56,7 @@ impl Frame {
         self.local_values[v] = EvalValue::from_usize(addr);
     }
 
-    pub fn ldr(&mut self, ctx: &ModuleCtx, addr: I256, v: Value, ty: Type) {
+    pub fn ldr(&mut self, ctx: &ModuleCtx, addr: I256, v: ValueId, ty: Type) {
         let addr = addr.to_u256().as_usize();
         debug_assert!(addr < self.alloca_region.len());
 
@@ -75,7 +75,7 @@ impl Frame {
         reg_value.serialize(ctx, ty, &mut self.alloca_region[addr..size]);
     }
 
-    pub fn is_assigned(&self, v: Value) -> bool {
+    pub fn is_assigned(&self, v: ValueId) -> bool {
         for (local_v, local) in self.local_values.iter() {
             if v == local_v {
                 return matches!(local, EvalValue::Literal(_));
