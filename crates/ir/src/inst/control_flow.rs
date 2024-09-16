@@ -1,7 +1,7 @@
 use macros::Inst;
 use smallvec::SmallVec;
 
-use crate::{module::FuncRef, Block, Type, Value};
+use crate::{module::FuncRef, Block, Type, ValueId};
 
 use super::InstDowncast;
 
@@ -15,7 +15,7 @@ pub struct Jump {
 #[inst(terminator)]
 pub struct Br {
     #[inst(value)]
-    cond: Value,
+    cond: ValueId,
     z_dest: Block,
     nz_dest: Block,
 }
@@ -24,9 +24,9 @@ pub struct Br {
 #[inst(terminator)]
 pub struct BrTable {
     #[inst(value)]
-    scrutinee: Value,
+    scrutinee: ValueId,
     #[inst(value)]
-    table: Vec<(Value, Block)>,
+    table: Vec<(ValueId, Block)>,
 
     default: Option<Block>,
 }
@@ -34,7 +34,7 @@ pub struct BrTable {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 pub struct Phi {
     #[inst(value)]
-    values: Vec<(Value, Block)>,
+    values: Vec<(ValueId, Block)>,
     ty: Type,
 }
 
@@ -43,7 +43,7 @@ pub struct Phi {
 #[inst(terminator)]
 pub struct Call {
     #[inst(value)]
-    args: SmallVec<[Value; 8]>,
+    args: SmallVec<[ValueId; 8]>,
     callee: FuncRef,
     ret_ty: Type,
 }
@@ -53,7 +53,7 @@ pub struct Call {
 #[inst(terminator)]
 pub struct Return {
     #[inst(value)]
-    arg: Option<Value>,
+    arg: Option<ValueId>,
 }
 
 #[derive(Clone, Copy)]

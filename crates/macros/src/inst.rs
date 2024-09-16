@@ -221,11 +221,11 @@ impl InstStruct {
 
         quote! {
             impl crate::Inst for #struct_name {
-                fn visit_values(&self, f: &mut dyn FnMut(crate::Value)) {
+                fn visit_values(&self, f: &mut dyn FnMut(crate::ValueId)) {
                     #(crate::ValueVisitable::visit_with(&self.#visit_fields, (f));)*
                 }
 
-                fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut crate::Value)) {
+                fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut crate::ValueId)) {
                     #(crate::ValueVisitable::visit_mut_with(&mut self.#visit_fields, (f));)*
                 }
 

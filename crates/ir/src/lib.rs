@@ -33,7 +33,7 @@ pub use layout::Layout;
 pub use linkage::Linkage;
 pub use module::Module;
 pub use types::Type;
-pub use value::{Immediate, Value, ValueData};
+pub use value::{Immediate, ValueData, ValueId};
 
 pub(crate) use inst::ValueVisitable;
 

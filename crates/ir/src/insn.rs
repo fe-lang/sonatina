@@ -13,7 +13,7 @@ use crate::{
 
 use super::{
     module::{DisplayCalleeFuncRef, FuncRef},
-    Block, DataFlowGraph, Type, Value, ValueData,
+    Block, DataFlowGraph, Type, ValueData, ValueId,
 };
 
 /// An opaque reference to [`InsnData`]
@@ -48,34 +48,34 @@ impl<'a> fmt::Display for DisplayInsn<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InsnData {
     /// Unary instructions.
-    Unary { code: UnaryOp, args: [Value; 1] },
+    Unary { code: UnaryOp, args: [ValueId; 1] },
 
     /// Binary instructions.
-    Binary { code: BinaryOp, args: [Value; 2] },
+    Binary { code: BinaryOp, args: [ValueId; 2] },
 
     /// Cast operations.
     Cast {
         code: CastOp,
-        args: [Value; 1],
+        args: [ValueId; 1],
         ty: Type,
     },
 
     /// Load a value from memory or storage.
     Load {
-        args: [Value; 1],
+        args: [ValueId; 1],
         loc: DataLocationKind,
     },
 
     /// Store a value to memory or storage.
     Store {
-        args: [Value; 2],
+        args: [ValueId; 2],
         loc: DataLocationKind,
     },
 
     /// Call a function in the same contract.
     Call {
         func: FuncRef,
-        args: SmallVec<[Value; 8]>,
+        args: SmallVec<[ValueId; 8]>,
         ret_ty: Type,
     },
 
@@ -83,11 +83,14 @@ pub enum InsnData {
     Jump { dests: [Block; 1] },
 
     /// Conditional jump instruction.
-    Branch { args: [Value; 1], dests: [Block; 2] },
+    Branch {
+        args: [ValueId; 1],
+        dests: [Block; 2],
+    },
 
     /// Indirect jump instruction.
     BrTable {
-        args: SmallVec<[Value; 8]>,
+        args: SmallVec<[ValueId; 8]>,
         default: Option<Block>,
         table: SmallVec<[Block; 8]>,
     },
@@ -96,14 +99,14 @@ pub enum InsnData {
     Alloca { ty: Type },
 
     /// Return.
-    Return { args: Option<Value> },
+    Return { args: Option<ValueId> },
 
     /// Get element pointer.
-    Gep { args: SmallVec<[Value; 8]> },
+    Gep { args: SmallVec<[ValueId; 8]> },
 
     /// Phi function.
     Phi {
-        values: SmallVec<[Value; 8]>,
+        values: SmallVec<[ValueId; 8]>,
         blocks: SmallVec<[Block; 8]>,
         ty: Type,
     },
@@ -146,18 +149,18 @@ impl fmt::Display for DataLocationKind {
 }
 
 impl InsnData {
-    pub fn unary(code: UnaryOp, lhs: Value) -> Self {
+    pub fn unary(code: UnaryOp, lhs: ValueId) -> Self {
         Self::Unary { code, args: [lhs] }
     }
 
-    pub fn binary(code: BinaryOp, lhs: Value, rhs: Value) -> Self {
+    pub fn binary(code: BinaryOp, lhs: ValueId, rhs: ValueId) -> Self {
         Self::Binary {
             code,
             args: [lhs, rhs],
         }
     }
 
-    pub fn cast(code: CastOp, arg: Value, ty: Type) -> Self {
+    pub fn cast(code: CastOp, arg: ValueId, ty: Type) -> Self {
         Self::Cast {
             code,
             args: [arg],
@@ -239,7 +242,7 @@ impl InsnData {
         }
     }
 
-    pub fn args(&self) -> &[Value] {
+    pub fn args(&self) -> &[ValueId] {
         match self {
             Self::Binary { args, .. } | Self::Store { args, .. } => args,
 
@@ -259,7 +262,7 @@ impl InsnData {
         }
     }
 
-    pub fn args_mut(&mut self) -> &mut [Value] {
+    pub fn args_mut(&mut self) -> &mut [ValueId] {
         match self {
             Self::Binary { args, .. } | Self::Store { args, .. } => args,
 
@@ -279,7 +282,7 @@ impl InsnData {
         }
     }
 
-    pub fn append_phi_arg(&mut self, value: Value, block: Block) {
+    pub fn append_phi_arg(&mut self, value: ValueId, block: Block) {
         match self {
             Self::Phi { values, blocks, .. } => {
                 values.push(value);
@@ -293,7 +296,7 @@ impl InsnData {
     ///
     /// # Panics
     /// If `insn` is not a phi insn or there is no phi argument from the block, then the function panics.
-    pub fn remove_phi_arg(&mut self, from: Block) -> Value {
+    pub fn remove_phi_arg(&mut self, from: Block) -> ValueId {
         let (values, blocks) = match self {
             InsnData::Phi { values, blocks, .. } => (values, blocks),
             _ => panic!("insn is not a phi function"),
@@ -571,7 +574,7 @@ impl BinaryOp {
         }
     }
 
-    fn result_type(self, dfg: &DataFlowGraph, args: &[Value; 2]) -> Type {
+    fn result_type(self, dfg: &DataFlowGraph, args: &[ValueId; 2]) -> Type {
         if self.is_cmp() {
             Type::I1
         } else {
@@ -680,13 +683,13 @@ pub enum BranchInfo<'a> {
 
     /// Conditional jump.
     Br {
-        cond: Value,
+        cond: ValueId,
         dests: &'a [Block],
     },
 
     /// Indirect jump.
     BrTable {
-        args: &'a [Value],
+        args: &'a [ValueId],
         default: Option<Block>,
         table: &'a [Block],
     },
@@ -757,7 +760,7 @@ impl<'a> Iterator for BranchDestIter<'a> {
     }
 }
 
-fn get_gep_result_type(dfg: &DataFlowGraph, base: Value, indices: &[Value]) -> Type {
+fn get_gep_result_type(dfg: &DataFlowGraph, base: ValueId, indices: &[ValueId]) -> Type {
     let ctx = &dfg.ctx;
     let base_ty = ctx.with_ty_store(|s| {
         let ty = dfg.value_ty(base);

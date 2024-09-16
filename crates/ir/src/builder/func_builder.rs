@@ -4,7 +4,7 @@ use crate::{
     func_cursor::{CursorLocation, FuncCursor},
     insn::{BinaryOp, CastOp, DataLocationKind, InsnData, UnaryOp},
     module::FuncRef,
-    Block, Function, GlobalVariable, Immediate, Type, Value,
+    Block, Function, GlobalVariable, Immediate, Type, ValueId,
 };
 
 use super::{
@@ -22,7 +22,7 @@ pub struct FunctionBuilder<C> {
 
 macro_rules! impl_binary_insn {
     ($name:ident, $code:path) => {
-        pub fn $name(&mut self, lhs: Value, rhs: Value) -> Value {
+        pub fn $name(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
             self.binary_op($code, lhs, rhs)
         }
     };
@@ -30,7 +30,7 @@ macro_rules! impl_binary_insn {
 
 macro_rules! impl_cast_insn {
     ($name:ident, $code:path) => {
-        pub fn $name(&mut self, lhs: Value, ty: Type) -> Value {
+        pub fn $name(&mut self, lhs: ValueId, ty: Type) -> ValueId {
             self.cast_op($code, lhs, ty)
         }
     };
@@ -69,7 +69,7 @@ where
         module_builder
     }
 
-    pub fn append_parameter(&mut self, ty: Type) -> Value {
+    pub fn append_parameter(&mut self, ty: Type) -> ValueId {
         let idx = self.func.arg_values.len();
 
         let value_data = self.func.dfg.make_arg_value(ty, idx);
@@ -88,7 +88,7 @@ where
         self.cursor.set_location(CursorLocation::BlockBottom(block));
     }
 
-    pub fn make_imm_value<Imm>(&mut self, imm: Imm) -> Value
+    pub fn make_imm_value<Imm>(&mut self, imm: Imm) -> ValueId
     where
         Imm: Into<Immediate>,
     {
@@ -96,7 +96,7 @@ where
     }
 
     /// Return pointer value to the global variable.
-    pub fn make_global_value(&mut self, gv: GlobalVariable) -> Value {
+    pub fn make_global_value(&mut self, gv: GlobalVariable) -> ValueId {
         self.func.dfg.make_global_value(gv)
     }
 
@@ -113,7 +113,7 @@ where
             .declare_struct_type(name, fields, packed)
     }
 
-    pub fn unary_op(&mut self, op: UnaryOp, lhs: Value) -> Value {
+    pub fn unary_op(&mut self, op: UnaryOp, lhs: ValueId) -> ValueId {
         let insn_data = InsnData::Unary {
             code: op,
             args: [lhs],
@@ -121,15 +121,15 @@ where
         self.insert_insn(insn_data).unwrap()
     }
 
-    pub fn not(&mut self, lhs: Value) -> Value {
+    pub fn not(&mut self, lhs: ValueId) -> ValueId {
         self.unary_op(UnaryOp::Not, lhs)
     }
 
-    pub fn neg(&mut self, lhs: Value) -> Value {
+    pub fn neg(&mut self, lhs: ValueId) -> ValueId {
         self.unary_op(UnaryOp::Neg, lhs)
     }
 
-    pub fn binary_op(&mut self, op: BinaryOp, lhs: Value, rhs: Value) -> Value {
+    pub fn binary_op(&mut self, op: BinaryOp, lhs: ValueId, rhs: ValueId) -> ValueId {
         let insn_data = InsnData::Binary {
             code: op,
             args: [lhs, rhs],
@@ -155,7 +155,7 @@ where
     impl_binary_insn!(and, BinaryOp::And);
     impl_binary_insn!(or, BinaryOp::Or);
 
-    pub fn cast_op(&mut self, op: CastOp, value: Value, ty: Type) -> Value {
+    pub fn cast_op(&mut self, op: CastOp, value: ValueId, ty: Type) -> ValueId {
         let insn_data = InsnData::Cast {
             code: op,
             args: [value],
@@ -169,12 +169,12 @@ where
     impl_cast_insn!(trunc, CastOp::Trunc);
     impl_cast_insn!(bitcast, CastOp::BitCast);
 
-    pub fn load(&mut self, loc: DataLocationKind, addr: Value) -> Value {
+    pub fn load(&mut self, loc: DataLocationKind, addr: ValueId) -> ValueId {
         let insn_data = InsnData::Load { args: [addr], loc };
         self.insert_insn(insn_data).unwrap()
     }
 
-    pub fn store(&mut self, loc: DataLocationKind, addr: Value, data: Value) {
+    pub fn store(&mut self, loc: DataLocationKind, addr: ValueId, data: ValueId) {
         let insn_data = InsnData::Store {
             args: [addr, data],
             loc,
@@ -183,27 +183,27 @@ where
     }
 
     /// Build memory load instruction.
-    pub fn memory_load(&mut self, addr: Value) -> Value {
+    pub fn memory_load(&mut self, addr: ValueId) -> ValueId {
         self.load(DataLocationKind::Memory, addr)
     }
 
     /// Build memory store instruction.
-    pub fn memory_store(&mut self, addr: Value, data: Value) {
+    pub fn memory_store(&mut self, addr: ValueId, data: ValueId) {
         self.store(DataLocationKind::Memory, addr, data)
     }
 
     /// Build storage load instruction.
-    pub fn storage_load(&mut self, addr: Value) -> Value {
+    pub fn storage_load(&mut self, addr: ValueId) -> ValueId {
         self.load(DataLocationKind::Storage, addr)
     }
 
     /// Build storage store instruction.
-    pub fn storage_store(&mut self, addr: Value, data: Value) {
+    pub fn storage_store(&mut self, addr: ValueId, data: ValueId) {
         self.store(DataLocationKind::Storage, addr, data)
     }
 
     /// Build alloca instruction.
-    pub fn alloca(&mut self, ty: Type) -> Value {
+    pub fn alloca(&mut self, ty: Type) -> ValueId {
         let insn_data = InsnData::Alloca { ty };
         self.insert_insn(insn_data).unwrap()
     }
@@ -217,7 +217,7 @@ where
         self.insert_insn(insn_data);
     }
 
-    pub fn br_table(&mut self, cond: Value, default: Option<Block>, table: &[(Value, Block)]) {
+    pub fn br_table(&mut self, cond: ValueId, default: Option<Block>, table: &[(ValueId, Block)]) {
         if cfg!(debug_assertions) {
             if let Some(default) = default {
                 debug_assert!(!self.ssa_builder.is_sealed(default))
@@ -252,7 +252,7 @@ where
         self.insert_insn(insn_data);
     }
 
-    pub fn br(&mut self, cond: Value, then: Block, else_: Block) {
+    pub fn br(&mut self, cond: ValueId, then: Block, else_: Block) {
         debug_assert!(!self.ssa_builder.is_sealed(then));
         debug_assert!(!self.ssa_builder.is_sealed(else_));
 
@@ -267,7 +267,7 @@ where
         self.insert_insn(insn_data);
     }
 
-    pub fn call(&mut self, func: FuncRef, args: &[Value]) -> Option<Value> {
+    pub fn call(&mut self, func: FuncRef, args: &[ValueId]) -> Option<ValueId> {
         let sig = self.module_builder.get_sig(func).clone();
         let insn_data = InsnData::Call {
             func,
@@ -278,17 +278,17 @@ where
         self.insert_insn(insn_data)
     }
 
-    pub fn ret(&mut self, args: Option<Value>) {
+    pub fn ret(&mut self, args: Option<ValueId>) {
         let insn_data = InsnData::Return { args };
         self.insert_insn(insn_data);
     }
 
-    pub fn gep(&mut self, args: &[Value]) -> Option<Value> {
+    pub fn gep(&mut self, args: &[ValueId]) -> Option<ValueId> {
         let insn_data = InsnData::Gep { args: args.into() };
         self.insert_insn(insn_data)
     }
 
-    pub fn phi(&mut self, ty: Type, args: &[(Value, Block)]) -> Value {
+    pub fn phi(&mut self, ty: Type, args: &[(ValueId, Block)]) -> ValueId {
         let insn_data = InsnData::Phi {
             values: args.iter().map(|(val, _)| *val).collect(),
             blocks: args.iter().map(|(_, block)| *block).collect(),
@@ -297,7 +297,7 @@ where
         self.insert_insn(insn_data).unwrap()
     }
 
-    pub fn append_phi_arg(&mut self, phi_value: Value, value: Value, block: Block) {
+    pub fn append_phi_arg(&mut self, phi_value: ValueId, value: ValueId, block: Block) {
         let insn = self
             .func
             .dfg
@@ -314,12 +314,12 @@ where
         self.ssa_builder.declare_var(ty)
     }
 
-    pub fn use_var(&mut self, var: Variable) -> Value {
+    pub fn use_var(&mut self, var: Variable) -> ValueId {
         let block = self.cursor.block(&self.func).unwrap();
         self.ssa_builder.use_var(&mut self.func, var, block)
     }
 
-    pub fn def_var(&mut self, var: Variable, value: Value) {
+    pub fn def_var(&mut self, var: Variable, value: ValueId) {
         debug_assert_eq!(self.func.dfg.value_ty(value), self.ssa_builder.var_ty(var));
 
         let block = self.cursor.block(&self.func).unwrap();
@@ -339,11 +339,11 @@ where
         self.ssa_builder.is_sealed(block)
     }
 
-    pub fn type_of(&self, value: Value) -> Type {
+    pub fn type_of(&self, value: ValueId) -> Type {
         self.func.dfg.value_ty(value)
     }
 
-    pub fn args(&self) -> &[Value] {
+    pub fn args(&self) -> &[ValueId] {
         &self.func.arg_values
     }
 
@@ -359,7 +359,7 @@ where
         self.module_builder.ctx.isa.type_provider().gas_type()
     }
 
-    fn insert_insn(&mut self, insn_data: InsnData) -> Option<Value> {
+    fn insert_insn(&mut self, insn_data: InsnData) -> Option<ValueId> {
         let insn = self.cursor.insert_insn_data(&mut self.func, insn_data);
         let result = self.cursor.make_result(&mut self.func, insn);
         if let Some(result) = result {

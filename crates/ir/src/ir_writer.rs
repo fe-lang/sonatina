@@ -6,10 +6,10 @@ use crate::{
     DataLocationKind, GlobalVariableData, Module,
 };
 
-use super::{Block, Function, Insn, InsnData, Type, Value};
+use super::{Block, Function, Insn, InsnData, Type, ValueId};
 
 pub trait DebugProvider {
-    fn value_name(&self, _func: FuncRef, _value: Value) -> Option<&str> {
+    fn value_name(&self, _func: FuncRef, _value: ValueId) -> Option<&str> {
         None
     }
 }
@@ -137,7 +137,7 @@ impl<'a> FuncWriter<'a> {
         unsafe { Ok(String::from_utf8_unchecked(s)) }
     }
 
-    pub fn value_name(&self, value: Value) -> Option<&str> {
+    pub fn value_name(&self, value: ValueId) -> Option<&str> {
         self.debug.and_then(|d| d.value_name(self.func_ref, value))
     }
 
@@ -153,7 +153,7 @@ impl<'a> FuncWriter<'a> {
         Ok(())
     }
 
-    fn write_insn_args(&mut self, args: &[Value], mut w: impl io::Write) -> io::Result<()> {
+    fn write_insn_args(&mut self, args: &[ValueId], mut w: impl io::Write) -> io::Result<()> {
         self.write_iter_with_delim(args.iter(), " ", &mut w)
     }
 
@@ -203,7 +203,7 @@ trait IrWrite {
     fn write(&self, writer: &mut FuncWriter, w: &mut impl io::Write) -> io::Result<()>;
 }
 
-impl IrWrite for Value {
+impl IrWrite for ValueId {
     fn write(&self, writer: &mut FuncWriter, w: &mut impl io::Write) -> io::Result<()> {
         let value = *self;
         if let Some(imm) = writer.func.dfg.value_imm(value) {
@@ -451,7 +451,7 @@ impl IrWrite for Insn {
     }
 }
 #[derive(Clone)]
-struct ValueWithTy(Value);
+struct ValueWithTy(ValueId);
 
 impl IrWrite for ValueWithTy {
     fn write(&self, f: &mut FuncWriter, w: &mut impl io::Write) -> io::Result<()> {

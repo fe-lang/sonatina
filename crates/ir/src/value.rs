@@ -8,8 +8,8 @@ use super::{Insn, Type, I256, U256};
 
 /// An opaque reference to [`ValueData`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
-pub struct Value(pub u32);
-cranelift_entity::entity_impl!(Value);
+pub struct ValueId(pub u32);
+cranelift_entity::entity_impl!(ValueId);
 
 pub struct DisplayResultValue<'a> {
     insn: Insn,
@@ -35,12 +35,12 @@ impl<'a> fmt::Display for DisplayResultValue<'a> {
 }
 
 pub struct DisplayArgValue<'a> {
-    arg: Value,
+    arg: ValueId,
     dfg: &'a DataFlowGraph,
 }
 
 impl<'a> DisplayArgValue<'a> {
-    pub fn new(arg: Value, dfg: &'a DataFlowGraph) -> Self {
+    pub fn new(arg: ValueId, dfg: &'a DataFlowGraph) -> Self {
         Self { arg, dfg }
     }
 }
@@ -60,7 +60,7 @@ impl<'a> fmt::Display for DisplayArgValue<'a> {
 
 pub fn display_arg_values(
     f: &mut fmt::Formatter,
-    args: &[Value],
+    args: &[ValueId],
     dfg: &DataFlowGraph,
 ) -> fmt::Result {
     let arg0 = DisplayArgValue::new(args[0], dfg);

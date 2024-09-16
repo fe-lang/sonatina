@@ -106,11 +106,11 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
 pub struct DebugInfo {
     pub module_comments: Vec<String>,
     pub func_comments: SecondaryMap<FuncRef, Vec<String>>,
-    pub value_names: FxHashMap<FuncRef, Bimap<ir::Value, SmolStr>>,
+    pub value_names: FxHashMap<FuncRef, Bimap<ir::ValueId, SmolStr>>,
 }
 
 impl DebugProvider for DebugInfo {
-    fn value_name(&self, func: FuncRef, value: ir::Value) -> Option<&str> {
+    fn value_name(&self, func: FuncRef, value: ir::ValueId) -> Option<&str> {
         let names = self.value_names.get(&func)?;
         names.get_by_left(&value).map(|s| s.as_str())
     }
@@ -120,8 +120,8 @@ impl DebugProvider for DebugInfo {
 struct BuildCtx {
     errors: Vec<Error>,
     blocks: FxHashSet<ir::Block>,
-    value_names: FxHashMap<FuncRef, Bimap<ir::Value, SmolStr>>,
-    func_value_names: Bimap<ir::Value, SmolStr>,
+    value_names: FxHashMap<FuncRef, Bimap<ir::ValueId, SmolStr>>,
+    func_value_names: Bimap<ir::ValueId, SmolStr>,
 }
 
 impl BuildCtx {
@@ -203,7 +203,7 @@ impl BuildCtx {
                             ast::Expr::Call(ast::Call(name, args)) => {
                                 let func = self.func_ref(&mut fb.module_builder, name);
 
-                                let args: smallvec::SmallVec<[ir::Value; 8]> =
+                                let args: smallvec::SmallVec<[ir::ValueId; 8]> =
                                     args.iter().map(|val| self.value(&mut fb, val)).collect();
 
                                 let sig = fb.module_builder.get_sig(func).clone();
@@ -213,7 +213,7 @@ impl BuildCtx {
                                 InsnData::Call { func, args, ret_ty }
                             }
                             ast::Expr::Gep(vals) => {
-                                let args: SmallVec<[ir::Value; 8]> =
+                                let args: SmallVec<[ir::ValueId; 8]> =
                                     vals.iter().map(|val| self.value(&mut fb, val)).collect();
                                 InsnData::Gep { args }
                             }
@@ -335,7 +335,7 @@ impl BuildCtx {
         }
     }
 
-    fn name_value(&mut self, value: ir::Value, name: &ast::ValueName) {
+    fn name_value(&mut self, value: ir::ValueId, name: &ast::ValueName) {
         if self.func_value_names.contains_right(&name.string) {
             self.errors
                 .push(Error::DuplicateValueName(name.string.clone(), name.span));
@@ -343,7 +343,7 @@ impl BuildCtx {
         self.func_value_names.insert(value, name.string.clone());
     }
 
-    fn value(&mut self, fb: &mut FunctionBuilder<InsnInserter>, val: &ast::Value) -> ir::Value {
+    fn value(&mut self, fb: &mut FunctionBuilder<InsnInserter>, val: &ast::Value) -> ir::ValueId {
         match &val.kind {
             ast::ValueKind::Immediate(imm) => fb.make_imm_value(*imm),
             ast::ValueKind::Named(name) => self
@@ -355,7 +355,7 @@ impl BuildCtx {
                         UndefinedKind::Value(name.string.clone()),
                         name.span,
                     ));
-                    ir::Value(0)
+                    ir::ValueId(0)
                 }),
             ast::ValueKind::Error => unreachable!(),
         }

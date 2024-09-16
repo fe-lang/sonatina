@@ -1,4 +1,4 @@
-use super::{Block, Function, Insn, InsnData, Value};
+use super::{Block, Function, Insn, InsnData, ValueId};
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CursorLocation {
@@ -79,12 +79,12 @@ pub trait FuncCursor {
         self.set_location(next_loc);
     }
 
-    fn make_result(&mut self, func: &mut Function, insn: Insn) -> Option<Value> {
+    fn make_result(&mut self, func: &mut Function, insn: Insn) -> Option<ValueId> {
         let value_data = func.dfg.make_result(insn)?;
         Some(func.dfg.make_value(value_data))
     }
 
-    fn attach_result(&mut self, func: &mut Function, insn: Insn, value: Value) {
+    fn attach_result(&mut self, func: &mut Function, insn: Insn, value: ValueId) {
         func.dfg.attach_result(insn, value)
     }
 

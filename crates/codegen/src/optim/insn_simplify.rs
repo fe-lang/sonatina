@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    Function, Insn, InsnData, Value,
+    Function, Insn, InsnData, ValueId,
 };
 
 use super::simplify_impl::{simplify_insn, SimplifyResult};
@@ -73,7 +73,7 @@ impl InsnSimplifySolver {
         func: &mut Function,
         inserter: &mut InsnInserter,
         insn: Insn,
-        value: Value,
+        value: ValueId,
     ) {
         if let Some(insn_result) = func.dfg.insn_result(insn) {
             self.worklist.extend(func.dfg.users(insn_result).copied());

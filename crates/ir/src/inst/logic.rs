@@ -1,33 +1,33 @@
 use macros::Inst;
 
-use crate::Value;
+use crate::ValueId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Not {
     #[inst(value)]
-    arg: Value,
+    arg: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct And {
     #[inst(value)]
-    lhs: Value,
+    lhs: ValueId,
     #[inst(value)]
-    rhs: Value,
+    rhs: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Or {
     #[inst(value)]
-    lhs: Value,
+    lhs: ValueId,
     #[inst(value)]
-    rhs: Value,
+    rhs: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Xor {
     #[inst(value)]
-    lhs: Value,
+    lhs: ValueId,
     #[inst(value)]
-    rhs: Value,
+    rhs: ValueId,
 }

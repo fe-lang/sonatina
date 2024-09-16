@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 
 use crate::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    Block, Function, Insn, InsnData, Type, Value,
+    Block, Function, Insn, InsnData, Type, ValueId,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -39,11 +39,11 @@ impl SsaBuilder {
         self.vars.push(VariableData { ty })
     }
 
-    pub(super) fn def_var(&mut self, var: Variable, value: Value, block: Block) {
+    pub(super) fn def_var(&mut self, var: Variable, value: ValueId, block: Block) {
         self.blocks[block].def_var(var, value);
     }
 
-    pub(super) fn use_var(&mut self, func: &mut Function, var: Variable, block: Block) -> Value {
+    pub(super) fn use_var(&mut self, func: &mut Function, var: Variable, block: Block) -> ValueId {
         if let Some(value) = self.blocks[block].use_var_local(var) {
             value
         } else {
@@ -83,7 +83,7 @@ impl SsaBuilder {
         self.blocks[block].is_sealed()
     }
 
-    fn use_var_recursive(&mut self, func: &mut Function, var: Variable, block: Block) -> Value {
+    fn use_var_recursive(&mut self, func: &mut Function, var: Variable, block: Block) -> ValueId {
         if !self.is_sealed(block) {
             let (insn, value) = self.prepend_phi(func, var, block);
             self.blocks[block].push_incomplete_phi(var, insn);
@@ -141,7 +141,7 @@ impl SsaBuilder {
         }
     }
 
-    fn prepend_phi(&mut self, func: &mut Function, var: Variable, block: Block) -> (Insn, Value) {
+    fn prepend_phi(&mut self, func: &mut Function, var: Variable, block: Block) -> (Insn, ValueId) {
         let ty = self.var_ty(var);
         let insn_data = InsnData::Phi {
             values: SmallVec::new(),
@@ -167,18 +167,18 @@ struct SsaBlockData {
     is_sealed: bool,
 
     /// Records defined variables in an block.
-    defs: SecondaryMap<Variable, PackedOption<Value>>,
+    defs: SecondaryMap<Variable, PackedOption<ValueId>>,
 
     /// Records phis in an unsealed block.
     incomplete_phis: Vec<(Variable, Insn)>,
 }
 
 impl SsaBlockData {
-    fn def_var(&mut self, var: Variable, value: Value) {
+    fn def_var(&mut self, var: Variable, value: ValueId) {
         self.defs[var] = value.into();
     }
 
-    fn use_var_local(&self, var: Variable) -> Option<Value> {
+    fn use_var_local(&self, var: Variable) -> Option<ValueId> {
         self.defs[var].expand()
     }
 
