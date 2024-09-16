@@ -13,7 +13,7 @@ use crate::{
 
 use super::{
     module::{DisplayCalleeFuncRef, FuncRef},
-    Block, DataFlowGraph, Type, ValueData, ValueId,
+    Block, DataFlowGraph, Type, Value, ValueId,
 };
 
 /// An opaque reference to [`InsnData`]
@@ -783,7 +783,7 @@ fn get_gep_result_type(dfg: &DataFlowGraph, base: ValueId, indices: &[ValueId]) 
             CompoundTypeData::Ptr(_) => result_ty,
             CompoundTypeData::Struct(s) => {
                 let index = match dfg.value_data(index) {
-                    ValueData::Immediate { imm, .. } => imm.as_usize(),
+                    Value::Immediate { imm, .. } => imm.as_usize(),
                     _ => unreachable!(),
                 };
                 s.fields[index]
