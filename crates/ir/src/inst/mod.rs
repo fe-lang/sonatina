@@ -13,6 +13,11 @@ use smallvec::SmallVec;
 
 use crate::{InstSetBase, ValueId};
 
+/// An opaque reference to dynamic [`Inst`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
+pub struct InstId(pub u32);
+cranelift_entity::entity_impl!(InstId);
+
 pub trait Inst: inst_set::sealed::Registered + Any {
     fn visit_values(&self, f: &mut dyn FnMut(ValueId));
     fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut ValueId));
