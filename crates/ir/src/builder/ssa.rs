@@ -18,7 +18,7 @@ pub struct VariableData {
 }
 
 pub(super) struct SsaBuilder {
-    blocks: SecondaryMap<BlockId, SsaBlockData>,
+    blocks: SecondaryMap<BlockId, SsaBlock>,
 
     /// Records all declared variables.
     vars: PrimaryMap<Variable, VariableData>,
@@ -169,7 +169,7 @@ impl SsaBuilder {
 }
 
 #[derive(Default, Clone)]
-struct SsaBlockData {
+struct SsaBlock {
     /// Records all predecessors of a block.
     preds: Vec<BlockId>,
 
@@ -183,7 +183,7 @@ struct SsaBlockData {
     incomplete_phis: Vec<(Variable, Insn)>,
 }
 
-impl SsaBlockData {
+impl SsaBlock {
     fn def_var(&mut self, var: Variable, value: ValueId) {
         self.defs[var] = value.into();
     }

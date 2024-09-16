@@ -45,8 +45,8 @@ pub struct GvnSolver {
     /// Store edges.
     edges: PrimaryMap<Edge, EdgeData>,
 
-    /// Maps [`Block`] to [`GvnBlockData`]
-    blocks: SecondaryMap<BlockId, GvnBlockData>,
+    /// Maps [`Block`] to [`GvnBlock`]
+    blocks: SecondaryMap<BlockId, GvnBlock>,
 
     value_phi_table: FxHashMap<ValuePhi, Class>,
 
@@ -975,7 +975,7 @@ struct EdgeData {
 }
 
 #[derive(Debug, Default, Clone)]
-struct GvnBlockData {
+struct GvnBlock {
     /// Incoming edges.
     in_edges: Vec<Edge>,
 

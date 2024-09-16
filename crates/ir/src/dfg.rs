@@ -13,7 +13,7 @@ use super::{BranchInfo, Immediate, Insn, InsnData, Type, Value, ValueId};
 pub struct DataFlowGraph {
     pub ctx: ModuleCtx,
     #[doc(hidden)]
-    pub blocks: PrimaryMap<BlockId, BlockData>,
+    pub blocks: PrimaryMap<BlockId, Block>,
     #[doc(hidden)]
     pub values: PrimaryMap<ValueId, Value>,
     insns: PrimaryMap<Insn, InsnData>,
@@ -37,7 +37,7 @@ impl DataFlowGraph {
     }
 
     pub fn make_block(&mut self) -> BlockId {
-        self.blocks.push(BlockData::new())
+        self.blocks.push(Block::new())
     }
 
     pub fn make_value(&mut self, value: Value) -> ValueId {
@@ -147,7 +147,7 @@ impl DataFlowGraph {
         *self.users(value).nth(idx).unwrap()
     }
 
-    pub fn block_data(&self, block: BlockId) -> &BlockData {
+    pub fn block_data(&self, block: BlockId) -> &Block {
         &self.blocks[block]
     }
 
@@ -336,7 +336,7 @@ pub enum ValueDef {
     Arg(usize),
 }
 
-/// An opaque reference to [`BlockData`]
+/// An opaque reference to [`Block`]
 #[derive(Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub struct BlockId(pub u32);
 entity_impl!(BlockId, "block");
@@ -345,9 +345,9 @@ entity_impl!(BlockId, "block");
 /// A Block data doesn't hold any information for layout of a program. It is managed by
 /// [`super::layout::Layout`].
 #[derive(Debug, Clone, Default)]
-pub struct BlockData {}
+pub struct Block {}
 
-impl BlockData {
+impl Block {
     pub fn new() -> Self {
         Self::default()
     }
