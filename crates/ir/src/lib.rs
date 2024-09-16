@@ -1,6 +1,7 @@
 pub mod builder;
 pub mod cfg;
 pub mod dfg;
+pub mod dfg_;
 pub mod func_cursor;
 pub mod function;
 pub mod global_variable;
