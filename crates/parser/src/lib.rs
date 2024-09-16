@@ -240,7 +240,7 @@ impl BuildCtx {
                         // xxx cleanup
                         let value = *self.func_value_names.get_by_right(&name.string).unwrap();
                         let insn = fb.cursor.insert_insn_data(&mut fb.func, insn_data);
-                        fb.func.dfg.values[value] = ir::ValueData::Insn { insn, ty };
+                        fb.func.dfg.values[value] = ir::Value::Insn { insn, ty };
                         fb.cursor.attach_result(&mut fb.func, insn, value);
                         fb.cursor.set_location(CursorLocation::At(insn));
                     }
@@ -320,8 +320,8 @@ impl BuildCtx {
 
     fn declare_value(&mut self, func: &mut ir::Function, name: &ast::ValueName, ty: ir::Type) {
         // Abusing Immediate here; we just need a dummy value with a given type.
-        // The ValueData will be replaced when create the Insn that defines the value.
-        let value = func.dfg.make_value(ir::ValueData::Immediate {
+        // The Value will be replaced when create the Insn that defines the value.
+        let value = func.dfg.make_value(ir::Value::Immediate {
             imm: ir::Immediate::I128(424242),
             ty,
         });

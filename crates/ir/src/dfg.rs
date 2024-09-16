@@ -7,7 +7,7 @@ use smallvec::SmallVec;
 
 use crate::{global_variable::ConstantValue, module::ModuleCtx, GlobalVariable};
 
-use super::{BranchInfo, Immediate, Insn, InsnData, Type, ValueData, ValueId};
+use super::{BranchInfo, Immediate, Insn, InsnData, Type, Value, ValueId};
 
 #[derive(Debug, Clone)]
 pub struct DataFlowGraph {
@@ -15,7 +15,7 @@ pub struct DataFlowGraph {
     #[doc(hidden)]
     pub blocks: PrimaryMap<Block, BlockData>,
     #[doc(hidden)]
-    pub values: PrimaryMap<ValueId, ValueData>,
+    pub values: PrimaryMap<ValueId, Value>,
     insns: PrimaryMap<Insn, InsnData>,
     insn_results: SecondaryMap<Insn, PackedOption<ValueId>>,
     #[doc(hidden)]
@@ -40,7 +40,7 @@ impl DataFlowGraph {
         self.blocks.push(BlockData::new())
     }
 
-    pub fn make_value(&mut self, value: ValueData) -> ValueId {
+    pub fn make_value(&mut self, value: Value) -> ValueId {
         self.values.push(value)
     }
 
@@ -60,7 +60,7 @@ impl DataFlowGraph {
         }
 
         let ty = imm.ty();
-        let value_data = ValueData::Immediate { imm, ty };
+        let value_data = Value::Immediate { imm, ty };
         let value = self.make_value(value_data);
         self.immediates.insert(imm, value);
         value
@@ -69,7 +69,7 @@ impl DataFlowGraph {
     pub fn make_global_value(&mut self, gv: GlobalVariable) -> ValueId {
         let gv_ty = self.ctx.with_gv_store(|s| s.ty(gv));
         let ty = self.ctx.with_ty_store_mut(|s| s.make_ptr(gv_ty));
-        let value_data = ValueData::Global { gv, ty };
+        let value_data = Value::Global { gv, ty };
         self.make_value(value_data)
     }
 
@@ -94,9 +94,9 @@ impl DataFlowGraph {
         self.users[alias].append(&mut users);
     }
 
-    pub fn make_result(&mut self, insn: Insn) -> Option<ValueData> {
+    pub fn make_result(&mut self, insn: Insn) -> Option<Value> {
         let ty = self.insns[insn].result_type(self)?;
-        Some(ValueData::Insn { insn, ty })
+        Some(Value::Insn { insn, ty })
     }
 
     pub fn attach_result(&mut self, insn: Insn, value: ValueId) {
@@ -104,15 +104,15 @@ impl DataFlowGraph {
         self.insn_results[insn] = value.into();
     }
 
-    pub fn make_arg_value(&mut self, ty: Type, idx: usize) -> ValueData {
-        ValueData::Arg { ty, idx }
+    pub fn make_arg_value(&mut self, ty: Type, idx: usize) -> Value {
+        Value::Arg { ty, idx }
     }
 
     pub fn insn_data(&self, insn: Insn) -> &InsnData {
         &self.insns[insn]
     }
 
-    pub fn value_data(&self, value: ValueId) -> &ValueData {
+    pub fn value_data(&self, value: ValueId) -> &Value {
         &self.values[value]
     }
 
@@ -153,17 +153,17 @@ impl DataFlowGraph {
 
     pub fn value_insn(&self, value: ValueId) -> Option<Insn> {
         match self.value_data(value) {
-            ValueData::Insn { insn, .. } => Some(*insn),
+            Value::Insn { insn, .. } => Some(*insn),
             _ => None,
         }
     }
 
     pub fn value_ty(&self, value: ValueId) -> Type {
         match &self.values[value] {
-            ValueData::Insn { ty, .. }
-            | ValueData::Arg { ty, .. }
-            | ValueData::Immediate { ty, .. }
-            | ValueData::Global { ty, .. } => *ty,
+            Value::Insn { ty, .. }
+            | Value::Arg { ty, .. }
+            | Value::Immediate { ty, .. }
+            | Value::Global { ty, .. } => *ty,
         }
     }
 
@@ -173,8 +173,8 @@ impl DataFlowGraph {
 
     pub fn value_imm(&self, value: ValueId) -> Option<Immediate> {
         match self.value_data(value) {
-            ValueData::Immediate { imm, .. } => Some(*imm),
-            ValueData::Global { gv, .. } => self.ctx.with_gv_store(|s| {
+            Value::Immediate { imm, .. } => Some(*imm),
+            Value::Global { gv, .. } => self.ctx.with_gv_store(|s| {
                 if !s.is_const(*gv) {
                     return None;
                 }
@@ -189,7 +189,7 @@ impl DataFlowGraph {
 
     pub fn value_gv(&self, value: ValueId) -> Option<GlobalVariable> {
         match self.value_data(value) {
-            ValueData::Global { gv, .. } => Some(*gv),
+            Value::Global { gv, .. } => Some(*gv),
             _ => None,
         }
     }
@@ -326,7 +326,7 @@ impl DataFlowGraph {
 
     /// Returns `true` if `value` is a function argument.
     pub fn is_arg(&self, value: ValueId) -> bool {
-        matches!(self.value_data(value), ValueData::Arg { .. })
+        matches!(self.value_data(value), Value::Arg { .. })
     }
 }
 

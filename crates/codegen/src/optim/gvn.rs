@@ -36,8 +36,8 @@ pub struct GvnSolver {
     /// Store classes.
     classes: PrimaryMap<Class, ClassData>,
 
-    /// Maps [`Value`] to [`GvnValueData`].
-    values: SecondaryMap<ValueId, GvnValueData>,
+    /// Maps [`Value`] to [`GvnValue`].
+    values: SecondaryMap<ValueId, GvnValue>,
 
     /// Maps [`GvnInsn`] to [`Class`].
     insn_table: FxHashMap<GvnInsn, Class>,
@@ -909,7 +909,7 @@ struct ClassData {
 
 /// A collection of value data used by `GvnSolver`.
 #[derive(Debug, Clone, PartialEq)]
-struct GvnValueData {
+struct GvnValue {
     /// A class to which the value belongs.
     class: Class,
 
@@ -919,7 +919,7 @@ struct GvnValueData {
     rank: u32,
 }
 
-impl Default for GvnValueData {
+impl Default for GvnValue {
     fn default() -> Self {
         Self {
             class: INITIAL_CLASS,
@@ -986,7 +986,7 @@ struct GvnBlockData {
     reachable: bool,
 
     /// A rank of the block.
-    /// The rank definition is same as `GvnValueData::rank`.
+    /// The rank definition is same as `GvnValue::rank`.
     rank: u32,
 }
 

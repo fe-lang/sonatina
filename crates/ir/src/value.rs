@@ -6,7 +6,7 @@ use crate::{types::DisplayType, DataFlowGraph, GlobalVariable};
 
 use super::{Insn, Type, I256, U256};
 
-/// An opaque reference to [`ValueData`].
+/// An opaque reference to [`Value`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
 pub struct ValueId(pub u32);
 cranelift_entity::entity_impl!(ValueId);
@@ -49,7 +49,7 @@ impl<'a> fmt::Display for DisplayArgValue<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { arg, dfg } = *self;
         match *dfg.value_data(arg) {
-            ValueData::Immediate { imm, ty } => {
+            Value::Immediate { imm, ty } => {
                 let ty = DisplayType::new(ty, dfg);
                 write!(f, "{imm}.{ty}")
             }
@@ -74,7 +74,7 @@ pub fn display_arg_values(
 
 /// An value data definition.
 #[derive(Debug, Clone)]
-pub enum ValueData {
+pub enum Value {
     /// The value is defined by an instruction.
     Insn { insn: Insn, ty: Type },
 
