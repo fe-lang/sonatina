@@ -18,6 +18,7 @@ pub fn derive_inst(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
 struct InstStruct {
     struct_name: syn::Ident,
     has_side_effect: bool,
+    is_terminator: bool,
     fields: Vec<InstField>,
 }
 
@@ -29,7 +30,7 @@ struct InstField {
 
 impl InstStruct {
     fn new(item_struct: syn::ItemStruct) -> syn::Result<Self> {
-        let has_side_effect = Self::check_side_effect_attr(&item_struct)?;
+        let (has_side_effect, is_terminator) = Self::check_attr(&item_struct)?;
 
         let struct_ident = item_struct.ident;
 
@@ -45,6 +46,7 @@ impl InstStruct {
         Ok(Self {
             struct_name: struct_ident,
             has_side_effect,
+            is_terminator,
             fields,
         })
     }
@@ -69,21 +71,27 @@ impl InstStruct {
         })
     }
 
-    fn check_side_effect_attr(item_struct: &syn::ItemStruct) -> syn::Result<bool> {
+    fn check_attr(item_struct: &syn::ItemStruct) -> syn::Result<(bool, bool)> {
         let mut has_side_effect = false;
+        let mut is_terminator = false;
 
         for attr in &item_struct.attrs {
             if attr.path().is_ident("inst") {
                 let meta = attr.parse_args::<syn::Meta>()?;
-                if let syn::Meta::Path(path) = meta {
+                if let syn::Meta::Path(path) = &meta {
                     if path.is_ident("has_side_effect") {
                         has_side_effect = true;
+                    }
+                }
+                if let syn::Meta::Path(path) = &meta {
+                    if path.is_ident("terminator") {
+                        is_terminator = true;
                     }
                 }
             }
         }
 
-        Ok(has_side_effect)
+        Ok((has_side_effect, is_terminator))
     }
 
     fn parse_fields(fields: &syn::Fields) -> syn::Result<Vec<InstField>> {
@@ -195,6 +203,7 @@ impl InstStruct {
     fn impl_inst(&self) -> proc_macro2::TokenStream {
         let struct_name = &self.struct_name;
         let has_side_effect = self.has_side_effect;
+        let is_terminator = self.is_terminator;
         let visit_fields: Vec<_> = self
             .fields
             .iter()
@@ -216,6 +225,11 @@ impl InstStruct {
                 fn has_side_effect(&self) -> bool {
                     #has_side_effect
                 }
+
+                fn is_terminator(&self) -> bool {
+                    #is_terminator
+                }
+
 
                 fn as_text(&self) -> &'static str {
                     #text_form

@@ -4,11 +4,13 @@ use smallvec::SmallVec;
 use crate::{module::FuncRef, Block, Type, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(terminator)]
 pub struct Jump {
     dest: Block,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(terminator)]
 pub struct Br {
     #[inst(value)]
     cond: Value,
@@ -18,6 +20,7 @@ pub struct Br {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(terminator)]
 pub struct BrTable {
     #[inst(value)]
     scrutinee: Value,
@@ -36,6 +39,7 @@ pub struct Phi {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(has_side_effect)]
+#[inst(terminator)]
 pub struct Call {
     #[inst(value)]
     args: SmallVec<[Value; 8]>,
@@ -45,6 +49,7 @@ pub struct Call {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(has_side_effect)]
+#[inst(terminator)]
 pub struct Return {
     #[inst(value)]
     arg: Option<Value>,
