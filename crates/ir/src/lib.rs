@@ -20,7 +20,7 @@ mod bigint;
 pub use bigint::{I256, U256};
 pub use builder::Variable;
 pub use cfg::ControlFlowGraph;
-pub use dfg::{BlockData, BlockId, DataFlowGraph};
+pub use dfg::{Block, BlockId, DataFlowGraph};
 pub use function::{Function, Signature};
 pub use global_variable::{GlobalVariable, GlobalVariableData};
 pub use graphviz::render_to;
