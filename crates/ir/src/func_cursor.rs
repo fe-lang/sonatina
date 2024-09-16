@@ -1,10 +1,10 @@
-use super::{Block, Function, Insn, InsnData, ValueId};
+use super::{BlockId, Function, Insn, InsnData, ValueId};
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CursorLocation {
     At(Insn),
-    BlockTop(Block),
-    BlockBottom(Block),
+    BlockTop(BlockId),
+    BlockBottom(BlockId),
     #[default]
     NoWhere,
 }
@@ -88,7 +88,7 @@ pub trait FuncCursor {
         func.dfg.attach_result(insn, value)
     }
 
-    fn make_block(&mut self, func: &mut Function) -> Block {
+    fn make_block(&mut self, func: &mut Function) -> BlockId {
         func.dfg.make_block()
     }
 
@@ -133,7 +133,7 @@ pub trait FuncCursor {
             .expect("current cursor location doesn't point to insn")
     }
 
-    fn block(&self, func: &Function) -> Option<Block> {
+    fn block(&self, func: &Function) -> Option<BlockId> {
         match self.loc() {
             CursorLocation::At(insn) => Some(func.layout.insn_block(insn)),
             CursorLocation::BlockTop(block) | CursorLocation::BlockBottom(block) => Some(block),
@@ -141,11 +141,11 @@ pub trait FuncCursor {
         }
     }
 
-    fn expect_block(&self, func: &Function) -> Block {
+    fn expect_block(&self, func: &Function) -> BlockId {
         self.block(func).expect("cursor loc points to `NoWhere`")
     }
 
-    fn insert_block(&mut self, func: &mut Function, block: Block) {
+    fn insert_block(&mut self, func: &mut Function, block: BlockId) {
         if let Some(current) = self.block(func) {
             func.layout.insert_block_after(block, current)
         } else {
@@ -153,7 +153,7 @@ pub trait FuncCursor {
         }
     }
 
-    fn insert_block_before(&mut self, func: &mut Function, block: Block) {
+    fn insert_block_before(&mut self, func: &mut Function, block: BlockId) {
         if let Some(current) = self.block(func) {
             func.layout.insert_block_before(block, current)
         } else {
@@ -161,7 +161,7 @@ pub trait FuncCursor {
         }
     }
 
-    fn append_block(&mut self, func: &mut Function, block: Block) {
+    fn append_block(&mut self, func: &mut Function, block: BlockId) {
         func.layout.append_block(block);
     }
 
@@ -222,12 +222,12 @@ pub trait FuncCursor {
         self.set_location(self.prev_loc(func));
     }
 
-    fn next_block(&self, func: &Function) -> Option<Block> {
+    fn next_block(&self, func: &Function) -> Option<BlockId> {
         let block = self.block(func)?;
         func.layout.next_block_of(block)
     }
 
-    fn prev_block(&self, func: &Function) -> Option<Block> {
+    fn prev_block(&self, func: &Function) -> Option<BlockId> {
         let block = self.block(func)?;
         func.layout.prev_block_of(block)
     }

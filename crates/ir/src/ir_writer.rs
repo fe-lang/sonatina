@@ -6,7 +6,7 @@ use crate::{
     DataLocationKind, GlobalVariableData, Module,
 };
 
-use super::{Block, Function, Insn, InsnData, Type, ValueId};
+use super::{BlockId, Function, Insn, InsnData, Type, ValueId};
 
 pub trait DebugProvider {
     fn value_name(&self, _func: FuncRef, _value: ValueId) -> Option<&str> {
@@ -141,7 +141,7 @@ impl<'a> FuncWriter<'a> {
         self.debug.and_then(|d| d.value_name(self.func_ref, value))
     }
 
-    fn write_block_with_insn(&mut self, block: Block, mut w: impl io::Write) -> io::Result<()> {
+    fn write_block_with_insn(&mut self, block: BlockId, mut w: impl io::Write) -> io::Result<()> {
         self.indent(&mut w)?;
         block.write(self, &mut w)?;
 
@@ -236,7 +236,7 @@ impl GlobalVariableData {
     }
 }
 
-impl IrWrite for Block {
+impl IrWrite for BlockId {
     fn write(&self, _: &mut FuncWriter, w: &mut impl io::Write) -> io::Result<()> {
         w.write_fmt(format_args!("block{}", self.0))
     }

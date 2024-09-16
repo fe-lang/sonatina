@@ -1,14 +1,14 @@
 use macros::Inst;
 use smallvec::SmallVec;
 
-use crate::{module::FuncRef, Block, Type, ValueId};
+use crate::{module::FuncRef, BlockId, Type, ValueId};
 
 use super::InstDowncast;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(terminator)]
 pub struct Jump {
-    dest: Block,
+    dest: BlockId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
@@ -16,8 +16,8 @@ pub struct Jump {
 pub struct Br {
     #[inst(value)]
     cond: ValueId,
-    z_dest: Block,
-    nz_dest: Block,
+    z_dest: BlockId,
+    nz_dest: BlockId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
@@ -26,15 +26,15 @@ pub struct BrTable {
     #[inst(value)]
     scrutinee: ValueId,
     #[inst(value)]
-    table: Vec<(ValueId, Block)>,
+    table: Vec<(ValueId, BlockId)>,
 
-    default: Option<Block>,
+    default: Option<BlockId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 pub struct Phi {
     #[inst(value)]
-    values: Vec<(ValueId, Block)>,
+    values: Vec<(ValueId, BlockId)>,
     ty: Type,
 }
 
@@ -64,7 +64,7 @@ pub enum BranchInfo<'i> {
 }
 
 impl<'i> BranchInfo<'i> {
-    pub fn iter_dests(self) -> impl Iterator<Item = Block> + 'i {
+    pub fn iter_dests(self) -> impl Iterator<Item = BlockId> + 'i {
         BranchDestIter {
             branch_info: self,
             idx: 0,
@@ -102,7 +102,7 @@ pub struct BranchDestIter<'i> {
 }
 
 impl<'i> Iterator for BranchDestIter<'i> {
-    type Item = Block;
+    type Item = BlockId;
 
     fn next(&mut self) -> Option<Self::Item> {
         let idx = self.idx;

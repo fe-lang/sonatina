@@ -5,7 +5,7 @@ use crate::loop_analysis::{Loop, LoopTree};
 
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    Block, ControlFlowGraph, Function, Insn, InsnData, ValueId,
+    BlockId, ControlFlowGraph, Function, Insn, InsnData, ValueId,
 };
 
 #[derive(Debug)]
@@ -96,9 +96,9 @@ impl LicmSolver {
         cfg: &mut ControlFlowGraph,
         lpt: &mut LoopTree,
         lp: Loop,
-    ) -> Block {
+    ) -> BlockId {
         let lp_header = lpt.loop_header(lp);
-        let original_preheaders: Vec<Block> = cfg
+        let original_preheaders: Vec<BlockId> = cfg
             .preds_of(lp_header)
             .copied()
             .filter(|block| !lpt.is_in_loop(*block, lp))
@@ -140,7 +140,7 @@ impl LicmSolver {
     }
 
     /// Hoist invariants to the preheader.
-    fn hoist_invariants(&self, func: &mut Function, preheader: Block) {
+    fn hoist_invariants(&self, func: &mut Function, preheader: BlockId) {
         let last_insn = func.layout.last_insn_of(preheader).unwrap();
         for invariant in self.invariants.iter().copied() {
             func.layout.remove_insn(invariant);
@@ -152,9 +152,9 @@ impl LicmSolver {
     fn modify_phi_insn(
         &self,
         func: &mut Function,
-        lp_header: Block,
-        original_preheaders: &[Block],
-        new_preheader: Block,
+        lp_header: BlockId,
+        original_preheaders: &[BlockId],
+        new_preheader: BlockId,
     ) {
         // Record inserted phis to avoid duplication of the same phi.
         let mut inserted_phis = FxHashMap::default();

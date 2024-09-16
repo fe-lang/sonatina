@@ -7,12 +7,12 @@ use std::collections::BTreeSet;
 
 use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 
-use sonatina_ir::{Block, ControlFlowGraph};
+use sonatina_ir::{BlockId, ControlFlowGraph};
 
 #[derive(Default, Debug)]
 pub struct DomTree {
-    doms: SecondaryMap<Block, PackedOption<Block>>,
-    rpo: Vec<Block>,
+    doms: SecondaryMap<BlockId, PackedOption<BlockId>>,
+    rpo: Vec<BlockId>,
 }
 
 impl DomTree {
@@ -27,7 +27,7 @@ impl DomTree {
 
     /// Returns the immediate dominator of the `block`.
     /// Returns None if the `block` is unreachable from the entry block, or the `block` is the entry block itself.
-    pub fn idom_of(&self, block: Block) -> Option<Block> {
+    pub fn idom_of(&self, block: BlockId) -> Option<BlockId> {
         if self.rpo[0] == block {
             return None;
         }
@@ -35,7 +35,7 @@ impl DomTree {
     }
 
     /// Returns `true` if block1 strictly dominates block2.
-    pub fn strictly_dominates(&self, block1: Block, block2: Block) -> bool {
+    pub fn strictly_dominates(&self, block1: BlockId, block2: BlockId) -> bool {
         let mut current_block = block2;
         while let Some(block) = self.idom_of(current_block) {
             if block == block1 {
@@ -48,7 +48,7 @@ impl DomTree {
     }
 
     /// Returns `true` if block1 dominates block2.
-    pub fn dominates(&self, block1: Block, block2: Block) -> bool {
+    pub fn dominates(&self, block1: BlockId, block2: BlockId) -> bool {
         if block1 == block2 {
             return true;
         }
@@ -125,21 +125,21 @@ impl DomTree {
     }
 
     /// Returns `true` if block is reachable from the entry block.
-    pub fn is_reachable(&self, block: Block) -> bool {
+    pub fn is_reachable(&self, block: BlockId) -> bool {
         self.idom_of(block).is_some()
     }
 
     /// Returns blocks in RPO.
-    pub fn rpo(&self) -> &[Block] {
+    pub fn rpo(&self) -> &[BlockId] {
         &self.rpo
     }
 
     fn intersect(
         &self,
-        mut b1: Block,
-        mut b2: Block,
-        rpo_nums: &SecondaryMap<Block, u32>,
-    ) -> Block {
+        mut b1: BlockId,
+        mut b2: BlockId,
+        rpo_nums: &SecondaryMap<BlockId, u32>,
+    ) -> BlockId {
         while b1 != b2 {
             while rpo_nums[b1] < rpo_nums[b2] {
                 b1 = self.doms[b1].unwrap();
@@ -155,18 +155,18 @@ impl DomTree {
 
 /// Dominance frontiers of each blocks.
 #[derive(Default, Debug)]
-pub struct DFSet(SecondaryMap<Block, BTreeSet<Block>>);
+pub struct DFSet(SecondaryMap<BlockId, BTreeSet<BlockId>>);
 
 impl DFSet {
-    pub fn frontiers(&self, block: Block) -> impl Iterator<Item = &Block> {
+    pub fn frontiers(&self, block: BlockId) -> impl Iterator<Item = &BlockId> {
         self.0[block].iter()
     }
 
-    pub fn in_frontier_of(&self, block: Block, of: Block) -> bool {
+    pub fn in_frontier_of(&self, block: BlockId, of: BlockId) -> bool {
         self.0[of].contains(&block)
     }
 
-    pub fn frontier_num_of(&self, of: Block) -> usize {
+    pub fn frontier_num_of(&self, of: BlockId) -> usize {
         self.0[of].len()
     }
 
@@ -177,7 +177,7 @@ impl DFSet {
 
 #[derive(Default)]
 pub struct DominatorTreeTraversable {
-    children: SecondaryMap<Block, Vec<Block>>,
+    children: SecondaryMap<BlockId, Vec<BlockId>>,
 }
 
 impl DominatorTreeTraversable {
@@ -189,7 +189,7 @@ impl DominatorTreeTraversable {
         }
     }
 
-    pub fn children_of(&self, block: Block) -> &[Block] {
+    pub fn children_of(&self, block: BlockId) -> &[BlockId] {
         &self.children[block]
     }
 
@@ -215,7 +215,7 @@ mod tests {
         (dom_tree, df)
     }
 
-    fn test_df(df: &DFSet, of: Block, frontiers: &[Block]) -> bool {
+    fn test_df(df: &DFSet, of: BlockId, frontiers: &[BlockId]) -> bool {
         if df.frontier_num_of(of) != frontiers.len() {
             return false;
         }

@@ -11,14 +11,14 @@ use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     insn::{BinaryOp, CastOp, InsnData, UnaryOp},
-    Block, ControlFlowGraph, Function, Immediate, Insn, Type, ValueId,
+    BlockId, ControlFlowGraph, Function, Immediate, Insn, Type, ValueId,
 };
 
 #[derive(Debug)]
 pub struct SccpSolver {
     lattice: SecondaryMap<ValueId, LatticeCell>,
     reachable_edges: BTreeSet<FlowEdge>,
-    reachable_blocks: BTreeSet<Block>,
+    reachable_blocks: BTreeSet<BlockId>,
 
     flow_work: Vec<FlowEdge>,
     ssa_work: Vec<ValueId>,
@@ -114,7 +114,7 @@ impl SccpSolver {
         }
     }
 
-    fn eval_phis_in(&mut self, func: &Function, block: Block) {
+    fn eval_phis_in(&mut self, func: &Function, block: BlockId) {
         for insn in func.layout.iter_insn(block) {
             if func.dfg.is_phi(insn) {
                 self.eval_phi(func, insn);
@@ -152,7 +152,7 @@ impl SccpSolver {
         }
     }
 
-    fn eval_insns_in(&mut self, func: &Function, block: Block) {
+    fn eval_insns_in(&mut self, func: &Function, block: BlockId) {
         for insn in func.layout.iter_insn(block) {
             if func.dfg.is_phi(insn) {
                 self.eval_phi(func, insn);
@@ -343,7 +343,7 @@ impl SccpSolver {
         }
     }
 
-    fn is_reachable_edge(&self, insn: Insn, dest: Block) -> bool {
+    fn is_reachable_edge(&self, insn: Insn, dest: BlockId) -> bool {
         self.reachable_edges.contains(&FlowEdge::new(insn, dest))
     }
 
@@ -398,7 +398,7 @@ impl SccpSolver {
         }
     }
 
-    fn is_reachable(&self, func: &Function, from: Block, to: Block) -> bool {
+    fn is_reachable(&self, func: &Function, from: BlockId, to: BlockId) -> bool {
         let last_insn = if let Some(insn) = func.layout.last_insn_of(from) {
             insn
         } else {
@@ -434,11 +434,11 @@ impl Default for SccpSolver {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct FlowEdge {
     insn: Insn,
-    to: Block,
+    to: BlockId,
 }
 
 impl FlowEdge {
-    fn new(insn: Insn, to: Block) -> Self {
+    fn new(insn: Insn, to: BlockId) -> Self {
         Self { insn, to }
     }
 }

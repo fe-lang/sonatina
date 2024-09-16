@@ -3,7 +3,7 @@ use std::ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Sub};
 use sonatina_ir::{
     insn::{BinaryOp, CastOp, UnaryOp},
     module::FuncRef,
-    Block, DataLocationKind, Immediate, InsnData, Module, ValueId,
+    BlockId, DataLocationKind, Immediate, InsnData, Module, ValueId,
 };
 
 use crate::{types, EvalResult, Frame, ProgramCounter};
@@ -12,7 +12,7 @@ pub struct State {
     module: Module,
     frames: Vec<Frame>,
     pc: ProgramCounter,
-    prev_block: Option<Block>,
+    prev_block: Option<BlockId>,
 }
 
 impl State {

@@ -2,15 +2,15 @@
 
 use super::domtree::{DFSet, DomTree};
 
-use sonatina_ir::{Block, ControlFlowGraph, Function};
+use sonatina_ir::{BlockId, ControlFlowGraph, Function};
 
 #[derive(Debug)]
 pub struct PostDomTree {
     /// Dummy entry block to calculate CDG.
-    entry: Block,
+    entry: BlockId,
     /// Canonical dummy exit block to calculate CDG. All blocks ends with `return` has an edge to
     /// this block.
-    exit: Block,
+    exit: BlockId,
 
     /// Reverse control flow graph of the function.
     rcfg: ControlFlowGraph,
@@ -22,8 +22,8 @@ pub struct PostDomTree {
 impl Default for PostDomTree {
     fn default() -> Self {
         Self {
-            entry: Block(0),
-            exit: Block(0),
+            entry: BlockId(0),
+            exit: BlockId(0),
             rcfg: ControlFlowGraph::default(),
             domtree: DomTree::default(),
         }
@@ -44,8 +44,8 @@ impl PostDomTree {
         }
         let real_entry = self.rcfg.entry().unwrap();
 
-        self.entry = Block(func.dfg.blocks.len() as u32);
-        self.exit = Block(self.entry.0 + 1);
+        self.entry = BlockId(func.dfg.blocks.len() as u32);
+        self.exit = BlockId(self.entry.0 + 1);
 
         // Add edges from dummy entry block to real entry block and dummy exit block.
         self.rcfg.add_edge(self.entry, real_entry);
@@ -61,7 +61,7 @@ impl PostDomTree {
         self.domtree.compute(&self.rcfg);
     }
 
-    pub fn idom_of(&self, block: Block) -> Option<PDTIdom> {
+    pub fn idom_of(&self, block: BlockId) -> Option<PDTIdom> {
         match self.domtree.idom_of(block)? {
             block if block == self.entry => Some(PDTIdom::DummyEntry(self.entry)),
             block if block == self.exit => Some(PDTIdom::DummyExit(self.exit)),
@@ -86,42 +86,42 @@ impl PostDomTree {
     }
 
     /// Returns `true` if block is reachable from the exit blocks.
-    pub fn is_reachable(&self, block: Block) -> bool {
+    pub fn is_reachable(&self, block: BlockId) -> bool {
         self.domtree.is_reachable(block)
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum PDTIdom {
-    DummyEntry(Block),
-    DummyExit(Block),
-    Real(Block),
+    DummyEntry(BlockId),
+    DummyExit(BlockId),
+    Real(BlockId),
 }
 
 /// Post Dominance frontiers of each blocks.
 #[derive(Debug)]
 pub struct PDFSet {
     /// Dummy entry block of the post dominator tree.
-    entry: Block,
+    entry: BlockId,
 
     /// Canonical dummy exit block of the post dominator tree.
-    exit: Block,
+    exit: BlockId,
 
     df_set: DFSet,
 }
 
 impl PDFSet {
-    pub fn frontiers(&self, block: Block) -> impl Iterator<Item = &Block> {
+    pub fn frontiers(&self, block: BlockId) -> impl Iterator<Item = &BlockId> {
         self.df_set
             .frontiers(block)
             .filter(|block| **block != self.entry && **block != self.exit)
     }
 
-    pub fn in_frontier_of(&self, block: Block, of: Block) -> bool {
+    pub fn in_frontier_of(&self, block: BlockId, of: BlockId) -> bool {
         self.df_set.in_frontier_of(block, of)
     }
 
-    pub fn frontier_num_of(&self, of: Block) -> usize {
+    pub fn frontier_num_of(&self, of: BlockId) -> usize {
         self.frontiers(of).count()
     }
 
@@ -133,8 +133,8 @@ impl PDFSet {
 impl Default for PDFSet {
     fn default() -> Self {
         Self {
-            entry: Block(0),
-            exit: Block(0),
+            entry: BlockId(0),
+            exit: BlockId(0),
             df_set: DFSet::default(),
         }
     }
@@ -154,7 +154,7 @@ mod tests {
         (post_dom_tree, pdf)
     }
 
-    fn test_pdf(pdf: &PDFSet, of: Block, frontieres: &[Block]) -> bool {
+    fn test_pdf(pdf: &PDFSet, of: BlockId, frontieres: &[BlockId]) -> bool {
         if pdf.frontier_num_of(of) != frontieres.len() {
             return false;
         }

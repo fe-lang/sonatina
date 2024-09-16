@@ -13,7 +13,7 @@ use crate::{
 
 use super::{
     module::{DisplayCalleeFuncRef, FuncRef},
-    Block, DataFlowGraph, Type, Value, ValueId,
+    BlockId, DataFlowGraph, Type, Value, ValueId,
 };
 
 /// An opaque reference to [`InsnData`]
@@ -80,19 +80,19 @@ pub enum InsnData {
     },
 
     /// Unconditional jump instruction.
-    Jump { dests: [Block; 1] },
+    Jump { dests: [BlockId; 1] },
 
     /// Conditional jump instruction.
     Branch {
         args: [ValueId; 1],
-        dests: [Block; 2],
+        dests: [BlockId; 2],
     },
 
     /// Indirect jump instruction.
     BrTable {
         args: SmallVec<[ValueId; 8]>,
-        default: Option<Block>,
-        table: SmallVec<[Block; 8]>,
+        default: Option<BlockId>,
+        table: SmallVec<[BlockId; 8]>,
     },
 
     /// Allocate a memory on the stack frame for the given type.
@@ -107,7 +107,7 @@ pub enum InsnData {
     /// Phi function.
     Phi {
         values: SmallVec<[ValueId; 8]>,
-        blocks: SmallVec<[Block; 8]>,
+        blocks: SmallVec<[BlockId; 8]>,
         ty: Type,
     },
 }
@@ -172,7 +172,7 @@ impl InsnData {
         Self::Alloca { ty }
     }
 
-    pub fn jump(dest: Block) -> InsnData {
+    pub fn jump(dest: BlockId) -> InsnData {
         InsnData::Jump { dests: [dest] }
     }
 
@@ -207,7 +207,7 @@ impl InsnData {
         }
     }
 
-    pub fn rewrite_branch_dest(&mut self, from: Block, to: Block) {
+    pub fn rewrite_branch_dest(&mut self, from: BlockId, to: BlockId) {
         match self {
             Self::Jump { dests, .. } => {
                 if dests[0] == from {
@@ -282,7 +282,7 @@ impl InsnData {
         }
     }
 
-    pub fn append_phi_arg(&mut self, value: ValueId, block: Block) {
+    pub fn append_phi_arg(&mut self, value: ValueId, block: BlockId) {
         match self {
             Self::Phi { values, blocks, .. } => {
                 values.push(value);
@@ -296,7 +296,7 @@ impl InsnData {
     ///
     /// # Panics
     /// If `insn` is not a phi insn or there is no phi argument from the block, then the function panics.
-    pub fn remove_phi_arg(&mut self, from: Block) -> ValueId {
+    pub fn remove_phi_arg(&mut self, from: BlockId) -> ValueId {
         let (values, blocks) = match self {
             InsnData::Phi { values, blocks, .. } => (values, blocks),
             _ => panic!("insn is not a phi function"),
@@ -315,14 +315,14 @@ impl InsnData {
         values.remove(index)
     }
 
-    pub fn phi_blocks(&self) -> &[Block] {
+    pub fn phi_blocks(&self) -> &[BlockId] {
         match self {
             InsnData::Phi { blocks, .. } => blocks,
             _ => panic!("insn is not a phi function"),
         }
     }
 
-    pub fn phi_blocks_mut(&mut self) -> &mut [Block] {
+    pub fn phi_blocks_mut(&mut self) -> &mut [BlockId] {
         match self {
             InsnData::Phi { blocks, .. } => blocks,
             _ => panic!("insn is not a phi function"),
@@ -678,20 +678,20 @@ pub enum BranchInfo<'a> {
 
     /// Unconditional jump
     Jump {
-        dest: Block,
+        dest: BlockId,
     },
 
     /// Conditional jump.
     Br {
         cond: ValueId,
-        dests: &'a [Block],
+        dests: &'a [BlockId],
     },
 
     /// Indirect jump.
     BrTable {
         args: &'a [ValueId],
-        default: Option<Block>,
-        table: &'a [Block],
+        default: Option<BlockId>,
+        table: &'a [BlockId],
     },
 }
 
@@ -720,7 +720,7 @@ pub struct BranchDestIter<'a> {
 }
 
 impl<'a> Iterator for BranchDestIter<'a> {
-    type Item = Block;
+    type Item = BlockId;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.idx >= self.branch_info.dests_num() {

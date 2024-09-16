@@ -4,7 +4,7 @@ use crate::{
     func_cursor::{CursorLocation, FuncCursor},
     insn::{BinaryOp, CastOp, DataLocationKind, InsnData, UnaryOp},
     module::FuncRef,
-    Block, Function, GlobalVariable, Immediate, Type, ValueId,
+    BlockId, Function, GlobalVariable, Immediate, Type, ValueId,
 };
 
 use super::{
@@ -78,13 +78,13 @@ where
         value
     }
 
-    pub fn append_block(&mut self) -> Block {
+    pub fn append_block(&mut self) -> BlockId {
         let block = self.cursor.make_block(&mut self.func);
         self.cursor.append_block(&mut self.func, block);
         block
     }
 
-    pub fn switch_to_block(&mut self, block: Block) {
+    pub fn switch_to_block(&mut self, block: BlockId) {
         self.cursor.set_location(CursorLocation::BlockBottom(block));
     }
 
@@ -208,7 +208,7 @@ where
         self.insert_insn(insn_data).unwrap()
     }
 
-    pub fn jump(&mut self, dest: Block) {
+    pub fn jump(&mut self, dest: BlockId) {
         debug_assert!(!self.ssa_builder.is_sealed(dest));
         let insn_data = InsnData::Jump { dests: [dest] };
 
@@ -217,7 +217,12 @@ where
         self.insert_insn(insn_data);
     }
 
-    pub fn br_table(&mut self, cond: ValueId, default: Option<Block>, table: &[(ValueId, Block)]) {
+    pub fn br_table(
+        &mut self,
+        cond: ValueId,
+        default: Option<BlockId>,
+        table: &[(ValueId, BlockId)],
+    ) {
         if cfg!(debug_assertions) {
             if let Some(default) = default {
                 debug_assert!(!self.ssa_builder.is_sealed(default))
@@ -252,7 +257,7 @@ where
         self.insert_insn(insn_data);
     }
 
-    pub fn br(&mut self, cond: ValueId, then: Block, else_: Block) {
+    pub fn br(&mut self, cond: ValueId, then: BlockId, else_: BlockId) {
         debug_assert!(!self.ssa_builder.is_sealed(then));
         debug_assert!(!self.ssa_builder.is_sealed(else_));
 
@@ -288,7 +293,7 @@ where
         self.insert_insn(insn_data)
     }
 
-    pub fn phi(&mut self, ty: Type, args: &[(ValueId, Block)]) -> ValueId {
+    pub fn phi(&mut self, ty: Type, args: &[(ValueId, BlockId)]) -> ValueId {
         let insn_data = InsnData::Phi {
             values: args.iter().map(|(val, _)| *val).collect(),
             blocks: args.iter().map(|(_, block)| *block).collect(),
@@ -297,7 +302,7 @@ where
         self.insert_insn(insn_data).unwrap()
     }
 
-    pub fn append_phi_arg(&mut self, phi_value: ValueId, value: ValueId, block: Block) {
+    pub fn append_phi_arg(&mut self, phi_value: ValueId, value: ValueId, block: BlockId) {
         let insn = self
             .func
             .dfg
@@ -335,7 +340,7 @@ where
         self.ssa_builder.seal_all(&mut self.func);
     }
 
-    pub fn is_sealed(&self, block: Block) -> bool {
+    pub fn is_sealed(&self, block: BlockId) -> bool {
         self.ssa_builder.is_sealed(block)
     }
 

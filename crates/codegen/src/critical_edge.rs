@@ -3,7 +3,7 @@ use sonatina_ir::{func_cursor::FuncCursor, ControlFlowGraph};
 use sonatina_ir::{
     func_cursor::{CursorLocation, InsnInserter},
     insn::InsnData,
-    Block, Function, Insn,
+    BlockId, Function, Insn,
 };
 
 #[derive(Debug)]
@@ -77,7 +77,12 @@ impl CriticalEdgeSplitter {
         self.modify_phi_blocks(func, original_dest, inserted_dest);
     }
 
-    fn modify_phi_blocks(&self, func: &mut Function, original_dest: Block, inserted_dest: Block) {
+    fn modify_phi_blocks(
+        &self,
+        func: &mut Function,
+        original_dest: BlockId,
+        inserted_dest: BlockId,
+    ) {
         for insn in func.layout.iter_insn(original_dest) {
             if !func.dfg.is_phi(insn) {
                 continue;
@@ -94,9 +99,9 @@ impl CriticalEdgeSplitter {
     fn modify_cfg(
         &self,
         cfg: &mut ControlFlowGraph,
-        source_block: Block,
-        original_dest: Block,
-        inserted_dest: Block,
+        source_block: BlockId,
+        original_dest: BlockId,
+        inserted_dest: BlockId,
     ) {
         cfg.remove_edge(source_block, original_dest);
         cfg.add_edge(source_block, inserted_dest);
@@ -107,11 +112,11 @@ impl CriticalEdgeSplitter {
 #[derive(Debug)]
 struct CriticalEdge {
     insn: Insn,
-    to: Block,
+    to: BlockId,
 }
 
 impl CriticalEdge {
-    fn new(insn: Insn, to: Block) -> Self {
+    fn new(insn: Insn, to: BlockId) -> Self {
         Self { insn, to }
     }
 }

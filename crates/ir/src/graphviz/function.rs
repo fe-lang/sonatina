@@ -2,11 +2,11 @@ use std::iter;
 
 use dot2::{label::Text, GraphWalk, Id, Labeller, Style};
 
-use crate::{value::DisplayArgValue, Block, ControlFlowGraph, Function, InsnData};
+use crate::{value::DisplayArgValue, BlockId, ControlFlowGraph, Function, InsnData};
 
 use super::block::BlockNode;
 
-pub(super) const DUMMY_BLOCK: Block = Block(u32::MAX);
+pub(super) const DUMMY_BLOCK: BlockId = BlockId(u32::MAX);
 
 pub(super) struct FunctionGraph<'a> {
     func: &'a Function,
@@ -87,7 +87,7 @@ impl<'a> GraphWalk<'a> for FunctionGraph<'a> {
         let dummy_block = blocks.pop().unwrap();
         let mut edges = vec![BlockEdge {
             from: dummy_block,
-            to: BlockNode::new(func, cfg, Block(0u32)),
+            to: BlockNode::new(func, cfg, BlockId(0u32)),
             func,
         }];
         for block in blocks {
