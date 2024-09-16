@@ -18,6 +18,7 @@ pub trait Inst: inst_set::sealed::Registered + Any {
     fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut Value));
     fn has_side_effect(&self) -> bool;
     fn as_text(&self) -> &'static str;
+    fn is_terminator(&self) -> bool;
 }
 
 /// This trait works as a "proof" that a specific ISA contains `I`,
