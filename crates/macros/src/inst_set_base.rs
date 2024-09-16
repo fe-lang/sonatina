@@ -77,8 +77,14 @@ impl syn::parse::Parse for TraitDefinition {
     }
 }
 
+/// convert path to the inst struct to `has_inst` method name.
+/// e.g., `foo::Add` => `has_add`
 pub(super) fn path_to_method_name(p: &syn::Path) -> syn::Ident {
     let ident = &p.segments.last().as_ref().unwrap().ident;
+    ty_name_to_method_name(ident)
+}
+
+pub(super) fn ty_name_to_method_name(ident: &syn::Ident) -> syn::Ident {
     let s_ident = convert_to_snake(&ident.to_string());
     quote::format_ident!("has_{s_ident}")
 }

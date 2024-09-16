@@ -1,3 +1,5 @@
+use crate::inst_set_base::ty_name_to_method_name;
+
 use super::convert_to_snake;
 
 use quote::quote;
@@ -54,19 +56,19 @@ impl InstStruct {
     fn build(self) -> syn::Result<proc_macro2::TokenStream> {
         let ctor = self.make_ctor();
         let accessors = self.make_accessors();
-        let cast_fn = self.make_cast_fn();
 
         let struct_name = &self.struct_name;
         let impl_inst = self.impl_inst();
+        let impl_inst_cast = self.impl_inst_cast();
         Ok(quote! {
             impl #struct_name {
                 #ctor
 
                 #accessors
 
-                #cast_fn
             }
 
+           #impl_inst_cast
             #impl_inst
         })
     }
@@ -177,24 +179,38 @@ impl InstStruct {
         }
     }
 
-    fn make_cast_fn(&self) -> proc_macro2::TokenStream {
+    fn impl_inst_cast(&self) -> proc_macro2::TokenStream {
+        let struct_name = &self.struct_name;
+        let has_inst_method = ty_name_to_method_name(struct_name);
         quote! {
-            pub fn cast<'i>(hi: &dyn crate::HasInst<Self>, inst: &'i dyn crate::Inst) -> Option<&'i Self> {
-                if hi.is(inst) {
-                    unsafe { Some(&*(inst as *const dyn crate::Inst as *const Self)) }
-                } else {
-                    None
+            impl crate::InstCast for #struct_name {
+                fn downcast<'i>(hi: &dyn crate::HasInst<Self>, inst: &'i dyn crate::Inst) -> Option<&'i Self> {
+                    if hi.is(inst) {
+                        unsafe { Some(&*(inst as *const dyn crate::Inst as *const Self)) }
+                    } else {
+                        None
+                    }
                 }
-            }
 
-            pub fn cast_mut<'i>(
-                hi: &dyn crate::HasInst<Self>,
-                inst: &'i mut dyn crate::Inst,
-            ) -> Option<&'i mut Self> {
-                if hi.is(inst) {
-                    unsafe { Some(&mut *(inst as *mut dyn crate::Inst as *mut Self)) }
-                } else {
-                    None
+                fn downcast_mut<'i>(
+                    hi: &dyn crate::HasInst<Self>,
+                    inst: &'i mut dyn crate::Inst,
+                ) -> Option<&'i mut Self> {
+                    if hi.is(inst) {
+                        unsafe { Some(&mut *(inst as *mut dyn crate::Inst as *mut Self)) }
+                    } else {
+                        None
+                    }
+                }
+
+                fn downcast_with_isb<'i>(is: &dyn crate::InstSetBase, inst: &'i dyn crate::Inst) -> Option<&'i Self> {
+                    let hi = is.#has_inst_method()?;
+                    Self::downcast(hi, inst)
+                }
+
+                fn downcast_mut_with_isb<'i>(is: &dyn crate::InstSetBase, inst: &'i mut dyn crate::Inst) -> Option<&'i mut Self> {
+                    let hi = is.#has_inst_method()?;
+                    Self::downcast_mut(hi, inst)
                 }
             }
         }
