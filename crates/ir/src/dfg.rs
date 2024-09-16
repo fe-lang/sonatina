@@ -13,7 +13,7 @@ use super::{BranchInfo, Immediate, Insn, InsnData, Type, Value, ValueId};
 pub struct DataFlowGraph {
     pub ctx: ModuleCtx,
     #[doc(hidden)]
-    pub blocks: PrimaryMap<Block, BlockData>,
+    pub blocks: PrimaryMap<BlockId, BlockData>,
     #[doc(hidden)]
     pub values: PrimaryMap<ValueId, Value>,
     insns: PrimaryMap<Insn, InsnData>,
@@ -36,7 +36,7 @@ impl DataFlowGraph {
         }
     }
 
-    pub fn make_block(&mut self) -> Block {
+    pub fn make_block(&mut self) -> BlockId {
         self.blocks.push(BlockData::new())
     }
 
@@ -147,7 +147,7 @@ impl DataFlowGraph {
         *self.users(value).nth(idx).unwrap()
     }
 
-    pub fn block_data(&self, block: Block) -> &BlockData {
+    pub fn block_data(&self, block: BlockId) -> &BlockData {
         &self.blocks[block]
     }
 
@@ -194,15 +194,15 @@ impl DataFlowGraph {
         }
     }
 
-    pub fn phi_blocks(&self, insn: Insn) -> &[Block] {
+    pub fn phi_blocks(&self, insn: Insn) -> &[BlockId] {
         self.insns[insn].phi_blocks()
     }
 
-    pub fn phi_blocks_mut(&mut self, insn: Insn) -> &mut [Block] {
+    pub fn phi_blocks_mut(&mut self, insn: Insn) -> &mut [BlockId] {
         self.insns[insn].phi_blocks_mut()
     }
 
-    pub fn append_phi_arg(&mut self, insn: Insn, value: ValueId, block: Block) {
+    pub fn append_phi_arg(&mut self, insn: Insn, value: ValueId, block: BlockId) {
         self.insns[insn].append_phi_arg(value, block);
         self.attach_user(insn);
     }
@@ -211,7 +211,7 @@ impl DataFlowGraph {
     ///
     /// # Panics
     /// If `insn` is not a phi insn or there is no phi argument from the block, then the function panics.
-    pub fn remove_phi_arg(&mut self, insn: Insn, from: Block) -> ValueId {
+    pub fn remove_phi_arg(&mut self, insn: Insn, from: BlockId) -> ValueId {
         let removed = self.insns[insn].remove_phi_arg(from);
         self.remove_user(removed, insn);
         removed
@@ -249,7 +249,7 @@ impl DataFlowGraph {
         self.insns[insn].analyze_branch()
     }
 
-    pub fn remove_branch_dest(&mut self, insn: Insn, dest: Block) {
+    pub fn remove_branch_dest(&mut self, insn: Insn, dest: BlockId) {
         let this = &mut self.insns[insn];
         match this {
             InsnData::Jump { .. } => panic!("can't remove destination from `Jump` insn"),
@@ -303,7 +303,7 @@ impl DataFlowGraph {
         }
     }
 
-    pub fn rewrite_branch_dest(&mut self, insn: Insn, from: Block, to: Block) {
+    pub fn rewrite_branch_dest(&mut self, insn: Insn, from: BlockId, to: BlockId) {
         self.insns[insn].rewrite_branch_dest(from, to)
     }
 
@@ -338,8 +338,8 @@ pub enum ValueDef {
 
 /// An opaque reference to [`BlockData`]
 #[derive(Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
-pub struct Block(pub u32);
-entity_impl!(Block, "block");
+pub struct BlockId(pub u32);
+entity_impl!(BlockId, "block");
 
 /// A block data definition.
 /// A Block data doesn't hold any information for layout of a program. It is managed by

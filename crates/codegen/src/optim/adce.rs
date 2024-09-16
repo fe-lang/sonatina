@@ -8,13 +8,13 @@ use crate::post_domtree::{PDFSet, PDTIdom, PostDomTree};
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     insn::InsnData,
-    Block, Function, Insn,
+    BlockId, Function, Insn,
 };
 
 pub struct AdceSolver {
     live_insns: SecondaryMap<Insn, bool>,
-    live_blocks: SecondaryMap<Block, bool>,
-    empty_blocks: BTreeSet<Block>,
+    live_blocks: SecondaryMap<BlockId, bool>,
+    empty_blocks: BTreeSet<BlockId>,
     post_domtree: PostDomTree,
     worklist: Vec<Insn>,
 }
@@ -99,7 +99,7 @@ impl AdceSolver {
         }
     }
 
-    fn mark_block(&mut self, block: Block) {
+    fn mark_block(&mut self, block: BlockId) {
         self.live_blocks[block] = true;
     }
 
@@ -107,7 +107,7 @@ impl AdceSolver {
         self.live_insns[insn]
     }
 
-    fn does_block_live(&self, block: Block) -> bool {
+    fn does_block_live(&self, block: BlockId) -> bool {
         self.live_blocks[block]
     }
 
@@ -171,7 +171,7 @@ impl AdceSolver {
         br_insn_modified
     }
 
-    fn living_post_dom(&self, mut block: Block) -> Option<Block> {
+    fn living_post_dom(&self, mut block: BlockId) -> Option<BlockId> {
         loop {
             let idom = self.post_domtree.idom_of(block)?;
             match idom {
@@ -187,7 +187,7 @@ impl AdceSolver {
         &self,
         func: &mut Function,
         inserter: &mut InsnInserter,
-        block: Block,
+        block: BlockId,
     ) -> bool {
         let last_insn = match func.layout.last_insn_of(block) {
             Some(insn) => insn,

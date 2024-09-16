@@ -7,7 +7,7 @@ use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
 use sonatina_ir::{
     insn::{BinaryOp, CastOp, DataLocationKind, UnaryOp},
     module::FuncRef,
-    Block, DataFlowGraph, Immediate, Insn, InsnData, Type, ValueId,
+    BlockId, DataFlowGraph, Immediate, Insn, InsnData, Type, ValueId,
 };
 
 #[allow(clippy::all)]
@@ -83,12 +83,12 @@ fn try_swap_arg(ctx: &mut SimplifyContext, expr: Expr) -> Option<Expr> {
 type Unit = ();
 type ArgArray1 = [ExprValue; 1];
 type ArgArray2 = [ExprValue; 2];
-type BlockArray1 = [Block; 1];
-type BlockArray2 = [Block; 2];
+type BlockArray1 = [BlockId; 1];
+type BlockArray2 = [BlockId; 2];
 
-type BlockList = SmallVec<[Block; 8]>;
+type BlockList = SmallVec<[BlockId; 8]>;
 type ArgList = SmallVec<[ExprValue; 8]>;
-type BrTableDefaultDest = Option<Block>;
+type BrTableDefaultDest = Option<BlockId>;
 
 /// An opaque reference to [`ExprData`]
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]

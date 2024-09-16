@@ -5,7 +5,7 @@ use sonatina_ir::{
     module::FuncRef,
     types::{DisplayCompoundType, DisplayType},
     value::DisplayArgValue,
-    Block, Function, Insn, Type, ValueId,
+    BlockId, Function, Insn, Type, ValueId,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -13,16 +13,16 @@ pub enum ErrorKind {
     // Function errors
     PhiInEntryBlock(Insn),
     // Block errors
-    EmptyBlock(Block),
+    EmptyBlock(BlockId),
     TerminatorBeforeEnd(Insn),
     NotEndedByTerminator(Insn),
     InstructionMapMismatched(Insn),
     BranchBrokenLink(Insn),
     // Instruction errors
     ValueIsNullReference(ValueId),
-    BlockIsNullReference(Block),
+    BlockIsNullReference(BlockId),
     FunctionIsNullReference(FuncRef),
-    BranchToEntryBlock(Block),
+    BranchToEntryBlock(BlockId),
     // SSA form errors
     ValueLeak(ValueId),
     // Type errors
@@ -145,8 +145,8 @@ impl<'a> fmt::Display for DisplayErrorKind<'a> {
 #[derive(Debug, Clone, Copy)]
 pub enum IrSource {
     Callee(FuncRef),
-    Block(Block),
+    Block(BlockId),
     Insn(Insn),
-    Value(Value),
+    Value(ValueId),
     Type(Type),
 }

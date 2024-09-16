@@ -1,5 +1,5 @@
 use cranelift_entity::packed_option::ReservedValue;
-use sonatina_ir::{module::FuncRef, Block, Insn, Layout};
+use sonatina_ir::{module::FuncRef, BlockId, Insn, Layout};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProgramCounter {
@@ -38,7 +38,7 @@ impl ProgramCounter {
         self.insn = layout.next_insn_of(self.insn).unwrap();
     }
 
-    pub fn branch_to(&mut self, block: Block, layout: &Layout) {
+    pub fn branch_to(&mut self, block: BlockId, layout: &Layout) {
         self.insn = layout.first_insn_of(block).unwrap();
     }
 

@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 use dot2::label;
 
-use crate::{function::DisplaySignature, insn::DisplayInsn, Block, ControlFlowGraph, Function};
+use crate::{function::DisplaySignature, insn::DisplayInsn, BlockId, ControlFlowGraph, Function};
 
 use super::function::DUMMY_BLOCK;
 
@@ -10,11 +10,11 @@ use super::function::DUMMY_BLOCK;
 pub(super) struct BlockNode<'a> {
     pub(super) func: &'a Function,
     pub(super) cfg: &'a ControlFlowGraph,
-    pub(super) block: Block,
+    pub(super) block: BlockId,
 }
 
 impl<'a> BlockNode<'a> {
-    pub(super) fn new(func: &'a Function, cfg: &'a ControlFlowGraph, block: Block) -> Self {
+    pub(super) fn new(func: &'a Function, cfg: &'a ControlFlowGraph, block: BlockId) -> Self {
         Self { func, cfg, block }
     }
 

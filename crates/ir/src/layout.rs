@@ -1,14 +1,14 @@
 //! This module contains function layout information including block order and instruction order.
 use cranelift_entity::SecondaryMap;
 
-use super::{Block, Insn};
+use super::{BlockId, Insn};
 
 #[derive(Debug, Clone)]
 pub struct Layout {
-    blocks: SecondaryMap<Block, BlockNode>,
+    blocks: SecondaryMap<BlockId, BlockNode>,
     insns: SecondaryMap<Insn, InsnNode>,
-    entry_block: Option<Block>,
-    last_block: Option<Block>,
+    entry_block: Option<BlockId>,
+    last_block: Option<BlockId>,
 }
 
 impl Default for Layout {
@@ -27,33 +27,33 @@ impl Layout {
         }
     }
 
-    pub fn entry_block(&self) -> Option<Block> {
+    pub fn entry_block(&self) -> Option<BlockId> {
         self.entry_block
     }
 
-    pub fn last_block(&self) -> Option<Block> {
+    pub fn last_block(&self) -> Option<BlockId> {
         self.last_block
     }
 
-    pub fn is_block_empty(&self, block: Block) -> bool {
+    pub fn is_block_empty(&self, block: BlockId) -> bool {
         self.first_insn_of(block).is_none()
     }
 
-    pub fn prev_block_of(&self, block: Block) -> Option<Block> {
+    pub fn prev_block_of(&self, block: BlockId) -> Option<BlockId> {
         debug_assert!(self.is_block_inserted(block));
         self.blocks[block].prev
     }
 
-    pub fn next_block_of(&self, block: Block) -> Option<Block> {
+    pub fn next_block_of(&self, block: BlockId) -> Option<BlockId> {
         debug_assert!(self.is_block_inserted(block));
         self.blocks[block].next
     }
 
-    pub fn is_block_inserted(&self, block: Block) -> bool {
+    pub fn is_block_inserted(&self, block: BlockId) -> bool {
         Some(block) == self.entry_block || self.blocks[block] != BlockNode::default()
     }
 
-    pub fn first_insn_of(&self, block: Block) -> Option<Insn> {
+    pub fn first_insn_of(&self, block: BlockId) -> Option<Insn> {
         debug_assert!(self.is_block_inserted(block));
         self.blocks[block].first_insn
     }
@@ -63,7 +63,7 @@ impl Layout {
         self.first_insn_of(block) == Some(insn)
     }
 
-    pub fn last_insn_of(&self, block: Block) -> Option<Insn> {
+    pub fn last_insn_of(&self, block: BlockId) -> Option<Insn> {
         debug_assert!(self.is_block_inserted(block));
         self.blocks[block].last_insn
     }
@@ -78,7 +78,7 @@ impl Layout {
         self.insns[insn].next
     }
 
-    pub fn insn_block(&self, insn: Insn) -> Block {
+    pub fn insn_block(&self, insn: Insn) -> BlockId {
         debug_assert!(self.is_insn_inserted(insn));
         self.insns[insn].block.unwrap()
     }
@@ -87,14 +87,14 @@ impl Layout {
         self.insns[insn] != InsnNode::default()
     }
 
-    pub fn iter_block(&self) -> impl Iterator<Item = Block> + '_ {
+    pub fn iter_block(&self) -> impl Iterator<Item = BlockId> + '_ {
         BlockIter {
             next: self.entry_block,
             blocks: &self.blocks,
         }
     }
 
-    pub fn iter_insn(&self, block: Block) -> impl Iterator<Item = Insn> + '_ {
+    pub fn iter_insn(&self, block: BlockId) -> impl Iterator<Item = Insn> + '_ {
         debug_assert!(self.is_block_inserted(block));
         InsnIter {
             next: self.blocks[block].first_insn,
@@ -102,7 +102,7 @@ impl Layout {
         }
     }
 
-    pub fn append_block(&mut self, block: Block) {
+    pub fn append_block(&mut self, block: BlockId) {
         debug_assert!(!self.is_block_inserted(block));
 
         let mut block_node = BlockNode::default();
@@ -119,7 +119,7 @@ impl Layout {
         self.last_block = Some(block);
     }
 
-    pub fn insert_block_before(&mut self, block: Block, before: Block) {
+    pub fn insert_block_before(&mut self, block: BlockId, before: BlockId) {
         debug_assert!(self.is_block_inserted(before));
         debug_assert!(!self.is_block_inserted(block));
 
@@ -138,7 +138,7 @@ impl Layout {
         self.blocks[block] = block_node;
     }
 
-    pub fn insert_block_after(&mut self, block: Block, after: Block) {
+    pub fn insert_block_after(&mut self, block: BlockId, after: BlockId) {
         debug_assert!(self.is_block_inserted(after));
         debug_assert!(!self.is_block_inserted(block));
 
@@ -156,7 +156,7 @@ impl Layout {
         self.blocks[block] = block_node;
     }
 
-    pub fn remove_block(&mut self, block: Block) {
+    pub fn remove_block(&mut self, block: BlockId) {
         debug_assert!(self.is_block_inserted(block));
 
         let block_node = &mut self.blocks[block];
@@ -184,7 +184,7 @@ impl Layout {
         self.blocks[block] = BlockNode::default();
     }
 
-    pub fn append_insn(&mut self, insn: Insn, block: Block) {
+    pub fn append_insn(&mut self, insn: Insn, block: BlockId) {
         debug_assert!(self.is_block_inserted(block));
         debug_assert!(!self.is_insn_inserted(insn));
 
@@ -202,7 +202,7 @@ impl Layout {
         self.insns[insn] = insn_node;
     }
 
-    pub fn prepend_insn(&mut self, insn: Insn, block: Block) {
+    pub fn prepend_insn(&mut self, insn: Insn, block: BlockId) {
         debug_assert!(self.is_block_inserted(block));
         debug_assert!(!self.is_insn_inserted(insn));
 
@@ -292,14 +292,14 @@ impl Layout {
 }
 
 struct BlockIter<'a> {
-    next: Option<Block>,
-    blocks: &'a SecondaryMap<Block, BlockNode>,
+    next: Option<BlockId>,
+    blocks: &'a SecondaryMap<BlockId, BlockNode>,
 }
 
 impl<'a> Iterator for BlockIter<'a> {
-    type Item = Block;
+    type Item = BlockId;
 
-    fn next(&mut self) -> Option<Block> {
+    fn next(&mut self) -> Option<BlockId> {
         let next = self.next?;
         self.next = self.blocks[next].next;
         Some(next)
@@ -323,8 +323,8 @@ impl<'a> Iterator for InsnIter<'a> {
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 struct BlockNode {
-    prev: Option<Block>,
-    next: Option<Block>,
+    prev: Option<BlockId>,
+    next: Option<BlockId>,
     first_insn: Option<Insn>,
     last_insn: Option<Insn>,
 }
@@ -332,7 +332,7 @@ struct BlockNode {
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 struct InsnNode {
     /// An block in which the insn exists.
-    block: Option<Block>,
+    block: Option<BlockId>,
     /// A previous instruction.
     prev: Option<Insn>,
     /// A next instruction.
@@ -340,7 +340,7 @@ struct InsnNode {
 }
 
 impl InsnNode {
-    fn with_block(block: Block) -> Self {
+    fn with_block(block: BlockId) -> Self {
         Self {
             block: Some(block),
             prev: None,

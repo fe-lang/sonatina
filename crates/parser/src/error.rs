@@ -22,7 +22,7 @@ pub enum Error {
 
 #[derive(Debug)]
 pub enum UndefinedKind {
-    Block(ir::Block),
+    Block(ir::BlockId),
     Func(SmolStr),
     Type(SmolStr),
     Value(SmolStr),

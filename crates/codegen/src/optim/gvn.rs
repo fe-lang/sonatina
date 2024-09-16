@@ -17,7 +17,7 @@ use crate::domtree::{DomTree, DominatorTreeTraversable};
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
     insn::{BinaryOp, CastOp, InsnData, UnaryOp},
-    Block, ControlFlowGraph, DataFlowGraph, Function, Immediate, Insn, Type, ValueId,
+    BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, Insn, Type, ValueId,
 };
 
 use super::{constant_folding, simplify_impl};
@@ -46,7 +46,7 @@ pub struct GvnSolver {
     edges: PrimaryMap<Edge, EdgeData>,
 
     /// Maps [`Block`] to [`GvnBlockData`]
-    blocks: SecondaryMap<Block, GvnBlockData>,
+    blocks: SecondaryMap<BlockId, GvnBlockData>,
 
     value_phi_table: FxHashMap<ValuePhi, Class>,
 
@@ -234,7 +234,7 @@ impl GvnSolver {
         &mut self,
         func: &Function,
         domtree: &DomTree,
-        block: Block,
+        block: BlockId,
         insn: Insn,
     ) -> bool {
         match func.dfg.insn_data(insn) {
@@ -460,7 +460,7 @@ impl GvnSolver {
         func: &Function,
         domtree: &DomTree,
         value: ValueId,
-        target_block: Block,
+        target_block: BlockId,
     ) -> ValueId {
         let mut rep_value = self.leader(value);
 
@@ -551,7 +551,7 @@ impl GvnSolver {
     }
 
     /// Returns reachable incoming edges of the block.
-    fn reachable_in_edges(&self, block: Block) -> impl Iterator<Item = &Edge> {
+    fn reachable_in_edges(&self, block: BlockId) -> impl Iterator<Item = &Edge> {
         self.blocks[block]
             .in_edges
             .iter()
@@ -559,7 +559,7 @@ impl GvnSolver {
     }
 
     /// Returns unreachable outgoing edges of the block.
-    fn unreachable_out_edges(&self, block: Block) -> impl Iterator<Item = &Edge> {
+    fn unreachable_out_edges(&self, block: BlockId) -> impl Iterator<Item = &Edge> {
         self.blocks[block]
             .out_edges
             .iter()
@@ -567,7 +567,7 @@ impl GvnSolver {
     }
 
     /// Returns the incoming edge if the edge is only one reachable edge to the block.
-    fn dominant_reachable_in_edges(&self, block: Block) -> Option<Edge> {
+    fn dominant_reachable_in_edges(&self, block: BlockId) -> Option<Edge> {
         let mut edges = self.reachable_in_edges(block);
 
         let dominant = edges.next()?;
@@ -592,7 +592,7 @@ impl GvnSolver {
         func: &mut Function,
         domtree: &DomTree,
         insn_data: InsnData,
-        block: Block,
+        block: BlockId,
     ) -> GvnInsn {
         // Get canonicalized insn by swapping arguments with leader values.
         //
@@ -720,8 +720,8 @@ impl GvnSolver {
     /// Make edge data and append incoming/outgoing edges of corresponding blocks.
     fn add_edge_info(
         &mut self,
-        from: Block,
-        to: Block,
+        from: BlockId,
+        to: BlockId,
         cond: Option<ValueId>,
         predicate: Option<InsnData>,
         resolved_cond: Option<ValueId>,
@@ -846,7 +846,7 @@ impl GvnSolver {
     }
 
     /// Returns the rank of the block.
-    fn block_rank(&self, block: Block) -> u32 {
+    fn block_rank(&self, block: BlockId) -> u32 {
         self.blocks[block].rank
     }
 
@@ -871,7 +871,7 @@ impl GvnSolver {
 
     /// Find an edge that have corresponding `from` and `to` block.
     /// This method panics if an edge isn't found.
-    fn find_edge(&self, edges: &[Edge], from: Block, to: Block) -> Edge {
+    fn find_edge(&self, edges: &[Edge], from: BlockId, to: BlockId) -> Edge {
         edges
             .iter()
             .find(|edge| {
@@ -956,10 +956,10 @@ entity_impl!(Edge);
 #[derive(Debug, Clone)]
 struct EdgeData {
     /// An originating block.
-    from: Block,
+    from: BlockId,
 
     /// A destinating block.
-    to: Block,
+    to: BlockId,
 
     /// Hold a condition value if branch is conditional.
     cond: PackedOption<ValueId>,
@@ -1290,13 +1290,13 @@ enum ValuePhi {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ValuePhiInsn {
     /// The Block where the phi insn should be inserted.
-    block: Block,
+    block: BlockId,
     /// Argument of the value phi.
-    args: Vec<(ValuePhi, Block)>,
+    args: Vec<(ValuePhi, BlockId)>,
 }
 
 impl ValuePhiInsn {
-    fn with_capacity(block: Block, cap: usize) -> Self {
+    fn with_capacity(block: BlockId, cap: usize) -> Self {
         Self {
             block,
             args: Vec::with_capacity(cap),
@@ -1330,7 +1330,7 @@ struct RedundantCodeRemover<'a> {
     /// Record pairs of available class and representative value in bottom of blocks.
     /// This is necessary to decide whether the args of inserted phi functions are dominated by its
     /// definitions.
-    avail_set: SecondaryMap<Block, FxHashMap<Class, ValueId>>,
+    avail_set: SecondaryMap<BlockId, FxHashMap<Class, ValueId>>,
 
     /// Record resolved value phis.
     resolved_value_phis: FxHashMap<ValuePhi, ValueId>,
@@ -1405,7 +1405,7 @@ impl<'a> RedundantCodeRemover<'a> {
     }
 
     /// Remove redundant code in the block.
-    fn remove_code_in_block(&mut self, func: &mut Function, domtree: &DomTree, block: Block) {
+    fn remove_code_in_block(&mut self, func: &mut Function, domtree: &DomTree, block: BlockId) {
         // Get avail set in the top of the block.
         let mut avails = if block == func.layout.entry_block().unwrap() {
             // Insert always available values to avail set of the entry block.
@@ -1459,7 +1459,7 @@ impl<'a> RedundantCodeRemover<'a> {
     }
 
     /// Resolve value phis in the block.
-    fn resolve_value_phi_in_block(&mut self, func: &mut Function, block: Block) {
+    fn resolve_value_phi_in_block(&mut self, func: &mut Function, block: BlockId) {
         let mut inserter = InsnInserter::at_location(CursorLocation::BlockTop(block));
         loop {
             match inserter.loc() {
@@ -1503,7 +1503,7 @@ impl<'a> RedundantCodeRemover<'a> {
 
     /// Returns `true` if the `value_phi` can be resolved, i.e. all phi args are dominated by
     /// in the `block`.
-    fn is_value_phi_resolvable(&self, value_phi: &ValuePhi, block: Block) -> bool {
+    fn is_value_phi_resolvable(&self, value_phi: &ValuePhi, block: BlockId) -> bool {
         if self.resolved_value_phis.contains_key(value_phi) {
             return true;
         }
@@ -1533,7 +1533,7 @@ impl<'a> RedundantCodeRemover<'a> {
         inserter: &mut InsnInserter,
         value_phi: &ValuePhi,
         ty: Type,
-        block: Block,
+        block: BlockId,
     ) -> ValueId {
         debug_assert!(self.is_value_phi_resolvable(value_phi, block));
 
@@ -1611,7 +1611,7 @@ impl<'a> RedundantCodeRemover<'a> {
     }
 
     /// Rewrite phi insn when there is at least one unreachable incoming edge to the block.
-    fn rewrite_phi(&self, func: &mut Function, insn: Insn, block: Block) {
+    fn rewrite_phi(&self, func: &mut Function, insn: Insn, block: BlockId) {
         if !func.dfg.is_phi(insn) {
             return;
         }

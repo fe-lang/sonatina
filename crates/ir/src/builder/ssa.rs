@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 
 use crate::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    Block, Function, Insn, InsnData, Type, ValueId,
+    BlockId, Function, Insn, InsnData, Type, ValueId,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -18,7 +18,7 @@ pub struct VariableData {
 }
 
 pub(super) struct SsaBuilder {
-    blocks: SecondaryMap<Block, SsaBlockData>,
+    blocks: SecondaryMap<BlockId, SsaBlockData>,
 
     /// Records all declared variables.
     vars: PrimaryMap<Variable, VariableData>,
@@ -39,11 +39,16 @@ impl SsaBuilder {
         self.vars.push(VariableData { ty })
     }
 
-    pub(super) fn def_var(&mut self, var: Variable, value: ValueId, block: Block) {
+    pub(super) fn def_var(&mut self, var: Variable, value: ValueId, block: BlockId) {
         self.blocks[block].def_var(var, value);
     }
 
-    pub(super) fn use_var(&mut self, func: &mut Function, var: Variable, block: Block) -> ValueId {
+    pub(super) fn use_var(
+        &mut self,
+        func: &mut Function,
+        var: Variable,
+        block: BlockId,
+    ) -> ValueId {
         if let Some(value) = self.blocks[block].use_var_local(var) {
             value
         } else {
@@ -55,11 +60,11 @@ impl SsaBuilder {
         self.vars[var].ty
     }
 
-    pub(super) fn append_pred(&mut self, block: Block, pred: Block) {
+    pub(super) fn append_pred(&mut self, block: BlockId, pred: BlockId) {
         self.blocks[block].append_pred(pred);
     }
 
-    pub(super) fn seal_block(&mut self, func: &mut Function, block: Block) {
+    pub(super) fn seal_block(&mut self, func: &mut Function, block: BlockId) {
         if self.is_sealed(block) {
             return;
         }
@@ -79,11 +84,11 @@ impl SsaBuilder {
         }
     }
 
-    pub(super) fn is_sealed(&self, block: Block) -> bool {
+    pub(super) fn is_sealed(&self, block: BlockId) -> bool {
         self.blocks[block].is_sealed()
     }
 
-    fn use_var_recursive(&mut self, func: &mut Function, var: Variable, block: Block) -> ValueId {
+    fn use_var_recursive(&mut self, func: &mut Function, var: Variable, block: BlockId) -> ValueId {
         if !self.is_sealed(block) {
             let (insn, value) = self.prepend_phi(func, var, block);
             self.blocks[block].push_incomplete_phi(var, insn);
@@ -141,7 +146,12 @@ impl SsaBuilder {
         }
     }
 
-    fn prepend_phi(&mut self, func: &mut Function, var: Variable, block: Block) -> (Insn, ValueId) {
+    fn prepend_phi(
+        &mut self,
+        func: &mut Function,
+        var: Variable,
+        block: BlockId,
+    ) -> (Insn, ValueId) {
         let ty = self.var_ty(var);
         let insn_data = InsnData::Phi {
             values: SmallVec::new(),
@@ -161,7 +171,7 @@ impl SsaBuilder {
 #[derive(Default, Clone)]
 struct SsaBlockData {
     /// Records all predecessors of a block.
-    preds: Vec<Block>,
+    preds: Vec<BlockId>,
 
     /// Records sealed blocks.
     is_sealed: bool,
@@ -182,7 +192,7 @@ impl SsaBlockData {
         self.defs[var].expand()
     }
 
-    fn append_pred(&mut self, pred: Block) {
+    fn append_pred(&mut self, pred: BlockId) {
         self.preds.push(pred);
     }
 
@@ -202,7 +212,7 @@ impl SsaBlockData {
         self.incomplete_phis.push((var, insn))
     }
 
-    fn preds(&self) -> &[Block] {
+    fn preds(&self) -> &[BlockId] {
         &self.preds
     }
 }

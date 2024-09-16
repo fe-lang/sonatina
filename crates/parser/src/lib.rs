@@ -119,7 +119,7 @@ impl DebugProvider for DebugInfo {
 #[derive(Default)]
 struct BuildCtx {
     errors: Vec<Error>,
-    blocks: FxHashSet<ir::Block>,
+    blocks: FxHashSet<ir::BlockId>,
     value_names: FxHashMap<FuncRef, Bimap<ir::ValueId, SmolStr>>,
     func_value_names: Bimap<ir::ValueId, SmolStr>,
 }
@@ -147,7 +147,7 @@ impl BuildCtx {
 
         // collect all defined block ids
         self.blocks
-            .extend(func.blocks.iter().map(|b| ir::Block(b.id())));
+            .extend(func.blocks.iter().map(|b| ir::BlockId(b.id())));
         if let Some(max) = self.blocks.iter().max() {
             while fb.func.dfg.blocks.len() <= max.0 as usize {
                 fb.cursor.make_block(&mut fb.func);
@@ -155,7 +155,7 @@ impl BuildCtx {
         }
 
         for block in &func.blocks {
-            let block_id = ir::Block(block.id());
+            let block_id = ir::BlockId(block.id());
             fb.cursor.append_block(&mut fb.func, block_id);
             fb.cursor.set_location(CursorLocation::BlockTop(block_id));
 
@@ -309,8 +309,8 @@ impl BuildCtx {
         })
     }
 
-    fn block(&mut self, b: &ast::BlockId) -> ir::Block {
-        let block = ir::Block(b.id.unwrap());
+    fn block(&mut self, b: &ast::BlockId) -> ir::BlockId {
+        let block = ir::BlockId(b.id.unwrap());
         if !self.blocks.contains(&block) {
             self.errors
                 .push(Error::Undefined(UndefinedKind::Block(block), b.span));

@@ -4,7 +4,7 @@ use smallvec::SmallVec;
 
 use crate::domtree::DomTree;
 
-use sonatina_ir::{Block, ControlFlowGraph};
+use sonatina_ir::{BlockId, ControlFlowGraph};
 
 #[derive(Debug, Default)]
 pub struct LoopTree {
@@ -15,7 +15,7 @@ pub struct LoopTree {
 
     /// Maps blocks to its contained loop.
     /// If the block is contained by multiple nested loops, then the block is mapped to the innermost loop.
-    block_to_loop: SecondaryMap<Block, PackedOption<Loop>>,
+    block_to_loop: SecondaryMap<BlockId, PackedOption<Loop>>,
 }
 
 impl LoopTree {
@@ -63,7 +63,7 @@ impl LoopTree {
     }
 
     /// Returns `true` if the `block` is in the `lp`.
-    pub fn is_in_loop(&self, block: Block, lp: Loop) -> bool {
+    pub fn is_in_loop(&self, block: BlockId, lp: Loop) -> bool {
         let mut loop_of_block = self.loop_of_block(block);
         while let Some(cur_lp) = loop_of_block {
             if lp == cur_lp {
@@ -80,7 +80,7 @@ impl LoopTree {
     }
 
     /// Map `block` to `lp`.
-    pub fn map_block(&mut self, block: Block, lp: Loop) {
+    pub fn map_block(&mut self, block: BlockId, lp: Loop) {
         self.block_to_loop[block] = lp.into();
     }
 
@@ -91,7 +91,7 @@ impl LoopTree {
     }
 
     /// Returns header block of the `lp`.
-    pub fn loop_header(&self, lp: Loop) -> Block {
+    pub fn loop_header(&self, lp: Loop) -> BlockId {
         self.loops[lp].header
     }
 
@@ -102,7 +102,7 @@ impl LoopTree {
 
     /// Returns the loop that the `block` belongs to.
     /// If the `block` belongs to multiple loops, then returns the innermost loop.
-    pub fn loop_of_block(&self, block: Block) -> Option<Loop> {
+    pub fn loop_of_block(&self, block: BlockId) -> Option<Loop> {
         self.block_to_loop[block].expand()
     }
 
@@ -170,7 +170,7 @@ entity_impl!(Loop);
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LoopData {
     /// A header of the loop.
-    header: Block,
+    header: BlockId,
 
     /// A parent loop that includes the loop.
     parent: PackedOption<Loop>,
@@ -183,8 +183,8 @@ pub struct BlocksInLoopPostOrder<'a, 'b> {
     lpt: &'a LoopTree,
     cfg: &'b ControlFlowGraph,
     lp: Loop,
-    stack: Vec<Block>,
-    block_state: FxHashMap<Block, BlockState>,
+    stack: Vec<BlockId>,
+    block_state: FxHashMap<BlockId, BlockState>,
 }
 
 impl<'a, 'b> BlocksInLoopPostOrder<'a, 'b> {
@@ -202,7 +202,7 @@ impl<'a, 'b> BlocksInLoopPostOrder<'a, 'b> {
 }
 
 impl<'a, 'b> Iterator for BlocksInLoopPostOrder<'a, 'b> {
-    type Item = Block;
+    type Item = BlockId;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(&block) = self.stack.last() {
