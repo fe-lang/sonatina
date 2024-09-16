@@ -113,3 +113,28 @@ where
         self.iter_mut().for_each(|v| v.visit_mut_with(f))
     }
 }
+
+pub trait InstCast: Inst + Sized {
+    fn downcast<'i>(is: &dyn InstSetBase, inst: &'i dyn Inst) -> Option<&'i Self>;
+    fn downcast_mut<'i>(is: &dyn InstSetBase, inst: &'i mut dyn Inst) -> Option<&'i mut Self>;
+
+    fn upcast(self) -> Box<dyn Inst> {
+        Box::new(self)
+    }
+
+    fn map<'i, F, R>(is: &dyn InstSetBase, inst: &'i dyn Inst, f: F) -> Option<R>
+    where
+        F: Fn(&'i Self) -> R,
+    {
+        let data = Self::downcast(is, inst)?;
+        Some(f(data))
+    }
+
+    fn map_mut<'i, F, R>(is: &dyn InstSetBase, inst: &'i mut dyn Inst, f: F) -> Option<R>
+    where
+        F: Fn(&'i mut Self) -> R,
+    {
+        let data = Self::downcast_mut(is, inst)?;
+        Some(f(data))
+    }
+}
