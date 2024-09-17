@@ -180,12 +180,12 @@ impl InstSet {
                 let tid = std::any::TypeId::of::<#p>();
                 fn #cast_fn_name<'i>(self_: &#ident, inst: &'i dyn crate::Inst) -> #inst_kind_name<'i> {
                     use crate::prelude::*;
-                    let inst = #p::downcast(self_, inst).unwrap();
+                    let inst = InstDowncast::downcast(self_, inst).unwrap();
                     #inst_kind_name::#variant_name(inst)
                 }
                 fn #cast_mut_fn_name<'i>(self_: &#ident, inst: &'i mut dyn crate::Inst) -> #inst_kind_mut_name<'i> {
                     use crate::prelude::*;
-                    let inst = #p::downcast_mut(self_, inst).unwrap();
+                    let inst = InstDowncastMut::downcast_mut(self_, inst).unwrap();
                     #inst_kind_mut_name::#variant_name(inst)
                 }
 

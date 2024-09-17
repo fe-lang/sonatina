@@ -114,29 +114,26 @@ where
     }
 }
 
-pub trait InstCast: Inst + Sized {
-    fn downcast<'i>(_hi: &dyn HasInst<Self>, inst: &'i dyn Inst) -> Option<&'i Self>;
-    fn downcast_mut<'i>(_hi: &dyn HasInst<Self>, inst: &'i mut dyn Inst) -> Option<&'i mut Self>;
+pub trait InstDowncast: Sized {
+    fn downcast<'i>(isb: &dyn InstSetBase, inst: &'i dyn Inst) -> Option<Self>;
 
-    fn downcast_with_isb<'i>(isb: &dyn InstSetBase, inst: &'i dyn Inst) -> Option<&'i Self>;
-    fn downcast_mut_with_isb<'i>(
-        is: &dyn InstSetBase,
-        inst: &'i mut dyn Inst,
-    ) -> Option<&'i mut Self>;
-
-    fn map_with_isb<'i, F, R>(isb: &dyn InstSetBase, inst: &'i dyn Inst, f: F) -> Option<R>
+    fn map<'i, F, R>(isb: &dyn InstSetBase, inst: &'i dyn Inst, f: F) -> Option<R>
     where
-        F: Fn(&'i Self) -> R,
+        F: Fn(Self) -> R,
     {
-        let data = Self::downcast_with_isb(isb, inst)?;
+        let data = Self::downcast(isb, inst)?;
         Some(f(data))
     }
+}
 
-    fn map_mut_with_isb<'i, F, R>(isb: &dyn InstSetBase, inst: &'i mut dyn Inst, f: F) -> Option<R>
+pub trait InstDowncastMut: Sized {
+    fn downcast_mut<'i>(isb: &dyn InstSetBase, inst: &'i mut dyn Inst) -> Option<Self>;
+
+    fn map_mut<'i, F, R>(isb: &dyn InstSetBase, inst: &'i mut dyn Inst, f: F) -> Option<R>
     where
-        F: Fn(&'i mut Self) -> R,
+        F: Fn(Self) -> R,
     {
-        let data = Self::downcast_mut_with_isb(isb, inst)?;
+        let data = Self::downcast_mut(isb, inst)?;
         Some(f(data))
     }
 }

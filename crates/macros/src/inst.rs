@@ -183,34 +183,25 @@ impl InstStruct {
         let struct_name = &self.struct_name;
         let has_inst_method = ty_name_to_method_name(struct_name);
         quote! {
-            impl crate::InstCast for #struct_name {
-                fn downcast<'i>(hi: &dyn crate::HasInst<Self>, inst: &'i dyn crate::Inst) -> Option<&'i Self> {
+            impl crate::InstDowncast for &#struct_name {
+                fn downcast<'i>(isb: &dyn crate::InstSetBase, inst: &'i dyn crate::Inst) -> Option<Self> {
+                    let hi = isb.#has_inst_method()?;
                     if hi.is(inst) {
                         unsafe { Some(&*(inst as *const dyn crate::Inst as *const Self)) }
                     } else {
                         None
                     }
                 }
+            }
 
-                fn downcast_mut<'i>(
-                    hi: &dyn crate::HasInst<Self>,
-                    inst: &'i mut dyn crate::Inst,
-                ) -> Option<&'i mut Self> {
+            impl crate::InstDowncastMut for &mut #struct_name {
+                fn downcast_mut<'i>(isb: &dyn crate::InstSetBase, inst: &'i mut dyn crate::Inst) -> Option<Self> {
+                    let hi = isb.#has_inst_method()?;
                     if hi.is(inst) {
-                        unsafe { Some(&mut *(inst as *mut dyn crate::Inst as *mut Self)) }
+                        unsafe { Some(*(inst as *mut dyn crate::Inst as *mut Self)) }
                     } else {
                         None
                     }
-                }
-
-                fn downcast_with_isb<'i>(is: &dyn crate::InstSetBase, inst: &'i dyn crate::Inst) -> Option<&'i Self> {
-                    let hi = is.#has_inst_method()?;
-                    Self::downcast(hi, inst)
-                }
-
-                fn downcast_mut_with_isb<'i>(is: &dyn crate::InstSetBase, inst: &'i mut dyn crate::Inst) -> Option<&'i mut Self> {
-                    let hi = is.#has_inst_method()?;
-                    Self::downcast_mut(hi, inst)
                 }
             }
         }

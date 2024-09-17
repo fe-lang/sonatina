@@ -135,7 +135,6 @@ define_inst_set_base! {
 ///
 /// This macro provides the way to these safe downcast, and allow us to focus on the
 /// restricted concrete instruction set, instead of "all possible" instructions.
-///
 pub trait InstSetExt: InstSetBase {
     type InstKind<'i>;
     type InstKindMut<'i>;
