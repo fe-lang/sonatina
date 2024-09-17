@@ -10,7 +10,7 @@ use crate::{
 #[derive(Debug, Default)]
 pub struct ErrorStack {
     pub errors: PrimaryMap<ErrorRef, ErrorData>,
-    pub pass: SecondaryMap<PassRef, SmallVec<[ErrorRef; 8]>>,
+    pub pass: PrimaryMap<PassRef, SmallVec<[ErrorRef; 8]>>,
     pub block: SecondaryMap<Block, SmallVec<[ErrorRef; 8]>>,
     pub insn: SecondaryMap<Insn, SmallVec<[ErrorRef; 8]>>,
     pub callee: SecondaryMap<FuncRef, SmallVec<[ErrorRef; 8]>>,
