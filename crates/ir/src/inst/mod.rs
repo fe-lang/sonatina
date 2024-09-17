@@ -115,9 +115,9 @@ where
 }
 
 pub trait InstDowncast: Sized {
-    fn downcast<'i>(isb: &dyn InstSetBase, inst: &'i dyn Inst) -> Option<Self>;
+    fn downcast(isb: &dyn InstSetBase, inst: &dyn Inst) -> Option<Self>;
 
-    fn map<'i, F, R>(isb: &dyn InstSetBase, inst: &'i dyn Inst, f: F) -> Option<R>
+    fn map<F, R>(isb: &dyn InstSetBase, inst: &dyn Inst, f: F) -> Option<R>
     where
         F: Fn(Self) -> R,
     {
@@ -126,10 +126,19 @@ pub trait InstDowncast: Sized {
     }
 }
 
-pub trait InstDowncastMut: Sized {
-    fn downcast_mut<'i>(isb: &dyn InstSetBase, inst: &'i mut dyn Inst) -> Option<Self>;
+impl<T> InstDowncastMut for T
+where
+    T: InstDowncast,
+{
+    fn downcast_mut(isb: &dyn InstSetBase, inst: &mut dyn Inst) -> Option<Self> {
+        InstDowncast::downcast(isb, inst)
+    }
+}
 
-    fn map_mut<'i, F, R>(isb: &dyn InstSetBase, inst: &'i mut dyn Inst, f: F) -> Option<R>
+pub trait InstDowncastMut: Sized {
+    fn downcast_mut(isb: &dyn InstSetBase, inst: &mut dyn Inst) -> Option<Self>;
+
+    fn map_mut<F, R>(isb: &dyn InstSetBase, inst: &mut dyn Inst, f: F) -> Option<R>
     where
         F: Fn(Self) -> R,
     {
