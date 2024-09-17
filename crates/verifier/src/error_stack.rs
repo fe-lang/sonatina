@@ -2,17 +2,21 @@ use cranelift_entity::{PrimaryMap, SecondaryMap};
 use smallvec::SmallVec;
 use sonatina_ir::{module::FuncRef, types::CompoundType, Block, Function, Insn, Value};
 
-use crate::error::{kind::IrSource, Error, ErrorData, ErrorRef};
+use crate::{
+    error::{kind::IrSource, Error, ErrorData, ErrorRef},
+    pass::PassRef,
+};
 
 #[derive(Debug, Default)]
 pub struct ErrorStack {
+    pub errors: PrimaryMap<ErrorRef, ErrorData>,
+    pub pass: SecondaryMap<PassRef, SmallVec<[ErrorRef; 8]>>,
     pub block: SecondaryMap<Block, SmallVec<[ErrorRef; 8]>>,
     pub insn: SecondaryMap<Insn, SmallVec<[ErrorRef; 8]>>,
     pub callee: SecondaryMap<FuncRef, SmallVec<[ErrorRef; 8]>>,
     pub ssa: SecondaryMap<Value, SmallVec<[ErrorRef; 8]>>,
     pub ty: SmallVec<[ErrorRef; 8]>,
     pub cmpd_ty: SecondaryMap<CompoundType, SmallVec<[ErrorRef; 8]>>,
-    pub errors: PrimaryMap<ErrorRef, ErrorData>,
 }
 
 impl ErrorStack {
