@@ -1,3 +1,5 @@
+use crate::inst_set_base::ty_name_to_method_name;
+
 use super::convert_to_snake;
 
 use quote::quote;
@@ -18,6 +20,7 @@ pub fn derive_inst(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
 struct InstStruct {
     struct_name: syn::Ident,
     has_side_effect: bool,
+    is_terminator: bool,
     fields: Vec<InstField>,
 }
 
@@ -29,7 +32,7 @@ struct InstField {
 
 impl InstStruct {
     fn new(item_struct: syn::ItemStruct) -> syn::Result<Self> {
-        let has_side_effect = Self::check_side_effect_attr(&item_struct)?;
+        let (has_side_effect, is_terminator) = Self::check_attr(&item_struct)?;
 
         let struct_ident = item_struct.ident;
 
@@ -45,6 +48,7 @@ impl InstStruct {
         Ok(Self {
             struct_name: struct_ident,
             has_side_effect,
+            is_terminator,
             fields,
         })
     }
@@ -52,38 +56,44 @@ impl InstStruct {
     fn build(self) -> syn::Result<proc_macro2::TokenStream> {
         let ctor = self.make_ctor();
         let accessors = self.make_accessors();
-        let cast_fn = self.make_cast_fn();
 
         let struct_name = &self.struct_name;
         let impl_inst = self.impl_inst();
+        let impl_inst_cast = self.impl_inst_cast();
         Ok(quote! {
             impl #struct_name {
                 #ctor
 
                 #accessors
 
-                #cast_fn
             }
 
+           #impl_inst_cast
             #impl_inst
         })
     }
 
-    fn check_side_effect_attr(item_struct: &syn::ItemStruct) -> syn::Result<bool> {
+    fn check_attr(item_struct: &syn::ItemStruct) -> syn::Result<(bool, bool)> {
         let mut has_side_effect = false;
+        let mut is_terminator = false;
 
         for attr in &item_struct.attrs {
             if attr.path().is_ident("inst") {
                 let meta = attr.parse_args::<syn::Meta>()?;
-                if let syn::Meta::Path(path) = meta {
+                if let syn::Meta::Path(path) = &meta {
                     if path.is_ident("has_side_effect") {
                         has_side_effect = true;
+                    }
+                }
+                if let syn::Meta::Path(path) = &meta {
+                    if path.is_ident("terminator") {
+                        is_terminator = true;
                     }
                 }
             }
         }
 
-        Ok(has_side_effect)
+        Ok((has_side_effect, is_terminator))
     }
 
     fn parse_fields(fields: &syn::Fields) -> syn::Result<Vec<InstField>> {
@@ -169,24 +179,29 @@ impl InstStruct {
         }
     }
 
-    fn make_cast_fn(&self) -> proc_macro2::TokenStream {
+    fn impl_inst_cast(&self) -> proc_macro2::TokenStream {
+        let struct_name = &self.struct_name;
+        let has_inst_method = ty_name_to_method_name(struct_name);
         quote! {
-            pub fn cast<'i>(hi: &dyn crate::HasInst<Self>, inst: &'i dyn crate::Inst) -> Option<&'i Self> {
-                if hi.is(inst) {
-                    unsafe { Some(&*(inst as *const dyn crate::Inst as *const Self)) }
-                } else {
-                    None
+            impl crate::InstDowncast for &#struct_name {
+                fn downcast(isb: &dyn crate::InstSetBase, inst: &dyn crate::Inst) -> Option<Self> {
+                    let hi = isb.#has_inst_method()?;
+                    if hi.is(inst) {
+                        unsafe { Some(&*(inst as *const dyn crate::Inst as *const Self)) }
+                    } else {
+                        None
+                    }
                 }
             }
 
-            pub fn cast_mut<'i>(
-                hi: &dyn crate::HasInst<Self>,
-                inst: &'i mut dyn crate::Inst,
-            ) -> Option<&'i mut Self> {
-                if hi.is(inst) {
-                    unsafe { Some(&mut *(inst as *mut dyn crate::Inst as *mut Self)) }
-                } else {
-                    None
+            impl crate::InstDowncastMut for &mut #struct_name {
+                fn downcast_mut(isb: &dyn crate::InstSetBase, inst: &mut dyn crate::Inst) -> Option<Self> {
+                    let hi = isb.#has_inst_method()?;
+                    if hi.is(inst) {
+                        unsafe { Some(*(inst as *mut dyn crate::Inst as *mut Self)) }
+                    } else {
+                        None
+                    }
                 }
             }
         }
@@ -195,6 +210,7 @@ impl InstStruct {
     fn impl_inst(&self) -> proc_macro2::TokenStream {
         let struct_name = &self.struct_name;
         let has_side_effect = self.has_side_effect;
+        let is_terminator = self.is_terminator;
         let visit_fields: Vec<_> = self
             .fields
             .iter()
@@ -216,6 +232,11 @@ impl InstStruct {
                 fn has_side_effect(&self) -> bool {
                     #has_side_effect
                 }
+
+                fn is_terminator(&self) -> bool {
+                    #is_terminator
+                }
+
 
                 fn as_text(&self) -> &'static str {
                     #text_form
