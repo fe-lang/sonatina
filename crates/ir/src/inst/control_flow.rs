@@ -1,7 +1,7 @@
 use macros::Inst;
 use smallvec::SmallVec;
 
-use crate::{module::FuncRef, BlockId, Type, ValueId};
+use crate::{module::FuncRef, value_::ValueId, BlockId, Type};
 
 use super::InstDowncast;
 

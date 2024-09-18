@@ -11,7 +11,7 @@ use std::any::{Any, TypeId};
 
 use smallvec::SmallVec;
 
-use crate::{InstSetBase, ValueId};
+use crate::{value_::ValueId, InstSetBase};
 
 /// An opaque reference to dynamic [`Inst`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]

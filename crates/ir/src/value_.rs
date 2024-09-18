@@ -14,7 +14,7 @@ cranelift_entity::entity_impl!(ValueId);
 #[derive(Debug, Clone)]
 pub enum Value {
     /// The value is defined by an instruction.
-    Insn { insn: InstId, ty: Type },
+    Inst { inst: InstId, ty: Type },
 
     /// The value is a function argument.
     Arg { ty: Type, idx: usize },
