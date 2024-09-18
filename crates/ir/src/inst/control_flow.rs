@@ -64,7 +64,7 @@ pub enum BranchInfo<'i> {
 }
 
 impl<'i> BranchInfo<'i> {
-    pub fn iter_dets(self) -> impl Iterator<Item = Block> + 'i {
+    pub fn iter_dests(self) -> impl Iterator<Item = Block> + 'i {
         BranchDestIter {
             branch_info: self,
             idx: 0,
