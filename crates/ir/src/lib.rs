@@ -4,6 +4,7 @@ pub mod dfg;
 pub mod dfg_;
 pub mod func_cursor;
 pub mod function;
+pub mod function_;
 pub mod global_variable;
 pub mod graphviz;
 pub mod insn;

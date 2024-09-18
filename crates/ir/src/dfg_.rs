@@ -1,10 +1,10 @@
 //! This module contains Sonatine IR data flow graph.
 use std::collections::BTreeSet;
 
-use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap};
+use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use rustc_hash::FxHashMap;
 
-use crate::{inst::InstId, module::ModuleCtx, Block, BlockId, GlobalVariable, Inst};
+use crate::{inst::InstId, module::ModuleCtx, GlobalVariable, Inst};
 
 use super::{
     value_::{Immediate, Value, ValueId},
@@ -136,5 +136,22 @@ impl DataFlowGraph {
 
     pub fn inst_result(&self, inst_id: InstId) -> Option<ValueId> {
         self.inst_results[inst_id].expand()
+    }
+}
+
+/// An opaque reference to [`Block`]
+#[derive(Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
+pub struct BlockId(pub u32);
+entity_impl!(BlockId, "block");
+
+/// A block data definition.
+/// A Block data doesn't hold any information for layout of a program. It is managed by
+/// [`super::layout::Layout`].
+#[derive(Debug, Clone, Default)]
+pub struct Block {}
+
+impl Block {
+    pub fn new() -> Self {
+        Self::default()
     }
 }
