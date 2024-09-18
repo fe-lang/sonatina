@@ -1,7 +1,7 @@
 use macros::Inst;
 pub mod inst_set;
 
-use crate::ValueId;
+use crate::value_::ValueId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(has_side_effect)]

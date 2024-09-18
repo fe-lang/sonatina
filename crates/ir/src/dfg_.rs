@@ -6,7 +6,10 @@ use rustc_hash::FxHashMap;
 
 use crate::{inst::InstId, module::ModuleCtx, Block, BlockId, GlobalVariable, Inst};
 
-use super::{Immediate, Type, Value, ValueId};
+use super::{
+    value_::{Immediate, Value, ValueId},
+    Type,
+};
 
 pub struct DataFlowGraph {
     pub ctx: ModuleCtx,
@@ -101,11 +104,24 @@ impl DataFlowGraph {
         &self.values[value_id]
     }
 
+    pub fn value_ty(&self, value_id: ValueId) -> Type {
+        match &self.values[value_id] {
+            Value::Inst { ty, .. }
+            | Value::Arg { ty, .. }
+            | Value::Immediate { ty, .. }
+            | Value::Global { ty, .. } => *ty,
+        }
+    }
+
     pub fn attach_user(&mut self, inst_id: InstId) {
         let inst = &self.insts[inst_id];
         inst.visit_values(&mut |value| {
             self.users[value].insert(inst_id);
         })
+    }
+
+    pub fn remove_user(&mut self, value: ValueId, user: InstId) {
+        self.users[value].remove(&user);
     }
 
     /// Returns the all instructions that use the `value_id`.
@@ -114,11 +130,11 @@ impl DataFlowGraph {
     }
 
     /// Returns the number of instructions that use the `value_id`.
-    pub fn users_num(&self, value: ValueId) -> usize {
-        self.users[value].len()
+    pub fn users_num(&self, value_id: ValueId) -> usize {
+        self.users[value_id].len()
     }
 
-    pub fn remove_user(&mut self, value: ValueId, user: InstId) {
-        self.users[value].remove(&user);
+    pub fn inst_result(&self, inst_id: InstId) -> Option<ValueId> {
+        self.inst_results[inst_id].expand()
     }
 }
