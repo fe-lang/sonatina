@@ -41,7 +41,7 @@ impl InsnSimplifySolver {
         }
 
         while let Some(insn) = self.worklist.pop_front() {
-            if !func.layout.is_insn_inserted(insn) {
+            if !func.layout.is_inst_inserted(insn) {
                 continue;
             }
 
@@ -81,7 +81,7 @@ impl InsnSimplifySolver {
             func.dfg.change_to_alias(insn_result, value);
         };
 
-        inserter.remove_insn(func);
+        inserter.remove_inst(func);
     }
 
     pub fn replace_insn_with_data(

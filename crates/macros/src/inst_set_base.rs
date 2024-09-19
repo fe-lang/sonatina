@@ -37,8 +37,12 @@ impl TraitDefinition {
 
         quote! {
             #(#attrs)*
-            pub trait InstSetBase {
+            pub trait InstSetBase: crate::HasInst<crate::inst::control_flow::Phi>  {
                 #(#methods)*
+
+                fn upcast(&self) -> &dyn crate::HasInst<crate::inst::control_flow::Phi> {
+                    self.has_phi().unwrap()
+                }
             }
         }
     }

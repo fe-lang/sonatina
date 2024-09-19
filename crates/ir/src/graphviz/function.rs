@@ -125,7 +125,7 @@ impl<'a> BlockEdge<'a> {
         let Self { from, to, func } = self;
         let to = to.block;
         let from = from.block;
-        for insn in func.layout.iter_insn(to) {
+        for insn in func.layout.iter_inst(to) {
             if let InsnData::Phi { values, blocks, .. } = func.dfg.insn_data(insn) {
                 for (i, block) in blocks.into_iter().enumerate() {
                     if *block == from {

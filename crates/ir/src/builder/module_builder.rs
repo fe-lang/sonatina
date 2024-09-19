@@ -9,7 +9,6 @@ use crate::{
 
 use super::FunctionBuilder;
 
-#[derive(Debug)]
 pub struct ModuleBuilder {
     pub funcs: PrimaryMap<FuncRef, Function>,
 

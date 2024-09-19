@@ -10,7 +10,7 @@ use cranelift_entity::SecondaryMap;
 
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    insn::{BinaryOp, CastOp, InsnData, UnaryOp},
+    inst::{BinaryOp, CastOp, InsnData, UnaryOp},
     BlockId, ControlFlowGraph, Function, Immediate, Insn, Type, ValueId,
 };
 
@@ -63,7 +63,7 @@ impl SccpSolver {
             while let Some(value) = self.ssa_work.pop() {
                 changed = true;
                 for &user in func.dfg.users(value) {
-                    let user_block = func.layout.insn_block(user);
+                    let user_block = func.layout.inst_block(user);
                     if self.reachable_blocks.contains(&user_block) {
                         if func.dfg.is_phi(user) {
                             self.eval_phi(func, user);
@@ -103,7 +103,7 @@ impl SccpSolver {
             self.eval_insns_in(func, dest);
         }
 
-        if let Some(last_insn) = func.layout.last_insn_of(dest) {
+        if let Some(last_insn) = func.layout.last_inst_of(dest) {
             let branch_info = func.dfg.analyze_branch(last_insn);
             if branch_info.dests_num() == 1 {
                 self.flow_work.push(FlowEdge::new(
@@ -115,7 +115,7 @@ impl SccpSolver {
     }
 
     fn eval_phis_in(&mut self, func: &Function, block: BlockId) {
-        for insn in func.layout.iter_insn(block) {
+        for insn in func.layout.iter_inst(block) {
             if func.dfg.is_phi(insn) {
                 self.eval_phi(func, insn);
             }
@@ -126,7 +126,7 @@ impl SccpSolver {
         debug_assert!(func.dfg.is_phi(insn));
         debug_assert!(self
             .reachable_blocks
-            .contains(&func.layout.insn_block(insn)));
+            .contains(&func.layout.inst_block(insn)));
 
         for &arg in func.dfg.insn_args(insn) {
             if let Some(imm) = func.dfg.value_imm(arg) {
@@ -134,7 +134,7 @@ impl SccpSolver {
             }
         }
 
-        let block = func.layout.insn_block(insn);
+        let block = func.layout.inst_block(insn);
 
         let mut eval_result = LatticeCell::Bot;
         for (i, from) in func.dfg.phi_blocks(insn).iter().enumerate() {
@@ -153,7 +153,7 @@ impl SccpSolver {
     }
 
     fn eval_insns_in(&mut self, func: &Function, block: BlockId) {
-        for insn in func.layout.iter_insn(block) {
+        for insn in func.layout.iter_inst(block) {
             if func.dfg.is_phi(insn) {
                 self.eval_phi(func, insn);
             } else {
@@ -352,9 +352,9 @@ impl SccpSolver {
         rpo.reverse();
 
         for block in rpo {
-            let mut next_insn = func.layout.first_insn_of(block);
+            let mut next_insn = func.layout.first_inst_of(block);
             while let Some(insn) = next_insn {
-                next_insn = func.layout.next_insn_of(insn);
+                next_insn = func.layout.next_inst_of(insn);
                 self.fold(func, insn);
             }
         }
@@ -368,7 +368,7 @@ impl SccpSolver {
 
         match self.lattice[insn_result].to_imm() {
             Some(imm) => {
-                InsnInserter::at_location(CursorLocation::At(insn)).remove_insn(func);
+                InsnInserter::at_location(CursorLocation::At(insn)).remove_inst(func);
                 let new_value = func.dfg.make_imm_value(imm);
                 func.dfg.change_to_alias(insn_result, new_value);
             }
@@ -394,12 +394,12 @@ impl SccpSolver {
             let phi_value = func.dfg.insn_result(insn).unwrap();
             func.dfg
                 .change_to_alias(phi_value, func.dfg.insn_arg(insn, 0));
-            InsnInserter::at_location(CursorLocation::At(insn)).remove_insn(func);
+            InsnInserter::at_location(CursorLocation::At(insn)).remove_inst(func);
         }
     }
 
     fn is_reachable(&self, func: &Function, from: BlockId, to: BlockId) -> bool {
-        let last_insn = if let Some(insn) = func.layout.last_insn_of(from) {
+        let last_insn = if let Some(insn) = func.layout.last_inst_of(from) {
             insn
         } else {
             return false;

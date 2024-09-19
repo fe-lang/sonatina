@@ -5,13 +5,12 @@ use std::{
 
 use cranelift_entity::{entity_impl, PrimaryMap};
 
-use crate::Function;
+use crate::{Function, InstSetBase};
 
 use crate::{global_variable::GlobalVariableStore, isa::TargetIsa, types::TypeStore};
 
 use super::Linkage;
 
-#[derive(Debug)]
 pub struct Module {
     /// Holds all function declared in the contract.
     pub funcs: PrimaryMap<FuncRef, Function>,
@@ -81,6 +80,10 @@ impl ModuleCtx {
         F: FnOnce(&mut GlobalVariableStore) -> R,
     {
         f(&mut self.gv_store.write().unwrap())
+    }
+
+    pub fn inst_set(&self) -> &'static dyn InstSetBase {
+        todo!()
     }
 }
 

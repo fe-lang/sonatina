@@ -81,7 +81,7 @@ mod test {
         let func_ref = module.iter_functions().next().unwrap();
 
         let func = &module.funcs[func_ref];
-        let insn = func.layout.iter_insn(b0).next().unwrap();
+        let insn = func.layout.iter_inst(b0).next().unwrap();
 
         let trace_info = TraceInfoBuilder::new(func_ref)
             .block(b0)

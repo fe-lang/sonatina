@@ -1,7 +1,7 @@
 use std::fmt;
 
 use sonatina_ir::{
-    insn::DisplayInsn,
+    inst::DisplayInsn,
     module::FuncRef,
     types::{DisplayCompoundType, DisplayType},
     value::DisplayArgValue,

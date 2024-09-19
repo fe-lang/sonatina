@@ -52,7 +52,7 @@ impl LicmSolver {
 
         let mut loop_var = FxHashSet::default();
         for block in block_in_loop_rpo {
-            for insn in func.layout.iter_insn(block) {
+            for insn in func.layout.iter_inst(block) {
                 if self.is_invariant(func, &loop_var, insn) {
                     self.invariants.push(insn);
                 } else if let Some(result) = func.dfg.insn_result(insn) {
@@ -122,7 +122,7 @@ impl LicmSolver {
 
         // Rewrite branch destination of original preheaders and modify cfg.
         for block in original_preheaders.iter().copied() {
-            let last_insn = func.layout.last_insn_of(block).unwrap();
+            let last_insn = func.layout.last_inst_of(block).unwrap();
             func.dfg
                 .rewrite_branch_dest(last_insn, lp_header, new_preheader);
             cfg.remove_edge(block, lp_header);
@@ -141,10 +141,10 @@ impl LicmSolver {
 
     /// Hoist invariants to the preheader.
     fn hoist_invariants(&self, func: &mut Function, preheader: BlockId) {
-        let last_insn = func.layout.last_insn_of(preheader).unwrap();
+        let last_insn = func.layout.last_inst_of(preheader).unwrap();
         for invariant in self.invariants.iter().copied() {
-            func.layout.remove_insn(invariant);
-            func.layout.insert_insn_before(invariant, last_insn);
+            func.layout.remove_inst(invariant);
+            func.layout.insert_inst_before(invariant, last_insn);
         }
     }
 
@@ -159,7 +159,7 @@ impl LicmSolver {
         // Record inserted phis to avoid duplication of the same phi.
         let mut inserted_phis = FxHashMap::default();
 
-        let mut next_insn = func.layout.first_insn_of(lp_header);
+        let mut next_insn = func.layout.first_inst_of(lp_header);
         while let Some(insn) = next_insn {
             if !func.dfg.is_phi(insn) {
                 break;
@@ -198,7 +198,7 @@ impl LicmSolver {
             // Append the result of new phi insn.
             func.dfg.append_phi_arg(insn, phi_result, new_preheader);
 
-            next_insn = func.layout.next_insn_of(insn);
+            next_insn = func.layout.next_inst_of(insn);
         }
     }
 }

@@ -1,6 +1,6 @@
 use macros::Inst;
 
-use crate::{value_::ValueId, Type};
+use crate::{Type, ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Sext {

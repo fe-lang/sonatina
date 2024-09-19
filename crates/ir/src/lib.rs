@@ -1,13 +1,13 @@
 pub mod builder;
 pub mod cfg;
 pub mod dfg;
-pub mod dfg_;
+//pub mod dfg_;
 pub mod func_cursor;
 pub mod function;
-pub mod function_;
+// pub mod function_;
 pub mod global_variable;
 pub mod graphviz;
-pub mod insn;
+// pub mod insn;
 pub mod inst;
 pub mod ir_writer;
 pub mod isa;
@@ -16,7 +16,7 @@ pub mod linkage;
 pub mod module;
 pub mod types;
 pub mod value;
-pub mod value_;
+//pub mod value_;
 
 mod bigint;
 
@@ -27,10 +27,9 @@ pub use dfg::{Block, BlockId, DataFlowGraph};
 pub use function::{Function, Signature};
 pub use global_variable::{GlobalVariable, GlobalVariableData};
 pub use graphviz::render_to;
-pub use insn::{BranchInfo, DataLocationKind, Insn, InsnData};
 pub use inst::{
     inst_set::{InstSetBase, InstSetExt},
-    HasInst, Inst, InstDowncast, InstDowncastMut,
+    HasInst, Inst, InstDowncast, InstDowncastMut, InstId,
 };
 pub use layout::Layout;
 pub use linkage::Linkage;

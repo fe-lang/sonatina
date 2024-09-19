@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
 
 use sonatina_ir::{
-    insn::{BinaryOp, CastOp, DataLocationKind, UnaryOp},
+    inst::{BinaryOp, CastOp, DataLocationKind, UnaryOp},
     module::FuncRef,
     BlockId, DataFlowGraph, Immediate, Insn, InsnData, Type, ValueId,
 };

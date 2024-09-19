@@ -146,7 +146,7 @@ impl<'a> FuncWriter<'a> {
         block.write(self, &mut w)?;
 
         self.enter(&mut w)?;
-        let insns = self.func.layout.iter_insn(block);
+        let insns = self.func.layout.iter_inst(block);
         self.write_iter_with_delim(insns, "\n", &mut w)?;
         self.leave();
 

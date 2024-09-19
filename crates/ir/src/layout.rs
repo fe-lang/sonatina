@@ -1,12 +1,12 @@
 //! This module contains function layout information including block order and instruction order.
 use cranelift_entity::SecondaryMap;
 
-use super::{BlockId, Insn};
+use super::{BlockId, InstId};
 
 #[derive(Debug, Clone)]
 pub struct Layout {
     blocks: SecondaryMap<BlockId, BlockNode>,
-    insns: SecondaryMap<Insn, InsnNode>,
+    insts: SecondaryMap<InstId, InstNode>,
     entry_block: Option<BlockId>,
     last_block: Option<BlockId>,
 }
@@ -21,7 +21,7 @@ impl Layout {
     pub fn new() -> Self {
         Self {
             blocks: SecondaryMap::new(),
-            insns: SecondaryMap::new(),
+            insts: SecondaryMap::new(),
             entry_block: None,
             last_block: None,
         }
@@ -36,7 +36,7 @@ impl Layout {
     }
 
     pub fn is_block_empty(&self, block: BlockId) -> bool {
-        self.first_insn_of(block).is_none()
+        self.first_inst_of(block).is_none()
     }
 
     pub fn prev_block_of(&self, block: BlockId) -> Option<BlockId> {
@@ -53,38 +53,38 @@ impl Layout {
         Some(block) == self.entry_block || self.blocks[block] != BlockNode::default()
     }
 
-    pub fn first_insn_of(&self, block: BlockId) -> Option<Insn> {
+    pub fn first_inst_of(&self, block: BlockId) -> Option<InstId> {
         debug_assert!(self.is_block_inserted(block));
-        self.blocks[block].first_insn
+        self.blocks[block].first_inst
     }
 
-    pub fn is_first_insn(&self, insn: Insn) -> bool {
-        let block = self.insn_block(insn);
-        self.first_insn_of(block) == Some(insn)
+    pub fn is_first_inst(&self, inst: InstId) -> bool {
+        let block = self.inst_block(inst);
+        self.first_inst_of(block) == Some(inst)
     }
 
-    pub fn last_insn_of(&self, block: BlockId) -> Option<Insn> {
+    pub fn last_inst_of(&self, block: BlockId) -> Option<InstId> {
         debug_assert!(self.is_block_inserted(block));
-        self.blocks[block].last_insn
+        self.blocks[block].last_inst
     }
 
-    pub fn prev_insn_of(&self, insn: Insn) -> Option<Insn> {
-        debug_assert!(self.is_insn_inserted(insn));
-        self.insns[insn].prev
+    pub fn prev_inst_of(&self, inst: InstId) -> Option<InstId> {
+        debug_assert!(self.is_inst_inserted(inst));
+        self.insts[inst].prev
     }
 
-    pub fn next_insn_of(&self, insn: Insn) -> Option<Insn> {
-        debug_assert!(self.is_insn_inserted(insn));
-        self.insns[insn].next
+    pub fn next_inst_of(&self, inst: InstId) -> Option<InstId> {
+        debug_assert!(self.is_inst_inserted(inst));
+        self.insts[inst].next
     }
 
-    pub fn insn_block(&self, insn: Insn) -> BlockId {
-        debug_assert!(self.is_insn_inserted(insn));
-        self.insns[insn].block.unwrap()
+    pub fn inst_block(&self, inst: InstId) -> BlockId {
+        debug_assert!(self.is_inst_inserted(inst));
+        self.insts[inst].block.unwrap()
     }
 
-    pub fn is_insn_inserted(&self, insn: Insn) -> bool {
-        self.insns[insn] != InsnNode::default()
+    pub fn is_inst_inserted(&self, inst: InstId) -> bool {
+        self.insts[inst] != InstNode::default()
     }
 
     pub fn iter_block(&self) -> impl Iterator<Item = BlockId> + '_ {
@@ -94,11 +94,11 @@ impl Layout {
         }
     }
 
-    pub fn iter_insn(&self, block: BlockId) -> impl Iterator<Item = Insn> + '_ {
+    pub fn iter_inst(&self, block: BlockId) -> impl Iterator<Item = InstId> + '_ {
         debug_assert!(self.is_block_inserted(block));
-        InsnIter {
-            next: self.blocks[block].first_insn,
-            insns: &self.insns,
+        InstIter {
+            next: self.blocks[block].first_inst,
+            insts: &self.insts,
         }
     }
 
@@ -184,110 +184,110 @@ impl Layout {
         self.blocks[block] = BlockNode::default();
     }
 
-    pub fn append_insn(&mut self, insn: Insn, block: BlockId) {
+    pub fn append_inst(&mut self, inst: InstId, block: BlockId) {
         debug_assert!(self.is_block_inserted(block));
-        debug_assert!(!self.is_insn_inserted(insn));
+        debug_assert!(!self.is_inst_inserted(inst));
 
         let block_node = &mut self.blocks[block];
-        let mut insn_node = InsnNode::with_block(block);
+        let mut inst_node = InstNode::with_block(block);
 
-        if let Some(last_insn) = block_node.last_insn {
-            insn_node.prev = Some(last_insn);
-            self.insns[last_insn].next = Some(insn);
+        if let Some(last_inst) = block_node.last_inst {
+            inst_node.prev = Some(last_inst);
+            self.insts[last_inst].next = Some(inst);
         } else {
-            block_node.first_insn = Some(insn);
+            block_node.first_inst = Some(inst);
         }
 
-        block_node.last_insn = Some(insn);
-        self.insns[insn] = insn_node;
+        block_node.last_inst = Some(inst);
+        self.insts[inst] = inst_node;
     }
 
-    pub fn prepend_insn(&mut self, insn: Insn, block: BlockId) {
+    pub fn prepend_inst(&mut self, inst: InstId, block: BlockId) {
         debug_assert!(self.is_block_inserted(block));
-        debug_assert!(!self.is_insn_inserted(insn));
+        debug_assert!(!self.is_inst_inserted(inst));
 
         let block_node = &mut self.blocks[block];
-        let mut insn_node = InsnNode::with_block(block);
+        let mut inst_node = InstNode::with_block(block);
 
-        if let Some(first_insn) = block_node.first_insn {
-            insn_node.next = Some(first_insn);
-            self.insns[first_insn].prev = Some(insn);
+        if let Some(first_inst) = block_node.first_inst {
+            inst_node.next = Some(first_inst);
+            self.insts[first_inst].prev = Some(inst);
         } else {
-            block_node.last_insn = Some(insn);
+            block_node.last_inst = Some(inst);
         }
 
-        block_node.first_insn = Some(insn);
-        self.insns[insn] = insn_node;
+        block_node.first_inst = Some(inst);
+        self.insts[inst] = inst_node;
     }
 
-    pub fn insert_insn_before(&mut self, insn: Insn, before: Insn) {
-        debug_assert!(self.is_insn_inserted(before));
-        debug_assert!(!self.is_insn_inserted(insn));
+    pub fn insert_inst_before(&mut self, inst: InstId, before: InstId) {
+        debug_assert!(self.is_inst_inserted(before));
+        debug_assert!(!self.is_inst_inserted(inst));
 
-        let before_insn_node = &self.insns[before];
-        let block = before_insn_node.block.unwrap();
-        let mut insn_node = InsnNode::with_block(block);
+        let before_inst_node = &self.insts[before];
+        let block = before_inst_node.block.unwrap();
+        let mut inst_node = InstNode::with_block(block);
 
-        match before_insn_node.prev {
+        match before_inst_node.prev {
             Some(prev) => {
-                insn_node.prev = Some(prev);
-                self.insns[prev].next = Some(insn);
+                inst_node.prev = Some(prev);
+                self.insts[prev].next = Some(inst);
             }
-            None => self.blocks[block].first_insn = Some(insn),
+            None => self.blocks[block].first_inst = Some(inst),
         }
-        insn_node.next = Some(before);
-        self.insns[before].prev = Some(insn);
-        self.insns[insn] = insn_node;
+        inst_node.next = Some(before);
+        self.insts[before].prev = Some(inst);
+        self.insts[inst] = inst_node;
     }
 
-    pub fn insert_insn_after(&mut self, insn: Insn, after: Insn) {
-        debug_assert!(self.is_insn_inserted(after));
-        debug_assert!(!self.is_insn_inserted(insn));
+    pub fn insert_inst_after(&mut self, inst: InstId, after: InstId) {
+        debug_assert!(self.is_inst_inserted(after));
+        debug_assert!(!self.is_inst_inserted(inst));
 
-        let after_insn_node = &self.insns[after];
-        let block = after_insn_node.block.unwrap();
-        let mut insn_node = InsnNode::with_block(block);
+        let after_inst_node = &self.insts[after];
+        let block = after_inst_node.block.unwrap();
+        let mut inst_node = InstNode::with_block(block);
 
-        match after_insn_node.next {
+        match after_inst_node.next {
             Some(next) => {
-                insn_node.next = Some(next);
-                self.insns[next].prev = Some(insn);
+                inst_node.next = Some(next);
+                self.insts[next].prev = Some(inst);
             }
-            None => self.blocks[block].last_insn = Some(insn),
+            None => self.blocks[block].last_inst = Some(inst),
         }
-        insn_node.prev = Some(after);
-        self.insns[after].next = Some(insn);
-        self.insns[insn] = insn_node;
+        inst_node.prev = Some(after);
+        self.insts[after].next = Some(inst);
+        self.insts[inst] = inst_node;
     }
 
     /// Remove instruction from the layout.
-    pub fn remove_insn(&mut self, insn: Insn) {
-        debug_assert!(self.is_insn_inserted(insn));
+    pub fn remove_inst(&mut self, inst: InstId) {
+        debug_assert!(self.is_inst_inserted(inst));
 
-        let insn_node = &self.insns[insn];
-        let block_node = &mut self.blocks[insn_node.block.unwrap()];
-        let prev_insn = insn_node.prev;
-        let next_insn = insn_node.next;
-        match (prev_insn, next_insn) {
+        let inst_node = &self.insts[inst];
+        let block_node = &mut self.blocks[inst_node.block.unwrap()];
+        let prev_inst = inst_node.prev;
+        let next_inst = inst_node.next;
+        match (prev_inst, next_inst) {
             (Some(prev), Some(next)) => {
-                self.insns[prev].next = Some(next);
-                self.insns[next].prev = Some(prev);
+                self.insts[prev].next = Some(next);
+                self.insts[next].prev = Some(prev);
             }
             (Some(prev), None) => {
-                self.insns[prev].next = None;
-                block_node.last_insn = Some(prev);
+                self.insts[prev].next = None;
+                block_node.last_inst = Some(prev);
             }
             (None, Some(next)) => {
-                self.insns[next].prev = None;
-                block_node.first_insn = Some(next);
+                self.insts[next].prev = None;
+                block_node.first_inst = Some(next);
             }
             (None, None) => {
-                block_node.first_insn = None;
-                block_node.last_insn = None;
+                block_node.first_inst = None;
+                block_node.last_inst = None;
             }
         }
 
-        self.insns[insn] = InsnNode::default();
+        self.insts[inst] = InstNode::default();
     }
 }
 
@@ -306,17 +306,17 @@ impl<'a> Iterator for BlockIter<'a> {
     }
 }
 
-struct InsnIter<'a> {
-    next: Option<Insn>,
-    insns: &'a SecondaryMap<Insn, InsnNode>,
+struct InstIter<'a> {
+    next: Option<InstId>,
+    insts: &'a SecondaryMap<InstId, InstNode>,
 }
 
-impl<'a> Iterator for InsnIter<'a> {
-    type Item = Insn;
+impl<'a> Iterator for InstIter<'a> {
+    type Item = InstId;
 
-    fn next(&mut self) -> Option<Insn> {
+    fn next(&mut self) -> Option<InstId> {
         let next = self.next?;
-        self.next = self.insns[next].next;
+        self.next = self.insts[next].next;
         Some(next)
     }
 }
@@ -325,21 +325,21 @@ impl<'a> Iterator for InsnIter<'a> {
 struct BlockNode {
     prev: Option<BlockId>,
     next: Option<BlockId>,
-    first_insn: Option<Insn>,
-    last_insn: Option<Insn>,
+    first_inst: Option<InstId>,
+    last_inst: Option<InstId>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
-struct InsnNode {
-    /// An block in which the insn exists.
+struct InstNode {
+    /// An block in which the inst exists.
     block: Option<BlockId>,
     /// A previous instruction.
-    prev: Option<Insn>,
+    prev: Option<InstId>,
     /// A next instruction.
-    next: Option<Insn>,
+    next: Option<InstId>,
 }
 
-impl InsnNode {
+impl InstNode {
     fn with_block(block: BlockId) -> Self {
         Self {
             block: Some(block),
@@ -351,22 +351,24 @@ impl InsnNode {
 
 #[cfg(test)]
 mod tests {
-    use crate::{builder::test_util::build_test_isa, module::ModuleCtx};
+    use macros::inst_set;
+
+    use crate::{builder::test_util::build_test_isa, inst, inst::InstId, module::ModuleCtx};
 
     use super::*;
 
-    use super::super::{dfg::DataFlowGraph, insn::BinaryOp, InsnData};
+    use super::super::dfg::DataFlowGraph;
+
+    #[inst_set(InstKind = "TestInstKind")]
+    struct TestInstSet(inst::control_flow::Phi, inst::arith::Add, inst::arith::Sub);
 
     impl DataFlowGraph {
         /// Returns dummy instruction.
-        fn make_dummy_insn(&mut self) -> Insn {
+        fn make_dummy_inst(&mut self, is: &TestInstSet) -> InstId {
             let v0 = self.make_imm_value(1i32);
             let v1 = self.make_imm_value(2i32);
-            let insn_data = InsnData::Binary {
-                code: BinaryOp::Add,
-                args: [v0, v1],
-            };
-            self.make_insn(insn_data)
+            let add = inst::arith::Add::new(is, v0, v1);
+            self.make_inst(add)
         }
     }
 
@@ -461,95 +463,97 @@ mod tests {
     }
 
     #[test]
-    fn test_insn_insertion() {
+    fn test_inst_insertion() {
         let mut layout = Layout::new();
+        let is = TestInstSet::new();
         let ctx = ModuleCtx::new(build_test_isa());
         let mut dfg = DataFlowGraph::new(ctx);
         let b1 = dfg.make_block();
         layout.append_block(b1);
-        assert_eq!(layout.first_insn_of(b1), None);
-        assert_eq!(layout.last_insn_of(b1), None);
+        assert_eq!(layout.first_inst_of(b1), None);
+        assert_eq!(layout.last_inst_of(b1), None);
 
-        // insn1.
-        let i1 = dfg.make_dummy_insn();
-        layout.append_insn(i1, b1);
-        assert_eq!(layout.first_insn_of(b1), Some(i1));
-        assert_eq!(layout.last_insn_of(b1), Some(i1));
-        assert_eq!(layout.insn_block(i1), b1);
-        assert_eq!(layout.prev_insn_of(i1), None);
-        assert_eq!(layout.next_insn_of(i1), None);
+        // inst1.
+        let i1 = dfg.make_dummy_inst(&is);
+        layout.append_inst(i1, b1);
+        assert_eq!(layout.first_inst_of(b1), Some(i1));
+        assert_eq!(layout.last_inst_of(b1), Some(i1));
+        assert_eq!(layout.inst_block(i1), b1);
+        assert_eq!(layout.prev_inst_of(i1), None);
+        assert_eq!(layout.next_inst_of(i1), None);
 
-        // insn1 -> insn2.
-        let i2 = dfg.make_dummy_insn();
-        layout.append_insn(i2, b1);
-        assert_eq!(layout.first_insn_of(b1), Some(i1));
-        assert_eq!(layout.last_insn_of(b1), Some(i2));
-        assert_eq!(layout.prev_insn_of(i2), Some(i1));
-        assert_eq!(layout.next_insn_of(i1), Some(i2));
+        // inst1 -> inst2.
+        let i2 = dfg.make_dummy_inst(&is);
+        layout.append_inst(i2, b1);
+        assert_eq!(layout.first_inst_of(b1), Some(i1));
+        assert_eq!(layout.last_inst_of(b1), Some(i2));
+        assert_eq!(layout.prev_inst_of(i2), Some(i1));
+        assert_eq!(layout.next_inst_of(i1), Some(i2));
 
-        // insn1 -> insn3 -> insn2.
-        let i3 = dfg.make_dummy_insn();
-        layout.insert_insn_after(i3, i1);
-        assert_eq!(layout.first_insn_of(b1), Some(i1));
-        assert_eq!(layout.last_insn_of(b1), Some(i2));
-        assert_eq!(layout.next_insn_of(i1), Some(i3));
-        assert_eq!(layout.prev_insn_of(i2), Some(i3));
-        assert_eq!(layout.prev_insn_of(i3), Some(i1));
-        assert_eq!(layout.next_insn_of(i3), Some(i2));
+        // inst1 -> inst3 -> inst2.
+        let i3 = dfg.make_dummy_inst(&is);
+        layout.insert_inst_after(i3, i1);
+        assert_eq!(layout.first_inst_of(b1), Some(i1));
+        assert_eq!(layout.last_inst_of(b1), Some(i2));
+        assert_eq!(layout.next_inst_of(i1), Some(i3));
+        assert_eq!(layout.prev_inst_of(i2), Some(i3));
+        assert_eq!(layout.prev_inst_of(i3), Some(i1));
+        assert_eq!(layout.next_inst_of(i3), Some(i2));
 
-        // insn1 -> insn3 -> insn4 -> insn2.
-        let i4 = dfg.make_dummy_insn();
-        layout.insert_insn_before(i4, i2);
-        assert_eq!(layout.first_insn_of(b1), Some(i1));
-        assert_eq!(layout.last_insn_of(b1), Some(i2));
-        assert_eq!(layout.next_insn_of(i3), Some(i4));
-        assert_eq!(layout.prev_insn_of(i2), Some(i4));
-        assert_eq!(layout.prev_insn_of(i4), Some(i3));
-        assert_eq!(layout.next_insn_of(i4), Some(i2));
+        // inst1 -> inst3 -> inst4 -> inst2.
+        let i4 = dfg.make_dummy_inst(&is);
+        layout.insert_inst_before(i4, i2);
+        assert_eq!(layout.first_inst_of(b1), Some(i1));
+        assert_eq!(layout.last_inst_of(b1), Some(i2));
+        assert_eq!(layout.next_inst_of(i3), Some(i4));
+        assert_eq!(layout.prev_inst_of(i2), Some(i4));
+        assert_eq!(layout.prev_inst_of(i4), Some(i3));
+        assert_eq!(layout.next_inst_of(i4), Some(i2));
     }
 
     #[test]
-    fn test_insn_removal() {
+    fn test_inst_removal() {
         let mut layout = Layout::new();
+        let is = TestInstSet::new();
         let ctx = ModuleCtx::new(build_test_isa());
         let mut dfg = DataFlowGraph::new(ctx);
         let b1 = dfg.make_block();
         layout.append_block(b1);
 
-        // insn1 -> insn2 -> insn3 -> insn4.
-        let i1 = dfg.make_dummy_insn();
-        let i2 = dfg.make_dummy_insn();
-        let i3 = dfg.make_dummy_insn();
-        let i4 = dfg.make_dummy_insn();
-        layout.append_insn(i1, b1);
-        layout.append_insn(i2, b1);
-        layout.append_insn(i3, b1);
-        layout.append_insn(i4, b1);
+        // inst1 -> inst2 -> inst3 -> inst4.
+        let i1 = dfg.make_dummy_inst(&is);
+        let i2 = dfg.make_dummy_inst(&is);
+        let i3 = dfg.make_dummy_inst(&is);
+        let i4 = dfg.make_dummy_inst(&is);
+        layout.append_inst(i1, b1);
+        layout.append_inst(i2, b1);
+        layout.append_inst(i3, b1);
+        layout.append_inst(i4, b1);
 
-        // insn1 -> insn2 -> insn4.
-        layout.remove_insn(i3);
-        assert_eq!(layout.first_insn_of(b1), Some(i1));
-        assert_eq!(layout.last_insn_of(b1), Some(i4));
-        assert_eq!(layout.next_insn_of(i2), Some(i4));
-        assert_eq!(layout.prev_insn_of(i4), Some(i2));
+        // inst1 -> inst2 -> inst4.
+        layout.remove_inst(i3);
+        assert_eq!(layout.first_inst_of(b1), Some(i1));
+        assert_eq!(layout.last_inst_of(b1), Some(i4));
+        assert_eq!(layout.next_inst_of(i2), Some(i4));
+        assert_eq!(layout.prev_inst_of(i4), Some(i2));
 
-        // insn1 -> insn2.
-        layout.remove_insn(i4);
-        assert_eq!(layout.first_insn_of(b1), Some(i1));
-        assert_eq!(layout.last_insn_of(b1), Some(i2));
-        assert_eq!(layout.next_insn_of(i1), Some(i2));
-        assert_eq!(layout.prev_insn_of(i2), Some(i1));
+        // inst1 -> inst2.
+        layout.remove_inst(i4);
+        assert_eq!(layout.first_inst_of(b1), Some(i1));
+        assert_eq!(layout.last_inst_of(b1), Some(i2));
+        assert_eq!(layout.next_inst_of(i1), Some(i2));
+        assert_eq!(layout.prev_inst_of(i2), Some(i1));
 
-        // insn2.
-        layout.remove_insn(i1);
-        assert_eq!(layout.first_insn_of(b1), Some(i2));
-        assert_eq!(layout.last_insn_of(b1), Some(i2));
-        assert_eq!(layout.next_insn_of(i2), None);
-        assert_eq!(layout.prev_insn_of(i2), None);
+        // inst2.
+        layout.remove_inst(i1);
+        assert_eq!(layout.first_inst_of(b1), Some(i2));
+        assert_eq!(layout.last_inst_of(b1), Some(i2));
+        assert_eq!(layout.next_inst_of(i2), None);
+        assert_eq!(layout.prev_inst_of(i2), None);
 
         // .
-        layout.remove_insn(i2);
-        assert_eq!(layout.first_insn_of(b1), None);
-        assert_eq!(layout.last_insn_of(b1), None);
+        layout.remove_inst(i2);
+        assert_eq!(layout.first_inst_of(b1), None);
+        assert_eq!(layout.last_inst_of(b1), None);
     }
 }

@@ -1,7 +1,7 @@
 use std::ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Sub};
 
 use sonatina_ir::{
-    insn::{BinaryOp, CastOp, UnaryOp},
+    inst::{BinaryOp, CastOp, UnaryOp},
     module::FuncRef,
     BlockId, DataLocationKind, Immediate, InsnData, Module, ValueId,
 };
@@ -164,7 +164,7 @@ impl State {
                 None
             }
             Jump { dests, .. } => {
-                let block = layout.insn_block(insn);
+                let block = layout.inst_block(insn);
                 self.prev_block = Some(block);
 
                 self.pc.branch_to(dests[0], layout);
@@ -174,7 +174,7 @@ impl State {
                 let arg = frame.load(args[0], dfg);
                 let idx = arg.not().to_u256().as_usize();
 
-                let block = layout.insn_block(insn);
+                let block = layout.inst_block(insn);
                 self.prev_block = Some(block);
                 self.pc.branch_to(dests[idx], layout);
                 None
@@ -184,7 +184,7 @@ impl State {
                 default,
                 table,
             } => {
-                let block = layout.insn_block(insn);
+                let block = layout.inst_block(insn);
                 self.prev_block = Some(block);
 
                 let cond = args[0];

@@ -1,8 +1,10 @@
-use super::{BlockId, Function, Insn, InsnData, ValueId};
+use crate::{Inst, InstId};
+
+use super::{BlockId, Function, ValueId};
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CursorLocation {
-    At(Insn),
+    At(InstId),
     BlockTop(BlockId),
     BlockBottom(BlockId),
     #[default]
@@ -24,68 +26,59 @@ pub trait FuncCursor {
         self.set_location(loc);
     }
 
-    fn insert_insn(&mut self, func: &mut Function, insn: Insn) {
+    fn insert_inst(&mut self, func: &mut Function, inst: InstId) {
         match self.loc() {
-            CursorLocation::At(at) => func.layout.insert_insn_after(insn, at),
-            CursorLocation::BlockTop(block) => func.layout.prepend_insn(insn, block),
-            CursorLocation::BlockBottom(block) => func.layout.append_insn(insn, block),
+            CursorLocation::At(at) => func.layout.insert_inst_after(inst, at),
+            CursorLocation::BlockTop(block) => func.layout.prepend_inst(inst, block),
+            CursorLocation::BlockBottom(block) => func.layout.append_inst(inst, block),
             CursorLocation::NoWhere => panic!("cursor loc points to `NoWhere`"),
         }
     }
 
-    fn append_insn(&mut self, func: &mut Function, insn: Insn) {
+    fn append_inst(&mut self, func: &mut Function, inst: InstId) {
         let current_block = self.expect_block(func);
-        func.layout.append_insn(insn, current_block);
+        func.layout.append_inst(inst, current_block);
     }
 
-    fn prepend_insn(&mut self, func: &mut Function, insn: Insn) {
+    fn prepend_inst(&mut self, func: &mut Function, inst: InstId) {
         let current_block = self.expect_block(func);
-        func.layout.prepend_insn(insn, current_block);
+        func.layout.prepend_inst(inst, current_block);
     }
 
-    fn insert_insn_data(&mut self, func: &mut Function, data: InsnData) -> Insn {
-        let insn = func.dfg.make_insn(data);
-        self.insert_insn(func, insn);
-        insn
+    fn insert_inst_data<I: Inst>(&mut self, func: &mut Function, data: I) -> InstId {
+        let inst = func.dfg.make_inst(data);
+        self.insert_inst(func, inst);
+        inst
     }
 
-    fn append_insn_data(&mut self, func: &mut Function, data: InsnData) -> Insn {
-        let insn = func.dfg.make_insn(data);
-        self.append_insn(func, insn);
-        insn
+    fn append_inst_data<I: Inst>(&mut self, func: &mut Function, data: I) -> InstId {
+        let inst = func.dfg.make_inst(data);
+        self.append_inst(func, inst);
+        inst
     }
 
-    fn prepend_insn_data(&mut self, func: &mut Function, data: InsnData) -> Insn {
-        let insn = func.dfg.make_insn(data);
-        self.prepend_insn(func, insn);
-        insn
+    fn prepend_inst_data<I: Inst>(&mut self, func: &mut Function, data: I) -> InstId {
+        let inst = func.dfg.make_inst(data);
+        self.prepend_inst(func, inst);
+        inst
     }
 
-    fn replace(&mut self, func: &mut Function, insn_data: InsnData) {
-        let insn = self.expect_insn();
-        func.dfg.replace_insn(insn, insn_data);
+    fn replace<I: Inst>(&mut self, func: &mut Function, data: I) {
+        let old = self.expect_inst();
+        func.dfg.replace_inst(old, Box::new(data));
     }
 
-    fn remove_insn(&mut self, func: &mut Function) {
-        let insn = self.expect_insn();
+    fn remove_inst(&mut self, func: &mut Function) {
+        let inst_id = self.expect_inst();
+        func.dfg.untrack_inst(inst_id);
+        func.layout.remove_inst(inst_id);
+
         let next_loc = self.next_loc(func);
-
-        for idx in 0..func.dfg.insn_args_num(insn) {
-            let arg = func.dfg.insn_arg(insn, idx);
-            func.dfg.remove_user(arg, insn);
-        }
-        func.layout.remove_insn(insn);
-
         self.set_location(next_loc);
     }
 
-    fn make_result(&mut self, func: &mut Function, insn: Insn) -> Option<ValueId> {
-        let value_data = func.dfg.make_result(insn)?;
-        Some(func.dfg.make_value(value_data))
-    }
-
-    fn attach_result(&mut self, func: &mut Function, insn: Insn, value: ValueId) {
-        func.dfg.attach_result(insn, value)
+    fn attach_result(&mut self, func: &mut Function, inst: InstId, value: ValueId) {
+        func.dfg.attach_result(inst, value)
     }
 
     fn make_block(&mut self, func: &mut Function) -> BlockId {
@@ -94,7 +87,7 @@ pub trait FuncCursor {
 
     fn remove_block(&mut self, func: &mut Function) {
         let block = match self.loc() {
-            CursorLocation::At(insn) => func.layout.insn_block(insn),
+            CursorLocation::At(inst) => func.layout.inst_block(inst),
             CursorLocation::BlockTop(block) | CursorLocation::BlockBottom(block) => block,
             CursorLocation::NoWhere => panic!("cursor loc points `NoWhere`"),
         };
@@ -102,11 +95,11 @@ pub trait FuncCursor {
         // Store next block of the current block for later use.
         let next_block = func.layout.next_block_of(block);
 
-        // Remove all insns in the current block.
-        if let Some(first_insn) = func.layout.first_insn_of(block) {
-            self.set_location(CursorLocation::At(first_insn));
+        // Remove all insts in the current block.
+        if let Some(first_inst) = func.layout.first_inst_of(block) {
+            self.set_location(CursorLocation::At(first_inst));
             while matches!(self.loc(), CursorLocation::At(..)) {
-                self.remove_insn(func);
+                self.remove_inst(func);
             }
         }
         // Remove current block.
@@ -120,22 +113,22 @@ pub trait FuncCursor {
         }
     }
 
-    fn insn(&self) -> Option<Insn> {
-        if let CursorLocation::At(insn) = self.loc() {
-            Some(insn)
+    fn inst(&self) -> Option<InstId> {
+        if let CursorLocation::At(inst) = self.loc() {
+            Some(inst)
         } else {
             None
         }
     }
 
-    fn expect_insn(&self) -> Insn {
-        self.insn()
-            .expect("current cursor location doesn't point to insn")
+    fn expect_inst(&self) -> InstId {
+        self.inst()
+            .expect("current cursor location doesn't point to inst")
     }
 
     fn block(&self, func: &Function) -> Option<BlockId> {
         match self.loc() {
-            CursorLocation::At(insn) => Some(func.layout.insn_block(insn)),
+            CursorLocation::At(inst) => Some(func.layout.inst_block(inst)),
             CursorLocation::BlockTop(block) | CursorLocation::BlockBottom(block) => Some(block),
             CursorLocation::NoWhere => None,
         }
@@ -167,13 +160,13 @@ pub trait FuncCursor {
 
     fn next_loc(&self, func: &Function) -> CursorLocation {
         match self.loc() {
-            CursorLocation::At(insn) => func.layout.next_insn_of(insn).map_or_else(
-                || CursorLocation::BlockBottom(func.layout.insn_block(insn)),
+            CursorLocation::At(inst) => func.layout.next_inst_of(inst).map_or_else(
+                || CursorLocation::BlockBottom(func.layout.inst_block(inst)),
                 CursorLocation::At,
             ),
             CursorLocation::BlockTop(block) => func
                 .layout
-                .first_insn_of(block)
+                .first_inst_of(block)
                 .map_or_else(|| CursorLocation::BlockBottom(block), CursorLocation::At),
             CursorLocation::BlockBottom(block) => func
                 .layout
@@ -187,8 +180,8 @@ pub trait FuncCursor {
 
     fn prev_loc(&self, func: &Function) -> CursorLocation {
         match self.loc() {
-            CursorLocation::At(insn) => func.layout.prev_insn_of(insn).map_or_else(
-                || CursorLocation::BlockTop(func.layout.insn_block(insn)),
+            CursorLocation::At(inst) => func.layout.prev_inst_of(inst).map_or_else(
+                || CursorLocation::BlockTop(func.layout.inst_block(inst)),
                 CursorLocation::At,
             ),
             CursorLocation::BlockTop(block) => func
@@ -199,7 +192,7 @@ pub trait FuncCursor {
                 }),
             CursorLocation::BlockBottom(block) => func
                 .layout
-                .last_insn_of(block)
+                .last_inst_of(block)
                 .map_or_else(|| CursorLocation::BlockTop(block), CursorLocation::At),
             CursorLocation::NoWhere => CursorLocation::NoWhere,
         }
