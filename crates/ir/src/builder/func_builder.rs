@@ -1,10 +1,7 @@
-use smallvec::SmallVec;
-
 use crate::{
     func_cursor::{CursorLocation, FuncCursor},
-    insn::{BinaryOp, CastOp, DataLocationKind, InsnData, UnaryOp},
     module::FuncRef,
-    BlockId, Function, GlobalVariable, Immediate, Type, ValueId,
+    BlockId, Function, GlobalVariable, Immediate, Inst, Type, Value, ValueId,
 };
 
 use super::{
@@ -20,28 +17,14 @@ pub struct FunctionBuilder<C> {
     ssa_builder: SsaBuilder,
 }
 
-macro_rules! impl_binary_insn {
-    ($name:ident, $code:path) => {
-        pub fn $name(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
-            self.binary_op($code, lhs, rhs)
-        }
-    };
-}
-
-macro_rules! impl_cast_insn {
-    ($name:ident, $code:path) => {
-        pub fn $name(&mut self, lhs: ValueId, ty: Type) -> ValueId {
-            self.cast_op($code, lhs, ty)
-        }
-    };
-}
-
 impl<C> FunctionBuilder<C>
 where
     C: FuncCursor,
 {
     pub fn new(module_builder: ModuleBuilder, func_ref: FuncRef, cursor: C) -> Self {
-        let func = module_builder.funcs[func_ref].clone();
+        let sig = module_builder.funcs[func_ref].sig.clone();
+        let func = Function::new(&module_builder.ctx, sig);
+
         Self {
             module_builder,
             func,
@@ -113,206 +96,41 @@ where
             .declare_struct_type(name, fields, packed)
     }
 
-    pub fn unary_op(&mut self, op: UnaryOp, lhs: ValueId) -> ValueId {
-        let insn_data = InsnData::Unary {
-            code: op,
-            args: [lhs],
+    /// Inserts an instruction into the current position and returns a `ValueId` for
+    /// the result.
+    ///
+    /// # Parameters
+    /// - `inst`: The instruction to insert, which must implement the `Inst` trait.
+    /// - `ret_ty`: The return type of the instruction. A result value will be
+    ///   created with this type and associated with the instruction.
+    ///
+    /// # Returns
+    /// - `ValueId`: The ID of the result value associated with the inserted
+    ///   instruction.
+    pub fn insert_inst<I: Inst>(&mut self, inst: I, ret_ty: Type) -> ValueId {
+        let inst_id = self.cursor.insert_inst_data(&mut self.func, inst);
+
+        let result = Value::Inst {
+            inst: inst_id,
+            ty: ret_ty,
         };
-        self.insert_insn(insn_data).unwrap()
+        let result = self.func.dfg.make_value(result);
+        self.func.dfg.attach_result(inst_id, result);
+
+        self.cursor.set_location(CursorLocation::At(inst_id));
+        result
     }
 
-    pub fn not(&mut self, lhs: ValueId) -> ValueId {
-        self.unary_op(UnaryOp::Not, lhs)
-    }
-
-    pub fn neg(&mut self, lhs: ValueId) -> ValueId {
-        self.unary_op(UnaryOp::Neg, lhs)
-    }
-
-    pub fn binary_op(&mut self, op: BinaryOp, lhs: ValueId, rhs: ValueId) -> ValueId {
-        let insn_data = InsnData::Binary {
-            code: op,
-            args: [lhs, rhs],
-        };
-        self.insert_insn(insn_data).unwrap()
-    }
-
-    impl_binary_insn!(add, BinaryOp::Add);
-    impl_binary_insn!(sub, BinaryOp::Sub);
-    impl_binary_insn!(mul, BinaryOp::Mul);
-    impl_binary_insn!(udiv, BinaryOp::Udiv);
-    impl_binary_insn!(sdiv, BinaryOp::Sdiv);
-    impl_binary_insn!(lt, BinaryOp::Lt);
-    impl_binary_insn!(gt, BinaryOp::Gt);
-    impl_binary_insn!(slt, BinaryOp::Slt);
-    impl_binary_insn!(sgt, BinaryOp::Sgt);
-    impl_binary_insn!(le, BinaryOp::Le);
-    impl_binary_insn!(ge, BinaryOp::Ge);
-    impl_binary_insn!(sle, BinaryOp::Sle);
-    impl_binary_insn!(sge, BinaryOp::Sge);
-    impl_binary_insn!(eq, BinaryOp::Eq);
-    impl_binary_insn!(ne, BinaryOp::Ne);
-    impl_binary_insn!(and, BinaryOp::And);
-    impl_binary_insn!(or, BinaryOp::Or);
-
-    pub fn cast_op(&mut self, op: CastOp, value: ValueId, ty: Type) -> ValueId {
-        let insn_data = InsnData::Cast {
-            code: op,
-            args: [value],
-            ty,
-        };
-        self.insert_insn(insn_data).unwrap()
-    }
-
-    impl_cast_insn!(sext, CastOp::Sext);
-    impl_cast_insn!(zext, CastOp::Zext);
-    impl_cast_insn!(trunc, CastOp::Trunc);
-    impl_cast_insn!(bitcast, CastOp::BitCast);
-
-    pub fn load(&mut self, loc: DataLocationKind, addr: ValueId) -> ValueId {
-        let insn_data = InsnData::Load { args: [addr], loc };
-        self.insert_insn(insn_data).unwrap()
-    }
-
-    pub fn store(&mut self, loc: DataLocationKind, addr: ValueId, data: ValueId) {
-        let insn_data = InsnData::Store {
-            args: [addr, data],
-            loc,
-        };
-        self.insert_insn(insn_data);
-    }
-
-    /// Build memory load instruction.
-    pub fn memory_load(&mut self, addr: ValueId) -> ValueId {
-        self.load(DataLocationKind::Memory, addr)
-    }
-
-    /// Build memory store instruction.
-    pub fn memory_store(&mut self, addr: ValueId, data: ValueId) {
-        self.store(DataLocationKind::Memory, addr, data)
-    }
-
-    /// Build storage load instruction.
-    pub fn storage_load(&mut self, addr: ValueId) -> ValueId {
-        self.load(DataLocationKind::Storage, addr)
-    }
-
-    /// Build storage store instruction.
-    pub fn storage_store(&mut self, addr: ValueId, data: ValueId) {
-        self.store(DataLocationKind::Storage, addr, data)
-    }
-
-    /// Build alloca instruction.
-    pub fn alloca(&mut self, ty: Type) -> ValueId {
-        let insn_data = InsnData::Alloca { ty };
-        self.insert_insn(insn_data).unwrap()
-    }
-
-    pub fn jump(&mut self, dest: BlockId) {
-        debug_assert!(!self.ssa_builder.is_sealed(dest));
-        let insn_data = InsnData::Jump { dests: [dest] };
-
-        let pred = self.cursor.block(&self.func);
-        self.ssa_builder.append_pred(dest, pred.unwrap());
-        self.insert_insn(insn_data);
-    }
-
-    pub fn br_table(
-        &mut self,
-        cond: ValueId,
-        default: Option<BlockId>,
-        table: &[(ValueId, BlockId)],
-    ) {
-        if cfg!(debug_assertions) {
-            if let Some(default) = default {
-                debug_assert!(!self.ssa_builder.is_sealed(default))
-            }
-
-            for (_, dest) in table {
-                debug_assert!(!self.ssa_builder.is_sealed(*dest));
-            }
-        }
-
-        let mut args = SmallVec::new();
-        let mut blocks = SmallVec::new();
-        args.push(cond);
-        for (value, block) in table {
-            args.push(*value);
-            blocks.push(*block);
-        }
-
-        let insn_data = InsnData::BrTable {
-            args,
-            default,
-            table: blocks,
-        };
-        let block = self.cursor.block(&self.func).unwrap();
-
-        if let Some(default) = default {
-            self.ssa_builder.append_pred(default, block);
-        }
-        for (_, dest) in table {
-            self.ssa_builder.append_pred(*dest, block);
-        }
-        self.insert_insn(insn_data);
-    }
-
-    pub fn br(&mut self, cond: ValueId, then: BlockId, else_: BlockId) {
-        debug_assert!(!self.ssa_builder.is_sealed(then));
-        debug_assert!(!self.ssa_builder.is_sealed(else_));
-
-        let insn_data = InsnData::Branch {
-            args: [cond],
-            dests: [then, else_],
-        };
-
-        let block = self.cursor.block(&self.func).unwrap();
-        self.ssa_builder.append_pred(then, block);
-        self.ssa_builder.append_pred(else_, block);
-        self.insert_insn(insn_data);
-    }
-
-    pub fn call(&mut self, func: FuncRef, args: &[ValueId]) -> Option<ValueId> {
-        let sig = self.module_builder.get_sig(func).clone();
-        let insn_data = InsnData::Call {
-            func,
-            args: args.into(),
-            ret_ty: sig.ret_ty(),
-        };
-        self.func.callees.insert(func, sig);
-        self.insert_insn(insn_data)
-    }
-
-    pub fn ret(&mut self, args: Option<ValueId>) {
-        let insn_data = InsnData::Return { args };
-        self.insert_insn(insn_data);
-    }
-
-    pub fn gep(&mut self, args: &[ValueId]) -> Option<ValueId> {
-        let insn_data = InsnData::Gep { args: args.into() };
-        self.insert_insn(insn_data)
-    }
-
-    pub fn phi(&mut self, ty: Type, args: &[(ValueId, BlockId)]) -> ValueId {
-        let insn_data = InsnData::Phi {
-            values: args.iter().map(|(val, _)| *val).collect(),
-            blocks: args.iter().map(|(_, block)| *block).collect(),
-            ty,
-        };
-        self.insert_insn(insn_data).unwrap()
-    }
-
-    pub fn append_phi_arg(&mut self, phi_value: ValueId, value: ValueId, block: BlockId) {
-        let insn = self
-            .func
-            .dfg
-            .value_insn(phi_value)
-            .expect("value must be the result of phi function");
-        debug_assert!(
-            self.func.dfg.is_phi(insn),
-            "value must be the result of phi function"
-        );
-        self.func.dfg.append_phi_arg(insn, value, block);
+    /// Inserts an instruction into the function without creating a result value
+    /// (i.e., for instructions that have no return type).
+    ///
+    /// Please refer to [`insert_inst`] if the instruction has a result.
+    ///
+    /// # Parameters
+    /// - `inst`: The instruction to insert, which must implement the `Inst` trait.
+    pub fn insert_inst_no_result<I: Inst>(&mut self, inst: I) {
+        let inst_id = self.cursor.insert_inst_data(&mut self.func, inst);
+        self.cursor.set_location(CursorLocation::At(inst_id));
     }
 
     pub fn declare_var(&mut self, ty: Type) -> Variable {
@@ -363,33 +181,39 @@ where
     pub fn gas_type(&self) -> Type {
         self.module_builder.ctx.isa.type_provider().gas_type()
     }
-
-    fn insert_insn(&mut self, insn_data: InsnData) -> Option<ValueId> {
-        let insn = self.cursor.insert_insn_data(&mut self.func, insn_data);
-        let result = self.cursor.make_result(&mut self.func, insn);
-        if let Some(result) = result {
-            self.cursor.attach_result(&mut self.func, insn, result);
-        }
-        self.cursor.set_location(CursorLocation::At(insn));
-        result
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use macros::inst_set;
+
+    use crate::inst::{
+        arith::{Add, Mul, Sub},
+        cast::Sext,
+        control_flow::{Br, Jump, Phi, Return},
+    };
+
     use super::{super::test_util::*, *};
+
+    #[inst_set(InstKind = "TestInstKind")]
+    struct TestInstSet(Phi, Add, Mul, Sub, Return, Sext, Br, Jump);
 
     #[test]
     fn entry_block() {
         let mut builder = test_func_builder(&[], Type::Void);
+        let is = TestInstSet::new();
 
         let b0 = builder.append_block();
         builder.switch_to_block(b0);
         let v0 = builder.make_imm_value(1i8);
         let v1 = builder.make_imm_value(2i8);
-        let v2 = builder.add(v0, v1);
-        builder.sub(v2, v0);
-        builder.ret(None);
+        let add = Add::new(&is, v0, v1);
+        let v2 = builder.insert_inst(add, Type::I8);
+
+        let sub = Sub::new(&is, v2, v0);
+        builder.insert_inst(sub, Type::I8);
+        let ret = Return::new(&is, None);
+        builder.insert_inst_no_result(ret);
 
         builder.seal_all();
 
@@ -411,15 +235,19 @@ mod tests {
     #[test]
     fn entry_block_with_args() {
         let mut builder = test_func_builder(&[Type::I32, Type::I64], Type::Void);
+        let is = TestInstSet::new();
 
         let entry_block = builder.append_block();
         builder.switch_to_block(entry_block);
         let args = builder.args();
         let (arg0, arg1) = (args[0], args[1]);
         assert_eq!(args.len(), 2);
-        let v3 = builder.sext(arg0, Type::I64);
-        builder.mul(v3, arg1);
-        builder.ret(None);
+        let sext = Sext::new(&is, arg0, Type::I64);
+        let v3 = builder.insert_inst(sext, Type::I64);
+        let mul = Mul::new(&is, v3, arg1);
+        builder.insert_inst(mul, Type::I64);
+        let ret = Return::new(&is, None);
+        builder.insert_inst_no_result(ret);
 
         builder.seal_all();
 
@@ -441,12 +269,14 @@ mod tests {
     #[test]
     fn entry_block_with_return() {
         let mut builder = test_func_builder(&[], Type::I32);
+        let is = TestInstSet::new();
 
         let entry_block = builder.append_block();
 
         builder.switch_to_block(entry_block);
         let v0 = builder.make_imm_value(1i32);
-        builder.ret(Some(v0));
+        let ret = Return::new(&is, Some(v0));
+        builder.insert_inst_no_result(ret);
         builder.seal_all();
 
         let module = builder.finish().build();
@@ -465,6 +295,7 @@ mod tests {
     #[test]
     fn then_else_merge_block() {
         let mut builder = test_func_builder(&[Type::I64], Type::Void);
+        let is = TestInstSet::new();
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -474,20 +305,26 @@ mod tests {
         let arg0 = builder.args()[0];
 
         builder.switch_to_block(entry_block);
-        builder.br(arg0, then_block, else_block);
+        let br = Br::new(&is, arg0, then_block, else_block);
+        builder.insert_inst_no_result(br);
 
         builder.switch_to_block(then_block);
         let v1 = builder.make_imm_value(1i64);
-        builder.jump(merge_block);
+        let jump = Jump::new(&is, merge_block);
+        builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(else_block);
         let v2 = builder.make_imm_value(2i64);
-        builder.jump(merge_block);
+        let jump = Jump::new(&is, merge_block);
+        builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(merge_block);
-        let v3 = builder.phi(Type::I64, &[(v1, then_block), (v2, else_block)]);
-        builder.add(v3, arg0);
-        builder.ret(None);
+        let phi = Phi::new(&is, vec![(v1, then_block), (v2, else_block)], Type::I64);
+        let v3 = builder.insert_inst(phi, Type::I64);
+        let add = Add::new(&is, v3, arg0);
+        builder.insert_inst(add, Type::I64);
+        let ret = Return::new(&is, None);
+        builder.insert_inst_no_result(ret);
 
         builder.seal_all();
 

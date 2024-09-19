@@ -22,7 +22,7 @@ impl ReservedValue for ProgramCounter {
 impl ProgramCounter {
     pub fn new(entry_func: FuncRef, layout: &Layout) -> Self {
         let entry = layout.entry_block().unwrap();
-        let insn = layout.first_insn_of(entry).unwrap();
+        let insn = layout.first_inst_of(entry).unwrap();
 
         Self {
             func_ref: entry_func,
@@ -35,11 +35,11 @@ impl ProgramCounter {
     }
 
     pub fn next_insn(&mut self, layout: &Layout) {
-        self.insn = layout.next_insn_of(self.insn).unwrap();
+        self.insn = layout.next_inst_of(self.insn).unwrap();
     }
 
     pub fn branch_to(&mut self, block: BlockId, layout: &Layout) {
-        self.insn = layout.first_insn_of(block).unwrap();
+        self.insn = layout.first_inst_of(block).unwrap();
     }
 
     pub fn resume_frame_at(&mut self, ret_addr: Self) {

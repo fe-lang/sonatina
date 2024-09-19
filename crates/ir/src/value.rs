@@ -1,82 +1,21 @@
 //! This module contains Sonatine IR value definition.
+use core::fmt;
+use std::ops;
 
-use std::{fmt, ops};
+use crate::{inst::InstId, GlobalVariable, I256};
 
-use crate::{types::DisplayType, DataFlowGraph, GlobalVariable};
-
-use super::{Insn, Type, I256, U256};
+use super::Type;
 
 /// An opaque reference to [`Value`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
 pub struct ValueId(pub u32);
 cranelift_entity::entity_impl!(ValueId);
 
-pub struct DisplayResultValue<'a> {
-    insn: Insn,
-    dfg: &'a DataFlowGraph,
-}
-
-impl<'a> DisplayResultValue<'a> {
-    pub fn new(insn: Insn, dfg: &'a DataFlowGraph) -> Self {
-        Self { insn, dfg }
-    }
-}
-
-impl<'a> fmt::Display for DisplayResultValue<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let Self { insn, dfg } = *self;
-        if let Some(value) = dfg.insn_result(insn) {
-            let ty = dfg.insn_result_ty(insn).unwrap();
-            let ty = DisplayType::new(ty, dfg);
-            return write!(f, "v{}.{ty} = ", value.0);
-        }
-        Ok(())
-    }
-}
-
-pub struct DisplayArgValue<'a> {
-    arg: ValueId,
-    dfg: &'a DataFlowGraph,
-}
-
-impl<'a> DisplayArgValue<'a> {
-    pub fn new(arg: ValueId, dfg: &'a DataFlowGraph) -> Self {
-        Self { arg, dfg }
-    }
-}
-
-impl<'a> fmt::Display for DisplayArgValue<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { arg, dfg } = *self;
-        match *dfg.value_data(arg) {
-            Value::Immediate { imm, ty } => {
-                let ty = DisplayType::new(ty, dfg);
-                write!(f, "{imm}.{ty}")
-            }
-            _ => write!(f, "v{}", arg.0),
-        }
-    }
-}
-
-pub fn display_arg_values(
-    f: &mut fmt::Formatter,
-    args: &[ValueId],
-    dfg: &DataFlowGraph,
-) -> fmt::Result {
-    let arg0 = DisplayArgValue::new(args[0], dfg);
-    write!(f, "{arg0}")?;
-    for arg in &args[1..] {
-        let arg = DisplayArgValue::new(*arg, dfg);
-        write!(f, " {arg}")?;
-    }
-    Ok(())
-}
-
 /// An value data definition.
 #[derive(Debug, Clone)]
 pub enum Value {
     /// The value is defined by an instruction.
-    Insn { insn: Insn, ty: Type },
+    Inst { inst: InstId, ty: Type },
 
     /// The value is a function argument.
     Arg { ty: Type, idx: usize },
@@ -405,9 +344,3 @@ imm_from_primary!(u64, i64, Immediate::I64);
 imm_from_primary!(i128, i128, Immediate::I128);
 imm_from_primary!(u128, i128, Immediate::I128);
 imm_from_primary!(I256, I256, Immediate::I256);
-
-impl From<U256> for Immediate {
-    fn from(imm: U256) -> Self {
-        Self::I256(imm.into())
-    }
-}

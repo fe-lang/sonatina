@@ -6,7 +6,7 @@ use crate::{
 use either::Either;
 use hex::FromHex;
 pub use ir::{
-    insn::{BinaryOp, CastOp, UnaryOp},
+    inst::{BinaryOp, CastOp, UnaryOp},
     DataLocationKind, Immediate, Linkage,
 };
 use ir::{I256, U256};

@@ -4,7 +4,7 @@ use cranelift_entity::packed_option::PackedOption;
 use sonatina_ir::{
     function::DisplaySignature,
     global_variable::DisplayGlobalVariable,
-    insn::DisplayInsn,
+    inst::DisplayInsn,
     module::{DisplayCalleeFuncRef, FuncRef},
     types::{CompoundType, DisplayCompoundType, DisplayType},
     value::DisplayArgValue,

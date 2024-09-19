@@ -7,7 +7,7 @@ use crate::post_domtree::{PDFSet, PDTIdom, PostDomTree};
 
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    insn::InsnData,
+    inst::InsnData,
     BlockId, Function, Insn,
 };
 
@@ -56,7 +56,7 @@ impl AdceSolver {
         }
 
         for block in func.layout.iter_block() {
-            for insn in func.layout.iter_insn(block) {
+            for insn in func.layout.iter_inst(block) {
                 if func.dfg.has_side_effect(insn) {
                     self.mark_insn(func, insn);
                 }
@@ -92,9 +92,9 @@ impl AdceSolver {
             }
         };
 
-        let insn_block = func.layout.insn_block(insn);
+        let insn_block = func.layout.inst_block(insn);
         if mark_insn(insn, insn_block) {
-            let last_insn = func.layout.last_insn_of(insn_block).unwrap();
+            let last_insn = func.layout.last_inst_of(insn_block).unwrap();
             mark_insn(last_insn, insn_block);
         }
     }
@@ -118,9 +118,9 @@ impl AdceSolver {
             }
         }
 
-        let insn_block = func.layout.insn_block(insn);
+        let insn_block = func.layout.inst_block(insn);
         for &block in pdf_set.frontiers(insn_block) {
-            if let Some(last_insn) = func.layout.last_insn_of(block) {
+            if let Some(last_insn) = func.layout.last_inst_of(block) {
                 self.mark_insn(func, last_insn)
             }
         }
@@ -140,7 +140,7 @@ impl AdceSolver {
                     if self.does_insn_live(insn) {
                         inserter.proceed(func);
                     } else {
-                        inserter.remove_insn(func)
+                        inserter.remove_inst(func)
                     }
                 }
 
@@ -189,7 +189,7 @@ impl AdceSolver {
         inserter: &mut InsnInserter,
         block: BlockId,
     ) -> bool {
-        let last_insn = match func.layout.last_insn_of(block) {
+        let last_insn = match func.layout.last_inst_of(block) {
             Some(insn) => insn,
             None => return false,
         };

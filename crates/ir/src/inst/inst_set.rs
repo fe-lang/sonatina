@@ -146,7 +146,7 @@ pub trait InstSetExt: InstSetBase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::value_::ValueId;
+    use crate::ValueId;
     use arith::*;
     use control_flow::*;
     use logic::*;

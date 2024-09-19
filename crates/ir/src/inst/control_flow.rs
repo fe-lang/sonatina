@@ -1,7 +1,7 @@
 use macros::Inst;
 use smallvec::SmallVec;
 
-use crate::{module::FuncRef, value_::ValueId, BlockId, Type};
+use crate::{module::FuncRef, BlockId, Type, ValueId};
 
 use super::InstDowncast;
 
@@ -34,8 +34,14 @@ pub struct BrTable {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 pub struct Phi {
     #[inst(value)]
-    values: Vec<(ValueId, BlockId)>,
+    args: Vec<(ValueId, BlockId)>,
     ty: Type,
+}
+
+impl Phi {
+    pub fn append_phi_arg(&mut self, value: ValueId, block: BlockId) {
+        self.args.push((value, block))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]

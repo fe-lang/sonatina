@@ -16,7 +16,7 @@ use crate::domtree::{DomTree, DominatorTreeTraversable};
 
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    insn::{BinaryOp, CastOp, InsnData, UnaryOp},
+    inst::{BinaryOp, CastOp, InsnData, UnaryOp},
     BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, Insn, Type, ValueId,
 };
 
@@ -106,7 +106,7 @@ impl GvnSolver {
             self.blocks[block].rank = rank;
             rank += 1;
 
-            for insn in func.layout.iter_insn(block) {
+            for insn in func.layout.iter_inst(block) {
                 if let Some(insn_result) = func.dfg.insn_result(insn) {
                     self.values[insn_result].rank = rank;
                     rank += 1;
@@ -194,17 +194,17 @@ impl GvnSolver {
                     continue;
                 }
 
-                let mut next_insn = func.layout.first_insn_of(block);
+                let mut next_insn = func.layout.first_inst_of(block);
                 while let Some(insn) = next_insn {
                     // Reassign congruence class to the result value of the insn.
                     if let Some(insn_result) = func.dfg.insn_result(insn) {
                         changed |= self.reassign_congruence(func, domtree, insn, insn_result);
                     }
-                    next_insn = func.layout.next_insn_of(insn);
+                    next_insn = func.layout.next_inst_of(insn);
                 }
 
                 // If insn is terminator, analyze it to update edge and block reachability.
-                if let Some(last_insn) = func.layout.last_insn_of(block) {
+                if let Some(last_insn) = func.layout.last_inst_of(block) {
                     changed |= self.analyze_last_insn(func, domtree, block, last_insn);
                 }
             }
@@ -320,7 +320,7 @@ impl GvnSolver {
         insn_result: ValueId,
     ) -> bool {
         // Perform symbolic evaluation for the insn.
-        let block = func.layout.insn_block(insn);
+        let block = func.layout.inst_block(insn);
         let gvn_insn = self.perform_symbolic_evaluation(
             func,
             domtree,
@@ -1247,7 +1247,7 @@ impl<'a> ValuePhiFinder<'a> {
         }
 
         let class = self.solver.value_class(value);
-        let phi_block = func.layout.insn_block(func.dfg.value_insn(value)?);
+        let phi_block = func.layout.inst_block(func.dfg.value_insn(value)?);
 
         // if the gvn_insn of the value class is phi, then create `ValuePhi::Insn` from its args.
         if let GvnInsn::Insn(InsnData::Phi { values, blocks, .. }) =
@@ -1440,7 +1440,7 @@ impl<'a> RedundantCodeRemover<'a> {
                         // Use representative value if the class is in avail set.
                         if let Some(value) = avails.get(&class) {
                             self.change_to_alias(func, insn_result, *value);
-                            inserter.remove_insn(func);
+                            inserter.remove_inst(func);
                             continue;
                         }
 
@@ -1489,7 +1489,7 @@ impl<'a> RedundantCodeRemover<'a> {
                                 );
 
                                 self.change_to_alias(func, insn_result, value);
-                                inserter.remove_insn(func);
+                                inserter.remove_inst(func);
                                 continue;
                             }
                         }

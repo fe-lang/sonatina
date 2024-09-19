@@ -2,7 +2,7 @@ use sonatina_ir::{func_cursor::FuncCursor, ControlFlowGraph};
 
 use sonatina_ir::{
     func_cursor::{CursorLocation, InsnInserter},
-    insn::InsnData,
+    inst::InsnData,
     BlockId, Function, Insn,
 };
 
@@ -28,7 +28,7 @@ impl CriticalEdgeSplitter {
         self.clear();
 
         for block in func.layout.iter_block() {
-            if let Some(last_insn) = func.layout.last_insn_of(block) {
+            if let Some(last_insn) = func.layout.last_inst_of(block) {
                 self.add_critical_edges(last_insn, func, cfg);
             }
         }
@@ -59,7 +59,7 @@ impl CriticalEdgeSplitter {
     fn split_edge(&mut self, edge: CriticalEdge, func: &mut Function, cfg: &mut ControlFlowGraph) {
         let insn = edge.insn;
         let original_dest = edge.to;
-        let source_block = func.layout.insn_block(insn);
+        let source_block = func.layout.inst_block(insn);
 
         // Create a new block that contains only a jump insn to the destinating block of the
         // critical edge.
@@ -68,7 +68,7 @@ impl CriticalEdgeSplitter {
         let mut cursor = InsnInserter::at_location(CursorLocation::BlockTop(original_dest));
         cursor.append_block(func, inserted_dest);
         cursor.set_location(CursorLocation::BlockTop(inserted_dest));
-        cursor.append_insn(func, jump);
+        cursor.append_inst(func, jump);
 
         // Rewrite branch destination to the new block.
         func.dfg
@@ -83,7 +83,7 @@ impl CriticalEdgeSplitter {
         original_dest: BlockId,
         inserted_dest: BlockId,
     ) {
-        for insn in func.layout.iter_insn(original_dest) {
+        for insn in func.layout.iter_inst(original_dest) {
             if !func.dfg.is_phi(insn) {
                 continue;
             }

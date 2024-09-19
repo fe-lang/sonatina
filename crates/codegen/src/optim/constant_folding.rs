@@ -1,5 +1,5 @@
 use sonatina_ir::{
-    insn::{BinaryOp, CastOp, UnaryOp},
+    inst::{BinaryOp, CastOp, UnaryOp},
     DataFlowGraph, Immediate, InsnData,
 };
 

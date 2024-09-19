@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 
-use crate::{BlockId, Function, Insn};
+use crate::{BlockId, Function, InstId};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct ControlFlowGraph {
@@ -22,8 +22,8 @@ impl ControlFlowGraph {
         self.entry = func.layout.entry_block().into();
 
         for block in func.layout.iter_block() {
-            if let Some(last_insn) = func.layout.last_insn_of(block) {
-                self.analyze_insn(func, last_insn);
+            if let Some(last_inst) = func.layout.last_inst_of(block) {
+                self.analyze_inst(func, last_inst);
             }
         }
     }
@@ -76,14 +76,18 @@ impl ControlFlowGraph {
         self.exits.clear();
     }
 
-    fn analyze_insn(&mut self, func: &Function, insn: Insn) {
-        if func.dfg.is_return(insn) {
-            let exit = func.layout.insn_block(insn);
+    fn analyze_inst(&mut self, func: &Function, inst: crate::InstId) {
+        if func.dfg.is_exit(inst) {
+            let exit = func.layout.inst_block(inst);
             self.exits.push(exit);
         }
 
-        for dest in func.dfg.analyze_branch(insn).iter_dests() {
-            let block = func.layout.insn_block(insn);
+        let Some(branch_info) = func.dfg.branch_info(inst) else {
+            return;
+        };
+
+        for dest in branch_info.iter_dets() {
+            let block = func.layout.inst_block(inst);
             self.add_edge(block, dest);
         }
     }

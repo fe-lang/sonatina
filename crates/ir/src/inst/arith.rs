@@ -1,6 +1,6 @@
 use macros::Inst;
 
-use crate::value_::ValueId;
+use crate::ValueId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Neg {

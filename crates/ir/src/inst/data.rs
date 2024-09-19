@@ -1,7 +1,7 @@
 use macros::Inst;
 use smallvec::SmallVec;
 
-use crate::value_::ValueId;
+use crate::ValueId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Mload {

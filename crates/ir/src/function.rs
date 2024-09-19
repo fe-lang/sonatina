@@ -1,10 +1,8 @@
 use super::{module::FuncRef, DataFlowGraph, Layout, Type, ValueId};
-use crate::{module::ModuleCtx, types::DisplayType, Linkage};
+use crate::{module::ModuleCtx, Linkage};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
-use std::fmt::{self, Write};
 
-#[derive(Debug, Clone)]
 pub struct Function {
     /// Signature of the function.
     pub sig: Signature,
@@ -79,39 +77,5 @@ impl Signature {
     #[doc(hidden)]
     pub fn set_ret_ty(&mut self, ty: Type) {
         self.ret_ty = ty;
-    }
-}
-
-pub struct DisplaySignature<'a, 'b> {
-    sig: &'a Signature,
-    dfg: &'b DataFlowGraph,
-}
-
-impl<'a, 'b> DisplaySignature<'a, 'b> {
-    pub fn new(sig: &'a Signature, dfg: &'b DataFlowGraph) -> Self {
-        Self { sig, dfg }
-    }
-}
-
-impl<'a, 'b> fmt::Display for DisplaySignature<'a, 'b> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let Self { sig, dfg } = *self;
-        let Signature {
-            name,
-            linkage,
-            args,
-            ret_ty,
-        } = sig;
-
-        let mut args_ty = String::new();
-        for arg_ty in args {
-            let ty = DisplayType::new(*arg_ty, dfg);
-            write!(&mut args_ty, "{ty} ")?;
-        }
-        let args_ty = args_ty.trim();
-
-        let ret_ty = DisplayType::new(*ret_ty, dfg);
-
-        write!(f, "func {linkage} %{name}({args_ty}) -> {ret_ty}")
     }
 }
