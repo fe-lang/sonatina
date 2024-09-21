@@ -86,7 +86,7 @@ impl ControlFlowGraph {
             return;
         };
 
-        for dest in branch_info.iter_dets() {
+        for dest in branch_info.iter_dests() {
             let block = func.layout.inst_block(inst);
             self.add_edge(block, dest);
         }
