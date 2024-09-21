@@ -76,8 +76,8 @@ impl<'a> ModuleWriter<'a> {
 }
 
 pub struct FuncWriter<'a> {
-    func_ref: FuncRef,
-    func: &'a Function,
+    pub(crate) func_ref: FuncRef,
+    pub(crate) func: &'a Function,
     level: u8,
     debug: Option<&'a dyn DebugProvider>,
 }
@@ -97,8 +97,6 @@ impl<'a> FuncWriter<'a> {
     }
 
     pub fn write(&mut self, mut w: impl io::Write) -> io::Result<()> {
-        // TODO: extern declarations aren't printed correctly
-
         w.write_fmt(format_args!(
             "func {} %{}(",
             self.func.sig.linkage(),
@@ -151,7 +149,8 @@ impl<'a> FuncWriter<'a> {
 
         self.enter(&mut w)?;
         let insts = self.func.layout.iter_inst(block);
-        self.write_iter_with_delim(insts, "\n", &mut w)?;
+        self.write_iter_with_delim(insts, ";\n", &mut w)?;
+        write!(w, ";");
         self.leave();
 
         Ok(())
@@ -163,7 +162,7 @@ impl<'a> FuncWriter<'a> {
         self.write_iter_with_delim(values.iter(), " ", &mut w)
     }
 
-    fn write_iter_with_delim<T>(
+    pub fn write_iter_with_delim<T>(
         &mut self,
         iter: impl Iterator<Item = T>,
         delim: &str,

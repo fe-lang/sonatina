@@ -1,7 +1,13 @@
+use std::io;
+
 use macros::Inst;
 use smallvec::SmallVec;
 
-use crate::{module::FuncRef, BlockId, Type, ValueId};
+use crate::{
+    ir_writer::{FuncWriter, IrWrite},
+    module::FuncRef,
+    BlockId, Inst, Type, ValueId,
+};
 
 use super::InstDowncast;
 
@@ -9,6 +15,13 @@ use super::InstDowncast;
 #[inst(terminator)]
 pub struct Jump {
     dest: BlockId,
+}
+impl IrWrite for Jump {
+    fn write(&self, writer: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
+        write!(w, "{}", self.as_text())?;
+        writer.space(&mut *w)?;
+        self.dest.write(writer, w)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
@@ -18,6 +31,20 @@ pub struct Br {
     cond: ValueId,
     z_dest: BlockId,
     nz_dest: BlockId,
+}
+impl IrWrite for Br {
+    fn write(&self, writer: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
+        write!(w, "{}", self.as_text())?;
+        writer.space(&mut *w)?;
+
+        self.cond.write(writer, w)?;
+        writer.space(&mut *w)?;
+
+        self.z_dest.write(writer, w)?;
+        writer.space(&mut *w)?;
+
+        self.nz_dest.write(writer, w)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
@@ -30,6 +57,34 @@ pub struct BrTable {
 
     default: Option<BlockId>,
 }
+impl IrWrite for BrTable {
+    fn write(&self, writer: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
+        write!(w, "{}", self.as_text())?;
+        writer.space(&mut *w)?;
+
+        self.scrutinee.write(writer, w)?;
+        writer.space(&mut *w)?;
+
+        if let Some(default) = self.default {
+            default.write(writer, &mut *w)?;
+        } else {
+            write!(w, "undef")?;
+        }
+        writer.space(&mut *w)?;
+
+        let mut table_args = vec![];
+        for (value, block) in &self.table {
+            let mut arg = vec![b'('];
+            value.write(writer, &mut arg)?;
+            writer.space(&mut arg)?;
+            block.write(writer, &mut arg)?;
+            arg.push(b')');
+            table_args.push(arg);
+        }
+
+        writer.write_iter_with_delim(table_args.iter(), " ", &mut *w)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 pub struct Phi {
@@ -37,10 +92,27 @@ pub struct Phi {
     args: Vec<(ValueId, BlockId)>,
     ty: Type,
 }
-
 impl Phi {
     pub fn append_phi_arg(&mut self, value: ValueId, block: BlockId) {
         self.args.push((value, block))
+    }
+}
+impl IrWrite for Phi {
+    fn write(&self, writer: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
+        write!(w, "{}", self.as_text())?;
+        writer.space(&mut *w)?;
+
+        let mut args = vec![];
+        for (value, block) in &self.args {
+            let mut arg = vec![b'('];
+            value.write(writer, &mut arg)?;
+            writer.space(&mut arg)?;
+            block.write(writer, &mut arg)?;
+            arg.push(b')');
+            args.push(arg);
+        }
+
+        writer.write_iter_with_delim(args.iter(), " ", &mut *w)
     }
 }
 
@@ -53,6 +125,17 @@ pub struct Call {
     callee: FuncRef,
     ret_ty: Type,
 }
+impl IrWrite for Call {
+    fn write(&self, writer: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
+        write!(w, "{}", self.as_text())?;
+        writer.space(&mut *w)?;
+
+        write!(w, "%{}", writer.func.callees[&self.callee].name())?;
+
+        writer.space(&mut *w)?;
+        writer.write_inst_values(self, &mut *w)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(has_side_effect)]
@@ -60,6 +143,17 @@ pub struct Call {
 pub struct Return {
     #[inst(value)]
     arg: Option<ValueId>,
+}
+impl IrWrite for Return {
+    fn write(&self, writer: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
+        write!(w, "{}", self.as_text())?;
+        if let Some(arg) = self.arg {
+            writer.space(&mut *w)?;
+            arg.write(writer, &mut *w)?;
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy)]

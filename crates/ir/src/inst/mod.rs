@@ -11,19 +11,26 @@ use std::any::{Any, TypeId};
 
 use smallvec::SmallVec;
 
-use crate::{InstSetBase, ValueId};
+use crate::{ir_writer::IrWrite, InstSetBase, ValueId};
 
 /// An opaque reference to dynamic [`Inst`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
 pub struct InstId(pub u32);
 cranelift_entity::entity_impl!(InstId);
 
-pub trait Inst: inst_set::sealed::Registered + Any {
+pub trait Inst: inst_set::sealed::Registered + Any + IrWrite {
     fn visit_values(&self, f: &mut dyn FnMut(ValueId));
     fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut ValueId));
     fn has_side_effect(&self) -> bool;
     fn as_text(&self) -> &'static str;
     fn is_terminator(&self) -> bool;
+
+    fn collect_values(&self) -> Vec<ValueId> {
+        let mut vs = Vec::new();
+
+        self.visit_values(&mut |v| vs.push(v));
+        vs
+    }
 }
 
 /// This trait works as a "proof" that a specific ISA contains `I`,
@@ -150,4 +157,21 @@ pub trait InstDowncastMut: Sized {
         let data = Self::downcast_mut(isb, inst)?;
         Some(f(data))
     }
+}
+
+#[macro_export]
+macro_rules! impl_ir_write {
+    ($ty:ty) => {
+        impl crate::ir_writer::IrWrite for $ty {
+            fn write(
+                &self,
+                writer: &mut crate::ir_writer::FuncWriter,
+                w: &mut dyn std::io::Write,
+            ) -> std::io::Result<()> {
+                write!(w, "{}", crate::Inst::as_text(self))?;
+                writer.space(&mut *w)?;
+                writer.write_inst_values(self, w)
+            }
+        }
+    };
 }
