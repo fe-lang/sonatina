@@ -3,10 +3,10 @@ use std::io;
 use crate::{
     module::{FuncRef, ModuleCtx},
     types::{CompoundType, CompoundTypeData, StructData},
-    DataLocationKind, GlobalVariableData, Module,
+    GlobalVariableData, InstId, Module, Value,
 };
 
-use super::{BlockId, Function, Insn, InsnData, Type, ValueId};
+use super::{BlockId, Function, Inst, Type, ValueId};
 
 pub trait DebugProvider {
     fn value_name(&self, _func: FuncRef, _value: ValueId) -> Option<&str> {
@@ -116,7 +116,7 @@ impl<'a> FuncWriter<'a> {
         self.level += 1;
 
         for block in self.func.layout.iter_block() {
-            self.write_block_with_insn(block, &mut w)?;
+            self.write_block_with_inst(block, &mut w)?;
             self.newline(&mut w)?;
             self.newline(&mut w)?;
         }
@@ -141,20 +141,26 @@ impl<'a> FuncWriter<'a> {
         self.debug.and_then(|d| d.value_name(self.func_ref, value))
     }
 
-    fn write_block_with_insn(&mut self, block: BlockId, mut w: impl io::Write) -> io::Result<()> {
+    pub fn write_block_with_inst(
+        &mut self,
+        block: BlockId,
+        mut w: impl io::Write,
+    ) -> io::Result<()> {
         self.indent(&mut w)?;
         block.write(self, &mut w)?;
 
         self.enter(&mut w)?;
-        let insns = self.func.layout.iter_inst(block);
-        self.write_iter_with_delim(insns, "\n", &mut w)?;
+        let insts = self.func.layout.iter_inst(block);
+        self.write_iter_with_delim(insts, "\n", &mut w)?;
         self.leave();
 
         Ok(())
     }
 
-    fn write_insn_args(&mut self, args: &[ValueId], mut w: impl io::Write) -> io::Result<()> {
-        self.write_iter_with_delim(args.iter(), " ", &mut w)
+    pub fn write_inst_values(&mut self, inst: &dyn Inst, mut w: impl io::Write) -> io::Result<()> {
+        let values = inst.collect_values();
+
+        self.write_iter_with_delim(values.iter(), " ", &mut w)
     }
 
     fn write_iter_with_delim<T>(
@@ -177,15 +183,15 @@ impl<'a> FuncWriter<'a> {
         Ok(())
     }
 
-    fn indent(&self, mut w: impl io::Write) -> io::Result<()> {
+    pub fn indent(&self, mut w: impl io::Write) -> io::Result<()> {
         w.write_all(" ".repeat(self.level as usize * 4).as_bytes())
     }
 
-    fn newline(&self, mut w: impl io::Write) -> io::Result<()> {
+    pub fn newline(&self, mut w: impl io::Write) -> io::Result<()> {
         w.write_all(b"\n")
     }
 
-    fn space(&self, mut w: impl io::Write) -> io::Result<()> {
+    pub fn space(&self, mut w: impl io::Write) -> io::Result<()> {
         w.write_all(b" ")
     }
 
@@ -199,25 +205,29 @@ impl<'a> FuncWriter<'a> {
     }
 }
 
-trait IrWrite {
-    fn write(&self, writer: &mut FuncWriter, w: &mut impl io::Write) -> io::Result<()>;
+pub trait IrWrite {
+    fn write(&self, writer: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()>;
 }
 
 impl IrWrite for ValueId {
-    fn write(&self, writer: &mut FuncWriter, w: &mut impl io::Write) -> io::Result<()> {
+    fn write(&self, writer: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
         let value = *self;
-        if let Some(imm) = writer.func.dfg.value_imm(value) {
-            write!(w, "{}.", imm)?;
-            let ty = writer.func.dfg.value_ty(value);
-            ty.ir_write(writer.ctx(), w)
-        } else if let Some(gv) = writer.func.dfg.value_gv(value) {
-            writer
+        match writer.func.dfg.value(*self) {
+            Value::Immediate { imm, .. } => {
+                write!(w, "{}.", imm)?;
+                let ty = writer.func.dfg.value_ty(value);
+                ty.ir_write(writer.ctx(), w)
+            }
+            Value::Global { gv, .. } => writer
                 .ctx()
-                .with_gv_store(|s| write!(w, "%{}", s.gv_data(gv).symbol))
-        } else if let Some(name) = writer.value_name(value) {
-            write!(w, "{name}")
-        } else {
-            write!(w, "v{}", value.0)
+                .with_gv_store(|s| write!(w, "%{}", s.gv_data(*gv).symbol)),
+            _ => {
+                if let Some(name) = writer.value_name(value) {
+                    write!(w, "{name}")
+                } else {
+                    write!(w, "v{}", value.0)
+                }
+            }
         }
     }
 }
@@ -237,13 +247,13 @@ impl GlobalVariableData {
 }
 
 impl IrWrite for BlockId {
-    fn write(&self, _: &mut FuncWriter, w: &mut impl io::Write) -> io::Result<()> {
+    fn write(&self, _: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
         w.write_fmt(format_args!("block{}", self.0))
     }
 }
 
 impl Type {
-    fn ir_write(&self, ctx: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
+    fn ir_write(&self, ctx: &ModuleCtx, w: &mut dyn io::Write) -> io::Result<()> {
         match self {
             Self::I1 => write!(w, "i1"),
             Self::I8 => write!(w, "i8"),
@@ -259,7 +269,7 @@ impl Type {
 }
 
 impl CompoundType {
-    fn ir_write(&self, ctx: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
+    fn ir_write(&self, ctx: &ModuleCtx, w: &mut dyn io::Write) -> io::Result<()> {
         let comp_data = ctx.with_ty_store(|s| s.resolve_compound(*self).clone());
 
         match comp_data {
@@ -280,7 +290,7 @@ impl CompoundType {
 }
 
 impl StructData {
-    fn ir_write(&self, ctx: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
+    fn ir_write(&self, ctx: &ModuleCtx, w: &mut dyn io::Write) -> io::Result<()> {
         write!(w, "type %{} = ", self.name)?;
         if self.packed {
             write!(w, "<{{")?;
@@ -303,158 +313,11 @@ impl StructData {
     }
 }
 
-impl IrWrite for Insn {
-    fn write(&self, writer: &mut FuncWriter, w: &mut impl io::Write) -> io::Result<()> {
-        use InsnData::*;
-
-        writer.indent(&mut *w)?;
-        if let Some(insn_result) = writer.func.dfg.insn_result(*self) {
-            insn_result.write(writer, &mut *w)?;
-            w.write_all(b".")?;
-            let ty = writer.func.dfg.value_ty(insn_result);
-            ty.ir_write(writer.ctx(), &mut *w)?;
-            w.write_all(b" = ")?;
-        }
-
-        let insn_data = writer.func.dfg.insn_data(*self);
-        match insn_data {
-            Unary { code, args } => {
-                write!(w, "{}", code)?;
-                writer.space(&mut *w)?;
-                writer.write_insn_args(args, &mut *w)?;
-            }
-
-            Binary { code, args } => {
-                write!(w, "{}", code)?;
-                writer.space(&mut *w)?;
-                writer.write_insn_args(args, &mut *w)?;
-            }
-
-            Cast { code, args, .. } => {
-                write!(w, "{}", code)?;
-                writer.space(&mut *w)?;
-                writer.write_insn_args(args, &mut *w)?;
-            }
-
-            Load { args, loc } => {
-                write!(w, "load")?;
-                writer.space(&mut *w)?;
-                match loc {
-                    DataLocationKind::Memory => write!(w, "@memory")?,
-                    DataLocationKind::Storage => write!(w, "@storage")?,
-                }
-                writer.space(&mut *w)?;
-                writer.write_insn_args(args, &mut *w)?;
-            }
-
-            Store { args, loc } => {
-                write!(w, "store")?;
-                writer.space(&mut *w)?;
-                match loc {
-                    DataLocationKind::Memory => write!(w, "@memory")?,
-                    DataLocationKind::Storage => write!(w, "@storage")?,
-                }
-                writer.space(&mut *w)?;
-                writer.write_insn_args(args, &mut *w)?;
-            }
-
-            Call { func, args, .. } => {
-                write!(w, "call")?;
-                writer.space(&mut *w)?;
-                write!(w, "%{}", writer.func.callees[func].name())?;
-                writer.space(&mut *w)?;
-                writer.write_insn_args(args, &mut *w)?;
-            }
-
-            Jump { dests } => {
-                write!(w, "jump")?;
-                writer.space(&mut *w)?;
-                writer.write_iter_with_delim(dests.iter(), " ", &mut *w)?;
-            }
-
-            Branch { args, dests } => {
-                write!(w, "br")?;
-                writer.space(&mut *w)?;
-                writer.write_insn_args(args, &mut *w)?;
-                writer.space(&mut *w)?;
-                writer.write_iter_with_delim(dests.iter(), " ", &mut *w)?;
-            }
-
-            BrTable {
-                args,
-                default,
-                table,
-            } => {
-                write!(w, "br_table")?;
-                writer.space(&mut *w)?;
-                args[0].write(writer, &mut *w)?;
-                writer.space(&mut *w)?;
-                if let Some(default) = default {
-                    default.write(writer, &mut *w)?;
-                } else {
-                    write!(w, "undef")?;
-                }
-                writer.space(&mut *w)?;
-
-                let mut table_args = vec![];
-                for (value, block) in args[1..].iter().zip(table.iter()) {
-                    let mut arg = vec![b'('];
-                    value.write(writer, &mut arg)?;
-                    writer.space(&mut arg)?;
-                    block.write(writer, &mut arg)?;
-                    arg.push(b')');
-                    table_args.push(arg);
-                }
-
-                writer.write_iter_with_delim(table_args.iter(), " ", &mut *w)?;
-            }
-
-            Alloca { ty } => {
-                write!(w, "alloca")?;
-                writer.space(&mut *w)?;
-                ty.ir_write(writer.ctx(), &mut *w)?;
-            }
-
-            Return { args } => {
-                write!(w, "return")?;
-                if let Some(arg) = args {
-                    writer.space(&mut *w)?;
-                    arg.write(writer, &mut *w)?;
-                }
-            }
-
-            Gep { args } => {
-                write!(w, "gep")?;
-                writer.space(&mut *w)?;
-                writer.write_insn_args(args, &mut *w)?;
-            }
-
-            Phi { values, blocks, .. } => {
-                write!(w, "phi")?;
-                writer.space(&mut *w)?;
-                let mut args = vec![];
-                for (value, block) in values.iter().zip(blocks.iter()) {
-                    let mut arg = vec![b'('];
-                    value.write(writer, &mut arg)?;
-                    writer.space(&mut arg)?;
-                    block.write(writer, &mut arg)?;
-                    arg.push(b')');
-                    args.push(arg);
-                }
-
-                writer.write_iter_with_delim(args.iter(), " ", &mut *w)?;
-            }
-        }
-
-        write!(w, ";")?;
-        Ok(())
-    }
-}
 #[derive(Clone)]
 struct ValueWithTy(ValueId);
 
 impl IrWrite for ValueWithTy {
-    fn write(&self, f: &mut FuncWriter, w: &mut impl io::Write) -> io::Result<()> {
+    fn write(&self, f: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
         let ty = f.func.dfg.value_ty(self.0);
         self.0.write(f, &mut *w)?;
         w.write_all(b".")?;
@@ -462,17 +325,24 @@ impl IrWrite for ValueWithTy {
     }
 }
 
+impl IrWrite for InstId {
+    fn write(&self, f: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
+        let inst = f.func.dfg.inst(*self);
+        inst.write(f, w)
+    }
+}
+
 impl<T> IrWrite for &T
 where
     T: IrWrite,
 {
-    fn write(&self, f: &mut FuncWriter, w: &mut impl io::Write) -> io::Result<()> {
+    fn write(&self, f: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
         (*self).write(f, w)
     }
 }
 
 impl IrWrite for Vec<u8> {
-    fn write(&self, _: &mut FuncWriter, w: &mut impl io::Write) -> io::Result<()> {
+    fn write(&self, _: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
         w.write_all(self)
     }
 }
