@@ -1,13 +1,13 @@
 use macros::Inst;
 
-use crate::{impl_ir_write, ValueId};
+use crate::{impl_display_with_func, ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Not {
     #[inst(value)]
     arg: ValueId,
 }
-impl_ir_write!(Not);
+impl_display_with_func!(Not);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct And {
@@ -16,7 +16,7 @@ pub struct And {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_ir_write!(And);
+impl_display_with_func!(And);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Or {
@@ -25,7 +25,7 @@ pub struct Or {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_ir_write!(Or);
+impl_display_with_func!(Or);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Xor {
@@ -34,4 +34,4 @@ pub struct Xor {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_ir_write!(Xor);
+impl_display_with_func!(Xor);

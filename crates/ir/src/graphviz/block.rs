@@ -2,11 +2,11 @@ use std::fmt::Write;
 
 use dot2::label;
 
-use crate::{function::DisplaySignature, inst::DisplayInsn, BlockId, ControlFlowGraph, Function};
+use crate::{ir_writer::DisplayableWithFunc, BlockId, ControlFlowGraph, Function};
 
 use super::function::DUMMY_BLOCK;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub(super) struct BlockNode<'a> {
     pub(super) func: &'a Function,
     pub(super) cfg: &'a ControlFlowGraph,
@@ -33,7 +33,7 @@ impl<'a> BlockNode<'a> {
             sig, dfg, layout, ..
         } = func;
         if block == DUMMY_BLOCK {
-            let sig = DisplaySignature::new(sig, dfg);
+            let sig = DisplayableWithFunc(sig, &self.func);
             return label::Text::LabelStr(format!("{sig}").into());
         }
 
@@ -49,10 +49,10 @@ impl<'a> BlockNode<'a> {
 
         // Write block body.
         write!(label, r#"<tr><td align="left" balign="left">"#).unwrap();
-        for insn in layout.iter_inst(self.block) {
-            let display_insn = DisplayInsn::new(insn, func);
+        for inst in layout.iter_inst(self.block) {
+            let inst = DisplayableWithFunc(inst, self.func);
             let mut insn_string = String::new();
-            write!(&mut insn_string, "{}", display_insn).unwrap();
+            write!(&mut insn_string, "{}", inst).unwrap();
 
             write!(label, "{}", dot2::escape_html(&insn_string)).unwrap();
             write!(label, "<br/>").unwrap();

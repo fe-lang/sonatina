@@ -1,6 +1,6 @@
 use macros::Inst;
 
-use crate::{impl_ir_write, ValueId};
+use crate::{impl_display_with_func, ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Lt {
@@ -9,7 +9,7 @@ pub struct Lt {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_ir_write!(Lt);
+impl_display_with_func!(Lt);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Gt {
@@ -18,7 +18,7 @@ pub struct Gt {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_ir_write!(Gt);
+impl_display_with_func!(Gt);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Slt {
@@ -27,7 +27,7 @@ pub struct Slt {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_ir_write!(Slt);
+impl_display_with_func!(Slt);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Sgt {
@@ -36,7 +36,7 @@ pub struct Sgt {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_ir_write!(Sgt);
+impl_display_with_func!(Sgt);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Le {
@@ -45,7 +45,7 @@ pub struct Le {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_ir_write!(Le);
+impl_display_with_func!(Le);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Ge {
@@ -54,7 +54,7 @@ pub struct Ge {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_ir_write!(Ge);
+impl_display_with_func!(Ge);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Sle {
@@ -63,7 +63,7 @@ pub struct Sle {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_ir_write!(Sle);
+impl_display_with_func!(Sle);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Sge {
@@ -72,7 +72,7 @@ pub struct Sge {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_ir_write!(Sge);
+impl_display_with_func!(Sge);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Eq {
@@ -81,7 +81,7 @@ pub struct Eq {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_ir_write!(Eq);
+impl_display_with_func!(Eq);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Ne {
@@ -90,11 +90,11 @@ pub struct Ne {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_ir_write!(Ne);
+impl_display_with_func!(Ne);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct IsZero {
     #[inst(value)]
     lhs: ValueId,
 }
-impl_ir_write!(IsZero);
+impl_display_with_func!(IsZero);

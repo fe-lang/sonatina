@@ -1,4 +1,4 @@
-use std::io;
+use std::{fmt, io};
 
 use crate::{
     module::{FuncRef, ModuleCtx},
@@ -204,28 +204,20 @@ impl<'a> FuncWriter<'a> {
     }
 }
 
-pub trait IrWrite {
-    fn write(&self, writer: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()>;
-}
-
-impl IrWrite for ValueId {
-    fn write(&self, writer: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
+impl DisplayWithFunc for ValueId {
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
         let value = *self;
-        match writer.func.dfg.value(*self) {
-            Value::Immediate { imm, .. } => {
-                write!(w, "{}.", imm)?;
-                let ty = writer.func.dfg.value_ty(value);
-                ty.ir_write(writer.ctx(), w)
+        match func.dfg.value(*self) {
+            Value::Immediate { imm, ty } => {
+                let ty = DisplayableWithFunc(ty, func);
+                write!(formatter, "{}.{}", imm, ty)
             }
-            Value::Global { gv, .. } => writer
-                .ctx()
-                .with_gv_store(|s| write!(w, "%{}", s.gv_data(*gv).symbol)),
+            Value::Global { gv, .. } => func
+                .dfg
+                .ctx
+                .with_gv_store(|s| write!(formatter, "%{}", s.gv_data(*gv).symbol)),
             _ => {
-                if let Some(name) = writer.value_name(value) {
-                    write!(w, "{name}")
-                } else {
-                    write!(w, "v{}", value.0)
-                }
+                write!(formatter, "v{}", value.0)
             }
         }
     }
@@ -245,46 +237,9 @@ impl GlobalVariableData {
     }
 }
 
-impl IrWrite for BlockId {
-    fn write(&self, _: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
-        w.write_fmt(format_args!("block{}", self.0))
-    }
-}
-
-impl Type {
-    fn ir_write(&self, ctx: &ModuleCtx, w: &mut dyn io::Write) -> io::Result<()> {
-        match self {
-            Self::I1 => write!(w, "i1"),
-            Self::I8 => write!(w, "i8"),
-            Self::I16 => write!(w, "i16"),
-            Self::I32 => write!(w, "i32"),
-            Self::I64 => write!(w, "i64"),
-            Self::I128 => write!(w, "i128"),
-            Self::I256 => write!(w, "i256"),
-            Self::Void => write!(w, "void"),
-            Self::Compound(compound) => compound.ir_write(ctx, w),
-        }
-    }
-}
-
-impl CompoundType {
-    fn ir_write(&self, ctx: &ModuleCtx, w: &mut dyn io::Write) -> io::Result<()> {
-        let comp_data = ctx.with_ty_store(|s| s.resolve_compound(*self).clone());
-
-        match comp_data {
-            CompoundTypeData::Array { elem, len } => {
-                write!(w, "[")?;
-                elem.ir_write(ctx, &mut *w)?;
-                write!(w, "; {}]", len)
-            }
-            CompoundTypeData::Ptr(elem) => {
-                write!(w, "*")?;
-                elem.ir_write(ctx, w)
-            }
-            CompoundTypeData::Struct(def) => {
-                write!(w, "%{}", def.name)
-            }
-        }
+impl DisplayWithFunc for BlockId {
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "block{}", self.0)
     }
 }
 
@@ -315,33 +270,70 @@ impl StructData {
 #[derive(Clone)]
 struct ValueWithTy(ValueId);
 
-impl IrWrite for ValueWithTy {
-    fn write(&self, f: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
-        let ty = f.func.dfg.value_ty(self.0);
-        self.0.write(f, &mut *w)?;
-        w.write_all(b".")?;
-        ty.ir_write(f.ctx(), w)
+impl DisplayWithFunc for ValueWithTy {
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let value = DisplayableWithFunc(self.0, func);
+        let ty = func.dfg.value_ty(self.0);
+        let ty = DisplayableWithFunc(ty, func);
+        write!(formatter, "{value}.{ty}")
     }
 }
 
-impl IrWrite for InstId {
-    fn write(&self, f: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
-        let inst = f.func.dfg.inst(*self);
-        inst.write(f, w)
-    }
+pub trait DisplayWithFunc {
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result;
 }
 
-impl<T> IrWrite for &T
+impl<T> DisplayWithFunc for &T
 where
-    T: IrWrite,
+    T: DisplayWithFunc,
 {
-    fn write(&self, f: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
-        (*self).write(f, w)
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+        (*self).fmt(func, formatter)
     }
 }
 
-impl IrWrite for Vec<u8> {
-    fn write(&self, _: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
-        w.write_all(self)
+impl DisplayWithFunc for InstId {
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let inst = func.dfg.inst(*self);
+        inst.fmt(func, formatter)
+    }
+}
+
+pub(crate) struct DisplayFuncHelper<'a> {
+    pub(crate) func: &'a Function,
+}
+impl<'a> DisplayFuncHelper<'a> {
+    pub(crate) fn new(func: &'a Function) -> Self {
+        Self { func }
+    }
+}
+
+pub fn write_iter_with_delim<T>(
+    func: &Function,
+    f: &mut fmt::Formatter,
+    iter: impl Iterator<Item = T>,
+    delim: &str,
+) -> fmt::Result
+where
+    T: DisplayWithFunc,
+{
+    let mut iter = iter.peekable();
+    while let Some(item) = iter.next() {
+        item.fmt(func, f);
+        if iter.peek().is_some() {
+            f.write_str(delim)?;
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) struct DisplayableWithFunc<'f, T>(pub(crate) T, pub(crate) &'f Function);
+impl<'f, T> fmt::Display for DisplayableWithFunc<'f, T>
+where
+    T: DisplayWithFunc,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(self.1, f)
     }
 }
