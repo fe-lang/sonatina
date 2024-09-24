@@ -1,12 +1,12 @@
-use std::io;
+use std::fmt;
 
 use macros::Inst;
 use smallvec::SmallVec;
 
 use crate::{
-    ir_writer::{FuncWriter, IrWrite},
+    ir_writer::{DisplayWithFunc, DisplayableWithFunc},
     module::FuncRef,
-    BlockId, Inst, Type, ValueId,
+    BlockId, Function, Inst, Type, ValueId,
 };
 
 use super::InstDowncast;
@@ -16,11 +16,12 @@ use super::InstDowncast;
 pub struct Jump {
     dest: BlockId,
 }
-impl IrWrite for Jump {
-    fn write(&self, writer: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
-        write!(w, "{}", self.as_text())?;
-        writer.space(&mut *w)?;
-        self.dest.write(writer, w)
+impl DisplayWithFunc for Jump {
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let name = self.as_text();
+        let block = DisplayableWithFunc(self.dest, func);
+
+        write!(formatter, "{name} {block}")
     }
 }
 
@@ -32,18 +33,14 @@ pub struct Br {
     z_dest: BlockId,
     nz_dest: BlockId,
 }
-impl IrWrite for Br {
-    fn write(&self, writer: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
-        write!(w, "{}", self.as_text())?;
-        writer.space(&mut *w)?;
+impl DisplayWithFunc for Br {
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let name = self.as_text();
+        let cond = DisplayableWithFunc(self.cond, func);
+        let z_dest = DisplayableWithFunc(self.z_dest, func);
+        let nz_dest = DisplayableWithFunc(self.nz_dest, func);
 
-        self.cond.write(writer, w)?;
-        writer.space(&mut *w)?;
-
-        self.z_dest.write(writer, w)?;
-        writer.space(&mut *w)?;
-
-        self.nz_dest.write(writer, w)
+        write!(formatter, "{name} {cond} {z_dest} {nz_dest}")
     }
 }
 
@@ -52,37 +49,31 @@ impl IrWrite for Br {
 pub struct BrTable {
     #[inst(value)]
     scrutinee: ValueId,
-    #[inst(value)]
-    table: Vec<(ValueId, BlockId)>,
 
     default: Option<BlockId>,
+    #[inst(value)]
+    table: Vec<(ValueId, BlockId)>,
 }
-impl IrWrite for BrTable {
-    fn write(&self, writer: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
-        write!(w, "{}", self.as_text())?;
-        writer.space(&mut *w)?;
-
-        self.scrutinee.write(writer, w)?;
-        writer.space(&mut *w)?;
-
+impl DisplayWithFunc for BrTable {
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let name = self.as_text();
+        let scrutinee = DisplayableWithFunc(self.scrutinee, func);
+        write!(formatter, "{name} {scrutinee}")?;
         if let Some(default) = self.default {
-            default.write(writer, &mut *w)?;
+            let default = DisplayableWithFunc(default, func);
+            write!(formatter, " {default}")?;
         } else {
-            write!(w, "undef")?;
-        }
-        writer.space(&mut *w)?;
+            write!(formatter, " undef")?;
+        };
 
         let mut table_args = vec![];
         for (value, block) in &self.table {
-            let mut arg = vec![b'('];
-            value.write(writer, &mut arg)?;
-            writer.space(&mut arg)?;
-            block.write(writer, &mut arg)?;
-            arg.push(b')');
-            table_args.push(arg);
+            let value = DisplayableWithFunc(value, func);
+            let block = DisplayableWithFunc(block, func);
+            write!(formatter, " ({value} {block})")?;
         }
 
-        writer.write_iter_with_delim(table_args.iter(), " ", &mut *w)
+        Ok(())
     }
 }
 
@@ -97,22 +88,18 @@ impl Phi {
         self.args.push((value, block))
     }
 }
-impl IrWrite for Phi {
-    fn write(&self, writer: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
-        write!(w, "{}", self.as_text())?;
-        writer.space(&mut *w)?;
+impl DisplayWithFunc for Phi {
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let name = self.as_text();
+        write!(formatter, "{}", self.as_text());
 
-        let mut args = vec![];
         for (value, block) in &self.args {
-            let mut arg = vec![b'('];
-            value.write(writer, &mut arg)?;
-            writer.space(&mut arg)?;
-            block.write(writer, &mut arg)?;
-            arg.push(b')');
-            args.push(arg);
+            let value = DisplayableWithFunc(value, func);
+            let block = DisplayableWithFunc(block, func);
+            write!(formatter, " ({value} {block})")?;
         }
 
-        writer.write_iter_with_delim(args.iter(), " ", &mut *w)
+        Ok(())
     }
 }
 
@@ -120,20 +107,22 @@ impl IrWrite for Phi {
 #[inst(has_side_effect)]
 #[inst(terminator)]
 pub struct Call {
+    callee: FuncRef,
+
     #[inst(value)]
     args: SmallVec<[ValueId; 8]>,
-    callee: FuncRef,
     ret_ty: Type,
 }
-impl IrWrite for Call {
-    fn write(&self, writer: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
-        write!(w, "{}", self.as_text())?;
-        writer.space(&mut *w)?;
-
-        write!(w, "%{}", writer.func.callees[&self.callee].name())?;
-
-        writer.space(&mut *w)?;
-        writer.write_inst_values(self, &mut *w)
+impl DisplayWithFunc for Call {
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let name = self.as_text();
+        let callee = func.callees[&self.callee].name();
+        write!(formatter, "{name} %{callee}")?;
+        for value in self.args {
+            let value = DisplayableWithFunc(value, func);
+            write!(formatter, " {value}")?;
+        }
+        Ok(())
     }
 }
 
@@ -144,14 +133,13 @@ pub struct Return {
     #[inst(value)]
     arg: Option<ValueId>,
 }
-impl IrWrite for Return {
-    fn write(&self, writer: &mut FuncWriter, w: &mut dyn io::Write) -> io::Result<()> {
-        write!(w, "{}", self.as_text())?;
+impl DisplayWithFunc for Return {
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "{}", self.as_text())?;
         if let Some(arg) = self.arg {
-            writer.space(&mut *w)?;
-            arg.write(writer, &mut *w)?;
+            let arg = DisplayableWithFunc(arg, func);
+            write!(formatter, " {arg}")?;
         }
-
         Ok(())
     }
 }

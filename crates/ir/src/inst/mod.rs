@@ -11,14 +11,14 @@ use std::any::{Any, TypeId};
 
 use smallvec::SmallVec;
 
-use crate::{ir_writer::IrWrite, InstSetBase, ValueId};
+use crate::{ir_writer::DisplayWithFunc, InstSetBase, ValueId};
 
 /// An opaque reference to dynamic [`Inst`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
 pub struct InstId(pub u32);
 cranelift_entity::entity_impl!(InstId);
 
-pub trait Inst: inst_set::sealed::Registered + Any + IrWrite {
+pub trait Inst: inst_set::sealed::Registered + Any + DisplayWithFunc {
     fn visit_values(&self, f: &mut dyn FnMut(ValueId));
     fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut ValueId));
     fn has_side_effect(&self) -> bool;
@@ -160,17 +160,17 @@ pub trait InstDowncastMut: Sized {
 }
 
 #[macro_export]
-macro_rules! impl_ir_write {
+macro_rules! impl_display_with_func {
     ($ty:ty) => {
-        impl crate::ir_writer::IrWrite for $ty {
-            fn write(
+        impl crate::ir_writer::DisplayWithFunc for $ty {
+            fn fmt(
                 &self,
-                writer: &mut crate::ir_writer::FuncWriter,
-                w: &mut dyn std::io::Write,
-            ) -> std::io::Result<()> {
-                write!(w, "{}", crate::Inst::as_text(self))?;
-                writer.space(&mut *w)?;
-                writer.write_inst_values(self, w)
+                func: &crate::Function,
+                formatter: &mut std::fmt::Formatter,
+            ) -> std::fmt::Result {
+                formatter.write_fmt(format_args!("{} ", crate::Inst::as_text(self)))?;
+                let values = crate::Inst::collect_values(self);
+                crate::ir_writer::write_iter_with_delim(func, formatter, values.into_iter(), " ")
             }
         }
     };

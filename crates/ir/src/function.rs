@@ -1,5 +1,11 @@
+use std::fmt;
+
 use super::{module::FuncRef, DataFlowGraph, Layout, Type, ValueId};
-use crate::{module::ModuleCtx, Linkage};
+use crate::{
+    ir_writer::{DisplayWithFunc, DisplayableWithFunc},
+    module::ModuleCtx,
+    Linkage,
+};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
@@ -77,5 +83,26 @@ impl Signature {
     #[doc(hidden)]
     pub fn set_ret_ty(&mut self, ty: Type) {
         self.ret_ty = ty;
+    }
+}
+
+impl DisplayWithFunc for Signature {
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let Signature {
+            name,
+            linkage,
+            args,
+            ret_ty,
+        } = self;
+
+        let mut args_ty = String::new();
+        for arg_ty in args {
+            let ty = DisplayableWithFunc(arg_ty, func);
+            write!(&mut args_ty, "{ty} ")?;
+        }
+        let args_ty = args_ty.trim();
+        let ret_ty = DisplayableWithFunc::new(ret_ty, func);
+
+        write!(formatter, "func {linkage} %{name}({args_ty} -> {ret_ty})")
     }
 }

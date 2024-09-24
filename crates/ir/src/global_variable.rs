@@ -3,7 +3,10 @@ use std::fmt;
 use cranelift_entity::PrimaryMap;
 use rustc_hash::FxHashMap;
 
-use crate::{types::DisplayType, DataFlowGraph, Immediate, Linkage, Type};
+use crate::{
+    ir_writer::{DisplayWithFunc, DisplayableWithFunc},
+    Immediate, Linkage, Type,
+};
 
 #[derive(Debug, Default)]
 pub struct GlobalVariableStore {
@@ -55,23 +58,11 @@ impl GlobalVariableStore {
 pub struct GlobalVariable(pub u32);
 cranelift_entity::entity_impl!(GlobalVariable);
 
-pub struct DisplayGlobalVariable<'a> {
-    gv: GlobalVariable,
-    dfg: &'a DataFlowGraph,
-}
-
-impl<'a> DisplayGlobalVariable<'a> {
-    pub fn new(gv: GlobalVariable, dfg: &'a DataFlowGraph) -> Self {
-        Self { gv, dfg }
-    }
-}
-
-impl<'a> fmt::Display for DisplayGlobalVariable<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { gv, dfg } = self;
-        dfg.ctx.with_gv_store(|s| {
-            let gv_data = s.gv_data(*gv);
-            DisplayGlobalVariableData { gv_data, dfg }.fmt(f)
+impl DisplayWithFunc for GlobalVariable {
+    fn fmt(&self, func: &crate::Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+        func.dfg.ctx.with_gv_store(|s| {
+            let gv_data = DisplayableWithFunc(s.gv_data(self.gv), func);
+            write!(formatter, "{gv_data}")
         })
     }
 }
@@ -113,13 +104,8 @@ impl GlobalVariableData {
     }
 }
 
-pub struct DisplayGlobalVariableData<'a, 'b> {
-    gv_data: &'a GlobalVariableData,
-    dfg: &'b DataFlowGraph,
-}
-
-impl<'a, 'b> fmt::Display for DisplayGlobalVariableData<'a, 'b> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl DisplayWithFunc for GlobalVariableData {
+    fn fmt(&self, func: &crate::Function, formatter: &mut fmt::Formatter) -> fmt::Result {
         let GlobalVariableData {
             symbol: _,
             ty,
@@ -127,14 +113,15 @@ impl<'a, 'b> fmt::Display for DisplayGlobalVariableData<'a, 'b> {
             is_const,
             data,
         } = &self.gv_data;
-        let ty = DisplayType::new(*ty, self.dfg);
-        ty.fmt(f)?;
+
+        let ty = DisplayableWithFunc(*ty, func);
+        ty.fmt(formatter)?;
         if *is_const {
-            write!(f, " const")?;
+            write!(formatter, " const")?;
         }
-        write!(f, " {linkage}")?;
+        write!(formatter, " {linkage}")?;
         if let Some(data) = data {
-            write!(f, " {}", data)?;
+            write!(formatter, " {}", data)?;
         }
         Ok(())
     }
@@ -210,9 +197,10 @@ mod test {
             ))
         });
 
-        let dfg = DataFlowGraph::new(ctx);
-        let display_gv = DisplayGlobalVariable::new(gv, &dfg);
+        let sig = crate::Signature::defualt();
+        let func = crate::Function::new(&ctx, sig);
 
+        let display_gv = DisplayableWithFunc(gv, &func);
         assert_eq!(display_gv.to_string(), "i32 const public 1618");
     }
 
@@ -235,9 +223,10 @@ mod test {
             ))
         });
 
-        let dfg = DataFlowGraph::new(ctx);
-        let display_gv = DisplayGlobalVariable::new(gv, &dfg);
+        let sig = crate::Signature::defualt();
+        let func = crate::Function::new(&ctx, sig);
 
+        let display_gv = DisplayableWithFunc(gv, &func);
         assert_eq!(display_gv.to_string(), "[i32;3] const private [8, 4, 2]");
     }
 }
