@@ -66,7 +66,6 @@ impl DisplayWithFunc for BrTable {
             write!(formatter, " undef")?;
         };
 
-        let mut table_args = vec![];
         for (value, block) in &self.table {
             let value = DisplayableWithFunc(value, func);
             let block = DisplayableWithFunc(block, func);
@@ -90,8 +89,7 @@ impl Phi {
 }
 impl DisplayWithFunc for Phi {
     fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
-        let name = self.as_text();
-        write!(formatter, "{}", self.as_text());
+        write!(formatter, "{}", self.as_text())?;
 
         for (value, block) in &self.args {
             let value = DisplayableWithFunc(value, func);
@@ -118,7 +116,7 @@ impl DisplayWithFunc for Call {
         let name = self.as_text();
         let callee = func.callees[&self.callee].name();
         write!(formatter, "{name} %{callee}")?;
-        for value in self.args {
+        for value in &self.args {
             let value = DisplayableWithFunc(value, func);
             write!(formatter, " {value}")?;
         }

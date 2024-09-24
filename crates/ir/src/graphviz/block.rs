@@ -29,9 +29,7 @@ impl<'a> BlockNode<'a> {
 impl<'a> BlockNode<'a> {
     pub(super) fn label(self) -> label::Text<'static> {
         let Self { block, func, .. } = self;
-        let Function {
-            sig, dfg, layout, ..
-        } = func;
+        let Function { sig, layout, .. } = func;
         if block == DUMMY_BLOCK {
             let sig = DisplayableWithFunc(sig, &self.func);
             return label::Text::LabelStr(format!("{sig}").into());

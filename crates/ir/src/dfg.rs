@@ -1,5 +1,5 @@
 //! This module contains Sonatine IR data flow graph.
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fmt};
 
 use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use rustc_hash::FxHashMap;
@@ -9,8 +9,9 @@ use crate::{
         control_flow::{self, BranchInfo},
         InstId,
     },
+    ir_writer::DisplayWithFunc,
     module::ModuleCtx,
-    GlobalVariable, Inst, InstDowncast, InstDowncastMut, InstSetBase,
+    Function, GlobalVariable, Inst, InstDowncast, InstDowncastMut, InstSetBase,
 };
 
 use super::{Immediate, Type, Value, ValueId};
@@ -207,6 +208,12 @@ impl DataFlowGraph {
 #[derive(Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub struct BlockId(pub u32);
 entity_impl!(BlockId, "block");
+
+impl DisplayWithFunc for BlockId {
+    fn fmt(&self, _func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "block{}", self.0)
+    }
+}
 
 /// A block data definition.
 /// A Block data doesn't hold any information for layout of a program. It is managed by
