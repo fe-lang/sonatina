@@ -14,7 +14,6 @@ pub mod test_util {
 
     use crate::{
         func_cursor::InsnInserter,
-        ir_writer::FuncWriter,
         isa::{IsaBuilder, TargetIsa},
         module::{FuncRef, ModuleCtx},
         Linkage, Module, Signature, Type,
@@ -36,7 +35,6 @@ pub mod test_util {
 
     pub fn dump_func(module: &Module, func_ref: FuncRef) -> String {
         let func = &module.funcs[func_ref];
-        let mut writer = FuncWriter::new(func_ref, func, None);
-        writer.dump_string().unwrap()
+        format!("{func}")
     }
 }

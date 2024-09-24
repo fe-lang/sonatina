@@ -2,7 +2,7 @@ use std::fmt;
 
 use super::{module::FuncRef, DataFlowGraph, Layout, Type, ValueId};
 use crate::{
-    ir_writer::{DisplayWithFunc, DisplayableWithFunc},
+    ir_writer::{DisplayWithFunc, DisplayableWithModule},
     module::ModuleCtx,
     Linkage,
 };
@@ -40,6 +40,10 @@ impl Function {
             layout: Layout::default(),
             callees: FxHashMap::default(),
         }
+    }
+
+    pub fn ctx(&self) -> &ModuleCtx {
+        &self.dfg.ctx
     }
 }
 
@@ -97,11 +101,11 @@ impl DisplayWithFunc for Signature {
 
         let mut args_ty = String::new();
         for arg_ty in args {
-            let ty = DisplayableWithFunc(arg_ty, func);
-            write!(&mut args_ty, "{ty} ")?;
+            let ty = DisplayableWithModule(arg_ty, func.ctx());
+            args_ty.push_str(&format!("{ty} "));
         }
         let args_ty = args_ty.trim();
-        let ret_ty = DisplayableWithFunc::new(ret_ty, func);
+        let ret_ty = DisplayableWithModule(ret_ty, func.ctx());
 
         write!(formatter, "func {linkage} %{name}({args_ty} -> {ret_ty})")
     }

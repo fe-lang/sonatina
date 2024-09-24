@@ -134,7 +134,7 @@ impl<'a> BlockEdge<'a> {
                 continue;
             };
 
-            for (i, (value, block)) in phi.args().into_iter().enumerate() {
+            for (value, block) in phi.args().into_iter() {
                 if *block == from {
                     let value = DisplayableWithFunc(value, &func);
                     return Text::LabelStr(format!("{value}").into());

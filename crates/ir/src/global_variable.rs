@@ -4,7 +4,8 @@ use cranelift_entity::PrimaryMap;
 use rustc_hash::FxHashMap;
 
 use crate::{
-    ir_writer::{DisplayWithFunc, DisplayableWithFunc},
+    ir_writer::{DisplayWithModule, DisplayableWithModule},
+    module::ModuleCtx,
     Immediate, Linkage, Type,
 };
 
@@ -58,10 +59,10 @@ impl GlobalVariableStore {
 pub struct GlobalVariable(pub u32);
 cranelift_entity::entity_impl!(GlobalVariable);
 
-impl DisplayWithFunc for GlobalVariable {
-    fn fmt(&self, func: &crate::Function, formatter: &mut fmt::Formatter) -> fmt::Result {
-        func.dfg.ctx.with_gv_store(|s| {
-            let gv_data = DisplayableWithFunc(s.gv_data(self.gv), func);
+impl DisplayWithModule for GlobalVariable {
+    fn fmt(&self, module: &ModuleCtx, formatter: &mut fmt::Formatter) -> fmt::Result {
+        module.with_gv_store(|s| {
+            let gv_data = DisplayableWithModule(s.gv_data(*self), module);
             write!(formatter, "{gv_data}")
         })
     }
@@ -104,18 +105,18 @@ impl GlobalVariableData {
     }
 }
 
-impl DisplayWithFunc for GlobalVariableData {
-    fn fmt(&self, func: &crate::Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+impl DisplayWithModule for GlobalVariableData {
+    fn fmt(&self, module: &ModuleCtx, formatter: &mut fmt::Formatter) -> fmt::Result {
         let GlobalVariableData {
             symbol: _,
             ty,
             linkage,
             is_const,
             data,
-        } = &self.gv_data;
+        } = &self;
 
-        let ty = DisplayableWithFunc(*ty, func);
-        ty.fmt(formatter)?;
+        let ty = DisplayableWithModule(*ty, module);
+        write!(formatter, "{ty}")?;
         if *is_const {
             write!(formatter, " const")?;
         }
@@ -197,10 +198,7 @@ mod test {
             ))
         });
 
-        let sig = crate::Signature::defualt();
-        let func = crate::Function::new(&ctx, sig);
-
-        let display_gv = DisplayableWithFunc(gv, &func);
+        let display_gv = DisplayableWithModule(gv, &ctx);
         assert_eq!(display_gv.to_string(), "i32 const public 1618");
     }
 
@@ -223,10 +221,7 @@ mod test {
             ))
         });
 
-        let sig = crate::Signature::defualt();
-        let func = crate::Function::new(&ctx, sig);
-
-        let display_gv = DisplayableWithFunc(gv, &func);
+        let display_gv = DisplayableWithModule(gv, &ctx);
         assert_eq!(display_gv.to_string(), "[i32;3] const private [8, 4, 2]");
     }
 }

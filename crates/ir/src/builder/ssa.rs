@@ -60,10 +60,6 @@ impl SsaBuilder {
         self.vars[var].ty
     }
 
-    pub(super) fn append_pred(&mut self, block: BlockId, pred: BlockId) {
-        self.blocks[block].append_pred(pred);
-    }
-
     pub(super) fn seal_block(&mut self, func: &mut Function, block: BlockId) {
         if self.is_sealed(block) {
             return;
@@ -188,10 +184,6 @@ impl SsaBlock {
 
     fn use_var_local(&self, var: Variable) -> Option<ValueId> {
         self.defs[var].expand()
-    }
-
-    fn append_pred(&mut self, pred: BlockId) {
-        self.preds.push(pred);
     }
 
     fn seal(&mut self) {
@@ -700,8 +692,8 @@ mod tests {
         let brt = BrTable::new(
             &is,
             builder.args()[0],
-            vec![(value1, b1), (value2, b2), (value3, b3)],
             Some(b4),
+            vec![(value1, b1), (value2, b2), (value3, b3)],
         );
         builder.insert_inst_no_result(brt);
 

@@ -170,7 +170,13 @@ macro_rules! impl_display_with_func {
             ) -> std::fmt::Result {
                 formatter.write_fmt(format_args!("{} ", crate::Inst::as_text(self)))?;
                 let values = crate::Inst::collect_values(self);
-                crate::ir_writer::write_iter_with_delim(func, formatter, values.into_iter(), " ")
+                crate::ir_writer::display_iter_with_delim(
+                    formatter,
+                    values
+                        .into_iter()
+                        .map(|v| crate::ir_writer::DisplayableWithFunc(v, func)),
+                    " ",
+                )
             }
         }
     };
