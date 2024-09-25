@@ -123,7 +123,7 @@ impl SsaBuilder {
 
     fn remove_trivial_phi(&mut self, func: &mut Function, inst_id: InstId) {
         let phi_value = func.dfg.inst_result(inst_id).unwrap();
-        let phi = func.dfg.phi_mut(inst_id).unwrap();
+        let phi = func.dfg.cast_phi_mut(inst_id).unwrap();
 
         let phi_args = phi.args_mut();
         if phi_args.is_empty() {
@@ -142,7 +142,7 @@ impl SsaBuilder {
 
         for i in 0..func.dfg.users_num(phi_value) {
             let user = *func.dfg.users(phi_value).nth(i).unwrap();
-            if func.dfg.phi(user).is_some() && !self.trivial_phis.contains_key(user) {
+            if func.dfg.cast_phi(user).is_some() && !self.trivial_phis.contains_key(user) {
                 self.remove_trivial_phi(func, user);
             }
         }
