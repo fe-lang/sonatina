@@ -68,6 +68,16 @@ where
         block
     }
 
+    pub fn append_phi_arg(&mut self, phi_res: ValueId, value: ValueId, block: BlockId) {
+        let phi_inst = self
+            .func
+            .dfg
+            .value_inst(phi_res)
+            .expect("`phi_res` should be a result of phi inst");
+
+        self.func.dfg.append_phi_arg(phi_inst, value, block);
+    }
+
     pub fn switch_to_block(&mut self, block: BlockId) {
         self.cursor.set_location(CursorLocation::BlockBottom(block));
     }
@@ -123,6 +133,15 @@ where
         result
     }
 
+    pub fn insert_inst_with<F, I>(&mut self, f: F, ret_ty: Type) -> ValueId
+    where
+        F: FnOnce() -> I,
+        I: Inst,
+    {
+        let i = f();
+        self.insert_inst(i, ret_ty)
+    }
+
     /// Inserts an instruction into the function without creating a result value
     /// (i.e., for instructions that have no return type).
     ///
@@ -134,6 +153,15 @@ where
         let inst_id = self.cursor.insert_inst_data(&mut self.func, inst);
         self.append_pred(inst_id);
         self.cursor.set_location(CursorLocation::At(inst_id));
+    }
+
+    pub fn insert_inst_no_result_with<F, I>(&mut self, f: F)
+    where
+        F: FnOnce() -> I,
+        I: Inst,
+    {
+        let i = f();
+        self.insert_inst_no_result(i);
     }
 
     pub fn declare_var(&mut self, ty: Type) -> Variable {

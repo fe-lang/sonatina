@@ -72,6 +72,14 @@ impl DataFlowGraph {
         value
     }
 
+    /// Returns inst if the value is originated from inst.
+    pub fn value_inst(&self, value: ValueId) -> Option<InstId> {
+        match self.value(value) {
+            Value::Inst { inst, .. } => Some(*inst),
+            _ => None,
+        }
+    }
+
     pub fn make_global_value(&mut self, gv: GlobalVariable) -> ValueId {
         let gv_ty = self.ctx.with_gv_store(|s| s.ty(gv));
         let ty = self.ctx.with_ty_store_mut(|s| s.make_ptr(gv_ty));
@@ -174,7 +182,7 @@ impl DataFlowGraph {
     }
 
     pub fn append_phi_arg(&mut self, inst_id: InstId, value: ValueId, block: BlockId) {
-        let Some(phi) = self.phi_mut(inst_id) else {
+        let Some(phi) = self.cast_phi_mut(inst_id) else {
             return;
         };
         phi.append_phi_arg(value, block);
@@ -185,13 +193,25 @@ impl DataFlowGraph {
         self.ctx.inst_set
     }
 
-    pub fn phi(&self, inst_id: InstId) -> Option<&control_flow::Phi> {
+    pub fn cast_phi(&self, inst_id: InstId) -> Option<&control_flow::Phi> {
         let inst = self.inst(inst_id);
         let is = self.inst_set();
         InstDowncast::downcast(is, inst)
     }
 
-    pub fn phi_mut(&mut self, inst_id: InstId) -> Option<&mut control_flow::Phi> {
+    pub fn cast_phi_mut(&mut self, inst_id: InstId) -> Option<&mut control_flow::Phi> {
+        let is = self.inst_set();
+        let inst = self.inst_mut(inst_id);
+        InstDowncastMut::downcast_mut(is, inst)
+    }
+
+    pub fn cast_jump(&self, inst_id: InstId) -> Option<&control_flow::Jump> {
+        let inst = self.inst(inst_id);
+        let is = self.inst_set();
+        InstDowncast::downcast(is, inst)
+    }
+
+    pub fn cast_jump_mut(&mut self, inst_id: InstId) -> Option<&mut control_flow::Jump> {
         let is = self.inst_set();
         let inst = self.inst_mut(inst_id);
         InstDowncastMut::downcast_mut(is, inst)
