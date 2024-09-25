@@ -2,7 +2,10 @@ use std::fmt::Write;
 
 use dot2::label;
 
-use crate::{ir_writer::DisplayableWithFunc, BlockId, ControlFlowGraph, Function};
+use crate::{
+    ir_writer::{DisplayableWithFunc, ValueWithTy},
+    BlockId, ControlFlowGraph, Function,
+};
 
 use super::function::DUMMY_BLOCK;
 
@@ -48,11 +51,20 @@ impl<'a> BlockNode<'a> {
         // Write block body.
         write!(label, r#"<tr><td align="left" balign="left">"#).unwrap();
         for inst in layout.iter_inst(self.block) {
+            let mut inst_string = String::new();
+            if let Some(result) = self.func.dfg.inst_result(inst) {
+                let result_with_ty = ValueWithTy(result);
+                write!(
+                    &mut inst_string,
+                    "{} = ",
+                    DisplayableWithFunc(result_with_ty, self.func)
+                )
+                .unwrap();
+            }
             let inst = DisplayableWithFunc(inst, self.func);
-            let mut insn_string = String::new();
-            write!(&mut insn_string, "{}", inst).unwrap();
+            write!(&mut inst_string, "{inst};").unwrap();
 
-            write!(label, "{}", dot2::escape_html(&insn_string)).unwrap();
+            write!(label, "{}", dot2::escape_html(&inst_string)).unwrap();
             write!(label, "<br/>").unwrap();
         }
         write!(label, r#"</td></tr>"#).unwrap();

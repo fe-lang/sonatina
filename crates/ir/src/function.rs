@@ -111,6 +111,6 @@ impl DisplayWithFunc for Signature {
         let args_ty = args_ty.trim();
         let ret_ty = DisplayableWithModule(ret_ty, func.ctx());
 
-        write!(formatter, "func {linkage} %{name}({args_ty} -> {ret_ty})")
+        write!(formatter, "func {linkage} %{name}({args_ty}) -> {ret_ty}")
     }
 }

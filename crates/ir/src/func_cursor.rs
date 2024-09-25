@@ -70,10 +70,11 @@ pub trait FuncCursor {
 
     fn remove_inst(&mut self, func: &mut Function) {
         let inst_id = self.expect_inst();
+        let next_loc = self.next_loc(func);
+
         func.dfg.untrack_inst(inst_id);
         func.layout.remove_inst(inst_id);
 
-        let next_loc = self.next_loc(func);
         self.set_location(next_loc);
     }
 
