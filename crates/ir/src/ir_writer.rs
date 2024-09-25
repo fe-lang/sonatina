@@ -70,7 +70,7 @@ impl<'a> FuncDisplayHelper<'a> {
         Self { func, level: 0 }
     }
 
-    fn display(&mut self, mut f: &mut fmt::Formatter) -> fmt::Result {
+    fn display(&mut self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_fmt(format_args!(
             "func {} %{}(",
             self.func.sig.linkage(),
@@ -185,7 +185,7 @@ where
 }
 
 #[derive(Clone)]
-struct ValueWithTy(ValueId);
+pub(super) struct ValueWithTy(pub(super) ValueId);
 
 impl DisplayWithFunc for ValueWithTy {
     fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
