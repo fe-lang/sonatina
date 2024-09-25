@@ -204,7 +204,12 @@ mod tests {
 
     use super::*;
 
-    use sonatina_ir::{builder::test_util::*, Function, Type};
+    use sonatina_ir::{
+        builder::test_util::*,
+        inst::control_flow::{Br, BrTable, Jump, Return},
+        prelude::*,
+        Function, Type,
+    };
 
     fn calc_dom(func: &Function) -> (DomTree, DFSet) {
         let mut cfg = ControlFlowGraph::default();
@@ -230,7 +235,8 @@ mod tests {
 
     #[test]
     fn dom_tree_if_else() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -239,16 +245,16 @@ mod tests {
 
         builder.switch_to_block(entry_block);
         let v0 = builder.make_imm_value(true);
-        builder.br(v0, else_block, then_block);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, else_block, then_block));
 
         builder.switch_to_block(then_block);
-        builder.jump(merge_block);
+        builder.insert_inst_no_result_with(|| Jump::new(is, merge_block));
 
         builder.switch_to_block(else_block);
-        builder.jump(merge_block);
+        builder.insert_inst_no_result_with(|| Jump::new(is, merge_block));
 
         builder.switch_to_block(merge_block);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
 
@@ -270,7 +276,8 @@ mod tests {
 
     #[test]
     fn unreachable_edge() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -280,19 +287,19 @@ mod tests {
 
         builder.switch_to_block(a);
         let v0 = builder.make_imm_value(true);
-        builder.br(v0, b, c);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, b, c));
 
         builder.switch_to_block(b);
-        builder.jump(e);
+        builder.insert_inst_no_result_with(|| Jump::new(is, e));
 
         builder.switch_to_block(c);
-        builder.jump(e);
+        builder.insert_inst_no_result_with(|| Jump::new(is, e));
 
         builder.switch_to_block(d);
-        builder.jump(e);
+        builder.insert_inst_no_result_with(|| Jump::new(is, e));
 
         builder.switch_to_block(e);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
 
@@ -317,7 +324,8 @@ mod tests {
 
     #[test]
     fn dom_tree_complex() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -335,43 +343,43 @@ mod tests {
 
         builder.switch_to_block(a);
         let v0 = builder.make_imm_value(true);
-        builder.br(v0, c, b);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, c, b));
 
         builder.switch_to_block(b);
-        builder.br(v0, g, d);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, g, d));
 
         builder.switch_to_block(c);
-        builder.br(v0, h, e);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, h, e));
 
         builder.switch_to_block(d);
-        builder.br(v0, g, f);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, g, f));
 
         builder.switch_to_block(e);
-        builder.br(v0, h, c);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, h, c));
 
         builder.switch_to_block(f);
-        builder.br(v0, k, i);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, k, i));
 
         builder.switch_to_block(g);
-        builder.jump(j);
+        builder.insert_inst_no_result_with(|| Jump::new(is, j));
 
         builder.switch_to_block(h);
-        builder.jump(m);
+        builder.insert_inst_no_result_with(|| Jump::new(is, m));
 
         builder.switch_to_block(i);
-        builder.jump(l);
+        builder.insert_inst_no_result_with(|| Jump::new(is, l));
 
         builder.switch_to_block(j);
-        builder.jump(i);
+        builder.insert_inst_no_result_with(|| Jump::new(is, i));
 
         builder.switch_to_block(k);
-        builder.jump(l);
+        builder.insert_inst_no_result_with(|| Jump::new(is, l));
 
         builder.switch_to_block(l);
-        builder.br(v0, m, b);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, m, b));
 
         builder.switch_to_block(m);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
 
@@ -409,7 +417,8 @@ mod tests {
 
     #[test]
     fn dom_tree_br_table() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -422,23 +431,24 @@ mod tests {
         let v0 = builder.make_imm_value(0i32);
         let v1 = builder.make_imm_value(1i32);
         let v2 = builder.make_imm_value(2i32);
-        builder.br_table(v0, Some(b), &[(v1, c), (v2, d)]);
+        builder
+            .insert_inst_no_result_with(|| BrTable::new(is, v0, Some(b), vec![(v1, c), (v2, d)]));
 
         builder.switch_to_block(b);
         let v3 = builder.make_imm_value(true);
-        builder.br(v3, a, e);
+        builder.insert_inst_no_result_with(|| Br::new(is, v3, a, e));
 
         builder.switch_to_block(c);
-        builder.jump(f);
+        builder.insert_inst_no_result_with(|| Jump::new(is, f));
 
         builder.switch_to_block(d);
-        builder.jump(f);
+        builder.insert_inst_no_result_with(|| Jump::new(is, f));
 
         builder.switch_to_block(e);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.switch_to_block(f);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
 
