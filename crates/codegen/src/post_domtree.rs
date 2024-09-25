@@ -145,7 +145,15 @@ mod tests {
     #![allow(clippy::many_single_char_names)]
 
     use super::*;
-    use sonatina_ir::{builder::test_util::*, Type};
+    use sonatina_ir::{
+        builder::test_util::*,
+        inst::{
+            arith::Add,
+            control_flow::{Br, Jump, Phi, Return},
+        },
+        prelude::*,
+        Type,
+    };
 
     fn calc_dom(func: &Function) -> (PostDomTree, PDFSet) {
         let mut post_dom_tree = PostDomTree::new();
@@ -170,7 +178,8 @@ mod tests {
 
     #[test]
     fn pd_if_else() {
-        let mut builder = test_func_builder(&[Type::I64], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -180,20 +189,23 @@ mod tests {
         let arg0 = builder.args()[0];
 
         builder.switch_to_block(entry_block);
-        builder.br(arg0, then_block, else_block);
+        builder.insert_inst_no_result_with(|| Br::new(is, arg0, then_block, else_block));
 
         builder.switch_to_block(then_block);
         let v1 = builder.make_imm_value(1i64);
-        builder.jump(merge_block);
+        builder.insert_inst_no_result_with(|| Jump::new(is, merge_block));
 
         builder.switch_to_block(else_block);
         let v2 = builder.make_imm_value(2i64);
-        builder.jump(merge_block);
+        builder.insert_inst_no_result_with(|| Jump::new(is, merge_block));
 
         builder.switch_to_block(merge_block);
-        let v3 = builder.phi(Type::I64, &[(v1, then_block), (v2, else_block)]);
-        builder.add(v3, arg0);
-        builder.ret(None);
+        let v3 = builder.insert_inst_with(
+            || Phi::new(is, vec![(v1, then_block), (v2, else_block)], Type::I64),
+            Type::I64,
+        );
+        builder.insert_inst_with(|| Add::new(is, v3, arg0), Type::I64);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
 
@@ -215,11 +227,12 @@ mod tests {
 
     #[test]
     fn infinite_loop() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let a = builder.append_block();
         builder.switch_to_block(a);
-        builder.jump(a);
+        builder.insert_inst_no_result_with(|| Jump::new(is, a));
 
         builder.seal_all();
 
@@ -234,7 +247,8 @@ mod tests {
 
     #[test]
     fn test_multiple_return() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -244,19 +258,19 @@ mod tests {
 
         builder.switch_to_block(a);
         let v0 = builder.make_imm_value(1i8);
-        builder.br(v0, b, c);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, b, c));
 
         builder.switch_to_block(b);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.switch_to_block(c);
-        builder.br(v0, d, e);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, d, e));
 
         builder.switch_to_block(d);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.switch_to_block(e);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
 
@@ -280,7 +294,8 @@ mod tests {
 
     #[test]
     fn pd_complex() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -293,28 +308,28 @@ mod tests {
 
         builder.switch_to_block(a);
         let v0 = builder.make_imm_value(1i8);
-        builder.br(v0, b, c);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, b, c));
 
         builder.switch_to_block(b);
-        builder.jump(g);
+        builder.insert_inst_no_result_with(|| Jump::new(is, g));
 
         builder.switch_to_block(c);
-        builder.br(v0, d, e);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, d, e));
 
         builder.switch_to_block(d);
-        builder.jump(f);
+        builder.insert_inst_no_result_with(|| Jump::new(is, f));
 
         builder.switch_to_block(e);
-        builder.jump(f);
+        builder.insert_inst_no_result_with(|| Jump::new(is, f));
 
         builder.switch_to_block(f);
-        builder.jump(g);
+        builder.insert_inst_no_result_with(|| Jump::new(is, g));
 
         builder.switch_to_block(g);
-        builder.br(v0, a, h);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, a, h));
 
         builder.switch_to_block(h);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
 
