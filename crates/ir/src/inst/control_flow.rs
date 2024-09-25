@@ -9,7 +9,7 @@ use crate::{
     BlockId, Function, Inst, Type, ValueId,
 };
 
-use super::InstDowncast;
+use super::{InstDowncast, InstDowncastMut};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(terminator)]
@@ -182,7 +182,7 @@ impl<'i> InstDowncast for BranchInfo<'i> {
 }
 
 #[derive(Clone, Copy)]
-pub struct BranchDestIter<'i> {
+struct BranchDestIter<'i> {
     branch_info: BranchInfo<'i>,
     idx: usize,
 }
@@ -213,5 +213,63 @@ impl<'i> Iterator for BranchDestIter<'i> {
                 }
             }
         }
+    }
+}
+
+pub enum BranchInfoMut<'i> {
+    Jump(&'i mut Jump),
+    Br(&'i mut Br),
+    BrTable(&'i mut BrTable),
+}
+
+impl<'i> BranchInfoMut<'i> {
+    pub fn rewrite_branch_dest(&mut self, from: BlockId, to: BlockId) {
+        let repalce_if_match = |block: &mut BlockId| {
+            if *block == from {
+                *block = to
+            }
+        };
+
+        match self {
+            Self::Jump(j) => repalce_if_match(&mut j.dest),
+
+            Self::Br(br) => {
+                repalce_if_match(&mut br.z_dest);
+                repalce_if_match(&mut br.nz_dest);
+            }
+
+            Self::BrTable(brt) => {
+                if let Some(default) = &mut brt.default {
+                    repalce_if_match(default);
+                }
+
+                brt.table
+                    .iter_mut()
+                    .for_each(|(_, block)| repalce_if_match(block));
+            }
+        }
+    }
+
+    pub fn num_dests(&self) -> usize {
+        match self {
+            Self::Jump(_) => 1,
+            Self::Br(_) => 2,
+            Self::BrTable(brt) => {
+                let ent_len = brt.table.len();
+                if brt.default.is_some() {
+                    ent_len + 1
+                } else {
+                    ent_len
+                }
+            }
+        }
+    }
+}
+
+impl<'i> InstDowncastMut for BranchInfoMut<'i> {
+    fn downcast_mut(isb: &dyn crate::InstSetBase, inst: &mut dyn super::Inst) -> Option<Self> {
+        InstDowncastMut::map_mut(isb, inst, BranchInfoMut::Jump)
+            .or_else(|| InstDowncastMut::map_mut(isb, inst, BranchInfoMut::Br))
+            .or_else(|| InstDowncastMut::map_mut(isb, inst, BranchInfoMut::BrTable))
     }
 }
