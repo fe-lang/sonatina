@@ -187,7 +187,7 @@ impl InstStruct {
                 fn downcast(isb: &dyn crate::InstSetBase, inst: &dyn crate::Inst) -> Option<Self> {
                     let hi = isb.#has_inst_method()?;
                     if hi.is(inst) {
-                        unsafe { Some(&*(inst as *const dyn crate::Inst as *const Self)) }
+                        unsafe { Some(&*(inst as *const dyn crate::Inst as *const #struct_name)) }
                     } else {
                         None
                     }
@@ -198,7 +198,7 @@ impl InstStruct {
                 fn downcast_mut(isb: &dyn crate::InstSetBase, inst: &mut dyn crate::Inst) -> Option<Self> {
                     let hi = isb.#has_inst_method()?;
                     if hi.is(inst) {
-                        unsafe { Some(*(inst as *mut dyn crate::Inst as *mut Self)) }
+                        unsafe { Some(&mut *(inst as *mut dyn crate::Inst as *mut #struct_name)) }
                     } else {
                         None
                     }
