@@ -1,53 +1,17 @@
-use dyn_clone::DynClone;
-use sonatina_triple::{Architecture, TargetTriple};
+use sonatina_triple::TargetTriple;
 
-use crate::Type;
+use crate::InstSetBase;
 
-pub mod evm_eth;
+pub mod evm;
 
-pub struct IsaBuilder {
-    triple: TargetTriple,
+pub trait Isa {
+    type InstSet: InstSetBase;
+
+    fn triple(&self) -> TargetTriple;
+    fn inst_set() -> &'static dyn InstSetBase;
+    fn type_layout() -> &'static dyn TypeLayout;
 }
 
-impl IsaBuilder {
-    pub fn new(triple: TargetTriple) -> Self {
-        Self { triple }
-    }
-    pub fn build(self) -> TargetIsa {
-        match self.triple.architecture {
-            Architecture::Evm => evm_eth::EvmEth::build_isa(self.triple),
-        }
-    }
+pub trait TypeLayout {
+    fn pointer_size(&self) -> usize;
 }
-
-#[derive(Debug, Clone)]
-pub struct TargetIsa {
-    triple: TargetTriple,
-    type_provider: Box<dyn IsaSpecificTypeProvider>,
-}
-
-impl TargetIsa {
-    pub fn type_provider(&self) -> &dyn IsaSpecificTypeProvider {
-        self.type_provider.as_ref()
-    }
-
-    pub fn triple(&self) -> &TargetTriple {
-        &self.triple
-    }
-
-    fn new(triple: TargetTriple, type_provider: Box<dyn IsaSpecificTypeProvider>) -> Self {
-        Self {
-            triple,
-            type_provider,
-        }
-    }
-}
-
-pub trait IsaSpecificTypeProvider: std::fmt::Debug + DynClone {
-    fn pointer_type(&self) -> Type;
-    fn address_type(&self) -> Type;
-    fn balance_type(&self) -> Type;
-    fn gas_type(&self) -> Type;
-}
-
-dyn_clone::clone_trait_object!(IsaSpecificTypeProvider);

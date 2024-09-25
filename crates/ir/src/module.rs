@@ -4,10 +4,11 @@ use std::{
 };
 
 use cranelift_entity::{entity_impl, PrimaryMap};
+use sonatina_triple::TargetTriple;
 
-use crate::{Function, InstSetBase};
+use crate::{isa::TypeLayout, Function, InstSetBase};
 
-use crate::{global_variable::GlobalVariableStore, isa::TargetIsa, types::TypeStore};
+use crate::{global_variable::GlobalVariableStore, isa::Isa, types::TypeStore};
 
 use super::Linkage;
 
@@ -20,7 +21,7 @@ pub struct Module {
 
 impl Module {
     #[doc(hidden)]
-    pub fn new(isa: TargetIsa) -> Self {
+    pub fn new<T: Isa>(isa: &T) -> Self {
         Self {
             funcs: PrimaryMap::default(),
             ctx: ModuleCtx::new(isa),
@@ -38,17 +39,21 @@ impl Module {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ModuleCtx {
-    pub isa: TargetIsa,
+    pub triple: TargetTriple,
+    pub inst_set: &'static dyn InstSetBase,
+    pub type_layout: &'static dyn TypeLayout,
     type_store: Arc<RwLock<TypeStore>>,
     gv_store: Arc<RwLock<GlobalVariableStore>>,
 }
 
 impl ModuleCtx {
-    pub fn new(isa: TargetIsa) -> Self {
+    pub fn new<T: Isa>(isa: &T) -> Self {
         Self {
-            isa,
+            triple: isa.triple(),
+            inst_set: T::inst_set(),
+            type_layout: T::type_layout(),
             type_store: Arc::new(RwLock::new(TypeStore::default())),
             gv_store: Arc::new(RwLock::new(GlobalVariableStore::default())),
         }

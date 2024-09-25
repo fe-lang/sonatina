@@ -4,7 +4,7 @@
 use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap, SparseSet};
 
 use crate::{
-    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
+    func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::control_flow,
     BlockId, Function, InstId, Type, Value, ValueId,
 };
@@ -134,7 +134,7 @@ impl SsaBuilder {
 
         func.dfg.change_to_alias(phi_value, first_value);
         self.trivial_phis.insert(inst_id);
-        InsnInserter::at_location(CursorLocation::At(inst_id)).remove_inst(func);
+        InstInserter::at_location(CursorLocation::At(inst_id)).remove_inst(func);
 
         for i in 0..func.dfg.users_num(phi_value) {
             let user = *func.dfg.users(phi_value).nth(i).unwrap();
@@ -153,7 +153,7 @@ impl SsaBuilder {
         let ty = self.var_ty(var);
         let is = func.dfg.inst_set();
         let phi = control_flow::Phi::new(is.upcast(), Vec::new(), ty);
-        let mut cursor = InsnInserter::at_location(CursorLocation::BlockTop(block));
+        let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(block));
 
         let inst = cursor.prepend_inst_data(func, phi);
         let value = func.dfg.make_value(Value::Inst { inst, ty });

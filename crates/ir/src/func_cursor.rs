@@ -227,11 +227,11 @@ pub trait FuncCursor {
 }
 
 #[derive(Debug)]
-pub struct InsnInserter {
+pub struct InstInserter {
     loc: CursorLocation,
 }
 
-impl FuncCursor for InsnInserter {
+impl FuncCursor for InstInserter {
     fn at_location(loc: CursorLocation) -> Self {
         Self { loc }
     }

@@ -1,18 +1,8 @@
 use std::{fmt, io};
 
-use crate::{
-    module::{FuncRef, ModuleCtx},
-    InstId, Module, Value,
-};
+use crate::{module::ModuleCtx, InstId, Module, Value};
 
 use super::{BlockId, Function, ValueId};
-
-pub trait DebugProvider {
-    fn value_name(&self, _func: FuncRef, _value: ValueId) -> Option<&str> {
-        None
-    }
-}
-impl DebugProvider for () {}
 
 pub struct ModuleWriter<'a> {
     module: &'a Module,
@@ -27,7 +17,7 @@ impl<'a> ModuleWriter<'a> {
 
     pub fn write(&mut self, mut w: impl io::Write) -> io::Result<()> {
         // Write target.
-        writeln!(w, "target = {}", self.module.ctx.isa.triple())?;
+        writeln!(w, "target = {}", self.module.ctx.triple)?;
 
         // Write struct types defined in the module.
         self.module.ctx.with_ty_store(|s| {
@@ -65,23 +55,22 @@ impl<'a> ModuleWriter<'a> {
 
 impl fmt::Display for Function {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut fw = FuncWriter::new(self);
-        fw.write(f)
+        let mut fw = FuncDisplayHelper::new(self);
+        fw.display(f)
     }
 }
 
-struct FuncWriter<'a> {
+struct FuncDisplayHelper<'a> {
     pub(crate) func: &'a Function,
     level: u8,
 }
 
-impl<'a> FuncWriter<'a> {
+impl<'a> FuncDisplayHelper<'a> {
     fn new(func: &'a Function) -> Self {
         Self { func, level: 0 }
     }
 
-    // TODO: fix.
-    fn write(&mut self, mut f: &mut fmt::Formatter) -> fmt::Result {
+    fn display(&mut self, mut f: &mut fmt::Formatter) -> fmt::Result {
         f.write_fmt(format_args!(
             "func {} %{}(",
             self.func.sig.linkage(),
@@ -111,7 +100,7 @@ impl<'a> FuncWriter<'a> {
         Ok(())
     }
 
-    pub fn write_block_with_inst(&mut self, block: BlockId, f: &mut fmt::Formatter) -> fmt::Result {
+    fn write_block_with_inst(&mut self, block: BlockId, f: &mut fmt::Formatter) -> fmt::Result {
         self.indent(f)?;
         write!(f, "{}", DisplayableWithFunc(block, self.func))?;
 
@@ -128,11 +117,11 @@ impl<'a> FuncWriter<'a> {
         Ok(())
     }
 
-    pub fn indent(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn indent(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", " ".repeat(self.level as usize * 4))
     }
 
-    pub fn newline(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn newline(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "\n")
     }
 
