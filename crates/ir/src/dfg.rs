@@ -6,7 +6,7 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     inst::{
-        control_flow::{self, BranchInfo},
+        control_flow::{self, BranchInfo, BranchInfoMut},
         InstId,
     },
     ir_writer::DisplayWithFunc,
@@ -157,6 +157,12 @@ impl DataFlowGraph {
     pub fn branch_info(&self, inst: InstId) -> Option<BranchInfo> {
         let inst = self.inst(inst);
         BranchInfo::downcast(self.ctx.inst_set, inst)
+    }
+
+    pub fn branch_info_mut(&mut self, inst: InstId) -> Option<BranchInfoMut> {
+        let inst_set = self.inst_set();
+        let inst = self.inst_mut(inst);
+        BranchInfoMut::downcast_mut(inst_set, inst)
     }
 
     pub fn is_terminator(&self, inst: InstId) -> bool {
