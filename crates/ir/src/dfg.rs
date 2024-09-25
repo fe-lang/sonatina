@@ -6,7 +6,7 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     inst::{
-        control_flow::{self, BranchInfo, BranchInfoMut},
+        control_flow::{self, BranchInfo, BranchInfoMut, Jump, Phi},
         InstId,
     },
     ir_writer::DisplayWithFunc,
@@ -217,6 +217,16 @@ impl DataFlowGraph {
         InstDowncastMut::downcast_mut(is, inst)
     }
 
+    pub fn make_phi(&self, args: Vec<(ValueId, BlockId)>, ty: &Type) -> Phi {
+        let has_phi = self.inst_set().phi();
+        Phi::new(has_phi, args, ty.clone())
+    }
+
+    pub fn make_jump(&self, to: BlockId) -> Jump {
+        let has_jump = self.inst_set().jump();
+        Jump::new(has_jump, to)
+    }
+
     pub fn change_to_alias(&mut self, value: ValueId, alias: ValueId) {
         let mut users = std::mem::take(&mut self.users[value]);
         for inst in &users {
@@ -227,6 +237,23 @@ impl DataFlowGraph {
             });
         }
         self.users[alias].append(&mut users);
+    }
+
+    pub fn has_side_effect(&self, inst: InstId) -> bool {
+        self.inst(inst).has_side_effect()
+    }
+
+    pub fn is_branch(&self, inst: InstId) -> bool {
+        self.branch_info(inst).is_some()
+    }
+
+    pub fn is_phi(&self, inst: InstId) -> bool {
+        self.cast_phi(inst).is_some()
+    }
+
+    pub fn rewrite_branch_dest(&mut self, inst: InstId, from: BlockId, to: BlockId) {
+        self.branch_info_mut(inst)
+            .map(|mut bi| bi.rewrite_branch_dest(from, to));
     }
 }
 

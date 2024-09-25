@@ -40,8 +40,11 @@ pub use value::{Immediate, Value, ValueId};
 pub(crate) use inst::ValueVisitable;
 
 pub mod prelude {
-    pub use crate::inst::{
-        inst_set::{InstSetBase, InstSetExt},
-        HasInst, Inst, InstDowncast, InstDowncastMut,
+    pub use crate::{
+        inst::{
+            inst_set::{InstSetBase, InstSetExt},
+            HasInst, Inst, InstDowncast, InstDowncastMut,
+        },
+        isa::Isa,
     };
 }
