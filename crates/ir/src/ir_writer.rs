@@ -85,13 +85,11 @@ impl<'a> FuncDisplayHelper<'a> {
             ", ",
         )?;
         let ret_ty = DisplayableWithModule(self.func.sig.ret_ty(), self.func.ctx());
-        write!(f, ") -> {ret_ty} {{")?;
+        write!(f, ") -> {ret_ty} {{\n")?;
 
         self.level += 1;
         for block in self.func.layout.iter_block() {
             self.write_block_with_inst(block, f)?;
-            self.newline(&mut f)?;
-            self.newline(&mut f)?;
         }
 
         self.level -= 1;
@@ -105,14 +103,24 @@ impl<'a> FuncDisplayHelper<'a> {
         write!(f, "{}", DisplayableWithFunc(block, self.func))?;
 
         self.enter(f)?;
-        let insts = self
-            .func
-            .layout
-            .iter_inst(block)
-            .map(|inst| DisplayableWithFunc(inst, self.func));
-        display_iter_with_delim(f, insts, ";\n")?;
-        write!(f, ";")?;
+        for inst in self.func.layout.iter_inst(block) {
+            self.write_inst_in_block(inst, f)?;
+        }
         self.leave();
+
+        self.newline(f)?;
+        Ok(())
+    }
+
+    fn write_inst_in_block(&mut self, inst: InstId, f: &mut fmt::Formatter) -> fmt::Result {
+        self.indent(f)?;
+
+        if let Some(result) = self.func.dfg.inst_result(inst) {
+            let result_with_ty = ValueWithTy(result);
+            write!(f, "{} = ", DisplayableWithFunc(result_with_ty, self.func))?;
+        };
+
+        write!(f, "{};\n", DisplayableWithFunc(inst, self.func))?;
 
         Ok(())
     }
