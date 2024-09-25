@@ -86,6 +86,12 @@ impl Phi {
     pub fn append_phi_arg(&mut self, value: ValueId, block: BlockId) {
         self.args.push((value, block))
     }
+
+    /// Remove phi argument from the `block`.
+    pub fn remove_phi_arg(&mut self, block: BlockId) -> Option<ValueId> {
+        let pos = self.args.iter().position(|(_, b)| *b == block)?;
+        Some(self.args.remove(pos).0)
+    }
 }
 impl DisplayWithFunc for Phi {
     fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {

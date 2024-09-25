@@ -1,4 +1,4 @@
-use crate::{Inst, InstId};
+use crate::{Inst, InstId, Type, Value};
 
 use super::{BlockId, Function, ValueId};
 
@@ -49,6 +49,14 @@ pub trait FuncCursor {
         let inst = func.dfg.make_inst(data);
         self.insert_inst(func, inst);
         inst
+    }
+
+    fn make_result(&self, func: &mut Function, inst_id: InstId, ty: &Type) -> ValueId {
+        let result = Value::Inst {
+            inst: inst_id,
+            ty: ty.clone(),
+        };
+        func.dfg.make_value(result)
     }
 
     fn append_inst_data<I: Inst>(&mut self, func: &mut Function, data: I) -> InstId {
