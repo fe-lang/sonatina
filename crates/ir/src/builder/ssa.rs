@@ -60,6 +60,10 @@ impl SsaBuilder {
         self.vars[var].ty
     }
 
+    pub(super) fn append_pred(&mut self, block: BlockId, pred: BlockId) {
+        self.blocks[block].append_pred(pred);
+    }
+
     pub(super) fn seal_block(&mut self, func: &mut Function, block: BlockId) {
         if self.is_sealed(block) {
             return;
@@ -86,8 +90,8 @@ impl SsaBuilder {
 
     fn use_var_recursive(&mut self, func: &mut Function, var: Variable, block: BlockId) -> ValueId {
         if !self.is_sealed(block) {
-            let (insn, value) = self.prepend_phi(func, var, block);
-            self.blocks[block].push_incomplete_phi(var, insn);
+            let (inst, value) = self.prepend_phi(func, var, block);
+            self.blocks[block].push_incomplete_phi(var, inst);
             self.def_var(var, value, block);
             return value;
         }
@@ -95,10 +99,10 @@ impl SsaBuilder {
         match *self.blocks[block].preds() {
             [pred] => self.use_var(func, var, pred),
             _ => {
-                let (phi_insn, phi_value) = self.prepend_phi(func, var, block);
+                let (phi_inst, phi_value) = self.prepend_phi(func, var, block);
                 // Break potential cycles by defining operandless phi.
                 self.def_var(var, phi_value, block);
-                self.add_phi_args(func, var, phi_insn);
+                self.add_phi_args(func, var, phi_inst);
                 phi_value
             }
         }
@@ -186,6 +190,10 @@ impl SsaBlock {
         self.defs[var].expand()
     }
 
+    fn append_pred(&mut self, pred: BlockId) {
+        self.preds.push(pred);
+    }
+
     fn seal(&mut self) {
         self.is_sealed = true;
     }
@@ -198,8 +206,8 @@ impl SsaBlock {
         std::mem::take(&mut self.incomplete_phis)
     }
 
-    fn push_incomplete_phi(&mut self, var: Variable, insn: InstId) {
-        self.incomplete_phis.push((var, insn))
+    fn push_incomplete_phi(&mut self, var: Variable, inst_id: InstId) {
+        self.incomplete_phis.push((var, inst_id))
     }
 
     fn preds(&self) -> &[BlockId] {
@@ -212,7 +220,7 @@ mod tests {
     use control_flow::{Br, BrTable, Jump, Phi, Return};
     use macros::inst_set;
 
-    use crate::inst::arith::Add;
+    use crate::{inst::arith::Add, isa::Isa};
 
     use super::{super::test_util::*, *};
 
@@ -221,8 +229,8 @@ mod tests {
 
     #[test]
     fn use_var_local() {
-        let mut builder = test_func_builder(&[], Type::Void);
-        let is = TestInstSet::new();
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
 
@@ -231,10 +239,10 @@ mod tests {
         let v0 = builder.make_imm_value(1i32);
         builder.def_var(var, v0);
         let v1 = builder.use_var(var);
-        let add = Add::new(&is, v1, v0);
+        let add = Add::new(is, v1, v0);
         builder.insert_inst(add, Type::I32);
 
-        let ret = Return::new(&is, None);
+        let ret = Return::new(is, None);
         builder.insert_inst_no_result(ret);
         builder.seal_block();
 
@@ -255,8 +263,8 @@ mod tests {
 
     #[test]
     fn use_var_global_if() {
-        let mut builder = test_func_builder(&[], Type::Void);
-        let is = TestInstSet::new();
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
 
@@ -267,7 +275,7 @@ mod tests {
 
         builder.switch_to_block(b0);
         let imm = builder.make_imm_value(1i32);
-        let br = Br::new(&is, imm, b2, b1);
+        let br = Br::new(is, imm, b2, b1);
         builder.insert_inst_no_result(br);
 
         builder.seal_block();
@@ -275,20 +283,20 @@ mod tests {
         builder.switch_to_block(b1);
         let imm = builder.make_imm_value(2i32);
         builder.def_var(var, imm);
-        let jump = Jump::new(&is, b3);
+        let jump = Jump::new(is, b3);
         builder.insert_inst_no_result(jump);
         builder.seal_block();
 
         builder.switch_to_block(b2);
         let imm = builder.make_imm_value(3i32);
         builder.def_var(var, imm);
-        let jump = Jump::new(&is, b3);
+        let jump = Jump::new(is, b3);
         builder.insert_inst_no_result(jump);
         builder.seal_block();
 
         builder.switch_to_block(b3);
         builder.use_var(var);
-        let ret = Return::new(&is, None);
+        let ret = Return::new(is, None);
         builder.insert_inst_no_result(ret);
         builder.seal_block();
 
@@ -318,8 +326,8 @@ mod tests {
 
     #[test]
     fn use_var_global_many_preds() {
-        let mut builder = test_func_builder(&[], Type::Void);
-        let is = TestInstSet::new();
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let var0 = builder.declare_var(Type::I32);
         let var1 = builder.declare_var(Type::I32);
@@ -336,48 +344,48 @@ mod tests {
         builder.switch_to_block(b0);
         let v0 = builder.make_imm_value(0i32);
         builder.def_var(var1, v0);
-        let br = Br::new(&is, v0, b1, b2);
+        let br = Br::new(is, v0, b1, b2);
         builder.insert_inst_no_result(br);
 
         builder.switch_to_block(b1);
         let v1 = builder.make_imm_value(1i32);
         builder.def_var(var0, v1);
         builder.def_var(var1, v1);
-        let jump = Jump::new(&is, b7);
+        let jump = Jump::new(is, b7);
         builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(b2);
-        let br = Br::new(&is, v0, b3, b4);
+        let br = Br::new(is, v0, b3, b4);
         builder.insert_inst_no_result(br);
 
         builder.switch_to_block(b3);
         let v2 = builder.make_imm_value(2i32);
         builder.def_var(var0, v2);
-        let jump = Jump::new(&is, b7);
+        let jump = Jump::new(is, b7);
         builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(b4);
-        let br = Br::new(&is, v0, b5, b6);
+        let br = Br::new(is, v0, b5, b6);
         builder.insert_inst_no_result(br);
 
         builder.switch_to_block(b5);
         let v3 = builder.make_imm_value(3i32);
         builder.def_var(var0, v3);
-        let jump = Jump::new(&is, b7);
+        let jump = Jump::new(is, b7);
         builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(b6);
         let v4 = builder.make_imm_value(4i32);
         builder.def_var(var0, v4);
-        let jump = Jump::new(&is, b7);
+        let jump = Jump::new(is, b7);
         builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(b7);
         let v_var0 = builder.use_var(var0);
         let v_var1 = builder.use_var(var1);
-        let add = Add::new(&is, v_var0, v_var1);
+        let add = Add::new(is, v_var0, v_var1);
         builder.insert_inst(add, Type::I32);
-        let ret = Return::new(&is, None);
+        let ret = Return::new(is, None);
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
@@ -422,8 +430,8 @@ mod tests {
 
     #[test]
     fn use_var_global_loop() {
-        let mut builder = test_func_builder(&[], Type::Void);
-        let is = TestInstSet::new();
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
 
@@ -435,18 +443,18 @@ mod tests {
         builder.switch_to_block(b0);
         let value = builder.make_imm_value(1i32);
         builder.def_var(var, value);
-        let jump = Jump::new(&is, b1);
+        let jump = Jump::new(is, b1);
         builder.insert_inst_no_result(jump);
         builder.seal_block();
 
         builder.switch_to_block(b1);
-        let br = Br::new(&is, value, b2, b3);
+        let br = Br::new(is, value, b2, b3);
         builder.insert_inst_no_result(br);
 
         builder.switch_to_block(b2);
         let value = builder.make_imm_value(10i32);
         builder.def_var(var, value);
-        let jump = Jump::new(&is, b1);
+        let jump = Jump::new(is, b1);
         builder.insert_inst_no_result(jump);
         builder.seal_block();
 
@@ -455,9 +463,9 @@ mod tests {
 
         builder.switch_to_block(b3);
         let val = builder.use_var(var);
-        let add = Add::new(&is, val, val);
+        let add = Add::new(is, val, val);
         builder.insert_inst(add, Type::I32);
-        let ret = Return::new(&is, None);
+        let ret = Return::new(is, None);
         builder.insert_inst_no_result(ret);
         builder.seal_block();
 
@@ -488,8 +496,8 @@ mod tests {
 
     #[test]
     fn use_var_global_complex() {
-        let mut builder = test_func_builder(&[], Type::Void);
-        let is = TestInstSet::new();
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
 
@@ -504,33 +512,33 @@ mod tests {
         builder.switch_to_block(b0);
         let value1 = builder.make_imm_value(1i32);
         builder.def_var(var, value1);
-        let jump = Jump::new(&is, b1);
+        let jump = Jump::new(is, b1);
         builder.insert_inst_no_result(jump);
         builder.seal_block();
 
         builder.switch_to_block(b1);
-        let br = Br::new(&is, value1, b6, b2);
+        let br = Br::new(is, value1, b6, b2);
         builder.insert_inst_no_result(br);
 
         builder.switch_to_block(b2);
-        let br = Br::new(&is, value1, b4, b3);
+        let br = Br::new(is, value1, b4, b3);
         builder.insert_inst_no_result(br);
         builder.seal_block();
 
         builder.switch_to_block(b3);
         let value2 = builder.make_imm_value(2i32);
         builder.def_var(var, value2);
-        let jump = Jump::new(&is, b5);
+        let jump = Jump::new(is, b5);
         builder.insert_inst_no_result(jump);
         builder.seal_block();
 
         builder.switch_to_block(b4);
-        let jump = Jump::new(&is, b5);
+        let jump = Jump::new(is, b5);
         builder.insert_inst_no_result(jump);
         builder.seal_block();
 
         builder.switch_to_block(b5);
-        let jump = Jump::new(&is, b1);
+        let jump = Jump::new(is, b1);
         builder.insert_inst_no_result(jump);
         builder.seal_block();
 
@@ -539,9 +547,9 @@ mod tests {
 
         builder.switch_to_block(b6);
         let val = builder.use_var(var);
-        let add = Add::new(&is, val, val);
+        let add = Add::new(is, val, val);
         builder.insert_inst(add, Type::I32);
-        let ret = Return::new(&is, None);
+        let ret = Return::new(is, None);
         builder.insert_inst_no_result(ret);
         builder.seal_block();
 
@@ -582,8 +590,8 @@ mod tests {
 
     #[test]
     fn use_var_global_complex_seal_all() {
-        let mut builder = test_func_builder(&[], Type::Void);
-        let is = TestInstSet::new();
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
 
@@ -598,38 +606,38 @@ mod tests {
         builder.switch_to_block(b0);
         let value1 = builder.make_imm_value(1i32);
         builder.def_var(var, value1);
-        let jump = Jump::new(&is, b1);
+        let jump = Jump::new(is, b1);
         builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(b1);
-        let br = Br::new(&is, value1, b6, b2);
+        let br = Br::new(is, value1, b6, b2);
         builder.insert_inst_no_result(br);
 
         builder.switch_to_block(b2);
-        let br = Br::new(&is, value1, b4, b3);
+        let br = Br::new(is, value1, b4, b3);
         builder.insert_inst_no_result(br);
 
         builder.switch_to_block(b3);
         let value2 = builder.make_imm_value(2i32);
         builder.def_var(var, value2);
-        let jump = Jump::new(&is, b5);
+        let jump = Jump::new(is, b5);
         builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(b4);
-        let jump = Jump::new(&is, b5);
+        let jump = Jump::new(is, b5);
         builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(b5);
-        let jump = Jump::new(&is, b1);
+        let jump = Jump::new(is, b1);
         builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(b1);
 
         builder.switch_to_block(b6);
         let val = builder.use_var(var);
-        let add = Add::new(&is, val, val);
+        let add = Add::new(is, val, val);
         builder.insert_inst(add, Type::I32);
-        let ret = Return::new(&is, None);
+        let ret = Return::new(is, None);
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
@@ -671,8 +679,8 @@ mod tests {
 
     #[test]
     fn br_table() {
-        let mut builder = test_func_builder(&[Type::I32], Type::I32);
-        let is = TestInstSet::new();
+        let (evm, mut builder) = test_func_builder(&[Type::I32], Type::I32);
+        let is = evm.inst_set();
         let var = builder.declare_var(Type::I32);
 
         let b0 = builder.append_block();
@@ -690,7 +698,7 @@ mod tests {
         builder.def_var(var, value0);
 
         let brt = BrTable::new(
-            &is,
+            is,
             builder.args()[0],
             Some(b4),
             vec![(value1, b1), (value2, b2), (value3, b3)],
@@ -699,22 +707,22 @@ mod tests {
 
         builder.switch_to_block(b1);
         builder.def_var(var, value1);
-        let jump = Jump::new(&is, b4);
+        let jump = Jump::new(is, b4);
         builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(b2);
         builder.def_var(var, value2);
-        let jump = Jump::new(&is, b4);
+        let jump = Jump::new(is, b4);
         builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(b3);
         builder.def_var(var, value3);
-        let jump = Jump::new(&is, b4);
+        let jump = Jump::new(is, b4);
         builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(b4);
         let ret_val = builder.use_var(var);
-        let ret = Return::new(&is, ret_val.into());
+        let ret = Return::new(is, ret_val.into());
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
@@ -749,7 +757,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn undef_use() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (_, mut builder) = test_func_builder(&[], Type::Void);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();
@@ -761,7 +769,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn unreachable_use() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (_, mut builder) = test_func_builder(&[], Type::Void);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();

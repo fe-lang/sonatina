@@ -19,17 +19,17 @@ pub mod test_util {
         Linkage, Module, Signature, Type,
     };
 
-    pub fn build_test_isa() -> Evm {
+    pub fn test_isa() -> Evm {
         Evm::new(EvmVersion::London)
     }
 
-    pub fn test_func_builder(args: &[Type], ret_ty: Type) -> FunctionBuilder<InstInserter> {
-        let ctx = ModuleCtx::new(&build_test_isa());
+    pub fn test_func_builder(args: &[Type], ret_ty: Type) -> (Evm, FunctionBuilder<InstInserter>) {
+        let ctx = ModuleCtx::new(&test_isa());
         let mut mb = ModuleBuilder::new(ctx);
 
         let sig = Signature::new("test_func", Linkage::Public, args, ret_ty);
         let func_ref = mb.declare_function(sig);
-        mb.build_function(func_ref)
+        (test_isa(), mb.build_function(func_ref))
     }
 
     pub fn dump_func(module: &Module, func_ref: FuncRef) -> String {

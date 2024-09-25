@@ -52,8 +52,8 @@ impl ModuleCtx {
     pub fn new<T: Isa>(isa: &T) -> Self {
         Self {
             triple: isa.triple(),
-            inst_set: T::inst_set(),
-            type_layout: T::type_layout(),
+            inst_set: isa.inst_set(),
+            type_layout: isa.type_layout(),
             type_store: Arc::new(RwLock::new(TypeStore::default())),
             gv_store: Arc::new(RwLock::new(GlobalVariableStore::default())),
         }
@@ -85,10 +85,6 @@ impl ModuleCtx {
         F: FnOnce(&mut GlobalVariableStore) -> R,
     {
         f(&mut self.gv_store.write().unwrap())
-    }
-
-    pub fn inst_set(&self) -> &'static dyn InstSetBase {
-        todo!()
     }
 }
 
