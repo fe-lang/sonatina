@@ -206,7 +206,7 @@ impl<'i> Iterator for BranchDestIter<'i> {
             }
 
             BranchInfo::BrTable(brt) => {
-                if brt.table.len() < idx {
+                if idx < brt.table.len() {
                     Some(brt.table[idx].1)
                 } else {
                     brt.default
