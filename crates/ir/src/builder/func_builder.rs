@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn entry_block_with_return() {
-        let (evm, mut builder) = test_func_builder(&[Type::I32, Type::I64], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::I32);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn then_else_merge_block() {
-        let (evm, mut builder) = test_func_builder(&[Type::I32, Type::I64], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[Type::I64], Type::Void);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();
