@@ -112,19 +112,23 @@ define_inst_set_base! {
 /// e.g.
 ///
 /// ```rust,ignore
-/// use sonatina_ir::inst::basic::*;
+/// use sonatina_ir::inst::{arith::*, control_flow::*};
 /// #[inst_set(InstKind = "InstKind")]
-/// struct InstSet(Add, Sub);
+/// struct InstSet(Jump, Phi, Add, Sub);
 /// ```
 /// defines
 ///
 /// ```rust
-/// use sonatina_ir::inst::arith::*;
+/// use sonatina_ir::inst::{arith::*, control_flow::*};
 /// enum InstKind<'i> {
+///     Jump(&'i Jump),
+///     Phi(&'i Phi),
 ///     Add(&'i Add),
 ///     Sub(&'i Sub),
 /// }
 /// enum InstKindMut<'i> {
+///     Jump(&'i mut Jump),
+///     Phi(&'i mut Phi),
 ///     Add(&'i mut Add),
 ///     Sub(&'i mut Sub),
 /// }
