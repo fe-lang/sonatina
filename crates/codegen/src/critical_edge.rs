@@ -1,9 +1,8 @@
-use sonatina_ir::{func_cursor::FuncCursor, ControlFlowGraph};
+use sonatina_ir::{func_cursor::FuncCursor, inst::control_flow::Jump, ControlFlowGraph, InstId};
 
 use sonatina_ir::{
-    func_cursor::{CursorLocation, InsnInserter},
-    inst::InsnData,
-    BlockId, Function, Insn,
+    func_cursor::{CursorLocation, InstInserter},
+    BlockId, Function,
 };
 
 #[derive(Debug)]
@@ -28,8 +27,8 @@ impl CriticalEdgeSplitter {
         self.clear();
 
         for block in func.layout.iter_block() {
-            if let Some(last_insn) = func.layout.last_inst_of(block) {
-                self.add_critical_edges(last_insn, func, cfg);
+            if let Some(last_inst) = func.layout.last_inst_of(block) {
+                self.add_critical_edges(last_inst, func, cfg);
             }
         }
 
@@ -43,36 +42,40 @@ impl CriticalEdgeSplitter {
         self.critical_edges.clear();
     }
 
-    fn add_critical_edges(&mut self, insn: Insn, func: &Function, cfg: &ControlFlowGraph) {
-        let branch_info = func.dfg.analyze_branch(insn);
-        if branch_info.dests_num() < 2 {
+    fn add_critical_edges(&mut self, inst_id: InstId, func: &Function, cfg: &ControlFlowGraph) {
+        let Some(branch_info) = func.dfg.branch_info(inst_id) else {
+            return;
+        };
+
+        if branch_info.num_dests() < 2 {
             return;
         }
 
         for dest in branch_info.iter_dests() {
             if cfg.pred_num_of(dest) > 1 {
-                self.critical_edges.push(CriticalEdge::new(insn, dest));
+                self.critical_edges.push(CriticalEdge::new(inst_id, dest));
             }
         }
     }
 
     fn split_edge(&mut self, edge: CriticalEdge, func: &mut Function, cfg: &mut ControlFlowGraph) {
-        let insn = edge.insn;
+        let inst = edge.inst;
         let original_dest = edge.to;
-        let source_block = func.layout.inst_block(insn);
+        let source_block = func.layout.inst_block(inst);
 
-        // Create a new block that contains only a jump insn to the destinating block of the
+        // Create a new block that contains only a jump inst to the destinating block of the
         // critical edge.
         let inserted_dest = func.dfg.make_block();
-        let jump = func.dfg.make_insn(InsnData::jump(original_dest));
-        let mut cursor = InsnInserter::at_location(CursorLocation::BlockTop(original_dest));
+        let jump = Jump::new(func.dfg.inst_set().jump(), original_dest);
+        let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(original_dest));
         cursor.append_block(func, inserted_dest);
         cursor.set_location(CursorLocation::BlockTop(inserted_dest));
-        cursor.append_inst(func, jump);
+        cursor.append_inst_data(func, jump);
 
         // Rewrite branch destination to the new block.
         func.dfg
-            .rewrite_branch_dest(insn, original_dest, inserted_dest);
+            .branch_info_mut(inst)
+            .map(|mut bi| bi.rewrite_branch_dest(original_dest, inserted_dest));
         self.modify_cfg(cfg, source_block, original_dest, inserted_dest);
         self.modify_phi_blocks(func, original_dest, inserted_dest);
     }
@@ -83,12 +86,12 @@ impl CriticalEdgeSplitter {
         original_dest: BlockId,
         inserted_dest: BlockId,
     ) {
-        for insn in func.layout.iter_inst(original_dest) {
-            if !func.dfg.is_phi(insn) {
+        for inst in func.layout.iter_inst(original_dest) {
+            let Some(phi) = func.dfg.cast_phi_mut(inst) else {
                 continue;
-            }
+            };
 
-            for block in func.dfg.phi_blocks_mut(insn) {
+            for (_, block) in phi.args_mut() {
                 if *block == original_dest {
                     *block = inserted_dest;
                 }
@@ -111,24 +114,33 @@ impl CriticalEdgeSplitter {
 
 #[derive(Debug)]
 struct CriticalEdge {
-    insn: Insn,
+    inst: InstId,
     to: BlockId,
 }
 
 impl CriticalEdge {
-    fn new(insn: Insn, to: BlockId) -> Self {
-        Self { insn, to }
+    fn new(inst: InstId, to: BlockId) -> Self {
+        Self { inst, to }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonatina_ir::{builder::test_util::*, Type};
+    use sonatina_ir::{
+        builder::test_util::*,
+        inst::{
+            arith::Add,
+            control_flow::{Br, BrTable, Phi, Return},
+        },
+        isa::Isa,
+        Type,
+    };
 
     #[test]
     fn critical_edge_basic() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -136,13 +148,16 @@ mod tests {
 
         builder.switch_to_block(a);
         let v0 = builder.make_imm_value(1i32);
-        builder.br(v0, c, b);
+        let br = Br::new(is, v0, c, b);
+        builder.insert_inst_no_result(br);
 
         builder.switch_to_block(b);
-        builder.jump(c);
+        let jump = Jump::new(is, c);
+        builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(c);
-        builder.ret(None);
+        let ret = Return::new(is, None);
+        builder.insert_inst_no_result(ret);
 
         builder.seal_all();
         let mut module = builder.finish().build();
@@ -180,7 +195,8 @@ mod tests {
     #[test]
     #[allow(clippy::many_single_char_names)]
     fn critical_edge_to_same_block() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -190,19 +206,24 @@ mod tests {
 
         builder.switch_to_block(a);
         let v0 = builder.make_imm_value(1i8);
-        builder.br(v0, d, b);
+        let br = Br::new(is, v0, d, b);
+        builder.insert_inst_no_result(br);
 
         builder.switch_to_block(b);
-        builder.jump(c);
+        let jump = Jump::new(is, c);
+        builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(c);
-        builder.br(v0, e, d);
+        let br = Br::new(is, v0, e, d);
+        builder.insert_inst_no_result(br);
 
         builder.switch_to_block(d);
-        builder.ret(None);
+        let ret = Return::new(is, None);
+        builder.insert_inst_no_result(ret);
 
         builder.switch_to_block(e);
-        builder.ret(None);
+        let ret = Return::new(is, None);
+        builder.insert_inst_no_result(ret);
 
         builder.seal_all();
         let mut module = builder.finish().build();
@@ -248,7 +269,8 @@ mod tests {
 
     #[test]
     fn critical_edge_phi() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -256,16 +278,17 @@ mod tests {
 
         builder.switch_to_block(a);
         let v1 = builder.make_imm_value(1i8);
-        builder.jump(b);
+        builder.insert_inst_no_result_with(|| Jump::new(is, c));
 
         builder.switch_to_block(b);
-        let phi_value = builder.phi(Type::I8, &[(v1, a)]);
-        let v2 = builder.add(phi_value, v1);
-        builder.append_phi_arg(phi_value, v2, b);
-        builder.br(phi_value, c, b);
+        let phi_res = builder.insert_inst_with(|| Phi::new(is, vec![(v1, a)], Type::I8), Type::I8);
+        let add_res = builder.insert_inst_with(|| Add::new(is, phi_res, v1), Type::I8);
+
+        builder.append_phi_arg(phi_res, add_res, b);
+        builder.insert_inst_no_result_with(|| Br::new(is, phi_res, c, b));
 
         builder.switch_to_block(c);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
         let mut module = builder.finish().build();
@@ -304,7 +327,8 @@ mod tests {
 
     #[test]
     fn critical_edge_br_table() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -314,22 +338,23 @@ mod tests {
 
         builder.switch_to_block(a);
         let cond = builder.make_imm_value(true);
-        builder.br(cond, b, e);
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, b, e));
 
         builder.switch_to_block(b);
         let v0 = builder.make_imm_value(0i32);
         let v1 = builder.make_imm_value(1i32);
         let v2 = builder.make_imm_value(2i32);
-        builder.br_table(v0, Some(c), &[(v1, d), (v2, e)]);
+        builder
+            .insert_inst_no_result_with(|| BrTable::new(is, v0, Some(c), vec![(v1, d), (v2, e)]));
 
         builder.switch_to_block(c);
-        builder.jump(b);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b));
 
         builder.switch_to_block(d);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.switch_to_block(e);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
         let mut module = builder.finish().build();
