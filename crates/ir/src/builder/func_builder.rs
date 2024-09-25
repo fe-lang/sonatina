@@ -169,18 +169,6 @@ where
     pub fn args(&self) -> &[ValueId] {
         &self.func.arg_values
     }
-
-    pub fn address_type(&self) -> Type {
-        self.module_builder.ctx.isa.type_provider().address_type()
-    }
-
-    pub fn balance_type(&self) -> Type {
-        self.module_builder.ctx.isa.type_provider().balance_type()
-    }
-
-    pub fn gas_type(&self) -> Type {
-        self.module_builder.ctx.isa.type_provider().gas_type()
-    }
 }
 
 #[cfg(test)]
