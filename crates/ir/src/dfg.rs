@@ -156,7 +156,7 @@ impl DataFlowGraph {
 
     pub fn branch_info(&self, inst: InstId) -> Option<BranchInfo> {
         let inst = self.inst(inst);
-        BranchInfo::downcast(self.ctx.inst_set(), inst)
+        BranchInfo::downcast(self.ctx.inst_set, inst)
     }
 
     pub fn is_terminator(&self, inst: InstId) -> bool {
@@ -176,7 +176,7 @@ impl DataFlowGraph {
     }
 
     pub fn inst_set(&self) -> &'static dyn InstSetBase {
-        self.ctx.inst_set()
+        self.ctx.inst_set
     }
 
     pub fn phi(&self, inst_id: InstId) -> Option<&control_flow::Phi> {

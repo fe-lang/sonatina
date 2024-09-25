@@ -4,7 +4,7 @@ use super::{module::FuncRef, DataFlowGraph, Layout, Type, ValueId};
 use crate::{
     ir_writer::{DisplayWithFunc, DisplayableWithModule},
     module::ModuleCtx,
-    Linkage,
+    InstSetBase, Linkage,
 };
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -44,6 +44,10 @@ impl Function {
 
     pub fn ctx(&self) -> &ModuleCtx {
         &self.dfg.ctx
+    }
+
+    pub fn inst_set(&self) -> &'static dyn InstSetBase {
+        self.dfg.inst_set()
     }
 }
 

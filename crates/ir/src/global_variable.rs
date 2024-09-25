@@ -179,13 +179,13 @@ impl fmt::Display for ConstantValue {
 
 #[cfg(test)]
 mod test {
-    use crate::{builder::test_util::build_test_isa, module::ModuleCtx};
+    use crate::{builder::test_util::test_isa, module::ModuleCtx};
 
     use super::*;
 
     #[test]
     fn display_gv() {
-        let ctx = ModuleCtx::new(build_test_isa());
+        let ctx = ModuleCtx::new(&test_isa());
 
         let cv = ConstantValue::make_imm(1618i32);
         let gv = ctx.with_gv_store_mut(|s| {
@@ -204,7 +204,7 @@ mod test {
 
     #[test]
     fn display_gv_array() {
-        let ctx = ModuleCtx::new(build_test_isa());
+        let ctx = ModuleCtx::new(&test_isa());
 
         let cv0 = ConstantValue::make_imm(8i32);
         let cv1 = ConstantValue::make_imm(4i32);

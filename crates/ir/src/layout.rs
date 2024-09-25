@@ -351,20 +351,21 @@ impl InstNode {
 
 #[cfg(test)]
 mod tests {
-    use macros::inst_set;
-
-    use crate::{builder::test_util::build_test_isa, inst, inst::InstId, module::ModuleCtx};
+    use crate::{
+        builder::test_util::test_isa,
+        inst::{self, arith::Add, InstId},
+        isa::Isa,
+        module::ModuleCtx,
+        HasInst,
+    };
 
     use super::*;
 
     use super::super::dfg::DataFlowGraph;
 
-    #[inst_set(InstKind = "TestInstKind")]
-    struct TestInstSet(inst::control_flow::Phi, inst::arith::Add, inst::arith::Sub);
-
     impl DataFlowGraph {
         /// Returns dummy instruction.
-        fn make_dummy_inst(&mut self, is: &TestInstSet) -> InstId {
+        fn make_dummy_inst(&mut self, is: &impl HasInst<Add>) -> InstId {
             let v0 = self.make_imm_value(1i32);
             let v1 = self.make_imm_value(2i32);
             let add = inst::arith::Add::new(is, v0, v1);
@@ -375,7 +376,7 @@ mod tests {
     #[test]
     fn test_block_insertion() {
         let mut layout = Layout::new();
-        let ctx = ModuleCtx::new(build_test_isa());
+        let ctx = ModuleCtx::new(&test_isa());
         let mut dfg = DataFlowGraph::new(ctx);
         assert_eq!(layout.entry_block, None);
         assert_eq!(layout.last_block, None);
@@ -422,7 +423,7 @@ mod tests {
     #[test]
     fn test_block_removal() {
         let mut layout = Layout::new();
-        let ctx = ModuleCtx::new(build_test_isa());
+        let ctx = ModuleCtx::new(&test_isa());
         let mut dfg = DataFlowGraph::new(ctx);
 
         // block1 -> block2 -> block3 -> block4.
@@ -465,8 +466,9 @@ mod tests {
     #[test]
     fn test_inst_insertion() {
         let mut layout = Layout::new();
-        let is = TestInstSet::new();
-        let ctx = ModuleCtx::new(build_test_isa());
+        let test_isa = test_isa();
+        let is = test_isa.inst_set();
+        let ctx = ModuleCtx::new(&test_isa);
         let mut dfg = DataFlowGraph::new(ctx);
         let b1 = dfg.make_block();
         layout.append_block(b1);
@@ -474,7 +476,7 @@ mod tests {
         assert_eq!(layout.last_inst_of(b1), None);
 
         // inst1.
-        let i1 = dfg.make_dummy_inst(&is);
+        let i1 = dfg.make_dummy_inst(is);
         layout.append_inst(i1, b1);
         assert_eq!(layout.first_inst_of(b1), Some(i1));
         assert_eq!(layout.last_inst_of(b1), Some(i1));
@@ -483,7 +485,7 @@ mod tests {
         assert_eq!(layout.next_inst_of(i1), None);
 
         // inst1 -> inst2.
-        let i2 = dfg.make_dummy_inst(&is);
+        let i2 = dfg.make_dummy_inst(is);
         layout.append_inst(i2, b1);
         assert_eq!(layout.first_inst_of(b1), Some(i1));
         assert_eq!(layout.last_inst_of(b1), Some(i2));
@@ -491,7 +493,7 @@ mod tests {
         assert_eq!(layout.next_inst_of(i1), Some(i2));
 
         // inst1 -> inst3 -> inst2.
-        let i3 = dfg.make_dummy_inst(&is);
+        let i3 = dfg.make_dummy_inst(is);
         layout.insert_inst_after(i3, i1);
         assert_eq!(layout.first_inst_of(b1), Some(i1));
         assert_eq!(layout.last_inst_of(b1), Some(i2));
@@ -501,7 +503,7 @@ mod tests {
         assert_eq!(layout.next_inst_of(i3), Some(i2));
 
         // inst1 -> inst3 -> inst4 -> inst2.
-        let i4 = dfg.make_dummy_inst(&is);
+        let i4 = dfg.make_dummy_inst(is);
         layout.insert_inst_before(i4, i2);
         assert_eq!(layout.first_inst_of(b1), Some(i1));
         assert_eq!(layout.last_inst_of(b1), Some(i2));
@@ -514,17 +516,18 @@ mod tests {
     #[test]
     fn test_inst_removal() {
         let mut layout = Layout::new();
-        let is = TestInstSet::new();
-        let ctx = ModuleCtx::new(build_test_isa());
+        let test_isa = test_isa();
+        let is = test_isa.inst_set();
+        let ctx = ModuleCtx::new(&test_isa);
         let mut dfg = DataFlowGraph::new(ctx);
         let b1 = dfg.make_block();
         layout.append_block(b1);
 
         // inst1 -> inst2 -> inst3 -> inst4.
-        let i1 = dfg.make_dummy_inst(&is);
-        let i2 = dfg.make_dummy_inst(&is);
-        let i3 = dfg.make_dummy_inst(&is);
-        let i4 = dfg.make_dummy_inst(&is);
+        let i1 = dfg.make_dummy_inst(is);
+        let i2 = dfg.make_dummy_inst(is);
+        let i3 = dfg.make_dummy_inst(is);
+        let i4 = dfg.make_dummy_inst(is);
         layout.append_inst(i1, b1);
         layout.append_inst(i2, b1);
         layout.append_inst(i3, b1);

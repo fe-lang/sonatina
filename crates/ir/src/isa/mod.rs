@@ -5,11 +5,11 @@ use crate::InstSetBase;
 pub mod evm;
 
 pub trait Isa {
-    type InstSet: InstSetBase;
+    type InstSet: InstSetBase + 'static;
 
     fn triple(&self) -> TargetTriple;
-    fn inst_set() -> &'static dyn InstSetBase;
-    fn type_layout() -> &'static dyn TypeLayout;
+    fn inst_set(&self) -> &'static Self::InstSet;
+    fn type_layout(&self) -> &'static dyn TypeLayout;
 }
 
 pub trait TypeLayout {

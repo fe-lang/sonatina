@@ -32,12 +32,12 @@ impl Isa for Evm {
         TargetTriple::new(Architecture::Evm, Chain::Ethereum, self.version)
     }
 
-    fn type_layout() -> &'static dyn TypeLayout {
+    fn type_layout(&self) -> &'static dyn TypeLayout {
         const TL: EvmTypeLayout = EvmTypeLayout {};
         &TL
     }
 
-    fn inst_set() -> &'static dyn crate::InstSetBase {
+    fn inst_set(&self) -> &'static Self::InstSet {
         static IS: LazyLock<EvmInstSet> = LazyLock::new(|| EvmInstSet::new());
         &*IS
     }

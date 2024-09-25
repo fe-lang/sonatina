@@ -1,7 +1,8 @@
 use crate::{
     func_cursor::{CursorLocation, FuncCursor},
+    inst::control_flow::BranchInfo,
     module::FuncRef,
-    BlockId, Function, GlobalVariable, Immediate, Inst, Type, Value, ValueId,
+    BlockId, Function, GlobalVariable, Immediate, Inst, InstDowncast, InstId, Type, Value, ValueId,
 };
 
 use super::{
@@ -109,6 +110,7 @@ where
     ///   instruction.
     pub fn insert_inst<I: Inst>(&mut self, inst: I, ret_ty: Type) -> ValueId {
         let inst_id = self.cursor.insert_inst_data(&mut self.func, inst);
+        self.append_pred(inst_id);
 
         let result = Value::Inst {
             inst: inst_id,
@@ -130,6 +132,7 @@ where
     /// - `inst`: The instruction to insert, which must implement the `Inst` trait.
     pub fn insert_inst_no_result<I: Inst>(&mut self, inst: I) {
         let inst_id = self.cursor.insert_inst_data(&mut self.func, inst);
+        self.append_pred(inst_id);
         self.cursor.set_location(CursorLocation::At(inst_id));
     }
 
@@ -169,38 +172,49 @@ where
     pub fn args(&self) -> &[ValueId] {
         &self.func.arg_values
     }
+
+    fn append_pred(&mut self, inst_id: InstId) {
+        let inst = self.func.dfg.inst(inst_id);
+        let Some(branch_info) = <BranchInfo as InstDowncast>::downcast(self.func.inst_set(), inst)
+        else {
+            return;
+        };
+
+        let current_block = self.cursor.block(&self.func).unwrap();
+        for dest in branch_info.iter_dests() {
+            self.ssa_builder.append_pred(dest, current_block)
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use macros::inst_set;
-
-    use crate::inst::{
-        arith::{Add, Mul, Sub},
-        cast::Sext,
-        control_flow::{Br, Jump, Phi, Return},
+    use crate::{
+        inst::{
+            arith::{Add, Mul, Sub},
+            cast::Sext,
+            control_flow::{Br, Jump, Phi, Return},
+        },
+        isa::Isa,
     };
 
     use super::{super::test_util::*, *};
 
-    #[inst_set(InstKind = "TestInstKind")]
-    struct TestInstSet(Phi, Add, Mul, Sub, Return, Sext, Br, Jump);
-
     #[test]
     fn entry_block() {
-        let mut builder = test_func_builder(&[], Type::Void);
-        let is = TestInstSet::new();
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let b0 = builder.append_block();
         builder.switch_to_block(b0);
         let v0 = builder.make_imm_value(1i8);
         let v1 = builder.make_imm_value(2i8);
-        let add = Add::new(&is, v0, v1);
+        let add = Add::new(is, v0, v1);
         let v2 = builder.insert_inst(add, Type::I8);
 
-        let sub = Sub::new(&is, v2, v0);
+        let sub = Sub::new(is, v2, v0);
         builder.insert_inst(sub, Type::I8);
-        let ret = Return::new(&is, None);
+        let ret = Return::new(is, None);
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
@@ -222,19 +236,19 @@ mod tests {
 
     #[test]
     fn entry_block_with_args() {
-        let mut builder = test_func_builder(&[Type::I32, Type::I64], Type::Void);
-        let is = TestInstSet::new();
+        let (evm, mut builder) = test_func_builder(&[Type::I32, Type::I64], Type::Void);
+        let is = evm.inst_set();
 
         let entry_block = builder.append_block();
         builder.switch_to_block(entry_block);
         let args = builder.args();
         let (arg0, arg1) = (args[0], args[1]);
         assert_eq!(args.len(), 2);
-        let sext = Sext::new(&is, arg0, Type::I64);
+        let sext = Sext::new(is, arg0, Type::I64);
         let v3 = builder.insert_inst(sext, Type::I64);
-        let mul = Mul::new(&is, v3, arg1);
+        let mul = Mul::new(is, v3, arg1);
         builder.insert_inst(mul, Type::I64);
-        let ret = Return::new(&is, None);
+        let ret = Return::new(is, None);
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
@@ -256,14 +270,14 @@ mod tests {
 
     #[test]
     fn entry_block_with_return() {
-        let mut builder = test_func_builder(&[], Type::I32);
-        let is = TestInstSet::new();
+        let (evm, mut builder) = test_func_builder(&[Type::I32, Type::I64], Type::Void);
+        let is = evm.inst_set();
 
         let entry_block = builder.append_block();
 
         builder.switch_to_block(entry_block);
         let v0 = builder.make_imm_value(1i32);
-        let ret = Return::new(&is, Some(v0));
+        let ret = Return::new(is, Some(v0));
         builder.insert_inst_no_result(ret);
         builder.seal_all();
 
@@ -282,8 +296,8 @@ mod tests {
 
     #[test]
     fn then_else_merge_block() {
-        let mut builder = test_func_builder(&[Type::I64], Type::Void);
-        let is = TestInstSet::new();
+        let (evm, mut builder) = test_func_builder(&[Type::I32, Type::I64], Type::Void);
+        let is = evm.inst_set();
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -293,25 +307,25 @@ mod tests {
         let arg0 = builder.args()[0];
 
         builder.switch_to_block(entry_block);
-        let br = Br::new(&is, arg0, then_block, else_block);
+        let br = Br::new(is, arg0, then_block, else_block);
         builder.insert_inst_no_result(br);
 
         builder.switch_to_block(then_block);
         let v1 = builder.make_imm_value(1i64);
-        let jump = Jump::new(&is, merge_block);
+        let jump = Jump::new(is, merge_block);
         builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(else_block);
         let v2 = builder.make_imm_value(2i64);
-        let jump = Jump::new(&is, merge_block);
+        let jump = Jump::new(is, merge_block);
         builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(merge_block);
-        let phi = Phi::new(&is, vec![(v1, then_block), (v2, else_block)], Type::I64);
+        let phi = Phi::new(is, vec![(v1, then_block), (v2, else_block)], Type::I64);
         let v3 = builder.insert_inst(phi, Type::I64);
-        let add = Add::new(&is, v3, arg0);
+        let add = Add::new(is, v3, arg0);
         builder.insert_inst(add, Type::I64);
-        let ret = Return::new(&is, None);
+        let ret = Return::new(is, None);
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
