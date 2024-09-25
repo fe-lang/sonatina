@@ -190,7 +190,7 @@ impl DisplayWithModule for Type {
             Type::Compound(cmpd_ty) => {
                 write!(formatter, "{}", DisplayableWithModule(cmpd_ty, module))
             }
-            Type::Void => write!(formatter, "()"),
+            Type::Void => write!(formatter, "void"),
         }
     }
 }
