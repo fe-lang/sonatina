@@ -74,8 +74,7 @@ impl CriticalEdgeSplitter {
 
         // Rewrite branch destination to the new block.
         func.dfg
-            .branch_info_mut(inst)
-            .map(|mut bi| bi.rewrite_branch_dest(original_dest, inserted_dest));
+            .rewrite_branch_dest(inst, original_dest, inserted_dest);
         self.modify_cfg(cfg, source_block, original_dest, inserted_dest);
         self.modify_phi_blocks(func, original_dest, inserted_dest);
     }

@@ -247,7 +247,16 @@ enum BlockState {
 mod tests {
     use super::*;
 
-    use sonatina_ir::{builder::test_util::*, Function, Type};
+    use sonatina_ir::{
+        builder::test_util::*,
+        inst::{
+            arith::Add,
+            cmp::Eq,
+            control_flow::{Br, Jump, Phi, Return},
+        },
+        prelude::*,
+        Function, Type,
+    };
 
     fn compute_loop(func: &Function) -> LoopTree {
         let mut cfg = ControlFlowGraph::new();
@@ -261,7 +270,8 @@ mod tests {
 
     #[test]
     fn simple_loop() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let b0 = builder.append_block();
         let b1 = builder.append_block();
@@ -270,22 +280,22 @@ mod tests {
 
         builder.switch_to_block(b0);
         let v0 = builder.make_imm_value(0i32);
-        builder.jump(b1);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b1));
 
         builder.switch_to_block(b1);
-        let v1 = builder.phi(Type::I32, &[(v0, b0)]);
+        let v1 = builder.insert_inst_with(|| Phi::new(is, vec![(v0, b0)], Type::I32), Type::I32);
         let c0 = builder.make_imm_value(10i32);
-        let v2 = builder.eq(v1, c0);
-        builder.br(v2, b3, b2);
+        let v2 = builder.insert_inst_with(|| Eq::new(is, v1, c0), Type::I1);
+        builder.insert_inst_no_result_with(|| Br::new(is, v2, b3, b2));
 
         builder.switch_to_block(b2);
         let c1 = builder.make_imm_value(1i32);
-        let v3 = builder.add(v1, c1);
-        builder.jump(b1);
+        let v3 = builder.insert_inst_with(|| Add::new(is, v1, c1), Type::I32);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b1));
         builder.append_phi_arg(v1, v3, b2);
 
         builder.switch_to_block(b3);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
 
@@ -306,7 +316,8 @@ mod tests {
 
     #[test]
     fn continue_loop() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let b0 = builder.append_block();
         let b1 = builder.append_block();
@@ -318,36 +329,37 @@ mod tests {
 
         builder.switch_to_block(b0);
         let v0 = builder.make_imm_value(0i32);
-        builder.jump(b1);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b1));
 
         builder.switch_to_block(b1);
-        let v1 = builder.phi(Type::I32, &[(v0, b0)]);
+        let v1 = builder.insert_inst_with(|| Phi::new(is, vec![(v0, b0)], Type::I32), Type::I32);
         let c0 = builder.make_imm_value(10i32);
-        let v2 = builder.eq(v1, c0);
-        builder.br(v2, b5, b2);
+        let v2 = builder.insert_inst_with(|| Eq::new(is, v1, c0), Type::I1);
+        builder.insert_inst_no_result_with(|| Br::new(is, v2, b5, b2));
 
         builder.switch_to_block(b2);
         let c1 = builder.make_imm_value(5i32);
-        let v3 = builder.eq(v1, c1);
-        builder.br(v3, b3, b4);
+        let v3 = builder.insert_inst_with(|| Eq::new(is, v1, c1), Type::I1);
+        builder.insert_inst_no_result_with(|| Br::new(is, v3, b3, b4));
+        builder.insert_inst_no_result_with(|| Br::new(is, v3, b3, b4));
 
         builder.switch_to_block(b3);
-        builder.jump(b5);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b5));
 
         builder.switch_to_block(b4);
         let c2 = builder.make_imm_value(3i32);
-        let v4 = builder.add(v1, c2);
+        let v4 = builder.insert_inst_with(|| Add::new(is, v1, c2), Type::I32);
         builder.append_phi_arg(v1, v4, b4);
-        builder.jump(b1);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b1));
 
         builder.switch_to_block(b5);
         let c3 = builder.make_imm_value(1i32);
-        let v5 = builder.add(v1, c3);
+        let v5 = builder.insert_inst_with(|| Add::new(is, v1, c3), Type::I32);
         builder.append_phi_arg(v1, v5, b5);
-        builder.jump(b1);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b1));
 
         builder.switch_to_block(b6);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
 
@@ -372,7 +384,9 @@ mod tests {
 
     #[test]
     fn single_block_loop() {
-        let mut builder = test_func_builder(&[Type::I1], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
+
         let b0 = builder.append_block();
         let b1 = builder.append_block();
         let b2 = builder.append_block();
@@ -380,13 +394,13 @@ mod tests {
         let arg = builder.args()[0];
 
         builder.switch_to_block(b0);
-        builder.jump(b1);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b1));
 
         builder.switch_to_block(b1);
-        builder.br(arg, b1, b2);
+        builder.insert_inst_no_result_with(|| Br::new(is, arg, b1, b2));
 
         builder.switch_to_block(b2);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
 
@@ -405,7 +419,8 @@ mod tests {
 
     #[test]
     fn nested_loop() {
-        let mut builder = test_func_builder(&[Type::I1], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let is = evm.inst_set();
 
         let b0 = builder.append_block();
         let b1 = builder.append_block();
@@ -423,40 +438,40 @@ mod tests {
         let arg = builder.args()[0];
 
         builder.switch_to_block(b0);
-        builder.jump(b1);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b1));
 
         builder.switch_to_block(b1);
-        builder.jump(b2);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b2));
 
         builder.switch_to_block(b2);
-        builder.br(arg, b3, b7);
+        builder.insert_inst_no_result_with(|| Br::new(is, arg, b3, b7));
 
         builder.switch_to_block(b3);
-        builder.jump(b4);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b4));
 
         builder.switch_to_block(b4);
-        builder.jump(b5);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b5));
 
         builder.switch_to_block(b5);
-        builder.br(arg, b4, b6);
+        builder.insert_inst_no_result_with(|| Br::new(is, arg, b4, b6));
 
         builder.switch_to_block(b6);
-        builder.br(arg, b3, b10);
+        builder.insert_inst_no_result_with(|| Br::new(is, arg, b3, b10));
 
         builder.switch_to_block(b7);
-        builder.jump(b8);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b8));
 
         builder.switch_to_block(b8);
-        builder.br(arg, b9, b7);
+        builder.insert_inst_no_result_with(|| Br::new(is, arg, b9, b7));
 
         builder.switch_to_block(b9);
-        builder.br(arg, b1, b10);
+        builder.insert_inst_no_result_with(|| Br::new(is, arg, b1, b10));
 
         builder.switch_to_block(b10);
-        builder.jump(b1);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b1));
 
         builder.switch_to_block(b11);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
 
