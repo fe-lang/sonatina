@@ -255,6 +255,50 @@ impl DataFlowGraph {
         self.branch_info_mut(inst)
             .map(|mut bi| bi.rewrite_branch_dest(from, to));
     }
+
+    pub fn remove_branch_dest(&mut self, inst: InstId, dest: BlockId) {
+        let Some(bi) = self.branch_info_mut(inst) else {
+            panic!("not a branch");
+        };
+
+        match bi {
+            BranchInfoMut::Jump(_) => panic!("can't remove destination from `Jump` insn"),
+
+            BranchInfoMut::Br(br) => {
+                let remain = if *br.z_dest() == dest {
+                    *br.nz_dest()
+                } else if *br.nz_dest() == dest {
+                    *br.z_dest()
+                } else {
+                    panic!("no dests found in the branch destination")
+                };
+
+                let cond = *br.cond();
+                self.users[cond].remove(&inst);
+                let jump = self.make_jump(remain);
+                self.insts[inst] = Box::new(jump);
+            }
+
+            BranchInfoMut::BrTable(brt) => {
+                if Some(dest) == *brt.default() {
+                    *brt.default_mut() = None;
+                }
+
+                let (keep, drop) = brt.table().iter().copied().partition(|(_, b)| *b != dest);
+                *brt.table_mut() = keep;
+                for (val, _) in drop {
+                    self.users[val].remove(&inst);
+                }
+
+                let bi = self.branch_info(inst).unwrap();
+                if bi.num_dests() == 1 {
+                    let remain = bi.iter_dests().next().unwrap();
+                    let jump = self.make_jump(remain);
+                    self.insts[inst] = Box::new(jump);
+                }
+            }
+        }
+    }
 }
 
 /// An opaque reference to [`Block`]
