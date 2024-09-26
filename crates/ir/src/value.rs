@@ -302,6 +302,22 @@ impl ops::Neg for Immediate {
     }
 }
 
+impl ops::Shl for Immediate {
+    type Output = Self;
+
+    fn shl(self, rhs: Self) -> Self::Output {
+        self.apply_binop(rhs, ops::Shl::shl)
+    }
+}
+
+impl ops::Shr for Immediate {
+    type Output = Self;
+
+    fn shr(self, rhs: Self) -> Self::Output {
+        self.apply_binop(rhs, ops::Shl::shl)
+    }
+}
+
 impl fmt::Display for Immediate {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {

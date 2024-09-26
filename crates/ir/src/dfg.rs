@@ -80,6 +80,14 @@ impl DataFlowGraph {
         }
     }
 
+    /// Returns immediate if the value is immediate value.
+    pub fn value_imm(&self, value: ValueId) -> Option<Immediate> {
+        match self.value(value) {
+            Value::Immediate { imm, .. } => Some(*imm),
+            _ => None,
+        }
+    }
+
     pub fn make_global_value(&mut self, gv: GlobalVariable) -> ValueId {
         let gv_ty = self.ctx.with_gv_store(|s| s.ty(gv));
         let ty = self.ctx.with_ty_store_mut(|s| s.make_ptr(gv_ty));
