@@ -1,6 +1,7 @@
 use sonatina_ir::{Immediate, ValueId};
 
 mod arith;
+mod cast;
 mod cmp;
 
 pub trait Interpret {
