@@ -1,6 +1,6 @@
 use quote::quote;
 
-use crate::{convert_to_snake, inst_set_base};
+use crate::{convert_to_snake, inst_set_base, subset_variant_name_from_path};
 
 pub fn define_inst_set(
     attr: proc_macro::TokenStream,
@@ -142,11 +142,11 @@ impl InstSet {
         let lt = syn::Lifetime::new("'i", proc_macro2::Span::call_site());
 
         let variants = self.insts.iter().map(|p| {
-            let variant_name = self.variant_name_from_inst_path(p);
+            let variant_name = subset_variant_name_from_path(p);
             quote! { #variant_name(&#lt #p) }
         });
         let variants_mut = self.insts.iter().map(|p| {
-            let variant_name = self.variant_name_from_inst_path(p);
+            let variant_name = subset_variant_name_from_path(p);
             quote! { #variant_name(&#lt mut #p) }
         });
 
@@ -174,7 +174,7 @@ impl InstSet {
             let ident = &self.ident;
             let inst_kind_name = &self.inst_kind_name;
             let inst_kind_mut_name = &self.inst_kind_mut_name;
-            let variant_name = self.variant_name_from_inst_path(p);
+            let variant_name = subset_variant_name_from_path(p);
 
             quote! {
                 let tid = std::any::TypeId::of::<#p>();
@@ -269,9 +269,5 @@ impl InstSet {
                 }
             }
         }
-    }
-
-    fn variant_name_from_inst_path<'a>(&self, p: &'a syn::Path) -> &'a syn::Ident {
-        &p.segments.last().unwrap().ident
     }
 }

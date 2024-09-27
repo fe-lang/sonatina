@@ -1,4 +1,5 @@
 mod inst;
+mod inst_prop;
 mod inst_set;
 mod inst_set_base;
 
@@ -65,6 +66,14 @@ pub fn inst_set(
     inst_set::define_inst_set(attr, input)
 }
 
+#[proc_macro_attribute]
+pub fn inst_prop(
+    attr: proc_macro::TokenStream,
+    input: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    inst_prop::define_inst_prop(attr, input)
+}
+
 /// Converts a given string to snake case.
 ///
 /// The function iterates through each character in the string. If the character is uppercase,
@@ -90,6 +99,10 @@ fn convert_to_snake(s: &str) -> String {
     }
 
     res
+}
+
+fn subset_variant_name_from_path<'a>(p: &'a syn::Path) -> &'a syn::Ident {
+    &p.segments.last().unwrap().ident
 }
 
 #[cfg(test)]
