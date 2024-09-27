@@ -3,6 +3,7 @@ use sonatina_ir::{Immediate, ValueId};
 mod arith;
 mod cast;
 mod cmp;
+mod logic;
 
 pub trait Interpret {
     fn interpret(&self, env: &mut dyn Env) -> Option<Immediate>;
