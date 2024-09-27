@@ -49,17 +49,13 @@ impl Interpret for Udiv {
 }
 
 impl Interpret for Umod {
-    fn interpret(&self, env: &mut dyn Env) -> Option<Immediate> {
-        let lhs = env.lookup_val(*self.lhs())?;
-        let rhs = env.lookup_val(*self.rhs())?;
+    fn interpret(&self, _env: &mut dyn Env) -> Option<Immediate> {
         todo!()
     }
 }
 
 impl Interpret for Smod {
-    fn interpret(&self, env: &mut dyn Env) -> Option<Immediate> {
-        let lhs = env.lookup_val(*self.lhs())?;
-        let rhs = env.lookup_val(*self.rhs())?;
+    fn interpret(&self, _env: &mut dyn Env) -> Option<Immediate> {
         todo!()
     }
 }
