@@ -1,10 +1,9 @@
 use std::sync::LazyLock;
 
-use crate::inst::evm::inst_set::EvmInstSet;
+use sonatina_triple::{Architecture, Chain, EvmVersion, TargetTriple, Version};
 
 use super::{Isa, TypeLayout};
-
-use sonatina_triple::{Architecture, Chain, EvmVersion, TargetTriple, Version};
+use crate::inst::evm::inst_set::EvmInstSet;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Evm {

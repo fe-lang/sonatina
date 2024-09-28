@@ -1,13 +1,12 @@
-use crate::{
-    func_cursor::{CursorLocation, FuncCursor},
-    inst::control_flow::BranchInfo,
-    module::FuncRef,
-    BlockId, Function, GlobalVariable, Immediate, Inst, InstDowncast, InstId, Type, Value, ValueId,
-};
-
 use super::{
     ssa::{SsaBuilder, Variable},
     ModuleBuilder,
+};
+use crate::{
+    func_cursor::{CursorLocation, FuncCursor},
+    inst::control_flow::{Branch, BranchInfo},
+    module::FuncRef,
+    BlockId, Function, GlobalVariable, Immediate, Inst, InstDowncast, InstId, Type, Value, ValueId,
 };
 
 pub struct FunctionBuilder<C> {
@@ -107,11 +106,12 @@ where
             .declare_struct_type(name, fields, packed)
     }
 
-    /// Inserts an instruction into the current position and returns a `ValueId` for
-    /// the result.
+    /// Inserts an instruction into the current position and returns a `ValueId`
+    /// for the result.
     ///
     /// # Parameters
-    /// - `inst`: The instruction to insert, which must implement the `Inst` trait.
+    /// - `inst`: The instruction to insert, which must implement the `Inst`
+    ///   trait.
     /// - `ret_ty`: The return type of the instruction. A result value will be
     ///   created with this type and associated with the instruction.
     ///
@@ -148,7 +148,8 @@ where
     /// Please refer to [`insert_inst`] if the instruction has a result.
     ///
     /// # Parameters
-    /// - `inst`: The instruction to insert, which must implement the `Inst` trait.
+    /// - `inst`: The instruction to insert, which must implement the `Inst`
+    ///   trait.
     pub fn insert_inst_no_result<I: Inst>(&mut self, inst: I) {
         let inst_id = self.cursor.insert_inst_data(&mut self.func, inst);
         self.append_pred(inst_id);
@@ -209,7 +210,7 @@ where
         };
 
         let current_block = self.cursor.block(&self.func).unwrap();
-        for dest in branch_info.iter_dests() {
+        for dest in branch_info.dests() {
             self.ssa_builder.append_pred(dest, current_block)
         }
     }
@@ -217,6 +218,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::{super::test_util::*, *};
     use crate::{
         inst::{
             arith::{Add, Mul, Sub},
@@ -225,8 +227,6 @@ mod tests {
         },
         isa::Isa,
     };
-
-    use super::{super::test_util::*, *};
 
     #[test]
     fn entry_block() {
