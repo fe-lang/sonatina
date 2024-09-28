@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 
-use crate::{BlockId, Function};
+use crate::{inst::control_flow::Branch, BlockId, Function};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct ControlFlowGraph {
@@ -86,7 +86,7 @@ impl ControlFlowGraph {
             return;
         };
 
-        for dest in branch_info.iter_dests() {
+        for dest in branch_info.dests() {
             let block = func.layout.inst_block(inst);
             self.add_edge(block, dest);
         }

@@ -4,17 +4,16 @@ use std::{collections::BTreeSet, fmt};
 use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use rustc_hash::FxHashMap;
 
+use super::{Immediate, Type, Value, ValueId};
 use crate::{
     inst::{
-        control_flow::{self, BranchInfo, BranchInfoMut, Jump, Phi},
+        control_flow::{self, Branch, BranchInfo, BranchInfoMut, Jump, Phi},
         InstId,
     },
     ir_writer::DisplayWithFunc,
     module::ModuleCtx,
     Function, GlobalVariable, Inst, InstDowncast, InstDowncastMut, InstSetBase,
 };
-
-use super::{Immediate, Type, Value, ValueId};
 
 pub struct DataFlowGraph {
     pub ctx: ModuleCtx,
@@ -299,9 +298,9 @@ impl DataFlowGraph {
                 }
 
                 let bi = self.branch_info(inst).unwrap();
-                if bi.num_dests() == 1 {
-                    let remain = bi.iter_dests().next().unwrap();
-                    let jump = self.make_jump(remain);
+                let dests = bi.dests();
+                if dests.len() == 1 {
+                    let jump = self.make_jump(dests[0]);
                     self.insts[inst] = Box::new(jump);
                 }
             }
@@ -321,8 +320,8 @@ impl DisplayWithFunc for BlockId {
 }
 
 /// A block data definition.
-/// A Block data doesn't hold any information for layout of a program. It is managed by
-/// [`super::layout::Layout`].
+/// A Block data doesn't hold any information for layout of a program. It is
+/// managed by [`super::layout::Layout`].
 #[derive(Debug, Clone, Default)]
 pub struct Block {}
 
