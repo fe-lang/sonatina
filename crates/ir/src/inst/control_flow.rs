@@ -156,6 +156,7 @@ impl DisplayWithFunc for Return {
 #[inst_prop(Subset = "BranchInfo")]
 pub trait Branch {
     fn dests(&self) -> Vec<BlockId>;
+    fn num_dests(&self) -> usize;
 
     type Members = (Jump, Br, BrTable);
 }
@@ -164,11 +165,19 @@ impl Branch for Jump {
     fn dests(&self) -> Vec<BlockId> {
         vec![self.dest]
     }
+
+    fn num_dests(&self) -> usize {
+        1
+    }
 }
 
 impl Branch for Br {
     fn dests(&self) -> Vec<BlockId> {
         vec![self.z_dest, self.nz_dest]
+    }
+
+    fn num_dests(&self) -> usize {
+        2
     }
 }
 
@@ -182,6 +191,15 @@ impl Branch for BrTable {
         dests.extend(self.table.iter().map(|(_, block)| *block));
 
         dests
+    }
+
+    fn num_dests(&self) -> usize {
+        let num = self.table.len();
+        if self.default.is_some() {
+            num + 1
+        } else {
+            num
+        }
     }
 }
 
