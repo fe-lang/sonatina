@@ -3,7 +3,6 @@ use std::fmt;
 use macros::{inst_prop, Inst};
 use smallvec::SmallVec;
 
-use super::InstDowncastMut;
 use crate::{
     ir_writer::{DisplayWithFunc, DisplayableWithFunc},
     module::FuncRef,
@@ -163,76 +162,62 @@ pub trait Branch {
 
 impl Branch for Jump {
     fn dests(&self) -> Vec<BlockId> {
-        todo!()
+        vec![self.dest]
     }
 }
 
 impl Branch for Br {
     fn dests(&self) -> Vec<BlockId> {
-        todo!()
+        vec![self.z_dest, self.nz_dest]
     }
 }
 
 impl Branch for BrTable {
     fn dests(&self) -> Vec<BlockId> {
-        todo!()
-    }
-}
-
-pub enum BranchInfoMut<'i> {
-    Jump(&'i mut Jump),
-    Br(&'i mut Br),
-    BrTable(&'i mut BrTable),
-}
-
-impl<'i> BranchInfoMut<'i> {
-    pub fn rewrite_branch_dest(&mut self, from: BlockId, to: BlockId) {
-        let repalce_if_match = |block: &mut BlockId| {
-            if *block == from {
-                *block = to
-            }
+        let mut dests = if let Some(default) = self.default {
+            vec![default]
+        } else {
+            vec![]
         };
+        dests.extend(self.table.iter().map(|(_, block)| *block));
 
-        match self {
-            Self::Jump(j) => repalce_if_match(&mut j.dest),
-
-            Self::Br(br) => {
-                repalce_if_match(&mut br.z_dest);
-                repalce_if_match(&mut br.nz_dest);
-            }
-
-            Self::BrTable(brt) => {
-                if let Some(default) = &mut brt.default {
-                    repalce_if_match(default);
-                }
-
-                brt.table
-                    .iter_mut()
-                    .for_each(|(_, block)| repalce_if_match(block));
-            }
-        }
-    }
-
-    pub fn num_dests(&self) -> usize {
-        match self {
-            Self::Jump(_) => 1,
-            Self::Br(_) => 2,
-            Self::BrTable(brt) => {
-                let ent_len = brt.table.len();
-                if brt.default.is_some() {
-                    ent_len + 1
-                } else {
-                    ent_len
-                }
-            }
-        }
+        dests
     }
 }
 
-impl<'i> InstDowncastMut for BranchInfoMut<'i> {
-    fn downcast_mut(isb: &dyn crate::InstSetBase, inst: &mut dyn super::Inst) -> Option<Self> {
-        InstDowncastMut::map_mut(isb, inst, BranchInfoMut::Jump)
-            .or_else(|| InstDowncastMut::map_mut(isb, inst, BranchInfoMut::Br))
-            .or_else(|| InstDowncastMut::map_mut(isb, inst, BranchInfoMut::BrTable))
+#[inst_prop(Subset = "BranchInfoMut")]
+pub trait BranchMut {
+    fn rewrite_branch_dest(&mut self, from: BlockId, to: BlockId);
+    type Members = (Jump, Br, BrTable);
+}
+
+impl BranchMut for Jump {
+    fn rewrite_branch_dest(&mut self, from: BlockId, to: BlockId) {
+        rewrite_if_match(&mut self.dest, from, to)
+    }
+}
+
+impl BranchMut for Br {
+    fn rewrite_branch_dest(&mut self, from: BlockId, to: BlockId) {
+        rewrite_if_match(&mut self.z_dest, from, to);
+        rewrite_if_match(&mut self.nz_dest, from, to);
+    }
+}
+
+impl BranchMut for BrTable {
+    fn rewrite_branch_dest(&mut self, from: BlockId, to: BlockId) {
+        if let Some(default) = &mut self.default {
+            rewrite_if_match(default, from, to);
+        }
+
+        self.table
+            .iter_mut()
+            .for_each(|(_, block)| rewrite_if_match(block, from, to));
+    }
+}
+
+fn rewrite_if_match(block: &mut BlockId, from: BlockId, to: BlockId) {
+    if *block == from {
+        *block = to
     }
 }
