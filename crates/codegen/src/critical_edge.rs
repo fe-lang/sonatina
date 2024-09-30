@@ -1,8 +1,7 @@
-use sonatina_ir::{func_cursor::FuncCursor, inst::control_flow::Jump, ControlFlowGraph, InstId};
-
 use sonatina_ir::{
-    func_cursor::{CursorLocation, InstInserter},
-    BlockId, Function,
+    func_cursor::{CursorLocation, FuncCursor, InstInserter},
+    inst::control_flow::{Branch, Jump},
+    BlockId, ControlFlowGraph, Function, InstId,
 };
 
 #[derive(Debug)]
@@ -51,7 +50,7 @@ impl CriticalEdgeSplitter {
             return;
         }
 
-        for dest in branch_info.iter_dests() {
+        for dest in branch_info.dests() {
             if cfg.pred_num_of(dest) > 1 {
                 self.critical_edges.push(CriticalEdge::new(inst_id, dest));
             }
@@ -63,8 +62,8 @@ impl CriticalEdgeSplitter {
         let original_dest = edge.to;
         let source_block = func.layout.inst_block(inst);
 
-        // Create a new block that contains only a jump inst to the destinating block of the
-        // critical edge.
+        // Create a new block that contains only a jump inst to the destinating block of
+        // the critical edge.
         let inserted_dest = func.dfg.make_block();
         let jump = Jump::new(func.dfg.inst_set().jump(), original_dest);
         let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(original_dest));
@@ -125,7 +124,6 @@ impl CriticalEdge {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sonatina_ir::{
         builder::test_util::*,
         inst::{
@@ -135,6 +133,8 @@ mod tests {
         isa::Isa,
         Type,
     };
+
+    use super::*;
 
     #[test]
     fn critical_edge_basic() {

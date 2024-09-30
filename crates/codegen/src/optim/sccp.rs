@@ -4,7 +4,7 @@
 //! propagation with conditional branches: ACM Transactions on Programming
 //! Languages and Systems Volume 13 Issue 2 April 1991 pp 181–210: <https://doi.org/10.1145/103135.103136>
 
-use std::{collections::BTreeSet, ops};
+use std::collections::BTreeSet;
 
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashSet;
@@ -12,7 +12,7 @@ use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::control_flow::{Branch, BranchInfo},
     prelude::*,
-    BlockId, ControlFlowGraph, Function, Immediate, InstId, Type, ValueId,
+    BlockId, ControlFlowGraph, Function, Immediate, InstId, ValueId,
 };
 
 use crate::interpret::{Interpret, Interpretable, State};
@@ -447,120 +447,6 @@ impl LatticeCell {
             }
             (Self::Bot, other) | (other, Self::Bot) => other,
         }
-    }
-
-    fn apply_unop<F>(self, f: F) -> Self
-    where
-        F: FnOnce(Immediate) -> Immediate,
-    {
-        match self {
-            Self::Top => Self::Top,
-            Self::Const(lhs) => Self::Const(f(lhs)),
-            Self::Bot => Self::Bot,
-        }
-    }
-
-    fn apply_binop<F>(self, rhs: Self, f: F) -> Self
-    where
-        F: FnOnce(Immediate, Immediate) -> Immediate,
-    {
-        match (self, rhs) {
-            (Self::Top, _) | (_, Self::Top) => Self::Top,
-            (Self::Const(lhs), Self::Const(rhs)) => Self::Const(f(lhs, rhs)),
-            (Self::Bot, _) | (_, Self::Bot) => Self::Bot,
-        }
-    }
-
-    fn not(self) -> Self {
-        self.apply_unop(ops::Not::not)
-    }
-
-    fn neg(self) -> Self {
-        self.apply_unop(ops::Neg::neg)
-    }
-
-    fn add(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, ops::Add::add)
-    }
-
-    fn sub(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, ops::Sub::sub)
-    }
-
-    fn mul(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, ops::Mul::mul)
-    }
-
-    fn udiv(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, Immediate::udiv)
-    }
-
-    fn sdiv(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, Immediate::sdiv)
-    }
-
-    fn lt(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, Immediate::lt)
-    }
-
-    fn gt(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, Immediate::gt)
-    }
-
-    fn slt(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, Immediate::slt)
-    }
-
-    fn sgt(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, Immediate::sgt)
-    }
-
-    fn le(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, Immediate::le)
-    }
-
-    fn ge(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, Immediate::ge)
-    }
-
-    fn sle(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, Immediate::sle)
-    }
-
-    fn sge(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, Immediate::sge)
-    }
-
-    fn eq(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, Immediate::imm_eq)
-    }
-
-    fn ne(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, Immediate::imm_ne)
-    }
-
-    fn and(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, ops::BitAnd::bitand)
-    }
-
-    fn or(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, ops::BitOr::bitor)
-    }
-
-    fn xor(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, ops::BitXor::bitxor)
-    }
-
-    fn sext(self, ty: Type) -> Self {
-        self.apply_unop(|val| Immediate::sext(val, ty))
-    }
-
-    fn zext(self, ty: Type) -> Self {
-        self.apply_unop(|val| Immediate::zext(val, ty))
-    }
-
-    fn trunc(self, ty: Type) -> Self {
-        self.apply_unop(|val| Immediate::trunc(val, ty))
     }
 }
 
