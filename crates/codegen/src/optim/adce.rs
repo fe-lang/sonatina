@@ -1,14 +1,15 @@
 //! This module contains a solver for `Aggressive Dead code elimination (ADCE)`.
 
-use cranelift_entity::SecondaryMap;
 use std::collections::BTreeSet;
 
-use crate::post_domtree::{PDFSet, PDTIdom, PostDomTree};
-
+use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
+    inst::control_flow::Branch,
     BlockId, Function, InstId,
 };
+
+use crate::post_domtree::{PDFSet, PDTIdom, PostDomTree};
 
 pub struct AdceSolver {
     live_insts: SecondaryMap<InstId, bool>,
@@ -198,7 +199,7 @@ impl AdceSolver {
         let dests: Vec<_> = func
             .dfg
             .branch_info(last_inst)
-            .map(|bi| bi.iter_dests().collect())
+            .map(|bi| bi.dests())
             .unwrap_or_default();
 
         let mut changed = false;
@@ -226,9 +227,9 @@ impl AdceSolver {
             return changed;
         };
         if branch_info.num_dests() > 1 {
-            let mut branch_dests = branch_info.iter_dests();
-            let first_dest = branch_dests.next().unwrap();
-            if branch_dests.all(|dest| dest == first_dest) {
+            let branch_dests = branch_info.dests();
+            let first_dest = branch_dests[0];
+            if branch_dests.iter().all(|dest| *dest == first_dest) {
                 changed = true;
                 let jump = func.dfg.make_jump(first_dest);
                 drop(branch_dests);

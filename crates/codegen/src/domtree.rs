@@ -1,12 +1,11 @@
 //! This module contains dominantor tree related structs.
 //!
-//! The algorithm is based on Keith D. Cooper., Timothy J. Harvey., and Ken Kennedy.: A Simple, Fast Dominance Algorithm:
-//! <https://www.cs.rice.edu/~keith/EMBED/dom.pdf>
+//! The algorithm is based on Keith D. Cooper., Timothy J. Harvey., and Ken
+//! Kennedy.: A Simple, Fast Dominance Algorithm: <https://www.cs.rice.edu/~keith/EMBED/dom.pdf>
 
 use std::collections::BTreeSet;
 
 use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
-
 use sonatina_ir::{BlockId, ControlFlowGraph};
 
 #[derive(Default, Debug)]
@@ -26,7 +25,8 @@ impl DomTree {
     }
 
     /// Returns the immediate dominator of the `block`.
-    /// Returns None if the `block` is unreachable from the entry block, or the `block` is the entry block itself.
+    /// Returns None if the `block` is unreachable from the entry block, or the
+    /// `block` is the entry block itself.
     pub fn idom_of(&self, block: BlockId) -> Option<BlockId> {
         if self.rpo[0] == block {
             return None;
@@ -202,14 +202,14 @@ impl DominatorTreeTraversable {
 mod tests {
     #![allow(clippy::many_single_char_names)]
 
-    use super::*;
-
     use sonatina_ir::{
         builder::test_util::*,
         inst::control_flow::{Br, BrTable, Jump, Return},
         prelude::*,
         Function, Type,
     };
+
+    use super::*;
 
     fn calc_dom(func: &Function) -> (DomTree, DFSet) {
         let mut cfg = ControlFlowGraph::default();
