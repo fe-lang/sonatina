@@ -1,18 +1,21 @@
 //! This module contains a solver for Sparse Conditional Constant Propagation.
 //!
-//! The algorithm is based on Mark N. Wegman., Frank Kcnncth Zadeck.: Constant propagation with conditional branches:
-//! ACM Transactions on Programming Languages and Systems Volume 13 Issue 2 April 1991 pp 181–210:
-//! <https://doi.org/10.1145/103135.103136>
+//! The algorithm is based on Mark N. Wegman., Frank Kcnncth Zadeck.: Constant
+//! propagation with conditional branches: ACM Transactions on Programming
+//! Languages and Systems Volume 13 Issue 2 April 1991 pp 181–210: <https://doi.org/10.1145/103135.103136>
 
 use std::{collections::BTreeSet, ops};
 
 use cranelift_entity::SecondaryMap;
-
+use rustc_hash::FxHashSet;
 use sonatina_ir::{
-    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    inst::{BinaryOp, CastOp, InsnData, UnaryOp},
-    BlockId, ControlFlowGraph, Function, Immediate, Insn, Type, ValueId,
+    func_cursor::{CursorLocation, FuncCursor, InstInserter},
+    inst::control_flow::{Branch, BranchInfo},
+    prelude::*,
+    BlockId, ControlFlowGraph, Function, Immediate, InstId, Type, ValueId,
 };
+
+use crate::interpret::{Interpret, Interpretable, State};
 
 #[derive(Debug)]
 pub struct SccpSolver {
@@ -49,7 +52,7 @@ impl SccpSolver {
 
         // Evaluate all values in entry block.
         self.reachable_blocks.insert(entry_block);
-        self.eval_insns_in(func, entry_block);
+        self.eval_insts_in(func, entry_block);
 
         let mut changed = true;
         while changed {
@@ -68,7 +71,7 @@ impl SccpSolver {
                         if func.dfg.is_phi(user) {
                             self.eval_phi(func, user);
                         } else {
-                            self.eval_insn(func, user);
+                            self.eval_inst(func, user);
                         }
                     }
                 }
@@ -77,7 +80,7 @@ impl SccpSolver {
 
         self.remove_unreachable_edges(func);
         cfg.compute(func);
-        self.fold_insns(func, cfg);
+        self.fold_insts(func, cfg);
     }
 
     pub fn clear(&mut self) {
@@ -100,165 +103,131 @@ impl SccpSolver {
             self.eval_phis_in(func, dest);
         } else {
             self.reachable_blocks.insert(dest);
-            self.eval_insns_in(func, dest);
+            self.eval_insts_in(func, dest);
         }
 
-        if let Some(last_insn) = func.layout.last_inst_of(dest) {
-            let branch_info = func.dfg.analyze_branch(last_insn);
-            if branch_info.dests_num() == 1 {
-                self.flow_work.push(FlowEdge::new(
-                    last_insn,
-                    branch_info.iter_dests().next().unwrap(),
-                ))
+        if let Some(last_inst) = func.layout.last_inst_of(dest) {
+            let Some(bi) = func.dfg.branch_info(last_inst) else {
+                return;
+            };
+            if bi.num_dests() == 1 {
+                self.flow_work.push(FlowEdge::new(last_inst, bi.dests()[0]))
             }
         }
     }
 
     fn eval_phis_in(&mut self, func: &Function, block: BlockId) {
-        for insn in func.layout.iter_inst(block) {
-            if func.dfg.is_phi(insn) {
-                self.eval_phi(func, insn);
+        for inst in func.layout.iter_inst(block) {
+            if func.dfg.is_phi(inst) {
+                self.eval_phi(func, inst);
             }
         }
     }
 
-    fn eval_phi(&mut self, func: &Function, insn: Insn) {
-        debug_assert!(func.dfg.is_phi(insn));
+    fn eval_phi(&mut self, func: &Function, inst: InstId) {
         debug_assert!(self
             .reachable_blocks
-            .contains(&func.layout.inst_block(insn)));
+            .contains(&func.layout.inst_block(inst)));
 
-        for &arg in func.dfg.insn_args(insn) {
-            if let Some(imm) = func.dfg.value_imm(arg) {
-                self.set_lattice_cell(arg, LatticeCell::Const(imm));
+        func.dfg.inst(inst).visit_values(&mut |value| {
+            if let Some(imm) = func.dfg.value_imm(value) {
+                self.set_lattice_cell(value, LatticeCell::Const(imm));
             }
-        }
+        });
 
-        let block = func.layout.inst_block(insn);
+        let block = func.layout.inst_block(inst);
+        let phi = func.dfg.cast_phi(inst).unwrap();
 
         let mut eval_result = LatticeCell::Bot;
-        for (i, from) in func.dfg.phi_blocks(insn).iter().enumerate() {
+        for (val, from) in phi.args() {
             if self.is_reachable(func, *from, block) {
-                let phi_arg = func.dfg.insn_arg(insn, i);
-                let v_cell = self.lattice[phi_arg];
+                let v_cell = self.lattice[*val];
                 eval_result = eval_result.join(v_cell);
             }
         }
 
-        let phi_value = func.dfg.insn_result(insn).unwrap();
+        let phi_value = func.dfg.inst_result(inst).unwrap();
         if eval_result != self.lattice[phi_value] {
             self.ssa_work.push(phi_value);
             self.lattice[phi_value] = eval_result;
         }
     }
 
-    fn eval_insns_in(&mut self, func: &Function, block: BlockId) {
-        for insn in func.layout.iter_inst(block) {
-            if func.dfg.is_phi(insn) {
-                self.eval_phi(func, insn);
+    fn eval_insts_in(&mut self, func: &Function, block: BlockId) {
+        for inst in func.layout.iter_inst(block) {
+            if func.dfg.is_phi(inst) {
+                self.eval_phi(func, inst);
             } else {
-                self.eval_insn(func, insn);
+                self.eval_inst(func, inst);
             }
         }
     }
 
-    fn eval_insn(&mut self, func: &Function, insn: Insn) {
-        debug_assert!(!func.dfg.is_phi(insn));
-        for &arg in func.dfg.insn_args(insn) {
-            if let Some(imm) = func.dfg.value_imm(arg) {
-                self.set_lattice_cell(arg, LatticeCell::Const(imm));
+    fn eval_inst(&mut self, func: &Function, inst_id: InstId) {
+        debug_assert!(!func.dfg.is_phi(inst_id));
+        func.dfg.inst(inst_id).visit_values(&mut |value| {
+            if let Some(imm) = func.dfg.value_imm(value) {
+                self.set_lattice_cell(value, LatticeCell::Const(imm));
             }
+        });
+
+        if let Some(bi) = func.dfg.branch_info(inst_id) {
+            self.eval_branch(inst_id, bi);
+            return;
+        };
+
+        let inst = func.dfg.inst(inst_id);
+        if inst.has_side_effect() {
+            return;
         }
 
-        let cell = match func.dfg.insn_data(insn) {
-            InsnData::Unary { code, args } => {
-                let arg_cell = self.lattice[args[0]];
-                match *code {
-                    UnaryOp::Not => arg_cell.not(),
-                    UnaryOp::Neg => arg_cell.neg(),
-                }
+        let mut cell_state = CellState::new(&self.lattice);
+        let value =
+            Interpretable::map(func.inst_set(), inst, |i| i.interpret(&mut cell_state)).flatten();
+
+        let inst_result = func.dfg.inst_result(inst_id).unwrap();
+        let cell = if let Some(value) = value {
+            LatticeCell::Const(value)
+        } else {
+            cell_state.cell()
+        };
+
+        self.set_lattice_cell(inst_result, cell);
+    }
+
+    fn eval_branch(&mut self, inst: InstId, bi: BranchInfo) {
+        match bi {
+            BranchInfo::Jump(jump) => {
+                self.flow_work.push(FlowEdge::new(inst, *jump.dest()));
             }
 
-            InsnData::Binary { code, args } => {
-                let lhs = self.lattice[args[0]];
-                let rhs = self.lattice[args[1]];
-                match *code {
-                    BinaryOp::Add => lhs.add(rhs),
-                    BinaryOp::Sub => lhs.sub(rhs),
-                    BinaryOp::Mul => lhs.mul(rhs),
-                    BinaryOp::Udiv => lhs.udiv(rhs),
-                    BinaryOp::Sdiv => lhs.sdiv(rhs),
-                    BinaryOp::Lt => lhs.lt(rhs),
-                    BinaryOp::Gt => lhs.gt(rhs),
-                    BinaryOp::Slt => lhs.slt(rhs),
-                    BinaryOp::Sgt => lhs.sgt(rhs),
-                    BinaryOp::Le => lhs.le(rhs),
-                    BinaryOp::Ge => lhs.ge(rhs),
-                    BinaryOp::Sle => lhs.sle(rhs),
-                    BinaryOp::Sge => lhs.sge(rhs),
-                    BinaryOp::Eq => lhs.eq(rhs),
-                    BinaryOp::Ne => lhs.ne(rhs),
-                    BinaryOp::And => lhs.and(rhs),
-                    BinaryOp::Or => lhs.or(rhs),
-                    BinaryOp::Xor => lhs.xor(rhs),
-                }
-            }
-
-            InsnData::Cast { code, args, ty } => {
-                let arg_cell = self.lattice[args[0]];
-                match code {
-                    CastOp::Sext => arg_cell.sext(*ty),
-                    CastOp::Zext => arg_cell.zext(*ty),
-                    CastOp::Trunc => arg_cell.trunc(*ty),
-                    CastOp::BitCast => LatticeCell::Top,
-                }
-            }
-
-            InsnData::Load { .. } => LatticeCell::Top,
-
-            InsnData::Call { .. } => LatticeCell::Top,
-
-            InsnData::Jump { dests, .. } => {
-                self.flow_work.push(FlowEdge::new(insn, dests[0]));
-                return;
-            }
-
-            InsnData::Branch { args, dests } => {
-                let v_cell = self.lattice[args[0]];
+            BranchInfo::Br(br) => {
+                let v_cell = self.lattice[*br.cond()];
 
                 if v_cell.is_top() {
-                    // Add both then and else edges.
-                    self.flow_work.push(FlowEdge::new(insn, dests[0]));
-                    self.flow_work.push(FlowEdge::new(insn, dests[1]));
+                    self.flow_work.push(FlowEdge::new(inst, *br.z_dest()));
+                    self.flow_work.push(FlowEdge::new(inst, *br.nz_dest()));
                 } else if v_cell.is_bot() {
                     unreachable!();
                 } else if v_cell.is_zero() {
-                    // Add else edge.
-                    self.flow_work.push(FlowEdge::new(insn, dests[1]));
+                    self.flow_work.push(FlowEdge::new(inst, *br.z_dest()));
                 } else {
-                    // Add then edge.
-                    self.flow_work.push(FlowEdge::new(insn, dests[0]));
+                    self.flow_work.push(FlowEdge::new(inst, *br.nz_dest()));
                 }
-
-                return;
             }
 
-            InsnData::BrTable {
-                args,
-                default,
-                table,
-            } => {
+            BranchInfo::BrTable(brt) => {
                 // An closure that add all destinations of the `BrTable.
                 let mut add_all_dest = || {
-                    if let Some(default) = default {
-                        self.flow_work.push(FlowEdge::new(insn, *default));
+                    if let Some(default) = brt.default() {
+                        self.flow_work.push(FlowEdge::new(inst, *default));
                     }
-                    for dest in table {
-                        self.flow_work.push(FlowEdge::new(insn, *dest));
+                    for (_, dest) in brt.table() {
+                        self.flow_work.push(FlowEdge::new(inst, *dest));
                     }
                 };
 
-                let v_cell = self.lattice[args[0]];
+                let v_cell = self.lattice[*brt.scrutinee()];
 
                 // If the argument of the `BrTable` is top, then add all destinations.
                 if v_cell.is_top() {
@@ -273,9 +242,9 @@ impl SccpSolver {
                 }
 
                 let mut contains_top = false;
-                for (value, dest) in args[1..].iter().zip(table.iter()) {
+                for (value, dest) in brt.table() {
                     if self.lattice[*value] == v_cell {
-                        self.flow_work.push(FlowEdge::new(insn, *dest));
+                        self.flow_work.push(FlowEdge::new(inst, *dest));
                         return;
                     } else if v_cell.is_top() {
                         contains_top = true;
@@ -287,32 +256,18 @@ impl SccpSolver {
                     add_all_dest();
                 } else {
                     // If all table values is not top, then just add default destination.
-                    if let Some(default) = default {
-                        self.flow_work.push(FlowEdge::new(insn, *default));
+                    if let Some(default) = brt.default() {
+                        self.flow_work.push(FlowEdge::new(inst, *default));
                     }
                 }
-
-                return;
             }
-
-            InsnData::Alloca { .. } | InsnData::Gep { .. } => LatticeCell::Top,
-
-            InsnData::Store { .. } | InsnData::Return { .. } => {
-                // No insn result. Do nothing.
-                return;
-            }
-
-            InsnData::Phi { .. } => unreachable!(),
-        };
-
-        let insn_result = func.dfg.insn_result(insn).unwrap();
-        self.set_lattice_cell(insn_result, cell);
+        }
     }
 
     /// Remove unreachable edges and blocks.
     fn remove_unreachable_edges(&self, func: &mut Function) {
         let entry_block = func.layout.entry_block().unwrap();
-        let mut inserter = InsnInserter::at_location(CursorLocation::BlockTop(entry_block));
+        let mut inserter = InstInserter::at_location(CursorLocation::BlockTop(entry_block));
 
         loop {
             match inserter.loc() {
@@ -326,12 +281,11 @@ impl SccpSolver {
 
                 CursorLocation::BlockBottom(..) => inserter.proceed(func),
 
-                CursorLocation::At(insn) => {
-                    if func.dfg.is_branch(insn) {
-                        let branch_info = func.dfg.analyze_branch(insn);
-                        for dest in branch_info.iter_dests().collect::<Vec<_>>() {
-                            if !self.is_reachable_edge(insn, dest) {
-                                func.dfg.remove_branch_dest(insn, dest);
+                CursorLocation::At(inst) => {
+                    if let Some(bi) = func.dfg.branch_info(inst) {
+                        for dest in bi.dests() {
+                            if !self.is_reachable_edge(inst, dest) {
+                                func.dfg.remove_branch_dest(inst, dest);
                             }
                         }
                     }
@@ -343,72 +297,70 @@ impl SccpSolver {
         }
     }
 
-    fn is_reachable_edge(&self, insn: Insn, dest: BlockId) -> bool {
-        self.reachable_edges.contains(&FlowEdge::new(insn, dest))
+    fn is_reachable_edge(&self, inst: InstId, dest: BlockId) -> bool {
+        self.reachable_edges.contains(&FlowEdge::new(inst, dest))
     }
 
-    fn fold_insns(&mut self, func: &mut Function, cfg: &ControlFlowGraph) {
+    fn fold_insts(&mut self, func: &mut Function, cfg: &ControlFlowGraph) {
         let mut rpo: Vec<_> = cfg.post_order().collect();
         rpo.reverse();
 
         for block in rpo {
-            let mut next_insn = func.layout.first_inst_of(block);
-            while let Some(insn) = next_insn {
-                next_insn = func.layout.next_inst_of(insn);
-                self.fold(func, insn);
+            let mut next_inst = func.layout.first_inst_of(block);
+            while let Some(inst) = next_inst {
+                next_inst = func.layout.next_inst_of(inst);
+                self.fold(func, inst);
             }
         }
     }
 
-    fn fold(&self, func: &mut Function, insn: Insn) {
-        let insn_result = match func.dfg.insn_result(insn) {
+    fn fold(&self, func: &mut Function, inst: InstId) {
+        let inst_result = match func.dfg.inst_result(inst) {
             Some(result) => result,
             None => return,
         };
 
-        match self.lattice[insn_result].to_imm() {
+        match self.lattice[inst_result].to_imm() {
             Some(imm) => {
-                InsnInserter::at_location(CursorLocation::At(insn)).remove_inst(func);
+                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
                 let new_value = func.dfg.make_imm_value(imm);
-                func.dfg.change_to_alias(insn_result, new_value);
+                func.dfg.change_to_alias(inst_result, new_value);
             }
             None => {
-                if func.dfg.is_phi(insn) {
-                    self.try_fold_phi(func, insn)
+                if func.dfg.is_phi(inst) {
+                    self.try_fold_phi(func, inst)
                 }
             }
         }
     }
 
-    fn try_fold_phi(&self, func: &mut Function, insn: Insn) {
-        debug_assert!(func.dfg.is_phi(insn));
-
-        let mut blocks = func.dfg.phi_blocks(insn).to_vec();
-        blocks.retain(|block| !self.reachable_blocks.contains(block));
-        for block in blocks {
-            func.dfg.remove_phi_arg(insn, block);
-        }
+    fn try_fold_phi(&self, func: &mut Function, inst: InstId) {
+        let phi = func.dfg.cast_phi_mut(inst).unwrap();
+        phi.retain(|block| self.reachable_blocks.contains(&block));
 
         // Remove phi function if it has just one argument.
-        if func.dfg.insn_args_num(insn) == 1 {
-            let phi_value = func.dfg.insn_result(insn).unwrap();
-            func.dfg
-                .change_to_alias(phi_value, func.dfg.insn_arg(insn, 0));
-            InsnInserter::at_location(CursorLocation::At(insn)).remove_inst(func);
+        if phi.args().len() == 1 {
+            let phi_arg = phi.args()[0].0;
+            let phi_value = func.dfg.inst_result(inst).unwrap();
+            func.dfg.change_to_alias(phi_value, phi_arg);
+            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
         }
     }
 
     fn is_reachable(&self, func: &Function, from: BlockId, to: BlockId) -> bool {
-        let last_insn = if let Some(insn) = func.layout.last_inst_of(from) {
-            insn
-        } else {
+        let Some(last_inst) = func.layout.last_inst_of(from) else {
             return false;
         };
-        for dest in func.dfg.analyze_branch(last_insn).iter_dests() {
+
+        let Some(bi) = func.dfg.branch_info(last_inst) else {
+            return false;
+        };
+
+        for dest in bi.dests() {
             if dest == to
                 && self
                     .reachable_edges
-                    .contains(&FlowEdge::new(last_insn, dest))
+                    .contains(&FlowEdge::new(last_inst, dest))
             {
                 return true;
             }
@@ -433,13 +385,13 @@ impl Default for SccpSolver {
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct FlowEdge {
-    insn: Insn,
+    inst: InstId,
     to: BlockId,
 }
 
 impl FlowEdge {
-    fn new(insn: Insn, to: BlockId) -> Self {
-        Self { insn, to }
+    fn new(inst: InstId, to: BlockId) -> Self {
+        Self { inst, to }
     }
 }
 
@@ -615,5 +567,39 @@ impl LatticeCell {
 impl Default for LatticeCell {
     fn default() -> Self {
         Self::Bot
+    }
+}
+
+struct CellState<'i> {
+    map: &'i SecondaryMap<ValueId, LatticeCell>,
+    used_val: FxHashSet<ValueId>,
+}
+impl<'i> CellState<'i> {
+    fn new(map: &'i SecondaryMap<ValueId, LatticeCell>) -> Self {
+        Self {
+            map,
+            used_val: Default::default(),
+        }
+    }
+
+    fn cell(&self) -> LatticeCell {
+        for &used in self.used_val.iter() {
+            if self.map[used] == LatticeCell::Top {
+                return LatticeCell::Top;
+            }
+        }
+
+        LatticeCell::Bot
+    }
+}
+
+impl<'i> State for CellState<'i> {
+    fn lookup_val(&mut self, value: ValueId) -> Option<Immediate> {
+        self.used_val.insert(value);
+
+        match self.map.get(value)? {
+            LatticeCell::Const(imm) => Some(*imm),
+            _ => None,
+        }
     }
 }
