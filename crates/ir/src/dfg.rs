@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap;
 use super::{Immediate, Type, Value, ValueId};
 use crate::{
     inst::{
-        control_flow::{self, Branch, BranchInfo, BranchInfoMut, Jump, Phi},
+        control_flow::{self, Branch, BranchInfo, BranchInfoMut, BranchMut, Jump, Phi},
         InstId,
     },
     ir_writer::DisplayWithFunc,
