@@ -170,19 +170,20 @@ impl InstProp {
 
     fn define_subset_impl(&self) -> proc_macro2::TokenStream {
         let subset_name = &self.subset_name;
+        let path_prefix = self.path_to_ir_crate();
         let arms = self.members.iter().map(|p| {
             let variant_name = subset_variant_name_from_path(p);
             quote!(
                 id if id == std::any::TypeId::of::<#p>() => {
-                    <&#p as crate::prelude::InstDowncast>::map(isb, inst, Self::#variant_name)
+                    <&#p as #path_prefix::prelude::InstDowncast>::map(isb, inst, Self::#variant_name)
                 }
             )
         });
 
         let lt = syn::Lifetime::new("'i", proc_macro2::Span::call_site());
         let inst_downcast_impl = quote! {
-            impl<#lt> crate::prelude::InstDowncast for #subset_name<#lt> {
-                fn downcast(isb: &dyn crate::prelude::InstSetBase, inst: &dyn crate::Inst) -> Option<Self> {
+            impl<#lt> #path_prefix::prelude::InstDowncast for #subset_name<#lt> {
+                fn downcast(isb: &dyn #path_prefix::prelude::InstSetBase, inst: &dyn #path_prefix::prelude::Inst) -> Option<Self> {
                     match inst.type_id() {
                         #(#arms)*
                         _ => None
@@ -218,10 +219,9 @@ impl InstProp {
             });
 
             quote! {
-                $sig {
+                #sig {
                     match self {
                         #(#arms,)*
-
 
                     }
                 }
@@ -249,6 +249,15 @@ impl InstProp {
     fn sealed_trait_name(&self) -> syn::Ident {
         let trait_name = &self.item_trait.ident;
         quote::format_ident! {"Sealed{trait_name}"}
+    }
+
+    fn path_to_ir_crate(&self) -> syn::Path {
+        let crate_name = std::env::var("CARGO_PKG_NAME").unwrap();
+        if crate_name == "sonatina-ir" {
+            syn::parse_quote!(crate)
+        } else {
+            syn::parse_quote!(::sonatina_ir)
+        }
     }
 
     fn parse_subset_name(args: syn::Meta) -> syn::Result<syn::Ident> {
