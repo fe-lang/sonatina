@@ -1,20 +1,20 @@
 use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
+use sonatina_ir::{BlockId, ControlFlowGraph};
 
 use crate::domtree::DomTree;
-
-use sonatina_ir::{BlockId, ControlFlowGraph};
 
 #[derive(Debug, Default)]
 pub struct LoopTree {
     /// Stores loops.
-    /// The index of an outer loops is guaranteed to be lower than its inner loops because loops
-    /// are found in RPO.
+    /// The index of an outer loops is guaranteed to be lower than its inner
+    /// loops because loops are found in RPO.
     loops: PrimaryMap<Loop, LoopData>,
 
     /// Maps blocks to its contained loop.
-    /// If the block is contained by multiple nested loops, then the block is mapped to the innermost loop.
+    /// If the block is contained by multiple nested loops, then the block is
+    /// mapped to the innermost loop.
     block_to_loop: SecondaryMap<BlockId, PackedOption<Loop>>,
 }
 
@@ -27,8 +27,8 @@ impl LoopTree {
     pub fn compute(&mut self, cfg: &ControlFlowGraph, domtree: &DomTree) {
         self.clear();
 
-        // Find loop headers in RPO, this means outer loops are guaranteed to be inserted first,
-        // then its inner loops are inserted.
+        // Find loop headers in RPO, this means outer loops are guaranteed to be
+        // inserted first, then its inner loops are inserted.
         for &block in domtree.rpo() {
             for &pred in cfg.preds_of(block) {
                 if domtree.dominates(block, pred) {
@@ -48,7 +48,8 @@ impl LoopTree {
     }
 
     /// Returns all loops.
-    /// The result iterator guarantees outer loops are returned before its inner loops.
+    /// The result iterator guarantees outer loops are returned before its inner
+    /// loops.
     pub fn loops(&self) -> impl DoubleEndedIterator<Item = Loop> {
         self.loops.keys()
     }
@@ -101,7 +102,8 @@ impl LoopTree {
     }
 
     /// Returns the loop that the `block` belongs to.
-    /// If the `block` belongs to multiple loops, then returns the innermost loop.
+    /// If the `block` belongs to multiple loops, then returns the innermost
+    /// loop.
     pub fn loop_of_block(&self, block: BlockId) -> Option<Loop> {
         self.block_to_loop[block].expand()
     }
@@ -153,8 +155,8 @@ impl LoopTree {
         }
     }
 
-    /// Returns the outermost parent loop of `lp`. If `lp` doesn't have any parent, then returns `lp`
-    /// itself.
+    /// Returns the outermost parent loop of `lp`. If `lp` doesn't have any
+    /// parent, then returns `lp` itself.
     fn outermost_parent(&self, mut lp: Loop) -> Loop {
         while let Some(parent) = self.parent_loop(lp) {
             lp = parent;
@@ -220,7 +222,8 @@ impl<'a, 'b> Iterator for BlocksInLoopPostOrder<'a, 'b> {
                     self.stack.pop().unwrap();
                 }
 
-                // The block is not visited yet, so push its unvisited in-loop successors to the stack and mark the block as `Visited`.
+                // The block is not visited yet, so push its unvisited in-loop successors to the
+                // stack and mark the block as `Visited`.
                 None => {
                     self.block_state.insert(block, BlockState::Visited);
                     for &succ in self.cfg.succs_of(block) {
@@ -245,8 +248,6 @@ enum BlockState {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use sonatina_ir::{
         builder::test_util::*,
         inst::{
@@ -257,6 +258,8 @@ mod tests {
         prelude::*,
         Function, Type,
     };
+
+    use super::*;
 
     fn compute_loop(func: &Function) -> LoopTree {
         let mut cfg = ControlFlowGraph::new();
@@ -384,7 +387,7 @@ mod tests {
 
     #[test]
     fn single_block_loop() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[Type::I1], Type::Void);
         let is = evm.inst_set();
 
         let b0 = builder.append_block();
@@ -419,7 +422,7 @@ mod tests {
 
     #[test]
     fn nested_loop() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[Type::I1], Type::Void);
         let is = evm.inst_set();
 
         let b0 = builder.append_block();

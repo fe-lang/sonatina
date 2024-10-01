@@ -277,7 +277,7 @@ mod tests {
 
         builder.switch_to_block(a);
         let v1 = builder.make_imm_value(1i8);
-        builder.insert_inst_no_result_with(|| Jump::new(is, c));
+        builder.insert_inst_no_result_with(|| Jump::new(is, b));
 
         builder.switch_to_block(b);
         let phi_res = builder.insert_inst_with(|| Phi::new(is, vec![(v1, a)], Type::I8), Type::I8);

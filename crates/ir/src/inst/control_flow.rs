@@ -28,17 +28,17 @@ impl DisplayWithFunc for Jump {
 pub struct Br {
     #[inst(value)]
     cond: ValueId,
-    z_dest: BlockId,
     nz_dest: BlockId,
+    z_dest: BlockId,
 }
 impl DisplayWithFunc for Br {
     fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
         let name = self.as_text();
         let cond = DisplayableWithFunc(self.cond, func);
-        let z_dest = DisplayableWithFunc(self.z_dest, func);
         let nz_dest = DisplayableWithFunc(self.nz_dest, func);
+        let z_dest = DisplayableWithFunc(self.z_dest, func);
 
-        write!(formatter, "{name} {cond} {z_dest} {nz_dest}")
+        write!(formatter, "{name} {cond} {nz_dest} {z_dest}")
     }
 }
 
@@ -173,7 +173,7 @@ impl Branch for Jump {
 
 impl Branch for Br {
     fn dests(&self) -> Vec<BlockId> {
-        vec![self.z_dest, self.nz_dest]
+        vec![self.nz_dest, self.z_dest]
     }
 
     fn num_dests(&self) -> usize {
@@ -217,8 +217,8 @@ impl BranchMut for Jump {
 
 impl BranchMut for Br {
     fn rewrite_branch_dest(&mut self, from: BlockId, to: BlockId) {
-        rewrite_if_match(&mut self.z_dest, from, to);
         rewrite_if_match(&mut self.nz_dest, from, to);
+        rewrite_if_match(&mut self.z_dest, from, to);
     }
 }
 
