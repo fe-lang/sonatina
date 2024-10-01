@@ -7,11 +7,14 @@ pub mod evm;
 pub mod inst_set;
 pub mod logic;
 
-use std::any::{Any, TypeId};
+use std::{
+    any::{Any, TypeId},
+    fmt,
+};
 
 use smallvec::SmallVec;
 
-use crate::{ir_writer::DisplayWithFunc, InstSetBase, ValueId};
+use crate::{ir_writer::DisplayWithFunc, Function, InstSetBase, ValueId};
 
 /// An opaque reference to dynamic [`Inst`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
@@ -33,8 +36,16 @@ pub trait Inst: inst_set::sealed::Registered + Any + DisplayWithFunc {
     }
 }
 
+impl DisplayWithFunc for InstId {
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let inst = func.dfg.inst(*self);
+        inst.fmt(func, formatter)
+    }
+}
+
 /// This trait works as a "proof" that a specific ISA contains `I`,
-/// and then allows a construction and reflection of type `I` in that specific ISA context.
+/// and then allows a construction and reflection of type `I` in that specific
+/// ISA context.
 pub trait HasInst<I: Inst> {
     fn is(&self, inst: &dyn Inst) -> bool {
         inst.type_id() == TypeId::of::<I>()
