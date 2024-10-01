@@ -2,12 +2,11 @@ use std::fmt::Write;
 
 use dot2::label;
 
+use super::function::DUMMY_BLOCK;
 use crate::{
     ir_writer::{DisplayableWithFunc, ValueWithTy},
     BlockId, ControlFlowGraph, Function,
 };
-
-use super::function::DUMMY_BLOCK;
 
 #[derive(Clone, Copy)]
 pub(super) struct BlockNode<'a> {

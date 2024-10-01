@@ -2,13 +2,10 @@ use std::fmt;
 
 use cranelift_entity::packed_option::PackedOption;
 use sonatina_ir::{
-    function::DisplaySignature,
-    global_variable::DisplayGlobalVariable,
-    inst::DisplayInsn,
+    ir_writer::{DisplayableWithFunc, DisplayableWithModule, InstStatement, ValueWithTy},
     module::{DisplayCalleeFuncRef, FuncRef},
-    types::{CompoundType, DisplayCompoundType, DisplayType},
-    value::DisplayArgValue,
-    BlockId, Function, GlobalVariable, Insn, Type, ValueId,
+    types::CompoundType,
+    BlockId, Function, GlobalVariable, InstId, Type, ValueId,
 };
 
 /// Execution context.
@@ -16,7 +13,7 @@ use sonatina_ir::{
 pub struct TraceInfo {
     func: PackedOption<FuncRef>,
     block: PackedOption<BlockId>,
-    insn: PackedOption<Insn>,
+    inst_id: PackedOption<InstId>,
     callee: PackedOption<FuncRef>,
     value: PackedOption<ValueId>,
     gv: PackedOption<GlobalVariable>,
@@ -33,8 +30,8 @@ impl TraceInfo {
         self.block.expand()
     }
 
-    pub fn insn(&self) -> Option<Insn> {
-        self.insn.expand()
+    pub fn inst_id(&self) -> Option<InstId> {
+        self.inst_id.expand()
     }
 
     pub fn callee(&self) -> Option<FuncRef> {
@@ -74,7 +71,7 @@ impl<'a, 'b> fmt::Display for DisplayTraceInfo<'a, 'b> {
         let Self { trace_info, func } = *self;
         let TraceInfo {
             block,
-            insn,
+            inst_id,
             value,
             gv,
             ty,
@@ -89,23 +86,24 @@ impl<'a, 'b> fmt::Display for DisplayTraceInfo<'a, 'b> {
         let mut line = 0;
 
         if let Some(cmpd_ty) = cmpd_ty.expand() {
-            let cmpd_ty = DisplayCompoundType::new(cmpd_ty, dfg);
+            let cmpd_ty = DisplayableWithModule(cmpd_ty, &dfg.ctx);
             write!(f, "\n{line}: {cmpd_ty}")?;
             line += 1;
         }
         if let Some(ty) = ty {
-            let cmpd_ty = DisplayType::new(*ty, dfg);
-            write!(f, "\n{line}: {cmpd_ty}")?;
+            let ty = DisplayableWithModule(ty, &dfg.ctx);
+            write!(f, "\n{line}: {ty}")?;
             line += 1;
         }
         if let Some(gv) = gv.expand() {
-            let gv = DisplayGlobalVariable::new(gv, dfg);
+            let gv = DisplayableWithModule(gv, &dfg.ctx);
             write!(f, "\n{line}: {gv}")?;
             line += 1;
         }
         if let Some(value) = value.expand() {
-            let value = DisplayArgValue::new(value, dfg);
-            write!(f, "\n{line}: {value}")?;
+            let value_with_ty = ValueWithTy(value);
+            let value_with_ty = DisplayableWithFunc(value_with_ty, &func);
+            write!(f, "\n{line}: {value_with_ty}")?;
             line += 1;
         }
         if let Some(callee) = trace_info.callee.expand() {
@@ -113,17 +111,19 @@ impl<'a, 'b> fmt::Display for DisplayTraceInfo<'a, 'b> {
             write!(f, "\n{line}: {callee}")?;
             line += 1;
         }
-        if let Some(insn) = insn.expand() {
-            let insn = DisplayInsn::new(insn, func);
-            write!(f, "\n{line}: {insn}")?;
+        if let Some(inst_id) = inst_id.expand() {
+            let inst_stmt = InstStatement(inst_id);
+            let inst_stmt = DisplayableWithFunc(inst_stmt, func);
+            write!(f, "\n{line}: {inst_stmt}")?;
             line += 1;
         }
         if let Some(block) = block.expand() {
             write!(f, "\n{line}: {block}")?;
             line += 1;
         }
-        let func = DisplaySignature::new(&func.sig, dfg);
-        write!(f, "\n{line}: {func}")
+
+        let sig = DisplayableWithFunc(&func.sig, func);
+        write!(f, "\n{line}: {sig}")
     }
 }
 
@@ -131,7 +131,7 @@ impl<'a, 'b> fmt::Display for DisplayTraceInfo<'a, 'b> {
 pub struct TraceInfoBuilder {
     func: PackedOption<FuncRef>,
     block: PackedOption<BlockId>,
-    insn: PackedOption<Insn>,
+    inst_id: PackedOption<InstId>,
     callee: PackedOption<FuncRef>,
     value: PackedOption<ValueId>,
     gv: PackedOption<GlobalVariable>,
@@ -144,7 +144,7 @@ impl TraceInfoBuilder {
         Self {
             func: func.into(),
             block: None.into(),
-            insn: None.into(),
+            inst_id: None.into(),
             callee: None.into(),
             value: None.into(),
             gv: None.into(),
@@ -158,8 +158,8 @@ impl TraceInfoBuilder {
         self
     }
 
-    pub fn insn(mut self, insn: Insn) -> Self {
-        self.insn = insn.into();
+    pub fn inst_id(mut self, inst_id: InstId) -> Self {
+        self.inst_id = inst_id.into();
         self
     }
 
@@ -197,7 +197,7 @@ impl TraceInfoBuilder {
         let Self {
             func,
             block,
-            insn,
+            inst_id,
             callee,
             value,
             gv,
@@ -208,7 +208,7 @@ impl TraceInfoBuilder {
         TraceInfo {
             func,
             block,
-            insn,
+            inst_id,
             callee,
             value,
             gv,

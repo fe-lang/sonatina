@@ -1,23 +1,22 @@
 use std::fmt;
 
 use sonatina_ir::{
-    inst::DisplayInsn,
+    ir_writer::{DisplayableWithFunc, DisplayableWithModule, ValueWithTy},
     module::FuncRef,
-    types::{DisplayCompoundType, DisplayType},
-    value::DisplayArgValue,
-    BlockId, Function, Insn, Type, ValueId,
+    types::CompoundType,
+    BlockId, Function, Insn, InstId, Type, ValueId,
 };
 
 #[derive(Debug, Clone, Copy)]
 pub enum ErrorKind {
     // Function errors
-    PhiInEntryBlock(Insn),
+    PhiInEntryBlock(InstId),
     // Block errors
     EmptyBlock(BlockId),
-    TerminatorBeforeEnd(Insn),
-    NotEndedByTerminator(Insn),
-    InstructionMapMismatched(Insn),
-    BranchBrokenLink(Insn),
+    TerminatorBeforeEnd(InstId),
+    NotEndedByTerminator(InstId),
+    InstructionMapMismatched(InstId),
+    BranchBrokenLink(InstId),
     // Instruction errors
     ValueIsNullReference(ValueId),
     BlockIsNullReference(BlockId),
@@ -73,30 +72,31 @@ impl<'a> fmt::Display for DisplayErrorKind<'a> {
         let Self { kind, func } = *self;
         use ErrorKind::*;
         match kind {
-            PhiInEntryBlock(insn) => {
-                let insn = DisplayInsn::new(insn, func);
-                write!(f, "phi instruction in entry block, {insn}")
+            PhiInEntryBlock(inst) => {
+                let inst = DisplayableWithFunc(inst, func);
+                write!(f, "phi instruction in entry block, {inst}")
             }
             EmptyBlock(block) => write!(f, "empty block, {block}"),
-            TerminatorBeforeEnd(insn) => {
-                let insn = DisplayInsn::new(insn, func);
-                write!(f, "terminator instruction mid-block, {insn}")
+            TerminatorBeforeEnd(inst) => {
+                let inst = DisplayableWithFunc(inst, func);
+                write!(f, "terminator instruction mid-block, {inst}")
             }
-            NotEndedByTerminator(insn) => {
-                let insn = DisplayInsn::new(insn, func);
-                write!(f, "last instruction not terminator, {insn}")
+            NotEndedByTerminator(inst) => {
+                let inst = DisplayableWithFunc(inst, func);
+                write!(f, "last instruction not terminator, {inst}")
             }
-            InstructionMapMismatched(insn) => {
-                let insn = DisplayInsn::new(insn, func);
-                write!(f, "instruction not mapped to block, {insn}")
+            InstructionMapMismatched(inst) => {
+                let inst = DisplayableWithFunc(inst, func);
+                write!(f, "instruction not mapped to block, {inst}")
             }
-            BranchBrokenLink(insn) => {
-                let insn = DisplayInsn::new(insn, func);
-                write!(f, "branch instruction not linked in cfg, {insn}")
+            BranchBrokenLink(inst) => {
+                let inst = DisplayableWithFunc(inst, func);
+                write!(f, "branch instruction not linked in cfg, {inst}")
             }
             ValueIsNullReference(value) => {
-                let v = DisplayArgValue::new(value, &func.dfg);
-                write!(f, "instruction references inexistent value, {v}")
+                let value = ValueWithTy(value);
+                let value = DisplayableWithFunc(value, func);
+                write!(f, "instruction references inexistent value, {value}")
             }
             BlockIsNullReference(block) => {
                 write!(f, "instruction references inexistent block, {block}")
@@ -107,35 +107,33 @@ impl<'a> fmt::Display for DisplayErrorKind<'a> {
                     "instruction references inexistent function, opaque ref: {func_ref:?}"
                 )
             }
-            CompoundTypeIsNullReference(ty) => {
-                let Type::Compound(cmpd_ty) = ty else {
-                    unreachable!("badly formed error");
-                };
-                let cmpd_ty = DisplayCompoundType::new(cmpd_ty, &func.dfg);
+            CompoundTypeIsNullReference(cmpd_ty) => {
+                let cmpd_ty = DisplayableWithModule(cmpd_ty, &func.dfg.ctx);
                 write!(f, "instruction references inexistent value, {cmpd_ty}")
             }
             BranchToEntryBlock(block) => write!(f, "branch to entry block, {block}"),
-            ValueLeak(v) => {
-                let v = DisplayArgValue::new(v, &func.dfg);
+            ValueLeak(value) => {
+                let value = ValueWithTy(value);
+                let value = DisplayableWithFunc(value, func);
                 write!(
                     f,
-                    "value not assigned by instruction nor from function args, {v}"
+                    "value not assigned by instruction nor from function args, {value}"
                 )
             }
             InsnArgWrongType(ty) => {
-                let ty = DisplayType::new(ty, &func.dfg);
+                let ty = DisplayableWithModule(ty, &func.dfg.ctx);
                 write!(f, "argument type inconsistent with instruction, {ty}")
             }
             InsnResultWrongType(ty) => {
-                let ty = DisplayType::new(ty, &func.dfg);
+                let ty = DisplayableWithModule(ty, &func.dfg.ctx);
                 write!(f, "argument type inconsistent with instruction, {ty}")
             }
             CalleeArgWrongType(ty) => {
-                let ty = DisplayType::new(ty, &func.dfg);
+                let ty = DisplayableWithModule(ty, &func.dfg.ctx);
                 write!(f, "argument type inconsistent with callee signature, {ty}")
             }
             CalleeResultWrongType(ty) => {
-                let ty = DisplayType::new(ty, &func.dfg);
+                let ty = DisplayableWithModule(ty, &func.dfg.ctx);
                 write!(f, "result type inconsistent with callee signature, {ty}")
             }
         }

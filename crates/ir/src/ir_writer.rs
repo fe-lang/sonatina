@@ -1,8 +1,7 @@
 use std::{fmt, io};
 
-use crate::{module::ModuleCtx, InstId, Module, Value};
-
-use super::{BlockId, Function, ValueId};
+use super::{BlockId, Function};
+use crate::{module::ModuleCtx, InstId, Module, Value, ValueId};
 
 pub struct ModuleWriter<'a> {
     module: &'a Module,
@@ -93,9 +92,7 @@ impl<'a> FuncDisplayHelper<'a> {
         }
 
         self.level -= 1;
-        writeln!(f, "}}")?;
-
-        Ok(())
+        writeln!(f, "}}")
     }
 
     fn write_block_with_inst(&mut self, block: BlockId, f: &mut fmt::Formatter) -> fmt::Result {
@@ -108,21 +105,13 @@ impl<'a> FuncDisplayHelper<'a> {
         }
         self.leave();
 
-        self.newline(f)?;
-        Ok(())
+        self.newline(f)
     }
 
     fn write_inst_in_block(&mut self, inst: InstId, f: &mut fmt::Formatter) -> fmt::Result {
         self.indent(f)?;
-
-        if let Some(result) = self.func.dfg.inst_result(inst) {
-            let result_with_ty = ValueWithTy(result);
-            write!(f, "{} = ", DisplayableWithFunc(result_with_ty, self.func))?;
-        };
-
-        write!(f, "{};\n", DisplayableWithFunc(inst, self.func))?;
-
-        Ok(())
+        let inst_with_res = InstStatement(inst);
+        write!(f, "{}\n", DisplayableWithFunc(inst_with_res, self.func))
     }
 
     fn indent(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -143,25 +132,6 @@ impl<'a> FuncDisplayHelper<'a> {
     }
 }
 
-impl DisplayWithFunc for ValueId {
-    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
-        let value = *self;
-        match func.dfg.value(*self) {
-            Value::Immediate { imm, ty } => {
-                let ty = DisplayableWithModule(ty, func.ctx());
-                write!(formatter, "{}.{}", imm, ty)
-            }
-            Value::Global { gv, .. } => func
-                .dfg
-                .ctx
-                .with_gv_store(|s| write!(formatter, "%{}", s.gv_data(*gv).symbol)),
-            _ => {
-                write!(formatter, "v{}", value.0)
-            }
-        }
-    }
-}
-
 pub trait DisplayWithModule {
     fn fmt(&self, module: &ModuleCtx, formatter: &mut fmt::Formatter) -> fmt::Result;
 }
@@ -174,25 +144,13 @@ where
         (*self).fmt(module, formatter)
     }
 }
-pub(crate) struct DisplayableWithModule<'m, T>(pub(crate) T, pub(crate) &'m ModuleCtx);
+pub struct DisplayableWithModule<'m, T>(pub T, pub &'m ModuleCtx);
 impl<'m, T> fmt::Display for DisplayableWithModule<'m, T>
 where
     T: DisplayWithModule,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(self.1, f)
-    }
-}
-
-#[derive(Clone)]
-pub(super) struct ValueWithTy(pub(super) ValueId);
-
-impl DisplayWithFunc for ValueWithTy {
-    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
-        let value = DisplayableWithFunc(self.0, func);
-        let ty = func.dfg.value_ty(self.0);
-        let ty = DisplayableWithModule(ty, func.ctx());
-        write!(formatter, "{value}.{ty}")
     }
 }
 
@@ -209,20 +167,45 @@ where
     }
 }
 
-impl DisplayWithFunc for InstId {
-    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
-        let inst = func.dfg.inst(*self);
-        inst.fmt(func, formatter)
-    }
-}
+pub struct DisplayableWithFunc<'f, T>(pub T, pub &'f Function);
 
-pub(crate) struct DisplayableWithFunc<'f, T>(pub(crate) T, pub(crate) &'f Function);
 impl<'f, T> fmt::Display for DisplayableWithFunc<'f, T>
 where
     T: DisplayWithFunc,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(self.1, f)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct ValueWithTy(pub ValueId);
+impl DisplayWithFunc for ValueWithTy {
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let value = DisplayableWithFunc(self.0, func);
+        if let Value::Immediate { .. } = func.dfg.value(self.0) {
+            write!(formatter, "{value}")
+        } else {
+            let ty = func.dfg.value_ty(self.0);
+            let ty = DisplayableWithModule(ty, func.ctx());
+            write!(formatter, "{value}.{ty}")
+        }
+    }
+}
+
+pub struct InstStatement(pub InstId);
+impl DisplayWithFunc for InstStatement {
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+        if let Some(result) = func.dfg.inst_result(self.0) {
+            let result_with_ty = ValueWithTy(result);
+            write!(
+                formatter,
+                "{} = ",
+                DisplayableWithFunc(result_with_ty, func)
+            )?;
+        };
+
+        write!(formatter, "{};", DisplayableWithFunc(self.0, func))
     }
 }
 

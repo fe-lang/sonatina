@@ -2,14 +2,36 @@
 use core::fmt;
 use std::ops;
 
-use crate::{inst::InstId, GlobalVariable, I256};
-
 use super::Type;
+use crate::{
+    inst::InstId,
+    ir_writer::{DisplayWithFunc, DisplayableWithModule},
+    Function, GlobalVariable, I256,
+};
 
 /// An opaque reference to [`Value`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
 pub struct ValueId(pub u32);
 cranelift_entity::entity_impl!(ValueId);
+
+impl DisplayWithFunc for ValueId {
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let value = *self;
+        match func.dfg.value(*self) {
+            Value::Immediate { imm, ty } => {
+                let ty = DisplayableWithModule(ty, func.ctx());
+                write!(formatter, "{}.{}", imm, ty)
+            }
+            Value::Global { gv, .. } => func
+                .dfg
+                .ctx
+                .with_gv_store(|s| write!(formatter, "%{}", s.gv_data(*gv).symbol)),
+            _ => {
+                write!(formatter, "v{}", value.0)
+            }
+        }
+    }
+}
 
 /// An value data definition.
 #[derive(Debug, Clone)]
