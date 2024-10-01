@@ -1,15 +1,15 @@
 //! This module contains implementation of `Post Dominator Tree`.
 
-use super::domtree::{DFSet, DomTree};
-
 use sonatina_ir::{BlockId, ControlFlowGraph, Function};
+
+use super::domtree::{DFSet, DomTree};
 
 #[derive(Debug)]
 pub struct PostDomTree {
     /// Dummy entry block to calculate CDG.
     entry: BlockId,
-    /// Canonical dummy exit block to calculate CDG. All blocks ends with `return` has an edge to
-    /// this block.
+    /// Canonical dummy exit block to calculate CDG. All blocks ends with
+    /// `return` has an edge to this block.
     exit: BlockId,
 
     /// Reverse control flow graph of the function.
@@ -144,7 +144,6 @@ impl Default for PDFSet {
 mod tests {
     #![allow(clippy::many_single_char_names)]
 
-    use super::*;
     use sonatina_ir::{
         builder::test_util::*,
         inst::{
@@ -154,6 +153,8 @@ mod tests {
         prelude::*,
         Type,
     };
+
+    use super::*;
 
     fn calc_dom(func: &Function) -> (PostDomTree, PDFSet) {
         let mut post_dom_tree = PostDomTree::new();
@@ -178,7 +179,7 @@ mod tests {
 
     #[test]
     fn pd_if_else() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[Type::I32], Type::Void);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();
