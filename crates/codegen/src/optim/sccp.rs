@@ -15,7 +15,7 @@ use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Immediate, InstId, ValueId,
 };
 
-use crate::interpret::{Interpret, Interpretable, State};
+use crate::interpret::{EvalValue, Interpret, Interpretable, State};
 
 #[derive(Debug)]
 pub struct SccpSolver {
@@ -182,11 +182,10 @@ impl SccpSolver {
         }
 
         let mut cell_state = CellState::new(&self.lattice);
-        let value =
-            Interpretable::map(func.inst_set(), inst, |i| i.interpret(&mut cell_state)).flatten();
+        let value = Interpretable::map(func.inst_set(), inst, |i| i.interpret(&mut cell_state));
 
         let inst_result = func.dfg.inst_result(inst_id).unwrap();
-        let cell = if let Some(value) = value {
+        let cell = if let Some(EvalValue::Imm(value)) = value {
             LatticeCell::Const(value)
         } else {
             cell_state.cell()
@@ -480,12 +479,16 @@ impl<'i> CellState<'i> {
 }
 
 impl<'i> State for CellState<'i> {
-    fn lookup_val(&mut self, value: ValueId) -> Option<Immediate> {
+    fn lookup_val(&mut self, value: ValueId) -> EvalValue {
         self.used_val.insert(value);
 
-        match self.map.get(value)? {
-            LatticeCell::Const(imm) => Some(*imm),
-            _ => None,
+        match self.map.get(value) {
+            Some(LatticeCell::Const(imm)) => EvalValue::Imm(*imm),
+            _ => EvalValue::Undef,
         }
+    }
+
+    fn set_next_action(&mut self, _action: crate::interpret::Action) {
+        // We can ignore any action for SCCP.
     }
 }
