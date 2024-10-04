@@ -487,7 +487,7 @@ impl<'i> State for CellState<'i> {
         }
     }
 
-    fn eval_func(
+    fn call_func(
         &mut self,
         _func: sonatina_ir::module::FuncRef,
         _args: Vec<EvalValue>,

@@ -61,7 +61,7 @@ pub trait State {
     /// error, or cause a panic).
     fn lookup_val(&mut self, value: ValueId) -> EvalValue;
 
-    fn eval_func(&mut self, func: FuncRef, args: Vec<EvalValue>) -> EvalValue;
+    fn call_func(&mut self, func: FuncRef, args: Vec<EvalValue>) -> EvalValue;
 
     fn set_action(&mut self, action: Action);
 

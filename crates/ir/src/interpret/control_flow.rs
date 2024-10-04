@@ -76,7 +76,9 @@ impl Interpret for Call {
             .map(|arg| state.lookup_val(*arg))
             .collect();
 
-        state.eval_func(func, args)
+        let val = state.call_func(func, args);
+        state.set_action(Action::Continue);
+        val
     }
 }
 
