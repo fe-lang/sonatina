@@ -1,27 +1,30 @@
-use sonatina_ir::{inst::cast::*, Immediate};
+use sonatina_ir::inst::cast::*;
 
-use super::{Interpret, State};
+use super::{EvalValue, Interpret, State};
 
 impl Interpret for Sext {
-    fn interpret(&self, state: &mut dyn State) -> Option<Immediate> {
-        let value = state.lookup_val(*self.from())?;
+    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+        let value = state.lookup_val(*self.from());
         let ty = self.ty();
-        Some(value.sext(*ty))
+
+        value.with_imm(|value| value.sext(*ty))
     }
 }
 
 impl Interpret for Zext {
-    fn interpret(&self, state: &mut dyn State) -> Option<Immediate> {
-        let value = state.lookup_val(*self.from())?;
+    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+        let value = state.lookup_val(*self.from());
         let ty = self.ty();
-        Some(value.zext(*ty))
+
+        value.with_imm(|value| value.zext(*ty))
     }
 }
 
 impl Interpret for Trunc {
-    fn interpret(&self, state: &mut dyn State) -> Option<Immediate> {
-        let value = state.lookup_val(*self.from())?;
+    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+        let value = state.lookup_val(*self.from());
         let ty = self.ty();
-        Some(value.trunc(*ty))
+
+        value.with_imm(|value| value.trunc(*ty))
     }
 }

@@ -1,4 +1,4 @@
-use sonatina_ir::{inst, Immediate, ValueId};
+use sonatina_ir::{inst, BlockId, Immediate, ValueId};
 use sonatina_macros::inst_prop;
 
 mod arith;
@@ -8,7 +8,7 @@ mod logic;
 
 #[inst_prop(Subset = "Interpretable")]
 pub trait Interpret {
-    fn interpret(&self, env: &mut dyn State) -> Option<Immediate>;
+    fn interpret(&self, env: &mut dyn State) -> EvalValue;
 
     type Members = (
         inst::arith::Neg,
@@ -41,5 +41,48 @@ pub trait Interpret {
 }
 
 pub trait State {
-    fn lookup_val(&mut self, value: ValueId) -> Option<Immediate>;
+    fn lookup_val(&mut self, value: ValueId) -> EvalValue;
+
+    fn set_next_action(&mut self, action: Action);
+}
+
+pub enum Action {
+    Continue,
+    JumpTo(BlockId),
+    Return(ValueId),
+}
+
+pub enum EvalValue {
+    Imm(Immediate),
+    Undef,
+}
+
+impl EvalValue {
+    pub fn with_imm<F, R>(self, f: F) -> Self
+    where
+        F: FnOnce(Immediate) -> R,
+        R: Into<Self>,
+    {
+        match self {
+            EvalValue::Imm(value) => f(value).into(),
+            EvalValue::Undef => EvalValue::Undef,
+        }
+    }
+
+    pub fn zip_with_imm<F, R>(lhs: Self, rhs: Self, f: F) -> Self
+    where
+        F: FnOnce(Immediate, Immediate) -> R,
+        R: Into<Self>,
+    {
+        match (lhs, rhs) {
+            (EvalValue::Imm(l), EvalValue::Imm(r)) => f(l, r).into(),
+            _ => EvalValue::Undef,
+        }
+    }
+}
+
+impl From<Immediate> for EvalValue {
+    fn from(imm: Immediate) -> Self {
+        Self::Imm(imm)
+    }
 }
