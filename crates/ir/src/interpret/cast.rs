@@ -1,6 +1,5 @@
-use sonatina_ir::inst::cast::*;
-
 use super::{EvalValue, Interpret, State};
+use crate::inst::cast::*;
 
 impl Interpret for Sext {
     fn interpret(&self, state: &mut dyn State) -> EvalValue {

@@ -1,6 +1,5 @@
-use sonatina_ir::inst::arith::*;
-
 use super::{EvalValue, Interpret, State};
+use crate::inst::arith::*;
 
 impl Interpret for Neg {
     fn interpret(&self, state: &mut dyn State) -> EvalValue {

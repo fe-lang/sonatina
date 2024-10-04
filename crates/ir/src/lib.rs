@@ -1,14 +1,12 @@
 pub mod builder;
 pub mod cfg;
 pub mod dfg;
-//pub mod dfg_;
 pub mod func_cursor;
 pub mod function;
-// pub mod function_;
 pub mod global_variable;
 pub mod graphviz;
-// pub mod insn;
 pub mod inst;
+pub mod interpret;
 pub mod ir_writer;
 pub mod isa;
 pub mod layout;
@@ -16,7 +14,6 @@ pub mod linkage;
 pub mod module;
 pub mod types;
 pub mod value;
-//pub mod value_;
 
 mod bigint;
 

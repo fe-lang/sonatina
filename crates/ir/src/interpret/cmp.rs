@@ -1,6 +1,5 @@
-use sonatina_ir::{inst::cmp::*, Immediate};
-
 use super::{EvalValue, Interpret, State};
+use crate::{inst::cmp::*, Immediate};
 
 impl Interpret for Lt {
     fn interpret(&self, state: &mut dyn State) -> EvalValue {

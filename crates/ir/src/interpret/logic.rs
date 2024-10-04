@@ -1,6 +1,5 @@
-use sonatina_ir::inst::logic::*;
-
 use super::{EvalValue, Interpret, State};
+use crate::inst::logic::*;
 
 impl Interpret for Not {
     fn interpret(&self, state: &mut dyn State) -> EvalValue {

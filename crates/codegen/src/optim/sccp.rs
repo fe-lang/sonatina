@@ -11,11 +11,10 @@ use rustc_hash::FxHashSet;
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::control_flow::{Branch, BranchInfo},
+    interpret::{EvalValue, Interpret, Interpretable, State},
     prelude::*,
     BlockId, ControlFlowGraph, Function, Immediate, InstId, ValueId,
 };
-
-use crate::interpret::{EvalValue, Interpret, Interpretable, State};
 
 #[derive(Debug)]
 pub struct SccpSolver {
@@ -488,7 +487,7 @@ impl<'i> State for CellState<'i> {
         }
     }
 
-    fn set_next_action(&mut self, _action: crate::interpret::Action) {
+    fn set_next_action(&mut self, _action: sonatina_ir::interpret::Action) {
         // We can ignore any action for SCCP.
     }
 }

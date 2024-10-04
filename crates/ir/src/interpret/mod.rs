@@ -1,5 +1,6 @@
-use sonatina_ir::{inst, BlockId, Immediate, ValueId};
-use sonatina_macros::inst_prop;
+use macros::inst_prop;
+
+use crate::{inst, BlockId, Immediate, ValueId};
 
 mod arith;
 mod cast;
