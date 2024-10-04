@@ -487,7 +487,19 @@ impl<'i> State for CellState<'i> {
         }
     }
 
-    fn set_next_action(&mut self, _action: sonatina_ir::interpret::Action) {
-        // We can ignore any action for SCCP.
+    fn eval_func(
+        &mut self,
+        _func: sonatina_ir::module::FuncRef,
+        _args: Vec<EvalValue>,
+    ) -> EvalValue {
+        panic!("call instuctuion must not be Interpreted")
+    }
+
+    fn set_action(&mut self, _action: sonatina_ir::interpret::Action) {
+        panic!("instruction with side effect must not be interpreted")
+    }
+
+    fn prev_block(&mut self) -> BlockId {
+        panic!("flow sensitive operation must not be interpreted")
     }
 }
