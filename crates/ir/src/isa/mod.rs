@@ -1,6 +1,6 @@
 use sonatina_triple::TargetTriple;
 
-use crate::InstSetBase;
+use crate::{types::TypeStore, InstSetBase, Type};
 
 pub mod evm;
 
@@ -13,5 +13,5 @@ pub trait Isa {
 }
 
 pub trait TypeLayout {
-    fn pointer_size(&self) -> usize;
+    fn size_of(&self, ty: Type, ty_store: &TypeStore) -> usize;
 }

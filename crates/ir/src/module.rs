@@ -6,11 +6,13 @@ use std::{
 use cranelift_entity::{entity_impl, PrimaryMap};
 use sonatina_triple::TargetTriple;
 
-use crate::{isa::TypeLayout, Function, InstSetBase};
-
-use crate::{global_variable::GlobalVariableStore, isa::Isa, types::TypeStore};
-
 use super::Linkage;
+use crate::{
+    global_variable::GlobalVariableStore,
+    isa::{Isa, TypeLayout},
+    types::TypeStore,
+    Function, InstSetBase, Type,
+};
 
 pub struct Module {
     /// Holds all function declared in the contract.
@@ -57,6 +59,10 @@ impl ModuleCtx {
             type_store: Arc::new(RwLock::new(TypeStore::default())),
             gv_store: Arc::new(RwLock::new(GlobalVariableStore::default())),
         }
+    }
+
+    pub fn size_of(&self, ty: Type) -> usize {
+        self.with_ty_store(|ty_store| self.type_layout.size_of(ty, ty_store))
     }
 
     pub fn with_ty_store<F, R>(&self, f: F) -> R
