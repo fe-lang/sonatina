@@ -9,7 +9,7 @@ use sonatina_triple::TargetTriple;
 use super::Linkage;
 use crate::{
     global_variable::GlobalVariableStore,
-    isa::{Isa, TypeLayout},
+    isa::{Endian, Isa, TypeLayout},
     types::TypeStore,
     Function, InstSetBase, Type,
 };
@@ -63,6 +63,10 @@ impl ModuleCtx {
 
     pub fn size_of(&self, ty: Type) -> usize {
         self.with_ty_store(|ty_store| self.type_layout.size_of(ty, ty_store))
+    }
+
+    pub fn endian(&self) -> Endian {
+        self.type_layout.endian()
     }
 
     pub fn with_ty_store<F, R>(&self, f: F) -> R

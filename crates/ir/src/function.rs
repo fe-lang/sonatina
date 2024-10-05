@@ -1,13 +1,14 @@
 use std::fmt;
 
+use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
+
 use super::{module::FuncRef, DataFlowGraph, Layout, Type, ValueId};
 use crate::{
     ir_writer::{DisplayWithFunc, DisplayableWithModule},
     module::ModuleCtx,
     InstSetBase, Linkage,
 };
-use rustc_hash::FxHashMap;
-use smallvec::SmallVec;
 
 pub struct Function {
     /// Signature of the function.
