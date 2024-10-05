@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use sonatina_triple::{Architecture, Chain, EvmVersion, TargetTriple, Version};
 
-use super::{Isa, TypeLayout};
+use super::{Endian, Isa, TypeLayout};
 use crate::{inst::evm::inst_set::EvmInstSet, types::CompoundTypeData, Type};
 
 #[derive(Debug, Clone, Copy)]
@@ -66,5 +66,9 @@ impl TypeLayout for EvmTypeLayout {
 
             _ => 32,
         }
+    }
+
+    fn endian(&self) -> Endian {
+        Endian::Be
     }
 }

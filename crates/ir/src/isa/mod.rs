@@ -14,4 +14,12 @@ pub trait Isa {
 
 pub trait TypeLayout {
     fn size_of(&self, ty: Type, ty_store: &TypeStore) -> usize;
+
+    fn endian(&self) -> Endian;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Endian {
+    Be,
+    Le,
 }

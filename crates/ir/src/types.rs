@@ -139,11 +139,15 @@ pub enum Type {
 }
 
 impl Type {
-    pub fn is_integral(&self) -> bool {
+    pub fn is_integral(self) -> bool {
         matches!(
             self,
             Self::I1 | Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::I128 | Self::I256
         )
+    }
+
+    pub fn is_pointer(self, ctx: &ModuleCtx) -> bool {
+        ctx.with_ty_store(|store| store.is_ptr(self))
     }
 }
 
