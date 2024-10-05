@@ -1,9 +1,10 @@
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     interpret::{Action, EvalValue, Interpret, Interpretable, State},
+    isa::Endian,
     module::FuncRef,
     prelude::*,
-    BlockId, Function, InstId, Module, Value, ValueId,
+    BlockId, Function, Immediate, InstId, Module, Type, Value, ValueId, I256,
 };
 
 pub struct Machine {
@@ -12,6 +13,7 @@ pub struct Machine {
     action: Action,
     // FIXME: Machine shouldn't have `Module`.
     module: Module,
+    memory: Vec<u8>,
 }
 
 impl Machine {
@@ -57,7 +59,7 @@ impl Machine {
                 }
 
                 Action::FallThrough => {
-                    panic!()
+                    panic!("fall through detected!")
                 }
 
                 Action::Return(e_val) => return e_val,
@@ -128,5 +130,69 @@ impl State for Machine {
     fn prev_block(&mut self) -> BlockId {
         let frame = self.top_frame();
         frame.prev_block.unwrap()
+    }
+
+    fn load(&mut self, addr: EvalValue, ty: Type) -> EvalValue {
+        if !(ty.is_integral() || ty.is_pointer(&self.module.ctx)) {
+            // TODO: we need to decide how to handle load of aggregate type when it fits
+            // into register/stack-slot size.
+            todo!();
+        }
+
+        let Some(addr) = addr.as_imm() else {
+            panic!("udnef address in load")
+        };
+        let addr = addr.as_usize();
+        let size = self.module.ctx.size_of(ty);
+        if addr + size > self.memory.len() {
+            panic!("uninitialized memory access is detected");
+        }
+
+        let slice = &self.memory[addr..addr + size];
+        let value_i256 = match self.module.ctx.endian() {
+            Endian::Be => I256::from_be_bytes(&slice),
+            Endian::Le => I256::from_le_bytes(&slice),
+        };
+
+        let imm = Immediate::from_i256(value_i256, ty);
+        EvalValue::Imm(imm)
+    }
+
+    fn store(&mut self, addr: EvalValue, value: EvalValue, ty: Type) -> EvalValue {
+        if !(ty.is_integral() || ty.is_pointer(&self.module.ctx)) {
+            // TODO: we need to decide how to handle load of aggregate type when it fits
+            // into register/stack-slot size.
+            todo!();
+        }
+
+        let Some(addr) = addr.as_imm() else {
+            panic!("udnef address in store")
+        };
+        let addr = addr.as_usize();
+        let size = self.module.ctx.size_of(ty);
+        if addr + size > self.memory.len() {
+            self.memory.resize(addr + size, 0);
+        }
+
+        let Some(value) = value.as_imm() else {
+            panic!("undef value in store");
+        };
+
+        match self.module.ctx.endian() {
+            Endian::Be => {
+                let v = value.as_i256().to_u256();
+                let bytes = v.to_big_endian();
+                let slice = &bytes[bytes.len() - size..];
+                self.memory[addr..addr + size].copy_from_slice(&slice);
+            }
+            Endian::Le => {
+                let v = value.as_i256().to_u256();
+                let bytes = v.to_little_endian();
+                let slice = &bytes[..size];
+                self.memory[addr..addr + size].copy_from_slice(&slice);
+            }
+        }
+
+        EvalValue::Undef
     }
 }
