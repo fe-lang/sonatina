@@ -13,7 +13,7 @@ use sonatina_ir::{
     inst::control_flow::{Branch, BranchInfo},
     interpret::{EvalValue, Interpret, Interpretable, State},
     prelude::*,
-    BlockId, ControlFlowGraph, Function, Immediate, InstId, ValueId,
+    BlockId, ControlFlowGraph, Function, Immediate, InstId, Type, ValueId,
 };
 
 #[derive(Debug)]
@@ -501,5 +501,13 @@ impl<'i> State for CellState<'i> {
 
     fn prev_block(&mut self) -> BlockId {
         panic!("flow sensitive operation must not be interpreted")
+    }
+
+    fn load(&mut self, _addr: EvalValue, _ty: Type) -> EvalValue {
+        panic!("instruction with side effect must not be interpreted")
+    }
+
+    fn store(&mut self, _addr: EvalValue, _value: EvalValue, _ty: Type) -> EvalValue {
+        panic!("instruction with side effect must not be interpreted")
     }
 }

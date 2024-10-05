@@ -1,11 +1,12 @@
 use macros::inst_prop;
 
-use crate::{inst, module::FuncRef, BlockId, Immediate, ValueId};
+use crate::{inst, module::FuncRef, BlockId, Immediate, Type, ValueId};
 
 mod arith;
 mod cast;
 mod cmp;
 mod control_flow;
+mod data;
 mod logic;
 
 #[inst_prop(Subset = "Interpretable")]
@@ -39,6 +40,8 @@ pub trait Interpret {
         inst::cmp::Eq,
         inst::cmp::Ne,
         inst::cmp::IsZero,
+        inst::data::Mload,
+        inst::data::Mstore,
         inst::control_flow::Jump,
         inst::control_flow::Br,
         inst::control_flow::BrTable,
@@ -75,6 +78,10 @@ pub trait State {
     /// decide how to deal with the situation(e.g., report an error, or
     /// cause a panic).
     fn prev_block(&mut self) -> BlockId;
+
+    fn load(&mut self, addr: EvalValue, ty: Type) -> EvalValue;
+
+    fn store(&mut self, addr: EvalValue, value: EvalValue, ty: Type) -> EvalValue;
 }
 
 pub enum Action {
