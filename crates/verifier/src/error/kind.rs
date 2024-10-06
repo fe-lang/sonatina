@@ -3,7 +3,7 @@ use std::fmt;
 use sonatina_ir::{
     insn::DisplayInsn,
     module::FuncRef,
-    types::{CompoundType, DisplayCompoundType, DisplayType},
+    types::{DisplayCompoundType, DisplayType},
     value::DisplayArgValue,
     Block, Function, Insn, Type, Value,
 };
@@ -22,7 +22,6 @@ pub enum ErrorKind {
     ValueIsNullReference(Value),
     BlockIsNullReference(Block),
     FunctionIsNullReference(FuncRef),
-    CompoundTypeIsNullReference(CompoundType),
     BranchToEntryBlock(Block),
     // SSA form errors
     ValueLeak(Value),
@@ -31,6 +30,7 @@ pub enum ErrorKind {
     InsnResultWrongType(Type),
     CalleeArgWrongType(Type),
     CalleeResultWrongType(Type),
+    CompoundTypeIsNullReference(Type),
 }
 
 impl ErrorKind {
@@ -47,12 +47,12 @@ impl ErrorKind {
             ValueIsNullReference(v) => IrSource::Value(v),
             BlockIsNullReference(b) | BranchToEntryBlock(b) => IrSource::Block(b),
             FunctionIsNullReference(f) => IrSource::Callee(f),
-            CompoundTypeIsNullReference(cmpd_ty) => IrSource::CompoundType(cmpd_ty),
             ValueLeak(v) => IrSource::Value(v),
-            InsnArgWrongType(_)
-            | InsnResultWrongType(_)
-            | CalleeArgWrongType(_)
-            | CalleeResultWrongType(_) => IrSource::Type,
+            InsnArgWrongType(ty)
+            | InsnResultWrongType(ty)
+            | CalleeArgWrongType(ty)
+            | CalleeResultWrongType(ty)
+            | CompoundTypeIsNullReference(ty) => IrSource::Type(ty),
         }
     }
 }
@@ -107,7 +107,10 @@ impl<'a> fmt::Display for DisplayErrorKind<'a> {
                     "instruction references inexistent function, opaque ref: {func_ref:?}"
                 )
             }
-            CompoundTypeIsNullReference(cmpd_ty) => {
+            CompoundTypeIsNullReference(ty) => {
+                let Type::Compound(cmpd_ty) = ty else {
+                    unreachable!("badly formed error");
+                };
                 let cmpd_ty = DisplayCompoundType::new(cmpd_ty, &func.dfg);
                 write!(f, "instruction references inexistent value, {cmpd_ty}")
             }
@@ -145,6 +148,5 @@ pub enum IrSource {
     Block(Block),
     Insn(Insn),
     Value(Value),
-    Type,
-    CompoundType(CompoundType),
+    Type(Type),
 }
