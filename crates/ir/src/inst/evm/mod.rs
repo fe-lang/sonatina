@@ -5,6 +5,7 @@ use crate::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(has_side_effect)]
+#[inst(terminator)]
 pub struct EvmStop {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
@@ -327,6 +328,7 @@ pub struct EvmCall {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(has_side_effect)]
+#[inst(terminator)]
 pub struct EvmReturn {
     #[inst(value)]
     addr: Value,
@@ -383,6 +385,7 @@ pub struct EvmStaticCall {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(has_side_effect)]
+#[inst(terminator)]
 pub struct EvmRevert {
     #[inst(value)]
     addr: Value,
@@ -392,6 +395,7 @@ pub struct EvmRevert {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(has_side_effect)]
+#[inst(terminator)]
 pub struct EvmSelfDestruct {
     #[inst(value)]
     addr: Value,

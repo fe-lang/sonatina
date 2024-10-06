@@ -11,13 +11,14 @@ use std::any::{Any, TypeId};
 
 use smallvec::SmallVec;
 
-use crate::Value;
+use crate::{InstSetBase, Value};
 
 pub trait Inst: inst_set::sealed::Registered + Any {
     fn visit_values(&self, f: &mut dyn FnMut(Value));
     fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut Value));
     fn has_side_effect(&self) -> bool;
     fn as_text(&self) -> &'static str;
+    fn is_terminator(&self) -> bool;
 }
 
 /// This trait works as a "proof" that a specific ISA contains `I`,
@@ -110,5 +111,38 @@ where
 
     fn visit_mut_with(&mut self, f: &mut dyn FnMut(&mut Value)) {
         self.iter_mut().for_each(|v| v.visit_mut_with(f))
+    }
+}
+
+pub trait InstDowncast: Sized {
+    fn downcast(isb: &dyn InstSetBase, inst: &dyn Inst) -> Option<Self>;
+
+    fn map<F, R>(isb: &dyn InstSetBase, inst: &dyn Inst, f: F) -> Option<R>
+    where
+        F: FnOnce(Self) -> R,
+    {
+        let data = Self::downcast(isb, inst)?;
+        Some(f(data))
+    }
+}
+
+impl<T> InstDowncastMut for T
+where
+    T: InstDowncast,
+{
+    fn downcast_mut(isb: &dyn InstSetBase, inst: &mut dyn Inst) -> Option<Self> {
+        InstDowncast::downcast(isb, inst)
+    }
+}
+
+pub trait InstDowncastMut: Sized {
+    fn downcast_mut(isb: &dyn InstSetBase, inst: &mut dyn Inst) -> Option<Self>;
+
+    fn map_mut<F, R>(isb: &dyn InstSetBase, inst: &mut dyn Inst, f: F) -> Option<R>
+    where
+        F: FnOnce(Self) -> R,
+    {
+        let data = Self::downcast_mut(isb, inst)?;
+        Some(f(data))
     }
 }
