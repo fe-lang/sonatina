@@ -1,8 +1,7 @@
-use crate::inst_set_base::ty_name_to_method_name;
+use quote::quote;
 
 use super::convert_to_snake;
-
-use quote::quote;
+use crate::inst_set_base::ty_name_to_method_name;
 
 pub fn derive_inst(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let item_struct = syn::parse_macro_input!(item as syn::ItemStruct);
@@ -54,22 +53,13 @@ impl InstStruct {
     }
 
     fn build(self) -> syn::Result<proc_macro2::TokenStream> {
-        let ctor = self.make_ctor();
-        let accessors = self.make_accessors();
-
-        let struct_name = &self.struct_name;
+        let impl_method = self.impl_method();
         let impl_inst = self.impl_inst();
         let impl_inst_cast = self.impl_inst_cast();
         Ok(quote! {
-            impl #struct_name {
-                #ctor
-
-                #accessors
-
-            }
-
+           #impl_method
            #impl_inst_cast
-            #impl_inst
+           #impl_inst
         })
     }
 
@@ -207,6 +197,26 @@ impl InstStruct {
         }
     }
 
+    fn impl_method(&self) -> proc_macro2::TokenStream {
+        let struct_name = &self.struct_name;
+        let text_form = convert_to_snake(&self.struct_name.to_string());
+        let ctor = self.make_ctor();
+        let accessors = self.make_accessors();
+
+        quote! {
+            impl #struct_name {
+                pub const fn inst_name() -> &'static str {
+                    #text_form
+
+                }
+
+                #ctor
+
+                #accessors
+            }
+        }
+    }
+
     fn impl_inst(&self) -> proc_macro2::TokenStream {
         let struct_name = &self.struct_name;
         let has_side_effect = self.has_side_effect;
@@ -217,7 +227,6 @@ impl InstStruct {
             .filter(|f| f.value)
             .map(|f| &f.ident)
             .collect();
-        let text_form = convert_to_snake(&self.struct_name.to_string());
 
         quote! {
             impl crate::Inst for #struct_name {
@@ -237,9 +246,8 @@ impl InstStruct {
                     #is_terminator
                 }
 
-
                 fn as_text(&self) -> &'static str {
-                    #text_form
+                    Self::inst_name()
                 }
             }
         }
