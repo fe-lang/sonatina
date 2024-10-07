@@ -1,7 +1,7 @@
-use derive_more::Debug as Dbg;
+use std::{ops::Range, str::FromStr};
+
 use either::Either;
 use pest::iterators::Pair;
-use std::{ops::Range, str::FromStr};
 
 #[derive(pest_derive::Parser)]
 #[grammar = "sonatina.pest"]
@@ -17,38 +17,6 @@ impl Span {
 
     pub fn as_range(&self) -> Range<usize> {
         self.0 as usize..self.1 as usize
-    }
-}
-
-#[derive(Dbg, Clone)]
-pub struct Spanned<T> {
-    #[debug(skip)]
-    pub span: Span,
-    pub inner: T,
-}
-
-impl<T> AsRef<T> for Spanned<T> {
-    fn as_ref(&self) -> &T {
-        &self.inner
-    }
-}
-
-impl<T> AsMut<T> for Spanned<T> {
-    fn as_mut(&mut self) -> &mut T {
-        &mut self.inner
-    }
-}
-
-impl<T, E> FromSyntax<E> for Spanned<T>
-where
-    T: FromSyntax<E>,
-{
-    fn from_syntax(node: &mut Node<E>) -> Self {
-        let inner = T::from_syntax(node);
-        Self {
-            span: node.span,
-            inner,
-        }
     }
 }
 
