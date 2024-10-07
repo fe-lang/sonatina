@@ -7,6 +7,7 @@ mod cast;
 mod cmp;
 mod control_flow;
 mod data;
+mod evm;
 mod logic;
 
 impl InstBuild for Box<dyn Inst> {
