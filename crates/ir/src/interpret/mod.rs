@@ -9,7 +9,7 @@ mod control_flow;
 mod data;
 mod logic;
 
-#[inst_prop(Subset = "Interpretable")]
+#[inst_prop]
 pub trait Interpret {
     fn interpret(&self, state: &mut dyn State) -> EvalValue;
 

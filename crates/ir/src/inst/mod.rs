@@ -12,6 +12,7 @@ use std::{
     fmt,
 };
 
+use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 
 use crate::{ir_writer::DisplayWithFunc, Function, InstSetBase, ValueId};
@@ -32,6 +33,15 @@ pub trait Inst: inst_set::sealed::Registered + Any + DisplayWithFunc {
         let mut vs = Vec::new();
 
         self.visit_values(&mut |v| vs.push(v));
+        vs
+    }
+
+    fn collect_value_set(&self) -> FxHashSet<ValueId> {
+        let mut vs = FxHashSet::default();
+
+        self.visit_values(&mut |v| {
+            vs.insert(v);
+        });
         vs
     }
 }

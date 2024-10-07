@@ -5,7 +5,6 @@ use std::collections::BTreeSet;
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::control_flow::Branch,
     BlockId, Function, InstId,
 };
 

@@ -1,6 +1,6 @@
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::control_flow::{Branch, Jump},
+    inst::control_flow::Jump,
     BlockId, ControlFlowGraph, Function, InstId,
 };
 
