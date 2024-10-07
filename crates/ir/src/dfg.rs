@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap;
 use super::{Immediate, Type, Value, ValueId};
 use crate::{
     inst::{
-        control_flow::{self, Branch, BranchInfo, BranchInfoMut, BranchMut, Jump, Phi},
+        control_flow::{self, Branch, Jump, Phi},
         InstId,
     },
     ir_writer::DisplayWithFunc,
@@ -169,15 +169,9 @@ impl DataFlowGraph {
         self.inst_results[inst_id].expand()
     }
 
-    pub fn branch_info(&self, inst: InstId) -> Option<BranchInfo> {
+    pub fn branch_info(&self, inst: InstId) -> Option<&dyn Branch> {
         let inst = self.inst(inst);
-        BranchInfo::downcast(self.ctx.inst_set, inst)
-    }
-
-    pub fn branch_info_mut(&mut self, inst: InstId) -> Option<BranchInfoMut> {
-        let inst_set = self.inst_set();
-        let inst = self.inst_mut(inst);
-        BranchInfoMut::downcast_mut(inst_set, inst)
+        InstDowncast::downcast(self.ctx.inst_set, inst)
     }
 
     pub fn is_terminator(&self, inst: InstId) -> bool {
@@ -259,51 +253,37 @@ impl DataFlowGraph {
     }
 
     pub fn rewrite_branch_dest(&mut self, inst: InstId, from: BlockId, to: BlockId) {
-        self.branch_info_mut(inst)
-            .map(|mut bi| bi.rewrite_branch_dest(from, to));
+        let inst_set = self.ctx.inst_set;
+        let Some(branch) = self.branch_info(inst) else {
+            return;
+        };
+
+        let new_inst = branch.rewrite_dest(inst_set, from, to);
+        self.remove_old_users(inst, new_inst.as_ref());
+
+        self.insts[inst] = new_inst;
     }
 
     pub fn remove_branch_dest(&mut self, inst: InstId, dest: BlockId) {
-        let Some(bi) = self.branch_info_mut(inst) else {
-            panic!("not a branch");
+        let inst_set = self.ctx.inst_set;
+        let Some(branch) = self.branch_info(inst) else {
+            return;
         };
 
-        match bi {
-            BranchInfoMut::Jump(_) => panic!("can't remove destination from `Jump` insn"),
+        let new_inst = branch.remove_dest(inst_set, dest);
+        self.remove_old_users(inst, new_inst.as_ref());
 
-            BranchInfoMut::Br(br) => {
-                let remain = if *br.z_dest() == dest {
-                    *br.nz_dest()
-                } else if *br.nz_dest() == dest {
-                    *br.z_dest()
-                } else {
-                    panic!("no dests found in the branch destination")
-                };
+        self.insts[inst] = new_inst;
+    }
 
-                let cond = *br.cond();
-                self.users[cond].remove(&inst);
-                let jump = self.make_jump(remain);
-                self.insts[inst] = Box::new(jump);
-            }
+    fn remove_old_users(&mut self, inst: InstId, new: &dyn Inst) {
+        let old_values = self.inst(inst).collect_value_set();
+        let new_values = new.collect_value_set();
+        assert!(old_values.is_superset(&new_values));
 
-            BranchInfoMut::BrTable(brt) => {
-                if Some(dest) == *brt.default() {
-                    *brt.default_mut() = None;
-                }
-
-                let (keep, drop) = brt.table().iter().copied().partition(|(_, b)| *b != dest);
-                *brt.table_mut() = keep;
-                for (val, _) in drop {
-                    self.users[val].remove(&inst);
-                }
-
-                let bi = self.branch_info(inst).unwrap();
-                let dests = bi.dests();
-                if dests.len() == 1 {
-                    let jump = self.make_jump(dests[0]);
-                    self.insts[inst] = Box::new(jump);
-                }
-            }
+        let removed_values = old_values.difference(&new_values);
+        for &removed in removed_values {
+            self.users[removed].remove(&inst);
         }
     }
 }

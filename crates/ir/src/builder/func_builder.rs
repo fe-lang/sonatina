@@ -4,9 +4,8 @@ use super::{
 };
 use crate::{
     func_cursor::{CursorLocation, FuncCursor},
-    inst::control_flow::{Branch, BranchInfo},
     module::FuncRef,
-    BlockId, Function, GlobalVariable, Immediate, Inst, InstDowncast, InstId, Type, Value, ValueId,
+    BlockId, Function, GlobalVariable, Immediate, Inst, InstId, Type, Value, ValueId,
 };
 
 pub struct FunctionBuilder<C> {
@@ -203,9 +202,7 @@ where
     }
 
     fn append_pred(&mut self, inst_id: InstId) {
-        let inst = self.func.dfg.inst(inst_id);
-        let Some(branch_info) = <BranchInfo as InstDowncast>::downcast(self.func.inst_set(), inst)
-        else {
+        let Some(branch_info) = self.func.dfg.branch_info(inst_id) else {
             return;
         };
 

@@ -1,6 +1,6 @@
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
-    interpret::{Action, EvalValue, Interpret, Interpretable, State},
+    interpret::{Action, EvalValue, Interpret, State},
     isa::Endian,
     module::FuncRef,
     prelude::*,
@@ -37,9 +37,10 @@ impl Machine {
 
         loop {
             let inst = self.top_func().dfg.inst(self.pc);
-            let Some(interpretable) = Interpretable::downcast(self.top_func().inst_set(), inst)
+            let Some(interpretable): Option<&dyn Interpret> =
+                InstDowncast::downcast(self.top_func().inst_set(), inst)
             else {
-                panic!("{} is not yet intepretable", inst.as_text());
+                panic!("`Intepret is not yet implemented for `{}`", inst.as_text());
             };
 
             let e_val = interpretable.interpret(self);

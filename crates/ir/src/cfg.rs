@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 
-use crate::{inst::control_flow::Branch, BlockId, Function};
+use crate::{BlockId, Function};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct ControlFlowGraph {

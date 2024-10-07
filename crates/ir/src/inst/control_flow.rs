@@ -6,10 +6,10 @@ use smallvec::SmallVec;
 use crate::{
     ir_writer::{DisplayWithFunc, DisplayableWithFunc},
     module::FuncRef,
-    BlockId, Function, Inst, Type, ValueId,
+    BlockId, Function, Inst, InstSetBase, Type, ValueId,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(terminator)]
 pub struct Jump {
     dest: BlockId,
@@ -153,10 +153,13 @@ impl DisplayWithFunc for Return {
     }
 }
 
-#[inst_prop(Subset = "BranchInfo")]
+#[inst_prop]
 pub trait Branch {
     fn dests(&self) -> Vec<BlockId>;
     fn num_dests(&self) -> usize;
+    fn remove_dest(&self, isb: &dyn InstSetBase, dest: BlockId) -> Box<dyn Inst>;
+    fn rewrite_dest(&self, isb: &dyn InstSetBase, from: BlockId, to: BlockId) -> Box<dyn Inst>;
+    fn branch_kind(&self) -> BranchKind;
 
     type Members = (Jump, Br, BrTable);
 }
@@ -169,6 +172,23 @@ impl Branch for Jump {
     fn num_dests(&self) -> usize {
         1
     }
+
+    fn remove_dest(&self, _isb: &dyn InstSetBase, dest: BlockId) -> Box<dyn Inst> {
+        if dest == self.dest {
+            panic!("can't remove destination from `Jump` inst")
+        }
+        Box::new(*self)
+    }
+
+    fn rewrite_dest(&self, _isb: &dyn InstSetBase, from: BlockId, to: BlockId) -> Box<dyn Inst> {
+        let mut jump = *self;
+        rewrite_if_match(&mut jump.dest, from, to);
+        Box::new(jump)
+    }
+
+    fn branch_kind(&self) -> BranchKind {
+        BranchKind::Jump(self)
+    }
 }
 
 impl Branch for Br {
@@ -178,6 +198,32 @@ impl Branch for Br {
 
     fn num_dests(&self) -> usize {
         2
+    }
+
+    fn remove_dest(&self, isb: &dyn InstSetBase, dest: BlockId) -> Box<dyn Inst> {
+        let remain = if self.z_dest == dest {
+            self.nz_dest
+        } else if self.nz_dest == dest {
+            self.z_dest
+        } else {
+            return Box::new(self.clone());
+        };
+
+        let has_jump = isb.jump();
+        let jump = Jump::new(has_jump, remain);
+        Box::new(jump)
+    }
+
+    fn rewrite_dest(&self, isb: &dyn InstSetBase, from: BlockId, to: BlockId) -> Box<dyn Inst> {
+        let mut br = self.clone();
+        rewrite_if_match(&mut br.nz_dest, from, to);
+        rewrite_if_match(&mut br.z_dest, from, to);
+
+        try_convert_branch_to_jump(isb, &br).unwrap_or_else(|| Box::new(br))
+    }
+
+    fn branch_kind(&self) -> BranchKind {
+        BranchKind::Br(self)
     }
 }
 
@@ -201,36 +247,74 @@ impl Branch for BrTable {
             num
         }
     }
-}
 
-#[inst_prop(Subset = "BranchInfoMut")]
-pub trait BranchMut {
-    fn rewrite_branch_dest(&mut self, from: BlockId, to: BlockId);
-    type Members = (Jump, Br, BrTable);
-}
+    fn remove_dest(&self, isb: &dyn InstSetBase, dest: BlockId) -> Box<dyn Inst> {
+        let mut brt = self.clone();
 
-impl BranchMut for Jump {
-    fn rewrite_branch_dest(&mut self, from: BlockId, to: BlockId) {
-        rewrite_if_match(&mut self.dest, from, to)
+        if Some(dest) == self.default {
+            *brt.default_mut() = None;
+        }
+
+        let keep = brt
+            .table()
+            .iter()
+            .copied()
+            .filter(|(_, b)| *b != dest)
+            .collect();
+        brt.table = keep;
+
+        let dest_num = brt.dests().len();
+        if dest_num == 1 {
+            let has_jump = isb.jump();
+            let jump = Jump::new(has_jump, brt.dests()[0]);
+            Box::new(jump)
+        } else {
+            Box::new(brt)
+        }
     }
-}
 
-impl BranchMut for Br {
-    fn rewrite_branch_dest(&mut self, from: BlockId, to: BlockId) {
-        rewrite_if_match(&mut self.nz_dest, from, to);
-        rewrite_if_match(&mut self.z_dest, from, to);
-    }
-}
-
-impl BranchMut for BrTable {
-    fn rewrite_branch_dest(&mut self, from: BlockId, to: BlockId) {
-        if let Some(default) = &mut self.default {
+    fn rewrite_dest(&self, isb: &dyn InstSetBase, from: BlockId, to: BlockId) -> Box<dyn Inst> {
+        let mut brt = self.clone();
+        if let Some(default) = &mut brt.default {
             rewrite_if_match(default, from, to);
         }
 
-        self.table
+        brt.table
             .iter_mut()
             .for_each(|(_, block)| rewrite_if_match(block, from, to));
+
+        try_convert_branch_to_jump(isb, &brt).unwrap_or_else(|| Box::new(brt))
+    }
+
+    fn branch_kind(&self) -> BranchKind {
+        BranchKind::BrTable(self)
+    }
+}
+
+pub enum BranchKind<'i> {
+    Jump(&'i Jump),
+    Br(&'i Br),
+    BrTable(&'i BrTable),
+}
+
+/// Attempts to convert a branch instruction into a jump instruction.
+///
+/// This function checks if all the destinations of the branch instruction
+/// are the same. If so, it converts the branch into a single jump
+/// instruction targeting that destination. Otherwise, it returns `None`.
+fn try_convert_branch_to_jump(isb: &dyn InstSetBase, branch: &dyn Branch) -> Option<Box<dyn Inst>> {
+    let first_dest = branch.dests()[0];
+    let is_dest_unique = branch
+        .dests()
+        .iter()
+        .skip(1)
+        .all(|dest| *dest == first_dest);
+    if is_dest_unique {
+        let has_jump = isb.jump();
+        let jump = Jump::new(has_jump, first_dest);
+        Some(Box::new(jump))
+    } else {
+        None
     }
 }
 

@@ -10,8 +10,8 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashSet;
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::control_flow::{Branch, BranchInfo},
-    interpret::{EvalValue, Interpret, Interpretable, State},
+    inst::control_flow::{Branch, BranchKind},
+    interpret::{EvalValue, Interpret, State},
     prelude::*,
     BlockId, ControlFlowGraph, Function, Immediate, InstId, Type, ValueId,
 };
@@ -181,7 +181,9 @@ impl SccpSolver {
         }
 
         let mut cell_state = CellState::new(&self.lattice);
-        let value = Interpretable::map(func.inst_set(), inst, |i| i.interpret(&mut cell_state));
+        let value = InstDowncast::map(func.inst_set(), inst, |i: &dyn Interpret| {
+            i.interpret(&mut cell_state)
+        });
 
         let inst_result = func.dfg.inst_result(inst_id).unwrap();
         let cell = if let Some(EvalValue::Imm(value)) = value {
@@ -193,13 +195,13 @@ impl SccpSolver {
         self.set_lattice_cell(inst_result, cell);
     }
 
-    fn eval_branch(&mut self, inst: InstId, bi: BranchInfo) {
-        match bi {
-            BranchInfo::Jump(jump) => {
+    fn eval_branch(&mut self, inst: InstId, bi: &dyn Branch) {
+        match bi.branch_kind() {
+            BranchKind::Jump(jump) => {
                 self.flow_work.push(FlowEdge::new(inst, *jump.dest()));
             }
 
-            BranchInfo::Br(br) => {
+            BranchKind::Br(br) => {
                 let v_cell = self.lattice[*br.cond()];
 
                 if v_cell.is_top() {
@@ -214,7 +216,7 @@ impl SccpSolver {
                 }
             }
 
-            BranchInfo::BrTable(brt) => {
+            BranchKind::BrTable(brt) => {
                 // An closure that add all destinations of the `BrTable.
                 let mut add_all_dest = || {
                     if let Some(default) = brt.default() {
