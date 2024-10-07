@@ -4,8 +4,8 @@ use super::{
 };
 use crate::{
     func_cursor::{CursorLocation, FuncCursor},
-    module::FuncRef,
-    BlockId, Function, GlobalVariable, Immediate, Inst, InstId, Type, Value, ValueId,
+    module::{FuncRef, ModuleCtx},
+    BlockId, Function, GlobalVariable, Immediate, Inst, InstId, InstSetBase, Type, Value, ValueId,
 };
 
 pub struct FunctionBuilder<C> {
@@ -199,6 +199,14 @@ where
 
     pub fn args(&self) -> &[ValueId] {
         &self.func.arg_values
+    }
+
+    pub fn inst_set(&self) -> &'static dyn InstSetBase {
+        self.module_builder.inst_set()
+    }
+
+    pub fn ctx(&self) -> &ModuleCtx {
+        &self.module_builder.ctx
     }
 
     fn append_pred(&mut self, inst_id: InstId) {
