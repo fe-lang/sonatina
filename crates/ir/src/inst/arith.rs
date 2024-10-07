@@ -1,93 +1,104 @@
 use macros::Inst;
 
-use crate::Value;
+use crate::{impl_display_with_func, ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Neg {
     #[inst(value)]
-    arg: Value,
+    arg: ValueId,
 }
+impl_display_with_func!(Neg);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Add {
     #[inst(value)]
-    lhs: Value,
+    lhs: ValueId,
     #[inst(value)]
-    rhs: Value,
+    rhs: ValueId,
 }
+impl_display_with_func!(Add);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Mul {
     #[inst(value)]
-    lhs: Value,
+    lhs: ValueId,
     #[inst(value)]
-    rhs: Value,
+    rhs: ValueId,
 }
+impl_display_with_func!(Mul);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Sub {
     #[inst(value)]
-    lhs: Value,
+    lhs: ValueId,
     #[inst(value)]
-    rhs: Value,
+    rhs: ValueId,
 }
+impl_display_with_func!(Sub);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(has_side_effect)]
 pub struct Sdiv {
     #[inst(value)]
-    lhs: Value,
+    lhs: ValueId,
     #[inst(value)]
-    rhs: Value,
+    rhs: ValueId,
 }
+impl_display_with_func!(Sdiv);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(has_side_effect)]
 pub struct Udiv {
     #[inst(value)]
-    lhs: Value,
+    lhs: ValueId,
     #[inst(value)]
-    rhs: Value,
+    rhs: ValueId,
 }
+impl_display_with_func!(Udiv);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(has_side_effect)]
 pub struct Umod {
     #[inst(value)]
-    lhs: Value,
+    lhs: ValueId,
     #[inst(value)]
-    rhs: Value,
+    rhs: ValueId,
 }
+impl_display_with_func!(Umod);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(has_side_effect)]
 pub struct Smod {
     #[inst(value)]
-    lhs: Value,
+    lhs: ValueId,
     #[inst(value)]
-    rhs: Value,
+    rhs: ValueId,
 }
+impl_display_with_func!(Smod);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Shl {
     #[inst(value)]
-    bits: Value,
+    bits: ValueId,
     #[inst(value)]
-    value: Value,
+    value: ValueId,
 }
+impl_display_with_func!(Shl);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Shr {
     #[inst(value)]
-    bits: Value,
+    bits: ValueId,
     #[inst(value)]
-    value: Value,
+    value: ValueId,
 }
+impl_display_with_func!(Shr);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Sar {
     #[inst(value)]
-    bits: Value,
+    bits: ValueId,
     #[inst(value)]
-    value: Value,
+    value: ValueId,
 }
+impl_display_with_func!(Sar);

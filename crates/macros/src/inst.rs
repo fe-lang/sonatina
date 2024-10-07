@@ -187,7 +187,7 @@ impl InstStruct {
                 fn downcast(isb: &dyn crate::InstSetBase, inst: &dyn crate::Inst) -> Option<Self> {
                     let hi = isb.#has_inst_method()?;
                     if hi.is(inst) {
-                        unsafe { Some(&*(inst as *const dyn crate::Inst as *const Self)) }
+                        unsafe { Some(&*(inst as *const dyn crate::Inst as *const #struct_name)) }
                     } else {
                         None
                     }
@@ -198,7 +198,7 @@ impl InstStruct {
                 fn downcast_mut(isb: &dyn crate::InstSetBase, inst: &mut dyn crate::Inst) -> Option<Self> {
                     let hi = isb.#has_inst_method()?;
                     if hi.is(inst) {
-                        unsafe { Some(*(inst as *mut dyn crate::Inst as *mut Self)) }
+                        unsafe { Some(&mut *(inst as *mut dyn crate::Inst as *mut #struct_name)) }
                     } else {
                         None
                     }
@@ -221,11 +221,11 @@ impl InstStruct {
 
         quote! {
             impl crate::Inst for #struct_name {
-                fn visit_values(&self, f: &mut dyn FnMut(crate::Value)) {
+                fn visit_values(&self, f: &mut dyn FnMut(crate::ValueId)) {
                     #(crate::ValueVisitable::visit_with(&self.#visit_fields, (f));)*
                 }
 
-                fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut crate::Value)) {
+                fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut crate::ValueId)) {
                     #(crate::ValueVisitable::visit_mut_with(&mut self.#visit_fields, (f));)*
                 }
 

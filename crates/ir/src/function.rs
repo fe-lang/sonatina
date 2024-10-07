@@ -1,14 +1,19 @@
-use super::{module::FuncRef, DataFlowGraph, Layout, Type, Value};
-use crate::{module::ModuleCtx, types::DisplayType, Linkage};
+use std::fmt;
+
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
-use std::fmt::{self, Write};
 
-#[derive(Debug, Clone)]
+use super::{module::FuncRef, DataFlowGraph, Layout, Type, ValueId};
+use crate::{
+    ir_writer::{DisplayWithFunc, DisplayableWithModule},
+    module::ModuleCtx,
+    InstSetBase, Linkage,
+};
+
 pub struct Function {
     /// Signature of the function.
     pub sig: Signature,
-    pub arg_values: smallvec::SmallVec<[Value; 8]>,
+    pub arg_values: smallvec::SmallVec<[ValueId; 8]>,
     pub dfg: DataFlowGraph,
     pub layout: Layout,
 
@@ -36,6 +41,14 @@ impl Function {
             layout: Layout::default(),
             callees: FxHashMap::default(),
         }
+    }
+
+    pub fn ctx(&self) -> &ModuleCtx {
+        &self.dfg.ctx
+    }
+
+    pub fn inst_set(&self) -> &'static dyn InstSetBase {
+        self.dfg.inst_set()
     }
 }
 
@@ -82,36 +95,23 @@ impl Signature {
     }
 }
 
-pub struct DisplaySignature<'a, 'b> {
-    sig: &'a Signature,
-    dfg: &'b DataFlowGraph,
-}
-
-impl<'a, 'b> DisplaySignature<'a, 'b> {
-    pub fn new(sig: &'a Signature, dfg: &'b DataFlowGraph) -> Self {
-        Self { sig, dfg }
-    }
-}
-
-impl<'a, 'b> fmt::Display for DisplaySignature<'a, 'b> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let Self { sig, dfg } = *self;
+impl DisplayWithFunc for Signature {
+    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
         let Signature {
             name,
             linkage,
             args,
             ret_ty,
-        } = sig;
+        } = self;
 
         let mut args_ty = String::new();
         for arg_ty in args {
-            let ty = DisplayType::new(*arg_ty, dfg);
-            write!(&mut args_ty, "{ty} ")?;
+            let ty = DisplayableWithModule(arg_ty, func.ctx());
+            args_ty.push_str(&format!("{ty} "));
         }
         let args_ty = args_ty.trim();
+        let ret_ty = DisplayableWithModule(ret_ty, func.ctx());
 
-        let ret_ty = DisplayType::new(*ret_ty, dfg);
-
-        write!(f, "func {linkage} %{name}({args_ty}) -> {ret_ty}")
+        write!(formatter, "func {linkage} %{name}({args_ty}) -> {ret_ty}")
     }
 }

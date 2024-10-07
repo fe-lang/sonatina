@@ -112,19 +112,23 @@ define_inst_set_base! {
 /// e.g.
 ///
 /// ```rust,ignore
-/// use sonatina_ir::inst::basic::*;
+/// use sonatina_ir::inst::{arith::*, control_flow::*};
 /// #[inst_set(InstKind = "InstKind")]
-/// struct InstSet(Add, Sub);
+/// struct InstSet(Jump, Phi, Add, Sub);
 /// ```
 /// defines
 ///
 /// ```rust
-/// use sonatina_ir::inst::arith::*;
+/// use sonatina_ir::inst::{arith::*, control_flow::*};
 /// enum InstKind<'i> {
+///     Jump(&'i Jump),
+///     Phi(&'i Phi),
 ///     Add(&'i Add),
 ///     Sub(&'i Sub),
 /// }
 /// enum InstKindMut<'i> {
+///     Jump(&'i mut Jump),
+///     Phi(&'i mut Phi),
 ///     Add(&'i mut Add),
 ///     Sub(&'i mut Sub),
 /// }
@@ -146,7 +150,7 @@ pub trait InstSetExt: InstSetBase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Value;
+    use crate::{InstDowncast, InstDowncastMut, ValueId};
     use arith::*;
     use control_flow::*;
     use logic::*;
@@ -176,9 +180,37 @@ mod tests {
     #[test]
     fn inst_creation() {
         let inst_set = TestInstSet::new();
-        let v = Value::from_u32(1);
+        let v = ValueId::from_u32(1);
         let _add = Add::new(&inst_set, v, v);
         let _sub = Sub::new(&inst_set, v, v);
+    }
+
+    #[test]
+    fn inst_downcast() {
+        let mut insts: Vec<Box<dyn Inst>> = Vec::new();
+        let inst_set = TestInstSet::new();
+        let v = ValueId::from_u32(1);
+        let add = Add::new(&inst_set, v, v);
+        insts.push(Box::new(add));
+        let sub = Sub::new(&inst_set, v, v);
+        insts.push(Box::new(sub));
+
+        assert!(
+            <&Add as InstDowncast>::downcast(&inst_set, insts.get(0).unwrap().as_ref()).is_some()
+        );
+        assert!(
+            <&Sub as InstDowncast>::downcast(&inst_set, insts.get(1).unwrap().as_ref()).is_some()
+        );
+        assert!(<&mut Add as InstDowncastMut>::downcast_mut(
+            &inst_set,
+            insts.get_mut(0).unwrap().as_mut()
+        )
+        .is_some());
+        assert!(<&mut Sub as InstDowncastMut>::downcast_mut(
+            &inst_set,
+            insts.get_mut(1).unwrap().as_mut()
+        )
+        .is_some());
     }
 
     #[test]
@@ -186,7 +218,7 @@ mod tests {
         let inst_set = TestInstSet::new();
         let mut insts: Vec<Box<dyn Inst>> = Vec::new();
 
-        let value = Value::from_u32(1);
+        let value = ValueId::from_u32(1);
         let add = Add::new(&inst_set, value, value);
         insts.push(Box::new(add));
         let sub = Sub::new(&inst_set, value, value);

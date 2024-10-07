@@ -5,7 +5,10 @@ use cranelift_entity::PrimaryMap;
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
-use crate::DataFlowGraph;
+use crate::{
+    ir_writer::{DisplayWithModule, DisplayableWithModule},
+    module::ModuleCtx,
+};
 
 #[derive(Debug, Default)]
 pub struct TypeStore {
@@ -135,112 +138,16 @@ pub enum Type {
     Void,
 }
 
-/// An opaque reference to [`CompoundTypeData`].
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
-pub struct CompoundType(u32);
-cranelift_entity::entity_impl!(CompoundType);
-
-pub struct DisplayCompoundType<'a> {
-    cmpd_ty: CompoundType,
-    dfg: &'a DataFlowGraph,
-}
-
-impl<'a> DisplayCompoundType<'a> {
-    pub fn new(cmpd_ty: CompoundType, dfg: &'a DataFlowGraph) -> Self {
-        Self { cmpd_ty, dfg }
-    }
-}
-
-impl<'a> fmt::Display for DisplayCompoundType<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use CompoundTypeData::*;
-        let dfg = self.dfg;
-        dfg.ctx
-            .with_ty_store(|s| match s.resolve_compound(self.cmpd_ty) {
-                Array { elem: ty, len } => {
-                    let ty = DisplayType::new(*ty, dfg);
-                    write!(f, "[{ty};{len}]")
-                }
-                Ptr(ty) => {
-                    let ty = DisplayType::new(*ty, dfg);
-                    write!(f, "*{ty}")
-                }
-                Struct(StructData { name, packed, .. }) => {
-                    if *packed {
-                        write!(f, "<{{{name}}}>")
-                    } else {
-                        write!(f, "{{{name}}}")
-                    }
-                }
-            })
-    }
-}
-
-pub struct DisplayType<'a> {
-    ty: Type,
-    dfg: &'a DataFlowGraph,
-}
-
-impl<'a> DisplayType<'a> {
-    pub fn new(ty: Type, dfg: &'a DataFlowGraph) -> Self {
-        Self { ty, dfg }
-    }
-}
-
-impl<'a> fmt::Display for DisplayType<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use Type::*;
-        match self.ty {
-            I1 => write!(f, "i1"),
-            I8 => write!(f, "i8"),
-            I16 => write!(f, "i16"),
-            I32 => write!(f, "i32"),
-            I64 => write!(f, "i64"),
-            I128 => write!(f, "i128"),
-            I256 => write!(f, "i256"),
-            Compound(cmpd_ty) => {
-                let dfg = self.dfg;
-                write!(f, "{}", DisplayCompoundType { cmpd_ty, dfg })
-            }
-            Void => write!(f, "()"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CompoundTypeData {
-    Array { elem: Type, len: usize },
-    Ptr(Type),
-    Struct(StructData),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StructData {
-    pub name: String,
-    pub fields: Vec<Type>,
-    pub packed: bool,
-}
-
-impl CompoundTypeData {
-    pub fn is_array(&self) -> bool {
-        matches!(self, Self::Array { .. })
-    }
-
-    pub fn is_ptr(&self) -> bool {
-        matches!(self, Self::Ptr(_))
-    }
-}
-
 impl Type {
-    pub fn is_integral(&self) -> bool {
+    pub fn is_integral(self) -> bool {
         matches!(
             self,
             Self::I1 | Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::I128 | Self::I256
         )
     }
 
-    pub fn to_string(&self, dfg: &DataFlowGraph) -> String {
-        DisplayType { ty: *self, dfg }.to_string()
+    pub fn is_pointer(self, ctx: &ModuleCtx) -> bool {
+        ctx.with_ty_store(|store| store.is_ptr(self))
     }
 }
 
@@ -271,5 +178,98 @@ impl cmp::PartialOrd for Type {
             (I256, _) => Some(cmp::Ordering::Greater),
             (_, _) => unreachable!(),
         }
+    }
+}
+
+impl DisplayWithModule for Type {
+    fn fmt(&self, module: &ModuleCtx, formatter: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Type::I1 => write!(formatter, "i1"),
+            Type::I8 => write!(formatter, "i8"),
+            Type::I16 => write!(formatter, "i16"),
+            Type::I32 => write!(formatter, "i32"),
+            Type::I64 => write!(formatter, "i64"),
+            Type::I128 => write!(formatter, "i128"),
+            Type::I256 => write!(formatter, "i256"),
+            Type::Compound(cmpd_ty) => {
+                write!(formatter, "{}", DisplayableWithModule(cmpd_ty, module))
+            }
+            Type::Void => write!(formatter, "void"),
+        }
+    }
+}
+
+/// An opaque reference to [`CompoundTypeData`].
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
+pub struct CompoundType(u32);
+cranelift_entity::entity_impl!(CompoundType);
+
+impl DisplayWithModule for CompoundType {
+    fn fmt(&self, module: &ModuleCtx, formatter: &mut fmt::Formatter) -> fmt::Result {
+        module.with_ty_store(|s| match s.resolve_compound(*self) {
+            CompoundTypeData::Array { elem: ty, len } => {
+                let ty = DisplayableWithModule(ty, module);
+                write!(formatter, "[{ty};{len}]")
+            }
+            CompoundTypeData::Ptr(ty) => {
+                let ty = DisplayableWithModule(ty, module);
+                write!(formatter, "*{ty}")
+            }
+            CompoundTypeData::Struct(StructData { name, packed, .. }) => {
+                if *packed {
+                    write!(formatter, "<{{{name}}}>")
+                } else {
+                    write!(formatter, "{{{name}}}")
+                }
+            }
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CompoundTypeData {
+    Array { elem: Type, len: usize },
+    Ptr(Type),
+    Struct(StructData),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StructData {
+    pub name: String,
+    pub fields: Vec<Type>,
+    pub packed: bool,
+}
+
+impl DisplayWithModule for StructData {
+    fn fmt(&self, module: &ModuleCtx, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "type %{} = ", self.name)?;
+        if self.packed {
+            write!(formatter, "<{{")?;
+        } else {
+            write!(formatter, "{{")?;
+        }
+
+        let mut delim = "";
+        for &ty in &self.fields {
+            let ty = DisplayableWithModule(ty, module);
+            write!(formatter, "{delim}{ty}")?;
+            delim = ", ";
+        }
+
+        if self.packed {
+            write!(formatter, "}}>;")
+        } else {
+            write!(formatter, "}};")
+        }
+    }
+}
+
+impl CompoundTypeData {
+    pub fn is_array(&self) -> bool {
+        matches!(self, Self::Array { .. })
+    }
+
+    pub fn is_ptr(&self) -> bool {
+        matches!(self, Self::Ptr(_))
     }
 }

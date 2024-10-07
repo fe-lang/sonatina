@@ -2,11 +2,14 @@ use std::iter;
 
 use dot2::{label::Text, GraphWalk, Id, Labeller, Style};
 
-use crate::{value::DisplayArgValue, Block, ControlFlowGraph, Function, InsnData};
+use crate::{
+    inst::control_flow::Phi, ir_writer::DisplayableWithFunc, prelude::*, BlockId, ControlFlowGraph,
+    Function,
+};
 
 use super::block::BlockNode;
 
-pub(super) const DUMMY_BLOCK: Block = Block(u32::MAX);
+pub(super) const DUMMY_BLOCK: BlockId = BlockId(u32::MAX);
 
 pub(super) struct FunctionGraph<'a> {
     func: &'a Function,
@@ -87,7 +90,7 @@ impl<'a> GraphWalk<'a> for FunctionGraph<'a> {
         let dummy_block = blocks.pop().unwrap();
         let mut edges = vec![BlockEdge {
             from: dummy_block,
-            to: BlockNode::new(func, cfg, Block(0u32)),
+            to: BlockNode::new(func, cfg, BlockId(0u32)),
             func,
         }];
         for block in blocks {
@@ -113,7 +116,7 @@ impl<'a> GraphWalk<'a> for FunctionGraph<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub(super) struct BlockEdge<'a> {
     from: BlockNode<'a>,
     to: BlockNode<'a>,
@@ -125,14 +128,16 @@ impl<'a> BlockEdge<'a> {
         let Self { from, to, func } = self;
         let to = to.block;
         let from = from.block;
-        for insn in func.layout.iter_insn(to) {
-            if let InsnData::Phi { values, blocks, .. } = func.dfg.insn_data(insn) {
-                for (i, block) in blocks.into_iter().enumerate() {
-                    if *block == from {
-                        let flow_arg = values[i];
-                        let v = DisplayArgValue::new(flow_arg, &func.dfg);
-                        return Text::LabelStr(format!("{v}").into());
-                    }
+        for inst_id in func.layout.iter_inst(to) {
+            let inst = self.func.dfg.inst(inst_id);
+            let Some(phi) = <&Phi as InstDowncast>::downcast(self.func.dfg.inst_set(), inst) else {
+                continue;
+            };
+
+            for (value, block) in phi.args().into_iter() {
+                if *block == from {
+                    let value = DisplayableWithFunc(value, &func);
+                    return Text::LabelStr(format!("{value}").into());
                 }
             }
         }

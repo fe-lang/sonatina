@@ -4,14 +4,16 @@ use std::{
 };
 
 use cranelift_entity::{entity_impl, PrimaryMap};
-
-use crate::Function;
-
-use crate::{global_variable::GlobalVariableStore, isa::TargetIsa, types::TypeStore};
+use sonatina_triple::TargetTriple;
 
 use super::Linkage;
+use crate::{
+    global_variable::GlobalVariableStore,
+    isa::{Endian, Isa, TypeLayout},
+    types::TypeStore,
+    Function, InstSetBase, Type,
+};
 
-#[derive(Debug)]
 pub struct Module {
     /// Holds all function declared in the contract.
     pub funcs: PrimaryMap<FuncRef, Function>,
@@ -21,7 +23,7 @@ pub struct Module {
 
 impl Module {
     #[doc(hidden)]
-    pub fn new(isa: TargetIsa) -> Self {
+    pub fn new<T: Isa>(isa: &T) -> Self {
         Self {
             funcs: PrimaryMap::default(),
             ctx: ModuleCtx::new(isa),
@@ -39,20 +41,32 @@ impl Module {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ModuleCtx {
-    pub isa: TargetIsa,
+    pub triple: TargetTriple,
+    pub inst_set: &'static dyn InstSetBase,
+    pub type_layout: &'static dyn TypeLayout,
     type_store: Arc<RwLock<TypeStore>>,
     gv_store: Arc<RwLock<GlobalVariableStore>>,
 }
 
 impl ModuleCtx {
-    pub fn new(isa: TargetIsa) -> Self {
+    pub fn new<T: Isa>(isa: &T) -> Self {
         Self {
-            isa,
+            triple: isa.triple(),
+            inst_set: isa.inst_set(),
+            type_layout: isa.type_layout(),
             type_store: Arc::new(RwLock::new(TypeStore::default())),
             gv_store: Arc::new(RwLock::new(GlobalVariableStore::default())),
         }
+    }
+
+    pub fn size_of(&self, ty: Type) -> usize {
+        self.with_ty_store(|ty_store| self.type_layout.size_of(ty, ty_store))
+    }
+
+    pub fn endian(&self) -> Endian {
+        self.type_layout.endian()
     }
 
     pub fn with_ty_store<F, R>(&self, f: F) -> R

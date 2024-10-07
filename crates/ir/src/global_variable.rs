@@ -3,7 +3,11 @@ use std::fmt;
 use cranelift_entity::PrimaryMap;
 use rustc_hash::FxHashMap;
 
-use crate::{types::DisplayType, DataFlowGraph, Immediate, Linkage, Type};
+use crate::{
+    ir_writer::{DisplayWithModule, DisplayableWithModule},
+    module::ModuleCtx,
+    Immediate, Linkage, Type,
+};
 
 #[derive(Debug, Default)]
 pub struct GlobalVariableStore {
@@ -55,23 +59,11 @@ impl GlobalVariableStore {
 pub struct GlobalVariable(pub u32);
 cranelift_entity::entity_impl!(GlobalVariable);
 
-pub struct DisplayGlobalVariable<'a> {
-    gv: GlobalVariable,
-    dfg: &'a DataFlowGraph,
-}
-
-impl<'a> DisplayGlobalVariable<'a> {
-    pub fn new(gv: GlobalVariable, dfg: &'a DataFlowGraph) -> Self {
-        Self { gv, dfg }
-    }
-}
-
-impl<'a> fmt::Display for DisplayGlobalVariable<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { gv, dfg } = self;
-        dfg.ctx.with_gv_store(|s| {
-            let gv_data = s.gv_data(*gv);
-            DisplayGlobalVariableData { gv_data, dfg }.fmt(f)
+impl DisplayWithModule for GlobalVariable {
+    fn fmt(&self, module: &ModuleCtx, formatter: &mut fmt::Formatter) -> fmt::Result {
+        module.with_gv_store(|s| {
+            let gv_data = DisplayableWithModule(s.gv_data(*self), module);
+            write!(formatter, "{gv_data}")
         })
     }
 }
@@ -113,28 +105,24 @@ impl GlobalVariableData {
     }
 }
 
-pub struct DisplayGlobalVariableData<'a, 'b> {
-    gv_data: &'a GlobalVariableData,
-    dfg: &'b DataFlowGraph,
-}
-
-impl<'a, 'b> fmt::Display for DisplayGlobalVariableData<'a, 'b> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl DisplayWithModule for GlobalVariableData {
+    fn fmt(&self, module: &ModuleCtx, formatter: &mut fmt::Formatter) -> fmt::Result {
         let GlobalVariableData {
             symbol: _,
             ty,
             linkage,
             is_const,
             data,
-        } = &self.gv_data;
-        let ty = DisplayType::new(*ty, self.dfg);
-        ty.fmt(f)?;
+        } = &self;
+
+        let ty = DisplayableWithModule(*ty, module);
+        write!(formatter, "{ty}")?;
         if *is_const {
-            write!(f, " const")?;
+            write!(formatter, " const")?;
         }
-        write!(f, " {linkage}")?;
+        write!(formatter, " {linkage}")?;
         if let Some(data) = data {
-            write!(f, " {}", data)?;
+            write!(formatter, " {}", data)?;
         }
         Ok(())
     }
@@ -191,13 +179,13 @@ impl fmt::Display for ConstantValue {
 
 #[cfg(test)]
 mod test {
-    use crate::{builder::test_util::build_test_isa, module::ModuleCtx};
+    use crate::{builder::test_util::test_isa, module::ModuleCtx};
 
     use super::*;
 
     #[test]
     fn display_gv() {
-        let ctx = ModuleCtx::new(build_test_isa());
+        let ctx = ModuleCtx::new(&test_isa());
 
         let cv = ConstantValue::make_imm(1618i32);
         let gv = ctx.with_gv_store_mut(|s| {
@@ -210,15 +198,13 @@ mod test {
             ))
         });
 
-        let dfg = DataFlowGraph::new(ctx);
-        let display_gv = DisplayGlobalVariable::new(gv, &dfg);
-
+        let display_gv = DisplayableWithModule(gv, &ctx);
         assert_eq!(display_gv.to_string(), "i32 const public 1618");
     }
 
     #[test]
     fn display_gv_array() {
-        let ctx = ModuleCtx::new(build_test_isa());
+        let ctx = ModuleCtx::new(&test_isa());
 
         let cv0 = ConstantValue::make_imm(8i32);
         let cv1 = ConstantValue::make_imm(4i32);
@@ -235,9 +221,7 @@ mod test {
             ))
         });
 
-        let dfg = DataFlowGraph::new(ctx);
-        let display_gv = DisplayGlobalVariable::new(gv, &dfg);
-
+        let display_gv = DisplayableWithModule(gv, &ctx);
         assert_eq!(display_gv.to_string(), "[i32;3] const private [8, 4, 2]");
     }
 }

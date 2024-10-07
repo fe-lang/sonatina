@@ -2,13 +2,13 @@ use std::collections::BTreeSet;
 
 use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
 
-use crate::{Block, Function, Insn};
+use crate::{BlockId, Function};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct ControlFlowGraph {
-    entry: PackedOption<Block>,
-    blocks: SecondaryMap<Block, BlockNode>,
-    pub exits: smallvec::SmallVec<[Block; 8]>,
+    entry: PackedOption<BlockId>,
+    blocks: SecondaryMap<BlockId, BlockNode>,
+    pub exits: smallvec::SmallVec<[BlockId; 8]>,
 }
 
 impl ControlFlowGraph {
@@ -22,29 +22,29 @@ impl ControlFlowGraph {
         self.entry = func.layout.entry_block().into();
 
         for block in func.layout.iter_block() {
-            if let Some(last_insn) = func.layout.last_insn_of(block) {
-                self.analyze_insn(func, last_insn);
+            if let Some(last_inst) = func.layout.last_inst_of(block) {
+                self.analyze_inst(func, last_inst);
             }
         }
     }
 
-    pub fn preds_of(&self, block: Block) -> impl Iterator<Item = &Block> {
+    pub fn preds_of(&self, block: BlockId) -> impl Iterator<Item = &BlockId> {
         self.blocks[block].preds()
     }
 
-    pub fn succs_of(&self, block: Block) -> impl Iterator<Item = &Block> {
+    pub fn succs_of(&self, block: BlockId) -> impl Iterator<Item = &BlockId> {
         self.blocks[block].succs()
     }
 
-    pub fn pred_num_of(&self, block: Block) -> usize {
+    pub fn pred_num_of(&self, block: BlockId) -> usize {
         self.blocks[block].pred_num()
     }
 
-    pub fn succ_num_of(&self, block: Block) -> usize {
+    pub fn succ_num_of(&self, block: BlockId) -> usize {
         self.blocks[block].succ_num()
     }
 
-    pub fn entry(&self) -> Option<Block> {
+    pub fn entry(&self) -> Option<BlockId> {
         self.entry.expand()
     }
 
@@ -52,17 +52,17 @@ impl ControlFlowGraph {
         CfgPostOrder::new(self)
     }
 
-    pub fn add_edge(&mut self, from: Block, to: Block) {
+    pub fn add_edge(&mut self, from: BlockId, to: BlockId) {
         self.blocks[to].push_pred(from);
         self.blocks[from].push_succ(to);
     }
 
-    pub fn remove_edge(&mut self, from: Block, to: Block) {
+    pub fn remove_edge(&mut self, from: BlockId, to: BlockId) {
         self.blocks[to].remove_pred(from);
         self.blocks[from].remove_succ(to);
     }
 
-    pub fn reverse_edges(&mut self, new_entry: Block, new_exits: &[Block]) {
+    pub fn reverse_edges(&mut self, new_entry: BlockId, new_exits: &[BlockId]) {
         for node in self.blocks.values_mut() {
             node.reverse_edge();
         }
@@ -76,14 +76,18 @@ impl ControlFlowGraph {
         self.exits.clear();
     }
 
-    fn analyze_insn(&mut self, func: &Function, insn: Insn) {
-        if func.dfg.is_return(insn) {
-            let exit = func.layout.insn_block(insn);
+    fn analyze_inst(&mut self, func: &Function, inst: crate::InstId) {
+        if func.dfg.is_exit(inst) {
+            let exit = func.layout.inst_block(inst);
             self.exits.push(exit);
         }
 
-        for dest in func.dfg.analyze_branch(insn).iter_dests() {
-            let block = func.layout.insn_block(insn);
+        let Some(branch_info) = func.dfg.branch_info(inst) else {
+            return;
+        };
+
+        for dest in branch_info.dests() {
+            let block = func.layout.inst_block(inst);
             self.add_edge(block, dest);
         }
     }
@@ -91,32 +95,32 @@ impl ControlFlowGraph {
 
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
 struct BlockNode {
-    preds: BTreeSet<Block>,
-    succs: BTreeSet<Block>,
+    preds: BTreeSet<BlockId>,
+    succs: BTreeSet<BlockId>,
 }
 
 impl BlockNode {
-    fn push_pred(&mut self, pred: Block) {
+    fn push_pred(&mut self, pred: BlockId) {
         self.preds.insert(pred);
     }
 
-    fn push_succ(&mut self, succ: Block) {
+    fn push_succ(&mut self, succ: BlockId) {
         self.succs.insert(succ);
     }
 
-    fn remove_pred(&mut self, pred: Block) {
+    fn remove_pred(&mut self, pred: BlockId) {
         self.preds.remove(&pred);
     }
 
-    fn remove_succ(&mut self, succ: Block) {
+    fn remove_succ(&mut self, succ: BlockId) {
         self.succs.remove(&succ);
     }
 
-    fn preds(&self) -> impl Iterator<Item = &Block> {
+    fn preds(&self) -> impl Iterator<Item = &BlockId> {
         self.preds.iter()
     }
 
-    fn succs(&self) -> impl Iterator<Item = &Block> {
+    fn succs(&self) -> impl Iterator<Item = &BlockId> {
         self.succs.iter()
     }
 
@@ -135,8 +139,8 @@ impl BlockNode {
 
 pub struct CfgPostOrder<'a> {
     cfg: &'a ControlFlowGraph,
-    node_state: SecondaryMap<Block, NodeState>,
-    stack: Vec<Block>,
+    node_state: SecondaryMap<BlockId, NodeState>,
+    stack: Vec<BlockId>,
 }
 
 impl<'a> CfgPostOrder<'a> {
@@ -156,9 +160,9 @@ impl<'a> CfgPostOrder<'a> {
 }
 
 impl<'a> Iterator for CfgPostOrder<'a> {
-    type Item = Block;
+    type Item = BlockId;
 
-    fn next(&mut self) -> Option<Block> {
+    fn next(&mut self) -> Option<BlockId> {
         while let Some(&block) = self.stack.last() {
             if self.node_state[block].is_unvisited() {
                 self.node_state[block].set_visited();

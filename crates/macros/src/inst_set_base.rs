@@ -37,8 +37,16 @@ impl TraitDefinition {
 
         quote! {
             #(#attrs)*
-            pub trait InstSetBase {
+            pub trait InstSetBase: crate::HasInst<crate::inst::control_flow::Phi> + crate::HasInst<crate::inst::control_flow::Jump> {
                 #(#methods)*
+
+                fn phi(&self) -> &dyn crate::HasInst<crate::inst::control_flow::Phi> {
+                    self.has_phi().unwrap()
+                }
+
+                fn jump(&self) -> &dyn crate::HasInst<crate::inst::control_flow::Jump> {
+                    self.has_jump().unwrap()
+                }
             }
         }
     }
