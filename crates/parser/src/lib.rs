@@ -1,9 +1,11 @@
+use std::hash::BuildHasherDefault;
+
 use ast::{StmtKind, ValueDeclaration};
 use cranelift_entity::SecondaryMap;
 use ir::{
     self,
     builder::{FunctionBuilder, ModuleBuilder},
-    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
+    func_cursor::{CursorLocation, FuncCursor, InstInserter},
     ir_writer::DebugProvider,
     isa::IsaBuilder,
     module::{FuncRef, ModuleCtx},
@@ -12,7 +14,6 @@ use ir::{
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smallvec::SmallVec;
 use smol_str::SmolStr;
-use std::hash::BuildHasherDefault;
 use syntax::Spanned;
 
 pub mod ast;
@@ -127,7 +128,7 @@ struct BuildCtx {
 impl BuildCtx {
     fn build_func(
         &mut self,
-        mut fb: FunctionBuilder<InsnInserter>,
+        mut fb: FunctionBuilder<InstInserter>,
         func_ref: FuncRef,
         func: &ast::Func,
     ) -> ModuleBuilder {
@@ -343,7 +344,7 @@ impl BuildCtx {
         self.func_value_names.insert(value, name.string.clone());
     }
 
-    fn value(&mut self, fb: &mut FunctionBuilder<InsnInserter>, val: &ast::Value) -> ir::ValueId {
+    fn value(&mut self, fb: &mut FunctionBuilder<InstInserter>, val: &ast::Value) -> ir::ValueId {
         match &val.kind {
             ast::ValueKind::Immediate(imm) => fb.make_imm_value(*imm),
             ast::ValueKind::Named(name) => self
