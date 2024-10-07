@@ -1,0 +1,118 @@
+use ir::{builder::FunctionBuilder, inst::control_flow::*, HasInst};
+use smallvec::SmallVec;
+
+use crate::{ast, error::ArityBound, BuildCtx, Error};
+
+super::impl_inst_build! {Jump, has_jump, (dest: BlockId)}
+super::impl_inst_build! {Br, has_br, (cond: ValueId, nz_dest: BlockId, z_dest: BlockId)}
+super::impl_inst_build_common! {BrTable, has_br_table, ArityBound::AtLeast(1), build_br_table}
+super::impl_inst_build_common! {Phi, has_phi, ArityBound::AtLeast(1), build_phi}
+super::impl_inst_build_common! {Call, has_call, ArityBound::AtLeast(1), build_call}
+super::impl_inst_build_common! {Return, has_return, ArityBound::AtLeast(0), build_return}
+
+fn build_br_table(
+    ctx: &mut BuildCtx,
+    fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
+    args: &Vec<ast::InstArg>,
+    has_inst: &dyn HasInst<BrTable>,
+) -> Result<BrTable, Error> {
+    let mut args = args.iter().peekable();
+    let scrutinee = super::process_arg!(ctx, fb, args, ValueId);
+
+    let default = (*args.peek().unwrap())
+        .try_into()
+        .map(|block: &ast::BlockId| {
+            args.next();
+            ctx.block(block)
+        })
+        .ok();
+
+    let mut table = Vec::new();
+    for arg in args {
+        let (value, block) = arg.try_into()?;
+        let value = ctx.value(fb, value);
+        let block = ctx.block(block);
+        table.push((value, block));
+    }
+
+    Ok(BrTable::new(has_inst, scrutinee, default, table))
+}
+
+fn build_phi(
+    ctx: &mut BuildCtx,
+    fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
+    args: &Vec<ast::InstArg>,
+    has_inst: &dyn HasInst<Phi>,
+) -> Result<Phi, Error> {
+    let mut ast_args = args.iter().peekable();
+    let mut args = Vec::new();
+
+    while let Some(&ast_arg) = ast_args.peek() {
+        let Ok((value, block)) = ast_arg.try_into() else {
+            break;
+        };
+
+        let value = ctx.value(fb, value);
+        let block = ctx.block(block);
+        args.push((value, block));
+
+        ast_args.next();
+    }
+
+    let ty = super::process_arg!(ctx, fb, ast_args, Type);
+    if let Some(arg) = ast_args.next() {
+        Err(Error::UnexpectedTrailingInstArg(arg.span))
+    } else {
+        Ok(Phi::new(has_inst, args, ty))
+    }
+}
+
+fn build_call(
+    ctx: &mut BuildCtx,
+    fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
+    args: &Vec<ast::InstArg>,
+    has_inst: &dyn HasInst<Call>,
+) -> Result<Call, Error> {
+    let mut ast_args = args.iter().peekable();
+    let callee = super::process_arg!(ctx, fb, ast_args, FuncRef);
+
+    let mut args = SmallVec::new();
+    while let Some(&ast_arg) = ast_args.peek() {
+        let Ok(value) = ast_arg.try_into() else {
+            break;
+        };
+
+        let value = ctx.value(fb, value);
+        args.push(value);
+
+        ast_args.next();
+    }
+
+    let sig = fb.module_builder.get_sig(callee);
+    if let Some(arg) = ast_args.next() {
+        Err(Error::UnexpectedTrailingInstArg(arg.span))
+    } else {
+        Ok(Call::new(has_inst, callee, args, sig.ret_ty()))
+    }
+}
+
+fn build_return(
+    ctx: &mut BuildCtx,
+    fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
+    args: &Vec<ast::InstArg>,
+    has_inst: &dyn HasInst<Return>,
+) -> Result<Return, Error> {
+    let mut ast_args = args.iter().peekable();
+
+    let arg = if ast_args.peek().is_some() {
+        Some(super::process_arg!(ctx, fb, ast_args, ValueId))
+    } else {
+        None
+    };
+
+    if let Some(arg) = ast_args.next() {
+        Err(Error::UnexpectedTrailingInstArg(arg.span))
+    } else {
+        Ok(Return::new(has_inst, arg))
+    }
+}

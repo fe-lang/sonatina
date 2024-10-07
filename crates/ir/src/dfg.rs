@@ -50,7 +50,11 @@ impl DataFlowGraph {
     }
 
     pub fn make_inst<I: Inst>(&mut self, inst: I) -> InstId {
-        let inst_id = self.insts.push(Box::new(inst));
+        self.make_inst_dyn(Box::new(inst))
+    }
+
+    pub fn make_inst_dyn(&mut self, inst: Box<dyn Inst>) -> InstId {
+        let inst_id = self.insts.push(inst);
         self.attach_user(inst_id);
         inst_id
     }

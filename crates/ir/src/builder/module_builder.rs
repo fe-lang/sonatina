@@ -1,13 +1,12 @@
 use cranelift_entity::PrimaryMap;
 use rustc_hash::FxHashMap;
 
+use super::FunctionBuilder;
 use crate::{
     func_cursor::{CursorLocation, FuncCursor},
     module::{FuncRef, ModuleCtx},
-    Function, GlobalVariable, GlobalVariableData, Module, Signature, Type,
+    Function, GlobalVariable, GlobalVariableData, InstSetBase, Module, Signature, Type,
 };
-
-use super::FunctionBuilder;
 
 pub struct ModuleBuilder {
     pub funcs: PrimaryMap<FuncRef, Function>,
@@ -89,5 +88,9 @@ impl ModuleBuilder {
             funcs: self.funcs,
             ctx: self.ctx,
         }
+    }
+
+    pub fn inst_set(&self) -> &'static dyn InstSetBase {
+        self.ctx.inst_set
     }
 }

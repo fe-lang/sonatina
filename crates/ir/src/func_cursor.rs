@@ -1,6 +1,5 @@
-use crate::{Inst, InstId, Type, Value};
-
 use super::{BlockId, Function, ValueId};
+use crate::{Inst, InstId, Type, Value};
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CursorLocation {
@@ -46,7 +45,11 @@ pub trait FuncCursor {
     }
 
     fn insert_inst_data<I: Inst>(&mut self, func: &mut Function, data: I) -> InstId {
-        let inst = func.dfg.make_inst(data);
+        self.insert_inst_data_dyn(func, Box::new(data))
+    }
+
+    fn insert_inst_data_dyn(&mut self, func: &mut Function, data: Box<dyn Inst>) -> InstId {
+        let inst = func.dfg.make_inst_dyn(data);
         self.insert_inst(func, inst);
         inst
     }

@@ -120,6 +120,7 @@ pub struct Call {
 
     #[inst(value)]
     args: SmallVec<[ValueId; 8]>,
+    // TODO: Is `ret_ty` necessary?
     ret_ty: Type,
 }
 impl DisplayWithFunc for Call {

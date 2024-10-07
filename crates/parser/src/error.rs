@@ -13,21 +13,20 @@ pub enum Error {
     SyntaxError(pest::error::Error<Rule>),
     Undefined(UndefinedKind, Span),
     DuplicateValueName(SmolStr, Span),
-    TypeMismatch {
-        specified: SmolStr,
-        inferred: SmolStr,
-        span: Span,
-    },
+
     InstArgKindMismatch {
         expected: SmolStr,
         actual: SmolStr,
         span: Span,
     },
+
     InstArgNumMismatch {
         expected: ArityBound,
         actual: usize,
         span: Span,
     },
+
+    UnexpectedTrailingInstArg(Span),
 
     UnsupportedInst {
         triple: TargetTriple,
@@ -57,7 +56,7 @@ impl Error {
                 pest::error::InputLocation::Pos(p) => Span(p as u32, p as u32),
                 pest::error::InputLocation::Span((s, e)) => Span(s as u32, e as u32),
             },
-            Error::TypeMismatch { span, .. } => *span,
+            Error::UnexpectedTrailingInstArg(span) => *span,
             Error::InstArgKindMismatch { span, .. } => *span,
             Error::InstArgNumMismatch { span, .. } => *span,
             Error::UnsupportedInst { span, .. } => *span,
@@ -88,13 +87,7 @@ impl Error {
 
             Error::DuplicateValueName(name, _) => format!("value name `{name}` is already defined"),
 
-            Error::TypeMismatch {
-                specified,
-                inferred,
-                ..
-            } => format!(
-                "type mismatch: value declared as `{specified}`, but inferred type is `{inferred}`",
-            ),
+            Error::UnexpectedTrailingInstArg(_) => "unexpected trailing inst argument".to_string(),
 
             Error::InstArgKindMismatch {
                 expected, actual, ..
@@ -148,4 +141,26 @@ pub enum ArityBound {
     Exact(usize),
     AtLeast(usize),
     AtMost(usize),
+}
+
+impl ArityBound {
+    pub fn verify_arity(&self, arity: usize, span: Span) -> Result<(), Error> {
+        let is_ok = match self {
+            Self::Exact(n) => *n == arity,
+
+            Self::AtLeast(n) => *n <= arity,
+
+            Self::AtMost(n) => *n >= arity,
+        };
+
+        if is_ok {
+            Ok(())
+        } else {
+            Err(Error::InstArgNumMismatch {
+                expected: *self,
+                actual: arity,
+                span,
+            })
+        }
+    }
 }

@@ -368,6 +368,70 @@ impl<'a> TryFrom<&'a InstArg> for &'a Value {
     }
 }
 
+impl<'a> TryFrom<&'a InstArg> for &'a Type {
+    type Error = Error;
+
+    fn try_from(arg: &'a InstArg) -> Result<Self, Self::Error> {
+        if let InstArgKind::Ty(ty) = &arg.kind {
+            Ok(ty)
+        } else {
+            Err(Error::InstArgKindMismatch {
+                expected: "type".into(),
+                actual: arg.kind.discriminant_name(),
+                span: arg.span,
+            })
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a InstArg> for &'a BlockId {
+    type Error = Error;
+
+    fn try_from(arg: &'a InstArg) -> Result<Self, Self::Error> {
+        if let InstArgKind::Block(block) = &arg.kind {
+            Ok(block)
+        } else {
+            Err(Error::InstArgKindMismatch {
+                expected: "block".into(),
+                actual: arg.kind.discriminant_name(),
+                span: arg.span,
+            })
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a InstArg> for (&'a Value, &'a BlockId) {
+    type Error = Error;
+
+    fn try_from(arg: &'a InstArg) -> Result<Self, Self::Error> {
+        if let InstArgKind::ValueBlockMap(map) = &arg.kind {
+            Ok((&map.0, &map.1))
+        } else {
+            Err(Error::InstArgKindMismatch {
+                expected: "(value, block)".into(),
+                actual: arg.kind.discriminant_name(),
+                span: arg.span,
+            })
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a InstArg> for &'a FunctionName {
+    type Error = Error;
+
+    fn try_from(arg: &'a InstArg) -> Result<Self, Self::Error> {
+        if let InstArgKind::FuncRef(name) = &arg.kind {
+            Ok(name)
+        } else {
+            Err(Error::InstArgKindMismatch {
+                expected: "function name".into(),
+                actual: arg.kind.discriminant_name(),
+                span: arg.span,
+            })
+        }
+    }
+}
+
 impl FromSyntax<Error> for InstArg {
     fn from_syntax(node: &mut Node<Error>) -> Self {
         node.descend();
@@ -402,7 +466,7 @@ impl InstArgKind {
             Self::Ty(_) => "type",
             Self::Block(_) => "block",
             Self::ValueBlockMap(_) => "(value, block)",
-            Self::FuncRef(_) => "function_name",
+            Self::FuncRef(_) => "function name",
         }
         .into()
     }
