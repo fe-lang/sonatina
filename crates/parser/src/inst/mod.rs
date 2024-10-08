@@ -1,4 +1,4 @@
-use ir::{builder::FunctionBuilder, func_cursor::InstInserter, inst, Inst};
+use ir::{builder::FunctionBuilder, func_cursor::InstInserter, Inst};
 
 use crate::{ast, BuildCtx, Error, UndefinedKind};
 
@@ -10,39 +10,37 @@ mod data;
 mod evm;
 mod logic;
 
-impl InstBuild for Box<dyn Inst> {
-    fn build(
-        ctx: &mut BuildCtx,
-        fb: &mut FunctionBuilder<InstInserter>,
-        ast_inst: &ast::Inst,
-    ) -> Result<Box<dyn Inst>, Error> {
-        let name = &ast_inst.name;
-        // TODO: Refactor this huge matching.
-        let inst = match name.name.as_str() {
-            "add" => {
-                let add = inst::arith::Add::build(ctx, fb, ast_inst)?;
-                Box::new(add)
-            }
-
-            _ => {
-                return Err(Error::Undefined(
-                    UndefinedKind::Inst(name.name.clone()),
-                    name.span,
-                ))
-            }
-        };
-
-        assert_eq!(inst.as_text(), ast_inst.name.name.as_str());
-        Ok(inst)
-    }
-}
-
 pub(super) trait InstBuild: Sized {
     fn build(
         ctx: &mut BuildCtx,
         fb: &mut FunctionBuilder<InstInserter>,
         ast_inst: &ast::Inst,
     ) -> Result<Self, Error>;
+}
+
+impl InstBuild for Box<dyn Inst> {
+    fn build(
+        ctx: &mut BuildCtx,
+        fb: &mut FunctionBuilder<InstInserter>,
+        ast_inst: &ast::Inst,
+    ) -> Result<Self, Error> {
+        fn build_inst<T: InstBuild + Inst>(
+            ctx: &mut BuildCtx,
+            fb: &mut FunctionBuilder<InstInserter>,
+            ast_inst: &ast::Inst,
+        ) -> Result<Box<dyn Inst>, Error> {
+            Ok(Box::new(T::build(ctx, fb, ast_inst)?))
+        }
+
+        ir::match_string_to_inst!(
+            ast_inst.name.name.as_str(),
+            build_inst(ctx, fb, ast_inst),
+            Err(Error::Undefined(
+                UndefinedKind::Inst(ast_inst.name.name.clone()),
+                ast_inst.span,
+            ))
+        )
+    }
 }
 
 macro_rules! impl_inst_build {
