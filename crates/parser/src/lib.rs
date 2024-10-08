@@ -7,6 +7,7 @@ use ir::{
     self,
     builder::{FunctionBuilder, ModuleBuilder},
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
+    isa::evm::Evm,
     module::{FuncRef, ModuleCtx},
     Module, Signature,
 };
@@ -16,7 +17,7 @@ use smol_str::SmolStr;
 pub mod ast;
 pub mod syntax;
 pub use error::{Error, UndefinedKind};
-use sonatina_triple::TargetTriple;
+use sonatina_triple::{Architecture, TargetTriple};
 pub use syntax::Span;
 
 mod error;
@@ -216,7 +217,7 @@ impl BuildCtx {
 
     fn declare_value(&mut self, func: &mut ir::Function, name: &ast::ValueName, ty: ir::Type) {
         // Abusing Immediate here; we just need a dummy value with a given type.
-        // The Value will be replaced when create the Insn that defines the value.
+        // The Value will be replaced when create the Inst that defines the value.
         let value = func.dfg.make_value(ir::Value::Immediate {
             imm: ir::Immediate::I128(424242),
             ty,
@@ -280,5 +281,10 @@ impl BuildCtx {
 }
 
 fn module_ctx_from_triple(triple: TargetTriple) -> ModuleCtx {
-    todo!()
+    match triple.architecture {
+        Architecture::Evm => {
+            let isa = Evm::new(triple);
+            ModuleCtx::new(&isa)
+        }
+    }
 }
