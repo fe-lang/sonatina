@@ -19,10 +19,12 @@ impl TraitDefinition {
     fn build(self) -> syn::Result<proc_macro2::TokenStream> {
         let trait_def = self.define_trait();
         let impls = self.impl_registered();
+        let macros = self.define_macros();
 
         Ok(quote! {
             #trait_def
             #impls
+            #macros
         })
     }
 
@@ -60,6 +62,57 @@ impl TraitDefinition {
 
         quote! {
             #(#impls)*
+        }
+    }
+
+    fn define_macros(&self) -> proc_macro2::TokenStream {
+        let arms = self.insts.iter().map(|path| {
+            quote! {
+                s if s == $crate::inst::#path::inst_name() => {
+                    $func::<$crate::inst::#path>($($args),*)
+                }
+            }
+        });
+        quote! {
+            /// This macro matches a given string to a specific instruction type
+            /// and invokes the provided function with the matched type as a generic argument.
+            ///
+            /// # Arguments
+            ///
+            /// * `$inst_str`: The string representing the instruction type name. This string is compared
+            ///                against the instruction type's `inst_name()` function.
+            /// * `$func`: The function to be invoked. It will be called with the matched instruction type
+            ///            as a generic argument.
+            /// * `$args`: The arguments passed to the function after it is matched to an instruction type.
+            /// * `$fallback`: The fallback expression to execute when the string does not match any known
+            ///                instruction type.
+            ///
+            /// # Example
+            ///
+            /// ```ignore
+            /// fn process_instruction<T>(arg1: u32, arg2: u32) {
+            ///     ...
+            /// }
+            ///
+            /// match_string_to_inst!("Add", process_instruction(arg1, arg2), {
+            ///     // Fallback behavior if no match is found
+            ///     println!("Instruction type not found");
+            /// });
+            /// ```
+            ///
+            /// In this example, if the string "add" matches the instruction type `Add`, the macro
+            /// calls the `process_instruction` function with `Add` as a generic parameter and passes
+            /// the arguments `arg1` and `arg2`. If the string does not match any known instruction,
+            /// the fallback block will be executed.
+            #[macro_export]
+            macro_rules! match_string_to_inst {
+                ($inst_str: expr, $func:ident($($args: expr),*), $fallback: expr) => {
+                    match $inst_str{
+                        #(#arms)*
+                        _ => $fallback,
+                    }
+                };
+            }
         }
     }
 }
