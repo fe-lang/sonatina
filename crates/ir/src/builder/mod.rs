@@ -4,14 +4,12 @@ mod ssa;
 
 pub use func_builder::FunctionBuilder;
 pub use module_builder::ModuleBuilder;
-
 pub use ssa::Variable;
 
 pub mod test_util {
+    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
     use super::*;
-
-    use sonatina_triple::EvmVersion;
-
     use crate::{
         func_cursor::InstInserter,
         isa::evm::Evm,
@@ -20,7 +18,13 @@ pub mod test_util {
     };
 
     pub fn test_isa() -> Evm {
-        Evm::new(EvmVersion::London)
+        let triple = TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::London),
+        );
+
+        Evm::new(triple)
     }
 
     pub fn test_func_builder(args: &[Type], ret_ty: Type) -> (Evm, FunctionBuilder<InstInserter>) {

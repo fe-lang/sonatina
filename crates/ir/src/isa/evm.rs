@@ -1,20 +1,19 @@
 use std::sync::LazyLock;
 
-use sonatina_triple::{Architecture, Chain, EvmVersion, TargetTriple, Version};
+use sonatina_triple::{Architecture, TargetTriple, Vendor};
 
 use super::{Endian, Isa, TypeLayout};
 use crate::{inst::evm::inst_set::EvmInstSet, types::CompoundTypeData, Type};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Evm {
-    version: Version,
+    triple: TargetTriple,
 }
 
 impl Evm {
-    pub fn new(version: EvmVersion) -> Self {
-        Self {
-            version: Version::Evm(version),
-        }
+    pub fn new(triple: TargetTriple) -> Self {
+        assert!(matches!(triple.architecture, Architecture::Evm));
+        Self { triple }
     }
 }
 
@@ -22,7 +21,7 @@ impl Isa for Evm {
     type InstSet = EvmInstSet;
 
     fn triple(&self) -> TargetTriple {
-        TargetTriple::new(Architecture::Evm, Chain::Ethereum, self.version)
+        self.triple
     }
 
     fn type_layout(&self) -> &'static dyn TypeLayout {

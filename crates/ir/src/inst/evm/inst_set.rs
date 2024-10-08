@@ -1,5 +1,6 @@
-use crate::inst::*;
 use macros::inst_set;
+
+use crate::inst::*;
 
 #[inst_set(InstKind = "EvmInstKind")]
 pub struct EvmInstSet(

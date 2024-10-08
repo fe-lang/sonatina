@@ -2,19 +2,26 @@ use std::fmt::{Display, Formatter};
 
 use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TargetTriple {
+    /// An architecture.
     pub architecture: Architecture,
-    pub chain: Chain,
-    pub version: Version,
+    /// A vendor or chain.
+    pub vendor: Vendor,
+    /// An operating system or VM.
+    pub operating_system: OperatingSystem,
 }
 
 impl TargetTriple {
-    pub fn new(architecture: Architecture, chain: Chain, version: Version) -> Self {
+    pub fn new(
+        architecture: Architecture,
+        vendor: Vendor,
+        operating_system: OperatingSystem,
+    ) -> Self {
         Self {
             architecture,
-            chain,
-            version,
+            vendor,
+            operating_system,
         }
     }
     pub fn parse(s: &str) -> Result<Self, InvalidTriple> {
@@ -25,12 +32,12 @@ impl TargetTriple {
                 .next()
                 .ok_or_else(|| InvalidTriple::InvalidFormat(s.to_string()))?,
         )?;
-        let chain = Chain::parse(
+        let chain = Vendor::parse(
             triple
                 .next()
                 .ok_or_else(|| InvalidTriple::InvalidFormat(s.to_string()))?,
         )?;
-        let version = Version::parse(
+        let version = OperatingSystem::parse(
             arch,
             chain,
             triple
@@ -48,7 +55,11 @@ impl TargetTriple {
 
 impl Display for TargetTriple {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}-{}-{}", self.architecture, self.chain, self.version)
+        write!(
+            f,
+            "{}-{}-{}",
+            self.architecture, self.vendor, self.operating_system
+        )
     }
 }
 
@@ -75,36 +86,36 @@ impl Display for Architecture {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Chain {
+pub enum Vendor {
     Ethereum,
 }
 
-impl Chain {
+impl Vendor {
     fn parse(s: &str) -> Result<Self, InvalidTriple> {
         match s {
-            "ethereum" => Ok(Chain::Ethereum),
-            _ => Err(InvalidTriple::ChainNotSupported),
+            "ethereum" => Ok(Vendor::Ethereum),
+            _ => Err(InvalidTriple::VendorNotSupported),
         }
     }
 }
 
-impl Display for Chain {
+impl Display for Vendor {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Chain::Ethereum => write!(f, "ethereum"),
+            Vendor::Ethereum => write!(f, "ethereum"),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Version {
-    EvmVersion(EvmVersion),
+pub enum OperatingSystem {
+    Evm(EvmVersion),
 }
 
-impl Version {
-    fn parse(arch: Architecture, chain: Chain, s: &str) -> Result<Self, InvalidTriple> {
+impl OperatingSystem {
+    fn parse(arch: Architecture, chain: Vendor, s: &str) -> Result<Self, InvalidTriple> {
         match (arch, chain) {
-            (Architecture::Evm, Chain::Ethereum) => {
+            (Architecture::Evm, Vendor::Ethereum) => {
                 let evm_version = match s {
                     "frontier" => EvmVersion::Frontier,
                     "homestead" => EvmVersion::Homestead,
@@ -112,18 +123,18 @@ impl Version {
                     "constantinople" => EvmVersion::Constantinople,
                     "istanbul" => EvmVersion::Istanbul,
                     "london" => EvmVersion::London,
-                    _ => return Err(InvalidTriple::VersionNotSupported),
+                    _ => return Err(InvalidTriple::OsNotSupported),
                 };
-                Ok(Self::EvmVersion(evm_version))
+                Ok(Self::Evm(evm_version))
             }
         }
     }
 }
 
-impl Display for Version {
+impl Display for OperatingSystem {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::EvmVersion(evm_version) => write!(f, "{}", evm_version),
+            Self::Evm(evm_version) => write!(f, "{}", evm_version),
         }
     }
 }
@@ -137,6 +148,7 @@ pub enum EvmVersion {
     Istanbul,
     London,
 }
+
 #[derive(Debug, Clone, Error)]
 pub enum InvalidTriple {
     #[error("the format of triple must be `architecture-chain-version: but got `{0}`")]
@@ -145,11 +157,11 @@ pub enum InvalidTriple {
     #[error("given architecture is not supported")]
     ArchitectureNotSupported,
 
-    #[error("given chain is not supported")]
-    ChainNotSupported,
+    #[error("given vendor is not supported")]
+    VendorNotSupported,
 
-    #[error("given version is not supported")]
-    VersionNotSupported,
+    #[error("given operating system is not supported")]
+    OsNotSupported,
 
     #[error("given triple consists of invalid combination")]
     InvalidCombination,
@@ -178,7 +190,10 @@ mod tests {
         let triple = TargetTriple::parse(target).unwrap();
 
         assert_eq!(triple.architecture, Architecture::Evm);
-        assert_eq!(triple.chain, Chain::Ethereum);
-        assert_eq!(triple.version, Version::EvmVersion(EvmVersion::Istanbul));
+        assert_eq!(triple.vendor, Vendor::Ethereum);
+        assert_eq!(
+            triple.operating_system,
+            OperatingSystem::Evm(EvmVersion::Istanbul)
+        );
     }
 }

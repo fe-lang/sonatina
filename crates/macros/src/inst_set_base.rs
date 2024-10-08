@@ -94,15 +94,16 @@ impl TraitDefinition {
             ///     ...
             /// }
             ///
-            /// match_string_to_inst!("Add", process_instruction(arg1, arg2), {
+            /// match_string_to_inst!("add", process_instruction(arg1, arg2), {
             ///     // Fallback behavior if no match is found
             ///     println!("Instruction type not found");
             /// });
             /// ```
             ///
             /// In this example, if the string "add" matches the instruction type `Add`, the macro
-            /// calls the `process_instruction` function with `Add` as a generic parameter and passes
-            /// the arguments `arg1` and `arg2`. If the string does not match any known instruction,
+            /// calls the `process_instruction` function with [`crate::inst::arith::Add`] as a generic parameter and passes
+            /// the arguments `arg1` and `arg2`(i.e, `process_function::<crate::inst::arith::Add>(arg1, arg2)`).
+            /// If the string does not match any known instruction,
             /// the fallback block will be executed.
             #[macro_export]
             macro_rules! match_string_to_inst {
