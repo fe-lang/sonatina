@@ -144,7 +144,7 @@ where
     /// Inserts an instruction into the function without creating a result value
     /// (i.e., for instructions that have no return type).
     ///
-    /// Please refer to [`insert_inst`] if the instruction has a result.
+    /// Please refer to [`Self::insert_inst`] if the instruction has a result.
     ///
     /// # Parameters
     /// - `inst`: The instruction to insert, which must implement the `Inst`
