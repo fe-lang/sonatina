@@ -31,7 +31,8 @@ impl InstProp {
         mut item_trait: syn::ItemTrait,
     ) -> syn::Result<(syn::ItemTrait, PropConfig)> {
         let mut members_opt = None;
-        const MISSING_MEMBERS: &str = "`type Members = (ty_1, ty_2, .., ty_n)` is required";
+        const MISSING_MEMBERS: &str =
+            "`type Members = (ty_1, ty_2, .., ty_n)` or `type Members = All` is required";
 
         for it in item_trait.items.iter() {
             if let syn::TraitItem::Type(assoc_ty) = it {
@@ -39,24 +40,44 @@ impl InstProp {
                     continue;
                 }
 
-                let Some((_, syn::Type::Tuple(tuple_ty))) = &assoc_ty.default else {
+                let Some((_, members)) = &assoc_ty.default else {
                     return Err(syn::Error::new_spanned(assoc_ty, MISSING_MEMBERS));
                 };
 
-                let mut members = Vec::with_capacity(tuple_ty.elems.len());
-                for elem_ty in &tuple_ty.elems {
-                    let syn::Type::Path(p) = elem_ty else {
-                        return Err(syn::Error::new_spanned(elem_ty, "path is requried"));
-                    };
+                let members = match members {
+                    syn::Type::Tuple(tuple_ty) => {
+                        let mut paths = Vec::with_capacity(tuple_ty.elems.len());
+                        for elem_ty in &tuple_ty.elems {
+                            let syn::Type::Path(p) = elem_ty else {
+                                return Err(syn::Error::new_spanned(elem_ty, "path is requried"));
+                            };
 
-                    members.push(p.path.clone());
-                }
+                            paths.push(p.path.clone());
+                        }
+                        Members::Subset(paths)
+                    }
+
+                    syn::Type::Path(p) => {
+                        if !p.path.is_ident("All") || p.qself.is_some() {
+                            return Err(syn::Error::new_spanned(
+                                p,
+                                "`(ty_1, ty_2, .., ty_n)` or `All` is required",
+                            ));
+                        }
+                        Members::All
+                    }
+
+                    _ => {
+                        return Err(syn::Error::new_spanned(assoc_ty, MISSING_MEMBERS));
+                    }
+                };
 
                 if members_opt.replace(members).is_some() {
                     return Err(syn::Error::new_spanned(it, "`members` should be unique"));
                 }
             }
         }
+
         let Some(members) = members_opt else {
             return Err(syn::Error::new(
                 proc_macro2::Span::call_site(),
@@ -91,7 +112,7 @@ impl InstProp {
 
         let config = PropConfig {
             members,
-            mutability,
+            is_mut: mutability,
         };
 
         Ok((item_trait, config))
@@ -110,13 +131,40 @@ impl InstProp {
     }
 
     fn impl_sealed_trait(&self) -> proc_macro2::TokenStream {
+        let path_prefix = self.path_to_ir_crate();
+
         let mod_name = self.sealed_module_name();
         let sealed_trait_name = self.sealed_trait_name();
-        let impl_for_members = self.config.members.iter().map(|path| {
-            quote! {
-                impl #sealed_trait_name for #path {}
+        let impl_for_members = match &self.config.members {
+            Members::All => {
+                let macro_path = if self.is_inside_ir_crate() {
+                    quote! { apply_macro_to_all_insts }
+                } else {
+                    quote! {#path_prefix::apply_macro_to_all_insts}
+                };
+
+                quote! {
+                    macro_rules! __impl_sealed {
+                        ($ty:ty) => {
+                            impl #sealed_trait_name for $ty {}
+                        };
+                    }
+
+                    #macro_path! {__impl_sealed}
+                }
             }
-        });
+
+            Members::Subset(insts) => {
+                let impls = insts.iter().map(|path| {
+                    quote! {
+                        impl #sealed_trait_name for #path {}
+                    }
+                });
+                quote! {
+                    #(#impls)*
+                }
+            }
+        };
 
         quote! {
             mod #mod_name {
@@ -124,7 +172,7 @@ impl InstProp {
 
                 #[doc(hidden)]
                 pub trait #sealed_trait_name {}
-                #(#impl_for_members)*
+                #impl_for_members
             }
         }
     }
@@ -150,11 +198,31 @@ impl InstProp {
     }
 
     fn impl_downcast(&self) -> proc_macro2::TokenStream {
-        let path_prefix = self.path_to_ir_crate();
         let trait_name = &self.item_trait.ident;
+        let path_prefix = self.path_to_ir_crate();
 
-        let arms = self.config.members.iter().map(|p| {
-            let arm_body = if self.config.mutability {
+        let members = match &self.config.members {
+            Members::All => {
+                let macro_path = if self.is_inside_ir_crate() {
+                    quote! { inst_downcast_from_all_insts }
+                } else {
+                    quote! {#path_prefix::inst_downcast_from_all_insts}
+                };
+                return if self.config.is_mut {
+                    quote! {
+                        #macro_path! {&mut dyn #trait_name}
+                    }
+                } else {
+                    quote! {
+                        #macro_path! {&dyn #trait_name}
+                    }
+                };
+            }
+            Members::Subset(insts) => insts,
+        };
+
+        let arms = members.iter().map(|p| {
+            let arm_body = if self.config.is_mut {
                 quote!(<&mut #p as #path_prefix::prelude::InstDowncastMut>::map_mut(isb, inst, |inst| inst as &mut dyn #trait_name))
             } else {
                 quote!(<&#p as #path_prefix::prelude::InstDowncast>::map(isb, inst, |inst| inst as &dyn #trait_name))
@@ -167,7 +235,7 @@ impl InstProp {
             )
         });
 
-        let inst_downcast_impl = if self.config.mutability {
+        let inst_downcast_impl = if self.config.is_mut {
             quote! {
                 impl #path_prefix::prelude::InstDowncastMut for &mut dyn #trait_name {
                     fn downcast_mut(isb: &dyn #path_prefix::prelude::InstSetBase, inst: &mut dyn #path_prefix::prelude::Inst) -> Option<Self> {
@@ -216,11 +284,21 @@ impl InstProp {
             syn::parse_quote!(::sonatina_ir)
         }
     }
+
+    fn is_inside_ir_crate(&self) -> bool {
+        let crate_name = std::env::var("CARGO_PKG_NAME").unwrap();
+        crate_name == "sonatina-ir"
+    }
 }
 
 struct PropConfig {
     /// `true` if one of trait method receiver is `mut`.
-    mutability: bool,
+    is_mut: bool,
 
-    members: Vec<syn::Path>,
+    members: Members,
+}
+
+enum Members {
+    All,
+    Subset(Vec<syn::Path>),
 }
