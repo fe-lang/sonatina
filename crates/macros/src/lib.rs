@@ -69,6 +69,57 @@ pub fn inst_set(
     inst_set::define_inst_set(attr, input)
 }
 
+/// A procedural macro attribute that facilitates defining a trait with a
+/// specific set of instruction types (implementing the `Inst` trait) and
+/// automatically implements downcasting functionality for the trait.
+///
+/// # Usage
+///
+/// This macro is applied to a trait to define a subset of instruction types
+/// (`Inst`-implementing types) that must implement the trait. The trait must
+/// define a type alias `Members`, which specifies the types that the trait will
+/// work with. The `Members` can be a specific set of types or use `All` to
+/// include all instruction types that.
+///
+/// ## Example
+///
+/// ```rust, ignore
+/// #[inst_prop]
+/// pub trait Commutative {
+///     type Members = (
+///         inst::arith::Add,
+///         inst::arith::Mul,
+///     );
+/// }
+///
+/// #[inst_prop]
+/// pub trait Interpret {
+///     fn eval(&self, state: &dyn State) -> EvalValue;
+///     type Members = {
+///         inst::arith::Add,
+///         inst::arith::Mul,
+///     };
+/// }
+/// ```
+///
+/// Alternatively, you can use `All` to specify that the trait works with all
+/// instruction types:
+///
+/// ```rust, ignore
+/// #[inst_prop]
+/// trait CommonTrait {
+///     fn foo(&self) -> Ty;
+///     type Members = All;
+/// }
+/// ```
+///
+/// ## Downcasting
+///
+/// The macro also generates `InstDowncast` or `InstDowncastMut`
+/// implementations for the trait, depending on the type of method receivers.
+///
+/// This allows the trait to act as a predicate that defines subsets of
+/// instruction types, providing dynamic dispatch and downcasting.
 #[proc_macro_attribute]
 pub fn inst_prop(
     attr: proc_macro::TokenStream,
