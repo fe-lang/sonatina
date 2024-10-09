@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use sonatina_triple::{Architecture, TargetTriple, Vendor};
+use sonatina_triple::{Architecture, TargetTriple};
 
 use super::{Endian, Isa, TypeLayout};
 use crate::{inst::evm::inst_set::EvmInstSet, types::CompoundTypeData, Type};

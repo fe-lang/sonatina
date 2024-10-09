@@ -1,14 +1,11 @@
 //! This module contains Sonatina IR types definitions.
-use std::{cmp, fmt};
+use std::{cmp, io};
 
 use cranelift_entity::PrimaryMap;
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
-use crate::{
-    ir_writer::{DisplayWithModule, DisplayableWithModule},
-    module::ModuleCtx,
-};
+use crate::{ir_writer::WriteWithModule, module::ModuleCtx};
 
 #[derive(Debug, Default)]
 pub struct TypeStore {
@@ -181,20 +178,18 @@ impl cmp::PartialOrd for Type {
     }
 }
 
-impl DisplayWithModule for Type {
-    fn fmt(&self, module: &ModuleCtx, formatter: &mut fmt::Formatter) -> fmt::Result {
+impl WriteWithModule for Type {
+    fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
         match self {
-            Type::I1 => write!(formatter, "i1"),
-            Type::I8 => write!(formatter, "i8"),
-            Type::I16 => write!(formatter, "i16"),
-            Type::I32 => write!(formatter, "i32"),
-            Type::I64 => write!(formatter, "i64"),
-            Type::I128 => write!(formatter, "i128"),
-            Type::I256 => write!(formatter, "i256"),
-            Type::Compound(cmpd_ty) => {
-                write!(formatter, "{}", DisplayableWithModule(cmpd_ty, module))
-            }
-            Type::Void => write!(formatter, "void"),
+            Type::I1 => write!(w, "i1"),
+            Type::I8 => write!(w, "i8"),
+            Type::I16 => write!(w, "i16"),
+            Type::I32 => write!(w, "i32"),
+            Type::I64 => write!(w, "i64"),
+            Type::I128 => write!(w, "i128"),
+            Type::I256 => write!(w, "i256"),
+            Type::Compound(cmpd_ty) => cmpd_ty.write(module, w),
+            Type::Void => write!(w, "void"),
         }
     }
 }
@@ -204,22 +199,23 @@ impl DisplayWithModule for Type {
 pub struct CompoundType(u32);
 cranelift_entity::entity_impl!(CompoundType);
 
-impl DisplayWithModule for CompoundType {
-    fn fmt(&self, module: &ModuleCtx, formatter: &mut fmt::Formatter) -> fmt::Result {
+impl WriteWithModule for CompoundType {
+    fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
         module.with_ty_store(|s| match s.resolve_compound(*self) {
             CompoundTypeData::Array { elem: ty, len } => {
-                let ty = DisplayableWithModule(ty, module);
-                write!(formatter, "[{ty};{len}]")
+                write!(w, "[")?;
+                ty.write(module, &mut *w)?;
+                write!(w, ";{len}]")
             }
             CompoundTypeData::Ptr(ty) => {
-                let ty = DisplayableWithModule(ty, module);
-                write!(formatter, "*{ty}")
+                write!(w, "*")?;
+                ty.write(module, w)
             }
             CompoundTypeData::Struct(StructData { name, packed, .. }) => {
                 if *packed {
-                    write!(formatter, "<{{{name}}}>")
+                    write!(w, "<{{{name}}}>")
                 } else {
-                    write!(formatter, "{{{name}}}")
+                    write!(w, "{{{name}}}")
                 }
             }
         })
@@ -240,26 +236,26 @@ pub struct StructData {
     pub packed: bool,
 }
 
-impl DisplayWithModule for StructData {
-    fn fmt(&self, module: &ModuleCtx, formatter: &mut fmt::Formatter) -> fmt::Result {
-        write!(formatter, "type %{} = ", self.name)?;
+impl WriteWithModule for StructData {
+    fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
+        write!(w, "type %{} = ", self.name)?;
         if self.packed {
-            write!(formatter, "<{{")?;
+            write!(w, "<{{")?;
         } else {
-            write!(formatter, "{{")?;
+            write!(w, "{{")?;
         }
 
         let mut delim = "";
         for &ty in &self.fields {
-            let ty = DisplayableWithModule(ty, module);
-            write!(formatter, "{delim}{ty}")?;
+            write!(w, "{delim}")?;
+            ty.write(module, &mut *w)?;
             delim = ", ";
         }
 
         if self.packed {
-            write!(formatter, "}}>;")
+            write!(w, "}}>;")
         } else {
-            write!(formatter, "}};")
+            write!(w, "}};")
         }
     }
 }

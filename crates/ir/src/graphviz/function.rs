@@ -2,12 +2,11 @@ use std::iter;
 
 use dot2::{label::Text, GraphWalk, Id, Labeller, Style};
 
+use super::block::BlockNode;
 use crate::{
-    inst::control_flow::Phi, ir_writer::DisplayableWithFunc, prelude::*, BlockId, ControlFlowGraph,
+    inst::control_flow::Phi, ir_writer::WriteWithFunc, prelude::*, BlockId, ControlFlowGraph,
     Function,
 };
-
-use super::block::BlockNode;
 
 pub(super) const DUMMY_BLOCK: BlockId = BlockId(u32::MAX);
 
@@ -25,8 +24,8 @@ impl<'a> FunctionGraph<'a> {
 impl<'a> FunctionGraph<'a> {
     pub(super) fn blocks(&self) -> Vec<BlockNode<'a>> {
         let Self { func, cfg } = self;
-        // Dummy block is needed to label the graph with the function signature. Returns a vector
-        // with the dummy block as a last element.
+        // Dummy block is needed to label the graph with the function signature. Returns
+        // a vector with the dummy block as a last element.
         cfg.post_order()
             .map(|block| BlockNode::new(func, cfg, block))
             .chain(iter::once(BlockNode::new(func, cfg, DUMMY_BLOCK)))
@@ -136,8 +135,8 @@ impl<'a> BlockEdge<'a> {
 
             for (value, block) in phi.args().into_iter() {
                 if *block == from {
-                    let value = DisplayableWithFunc(value, &func);
-                    return Text::LabelStr(format!("{value}").into());
+                    let value = value.dump_string(&func);
+                    return Text::LabelStr((value).into());
                 }
             }
         }

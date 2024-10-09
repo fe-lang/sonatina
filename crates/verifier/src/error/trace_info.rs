@@ -2,7 +2,7 @@ use std::fmt;
 
 use cranelift_entity::packed_option::PackedOption;
 use sonatina_ir::{
-    ir_writer::{DisplayableWithFunc, DisplayableWithModule, InstStatement, ValueWithTy},
+    ir_writer::{InstStatement, ValueWithTy, WriteWithFunc, WriteWithModule},
     module::{DisplayCalleeFuncRef, FuncRef},
     types::CompoundType,
     BlockId, Function, GlobalVariable, InstId, Type, ValueId,
@@ -86,23 +86,22 @@ impl<'a, 'b> fmt::Display for DisplayTraceInfo<'a, 'b> {
         let mut line = 0;
 
         if let Some(cmpd_ty) = cmpd_ty.expand() {
-            let cmpd_ty = DisplayableWithModule(cmpd_ty, &dfg.ctx);
+            let cmpd_ty = cmpd_ty.dump_string(&dfg.ctx);
             write!(f, "\n{line}: {cmpd_ty}")?;
             line += 1;
         }
         if let Some(ty) = ty {
-            let ty = DisplayableWithModule(ty, &dfg.ctx);
+            let ty = ty.dump_string(&dfg.ctx);
             write!(f, "\n{line}: {ty}")?;
             line += 1;
         }
         if let Some(gv) = gv.expand() {
-            let gv = DisplayableWithModule(gv, &dfg.ctx);
+            let gv = gv.dump_string(&dfg.ctx);
             write!(f, "\n{line}: {gv}")?;
             line += 1;
         }
         if let Some(value) = value.expand() {
-            let value_with_ty = ValueWithTy(value);
-            let value_with_ty = DisplayableWithFunc(value_with_ty, &func);
+            let value_with_ty = ValueWithTy(value).dump_string(&func);
             write!(f, "\n{line}: {value_with_ty}")?;
             line += 1;
         }
@@ -112,8 +111,7 @@ impl<'a, 'b> fmt::Display for DisplayTraceInfo<'a, 'b> {
             line += 1;
         }
         if let Some(inst_id) = inst_id.expand() {
-            let inst_stmt = InstStatement(inst_id);
-            let inst_stmt = DisplayableWithFunc(inst_stmt, func);
+            let inst_stmt = InstStatement(inst_id).dump_string(func);
             write!(f, "\n{line}: {inst_stmt}")?;
             line += 1;
         }
@@ -122,7 +120,7 @@ impl<'a, 'b> fmt::Display for DisplayTraceInfo<'a, 'b> {
             line += 1;
         }
 
-        let sig = DisplayableWithFunc(&func.sig, func);
+        let sig = func.sig.dump_string(func);
         write!(f, "\n{line}: {sig}")
     }
 }

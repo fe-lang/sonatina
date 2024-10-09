@@ -4,25 +4,27 @@ pub mod cmp;
 pub mod control_flow;
 pub mod data;
 pub mod evm;
+#[macro_use]
 pub mod inst_set;
 pub mod logic;
 
 use std::{
     any::{Any, TypeId},
-    fmt,
+    io,
 };
 
+use macros::inst_prop;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 
-use crate::{ir_writer::DisplayWithFunc, Function, InstSetBase, ValueId};
+use crate::{ir_writer::WriteWithFunc, Function, InstSetBase, ValueId};
 
 /// An opaque reference to dynamic [`Inst`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
 pub struct InstId(pub u32);
 cranelift_entity::entity_impl!(InstId);
 
-pub trait Inst: inst_set::sealed::Registered + Any + DisplayWithFunc {
+pub trait Inst: inst_set::sealed::Registered + Any {
     fn visit_values(&self, f: &mut dyn FnMut(ValueId));
     fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut ValueId));
     fn has_side_effect(&self) -> bool;
@@ -46,10 +48,11 @@ pub trait Inst: inst_set::sealed::Registered + Any + DisplayWithFunc {
     }
 }
 
-impl DisplayWithFunc for InstId {
-    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+impl WriteWithFunc for InstId {
+    fn write(&self, func: &Function, w: &mut impl io::Write) -> io::Result<()> {
         let inst = func.dfg.inst(*self);
-        inst.fmt(func, formatter)
+        let write: &dyn InstWrite = InstDowncast::downcast(func.inst_set(), inst).unwrap();
+        write.write(func, w)
     }
 }
 
@@ -180,25 +183,26 @@ pub trait InstDowncastMut: Sized {
     }
 }
 
-#[macro_export]
-macro_rules! impl_display_with_func {
+#[inst_prop]
+trait InstWrite {
+    fn write(&self, func: &Function, w: &mut dyn io::Write) -> io::Result<()>;
+    type Members = All;
+}
+
+macro_rules! impl_inst_write {
     ($ty:ty) => {
-        impl crate::ir_writer::DisplayWithFunc for $ty {
-            fn fmt(
+        impl crate::inst::InstWrite for $ty {
+            fn write(
                 &self,
                 func: &crate::Function,
-                formatter: &mut std::fmt::Formatter,
-            ) -> std::fmt::Result {
-                formatter.write_fmt(format_args!("{} ", crate::Inst::as_text(self)))?;
+                mut w: &mut dyn std::io::Write,
+            ) -> std::io::Result<()> {
+                w.write_fmt(format_args!("{} ", crate::Inst::as_text(self)))?;
                 let values = crate::Inst::collect_values(self);
-                crate::ir_writer::display_iter_with_delim(
-                    formatter,
-                    values
-                        .into_iter()
-                        .map(|v| crate::ir_writer::DisplayableWithFunc(v, func)),
-                    " ",
-                )
+                crate::ir_writer::write_iter_with_delim(&mut w, func, values.into_iter(), " ")
             }
         }
     };
 }
+
+use impl_inst_write;
