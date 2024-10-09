@@ -1,7 +1,7 @@
 use macros::Inst;
 use smallvec::SmallVec;
 
-use crate::{impl_display_with_func, Type, ValueId};
+use crate::{inst::impl_inst_write, Type, ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(has_side_effect)]
@@ -10,7 +10,7 @@ pub struct Mload {
     addr: ValueId,
     ty: Type,
 }
-impl_display_with_func!(Mload);
+impl_inst_write!(Mload);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(has_side_effect)]
@@ -21,11 +21,11 @@ pub struct Mstore {
     addr: ValueId,
     ty: Type,
 }
-impl_display_with_func!(Mstore);
+impl_inst_write!(Mstore);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 pub struct Gep {
     #[inst(value)]
     values: SmallVec<[ValueId; 8]>,
 }
-impl_display_with_func!(Gep);
+impl_inst_write!(Gep);

@@ -1,7 +1,10 @@
-use std::{fmt, io};
+use std::io;
 
 use super::{BlockId, Function};
-use crate::{module::ModuleCtx, InstId, Module, Value, ValueId};
+use crate::{
+    module::{FuncRef, ModuleCtx},
+    InstId, Module, Value, ValueId,
+};
 
 pub struct ModuleWriter<'a> {
     module: &'a Module,
@@ -14,15 +17,14 @@ impl<'a> ModuleWriter<'a> {
         Self { module }
     }
 
-    pub fn write(&mut self, mut w: impl io::Write) -> io::Result<()> {
+    pub fn write(&mut self, w: &mut impl io::Write) -> io::Result<()> {
         // Write target.
         writeln!(w, "target = {}", self.module.ctx.triple)?;
 
         // Write struct types defined in the module.
         self.module.ctx.with_ty_store(|s| {
             for s in s.all_struct_data() {
-                let s = DisplayableWithModule(s, &self.module.ctx);
-                write!(w, "{s}")?;
+                s.write(&self.module.ctx, &mut *w)?;
             }
             io::Result::Ok(())
         })?;
@@ -30,8 +32,7 @@ impl<'a> ModuleWriter<'a> {
         // Write module level global variables.
         self.module.ctx.with_gv_store(|s| {
             for gv in s.all_gv_data() {
-                let gv = DisplayableWithModule(gv, &self.module.ctx);
-                write!(w, "{gv}")?;
+                gv.write(&self.module.ctx, &mut *w)?;
             }
 
             io::Result::Ok(())
@@ -39,92 +40,107 @@ impl<'a> ModuleWriter<'a> {
 
         for func_ref in self.module.funcs.keys() {
             let func = &self.module.funcs[func_ref];
-            writeln!(w, "{func}")?;
+            let mut writer = FuncWriterImpl::new(func, func_ref);
+            writer.write(&mut *w)?;
         }
 
         Ok(())
     }
 
-    pub fn dump_string(&mut self) -> io::Result<String> {
+    pub fn dump_string(&mut self) -> String {
         let mut s = Vec::new();
-        self.write(&mut s)?;
-        unsafe { Ok(String::from_utf8_unchecked(s)) }
+        self.write(&mut s).unwrap();
+        unsafe { String::from_utf8_unchecked(s) }
     }
 }
 
-impl fmt::Display for Function {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut fw = FuncDisplayHelper::new(self);
-        fw.display(f)
+pub struct FuncWriter<'a> {
+    func: &'a Function,
+    func_ref: FuncRef,
+}
+
+impl<'a> FuncWriter<'a> {
+    pub fn new(func: &'a Function, func_ref: FuncRef) -> Self {
+        Self { func, func_ref }
+    }
+
+    pub fn write(&self, w: &mut impl io::Write) -> io::Result<()> {
+        FuncWriterImpl::new(self.func, self.func_ref).write(w)
+    }
+
+    pub fn dump_string(&self) -> String {
+        let mut s = Vec::new();
+        self.write(&mut s).unwrap();
+        unsafe { String::from_utf8_unchecked(s) }
     }
 }
 
-struct FuncDisplayHelper<'a> {
-    pub(crate) func: &'a Function,
+struct FuncWriterImpl<'a> {
+    func: &'a Function,
     level: u8,
 }
 
-impl<'a> FuncDisplayHelper<'a> {
-    fn new(func: &'a Function) -> Self {
+impl<'a> FuncWriterImpl<'a> {
+    fn new(func: &'a Function, _func_ref: FuncRef) -> Self {
         Self { func, level: 0 }
     }
 
-    fn display(&mut self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_fmt(format_args!(
+    fn write(&mut self, w: &mut impl io::Write) -> io::Result<()> {
+        w.write_fmt(format_args!(
             "func {} %{}(",
             self.func.sig.linkage(),
             self.func.sig.name()
         ))?;
-        display_iter_with_delim(
-            f,
-            self.func
-                .arg_values
-                .iter()
-                .map(|v| DisplayableWithFunc(ValueWithTy(*v), self.func)),
+        write_iter_with_delim(
+            &mut *w,
+            self.func,
+            self.func.arg_values.iter().map(|v| ValueWithTy(*v)),
             ", ",
         )?;
-        let ret_ty = DisplayableWithModule(self.func.sig.ret_ty(), self.func.ctx());
-        write!(f, ") -> {ret_ty} {{\n")?;
+        write!(w, ") -> ")?;
+        self.func.sig.ret_ty().write(self.func.ctx(), &mut *w)?;
+        write!(w, " {{\n")?;
 
         self.level += 1;
         for block in self.func.layout.iter_block() {
-            self.write_block_with_inst(block, f)?;
+            self.write_block_with_inst(block, &mut *w)?;
         }
 
         self.level -= 1;
-        writeln!(f, "}}")
+        writeln!(w, "}}")
     }
 
-    fn write_block_with_inst(&mut self, block: BlockId, f: &mut fmt::Formatter) -> fmt::Result {
-        self.indent(f)?;
-        write!(f, "{}", DisplayableWithFunc(block, self.func))?;
+    fn write_block_with_inst(&mut self, block: BlockId, w: &mut impl io::Write) -> io::Result<()> {
+        self.indent(&mut *w)?;
+        block.write(self.func, &mut *w)?;
 
-        self.enter(f)?;
+        self.enter(&mut *w)?;
         for inst in self.func.layout.iter_inst(block) {
-            self.write_inst_in_block(inst, f)?;
+            self.write_inst_in_block(inst, &mut *w)?;
         }
         self.leave();
 
-        self.newline(f)
+        self.newline(w)
     }
 
-    fn write_inst_in_block(&mut self, inst: InstId, f: &mut fmt::Formatter) -> fmt::Result {
-        self.indent(f)?;
+    fn write_inst_in_block(&mut self, inst: InstId, w: &mut impl io::Write) -> io::Result<()> {
+        self.indent(&mut *w)?;
         let inst_with_res = InstStatement(inst);
-        write!(f, "{}\n", DisplayableWithFunc(inst_with_res, self.func))
+        inst_with_res.write(self.func, &mut *w)?;
+        write!(w, "\n")
     }
 
-    fn indent(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", " ".repeat(self.level as usize * 4))
+    fn indent(&self, mut w: impl io::Write) -> io::Result<()> {
+        write!(w, "{}", " ".repeat(self.level as usize * 4))
     }
 
-    fn newline(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "\n")
+    fn newline(&self, mut w: impl io::Write) -> io::Result<()> {
+        write!(w, "\n")
     }
 
-    fn enter(&mut self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn enter(&mut self, mut w: impl io::Write) -> io::Result<()> {
         self.level += 1;
-        write!(f, ":\n")
+        write!(w, ":\n")
     }
 
     fn leave(&mut self) {
@@ -132,96 +148,88 @@ impl<'a> FuncDisplayHelper<'a> {
     }
 }
 
-pub trait DisplayWithModule {
-    fn fmt(&self, module: &ModuleCtx, formatter: &mut fmt::Formatter) -> fmt::Result;
-}
+pub trait WriteWithModule {
+    fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()>;
 
-impl<T> DisplayWithModule for &T
-where
-    T: DisplayWithModule,
-{
-    fn fmt(&self, module: &ModuleCtx, formatter: &mut fmt::Formatter) -> fmt::Result {
-        (*self).fmt(module, formatter)
-    }
-}
-pub struct DisplayableWithModule<'m, T>(pub T, pub &'m ModuleCtx);
-impl<'m, T> fmt::Display for DisplayableWithModule<'m, T>
-where
-    T: DisplayWithModule,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(self.1, f)
+    fn dump_string(&self, module: &ModuleCtx) -> String {
+        let mut s = Vec::new();
+        self.write(module, &mut s).unwrap();
+        unsafe { String::from_utf8_unchecked(s) }
     }
 }
 
-pub trait DisplayWithFunc {
-    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result;
-}
-
-impl<T> DisplayWithFunc for &T
+impl<T> WriteWithModule for &T
 where
-    T: DisplayWithFunc,
+    T: WriteWithModule,
 {
-    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
-        (*self).fmt(func, formatter)
+    fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
+        (*self).write(module, w)
     }
 }
 
-pub struct DisplayableWithFunc<'f, T>(pub T, pub &'f Function);
+pub trait WriteWithFunc {
+    fn write(&self, func: &Function, w: &mut impl io::Write) -> io::Result<()>;
 
-impl<'f, T> fmt::Display for DisplayableWithFunc<'f, T>
+    fn dump_string(&self, func: &Function) -> String {
+        let mut s = Vec::new();
+        self.write(func, &mut s).unwrap();
+        unsafe { String::from_utf8_unchecked(s) }
+    }
+}
+
+impl<T> WriteWithFunc for &T
 where
-    T: DisplayWithFunc,
+    T: WriteWithFunc,
 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(self.1, f)
+    fn write(&self, func: &Function, w: &mut impl io::Write) -> io::Result<()> {
+        (*self).write(func, w)
     }
 }
 
 #[derive(Clone, Copy)]
 pub struct ValueWithTy(pub ValueId);
-impl DisplayWithFunc for ValueWithTy {
-    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
-        let value = DisplayableWithFunc(self.0, func);
+impl WriteWithFunc for ValueWithTy {
+    fn write(&self, func: &Function, w: &mut impl io::Write) -> io::Result<()> {
+        let value = self.0;
+        value.write(func, &mut *w)?;
         if let Value::Immediate { .. } = func.dfg.value(self.0) {
-            write!(formatter, "{value}")
+            Ok(())
         } else {
             let ty = func.dfg.value_ty(self.0);
-            let ty = DisplayableWithModule(ty, func.ctx());
-            write!(formatter, "{value}.{ty}")
+            write!(w, ".")?;
+            ty.write(func.ctx(), &mut *w)
         }
     }
 }
 
 pub struct InstStatement(pub InstId);
-impl DisplayWithFunc for InstStatement {
-    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+impl WriteWithFunc for InstStatement {
+    fn write(&self, func: &Function, w: &mut impl io::Write) -> io::Result<()> {
         if let Some(result) = func.dfg.inst_result(self.0) {
             let result_with_ty = ValueWithTy(result);
-            write!(
-                formatter,
-                "{} = ",
-                DisplayableWithFunc(result_with_ty, func)
-            )?;
+            result_with_ty.write(func, &mut *w)?;
+            write!(w, " = ")?;
         };
 
-        write!(formatter, "{};", DisplayableWithFunc(self.0, func))
+        self.0.write(func, w)?;
+        write!(w, ";")
     }
 }
 
-pub fn display_iter_with_delim<T>(
-    f: &mut fmt::Formatter,
+pub fn write_iter_with_delim<T>(
+    w: &mut impl io::Write,
+    func: &Function,
     iter: impl Iterator<Item = T>,
     delim: &str,
-) -> fmt::Result
+) -> io::Result<()>
 where
-    T: fmt::Display,
+    T: WriteWithFunc,
 {
     let mut iter = iter.peekable();
     while let Some(item) = iter.next() {
-        write!(f, "{item}")?;
+        item.write(func, &mut *w)?;
         if iter.peek().is_some() {
-            f.write_str(delim)?;
+            write!(w, "{delim}")?;
         }
     }
 

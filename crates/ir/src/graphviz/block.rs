@@ -4,7 +4,7 @@ use dot2::label;
 
 use super::function::DUMMY_BLOCK;
 use crate::{
-    ir_writer::{DisplayableWithFunc, ValueWithTy},
+    ir_writer::{ValueWithTy, WriteWithFunc},
     BlockId, ControlFlowGraph, Function,
 };
 
@@ -33,8 +33,8 @@ impl<'a> BlockNode<'a> {
         let Self { block, func, .. } = self;
         let Function { sig, layout, .. } = func;
         if block == DUMMY_BLOCK {
-            let sig = DisplayableWithFunc(sig, &self.func);
-            return label::Text::LabelStr(format!("{sig}").into());
+            let sig = sig.dump_string(self.func);
+            return label::Text::LabelStr(sig.into());
         }
 
         let mut label = r#"<table border="0" cellborder="1" cellspacing="0">"#.to_string();
@@ -56,11 +56,11 @@ impl<'a> BlockNode<'a> {
                 write!(
                     &mut inst_string,
                     "{} = ",
-                    DisplayableWithFunc(result_with_ty, self.func)
+                    result_with_ty.dump_string(self.func)
                 )
                 .unwrap();
             }
-            let inst = DisplayableWithFunc(inst, self.func);
+            let inst = inst.dump_string(self.func);
             write!(&mut inst_string, "{inst};").unwrap();
 
             write!(label, "{}", dot2::escape_html(&inst_string)).unwrap();

@@ -1,6 +1,6 @@
 use macros::Inst;
 
-use crate::{impl_display_with_func, Type, ValueId};
+use crate::{inst::impl_inst_write, Type, ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Sext {
@@ -8,7 +8,7 @@ pub struct Sext {
     from: ValueId,
     ty: Type,
 }
-impl_display_with_func!(Sext);
+impl_inst_write!(Sext);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Zext {
@@ -16,7 +16,7 @@ pub struct Zext {
     from: ValueId,
     ty: Type,
 }
-impl_display_with_func!(Zext);
+impl_inst_write!(Zext);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Trunc {
@@ -24,7 +24,7 @@ pub struct Trunc {
     from: ValueId,
     ty: Type,
 }
-impl_display_with_func!(Trunc);
+impl_inst_write!(Trunc);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Bitcast {
@@ -32,4 +32,4 @@ pub struct Bitcast {
     from: ValueId,
     ty: Type,
 }
-impl_display_with_func!(Bitcast);
+impl_inst_write!(Bitcast);

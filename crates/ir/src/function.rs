@@ -1,11 +1,11 @@
-use std::fmt;
+use std::io;
 
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use super::{module::FuncRef, DataFlowGraph, Layout, Type, ValueId};
 use crate::{
-    ir_writer::{DisplayWithFunc, DisplayableWithModule},
+    ir_writer::{WriteWithFunc, WriteWithModule},
     module::ModuleCtx,
     InstSetBase, Linkage,
 };
@@ -95,8 +95,8 @@ impl Signature {
     }
 }
 
-impl DisplayWithFunc for Signature {
-    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+impl WriteWithFunc for Signature {
+    fn write(&self, func: &Function, w: &mut impl io::Write) -> io::Result<()> {
         let Signature {
             name,
             linkage,
@@ -104,14 +104,18 @@ impl DisplayWithFunc for Signature {
             ret_ty,
         } = self;
 
-        let mut args_ty = String::new();
-        for arg_ty in args {
-            let ty = DisplayableWithModule(arg_ty, func.ctx());
-            args_ty.push_str(&format!("{ty} "));
-        }
-        let args_ty = args_ty.trim();
-        let ret_ty = DisplayableWithModule(ret_ty, func.ctx());
+        write!(w, "func {linkage} %{name}(")?;
+        let mut args = args.iter();
+        if let Some(arg) = args.next() {
+            arg.write(func.ctx(), &mut *w)?;
+        };
 
-        write!(formatter, "func {linkage} %{name}({args_ty}) -> {ret_ty}")
+        for arg in args {
+            write!(w, " ")?;
+            arg.write(func.ctx(), &mut *w)?;
+        }
+        write!(w, ") -> ")?;
+
+        ret_ty.write(func.ctx(), &mut *w)
     }
 }

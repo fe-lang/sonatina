@@ -1,13 +1,9 @@
-use std::fmt;
+use std::{fmt, io};
 
 use cranelift_entity::PrimaryMap;
 use rustc_hash::FxHashMap;
 
-use crate::{
-    ir_writer::{DisplayWithModule, DisplayableWithModule},
-    module::ModuleCtx,
-    Immediate, Linkage, Type,
-};
+use crate::{ir_writer::WriteWithModule, module::ModuleCtx, Immediate, Linkage, Type};
 
 #[derive(Debug, Default)]
 pub struct GlobalVariableStore {
@@ -59,12 +55,9 @@ impl GlobalVariableStore {
 pub struct GlobalVariable(pub u32);
 cranelift_entity::entity_impl!(GlobalVariable);
 
-impl DisplayWithModule for GlobalVariable {
-    fn fmt(&self, module: &ModuleCtx, formatter: &mut fmt::Formatter) -> fmt::Result {
-        module.with_gv_store(|s| {
-            let gv_data = DisplayableWithModule(s.gv_data(*self), module);
-            write!(formatter, "{gv_data}")
-        })
+impl WriteWithModule for GlobalVariable {
+    fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
+        module.with_gv_store(|s| s.gv_data(*self).write(module, w))
     }
 }
 
@@ -105,8 +98,8 @@ impl GlobalVariableData {
     }
 }
 
-impl DisplayWithModule for GlobalVariableData {
-    fn fmt(&self, module: &ModuleCtx, formatter: &mut fmt::Formatter) -> fmt::Result {
+impl WriteWithModule for GlobalVariableData {
+    fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
         let GlobalVariableData {
             symbol: _,
             ty,
@@ -115,14 +108,13 @@ impl DisplayWithModule for GlobalVariableData {
             data,
         } = &self;
 
-        let ty = DisplayableWithModule(*ty, module);
-        write!(formatter, "{ty}")?;
+        ty.write(module, &mut *w)?;
         if *is_const {
-            write!(formatter, " const")?;
+            write!(w, " const")?;
         }
-        write!(formatter, " {linkage}")?;
+        write!(w, " {linkage}")?;
         if let Some(data) = data {
-            write!(formatter, " {}", data)?;
+            write!(w, " {data}")?;
         }
         Ok(())
     }
@@ -179,9 +171,8 @@ impl fmt::Display for ConstantValue {
 
 #[cfg(test)]
 mod test {
-    use crate::{builder::test_util::test_isa, module::ModuleCtx};
-
     use super::*;
+    use crate::{builder::test_util::test_isa, module::ModuleCtx};
 
     #[test]
     fn display_gv() {
@@ -198,8 +189,7 @@ mod test {
             ))
         });
 
-        let display_gv = DisplayableWithModule(gv, &ctx);
-        assert_eq!(display_gv.to_string(), "i32 const public 1618");
+        assert_eq!(gv.dump_string(&ctx), "i32 const public 1618");
     }
 
     #[test]
@@ -221,7 +211,6 @@ mod test {
             ))
         });
 
-        let display_gv = DisplayableWithModule(gv, &ctx);
-        assert_eq!(display_gv.to_string(), "[i32;3] const private [8, 4, 2]");
+        assert_eq!(gv.dump_string(&ctx), "[i32;3] const private [8, 4, 2]");
     }
 }

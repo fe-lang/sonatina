@@ -1,12 +1,11 @@
-use std::fmt;
+use std::io;
 
 use macros::{inst_prop, Inst};
 use smallvec::SmallVec;
 
+use super::InstWrite;
 use crate::{
-    ir_writer::{DisplayWithFunc, DisplayableWithFunc},
-    module::FuncRef,
-    BlockId, Function, Inst, InstSetBase, Type, ValueId,
+    ir_writer::WriteWithFunc, module::FuncRef, BlockId, Function, Inst, InstSetBase, Type, ValueId,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
@@ -14,12 +13,11 @@ use crate::{
 pub struct Jump {
     dest: BlockId,
 }
-impl DisplayWithFunc for Jump {
-    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+impl InstWrite for Jump {
+    fn write(&self, func: &Function, mut w: &mut dyn io::Write) -> io::Result<()> {
         let name = self.as_text();
-        let block = DisplayableWithFunc(self.dest, func);
-
-        write!(formatter, "{name} {block}")
+        write!(w, "{name} ")?;
+        self.dest.write(func, &mut w)
     }
 }
 
@@ -31,14 +29,15 @@ pub struct Br {
     nz_dest: BlockId,
     z_dest: BlockId,
 }
-impl DisplayWithFunc for Br {
-    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
-        let name = self.as_text();
-        let cond = DisplayableWithFunc(self.cond, func);
-        let nz_dest = DisplayableWithFunc(self.nz_dest, func);
-        let z_dest = DisplayableWithFunc(self.z_dest, func);
-
-        write!(formatter, "{name} {cond} {nz_dest} {z_dest}")
+impl InstWrite for Br {
+    fn write(&self, func: &Function, mut w: &mut dyn io::Write) -> io::Result<()> {
+        write!(w, "{}", self.as_text())?;
+        write!(w, " ")?;
+        self.cond.write(func, &mut w)?;
+        write!(w, " ")?;
+        self.nz_dest.write(func, &mut w)?;
+        write!(w, " ")?;
+        self.z_dest.write(func, &mut w)
     }
 }
 
@@ -52,22 +51,22 @@ pub struct BrTable {
     #[inst(value)]
     table: Vec<(ValueId, BlockId)>,
 }
-impl DisplayWithFunc for BrTable {
-    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
-        let name = self.as_text();
-        let scrutinee = DisplayableWithFunc(self.scrutinee, func);
-        write!(formatter, "{name} {scrutinee}")?;
+impl InstWrite for BrTable {
+    fn write(&self, func: &Function, mut w: &mut dyn io::Write) -> io::Result<()> {
+        write!(w, "{}", self.as_text())?;
+        write!(w, " ")?;
+        self.scrutinee.write(func, &mut w)?;
+        write!(w, " ")?;
         if let Some(default) = self.default {
-            let default = DisplayableWithFunc(default, func);
-            write!(formatter, " {default}")?;
-        } else {
-            write!(formatter, " undef")?;
+            default.write(func, &mut w)?;
         };
 
         for (value, block) in &self.table {
-            let value = DisplayableWithFunc(value, func);
-            let block = DisplayableWithFunc(block, func);
-            write!(formatter, " ({value} {block})")?;
+            write!(w, " (")?;
+            value.write(func, &mut w)?;
+            write!(w, " ")?;
+            block.write(func, &mut w)?;
+            write!(w, ")")?;
         }
 
         Ok(())
@@ -98,14 +97,16 @@ impl Phi {
         self.args.retain(|(_, block)| f(*block))
     }
 }
-impl DisplayWithFunc for Phi {
-    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
-        write!(formatter, "{}", self.as_text())?;
+impl InstWrite for Phi {
+    fn write(&self, func: &Function, mut w: &mut dyn io::Write) -> io::Result<()> {
+        write!(w, "{}", self.as_text())?;
 
         for (value, block) in &self.args {
-            let value = DisplayableWithFunc(value, func);
-            let block = DisplayableWithFunc(block, func);
-            write!(formatter, " ({value} {block})")?;
+            write!(w, " (")?;
+            value.write(func, &mut w)?;
+            write!(w, " ")?;
+            block.write(func, &mut w)?;
+            write!(w, ")")?;
         }
 
         Ok(())
@@ -123,14 +124,14 @@ pub struct Call {
     // TODO: Is `ret_ty` necessary?
     ret_ty: Type,
 }
-impl DisplayWithFunc for Call {
-    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
+impl InstWrite for Call {
+    fn write(&self, func: &Function, mut w: &mut dyn io::Write) -> io::Result<()> {
         let name = self.as_text();
         let callee = func.callees[&self.callee].name();
-        write!(formatter, "{name} %{callee}")?;
+        write!(w, "{name} %{callee}")?;
         for value in &self.args {
-            let value = DisplayableWithFunc(value, func);
-            write!(formatter, " {value}")?;
+            write!(w, " ")?;
+            value.write(func, &mut w)?;
         }
         Ok(())
     }
@@ -143,12 +144,12 @@ pub struct Return {
     #[inst(value)]
     arg: Option<ValueId>,
 }
-impl DisplayWithFunc for Return {
-    fn fmt(&self, func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
-        write!(formatter, "{}", self.as_text())?;
+impl InstWrite for Return {
+    fn write(&self, func: &Function, mut w: &mut dyn io::Write) -> io::Result<()> {
+        write!(w, "{}", self.as_text())?;
         if let Some(arg) = self.arg {
-            let arg = DisplayableWithFunc(arg, func);
-            write!(formatter, " {arg}")?;
+            write!(w, " ")?;
+            arg.write(func, &mut w)?;
         }
         Ok(())
     }

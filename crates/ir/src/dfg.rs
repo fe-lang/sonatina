@@ -1,5 +1,5 @@
 //! This module contains Sonatine IR data flow graph.
-use std::{collections::BTreeSet, fmt};
+use std::{collections::BTreeSet, io};
 
 use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use rustc_hash::FxHashMap;
@@ -10,7 +10,7 @@ use crate::{
         control_flow::{self, Branch, Jump, Phi},
         InstId,
     },
-    ir_writer::DisplayWithFunc,
+    ir_writer::WriteWithFunc,
     module::ModuleCtx,
     Function, GlobalVariable, Inst, InstDowncast, InstDowncastMut, InstSetBase,
 };
@@ -297,9 +297,9 @@ impl DataFlowGraph {
 pub struct BlockId(pub u32);
 entity_impl!(BlockId, "block");
 
-impl DisplayWithFunc for BlockId {
-    fn fmt(&self, _func: &Function, formatter: &mut fmt::Formatter) -> fmt::Result {
-        write!(formatter, "block{}", self.0)
+impl WriteWithFunc for BlockId {
+    fn write(&self, _func: &Function, w: &mut impl io::Write) -> io::Result<()> {
+        write!(w, "block{}", self.0)
     }
 }
 
