@@ -7,9 +7,10 @@ use ir::{
     self,
     builder::{FunctionBuilder, ModuleBuilder},
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
+    ir_writer::DebugProvider,
     isa::evm::Evm,
     module::{FuncRef, ModuleCtx},
-    Module, Signature,
+    Function, Module, Signature,
 };
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smol_str::SmolStr;
@@ -109,6 +110,13 @@ pub struct DebugInfo {
     pub module_comments: Vec<String>,
     pub func_comments: SecondaryMap<FuncRef, Vec<String>>,
     pub value_names: FxHashMap<FuncRef, Bimap<ir::ValueId, SmolStr>>,
+}
+
+impl DebugProvider for DebugInfo {
+    fn value_name(&self, _func: &Function, func_ref: FuncRef, value: ir::ValueId) -> Option<&str> {
+        let names = self.value_names.get(&func_ref)?;
+        names.get_by_left(&value).map(|s| s.as_str())
+    }
 }
 
 #[derive(Default)]
@@ -280,6 +288,8 @@ impl BuildCtx {
     }
 }
 
+// TODO: Temporary stopgap solution.
+// We need to have a proper ISA builder in the near future.
 fn module_ctx_from_triple(triple: TargetTriple) -> ModuleCtx {
     match triple.architecture {
         Architecture::Evm => {

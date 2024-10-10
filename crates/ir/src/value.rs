@@ -1,37 +1,14 @@
 //! This module contains Sonatine IR value definition.
 use core::fmt;
-use std::{io, ops};
+use std::ops;
 
 use super::Type;
-use crate::{
-    inst::InstId,
-    ir_writer::{WriteWithFunc, WriteWithModule},
-    Function, GlobalVariable, I256,
-};
+use crate::{inst::InstId, GlobalVariable, I256};
 
 /// An opaque reference to [`Value`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
 pub struct ValueId(pub u32);
 cranelift_entity::entity_impl!(ValueId);
-
-impl WriteWithFunc for ValueId {
-    fn write(&self, func: &Function, w: &mut impl io::Write) -> io::Result<()> {
-        let value = *self;
-        match func.dfg.value(*self) {
-            Value::Immediate { imm, ty } => {
-                write!(w, "{}.", imm)?;
-                ty.write(func.ctx(), w)
-            }
-            Value::Global { gv, .. } => func
-                .dfg
-                .ctx
-                .with_gv_store(|s| write!(w, "%{}", s.gv_data(*gv).symbol)),
-            _ => {
-                write!(w, "v{}", value.0)
-            }
-        }
-    }
-}
 
 /// An value data definition.
 #[derive(Debug, Clone)]

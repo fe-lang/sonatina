@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 use super::{module::FuncRef, DataFlowGraph, Layout, Type, ValueId};
 use crate::{
-    ir_writer::{WriteWithFunc, WriteWithModule},
+    ir_writer::{FuncWriteCtx, WriteWithFunc, WriteWithModule},
     module::ModuleCtx,
     InstSetBase, Linkage,
 };
@@ -96,7 +96,7 @@ impl Signature {
 }
 
 impl WriteWithFunc for Signature {
-    fn write(&self, func: &Function, w: &mut impl io::Write) -> io::Result<()> {
+    fn write(&self, ctx: &FuncWriteCtx, w: &mut impl io::Write) -> io::Result<()> {
         let Signature {
             name,
             linkage,
@@ -107,15 +107,15 @@ impl WriteWithFunc for Signature {
         write!(w, "func {linkage} %{name}(")?;
         let mut args = args.iter();
         if let Some(arg) = args.next() {
-            arg.write(func.ctx(), &mut *w)?;
+            arg.write(ctx.module_ctx(), &mut *w)?;
         };
 
         for arg in args {
             write!(w, " ")?;
-            arg.write(func.ctx(), &mut *w)?;
+            arg.write(ctx.module_ctx(), &mut *w)?;
         }
         write!(w, ") -> ")?;
 
-        ret_ty.write(func.ctx(), &mut *w)
+        ret_ty.write(ctx.module_ctx(), &mut *w)
     }
 }

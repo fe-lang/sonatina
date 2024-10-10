@@ -1,3 +1,5 @@
+use std::fmt::{self, Write};
+
 use dir_test::{dir_test, Fixture};
 use indenter::indented;
 use ir::ir_writer::ModuleWriter;
@@ -7,7 +9,6 @@ use sonatina_parser::{
     syntax::{Parser, Rule},
     Error,
 };
-use std::fmt::{self, Write};
 mod common;
 
 #[dir_test(
@@ -50,7 +51,7 @@ fn test_module_ast(fixture: Fixture<&str>) {
 fn test_module_ir(fixture: Fixture<&str>) {
     let module = parse_module(fixture.content()).unwrap();
     let mut w = ModuleWriter::with_debug_provider(&module.module, &module.debug);
-    snap_test!(w.dump_string().unwrap(), fixture.path(), Some("ir"));
+    snap_test!(w.dump_string(), fixture.path(), Some("ir"));
 }
 
 fn test_rule(rule: Rule, fixture: Fixture<&str>) {

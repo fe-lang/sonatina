@@ -1,7 +1,7 @@
 use std::fmt;
 
 use sonatina_ir::{
-    ir_writer::{ValueWithTy, WriteWithFunc, WriteWithModule},
+    ir_writer::{FuncWriteCtx, ValueWithTy, WriteWithFunc, WriteWithModule},
     module::FuncRef,
     types::CompoundType,
     BlockId, Function, Insn, InstId, Type, ValueId,
@@ -58,43 +58,43 @@ impl ErrorKind {
 
 pub struct DisplayErrorKind<'a> {
     kind: ErrorKind,
-    func: &'a Function,
+    ctx: FuncWriteCtx<'a>,
 }
 
 impl<'a> DisplayErrorKind<'a> {
-    pub fn new(kind: ErrorKind, func: &'a Function) -> Self {
-        Self { kind, func }
+    pub fn new(kind: ErrorKind, func: &'a Function, func_ref: FuncRef) -> Self {
+        let ctx = FuncWriteCtx::new(func, func_ref);
+        Self { kind, ctx }
     }
 }
 
 impl<'a> fmt::Display for DisplayErrorKind<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { kind, func } = *self;
         use ErrorKind::*;
-        match kind {
+        match self.kind {
             PhiInEntryBlock(inst) => {
-                let inst = inst.dump_string(func);
+                let inst = inst.dump_string(&self.ctx);
                 write!(f, "phi instruction in entry block, {inst}")
             }
             EmptyBlock(block) => write!(f, "empty block, {block}"),
             TerminatorBeforeEnd(inst) => {
-                let inst = inst.dump_string(func);
+                let inst = inst.dump_string(&self.ctx);
                 write!(f, "terminator instruction mid-block, {inst}")
             }
             NotEndedByTerminator(inst) => {
-                let inst = inst.dump_string(func);
+                let inst = inst.dump_string(&self.ctx);
                 write!(f, "last instruction not terminator, {inst}")
             }
             InstructionMapMismatched(inst) => {
-                let inst = inst.dump_string(func);
+                let inst = inst.dump_string(&self.ctx);
                 write!(f, "instruction not mapped to block, {inst}")
             }
             BranchBrokenLink(inst) => {
-                let inst = inst.dump_string(func);
+                let inst = inst.dump_string(&self.ctx);
                 write!(f, "branch instruction not linked in cfg, {inst}")
             }
             ValueIsNullReference(value) => {
-                let value = ValueWithTy(value).dump_string(func);
+                let value = ValueWithTy(value).dump_string(&self.ctx);
                 write!(f, "instruction references inexistent value, {value}")
             }
             BlockIsNullReference(block) => {
@@ -107,31 +107,31 @@ impl<'a> fmt::Display for DisplayErrorKind<'a> {
                 )
             }
             CompoundTypeIsNullReference(cmpd_ty) => {
-                let cmpd_ty = cmpd_ty.dump_string(&func.dfg.ctx);
+                let cmpd_ty = cmpd_ty.dump_string(&self.ctx.module_ctx());
                 write!(f, "instruction references inexistent value, {cmpd_ty}")
             }
             BranchToEntryBlock(block) => write!(f, "branch to entry block, {block}"),
             ValueLeak(value) => {
-                let value = ValueWithTy(value).dump_string(func);
+                let value = ValueWithTy(value).dump_string(&self.ctx);
                 write!(
                     f,
                     "value not assigned by instruction nor from function args, {value}"
                 )
             }
             InsnArgWrongType(ty) => {
-                let ty = ty.dump_string(&func.dfg.ctx);
+                let ty = ty.dump_string(&self.ctx.module_ctx());
                 write!(f, "argument type inconsistent with instruction, {ty}")
             }
             InsnResultWrongType(ty) => {
-                let ty = ty.dump_string(&func.dfg.ctx);
+                let ty = ty.dump_string(&self.ctx.module_ctx());
                 write!(f, "argument type inconsistent with instruction, {ty}")
             }
             CalleeArgWrongType(ty) => {
-                let ty = ty.dump_string(&func.dfg.ctx);
+                let ty = ty.dump_string(&self.ctx.module_ctx());
                 write!(f, "argument type inconsistent with callee signature, {ty}")
             }
             CalleeResultWrongType(ty) => {
-                let ty = ty.dump_string(&func.dfg.ctx);
+                let ty = ty.dump_string(&self.ctx.module_ctx());
                 write!(f, "result type inconsistent with callee signature, {ty}")
             }
         }
