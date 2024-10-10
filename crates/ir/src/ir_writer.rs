@@ -112,7 +112,7 @@ impl<'a> FuncWriteCtx<'a> {
     }
 
     pub fn module_ctx(&self) -> &ModuleCtx {
-        &self.func.ctx()
+        self.func.ctx()
     }
 }
 
@@ -153,7 +153,7 @@ impl<'a> FuncWriter<'a> {
             .sig
             .ret_ty()
             .write(self.ctx.module_ctx(), &mut *w)?;
-        write!(w, " {{\n")?;
+        writeln!(w, " {{")?;
 
         self.level += 1;
         for block in self.ctx.func.layout.iter_block() {
@@ -187,7 +187,7 @@ impl<'a> FuncWriter<'a> {
         self.indent(&mut *w)?;
         let inst_with_res = InstStatement(inst);
         inst_with_res.write(&self.ctx, &mut *w)?;
-        write!(w, "\n")
+        writeln!(w)
     }
 
     fn indent(&self, mut w: impl io::Write) -> io::Result<()> {
@@ -195,12 +195,12 @@ impl<'a> FuncWriter<'a> {
     }
 
     fn newline(&self, mut w: impl io::Write) -> io::Result<()> {
-        write!(w, "\n")
+        writeln!(w)
     }
 
     fn enter(&mut self, mut w: impl io::Write) -> io::Result<()> {
         self.level += 1;
-        write!(w, ":\n")
+        writeln!(w, ":")
     }
 
     fn leave(&mut self) {

@@ -132,7 +132,7 @@ impl<'a> BlockEdge<'a> {
                 continue;
             };
 
-            for (value, block) in phi.args().into_iter() {
+            for (value, block) in phi.args().iter() {
                 if *block == from {
                     let value = ctx.dump_value_string(*value);
                     return Text::LabelStr((value).into());

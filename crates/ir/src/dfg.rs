@@ -224,7 +224,7 @@ impl DataFlowGraph {
 
     pub fn make_phi(&self, args: Vec<(ValueId, BlockId)>, ty: &Type) -> Phi {
         let has_phi = self.inst_set().phi();
-        Phi::new(has_phi, args, ty.clone())
+        Phi::new(has_phi, args, *ty)
     }
 
     pub fn make_jump(&self, to: BlockId) -> Jump {

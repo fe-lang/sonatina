@@ -30,8 +30,8 @@ impl Isa for Evm {
     }
 
     fn inst_set(&self) -> &'static Self::InstSet {
-        static IS: LazyLock<EvmInstSet> = LazyLock::new(|| EvmInstSet::new());
-        &*IS
+        static IS: LazyLock<EvmInstSet> = LazyLock::new(EvmInstSet::new);
+        &IS
     }
 }
 

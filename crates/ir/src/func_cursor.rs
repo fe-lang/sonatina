@@ -57,7 +57,7 @@ pub trait FuncCursor {
     fn make_result(&self, func: &mut Function, inst_id: InstId, ty: &Type) -> ValueId {
         let result = Value::Inst {
             inst: inst_id,
-            ty: ty.clone(),
+            ty: *ty,
         };
         func.dfg.make_value(result)
     }

@@ -107,7 +107,7 @@ impl<'a> fmt::Display for DisplayErrorKind<'a> {
                 )
             }
             CompoundTypeIsNullReference(cmpd_ty) => {
-                let cmpd_ty = cmpd_ty.dump_string(&self.ctx.module_ctx());
+                let cmpd_ty = cmpd_ty.dump_string(self.ctx.module_ctx());
                 write!(f, "instruction references inexistent value, {cmpd_ty}")
             }
             BranchToEntryBlock(block) => write!(f, "branch to entry block, {block}"),
@@ -119,19 +119,19 @@ impl<'a> fmt::Display for DisplayErrorKind<'a> {
                 )
             }
             InsnArgWrongType(ty) => {
-                let ty = ty.dump_string(&self.ctx.module_ctx());
+                let ty = ty.dump_string(self.ctx.module_ctx());
                 write!(f, "argument type inconsistent with instruction, {ty}")
             }
             InsnResultWrongType(ty) => {
-                let ty = ty.dump_string(&self.ctx.module_ctx());
+                let ty = ty.dump_string(self.ctx.module_ctx());
                 write!(f, "argument type inconsistent with instruction, {ty}")
             }
             CalleeArgWrongType(ty) => {
-                let ty = ty.dump_string(&self.ctx.module_ctx());
+                let ty = ty.dump_string(self.ctx.module_ctx());
                 write!(f, "argument type inconsistent with callee signature, {ty}")
             }
             CalleeResultWrongType(ty) => {
-                let ty = ty.dump_string(&self.ctx.module_ctx());
+                let ty = ty.dump_string(self.ctx.module_ctx());
                 write!(f, "result type inconsistent with callee signature, {ty}")
             }
         }

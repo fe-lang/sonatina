@@ -203,7 +203,7 @@ mod tests {
         insts.push(Box::new(sub));
 
         assert!(
-            <&Add as InstDowncast>::downcast(&inst_set, insts.get(0).unwrap().as_ref()).is_some()
+            <&Add as InstDowncast>::downcast(&inst_set, insts.first().unwrap().as_ref()).is_some()
         );
         assert!(
             <&Sub as InstDowncast>::downcast(&inst_set, insts.get(1).unwrap().as_ref()).is_some()
