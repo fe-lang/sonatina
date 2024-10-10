@@ -10,7 +10,7 @@ super::impl_inst_build_common! {Gep, has_gep, ArityBound::AtLeast(0), build_gep}
 fn build_gep(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
-    args: &Vec<ast::InstArg>,
+    args: &[ast::InstArg],
     has_inst: &dyn HasInst<Gep>,
 ) -> Result<Gep, Error> {
     let mut values = SmallVec::new();

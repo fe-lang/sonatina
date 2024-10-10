@@ -51,9 +51,10 @@ assign_stmt =  { value_declaration ~ "=" ~ inst }
 inst_stmt = { inst }
 
 inst = { inst_name ~ inst_arg* }
+inst_name = { inst_identifier }
+inst_identifier = @{ ident_start_char ~ ident_body_char* }
 inst_arg = { value | type_name | block_ident | value_block_map | function_identifier}
-inst_name = { ident_start_char ~ ident_body_char* }
-value_block_map = { "(" ~ value ~ block_ident ~ ")" }
+value_block_map = { ("(" ~ value ~ block_ident ~ ")")+ }
 
 value       =  { value_name | imm_number }
 imm_number  = ${ number ~ "." ~ primitive_type }

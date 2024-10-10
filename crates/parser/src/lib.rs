@@ -298,3 +298,19 @@ fn module_ctx_from_triple(triple: TargetTriple) -> ModuleCtx {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test() {
+        let s = "
+target = \"evm-ethereum-london\"
+
+func public %main() {
+    block0:
+        v0.i8 = add 0.i8 1.i8;
+}";
+        parse_module(&s).unwrap();
+    }
+}

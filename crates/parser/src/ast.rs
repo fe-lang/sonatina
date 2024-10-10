@@ -325,7 +325,7 @@ pub struct InstName {
 impl FromSyntax<Error> for InstName {
     fn from_syntax(node: &mut Node<Error>) -> Self {
         InstName {
-            name: node.parse_str(Rule::inst_name),
+            name: node.parse_str(Rule::inst_identifier),
             span: node.span,
         }
     }
@@ -434,13 +434,18 @@ impl<'a> TryFrom<&'a InstArg> for &'a FunctionName {
 
 impl FromSyntax<Error> for InstArg {
     fn from_syntax(node: &mut Node<Error>) -> Self {
-        node.descend();
-        let kind = match node.rule {
-            Rule::value => InstArgKind::Value(node.single(Rule::value)),
-            Rule::type_name => InstArgKind::Ty(node.single(Rule::type_name)),
-            Rule::block => InstArgKind::Block(node.single(Rule::block_ident)),
-            Rule::value_block_map => InstArgKind::ValueBlockMap(node.single(Rule::value_block_map)),
-            _ => unreachable!(),
+        let kind = if let Some(value) = node.single_opt(Rule::value) {
+            InstArgKind::Value(value)
+        } else if let Some(ty) = node.single_opt(Rule::type_name) {
+            InstArgKind::Ty(ty)
+        } else if let Some(block) = node.single_opt(Rule::block_ident) {
+            InstArgKind::Block(block)
+        } else if let Some(vb_map) = node.single_opt(Rule::value_block_map) {
+            InstArgKind::ValueBlockMap(vb_map)
+        } else if let Some(func) = node.single_opt(Rule::function_identifier) {
+            InstArgKind::FuncRef(func)
+        } else {
+            unreachable!()
         };
 
         Self {
