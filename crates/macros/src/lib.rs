@@ -155,7 +155,7 @@ fn convert_to_snake(s: &str) -> String {
     res
 }
 
-fn subset_variant_name_from_path<'a>(p: &'a syn::Path) -> &'a syn::Ident {
+fn subset_variant_name_from_path(p: &syn::Path) -> &syn::Ident {
     &p.segments.last().unwrap().ident
 }
 

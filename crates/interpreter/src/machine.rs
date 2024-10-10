@@ -151,8 +151,8 @@ impl State for Machine {
 
         let slice = &self.memory[addr..addr + size];
         let value_i256 = match self.module.ctx.endian() {
-            Endian::Be => I256::from_be_bytes(&slice),
-            Endian::Le => I256::from_le_bytes(&slice),
+            Endian::Be => I256::from_be_bytes(slice),
+            Endian::Le => I256::from_le_bytes(slice),
         };
 
         let imm = Immediate::from_i256(value_i256, ty);
@@ -184,13 +184,13 @@ impl State for Machine {
                 let v = value.as_i256().to_u256();
                 let bytes = v.to_big_endian();
                 let slice = &bytes[bytes.len() - size..];
-                self.memory[addr..addr + size].copy_from_slice(&slice);
+                self.memory[addr..addr + size].copy_from_slice(slice);
             }
             Endian::Le => {
                 let v = value.as_i256().to_u256();
                 let bytes = v.to_little_endian();
                 let slice = &bytes[..size];
-                self.memory[addr..addr + size].copy_from_slice(&slice);
+                self.memory[addr..addr + size].copy_from_slice(slice);
             }
         }
 
