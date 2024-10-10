@@ -17,7 +17,10 @@ use macros::inst_prop;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 
-use crate::{ir_writer::WriteWithFunc, Function, InstSetBase, ValueId};
+use crate::{
+    ir_writer::{FuncWriteCtx, WriteWithFunc},
+    InstSetBase, ValueId,
+};
 
 /// An opaque reference to dynamic [`Inst`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
@@ -49,10 +52,10 @@ pub trait Inst: inst_set::sealed::Registered + Any {
 }
 
 impl WriteWithFunc for InstId {
-    fn write(&self, func: &Function, w: &mut impl io::Write) -> io::Result<()> {
-        let inst = func.dfg.inst(*self);
-        let write: &dyn InstWrite = InstDowncast::downcast(func.inst_set(), inst).unwrap();
-        write.write(func, w)
+    fn write(&self, ctx: &FuncWriteCtx, w: &mut impl io::Write) -> io::Result<()> {
+        let inst = ctx.func.dfg.inst(*self);
+        let write: &dyn InstWrite = InstDowncast::downcast(ctx.func.inst_set(), inst).unwrap();
+        write.write(ctx, w)
     }
 }
 
@@ -185,7 +188,7 @@ pub trait InstDowncastMut: Sized {
 
 #[inst_prop]
 trait InstWrite {
-    fn write(&self, func: &Function, w: &mut dyn io::Write) -> io::Result<()>;
+    fn write(&self, ctx: &FuncWriteCtx, w: &mut dyn io::Write) -> io::Result<()>;
     type Members = All;
 }
 
@@ -194,12 +197,21 @@ macro_rules! impl_inst_write {
         impl crate::inst::InstWrite for $ty {
             fn write(
                 &self,
-                func: &crate::Function,
+                ctx: &crate::ir_writer::FuncWriteCtx,
                 mut w: &mut dyn std::io::Write,
             ) -> std::io::Result<()> {
                 w.write_fmt(format_args!("{} ", crate::Inst::as_text(self)))?;
                 let values = crate::Inst::collect_values(self);
-                crate::ir_writer::write_iter_with_delim(&mut w, func, values.into_iter(), " ")
+                let mut values = values.iter();
+
+                if let Some(value) = values.next() {
+                    ctx.write_value(*value, &mut w)?;
+                }
+                for value in values {
+                    write!(w, " ")?;
+                    ctx.write_value(*value, &mut w)?;
+                }
+                Ok(())
             }
         }
     };

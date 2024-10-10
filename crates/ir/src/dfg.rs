@@ -10,9 +10,9 @@ use crate::{
         control_flow::{self, Branch, Jump, Phi},
         InstId,
     },
-    ir_writer::WriteWithFunc,
+    ir_writer::{FuncWriteCtx, WriteWithFunc},
     module::ModuleCtx,
-    Function, GlobalVariable, Inst, InstDowncast, InstDowncastMut, InstSetBase,
+    GlobalVariable, Inst, InstDowncast, InstDowncastMut, InstSetBase,
 };
 
 pub struct DataFlowGraph {
@@ -298,7 +298,7 @@ pub struct BlockId(pub u32);
 entity_impl!(BlockId, "block");
 
 impl WriteWithFunc for BlockId {
-    fn write(&self, _func: &Function, w: &mut impl io::Write) -> io::Result<()> {
+    fn write(&self, _ctx: &FuncWriteCtx, w: &mut impl io::Write) -> io::Result<()> {
         write!(w, "block{}", self.0)
     }
 }

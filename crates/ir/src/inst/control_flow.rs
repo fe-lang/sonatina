@@ -5,7 +5,9 @@ use smallvec::SmallVec;
 
 use super::InstWrite;
 use crate::{
-    ir_writer::WriteWithFunc, module::FuncRef, BlockId, Function, Inst, InstSetBase, Type, ValueId,
+    ir_writer::{FuncWriteCtx, WriteWithFunc},
+    module::FuncRef,
+    BlockId, Inst, InstSetBase, Type, ValueId,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
@@ -14,10 +16,10 @@ pub struct Jump {
     dest: BlockId,
 }
 impl InstWrite for Jump {
-    fn write(&self, func: &Function, mut w: &mut dyn io::Write) -> io::Result<()> {
+    fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
         let name = self.as_text();
         write!(w, "{name} ")?;
-        self.dest.write(func, &mut w)
+        self.dest.write(ctx, &mut w)
     }
 }
 
@@ -30,14 +32,14 @@ pub struct Br {
     z_dest: BlockId,
 }
 impl InstWrite for Br {
-    fn write(&self, func: &Function, mut w: &mut dyn io::Write) -> io::Result<()> {
+    fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
         write!(w, "{}", self.as_text())?;
         write!(w, " ")?;
-        self.cond.write(func, &mut w)?;
+        ctx.write_value(self.cond, &mut w)?;
         write!(w, " ")?;
-        self.nz_dest.write(func, &mut w)?;
+        self.nz_dest.write(ctx, &mut w)?;
         write!(w, " ")?;
-        self.z_dest.write(func, &mut w)
+        self.z_dest.write(ctx, &mut w)
     }
 }
 
@@ -52,20 +54,20 @@ pub struct BrTable {
     table: Vec<(ValueId, BlockId)>,
 }
 impl InstWrite for BrTable {
-    fn write(&self, func: &Function, mut w: &mut dyn io::Write) -> io::Result<()> {
+    fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
         write!(w, "{}", self.as_text())?;
         write!(w, " ")?;
-        self.scrutinee.write(func, &mut w)?;
+        ctx.write_value(self.scrutinee, &mut w)?;
         write!(w, " ")?;
         if let Some(default) = self.default {
-            default.write(func, &mut w)?;
+            default.write(ctx, &mut w)?;
         };
 
         for (value, block) in &self.table {
             write!(w, " (")?;
-            value.write(func, &mut w)?;
+            ctx.write_value(*value, &mut w)?;
             write!(w, " ")?;
-            block.write(func, &mut w)?;
+            block.write(ctx, &mut w)?;
             write!(w, ")")?;
         }
 
@@ -98,14 +100,14 @@ impl Phi {
     }
 }
 impl InstWrite for Phi {
-    fn write(&self, func: &Function, mut w: &mut dyn io::Write) -> io::Result<()> {
+    fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
         write!(w, "{}", self.as_text())?;
 
         for (value, block) in &self.args {
             write!(w, " (")?;
-            value.write(func, &mut w)?;
+            ctx.write_value(*value, &mut w)?;
             write!(w, " ")?;
-            block.write(func, &mut w)?;
+            block.write(ctx, &mut w)?;
             write!(w, ")")?;
         }
 
@@ -125,13 +127,13 @@ pub struct Call {
     ret_ty: Type,
 }
 impl InstWrite for Call {
-    fn write(&self, func: &Function, mut w: &mut dyn io::Write) -> io::Result<()> {
+    fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
         let name = self.as_text();
-        let callee = func.callees[&self.callee].name();
+        let callee = ctx.func.callees[&self.callee].name();
         write!(w, "{name} %{callee}")?;
         for value in &self.args {
             write!(w, " ")?;
-            value.write(func, &mut w)?;
+            ctx.write_value(*value, &mut w)?;
         }
         Ok(())
     }
@@ -145,11 +147,11 @@ pub struct Return {
     arg: Option<ValueId>,
 }
 impl InstWrite for Return {
-    fn write(&self, func: &Function, mut w: &mut dyn io::Write) -> io::Result<()> {
+    fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
         write!(w, "{}", self.as_text())?;
         if let Some(arg) = self.arg {
             write!(w, " ")?;
-            arg.write(func, &mut w)?;
+            ctx.write_value(arg, &mut w)?;
         }
         Ok(())
     }

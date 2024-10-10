@@ -1,7 +1,4 @@
-use std::{
-    fmt,
-    sync::{Arc, RwLock},
-};
+use std::sync::{Arc, RwLock};
 
 use cranelift_entity::{entity_impl, PrimaryMap};
 use sonatina_triple::TargetTriple;
@@ -101,22 +98,3 @@ impl ModuleCtx {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FuncRef(u32);
 entity_impl!(FuncRef);
-
-pub struct DisplayCalleeFuncRef<'a> {
-    callee: FuncRef,
-    func: &'a Function,
-}
-
-impl<'a> DisplayCalleeFuncRef<'a> {
-    pub fn new(callee: FuncRef, func: &'a Function) -> Self {
-        Self { callee, func }
-    }
-}
-
-impl<'a> fmt::Display for DisplayCalleeFuncRef<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let Self { callee, func } = *self;
-        let sig = func.callees.get(&callee).unwrap();
-        write!(f, "{}", sig.name())
-    }
-}

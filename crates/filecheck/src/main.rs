@@ -1,6 +1,5 @@
 use sonatina_filecheck::{
-    adce::AdceTransform, gvn::GvnTransform, insn_simplify::InsnSimplifyTransform,
-    licm::LicmTransformer, sccp::SccpTransform, FileCheckRunner,
+    adce::AdceTransform, licm::LicmTransformer, sccp::SccpTransform, FileCheckRunner,
 };
 
 fn main() {
@@ -10,11 +9,12 @@ fn main() {
     runner.attach_transformer(AdceTransform::default());
     runner.run();
 
-    runner.attach_transformer(InsnSimplifyTransform::default());
-    runner.run();
+    // TODO: Uncomment here when we implement corresponding egglog optimization
+    // pass. runner.attach_transformer(InsnSimplifyTransform::default());
+    // runner.run();
 
-    runner.attach_transformer(GvnTransform::default());
-    runner.run();
+    // runner.attach_transformer(GvnTransform::default());
+    // runner.run();
 
     runner.attach_transformer(LicmTransformer::default());
     runner.run();

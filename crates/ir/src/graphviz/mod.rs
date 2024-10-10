@@ -1,16 +1,21 @@
 use std::io;
 
-use crate::{ControlFlowGraph, Function};
+use crate::{ir_writer::FuncWriteCtx, module::FuncRef, ControlFlowGraph, Function};
 
 mod block;
 mod function;
 
 use function::FunctionGraph;
 
-pub fn render_to<W: io::Write>(func: &Function, output: &mut W) -> io::Result<()> {
+pub fn render_to<W: io::Write>(
+    func: &Function,
+    func_ref: FuncRef,
+    output: &mut W,
+) -> io::Result<()> {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(func);
-    let func_graph = FunctionGraph::new(func, &cfg);
+    let ctx = FuncWriteCtx::new(func, func_ref);
+    let func_graph = FunctionGraph::new(&ctx, &cfg);
     dot2::render(&func_graph, output).map_err(|err| match err {
         dot2::Error::Io(err) => err,
         _ => panic!("invalid graphviz id"),
@@ -19,6 +24,7 @@ pub fn render_to<W: io::Write>(func: &Function, output: &mut W) -> io::Result<()
 
 #[cfg(test)]
 mod test {
+    use super::*;
     use crate::{
         builder::test_util::test_func_builder,
         inst::{
@@ -28,8 +34,6 @@ mod test {
         isa::Isa,
         Type,
     };
-
-    use super::*;
 
     #[test]
     fn test_dump_ir() {
@@ -70,7 +74,7 @@ mod test {
         let func_ref = module.iter_functions().next().unwrap();
 
         let mut text = vec![];
-        render_to(&module.funcs[func_ref], &mut text).unwrap();
+        render_to(&module.funcs[func_ref], func_ref, &mut text).unwrap();
         let text = String::from_utf8(text).unwrap();
         let expected = "digraph test_func {
     block3[label=<<table border=\"0\" cellborder=\"1\" cellspacing=\"0\"><tr><td bgcolor=\"gray\" align=\"center\" colspan=\"1\">block3</td></tr><tr><td align=\"left\" balign=\"left\">v3.i64 = phi (1.i64 block1) (2.i64 block2);<br/>v4.i64 = add v3 v0;<br/>return;<br/></td></tr></table>>][shape=\"none\"];

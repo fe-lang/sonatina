@@ -2,8 +2,8 @@ use std::fmt;
 
 use cranelift_entity::packed_option::PackedOption;
 use sonatina_ir::{
-    ir_writer::{InstStatement, ValueWithTy, WriteWithFunc, WriteWithModule},
-    module::{DisplayCalleeFuncRef, FuncRef},
+    ir_writer::{FuncWriteCtx, InstStatement, ValueWithTy, WriteWithFunc, WriteWithModule},
+    module::FuncRef,
     types::CompoundType,
     BlockId, Function, GlobalVariable, InstId, Type, ValueId,
 };
@@ -57,18 +57,18 @@ impl TraceInfo {
 
 pub struct DisplayTraceInfo<'a, 'b> {
     trace_info: &'a TraceInfo,
-    func: &'b Function,
+    ctx: FuncWriteCtx<'b>,
 }
 
 impl<'a, 'b> DisplayTraceInfo<'a, 'b> {
-    pub fn new(trace_info: &'a TraceInfo, func: &'b Function) -> Self {
-        Self { trace_info, func }
+    pub fn new(trace_info: &'a TraceInfo, func: &'b Function, func_ref: FuncRef) -> Self {
+        let ctx = FuncWriteCtx::new(func, func_ref);
+        Self { trace_info, ctx }
     }
 }
 
 impl<'a, 'b> fmt::Display for DisplayTraceInfo<'a, 'b> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { trace_info, func } = *self;
         let TraceInfo {
             block,
             inst_id,
@@ -77,9 +77,9 @@ impl<'a, 'b> fmt::Display for DisplayTraceInfo<'a, 'b> {
             ty,
             cmpd_ty,
             ..
-        } = trace_info;
+        } = self.trace_info;
 
-        let dfg = &func.dfg;
+        let dfg = &self.ctx.func.dfg;
 
         "trace_info:".fmt(f)?;
 
@@ -101,17 +101,17 @@ impl<'a, 'b> fmt::Display for DisplayTraceInfo<'a, 'b> {
             line += 1;
         }
         if let Some(value) = value.expand() {
-            let value_with_ty = ValueWithTy(value).dump_string(&func);
+            let value_with_ty = ValueWithTy(value).dump_string(&self.ctx);
             write!(f, "\n{line}: {value_with_ty}")?;
             line += 1;
         }
-        if let Some(callee) = trace_info.callee.expand() {
-            let callee = DisplayCalleeFuncRef::new(callee, func);
+        if let Some(callee) = self.trace_info.callee.expand() {
+            let callee = self.ctx.func.callees[&callee].name();
             write!(f, "\n{line}: {callee}")?;
             line += 1;
         }
         if let Some(inst_id) = inst_id.expand() {
-            let inst_stmt = InstStatement(inst_id).dump_string(func);
+            let inst_stmt = InstStatement(inst_id).dump_string(&self.ctx);
             write!(f, "\n{line}: {inst_stmt}")?;
             line += 1;
         }
@@ -120,7 +120,7 @@ impl<'a, 'b> fmt::Display for DisplayTraceInfo<'a, 'b> {
             line += 1;
         }
 
-        let sig = func.sig.dump_string(func);
+        let sig = self.ctx.func.sig.dump_string(&self.ctx);
         write!(f, "\n{line}: {sig}")
     }
 }

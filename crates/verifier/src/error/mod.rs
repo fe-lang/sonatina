@@ -4,7 +4,7 @@ mod trace_info;
 use std::fmt;
 
 pub use kind::ErrorKind;
-use sonatina_ir::Function;
+use sonatina_ir::{module::FuncRef, Function};
 use trace_info::DisplayTraceInfo;
 pub use trace_info::{TraceInfo, TraceInfoBuilder};
 
@@ -27,20 +27,24 @@ impl ErrorData {
 pub struct Error<'a> {
     err: ErrorData,
     func: &'a Function,
+    func_ref: FuncRef,
 }
 
 impl<'a> Error<'a> {
-    pub fn new(err: ErrorData, func: &'a Function) -> Self {
-        Self { err, func }
+    pub fn new(err: ErrorData, func: &'a Function, func_ref: FuncRef) -> Self {
+        Self {
+            err,
+            func,
+            func_ref,
+        }
     }
 }
 
 impl<'a> fmt::Display for Error<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { err, func } = *self;
-        let ErrorData { kind, trace_info } = err;
-        let kind = DisplayErrorKind::new(kind, func);
-        let trace_info = DisplayTraceInfo::new(&trace_info, func);
+        let ErrorData { kind, trace_info } = self.err;
+        let kind = DisplayErrorKind::new(kind, self.func, self.func_ref);
+        let trace_info = DisplayTraceInfo::new(&trace_info, self.func, self.func_ref);
 
         write!(f, "{kind}\n{trace_info}")
     }
@@ -89,7 +93,7 @@ mod test {
 
         let err = ErrorData::new(ErrorKind::InsnArgWrongType(Type::I8), trace_info);
 
-        let err = Error::new(err, func);
+        let err = Error::new(err, func, func_ref);
 
         assert_eq!(
             "argument type inconsistent with instruction, i8

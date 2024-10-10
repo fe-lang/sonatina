@@ -4,26 +4,25 @@ use dot2::{label::Text, GraphWalk, Id, Labeller, Style};
 
 use super::block::BlockNode;
 use crate::{
-    inst::control_flow::Phi, ir_writer::WriteWithFunc, prelude::*, BlockId, ControlFlowGraph,
-    Function,
+    inst::control_flow::Phi, ir_writer::FuncWriteCtx, prelude::*, BlockId, ControlFlowGraph,
 };
 
 pub(super) const DUMMY_BLOCK: BlockId = BlockId(u32::MAX);
 
 pub(super) struct FunctionGraph<'a> {
-    func: &'a Function,
+    ctx: &'a FuncWriteCtx<'a>,
     cfg: &'a ControlFlowGraph,
 }
 
 impl<'a> FunctionGraph<'a> {
-    pub fn new(func: &'a Function, cfg: &'a ControlFlowGraph) -> Self {
-        Self { func, cfg }
+    pub fn new(ctx: &'a FuncWriteCtx, cfg: &'a ControlFlowGraph) -> Self {
+        Self { ctx, cfg }
     }
 }
 
 impl<'a> FunctionGraph<'a> {
     pub(super) fn blocks(&self) -> Vec<BlockNode<'a>> {
-        let Self { func, cfg } = self;
+        let Self { ctx: func, cfg } = self;
         // Dummy block is needed to label the graph with the function signature. Returns
         // a vector with the dummy block as a last element.
         cfg.post_order()
@@ -39,7 +38,7 @@ impl<'a> Labeller<'a> for FunctionGraph<'a> {
     type Subgraph = ();
 
     fn graph_id(&self) -> dot2::Result<Id<'a>> {
-        let func = self.func;
+        let func = self.ctx.func;
         let sig_name = func.sig.name().to_string();
         Id::new(sig_name)
     }
@@ -83,21 +82,21 @@ impl<'a> GraphWalk<'a> for FunctionGraph<'a> {
     }
 
     fn edges(&'a self) -> dot2::Edges<'a, Self::Edge> {
-        let Self { func, cfg } = self;
+        let Self { ctx, cfg } = self;
         let mut blocks = self.blocks();
 
         let dummy_block = blocks.pop().unwrap();
         let mut edges = vec![BlockEdge {
             from: dummy_block,
-            to: BlockNode::new(func, cfg, BlockId(0u32)),
-            func,
+            to: BlockNode::new(ctx, cfg, BlockId(0u32)),
+            ctx,
         }];
         for block in blocks {
             for succ in block.succs() {
                 let edge = BlockEdge {
                     from: block,
                     to: succ,
-                    func,
+                    ctx,
                 };
                 edges.push(edge);
             }
@@ -119,23 +118,23 @@ impl<'a> GraphWalk<'a> for FunctionGraph<'a> {
 pub(super) struct BlockEdge<'a> {
     from: BlockNode<'a>,
     to: BlockNode<'a>,
-    func: &'a Function,
+    ctx: &'a FuncWriteCtx<'a>,
 }
 
 impl<'a> BlockEdge<'a> {
     fn label(self) -> Text<'static> {
-        let Self { from, to, func } = self;
+        let Self { from, to, ctx } = self;
         let to = to.block;
         let from = from.block;
-        for inst_id in func.layout.iter_inst(to) {
-            let inst = self.func.dfg.inst(inst_id);
-            let Some(phi) = <&Phi as InstDowncast>::downcast(self.func.dfg.inst_set(), inst) else {
+        for inst_id in ctx.func.layout.iter_inst(to) {
+            let inst = ctx.func.dfg.inst(inst_id);
+            let Some(phi) = <&Phi as InstDowncast>::downcast(ctx.func.dfg.inst_set(), inst) else {
                 continue;
             };
 
             for (value, block) in phi.args().into_iter() {
                 if *block == from {
-                    let value = value.dump_string(&func);
+                    let value = ctx.dump_value_string(*value);
                     return Text::LabelStr((value).into());
                 }
             }
