@@ -1,3 +1,5 @@
+//! Verification context
+
 use std::sync::RwLock;
 
 use cranelift_entity::{PrimaryMap, SecondaryMap};
