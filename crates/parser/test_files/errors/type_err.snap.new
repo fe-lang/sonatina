@@ -1,0 +1,12 @@
+---
+source: crates/parser/tests/errors.rs
+assertion_line: 25
+expression: s
+input_file: crates/parser/test_files/errors/type_err.sntn
+---
+error: parse error
+ --> type_err.sntn:5:22
+  |
+5 |         v1.i8 = call %foo;
+  |                      ^^^^ inst arg kind mismtach: expected `function name`, but `type` given
+  |

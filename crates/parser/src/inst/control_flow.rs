@@ -13,7 +13,7 @@ super::impl_inst_build_common! {Return, has_return, ArityBound::AtLeast(0), buil
 fn build_br_table(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
-    args: &Vec<ast::InstArg>,
+    args: &[ast::InstArg],
     has_inst: &dyn HasInst<BrTable>,
 ) -> Result<BrTable, Error> {
     let mut args = args.iter().peekable();
@@ -41,7 +41,7 @@ fn build_br_table(
 fn build_phi(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
-    args: &Vec<ast::InstArg>,
+    args: &[ast::InstArg],
     has_inst: &dyn HasInst<Phi>,
 ) -> Result<Phi, Error> {
     let mut ast_args = args.iter().peekable();
@@ -70,7 +70,7 @@ fn build_phi(
 fn build_call(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
-    args: &Vec<ast::InstArg>,
+    args: &[ast::InstArg],
     has_inst: &dyn HasInst<Call>,
 ) -> Result<Call, Error> {
     let mut ast_args = args.iter().peekable();
@@ -99,7 +99,7 @@ fn build_call(
 fn build_return(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
-    args: &Vec<ast::InstArg>,
+    args: &[ast::InstArg],
     has_inst: &dyn HasInst<Return>,
 ) -> Result<Return, Error> {
     let mut ast_args = args.iter().peekable();
