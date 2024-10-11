@@ -7,8 +7,8 @@ Module {
     target: Some(
         TargetTriple {
             architecture: Evm,
-            chain: Ethereum,
-            version: EvmVersion(
+            vendor: Ethereum,
+            operating_system: Evm(
                 London,
             ),
         },
@@ -19,9 +19,13 @@ Module {
         Func {
             signature: FuncSignature {
                 linkage: Public,
-                name: FunctionName(
-                    "main",
-                ),
+                name: FunctionName {
+                    name: "main",
+                    span: Span(
+                        43,
+                        48,
+                    ),
+                },
                 params: [],
                 ret_type: None,
             },
@@ -35,7 +39,7 @@ Module {
                     },
                     stmts: [
                         Stmt {
-                            kind: Define(
+                            kind: Assign(
                                 ValueDeclaration(
                                     ValueName {
                                         string: "v0",
@@ -48,30 +52,67 @@ Module {
                                         ..
                                     },
                                 ),
-                                Binary(
-                                    Add,
-                                    Value {
-                                        kind: Immediate(
-                                            I8(
-                                                1,
-                                            ),
-                                        ),
+                                Inst {
+                                    name: InstName {
+                                        name: "add",
                                         ..
                                     },
-                                    Value {
-                                        kind: Immediate(
-                                            I8(
-                                                2,
+                                    args: [
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Immediate(
+                                                        I8(
+                                                            1,
+                                                        ),
+                                                    ),
+                                                    ..
+                                                },
                                             ),
-                                        ),
-                                        ..
-                                    },
-                                ),
+                                            ..
+                                        },
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Immediate(
+                                                        I8(
+                                                            2,
+                                                        ),
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                    ],
+                                    span: Span(
+                                        81,
+                                        94,
+                                    ),
+                                },
+                            ),
+                            span: Span(
+                                73,
+                                94,
                             ),
                         },
                         Stmt {
-                            kind: Return(
-                                None,
+                            kind: Inst(
+                                Inst {
+                                    name: InstName {
+                                        name: "return",
+                                        ..
+                                    },
+                                    args: [],
+                                    span: Span(
+                                        104,
+                                        110,
+                                    ),
+                                },
+                            ),
+                            span: Span(
+                                104,
+                                110,
                             ),
                         },
                     ],

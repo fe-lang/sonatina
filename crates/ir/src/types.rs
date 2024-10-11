@@ -238,7 +238,7 @@ pub struct StructData {
 
 impl WriteWithModule for StructData {
     fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
-        write!(w, "type %{} = ", self.name)?;
+        write!(w, "type @{} = ", self.name)?;
         if self.packed {
             write!(w, "<{{")?;
         } else {

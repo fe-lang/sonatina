@@ -13,7 +13,7 @@ declaration              = _{ function_declaration | struct_declaration }
 function_declaration     =  { "declare" ~ function_linkage? ~ function_identifier ~ function_param_type_list ~ function_ret_type? ~ ";" }
 function_param_type_list =  { "(" ~ (type_name ~ ",")* ~ type_name? ~ ")" }
 struct_declaration       =  { "type" ~ struct_identifier ~ "=" ~ struct_fields ~ ";" }
-struct_identifier        = ${ "%" ~ struct_name }
+struct_identifier        = ${ "@" ~ struct_name }
 struct_fields            = _{ normal_field_list | packed_field_list }
 normal_field_list        =  { "{" ~ type_list ~ "}" }
 packed_field_list        =  { "<{" ~ type_list ~ "}>" }
