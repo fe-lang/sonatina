@@ -1,5 +1,5 @@
 use cranelift_entity::PrimaryMap;
-use sonatina_ir::Function;
+use sonatina_ir::{module::FuncRef, Function};
 
 use crate::error::{Error, ErrorData, ErrorRef};
 
@@ -13,9 +13,13 @@ impl ErrorStack {
         self.errors.push(err)
     }
 
-    pub fn into_errs_iter(self, func: &Function) -> impl IntoIterator<Item = Error<'_>> {
+    pub fn into_errs_iter(
+        self,
+        func: &Function,
+        func_ref: FuncRef,
+    ) -> impl IntoIterator<Item = Error<'_>> {
         self.errors
             .into_iter()
-            .map(|(_, err)| Error::new(err, func))
+            .map(move |(_, err)| Error::new(err, func, func_ref))
     }
 }

@@ -3,8 +3,7 @@ use std::fmt;
 use sonatina_ir::{
     ir_writer::{FuncWriteCtx, ValueWithTy, WriteWithFunc, WriteWithModule},
     module::FuncRef,
-    types::CompoundType,
-    BlockId, Function, Insn, InstId, Type, ValueId,
+    BlockId, Function, InstId, Type, ValueId,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -25,8 +24,8 @@ pub enum ErrorKind {
     // SSA form errors
     ValueLeak(ValueId),
     // Type errors
-    InsnArgWrongType(Type),
-    InsnResultWrongType(Type),
+    InstArgWrongType(Type),
+    InstResultWrongType(Type),
     CalleeArgWrongType(Type),
     CalleeResultWrongType(Type),
     CompoundTypeIsNullReference(Type),
@@ -37,18 +36,18 @@ impl ErrorKind {
         use ErrorKind::*;
 
         match *self {
-            PhiInEntryBlock(i) => IrSource::Insn(i),
+            PhiInEntryBlock(i) => IrSource::Inst(i),
             EmptyBlock(b) => IrSource::Block(b),
             TerminatorBeforeEnd(i)
             | NotEndedByTerminator(i)
             | InstructionMapMismatched(i)
-            | BranchBrokenLink(i) => IrSource::Insn(i),
+            | BranchBrokenLink(i) => IrSource::Inst(i),
             ValueIsNullReference(v) => IrSource::Value(v),
             BlockIsNullReference(b) | BranchToEntryBlock(b) => IrSource::Block(b),
             FunctionIsNullReference(f) => IrSource::Callee(f),
             ValueLeak(v) => IrSource::Value(v),
-            InsnArgWrongType(ty)
-            | InsnResultWrongType(ty)
+            InstArgWrongType(ty)
+            | InstResultWrongType(ty)
             | CalleeArgWrongType(ty)
             | CalleeResultWrongType(ty)
             | CompoundTypeIsNullReference(ty) => IrSource::Type(ty),
@@ -118,11 +117,11 @@ impl<'a> fmt::Display for DisplayErrorKind<'a> {
                     "value not assigned by instruction nor from function args, {value}"
                 )
             }
-            InsnArgWrongType(ty) => {
+            InstArgWrongType(ty) => {
                 let ty = ty.dump_string(self.ctx.module_ctx());
                 write!(f, "argument type inconsistent with instruction, {ty}")
             }
-            InsnResultWrongType(ty) => {
+            InstResultWrongType(ty) => {
                 let ty = ty.dump_string(self.ctx.module_ctx());
                 write!(f, "argument type inconsistent with instruction, {ty}")
             }
@@ -142,7 +141,7 @@ impl<'a> fmt::Display for DisplayErrorKind<'a> {
 pub enum IrSource {
     Callee(FuncRef),
     Block(BlockId),
-    Insn(Insn),
+    Inst(InstId),
     Value(ValueId),
     Type(Type),
 }

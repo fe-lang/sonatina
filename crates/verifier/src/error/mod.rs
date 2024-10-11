@@ -2,9 +2,10 @@ pub mod kind;
 
 mod trace_info;
 
-use std::{error, fmt};
+use std::fmt;
 
 use cranelift_entity::entity_impl;
+use kind::DisplayErrorKind;
 pub use kind::ErrorKind;
 use sonatina_ir::{module::FuncRef, Function};
 use trace_info::DisplayTraceInfo;
@@ -95,7 +96,7 @@ mod test {
             .ty(Type::I8)
             .build();
 
-        let err = ErrorData::new(ErrorKind::InsnArgWrongType(Type::I8), trace_info);
+        let err = ErrorData::new(ErrorKind::InstArgWrongType(Type::I8), trace_info);
 
         let err = Error::new(err, func, func_ref);
 
