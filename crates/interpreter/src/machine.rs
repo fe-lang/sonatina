@@ -4,7 +4,7 @@ use sonatina_ir::{
     isa::Endian,
     module::FuncRef,
     prelude::*,
-    BlockId, Function, Immediate, InstId, Module, Type, Value, ValueId, I256,
+    BlockId, DataFlowGraph, Function, Immediate, InstId, Module, Type, Value, ValueId, I256,
 };
 
 pub struct Machine {
@@ -17,6 +17,24 @@ pub struct Machine {
 }
 
 impl Machine {
+    pub fn new(module: Module) -> Self {
+        Self {
+            frames: Vec::new(),
+            // Dummy pc
+            pc: InstId(0),
+            action: Action::Continue,
+            module,
+            memory: Vec::new(),
+        }
+    }
+
+    pub fn run(&mut self, func: FuncRef, args: Vec<EvalValue>) -> EvalValue {
+        let frame = Frame::new(func, &self.module, args);
+        self.frames.push(frame);
+        self.action = Action::Continue;
+        self.run_on_func()
+    }
+
     fn top_frame(&self) -> &Frame {
         self.frames.last().unwrap()
     }
@@ -195,5 +213,9 @@ impl State for Machine {
         }
 
         EvalValue::Undef
+    }
+
+    fn dfg(&self) -> &DataFlowGraph {
+        &self.top_func().dfg
     }
 }
