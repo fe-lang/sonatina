@@ -21,10 +21,7 @@ Module {
                 linkage: Public,
                 name: FunctionName {
                     name: "main",
-                    span: Span(
-                        43,
-                        48,
-                    ),
+                    ..
                 },
                 params: [],
                 ret_type: None,
@@ -85,16 +82,10 @@ Module {
                                             ..
                                         },
                                     ],
-                                    span: Span(
-                                        81,
-                                        94,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                73,
-                                94,
-                            ),
+                            ..
                         },
                         Stmt {
                             kind: Inst(
@@ -104,16 +95,10 @@ Module {
                                         ..
                                     },
                                     args: [],
-                                    span: Span(
-                                        104,
-                                        110,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                104,
-                                110,
-                            ),
+                            ..
                         },
                     ],
                 },

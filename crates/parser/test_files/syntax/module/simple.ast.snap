@@ -18,10 +18,7 @@ Module {
             linkage: External,
             name: FunctionName {
                 name: "add_i8",
-                span: Span(
-                    92,
-                    99,
-                ),
+                ..
             },
             params: [
                 Type {
@@ -112,10 +109,7 @@ Module {
                 linkage: Public,
                 name: FunctionName {
                     name: "main",
-                    span: Span(
-                        192,
-                        197,
-                    ),
+                    ..
                 },
                 params: [],
                 ret_type: None,
@@ -153,10 +147,7 @@ Module {
                                             kind: FuncRef(
                                                 FunctionName {
                                                     name: "foo",
-                                                    span: Span(
-                                                        235,
-                                                        239,
-                                                    ),
+                                                    ..
                                                 },
                                             ),
                                             ..
@@ -175,16 +166,10 @@ Module {
                                             ..
                                         },
                                     ],
-                                    span: Span(
-                                        230,
-                                        246,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                222,
-                                246,
-                            ),
+                            ..
                         },
                         Stmt {
                             kind: Inst(
@@ -194,16 +179,10 @@ Module {
                                         ..
                                     },
                                     args: [],
-                                    span: Span(
-                                        256,
-                                        262,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                256,
-                                262,
-                            ),
+                            ..
                         },
                     ],
                 },
@@ -215,10 +194,7 @@ Module {
                 linkage: Private,
                 name: FunctionName {
                     name: "foo",
-                    span: Span(
-                        302,
-                        306,
-                    ),
+                    ..
                 },
                 params: [
                     ValueDeclaration(
@@ -300,16 +276,10 @@ Module {
                                             ..
                                         },
                                     ],
-                                    span: Span(
-                                        338,
-                                        349,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                330,
-                                349,
-                            ),
+                            ..
                         },
                         Stmt {
                             kind: Assign(
@@ -335,10 +305,7 @@ Module {
                                             kind: FuncRef(
                                                 FunctionName {
                                                     name: "add_i8",
-                                                    span: Span(
-                                                        364,
-                                                        371,
-                                                    ),
+                                                    ..
                                                 },
                                             ),
                                             ..
@@ -372,16 +339,10 @@ Module {
                                             ..
                                         },
                                     ],
-                                    span: Span(
-                                        359,
-                                        377,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                351,
-                                377,
-                            ),
+                            ..
                         },
                         Stmt {
                             kind: Inst(
@@ -406,16 +367,10 @@ Module {
                                             ..
                                         },
                                     ],
-                                    span: Span(
-                                        379,
-                                        388,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                379,
-                                388,
-                            ),
+                            ..
                         },
                     ],
                 },
@@ -429,10 +384,7 @@ Module {
                 linkage: Private,
                 name: FunctionName {
                     name: "types",
-                    span: Span(
-                        398,
-                        404,
-                    ),
+                    ..
                 },
                 params: [
                     ValueDeclaration(
@@ -566,16 +518,10 @@ Module {
                                         ..
                                     },
                                     args: [],
-                                    span: Span(
-                                        496,
-                                        502,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                496,
-                                502,
-                            ),
+                            ..
                         },
                     ],
                 },
@@ -587,10 +533,7 @@ Module {
                 linkage: Private,
                 name: FunctionName {
                     name: "table",
-                    span: Span(
-                        512,
-                        518,
-                    ),
+                    ..
                 },
                 params: [
                     ValueDeclaration(
@@ -693,16 +636,10 @@ Module {
                                             ..
                                         },
                                     ],
-                                    span: Span(
-                                        548,
-                                        594,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                548,
-                                594,
-                            ),
+                            ..
                         },
                     ],
                 },
@@ -736,16 +673,10 @@ Module {
                                             ..
                                         },
                                     ],
-                                    span: Span(
-                                        616,
-                                        627,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                616,
-                                627,
-                            ),
+                            ..
                         },
                     ],
                 },
@@ -779,16 +710,10 @@ Module {
                                             ..
                                         },
                                     ],
-                                    span: Span(
-                                        649,
-                                        660,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                649,
-                                660,
-                            ),
+                            ..
                         },
                     ],
                 },
@@ -800,10 +725,7 @@ Module {
                 linkage: Private,
                 name: FunctionName {
                     name: "flow",
-                    span: Span(
-                        670,
-                        675,
-                    ),
+                    ..
                 },
                 params: [
                     ValueDeclaration(
@@ -857,16 +779,10 @@ Module {
                                             ..
                                         },
                                     ],
-                                    span: Span(
-                                        713,
-                                        724,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                713,
-                                724,
-                            ),
+                            ..
                         },
                     ],
                 },
@@ -942,16 +858,10 @@ Module {
                                             ..
                                         },
                                     ],
-                                    span: Span(
-                                        755,
-                                        787,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                746,
-                                787,
-                            ),
+                            ..
                         },
                         Stmt {
                             kind: Assign(
@@ -1001,16 +911,10 @@ Module {
                                             ..
                                         },
                                     ],
-                                    span: Span(
-                                        805,
-                                        817,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                797,
-                                817,
-                            ),
+                            ..
                         },
                         Stmt {
                             kind: Inst(
@@ -1057,16 +961,10 @@ Module {
                                             ..
                                         },
                                     ],
-                                    span: Span(
-                                        827,
-                                        846,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                827,
-                                846,
-                            ),
+                            ..
                         },
                     ],
                 },
@@ -1098,16 +996,10 @@ Module {
                                             ..
                                         },
                                     ],
-                                    span: Span(
-                                        868,
-                                        879,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                868,
-                                879,
-                            ),
+                            ..
                         },
                     ],
                 },
@@ -1142,16 +1034,10 @@ Module {
                                             ..
                                         },
                                     ],
-                                    span: Span(
-                                        901,
-                                        910,
-                                    ),
+                                    ..
                                 },
                             ),
-                            span: Span(
-                                901,
-                                910,
-                            ),
+                            ..
                         },
                     ],
                 },

@@ -210,9 +210,10 @@ impl FromSyntax<Error> for FuncSignature {
 }
 
 /// Doesn't include `%` prefix.
-#[derive(Debug)]
+#[derive(Dbg)]
 pub struct FunctionName {
     pub name: SmolStr,
+    #[debug(skip)]
     pub span: Span,
 }
 
@@ -265,9 +266,10 @@ impl FromSyntax<Error> for BlockId {
     }
 }
 
-#[derive(Debug)]
+#[derive(Dbg)]
 pub struct Stmt {
     pub kind: StmtKind,
+    #[debug(skip)]
     pub span: Span,
 }
 
@@ -296,10 +298,11 @@ pub enum StmtKind {
     Inst(Inst),
 }
 
-#[derive(Debug)]
+#[derive(Dbg)]
 pub struct Inst {
     pub name: InstName,
     pub args: Vec<InstArg>,
+    #[debug(skip)]
     pub span: Span,
 }
 
