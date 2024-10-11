@@ -1,21 +1,19 @@
 ---
-source: crates/parser2/tests/syntax.rs
-expression: w.dump_string().unwrap()
-input_file: crates/parser2/test_files/syntax/module/simple.sntn
+source: crates/parser/tests/syntax.rs
+expression: w.dump_string()
+input_file: crates/parser/test_files/syntax/module/simple.sntn
 ---
 target = evm-ethereum-london
-type %foo = {i8, i16, *i64};
-type %bar = {i8, [i8; 31]};
+type @foo = {i8, i16, *i64};
+type @bar = {i8, [i8; 31]};
 func external %add_i8(v0.i8, v1.i8) -> i8 {
 }
-
 func public %main() -> void {
     block0:
         v0.i8 = call %foo 100.i8;
         return;
 
 }
-
 func private %foo(v0.i8) -> i8 {
     block0:
         v1.i8 = mul v0 2.i8;
@@ -23,13 +21,11 @@ func private %foo(v0.i8) -> i8 {
         return v2;
 
 }
-
-func private %types(v0.*i8, v1.[i8; 2], v2.[*i8; 2], v3.[[i8; 2]; 2], v4.%foo, v5.*%foo) -> void {
+func private %types(v0.*i8, v1.[i8; 2], v2.[*i8; 2], v3.[[i8; 2]; 2], v4.@foo, v5.*@foo) -> void {
     block0:
         return;
 
 }
-
 func private %table(v0.i8) -> void {
     block0:
         br_table v0 block0 (1.i8 block1) (2.i8 block2);
@@ -41,7 +37,6 @@ func private %table(v0.i8) -> void {
         return 2.i8;
 
 }
-
 func private %flow(v0.i64) -> i64 {
     block0:
         jump block1;

@@ -10,7 +10,7 @@ pub struct Mload {
     addr: ValueId,
     ty: Type,
 }
-impl_inst_write!(Mload);
+impl_inst_write!(Mload, (addr: ValueId, ty: Type));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(has_side_effect)]
@@ -21,7 +21,7 @@ pub struct Mstore {
     addr: ValueId,
     ty: Type,
 }
-impl_inst_write!(Mstore);
+impl_inst_write!(Mstore, (value: ValueId, addr: ValueId, ty: Type));
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 pub struct Gep {

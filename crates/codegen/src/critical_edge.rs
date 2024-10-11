@@ -280,7 +280,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, b));
 
         builder.switch_to_block(b);
-        let phi_res = builder.insert_inst_with(|| Phi::new(is, vec![(v1, a)], Type::I8), Type::I8);
+        let phi_res = builder.insert_inst_with(|| Phi::new(is, vec![(v1, a)]), Type::I8);
         let add_res = builder.insert_inst_with(|| Add::new(is, phi_res, v1), Type::I8);
 
         builder.append_phi_arg(phi_res, add_res, b);

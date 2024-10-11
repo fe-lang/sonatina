@@ -84,6 +84,7 @@ pub trait State {
     fn store(&mut self, addr: EvalValue, value: EvalValue, ty: Type) -> EvalValue;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     Continue,
     JumpTo(BlockId),
@@ -95,7 +96,7 @@ pub enum Action {
     Return(EvalValue),
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum EvalValue {
     Imm(Immediate),
     #[default]

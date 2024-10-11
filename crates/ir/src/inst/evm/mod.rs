@@ -59,10 +59,12 @@ pub struct EvmKeccak256 {
 impl_inst_write!(EvmKeccak256);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmAddress {}
 impl_inst_write!(EvmAddress);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmBalance {
     #[inst(value)]
     contract_addr: ValueId,
@@ -70,18 +72,22 @@ pub struct EvmBalance {
 impl_inst_write!(EvmBalance);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmOrigin {}
 impl_inst_write!(EvmOrigin);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmCaller {}
 impl_inst_write!(EvmCaller);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmCallValue {}
 impl_inst_write!(EvmCallValue);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmCallDataLoad {
     data_offset: ValueId,
 }
@@ -100,6 +106,7 @@ pub struct EvmCallDataCopy {
 impl_inst_write!(EvmCallDataCopy);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmCodeSize {}
 impl_inst_write!(EvmCodeSize);
 
@@ -116,10 +123,12 @@ pub struct EvmCodeCopy {
 impl_inst_write!(EvmCodeCopy);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmGasPrice {}
 impl_inst_write!(EvmGasPrice);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmExtCodeSize {
     #[inst(value)]
     ext_addr: ValueId,
@@ -141,6 +150,7 @@ pub struct EvmExtCodeCopy {
 impl_inst_write!(EvmExtCodeCopy);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmReturnDataSize {}
 impl_inst_write!(EvmReturnDataSize);
 
@@ -157,6 +167,7 @@ pub struct EvmReturnDataCopy {
 impl_inst_write!(EvmReturnDataCopy);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmExtCodeHash {
     #[inst(value)]
     ext_addr: ValueId,
@@ -164,6 +175,7 @@ pub struct EvmExtCodeHash {
 impl_inst_write!(EvmExtCodeHash);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmBlockHash {
     #[inst(value)]
     block_num: ValueId,
@@ -171,6 +183,7 @@ pub struct EvmBlockHash {
 impl_inst_write!(EvmBlockHash);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmCoinBase {
     #[inst(value)]
     block_num: ValueId,
@@ -178,34 +191,42 @@ pub struct EvmCoinBase {
 impl_inst_write!(EvmCoinBase);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmTimestamp {}
 impl_inst_write!(EvmTimestamp);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmNumber {}
 impl_inst_write!(EvmNumber);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmPrevRandao {}
 impl_inst_write!(EvmPrevRandao);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmGasLimit {}
 impl_inst_write!(EvmGasLimit);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmChainId {}
 impl_inst_write!(EvmChainId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmSelfBalance {}
 impl_inst_write!(EvmSelfBalance);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmBaseFee {}
 impl_inst_write!(EvmBaseFee);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmBlobHash {
     #[inst(value)]
     idx: ValueId,
@@ -213,6 +234,7 @@ pub struct EvmBlobHash {
 impl_inst_write!(EvmBlobHash);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmBlobBaseFee {}
 impl_inst_write!(EvmBlobBaseFee);
 
@@ -245,10 +267,12 @@ pub struct EvmSstore {
 impl_inst_write!(EvmSstore);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmMsize {}
 impl_inst_write!(EvmMsize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct EvmGas {}
 impl_inst_write!(EvmGas);
 

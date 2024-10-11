@@ -3,7 +3,11 @@ use core::fmt;
 use std::ops;
 
 use super::Type;
-use crate::{inst::InstId, GlobalVariable, I256};
+use crate::{
+    inst::InstId,
+    ir_writer::{WriteWithFunc, WriteWithModule},
+    GlobalVariable, I256,
+};
 
 /// An opaque reference to [`Value`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
@@ -24,6 +28,33 @@ pub enum Value {
 
     /// The value is global value.
     Global { gv: GlobalVariable, ty: Type },
+}
+
+impl WriteWithFunc for ValueId {
+    fn write(
+        &self,
+        ctx: &crate::ir_writer::FuncWriteCtx,
+        w: &mut impl std::io::Write,
+    ) -> std::io::Result<()> {
+        if let Some(name) = ctx.dbg.value_name(ctx.func, ctx.func_ref, *self) {
+            write!(w, "{name}")
+        } else {
+            match ctx.func.dfg.value(*self) {
+                Value::Immediate { imm, ty } => {
+                    write!(w, "{}.", imm)?;
+                    ty.write(ctx.func.ctx(), w)
+                }
+                Value::Global { gv, .. } => ctx
+                    .func
+                    .dfg
+                    .ctx
+                    .with_gv_store(|s| write!(w, "%{}", s.gv_data(*gv).symbol)),
+                _ => {
+                    write!(w, "v{}", self.0)
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

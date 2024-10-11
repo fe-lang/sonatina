@@ -194,7 +194,7 @@ trait InstWrite {
 
 macro_rules! impl_inst_write {
     ($ty:ty) => {
-        impl crate::inst::InstWrite for $ty {
+        impl $crate::inst::InstWrite for $ty {
             fn write(
                 &self,
                 ctx: &crate::ir_writer::FuncWriteCtx,
@@ -205,16 +205,47 @@ macro_rules! impl_inst_write {
                 let mut values = values.iter();
 
                 if let Some(value) = values.next() {
-                    ctx.write_value(*value, &mut w)?;
+                    $crate::ir_writer::WriteWithFunc::write(value, ctx, &mut w)?
                 }
                 for value in values {
                     write!(w, " ")?;
-                    ctx.write_value(*value, &mut w)?;
+                    $crate::ir_writer::WriteWithFunc::write(value, ctx, &mut w)?
                 }
+                Ok(())
+            }
+        }
+    };
+
+    ($ty:ty, ($($field:ident: $kind:ident),+)) => {
+        impl $crate::inst::InstWrite for $ty {
+            fn write(
+                &self,
+                ctx: &crate::ir_writer::FuncWriteCtx,
+                mut w: &mut dyn std::io::Write,
+            ) -> std::io::Result<()> {
+                w.write_fmt(format_args!("{} ", crate::Inst::as_text(self)))?;
+                $crate::inst::__write_args!(self, ctx, &mut w, ($($field: $kind),+));
                 Ok(())
             }
         }
     };
 }
 
+macro_rules! __write_args {
+    ($self:expr, $ctx:expr, $w:expr, ($field:ident: $kind:ident $(,$fields:ident: $kinds:ident)+)) => {
+        $crate::inst::__write_args!($self, $ctx, $w, ($field: $kind));
+        write!(&mut $w, " ")?;
+        $crate::inst::__write_args!($self, $ctx, $w, ($($fields: $kinds),+));
+    };
+
+    ($self:expr, $ctx:expr, $w:expr, ($field:ident: Type)) => {
+        $crate::ir_writer::WriteWithModule::write($self.$field(), $ctx.func.ctx(), $w)?
+    };
+
+    ($self:expr, $ctx:expr, $w:expr, ($field:ident: ValueId)) => {
+        $crate::ir_writer::WriteWithFunc::write($self.$field(), $ctx, $w)?
+    };
+}
+
+use __write_args;
 use impl_inst_write;

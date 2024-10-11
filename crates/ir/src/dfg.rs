@@ -222,9 +222,9 @@ impl DataFlowGraph {
         InstDowncastMut::downcast_mut(is, inst)
     }
 
-    pub fn make_phi(&self, args: Vec<(ValueId, BlockId)>, ty: &Type) -> Phi {
+    pub fn make_phi(&self, args: Vec<(ValueId, BlockId)>) -> Phi {
         let has_phi = self.inst_set().phi();
-        Phi::new(has_phi, args, *ty)
+        Phi::new(has_phi, args)
     }
 
     pub fn make_jump(&self, to: BlockId) -> Jump {

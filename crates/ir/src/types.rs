@@ -205,7 +205,7 @@ impl WriteWithModule for CompoundType {
             CompoundTypeData::Array { elem: ty, len } => {
                 write!(w, "[")?;
                 ty.write(module, &mut *w)?;
-                write!(w, ";{len}]")
+                write!(w, "; {len}]")
             }
             CompoundTypeData::Ptr(ty) => {
                 write!(w, "*")?;
@@ -213,9 +213,9 @@ impl WriteWithModule for CompoundType {
             }
             CompoundTypeData::Struct(StructData { name, packed, .. }) => {
                 if *packed {
-                    write!(w, "<{{{name}}}>")
+                    write!(w, "@<{name}>")
                 } else {
-                    write!(w, "{{{name}}}")
+                    write!(w, "@{name}")
                 }
             }
         })

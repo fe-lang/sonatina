@@ -35,7 +35,7 @@ impl InstWrite for Br {
     fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
         write!(w, "{}", self.as_text())?;
         write!(w, " ")?;
-        ctx.write_value(self.cond, &mut w)?;
+        self.cond.write(ctx, &mut w)?;
         write!(w, " ")?;
         self.nz_dest.write(ctx, &mut w)?;
         write!(w, " ")?;
@@ -57,7 +57,7 @@ impl InstWrite for BrTable {
     fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
         write!(w, "{}", self.as_text())?;
         write!(w, " ")?;
-        ctx.write_value(self.scrutinee, &mut w)?;
+        self.scrutinee.write(ctx, &mut w)?;
         write!(w, " ")?;
         if let Some(default) = self.default {
             default.write(ctx, &mut w)?;
@@ -65,7 +65,7 @@ impl InstWrite for BrTable {
 
         for (value, block) in &self.table {
             write!(w, " (")?;
-            ctx.write_value(*value, &mut w)?;
+            value.write(ctx, &mut w)?;
             write!(w, " ")?;
             block.write(ctx, &mut w)?;
             write!(w, ")")?;
@@ -79,7 +79,6 @@ impl InstWrite for BrTable {
 pub struct Phi {
     #[inst(value)]
     args: Vec<(ValueId, BlockId)>,
-    ty: Type,
 }
 impl Phi {
     pub fn append_phi_arg(&mut self, value: ValueId, block: BlockId) {
@@ -105,7 +104,7 @@ impl InstWrite for Phi {
 
         for (value, block) in &self.args {
             write!(w, " (")?;
-            ctx.write_value(*value, &mut w)?;
+            value.write(ctx, &mut w)?;
             write!(w, " ")?;
             block.write(ctx, &mut w)?;
             write!(w, ")")?;
@@ -129,11 +128,15 @@ pub struct Call {
 impl InstWrite for Call {
     fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
         let name = self.as_text();
-        let callee = ctx.func.callees[&self.callee].name();
+        let callee = ctx
+            .func
+            .ctx()
+            .func_sig(self.callee)
+            .map_or("undef", |sig| sig.name());
         write!(w, "{name} %{callee}")?;
         for value in &self.args {
             write!(w, " ")?;
-            ctx.write_value(*value, &mut w)?;
+            value.write(ctx, &mut w)?;
         }
         Ok(())
     }
@@ -151,7 +154,7 @@ impl InstWrite for Return {
         write!(w, "{}", self.as_text())?;
         if let Some(arg) = self.arg {
             write!(w, " ")?;
-            ctx.write_value(arg, &mut w)?;
+            arg.write(ctx, &mut w)?;
         }
         Ok(())
     }

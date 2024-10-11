@@ -8,7 +8,7 @@ super::impl_inst_build! {Br, has_br, (cond: ValueId, nz_dest: BlockId, z_dest: B
 super::impl_inst_build_common! {BrTable, has_br_table, ArityBound::AtLeast(1), build_br_table}
 super::impl_inst_build_common! {Phi, has_phi, ArityBound::AtLeast(1), build_phi}
 super::impl_inst_build_common! {Call, has_call, ArityBound::AtLeast(1), build_call}
-super::impl_inst_build_common! {Return, has_return, ArityBound::AtLeast(0), build_return}
+super::impl_inst_build_common! {Return, has_return, ArityBound::AtMost(1), build_return}
 
 fn build_br_table(
     ctx: &mut BuildCtx,
@@ -59,11 +59,10 @@ fn build_phi(
         ast_args.next();
     }
 
-    let ty = super::process_arg!(ctx, fb, ast_args, Type);
     if let Some(arg) = ast_args.next() {
         Err(Error::UnexpectedTrailingInstArg(arg.span))
     } else {
-        Ok(Phi::new(has_inst, args, ty))
+        Ok(Phi::new(has_inst, args))
     }
 }
 

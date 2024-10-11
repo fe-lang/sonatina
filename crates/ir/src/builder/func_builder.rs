@@ -292,7 +292,7 @@ mod tests {
             dump_func(&module, func_ref),
             "func public %test_func(v0.i32, v1.i64) -> void {
     block0:
-        v2.i64 = sext v0;
+        v2.i64 = sext v0 i64;
         v3.i64 = mul v2 v1;
         return;
 
@@ -354,7 +354,7 @@ mod tests {
         builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(merge_block);
-        let phi = Phi::new(is, vec![(v1, then_block), (v2, else_block)], Type::I64);
+        let phi = Phi::new(is, vec![(v1, then_block), (v2, else_block)]);
         let v3 = builder.insert_inst(phi, Type::I64);
         let add = Add::new(is, v3, arg0);
         builder.insert_inst(add, Type::I64);

@@ -1,9 +1,8 @@
 use std::io;
 
-use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
-use super::{module::FuncRef, DataFlowGraph, Layout, Type, ValueId};
+use super::{DataFlowGraph, Layout, Type, ValueId};
 use crate::{
     ir_writer::{FuncWriteCtx, WriteWithFunc, WriteWithModule},
     module::ModuleCtx,
@@ -16,9 +15,6 @@ pub struct Function {
     pub arg_values: smallvec::SmallVec<[ValueId; 8]>,
     pub dfg: DataFlowGraph,
     pub layout: Layout,
-
-    /// Stores signatures of all functions that are called by the function.
-    pub callees: FxHashMap<FuncRef, Signature>,
 }
 
 impl Function {
@@ -39,7 +35,6 @@ impl Function {
             arg_values,
             dfg,
             layout: Layout::default(),
-            callees: FxHashMap::default(),
         }
     }
 

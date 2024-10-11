@@ -286,7 +286,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, b1));
 
         builder.switch_to_block(b1);
-        let v1 = builder.insert_inst_with(|| Phi::new(is, vec![(v0, b0)], Type::I32), Type::I32);
+        let v1 = builder.insert_inst_with(|| Phi::new(is, vec![(v0, b0)]), Type::I32);
         let c0 = builder.make_imm_value(10i32);
         let v2 = builder.insert_inst_with(|| Eq::new(is, v1, c0), Type::I1);
         builder.insert_inst_no_result_with(|| Br::new(is, v2, b3, b2));
@@ -335,7 +335,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, b1));
 
         builder.switch_to_block(b1);
-        let v1 = builder.insert_inst_with(|| Phi::new(is, vec![(v0, b0)], Type::I32), Type::I32);
+        let v1 = builder.insert_inst_with(|| Phi::new(is, vec![(v0, b0)]), Type::I32);
         let c0 = builder.make_imm_value(10i32);
         let v2 = builder.insert_inst_with(|| Eq::new(is, v1, c0), Type::I1);
         builder.insert_inst_no_result_with(|| Br::new(is, v2, b5, b2));

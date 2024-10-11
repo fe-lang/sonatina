@@ -11,7 +11,7 @@ use rustc_hash::FxHashSet;
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::control_flow::{Branch, BranchKind},
-    interpret::{EvalValue, Interpret, State},
+    interpret::{Action, EvalValue, Interpret, State},
     prelude::*,
     BlockId, ControlFlowGraph, Function, Immediate, InstId, Type, ValueId,
 };
@@ -497,8 +497,10 @@ impl<'i> State for CellState<'i> {
         panic!("call instuctuion must not be Interpreted")
     }
 
-    fn set_action(&mut self, _action: sonatina_ir::interpret::Action) {
-        panic!("instruction with side effect must not be interpreted")
+    fn set_action(&mut self, action: Action) {
+        if action != Action::Continue {
+            panic!("instruction with side effect must not be interpreted")
+        }
     }
 
     fn prev_block(&mut self) -> BlockId {

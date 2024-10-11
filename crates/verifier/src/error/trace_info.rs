@@ -106,8 +106,13 @@ impl<'a, 'b> fmt::Display for DisplayTraceInfo<'a, 'b> {
             line += 1;
         }
         if let Some(callee) = self.trace_info.callee.expand() {
-            let callee = self.ctx.func.callees[&callee].name();
-            write!(f, "\n{line}: {callee}")?;
+            let callee = self
+                .ctx
+                .func
+                .ctx()
+                .func_sig(callee)
+                .map_or("undef", |sig| sig.name());
+            write!(f, "\n{line}: %{callee}")?;
             line += 1;
         }
         if let Some(inst_id) = inst_id.expand() {

@@ -1,5 +1,5 @@
-//! SSA construction algorithm here is based on [`Simple and Efficient Construction of Static
-//! Single Assignment Form`](https://link.springer.com/chapter/10.1007/978-3-642-37051-9_6).
+//! SSA construction algorithm here is based on [`Simple and Efficient
+//! Construction of Static Single Assignment Form`](https://link.springer.com/chapter/10.1007/978-3-642-37051-9_6).
 
 use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap, SparseSet};
 
@@ -156,7 +156,7 @@ impl SsaBuilder {
     ) -> (InstId, ValueId) {
         let ty = self.var_ty(var);
         let is = func.dfg.inst_set();
-        let phi = control_flow::Phi::new(is.phi(), Vec::new(), ty);
+        let phi = control_flow::Phi::new(is.phi(), Vec::new());
         let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(block));
 
         let inst = cursor.prepend_inst_data(func, phi);
@@ -220,9 +220,8 @@ mod tests {
     use control_flow::{Br, BrTable, Jump, Phi, Return};
     use macros::inst_set;
 
-    use crate::{inst::arith::Add, isa::Isa};
-
     use super::{super::test_util::*, *};
+    use crate::{inst::arith::Add, isa::Isa};
 
     #[inst_set(InstKind = "TestInstKind")]
     struct TestInstSet(Phi, Jump, Add, Return, Br, BrTable);

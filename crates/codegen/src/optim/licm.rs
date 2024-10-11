@@ -1,12 +1,11 @@
 // TODO: Add control flow hoisting.
 use rustc_hash::{FxHashMap, FxHashSet};
-
-use crate::loop_analysis::{Loop, LoopTree};
-
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     BlockId, ControlFlowGraph, Function, InstId, ValueId,
 };
+
+use crate::loop_analysis::{Loop, LoopTree};
 
 #[derive(Debug)]
 pub struct LicmSolver {
@@ -87,10 +86,10 @@ impl LicmSolver {
     }
 
     /// Returns preheader of the loop.
-    /// 1. If there is natural preheader for the loop, then returns it without any modification of
-    ///    function.
-    /// 2. If no natural preheader for the loop, then create the preheader and modify function
-    ///    layout, `cfg`, and `lpt`.
+    /// 1. If there is natural preheader for the loop, then returns it without
+    ///    any modification of function.
+    /// 2. If no natural preheader for the loop, then create the preheader and
+    ///    modify function layout, `cfg`, and `lpt`.
     fn create_preheader(
         &self,
         func: &mut Function,
@@ -105,8 +104,8 @@ impl LicmSolver {
             .filter(|block| !lpt.is_in_loop(*block, lp))
             .collect();
 
-        // If the loop header already has a single preheader and the edge is not a critical edge,
-        // then it's possible to use the preheader as is.
+        // If the loop header already has a single preheader and the edge is not a
+        // critical edge, then it's possible to use the preheader as is.
         if original_preheaders.len() == 1 && cfg.succs_of(original_preheaders[0]).count() == 1 {
             return original_preheaders[0];
         }
@@ -163,13 +162,13 @@ impl LicmSolver {
 
         let mut next_inst = func.layout.first_inst_of(lp_header);
         while let Some(phi_inst_id) = next_inst {
-            let Some(old_phi) = func.dfg.cast_phi(phi_inst_id) else {
+            if func.dfg.cast_phi(phi_inst_id).is_none() {
                 break;
             };
 
             // Create new phi inst that should be inserted to the preheader, and remove inst
             // arguments passing through original preheaders.
-            let mut new_phi = func.dfg.make_phi(vec![], old_phi.ty());
+            let mut new_phi = func.dfg.make_phi(vec![]);
             let old_phi = func.dfg.cast_phi_mut(phi_inst_id).unwrap();
 
             for &block in original_preheaders {
@@ -189,7 +188,8 @@ impl LicmSolver {
                     let mut inserter =
                         InstInserter::at_location(CursorLocation::BlockTop(new_preheader));
                     let new_phi_inst = inserter.insert_inst_data(func, new_phi.clone());
-                    let result = inserter.make_result(func, new_phi_inst, new_phi.ty());
+                    let ty = func.dfg.value_ty(new_phi.args()[0].0);
+                    let result = inserter.make_result(func, new_phi_inst, ty);
                     inserter.attach_result(func, new_phi_inst, result);
 
                     // Add phi_inst_data to `inserted_phis` for reusing.

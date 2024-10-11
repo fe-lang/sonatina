@@ -31,9 +31,10 @@ impl ModuleBuilder {
             panic!("{} is already declared.", sig.name())
         } else {
             let name = sig.name().to_string();
-            let func = Function::new(&self.ctx, sig);
+            let func = Function::new(&self.ctx, sig.clone());
             let func_ref = self.funcs.push(func);
             self.declared_funcs.insert(name, func_ref);
+            self.ctx.declared_funcs[func_ref] = sig;
             func_ref
         }
     }

@@ -202,7 +202,7 @@ mod tests {
 
         builder.switch_to_block(merge_block);
         let v3 = builder.insert_inst_with(
-            || Phi::new(is, vec![(v1, then_block), (v2, else_block)], Type::I64),
+            || Phi::new(is, vec![(v1, then_block), (v2, else_block)]),
             Type::I64,
         );
         builder.insert_inst_with(|| Add::new(is, v3, arg0), Type::I64);

@@ -671,6 +671,27 @@ Module {
                                             ),
                                             ..
                                         },
+                                        InstArg {
+                                            kind: ValueBlockMap(
+                                                (
+                                                    Value {
+                                                        kind: Immediate(
+                                                            I8(
+                                                                2,
+                                                            ),
+                                                        ),
+                                                        ..
+                                                    },
+                                                    BlockId {
+                                                        id: Some(
+                                                            2,
+                                                        ),
+                                                        ..
+                                                    },
+                                                ),
+                                            ),
+                                            ..
+                                        },
                                     ],
                                     span: Span(
                                         548,
@@ -892,6 +913,27 @@ Module {
                                                     BlockId {
                                                         id: Some(
                                                             0,
+                                                        ),
+                                                        ..
+                                                    },
+                                                ),
+                                            ),
+                                            ..
+                                        },
+                                        InstArg {
+                                            kind: ValueBlockMap(
+                                                (
+                                                    Value {
+                                                        kind: Immediate(
+                                                            I64(
+                                                                100,
+                                                            ),
+                                                        ),
+                                                        ..
+                                                    },
+                                                    BlockId {
+                                                        id: Some(
+                                                            2,
                                                         ),
                                                         ..
                                                     },

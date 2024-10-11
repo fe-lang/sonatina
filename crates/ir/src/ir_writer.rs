@@ -28,6 +28,7 @@ impl<'a> ModuleWriter<'a> {
         self.module.ctx.with_ty_store(|s| {
             for s in s.all_struct_data() {
                 s.write(&self.module.ctx, &mut *w)?;
+                write!(w, "\n")?;
             }
             io::Result::Ok(())
         })?;
@@ -36,6 +37,7 @@ impl<'a> ModuleWriter<'a> {
         self.module.ctx.with_gv_store(|s| {
             for gv in s.all_gv_data() {
                 gv.write(&self.module.ctx, &mut *w)?;
+                write!(w, "\n")?;
             }
 
             io::Result::Ok(())
@@ -78,33 +80,6 @@ impl<'a> FuncWriteCtx<'a> {
 
     pub fn new(func: &'a Function, func_ref: FuncRef) -> Self {
         Self::with_debug_provider(func, func_ref, &DEFAULT_PROVIDER)
-    }
-
-    pub fn write_value(&self, value: ValueId, w: &mut impl io::Write) -> io::Result<()> {
-        if let Some(name) = self.dbg.value_name(self.func, self.func_ref, value) {
-            write!(w, "{name}")
-        } else {
-            match self.func.dfg.value(value) {
-                Value::Immediate { imm, ty } => {
-                    write!(w, "{}.", imm)?;
-                    ty.write(self.func.ctx(), w)
-                }
-                Value::Global { gv, .. } => self
-                    .func
-                    .dfg
-                    .ctx
-                    .with_gv_store(|s| write!(w, "%{}", s.gv_data(*gv).symbol)),
-                _ => {
-                    write!(w, "v{}", value.0)
-                }
-            }
-        }
-    }
-
-    pub fn dump_value_string(&self, value: ValueId) -> String {
-        let mut s = Vec::new();
-        self.write_value(value, &mut s).unwrap();
-        unsafe { String::from_utf8_unchecked(s) }
     }
 
     pub fn dfg(&self) -> &DataFlowGraph {
@@ -251,7 +226,7 @@ pub struct ValueWithTy(pub ValueId);
 impl WriteWithFunc for ValueWithTy {
     fn write(&self, ctx: &FuncWriteCtx, w: &mut impl io::Write) -> io::Result<()> {
         let value = self.0;
-        ctx.write_value(value, w)?;
+        value.write(ctx, w)?;
         if let Value::Immediate { .. } = ctx.dfg().value(self.0) {
             Ok(())
         } else {

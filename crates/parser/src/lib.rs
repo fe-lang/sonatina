@@ -298,3 +298,26 @@ fn module_ctx_from_triple(triple: TargetTriple) -> ModuleCtx {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn foo() {
+        let s = "     
+target = \"evm-ethereum-london\"
+
+# sameln: func public %simple(v0.i8) -> i8 {
+# nextln:     block0:
+# nextln:         return 2.i8;
+func public %simple(v0.i8) -> i8 {
+    block0:
+        v1.i8 = sub v0 1.i8;
+        v2.i8 = udiv v1 v0;
+        return 2.i8;
+}
+";
+
+        assert!(parse_module(s).is_ok());
+    }
+}

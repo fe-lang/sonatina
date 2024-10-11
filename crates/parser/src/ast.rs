@@ -345,7 +345,7 @@ impl InstArg {
         } else {
             Err(Error::InstArgKindMismatch {
                 expected: "value".into(),
-                actual: self.kind.discriminant_name(),
+                actual: self.kind.discriminant_name().into(),
                 span: self.span,
             })
         }
@@ -361,7 +361,7 @@ impl<'a> TryFrom<&'a InstArg> for &'a Value {
         } else {
             Err(Error::InstArgKindMismatch {
                 expected: "value".into(),
-                actual: arg.kind.discriminant_name(),
+                actual: arg.kind.discriminant_name().into(),
                 span: arg.span,
             })
         }
@@ -377,7 +377,7 @@ impl<'a> TryFrom<&'a InstArg> for &'a Type {
         } else {
             Err(Error::InstArgKindMismatch {
                 expected: "type".into(),
-                actual: arg.kind.discriminant_name(),
+                actual: arg.kind.discriminant_name().into(),
                 span: arg.span,
             })
         }
@@ -393,7 +393,7 @@ impl<'a> TryFrom<&'a InstArg> for &'a BlockId {
         } else {
             Err(Error::InstArgKindMismatch {
                 expected: "block".into(),
-                actual: arg.kind.discriminant_name(),
+                actual: arg.kind.discriminant_name().into(),
                 span: arg.span,
             })
         }
@@ -409,7 +409,7 @@ impl<'a> TryFrom<&'a InstArg> for (&'a Value, &'a BlockId) {
         } else {
             Err(Error::InstArgKindMismatch {
                 expected: "(value, block)".into(),
-                actual: arg.kind.discriminant_name(),
+                actual: arg.kind.discriminant_name().into(),
                 span: arg.span,
             })
         }
@@ -425,7 +425,7 @@ impl<'a> TryFrom<&'a InstArg> for &'a FunctionName {
         } else {
             Err(Error::InstArgKindMismatch {
                 expected: "function name".into(),
-                actual: arg.kind.discriminant_name(),
+                actual: arg.kind.discriminant_name().into(),
                 span: arg.span,
             })
         }

@@ -4,7 +4,10 @@ use dot2::{label::Text, GraphWalk, Id, Labeller, Style};
 
 use super::block::BlockNode;
 use crate::{
-    inst::control_flow::Phi, ir_writer::FuncWriteCtx, prelude::*, BlockId, ControlFlowGraph,
+    inst::control_flow::Phi,
+    ir_writer::{FuncWriteCtx, WriteWithFunc},
+    prelude::*,
+    BlockId, ControlFlowGraph,
 };
 
 pub(super) const DUMMY_BLOCK: BlockId = BlockId(u32::MAX);
@@ -134,7 +137,7 @@ impl<'a> BlockEdge<'a> {
 
             for (value, block) in phi.args().iter() {
                 if *block == from {
-                    let value = ctx.dump_value_string(*value);
+                    let value = value.dump_string(ctx);
                     return Text::LabelStr((value).into());
                 }
             }

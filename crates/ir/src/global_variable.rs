@@ -211,6 +211,6 @@ mod test {
             ))
         });
 
-        assert_eq!(gv.dump_string(&ctx), "[i32;3] const private [8, 4, 2]");
+        assert_eq!(gv.dump_string(&ctx), "[i32; 3] const private [8, 4, 2]");
     }
 }

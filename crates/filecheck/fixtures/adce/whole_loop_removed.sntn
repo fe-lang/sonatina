@@ -6,7 +6,7 @@ target = "evm-ethereum-london"
 func public %whole_loop_removed() -> i8 {
     block0:
         v0.i8 = or 1.i8 0.i8;
-        v1.i8 = sext v0;
+        v1.i8 = sext v0 i8;
         jump block2;
 
     block1:

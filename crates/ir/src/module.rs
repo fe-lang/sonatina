@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 
-use cranelift_entity::{entity_impl, PrimaryMap};
+use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
 use sonatina_triple::TargetTriple;
 
 use super::Linkage;
@@ -8,13 +8,11 @@ use crate::{
     global_variable::GlobalVariableStore,
     isa::{Endian, Isa, TypeLayout},
     types::TypeStore,
-    Function, InstSetBase, Type,
+    Function, InstSetBase, Signature, Type,
 };
 
 pub struct Module {
-    /// Holds all function declared in the contract.
     pub funcs: PrimaryMap<FuncRef, Function>,
-
     pub ctx: ModuleCtx,
 }
 
@@ -43,6 +41,7 @@ pub struct ModuleCtx {
     pub triple: TargetTriple,
     pub inst_set: &'static dyn InstSetBase,
     pub type_layout: &'static dyn TypeLayout,
+    pub declared_funcs: SecondaryMap<FuncRef, Signature>,
     type_store: Arc<RwLock<TypeStore>>,
     gv_store: Arc<RwLock<GlobalVariableStore>>,
 }
@@ -54,12 +53,17 @@ impl ModuleCtx {
             inst_set: isa.inst_set(),
             type_layout: isa.type_layout(),
             type_store: Arc::new(RwLock::new(TypeStore::default())),
+            declared_funcs: SecondaryMap::default(),
             gv_store: Arc::new(RwLock::new(GlobalVariableStore::default())),
         }
     }
 
     pub fn size_of(&self, ty: Type) -> usize {
         self.with_ty_store(|ty_store| self.type_layout.size_of(ty, ty_store))
+    }
+
+    pub fn func_sig(&self, func: FuncRef) -> Option<&Signature> {
+        self.declared_funcs.get(func)
     }
 
     pub fn endian(&self) -> Endian {

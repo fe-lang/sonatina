@@ -16,7 +16,7 @@ pub enum Error {
 
     InstArgKindMismatch {
         expected: SmolStr,
-        actual: SmolStr,
+        actual: Option<SmolStr>,
         span: Span,
     },
 
@@ -92,6 +92,7 @@ impl Error {
             Error::InstArgKindMismatch {
                 expected, actual, ..
             } => {
+                let actual = actual.as_ref().map(|s| s.as_str()).unwrap_or("none");
                 format!("inst arg kind mismtach: expected `{expected}`, but `{actual}` given")
             }
 
