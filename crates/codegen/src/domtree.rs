@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn dom_tree_if_else() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn unreachable_edge() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();
@@ -324,7 +324,7 @@ mod tests {
 
     #[test]
     fn dom_tree_complex() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn dom_tree_br_table() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();

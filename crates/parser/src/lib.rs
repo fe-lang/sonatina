@@ -58,7 +58,7 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
             .ret_type
             .as_ref()
             .map(|t| ctx.type_(&mut builder, t))
-            .unwrap_or(ir::Type::Void);
+            .unwrap_or(ir::Type::Unit);
 
         let sig = Signature::new(&func.name.name, func.linkage, &params, ret_ty);
         builder.declare_function(sig);
@@ -76,7 +76,7 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
             .ret_type
             .as_ref()
             .map(|t| ctx.type_(&mut builder, t))
-            .unwrap_or(ir::Type::Void);
+            .unwrap_or(ir::Type::Unit);
         let sig = Signature::new(&sig.name.name, sig.linkage, &args, ret_ty);
 
         builder.declare_function(sig);
@@ -277,11 +277,11 @@ impl BuildCtx {
                 let elem = self.type_(mb, t);
                 mb.declare_array_type(elem, *n)
             }
-            ast::TypeKind::Void => ir::Type::Void,
+            ast::TypeKind::Unit => ir::Type::Unit,
             ast::TypeKind::Struct(name) => mb.get_struct_type(name).unwrap_or_else(|| {
                 self.errors
                     .push(Error::Undefined(UndefinedKind::Type(name.clone()), t.span));
-                ir::Type::Void
+                ir::Type::Unit
             }),
             ast::TypeKind::Error => unreachable!(),
         }

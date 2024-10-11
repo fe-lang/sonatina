@@ -30,7 +30,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln: block8:
 # nextln:     return;
-func public %llvm_pr36501(v0.i1) -> void {
+func public %llvm_pr36501(v0.i1) -> unit {
     block0:
         jump block1;
 
@@ -89,7 +89,7 @@ func public %llvm_pr36501(v0.i1) -> void {
 # nextln:     v9.i32 = phi (v5 block11) (1.i32 block18);
 # nextln:     mstore v31 $var;
 # nextln:     return;
-func public %llvm_PR42557(v0.i32, v1.i1, v2.i1, v31.*i32) -> void {
+func public %llvm_PR42557(v0.i32, v1.i1, v2.i1, v31.*i32) -> unit {
     block0:
         jump block1;
 

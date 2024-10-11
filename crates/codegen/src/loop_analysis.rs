@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn simple_loop() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let b0 = builder.append_block();
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn continue_loop() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let b0 = builder.append_block();
@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn single_block_loop() {
-        let (evm, mut builder) = test_func_builder(&[Type::I1], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[Type::I1], Type::Unit);
         let is = evm.inst_set();
 
         let b0 = builder.append_block();
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn nested_loop() {
-        let (evm, mut builder) = test_func_builder(&[Type::I1], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[Type::I1], Type::Unit);
         let is = evm.inst_set();
 
         let b0 = builder.append_block();

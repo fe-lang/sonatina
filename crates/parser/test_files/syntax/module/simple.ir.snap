@@ -8,7 +8,7 @@ type @foo = {i8, i16, *i64};
 type @bar = {i8, [i8; 31]};
 func external %add_i8(v0.i8, v1.i8) -> i8 {
 }
-func public %main() -> void {
+func public %main() -> unit {
     block0:
         v0.i8 = call %foo 100.i8;
         return;
@@ -21,12 +21,12 @@ func private %foo(v0.i8) -> i8 {
         return v2;
 
 }
-func private %types(v0.*i8, v1.[i8; 2], v2.[*i8; 2], v3.[[i8; 2]; 2], v4.@foo, v5.*@foo) -> void {
+func private %types(v0.*i8, v1.[i8; 2], v2.[*i8; 2], v3.[[i8; 2]; 2], v4.@foo, v5.*@foo) -> unit {
     block0:
         return;
 
 }
-func private %table(v0.i8) -> void {
+func private %table(v0.i8) -> unit {
     block0:
         br_table v0 block0 (1.i8 block1) (2.i8 block2);
 

@@ -36,12 +36,12 @@ block_ident  = ${ "block" ~ block_number }
 block_number =  { ASCII_DIGIT+ }
 value_name   = ${ "v" ~ ASCII_DIGIT+ }
 
-type_name      =  { primitive_type | ptr_type | array_type | void_type | struct_identifier }
+type_name      =  { primitive_type | ptr_type | array_type | unit_type | struct_identifier }
 primitive_type =  { "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "i1" }
 ptr_type       = ${ "*" ~ type_name }
 array_type     = !{ "[" ~ type_name ~ ";" ~ array_size ~ "]" }
 array_size     =  { ASCII_DIGIT+ }
-void_type      =  { "void" }
+unit_type      =  { "unit" }
 
 value_declaration = ${ value_name ~ "." ~ type_name }
 

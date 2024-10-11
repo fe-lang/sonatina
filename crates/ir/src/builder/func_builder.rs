@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn entry_block() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let b0 = builder.append_block();
@@ -256,7 +256,7 @@ mod tests {
         let func_ref = module.iter_functions().next().unwrap();
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func() -> void {
+            "func public %test_func() -> unit {
     block0:
         v2.i8 = add 1.i8 2.i8;
         v3.i8 = sub v2 1.i8;
@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     fn entry_block_with_args() {
-        let (evm, mut builder) = test_func_builder(&[Type::I32, Type::I64], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[Type::I32, Type::I64], Type::Unit);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();
@@ -290,7 +290,7 @@ mod tests {
         let func_ref = module.iter_functions().next().unwrap();
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func(v0.i32, v1.i64) -> void {
+            "func public %test_func(v0.i32, v1.i64) -> unit {
     block0:
         v2.i64 = sext v0 i64;
         v3.i64 = mul v2 v1;
@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn then_else_merge_block() {
-        let (evm, mut builder) = test_func_builder(&[Type::I64], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[Type::I64], Type::Unit);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();
@@ -367,7 +367,7 @@ mod tests {
         let func_ref = module.iter_functions().next().unwrap();
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func(v0.i64) -> void {
+            "func public %test_func(v0.i64) -> unit {
     block0:
         br v0 block1 block2;
 

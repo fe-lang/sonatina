@@ -132,7 +132,7 @@ pub enum Type {
     I256,
     Compound(CompoundType),
     #[default]
-    Void,
+    Unit,
 }
 
 impl Type {
@@ -189,7 +189,7 @@ impl WriteWithModule for Type {
             Type::I128 => write!(w, "i128"),
             Type::I256 => write!(w, "i256"),
             Type::Compound(cmpd_ty) => cmpd_ty.write(module, w),
-            Type::Void => write!(w, "void"),
+            Type::Unit => write!(w, "unit"),
         }
     }
 }

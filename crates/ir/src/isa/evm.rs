@@ -61,7 +61,7 @@ impl TypeLayout for EvmTypeLayout {
                 }
             }
 
-            Type::Void => 0,
+            Type::Unit => 0,
 
             _ => 32,
         }

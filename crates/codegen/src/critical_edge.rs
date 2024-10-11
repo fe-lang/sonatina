@@ -138,7 +138,7 @@ mod tests {
 
     #[test]
     fn critical_edge_basic() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();
@@ -168,7 +168,7 @@ mod tests {
 
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func() -> void {
+            "func public %test_func() -> unit {
     block0:
         br 1.i32 block3 block1;
 
@@ -194,7 +194,7 @@ mod tests {
     #[test]
     #[allow(clippy::many_single_char_names)]
     fn critical_edge_to_same_block() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();
@@ -234,7 +234,7 @@ mod tests {
 
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func() -> void {
+            "func public %test_func() -> unit {
     block0:
         br 1.i8 block5 block1;
 
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn critical_edge_phi() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();
@@ -299,7 +299,7 @@ mod tests {
 
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func() -> void {
+            "func public %test_func() -> unit {
     block0:
         jump block1;
 
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn critical_edge_br_table() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();
@@ -365,7 +365,7 @@ mod tests {
 
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func() -> void {
+            "func public %test_func() -> unit {
     block0:
         br 1.i1 block5 block6;
 

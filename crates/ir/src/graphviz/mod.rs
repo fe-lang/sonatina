@@ -37,7 +37,7 @@ mod test {
 
     #[test]
     fn test_dump_ir() {
-        let (evm, mut builder) = test_func_builder(&[Type::I64], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[Type::I64], Type::Unit);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();
@@ -81,7 +81,7 @@ mod test {
     block2[label=<<table border=\"0\" cellborder=\"1\" cellspacing=\"0\"><tr><td bgcolor=\"gray\" align=\"center\" colspan=\"1\">block2</td></tr><tr><td align=\"left\" balign=\"left\">jump block3;<br/></td></tr></table>>][shape=\"none\"];
     block1[label=<<table border=\"0\" cellborder=\"1\" cellspacing=\"0\"><tr><td bgcolor=\"gray\" align=\"center\" colspan=\"1\">block1</td></tr><tr><td align=\"left\" balign=\"left\">jump block3;<br/></td></tr></table>>][shape=\"none\"];
     block0[label=<<table border=\"0\" cellborder=\"1\" cellspacing=\"0\"><tr><td bgcolor=\"gray\" align=\"center\" colspan=\"1\">block0</td></tr><tr><td align=\"left\" balign=\"left\">br v0 block1 block2;<br/></td></tr></table>>][shape=\"none\"];
-    dummy_block[label=\"func public %test_func(i64) -> void\"][shape=\"none\"];
+    dummy_block[label=\"func public %test_func(i64) -> unit\"][shape=\"none\"];
     dummy_block -> block0[label=\"\"][style=\"invis\"];
     block2 -> block3[label=\"2.i64\"];
     block1 -> block3[label=\"1.i64\"];

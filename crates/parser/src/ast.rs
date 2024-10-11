@@ -506,7 +506,7 @@ impl FromSyntax<Error> for Type {
                 };
                 TypeKind::Array(Box::new(node.single(Rule::type_name)), size)
             }
-            Rule::void_type => TypeKind::Void,
+            Rule::unit_type => TypeKind::Unit,
             Rule::struct_identifier => TypeKind::Struct(node.parse_str(Rule::struct_name)),
             _ => unreachable!(),
         };
@@ -523,7 +523,7 @@ pub enum TypeKind {
     Ptr(Box<Type>),
     Array(Box<Type>, usize),
     Struct(SmolStr),
-    Void,
+    Unit,
     Error,
 }
 

@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn use_var_local() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
@@ -250,7 +250,7 @@ mod tests {
 
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func() -> void {
+            "func public %test_func() -> unit {
     block0:
         v1.i32 = add 1.i32 1.i32;
         return;
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn use_var_global_if() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
@@ -304,7 +304,7 @@ mod tests {
 
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func() -> void {
+            "func public %test_func() -> unit {
     block0:
         br 1.i32 block2 block1;
 
@@ -325,7 +325,7 @@ mod tests {
 
     #[test]
     fn use_var_global_many_preds() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let var0 = builder.declare_var(Type::I32);
@@ -394,7 +394,7 @@ mod tests {
 
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func() -> void {
+            "func public %test_func() -> unit {
     block0:
         br 0.i32 block1 block2;
 
@@ -429,7 +429,7 @@ mod tests {
 
     #[test]
     fn use_var_global_loop() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
@@ -473,7 +473,7 @@ mod tests {
 
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func() -> void {
+            "func public %test_func() -> unit {
     block0:
         jump block1;
 
@@ -495,7 +495,7 @@ mod tests {
 
     #[test]
     fn use_var_global_complex() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
@@ -557,7 +557,7 @@ mod tests {
 
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func() -> void {
+            "func public %test_func() -> unit {
     block0:
         jump block1;
 
@@ -589,7 +589,7 @@ mod tests {
 
     #[test]
     fn use_var_global_complex_seal_all() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
@@ -646,7 +646,7 @@ mod tests {
 
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func() -> void {
+            "func public %test_func() -> unit {
     block0:
         jump block1;
 
@@ -756,7 +756,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn undef_use() {
-        let (_, mut builder) = test_func_builder(&[], Type::Void);
+        let (_, mut builder) = test_func_builder(&[], Type::Unit);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();
@@ -768,7 +768,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn unreachable_use() {
-        let (_, mut builder) = test_func_builder(&[], Type::Void);
+        let (_, mut builder) = test_func_builder(&[], Type::Unit);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();

@@ -69,7 +69,7 @@ mod test {
 
     #[test]
     fn display_verifier_error() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
         let is = evm.inst_set();
 
         let b0 = builder.append_block();
@@ -107,7 +107,7 @@ trace_info:
 1: 0.i8
 2: v2.i32 = add 28.i32 0.i8;
 3: block0
-4: func public %test_func() -> void",
+4: func public %test_func() -> unit",
             err.to_string()
         );
     }
