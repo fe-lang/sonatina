@@ -18,7 +18,7 @@ pub(super) trait InstBuild: Sized {
         ctx: &mut BuildCtx,
         fb: &mut FunctionBuilder<InstInserter>,
         ast_inst: &ast::Inst,
-    ) -> Result<Self, Error>;
+    ) -> Result<Self, Box<Error>>;
 }
 
 impl InstBuild for Box<dyn Inst> {
@@ -26,22 +26,22 @@ impl InstBuild for Box<dyn Inst> {
         ctx: &mut BuildCtx,
         fb: &mut FunctionBuilder<InstInserter>,
         ast_inst: &ast::Inst,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, Box<Error>> {
         fn build_inst<T: InstBuild + Inst>(
             ctx: &mut BuildCtx,
             fb: &mut FunctionBuilder<InstInserter>,
             ast_inst: &ast::Inst,
-        ) -> Result<Box<dyn Inst>, Error> {
+        ) -> Result<Box<dyn Inst>, Box<Error>> {
             Ok(Box::new(T::build(ctx, fb, ast_inst)?))
         }
 
         ir::match_string_to_inst!(
             ast_inst.name.name.as_str(),
             build_inst(ctx, fb, ast_inst),
-            Err(Error::Undefined(
+            Err(Box::new(Error::Undefined(
                 UndefinedKind::Inst(ast_inst.name.name.clone()),
                 ast_inst.span,
-            ))
+            )))
         )
     }
 }
@@ -74,15 +74,15 @@ macro_rules! impl_inst_build_common {
                 ctx: &mut crate::BuildCtx,
                 fb: &mut ir::builder::FunctionBuilder<ir::func_cursor::InstInserter>,
                 ast_inst: &crate::ast::Inst,
-            ) -> Result<Self, crate::Error> {
+            ) -> Result<Self, Box<crate::Error>> {
                 assert_eq!(Self::inst_name(), ast_inst.name.name.as_str());
 
                 let Some(has_inst) = fb.inst_set().$has_inst() else {
-                    return Err(crate::Error::UnsupportedInst {
+                    return Err(Box::new(crate::Error::UnsupportedInst {
                         triple: fb.ctx().triple.clone(),
                         inst: ast_inst.name.name.clone(),
                         span: ast_inst.name.span,
-                    });
+                    }));
                 };
 
                 let args = &ast_inst.args;

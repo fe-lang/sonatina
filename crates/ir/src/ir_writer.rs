@@ -28,7 +28,7 @@ impl<'a> ModuleWriter<'a> {
         self.module.ctx.with_ty_store(|s| {
             for s in s.all_struct_data() {
                 s.write(&self.module.ctx, &mut *w)?;
-                write!(w, "\n")?;
+                writeln!(w)?;
             }
             io::Result::Ok(())
         })?;
@@ -37,7 +37,7 @@ impl<'a> ModuleWriter<'a> {
         self.module.ctx.with_gv_store(|s| {
             for gv in s.all_gv_data() {
                 gv.write(&self.module.ctx, &mut *w)?;
-                write!(w, "\n")?;
+                writeln!(w)?;
             }
 
             io::Result::Ok(())

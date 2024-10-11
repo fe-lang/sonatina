@@ -15,7 +15,7 @@ fn build_br_table(
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
     has_inst: &dyn HasInst<BrTable>,
-) -> Result<BrTable, Error> {
+) -> Result<BrTable, Box<Error>> {
     let mut args = args.iter().peekable();
     let scrutinee = super::process_arg!(ctx, fb, args, ValueId);
 
@@ -43,7 +43,7 @@ fn build_phi(
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
     has_inst: &dyn HasInst<Phi>,
-) -> Result<Phi, Error> {
+) -> Result<Phi, Box<Error>> {
     let mut ast_args = args.iter().peekable();
     let mut args = Vec::new();
 
@@ -60,7 +60,7 @@ fn build_phi(
     }
 
     if let Some(arg) = ast_args.next() {
-        Err(Error::UnexpectedTrailingInstArg(arg.span))
+        Err(Box::new(Error::UnexpectedTrailingInstArg(arg.span)))
     } else {
         Ok(Phi::new(has_inst, args))
     }
@@ -71,7 +71,7 @@ fn build_call(
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
     has_inst: &dyn HasInst<Call>,
-) -> Result<Call, Error> {
+) -> Result<Call, Box<Error>> {
     let mut ast_args = args.iter().peekable();
     let callee = super::process_arg!(ctx, fb, ast_args, FuncRef);
 
@@ -89,7 +89,7 @@ fn build_call(
 
     let sig = fb.module_builder.get_sig(callee);
     if let Some(arg) = ast_args.next() {
-        Err(Error::UnexpectedTrailingInstArg(arg.span))
+        Err(Box::new(Error::UnexpectedTrailingInstArg(arg.span)))
     } else {
         Ok(Call::new(has_inst, callee, args, sig.ret_ty()))
     }
@@ -100,7 +100,7 @@ fn build_return(
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
     has_inst: &dyn HasInst<Return>,
-) -> Result<Return, Error> {
+) -> Result<Return, Box<Error>> {
     let mut ast_args = args.iter().peekable();
 
     let arg = if ast_args.peek().is_some() {
@@ -110,7 +110,7 @@ fn build_return(
     };
 
     if let Some(arg) = ast_args.next() {
-        Err(Error::UnexpectedTrailingInstArg(arg.span))
+        Err(Box::new(Error::UnexpectedTrailingInstArg(arg.span)))
     } else {
         Ok(Return::new(has_inst, arg))
     }

@@ -168,7 +168,7 @@ impl BuildCtx {
                         let inst = match InstBuild::build(self, &mut fb, ast_inst) {
                             Ok(inst) => inst,
                             Err(err) => {
-                                self.errors.push(err);
+                                self.errors.push(*err);
                                 continue;
                             }
                         };
@@ -186,7 +186,7 @@ impl BuildCtx {
                         let inst = match InstBuild::build(self, &mut fb, ast_inst) {
                             Ok(inst) => inst,
                             Err(err) => {
-                                self.errors.push(err);
+                                self.errors.push(*err);
                                 continue;
                             }
                         };

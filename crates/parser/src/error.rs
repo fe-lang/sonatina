@@ -7,6 +7,7 @@ use sonatina_triple::{InvalidTriple, TargetTriple};
 use crate::{syntax::Rule, Span};
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Error {
     NumberOutOfBounds(Span),
     InvalidTarget(InvalidTriple, Span),
@@ -145,7 +146,7 @@ pub enum ArityBound {
 }
 
 impl ArityBound {
-    pub fn verify_arity(&self, arity: usize, span: Span) -> Result<(), Error> {
+    pub fn verify_arity(&self, arity: usize, span: Span) -> Result<(), Box<Error>> {
         let is_ok = match self {
             Self::Exact(n) => *n == arity,
 
@@ -157,11 +158,11 @@ impl ArityBound {
         if is_ok {
             Ok(())
         } else {
-            Err(Error::InstArgNumMismatch {
+            Err(Box::new(Error::InstArgNumMismatch {
                 expected: *self,
                 actual: arity,
                 span,
-            })
+            }))
         }
     }
 }

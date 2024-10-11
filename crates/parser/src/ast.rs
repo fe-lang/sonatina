@@ -339,95 +339,95 @@ pub struct InstArg {
 }
 
 impl InstArg {
-    pub fn expect_value(&self) -> Result<&Value, Error> {
+    pub fn expect_value(&self) -> Result<&Value, Box<Error>> {
         if let InstArgKind::Value(value) = &self.kind {
             Ok(value)
         } else {
-            Err(Error::InstArgKindMismatch {
+            Err(Box::new(Error::InstArgKindMismatch {
                 expected: "value".into(),
                 actual: self.kind.discriminant_name().into(),
                 span: self.span,
-            })
+            }))
         }
     }
 }
 
 impl<'a> TryFrom<&'a InstArg> for &'a Value {
-    type Error = Error;
+    type Error = Box<Error>;
 
     fn try_from(arg: &'a InstArg) -> Result<Self, Self::Error> {
         if let InstArgKind::Value(value) = &arg.kind {
             Ok(value)
         } else {
-            Err(Error::InstArgKindMismatch {
+            Err(Box::new(Error::InstArgKindMismatch {
                 expected: "value".into(),
                 actual: arg.kind.discriminant_name().into(),
                 span: arg.span,
-            })
+            }))
         }
     }
 }
 
 impl<'a> TryFrom<&'a InstArg> for &'a Type {
-    type Error = Error;
+    type Error = Box<Error>;
 
     fn try_from(arg: &'a InstArg) -> Result<Self, Self::Error> {
         if let InstArgKind::Ty(ty) = &arg.kind {
             Ok(ty)
         } else {
-            Err(Error::InstArgKindMismatch {
+            Err(Box::new(Error::InstArgKindMismatch {
                 expected: "type".into(),
                 actual: arg.kind.discriminant_name().into(),
                 span: arg.span,
-            })
+            }))
         }
     }
 }
 
 impl<'a> TryFrom<&'a InstArg> for &'a BlockId {
-    type Error = Error;
+    type Error = Box<Error>;
 
     fn try_from(arg: &'a InstArg) -> Result<Self, Self::Error> {
         if let InstArgKind::Block(block) = &arg.kind {
             Ok(block)
         } else {
-            Err(Error::InstArgKindMismatch {
+            Err(Box::new(Error::InstArgKindMismatch {
                 expected: "block".into(),
                 actual: arg.kind.discriminant_name().into(),
                 span: arg.span,
-            })
+            }))
         }
     }
 }
 
 impl<'a> TryFrom<&'a InstArg> for (&'a Value, &'a BlockId) {
-    type Error = Error;
+    type Error = Box<Error>;
 
     fn try_from(arg: &'a InstArg) -> Result<Self, Self::Error> {
         if let InstArgKind::ValueBlockMap(map) = &arg.kind {
             Ok((&map.0, &map.1))
         } else {
-            Err(Error::InstArgKindMismatch {
+            Err(Box::new(Error::InstArgKindMismatch {
                 expected: "(value, block)".into(),
                 actual: arg.kind.discriminant_name().into(),
                 span: arg.span,
-            })
+            }))
         }
     }
 }
 
 impl<'a> TryFrom<&'a InstArg> for &'a FunctionName {
-    type Error = Error;
+    type Error = Box<Error>;
 
     fn try_from(arg: &'a InstArg) -> Result<Self, Self::Error> {
         if let InstArgKind::FuncRef(name) = &arg.kind {
             Ok(name)
         } else {
-            Err(Error::InstArgKindMismatch {
+            Err(Box::new(Error::InstArgKindMismatch {
                 expected: "function name".into(),
                 actual: arg.kind.discriminant_name().into(),
                 span: arg.span,
-            })
+            }))
         }
     }
 }

@@ -12,7 +12,7 @@ fn build_gep(
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
     args: &[ast::InstArg],
     has_inst: &dyn HasInst<Gep>,
-) -> Result<Gep, Error> {
+) -> Result<Gep, Box<Error>> {
     let mut values = SmallVec::new();
     let mut ast_args = args.iter().peekable();
     while ast_args.peek().is_some() {
@@ -20,7 +20,7 @@ fn build_gep(
     }
 
     if let Some(arg) = ast_args.next() {
-        Err(Error::UnexpectedTrailingInstArg(arg.span))
+        Err(Box::new(Error::UnexpectedTrailingInstArg(arg.span)))
     } else {
         Ok(Gep::new(has_inst, values))
     }
