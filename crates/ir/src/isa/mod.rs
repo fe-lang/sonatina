@@ -1,6 +1,6 @@
 use sonatina_triple::TargetTriple;
 
-use crate::{types::TypeStore, InstSetBase, Type};
+use crate::{module::ModuleCtx, InstSetBase, Type};
 
 pub mod evm;
 
@@ -13,8 +13,9 @@ pub trait Isa {
 }
 
 pub trait TypeLayout {
-    fn size_of(&self, ty: Type, ty_store: &TypeStore) -> usize;
-
+    fn size_of(&self, ty: Type, ctx: &ModuleCtx) -> usize;
+    fn align_of(&self, ty: Type, ctx: &ModuleCtx) -> usize;
+    fn pointer_repl(&self) -> Type;
     fn endian(&self) -> Endian;
 }
 

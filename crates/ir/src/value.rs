@@ -122,12 +122,12 @@ impl Immediate {
     }
 
     pub fn sext(self, ty: Type) -> Self {
-        debug_assert!(self.ty() < ty);
+        debug_assert!(self.ty() <= ty);
         Self::from_i256(self.as_i256(), ty)
     }
 
     pub fn zext(self, ty: Type) -> Self {
-        debug_assert!(self.ty() < ty);
+        debug_assert!(self.ty() <= ty);
         let i256: I256 = match self {
             Self::I1(val) => (val as u8).into(),
             Self::I8(val) => (val as u8).into(),

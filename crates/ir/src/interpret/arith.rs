@@ -35,7 +35,7 @@ impl Interpret for Mul {
         let rhs = state.lookup_val(*self.rhs());
         state.set_action(Action::Continue);
 
-        EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| lhs - rhs)
+        EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| lhs * rhs)
     }
 }
 

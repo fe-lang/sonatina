@@ -13,7 +13,7 @@ use sonatina_ir::{
     inst::control_flow::{Branch, BranchKind},
     interpret::{Action, EvalValue, Interpret, State},
     prelude::*,
-    BlockId, ControlFlowGraph, Function, Immediate, InstId, Type, ValueId,
+    BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, InstId, Type, ValueId,
 };
 
 #[derive(Debug)]
@@ -180,7 +180,7 @@ impl SccpSolver {
             return;
         }
 
-        let mut cell_state = CellState::new(&self.lattice);
+        let mut cell_state = CellState::new(&self.lattice, &func.dfg);
         let value = InstDowncast::map(func.inst_set(), inst, |i: &dyn Interpret| {
             i.interpret(&mut cell_state)
         });
@@ -456,15 +456,17 @@ impl Default for LatticeCell {
     }
 }
 
-struct CellState<'i> {
+struct CellState<'a, 'i> {
     map: &'i SecondaryMap<ValueId, LatticeCell>,
     used_val: FxHashSet<ValueId>,
+    dfg: &'a DataFlowGraph,
 }
-impl<'i> CellState<'i> {
-    fn new(map: &'i SecondaryMap<ValueId, LatticeCell>) -> Self {
+impl<'a, 'i> CellState<'a, 'i> {
+    fn new(map: &'i SecondaryMap<ValueId, LatticeCell>, dfg: &'a DataFlowGraph) -> Self {
         Self {
             map,
             used_val: Default::default(),
+            dfg,
         }
     }
 
@@ -479,7 +481,7 @@ impl<'i> CellState<'i> {
     }
 }
 
-impl<'i> State for CellState<'i> {
+impl<'a, 'i> State for CellState<'a, 'i> {
     fn lookup_val(&mut self, value: ValueId) -> EvalValue {
         self.used_val.insert(value);
 
@@ -513,5 +515,9 @@ impl<'i> State for CellState<'i> {
 
     fn store(&mut self, _addr: EvalValue, _value: EvalValue, _ty: Type) -> EvalValue {
         panic!("instruction with side effect must not be interpreted")
+    }
+
+    fn dfg(&self) -> &DataFlowGraph {
+        self.dfg
     }
 }

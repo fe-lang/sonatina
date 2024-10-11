@@ -1,6 +1,6 @@
 use macros::inst_prop;
 
-use crate::{inst, module::FuncRef, BlockId, Immediate, Type, ValueId};
+use crate::{inst, module::FuncRef, BlockId, DataFlowGraph, Immediate, Type, ValueId};
 
 mod arith;
 mod cast;
@@ -13,6 +13,8 @@ mod logic;
 pub trait Interpret {
     fn interpret(&self, state: &mut dyn State) -> EvalValue;
 
+    // TODO: Implement `Interpret` for all inst types and use
+    // `type Members = All`
     type Members = (
         inst::arith::Neg,
         inst::arith::Add,
@@ -42,6 +44,7 @@ pub trait Interpret {
         inst::cmp::IsZero,
         inst::data::Mload,
         inst::data::Mstore,
+        inst::data::Gep,
         inst::control_flow::Jump,
         inst::control_flow::Br,
         inst::control_flow::BrTable,
@@ -82,6 +85,8 @@ pub trait State {
     fn load(&mut self, addr: EvalValue, ty: Type) -> EvalValue;
 
     fn store(&mut self, addr: EvalValue, value: EvalValue, ty: Type) -> EvalValue;
+
+    fn dfg(&self) -> &DataFlowGraph;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

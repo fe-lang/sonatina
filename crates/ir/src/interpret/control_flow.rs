@@ -57,6 +57,7 @@ impl Interpret for BrTable {
 impl Interpret for Phi {
     fn interpret(&self, state: &mut dyn State) -> EvalValue {
         let prev_block = state.prev_block();
+        state.set_action(Action::Continue);
         for (value, block) in self.args() {
             if prev_block == *block {
                 return state.lookup_val(*value);

@@ -59,7 +59,11 @@ impl ModuleCtx {
     }
 
     pub fn size_of(&self, ty: Type) -> usize {
-        self.with_ty_store(|ty_store| self.type_layout.size_of(ty, ty_store))
+        self.type_layout.size_of(ty, self)
+    }
+
+    pub fn align_of(&self, ty: Type) -> usize {
+        self.type_layout.align_of(ty, self)
     }
 
     pub fn func_sig(&self, func: FuncRef) -> Option<&Signature> {
