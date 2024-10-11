@@ -37,7 +37,6 @@ pub struct Sub {
 impl_inst_write!(Sub);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(has_side_effect)]
 pub struct Sdiv {
     #[inst(value)]
     lhs: ValueId,
@@ -47,7 +46,6 @@ pub struct Sdiv {
 impl_inst_write!(Sdiv);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(has_side_effect)]
 pub struct Udiv {
     #[inst(value)]
     lhs: ValueId,
@@ -57,7 +55,6 @@ pub struct Udiv {
 impl_inst_write!(Udiv);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(has_side_effect)]
 pub struct Umod {
     #[inst(value)]
     lhs: ValueId,
@@ -67,7 +64,6 @@ pub struct Umod {
 impl_inst_write!(Umod);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(has_side_effect)]
 pub struct Smod {
     #[inst(value)]
     lhs: ValueId,

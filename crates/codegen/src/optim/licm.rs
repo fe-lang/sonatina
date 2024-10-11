@@ -74,7 +74,7 @@ impl LicmSolver {
 
         let mut invariant = true;
         let inst = func.dfg.inst(inst_id);
-        inst.visit_values(&mut |value| invariant &= loop_var.contains(&value));
+        inst.visit_values(&mut |value| invariant &= !loop_var.contains(&value));
         invariant
     }
 
@@ -178,7 +178,7 @@ impl LicmSolver {
                 new_phi.append_phi_arg(value, block);
             }
 
-            let phi_result = match inserted_phis.get(&phi_inst_id) {
+            let phi_result = match inserted_phis.get(&new_phi) {
                 // If the same phi is already inserted in the preheader, reuse its result.
                 Some(&value) => value,
 
@@ -193,7 +193,7 @@ impl LicmSolver {
                     inserter.attach_result(func, new_phi_inst, result);
 
                     // Add phi_inst_data to `inserted_phis` for reusing.
-                    inserted_phis.insert(new_phi_inst, result);
+                    inserted_phis.insert(new_phi, result);
 
                     result
                 }
