@@ -5,12 +5,13 @@ use crate::error::{Error, ErrorData, ErrorRef};
 
 #[derive(Debug, Default)]
 pub struct ErrorStack {
-    pub errors: PrimaryMap<ErrorRef, ErrorData>,
+    pub fatal_error: Option<ErrorData>,
+    pub non_fatal_errors: PrimaryMap<ErrorRef, ErrorData>,
 }
 
 impl ErrorStack {
     pub fn push(&mut self, err: ErrorData) -> ErrorRef {
-        self.errors.push(err)
+        self.non_fatal_errors.push(err)
     }
 
     pub fn into_errs_iter(
@@ -18,7 +19,7 @@ impl ErrorStack {
         func: &Function,
         func_ref: FuncRef,
     ) -> impl IntoIterator<Item = Error<'_>> {
-        self.errors
+        self.non_fatal_errors
             .into_iter()
             .map(move |(_, err)| Error::new(err, func, func_ref))
     }

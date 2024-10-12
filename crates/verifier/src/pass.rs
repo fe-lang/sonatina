@@ -19,5 +19,5 @@ pub trait VerificationPass {
         }
     }
 
-    fn report_fatal(&self, _ctx: &VerificationCtx, _e: ErrorData) -> !;
+    fn report_fatal(&self, ctx: &mut VerificationCtx, e: ErrorData);
 }
