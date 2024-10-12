@@ -4,7 +4,7 @@ use smallvec::SmallVec;
 use crate::{inst::impl_inst_write, Type, ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(has_side_effect)]
+#[inst(side_effect(super::SideEffect::Read))]
 pub struct Mload {
     #[inst(value)]
     addr: ValueId,
@@ -13,7 +13,7 @@ pub struct Mload {
 impl_inst_write!(Mload, (addr: ValueId, ty: Type));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(has_side_effect)]
+#[inst(side_effect(super::SideEffect::Write))]
 pub struct Mstore {
     #[inst(value)]
     value: ValueId,

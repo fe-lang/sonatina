@@ -8,7 +8,7 @@ use super::{Immediate, Type, Value, ValueId};
 use crate::{
     inst::{
         control_flow::{self, Branch, Jump, Phi},
-        InstId,
+        InstId, SideEffect,
     },
     ir_writer::{FuncWriteCtx, WriteWithFunc},
     module::ModuleCtx,
@@ -244,8 +244,8 @@ impl DataFlowGraph {
         self.users[alias].append(&mut users);
     }
 
-    pub fn has_side_effect(&self, inst: InstId) -> bool {
-        self.inst(inst).has_side_effect()
+    pub fn side_effect(&self, inst: InstId) -> SideEffect {
+        self.inst(inst).side_effect()
     }
 
     pub fn is_branch(&self, inst: InstId) -> bool {

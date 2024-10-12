@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
+    inst::SideEffect,
     BlockId, Function, InstId,
 };
 
@@ -56,7 +57,7 @@ impl AdceSolver {
 
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                if func.dfg.has_side_effect(inst) {
+                if matches!(func.dfg.side_effect(inst), SideEffect::Write) {
                     self.mark_inst(func, inst);
                 }
             }
