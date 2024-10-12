@@ -5,4 +5,4 @@ pub mod pass;
 
 pub use ctx::VerificationCtx;
 pub use error_stack::ErrorStack;
-pub use pass::{PassRef, VerificationPass};
+pub use pass::VerificationPass;
