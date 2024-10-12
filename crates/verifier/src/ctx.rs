@@ -1,7 +1,5 @@
 //! Verification context
 
-use std::sync::RwLock;
-
 use cranelift_entity::{PrimaryMap, SecondaryMap};
 use sonatina_ir::{module::FuncRef, ControlFlowGraph, Function, Module};
 
@@ -11,7 +9,7 @@ pub struct VerificationCtx {
     pub pass_ctx: PrimaryMap<PassRef, FuncRef>,
     pub func_ctx: SecondaryMap<FuncRef, FuncCtx>,
     pub module: Module,
-    error_stack: RwLock<ErrorStack>,
+    pub error_stack: ErrorStack,
 }
 
 impl VerificationCtx {
@@ -24,22 +22,8 @@ impl VerificationCtx {
             pass_ctx,
             func_ctx,
             module,
-            error_stack: RwLock::new(ErrorStack::default()),
+            error_stack: ErrorStack::default(),
         }
-    }
-
-    pub fn with_error_stack<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&ErrorStack) -> R,
-    {
-        f(&self.error_stack.read().unwrap())
-    }
-
-    pub fn with_error_stack_mut<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut ErrorStack) -> R,
-    {
-        f(&mut self.error_stack.write().unwrap())
     }
 
     pub fn func_of(&self, pass_ref: PassRef) -> FuncRef {
