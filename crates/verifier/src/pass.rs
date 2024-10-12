@@ -1,7 +1,5 @@
 //! Verification pass
 
-use std::sync::Arc;
-
 use cranelift_entity::entity_impl;
 
 use crate::{error::ErrorData, VerificationCtx};
@@ -13,14 +11,12 @@ entity_impl!(PassRef, "pass");
 pub trait VerificationPass {
     fn new(pass_ref: PassRef) -> Self;
 
-    fn run(&mut self, ctx: Arc<VerificationCtx>);
+    fn run(&mut self, ctx: VerificationCtx);
 
-    fn report_nonfatal(&self, ctx: &VerificationCtx, errs: &[ErrorData]) {
-        ctx.with_error_stack_mut(|s| {
-            for e in errs {
-                let _err_ref = s.errors.push(*e);
-            }
-        })
+    fn report_nonfatal(&self, ctx: &mut VerificationCtx, errs: &[ErrorData]) {
+        for e in errs {
+            let _err_ref = ctx.error_stack.push(*e);
+        }
     }
 
     fn report_fatal(&self, _ctx: &VerificationCtx, _e: ErrorData) -> !;
