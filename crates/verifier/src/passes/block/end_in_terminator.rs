@@ -46,9 +46,15 @@ impl VerificationPass for EndInTerminator {
 
 #[cfg(test)]
 mod tests {
-    use std::fmt::Write;
-
-    use sonatina_ir::{builder::test_util::test_func_builder, inst::logic::Xor, isa::Isa, Type};
+    use sonatina_ir::{
+        builder::test_util::test_func_builder,
+        inst::{
+            control_flow::{Jump, Return},
+            logic::Xor,
+        },
+        isa::Isa,
+        Type,
+    };
 
     use super::*;
 
@@ -75,25 +81,57 @@ mod tests {
         let res = EndInTerminator.run(&mut ctx);
         assert_eq!(res, VerificationResult::FailFatal);
 
-        let mut err_msgs = String::new();
+        let errs = ctx
+            .error_stack
+            .into_errs_iter(func, func_ref)
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(1, errs.len());
+
+        assert_eq!(
+            "last instruction not terminator, xor v0 0.i1
+trace_info:
+0: block0
+1: func public %test_func(i1) -> unit",
+            errs[0].to_string()
+        );
+    }
+
+    #[test]
+    fn terminator_mid_block() {
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let is = evm.inst_set();
+
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+
+        builder.switch_to_block(b0);
+        builder.insert_inst_no_result(Jump::new(is, b1));
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
+
+        builder.seal_all();
+
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
+        let func = &module.funcs[func_ref];
+
+        let mut ctx = VerificationCtx::new(func_ref, func);
+        let res = EndInTerminator.run(&mut ctx);
+        assert_eq!(res, VerificationResult::FailFatal);
 
         let errs = ctx
             .error_stack
             .into_errs_iter(func, func_ref)
             .into_iter()
             .collect::<Vec<_>>();
-
-        for e in errs {
-            write!(&mut err_msgs, "{}\n", e).unwrap();
-        }
+        assert_eq!(1, errs.len());
 
         assert_eq!(
-            "last instruction not terminator, xor v0 0.i1
+            "terminator instruction mid-block, jump block1
 trace_info:
 0: block0
-1: func public %test_func(i1) -> unit
-",
-            err_msgs
+1: func public %test_func() -> unit",
+            errs[0].to_string()
         );
     }
 }
