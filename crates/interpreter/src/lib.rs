@@ -1,299 +1,225 @@
-pub mod machine;
+use cranelift_entity::SecondaryMap;
+use sonatina_ir::{
+    interpret::{Action, EvalValue, Interpret, State},
+    isa::Endian,
+    module::FuncRef,
+    prelude::*,
+    BlockId, DataFlowGraph, Function, Immediate, InstId, Module, Type, Value, ValueId, I256,
+};
 
-#[cfg(test)]
-mod tests {
-    use machine::Machine;
-    use sonatina_ir::{module::FuncRef, Immediate, Module, Type};
+pub struct Machine {
+    frames: Vec<Frame>,
+    pc: InstId,
+    action: Action,
+    pub module: Module,
+    memory: Vec<u8>,
+}
 
-    use super::*;
+impl Machine {
+    pub fn new(module: Module) -> Self {
+        Self {
+            frames: Vec::new(),
+            // Dummy pc
+            pc: InstId(0),
+            action: Action::Continue,
+            module,
+            memory: Vec::new(),
+        }
+    }
 
-    fn parse_module(input: &str) -> Module {
-        match sonatina_parser::parse_module(input) {
-            Ok(pm) => pm.module,
-            Err(errs) => {
-                for err in errs {
-                    eprintln!("{}", err.print_to_string("[test]", input, true));
+    pub fn run(&mut self, func: FuncRef, args: Vec<EvalValue>) -> EvalValue {
+        let frame = Frame::new(func, &self.module, args);
+        self.frames.push(frame);
+        self.action = Action::Continue;
+        self.run_on_func()
+    }
+
+    pub fn clear_state(&mut self) {
+        self.frames.clear();
+        self.memory.clear();
+    }
+
+    fn top_frame(&self) -> &Frame {
+        self.frames.last().unwrap()
+    }
+
+    fn top_frame_mut(&mut self) -> &mut Frame {
+        self.frames.last_mut().unwrap()
+    }
+
+    fn top_func(&self) -> &Function {
+        &self.module.funcs[self.top_frame().func]
+    }
+
+    fn run_on_func(&mut self) -> EvalValue {
+        let layout = &self.top_func().layout;
+
+        let entry_block = layout.entry_block().unwrap();
+        self.pc = layout.first_inst_of(entry_block).unwrap();
+
+        loop {
+            let inst = self.top_func().dfg.inst(self.pc);
+            let Some(interpretable): Option<&dyn Interpret> =
+                InstDowncast::downcast(self.top_func().inst_set(), inst)
+            else {
+                panic!("`Intepret is not yet implemented for `{}`", inst.as_text());
+            };
+
+            let e_val = interpretable.interpret(self);
+            if let Some(inst_result) = self.top_func().dfg.inst_result(self.pc) {
+                self.top_frame_mut().map_val(inst_result, e_val);
+            };
+
+            match self.action {
+                Action::Continue => {
+                    self.pc = self.top_func().layout.next_inst_of(self.pc).unwrap();
                 }
-                panic!("parsing failed");
+
+                Action::JumpTo(next_block) => {
+                    let current_block = self.top_func().layout.inst_block(self.pc);
+                    self.top_frame_mut().prev_block = Some(current_block);
+                    self.pc = self.top_func().layout.first_inst_of(next_block).unwrap();
+                }
+
+                Action::FallThrough => {
+                    panic!("fall through detected!")
+                }
+
+                Action::Return(e_val) => return e_val,
             }
         }
     }
+}
 
-    fn setup(input: &str) -> (Machine, Vec<FuncRef>) {
-        let module = parse_module(input);
-        let funcs = module.iter_functions().collect();
-        (Machine::new(module), funcs)
+pub struct Frame {
+    func: FuncRef,
+    locals: SecondaryMap<ValueId, EvalValue>,
+    prev_block: Option<BlockId>,
+}
+
+impl Frame {
+    fn new(func: FuncRef, module: &Module, arg_e_values: Vec<EvalValue>) -> Self {
+        let arg_values = &module.funcs[func].arg_values;
+        assert_eq!(arg_values.len(), arg_e_values.len());
+
+        let mut frame = Self {
+            func,
+            locals: SecondaryMap::default(),
+            prev_block: None,
+        };
+
+        for (arg_val, arg_e_val) in arg_values.iter().zip(arg_e_values.into_iter()) {
+            frame.map_val(*arg_val, arg_e_val);
+        }
+
+        frame
     }
 
-    #[test]
-    fn unary() {
-        let input = "
-        target = \"evm-ethereum-london\"
+    fn map_val(&mut self, val: ValueId, e_val: EvalValue) {
+        self.locals[val] = e_val;
+    }
+}
 
-        func private %test() -> i32 {
-            block0:
-                v1.i32 = not 0.i32;
-                v2.i32 = neg v1;
-                return v2;
+impl State for Machine {
+    fn lookup_val(&mut self, value_id: ValueId) -> EvalValue {
+        let value = self.top_func().dfg.value(value_id);
+        match value {
+            Value::Immediate { imm, .. } => (*imm).into(),
+            Value::Global { .. } => {
+                todo!()
+            }
+            _ => self.top_frame().locals[value_id],
         }
-        ";
-
-        let (mut machine, funcs) = setup(input);
-        let result = machine.run(funcs[0], vec![]);
-
-        assert_eq!(result.as_imm().unwrap().as_i256().trunc_to_i32(), 1);
     }
 
-    #[test]
-    fn binary_arithmetic() {
-        let input = "
-        target = \"evm-ethereum-london\"
+    fn call_func(&mut self, func: FuncRef, args: Vec<EvalValue>) -> EvalValue {
+        let ret_addr = self.pc;
 
-        func private %test() -> i16 {
-            block0:
-                v0.i16 = add 3.i16 4.i16;
-                v1.i16 = sub v0 1.i16;
-                v2.i16 = udiv v1 2.i16;
-                v3.i16 =  sdiv v2 65535.i16;
-                return v3;
-        }
-        ";
+        let new_frame = Frame::new(func, &self.module, args);
+        self.frames.push(new_frame);
 
-        let (mut machine, funcs) = setup(input);
-        let result = machine.run(funcs[0], vec![]);
+        let result = self.run_on_func();
 
-        assert_eq!(result.as_imm().unwrap().as_i256().trunc_to_i16(), -3);
+        self.frames.pop();
+        self.pc = ret_addr;
+
+        result
     }
 
-    #[test]
-    fn cast_sext() {
-        let input = "
-        target = \"evm-ethereum-london\"
-
-        func private %test() -> i16 {
-            block0:
-                v0.i16 = sext -128.i8 i16;
-                return v0;
-        }
-        ";
-
-        let (mut machine, funcs) = setup(input);
-        let result = machine.run(funcs[0], vec![]);
-
-        assert_eq!(result.as_imm().unwrap().as_i256().trunc_to_i16(), -128);
+    fn set_action(&mut self, action: Action) {
+        self.action = action
     }
 
-    #[test]
-    fn cast_zext() {
-        let input = "
-        target = \"evm-ethereum-london\"
-
-        func private %test() -> i16 {
-            block0:
-                v0.i16 = zext -128.i8 i16;
-                return v0;
-        }
-        ";
-
-        let (mut machine, funcs) = setup(input);
-        let result = machine.run(funcs[0], vec![]);
-
-        assert_eq!(result.as_imm().unwrap().as_i256().trunc_to_i16(), 128);
+    fn prev_block(&mut self) -> BlockId {
+        let frame = self.top_frame();
+        frame.prev_block.unwrap()
     }
 
-    // // TODO: uncomment this when issue https://github.com/fe-lang/sonatina/issues/74 is resolved.
-    // // #[test]
-    // // fn load_store() {
-    // //     let input = "
-    // //     target = \"evm-ethereum-london\"
-
-    // //     func private %test() -> i32 {
-    // //         block0:
-    // //             mstore 0.*i32 1.i32 i32;
-    // //             v1.i32 = load 0.*i32 i32;
-    // //             return v1;
-    // //     }
-    // //     ";
-
-    // //     let (mut machine, func) = setup(input);
-    // //     let result = machine.run(func, vec![]);
-
-    // //     assert_eq!(result.as_imm().unwrap().as_i256().trunc_to_i32(), 128);
-    // // }
-
-    // #[test]
-    // fn call() {
-    //     let input = "
-    //     target = \"evm-ethereum-london\"
-
-    //     func public %test_callee(v0.i8) -> i8 {
-    //         block0:
-    //             v1.i8 = mul v0 2.i8;
-    //             return v1;
-    //     }
-
-    //     func public %test() -> i8 {
-    //         block0:
-    //             v0.i8 = call %test_callee 3.i8;
-    //             return v0;
-    //     }
-    //     ";
-
-    //     let (mut machine, funcs) = setup(input);
-    //     let result = machine.run(funcs[1], vec![]);
-
-    //     assert_eq!(result.as_imm().unwrap().as_i256().trunc_to_i8(), 6);
-    // }
-
-    // #[test]
-    // fn jump() {
-    //     let input = "
-    //     target = \"evm-ethereum-london\"
-
-    //     func private %test() -> i1 {
-    //         block0:
-    //             jump block2;
-    //         block1:
-    //             return 1.i1;
-    //         block2:
-    //             return 0.i1;
-    //     }
-    //     ";
-
-    //     let (mut machine, funcs) = setup(input);
-    //     let result = machine.run(funcs[0], vec![]);
-
-    //     assert!(!result.as_imm().unwrap().as_i256().trunc_to_i1());
-    // }
-
-    // #[test]
-    // fn branch() {
-    //     let input = "
-    //     target = \"evm-ethereum-london\"
-
-    //     func private %test() -> i8 {
-    //         block0:
-    //             br 1.i1 block1 block2;
-    //         block1:
-    //             return 1.i8;
-    //         block2:
-    //             return 2.i8;
-    //     }
-    //     ";
-
-    //     let (mut machine, funcs) = setup(input);
-    //     let result = machine.run(funcs[0], vec![]);
-
-    //     assert_eq!(result.as_imm().unwrap().as_i256().trunc_to_i8(), 1);
-    // }
-
-    // #[test]
-    // fn br_table() {
-    //     let input = "
-    //     target = \"evm-ethereum-london\"
-
-    //     func private %test() -> i64 {
-    //         block0:
-    //             br_table 1.i64 (0.i64 block1) (1.i64 block2);
-    //         block1:
-    //             return 1.i64;
-    //         block2:
-    //             return 2.i64;
-    //         block3:
-    //             return 3.i64;
-    //     }
-    //     ";
-
-    //     let (mut machine, funcs) = setup(input);
-    //     let result = machine.run(funcs[0], vec![]);
-
-    //     assert_eq!(result.as_imm().unwrap().as_i256().trunc_to_i64(), 2);
-    // }
-
-    #[test]
-    fn phi() {
-        let input = "
-        target = \"evm-ethereum-london\"
-
-        func private %test() -> i8 {
-            block0:
-                br 1.i1 block1 block2;
-            block1:
-                jump block2;
-            block2:
-                v0.i8 = phi (1.i8 block0) (-1.i8 block1);
-                return v0;
+    fn load(&mut self, addr: EvalValue, ty: Type) -> EvalValue {
+        if !(ty.is_integral() || ty.is_pointer(&self.module.ctx)) {
+            // TODO: we need to decide how to handle load of aggregate type when it fits
+            // into register/stack-slot size.
+            todo!();
         }
-        ";
 
-        let (mut machine, funcs) = setup(input);
-        let result = machine.run(funcs[0], vec![]);
+        let Some(addr) = addr.as_imm() else {
+            panic!("udnef address in load")
+        };
+        let addr = addr.as_usize();
+        let size = self.module.ctx.size_of(ty);
+        if addr + size > self.memory.len() {
+            panic!("uninitialized memory access is detected");
+        }
 
-        assert_eq!(result.as_imm().unwrap().as_i256().trunc_to_i8(), -1);
+        let slice = &self.memory[addr..addr + size];
+        let value_i256 = match self.module.ctx.endian() {
+            Endian::Be => I256::from_be_bytes(slice),
+            Endian::Le => I256::from_le_bytes(slice),
+        };
+
+        let imm = Immediate::from_i256(value_i256, ty);
+        EvalValue::Imm(imm)
     }
 
-    #[test]
-    fn gep() {
-        let input = "
-        target = \"evm-ethereum-london\"
-
-        type @s1 = {i32, i64, i1};
-
-        func private %test(v0.i256) -> *i1 {
-            block0:
-                v1.*@s1 = int_to_ptr v0 *@s1;
-                v2.*i1 = gep v1 0.i256 2.i256;
-                return v2;
+    fn store(&mut self, addr: EvalValue, value: EvalValue, ty: Type) -> EvalValue {
+        if !(ty.is_integral() || ty.is_pointer(&self.module.ctx)) {
+            // TODO: we need to decide how to handle load of aggregate type when it fits
+            // into register/stack-slot size.
+            todo!();
         }
-        ";
 
-        let (mut machine, funcs) = setup(input);
-        let arg = Immediate::zero(Type::I256);
-        let result = machine.run(funcs[0], vec![arg.into()]);
+        let Some(addr) = addr.as_imm() else {
+            panic!("udnef address in store")
+        };
+        let addr = addr.as_usize();
+        let size = self.module.ctx.size_of(ty);
+        if addr + size > self.memory.len() {
+            self.memory.resize(addr + size, 0);
+        }
 
-        assert_eq!(result.as_imm().unwrap().as_i256().trunc_to_i64(), 12);
+        let Some(value) = value.as_imm() else {
+            panic!("undef value in store");
+        };
+
+        match self.module.ctx.endian() {
+            Endian::Be => {
+                let v = value.as_i256().to_u256();
+                let bytes = v.to_big_endian();
+                let slice = &bytes[bytes.len() - size..];
+                self.memory[addr..addr + size].copy_from_slice(slice);
+            }
+            Endian::Le => {
+                let v = value.as_i256().to_u256();
+                let bytes = v.to_little_endian();
+                let slice = &bytes[..size];
+                self.memory[addr..addr + size].copy_from_slice(slice);
+            }
+        }
+
+        EvalValue::Undef
     }
 
-    #[cfg(target_arch = "aarch64")]
-    #[test]
-    fn gep_ptr_ty() {
-        let input = "
-        target = \"evm-ethereum-london\"
-
-        func private %test(v0.i256) -> **i32 {
-            block0:
-                v1.*[*i32; 3] = int_to_ptr v0 *[*i32; 3];
-                v2.**i32 = gep v1 0.i256 2.i256;
-                return v2;
-        }
-        ";
-
-        let (mut machine, funcs) = setup(input);
-        let arg = Immediate::zero(Type::I256);
-        let result = machine.run(funcs[0], vec![arg.into()]);
-
-        assert_eq!(result.as_imm().unwrap().as_i256().trunc_to_i64(), 64);
-    }
-
-    #[test]
-    fn gep_nested_aggr_ty() {
-        let input = "
-        target = \"evm-ethereum-london\"
-
-        type @s1 = {i32, [i16; 3], [i8; 2]};
-
-        func private %test(v0.i256) -> *i8 {
-            block0:
-                v1.*@s1 = int_to_ptr v0 *@s1;
-                v2.*i8 = gep v1 0.i256 2.i256 1.i256;
-                return v2;
-        }
-        ";
-
-        let (mut machine, funcs) = setup(input);
-        let arg = Immediate::zero(Type::I256);
-        let result = machine.run(funcs[0], vec![arg.into()]);
-
-        assert_eq!(result.as_imm().unwrap().as_i256().trunc_to_i64(), 11);
+    fn dfg(&self) -> &DataFlowGraph {
+        &self.top_func().dfg
     }
 }

@@ -2,7 +2,7 @@ mod common;
 
 use common::parse_test_cases;
 use dir_test::{dir_test, Fixture};
-use sonatina_interpreter::machine::Machine;
+use sonatina_interpreter::Machine;
 use sonatina_parser::ParsedModule;
 
 #[dir_test(
@@ -10,7 +10,7 @@ use sonatina_parser::ParsedModule;
     glob: "*.sntn",
     loader: common::parse_module,
 )]
-fn test_arith(fixture: Fixture<ParsedModule>) {
+fn test(fixture: Fixture<ParsedModule>) {
     let parsed_module = fixture.into_content();
     let test_cases = match parse_test_cases(&parsed_module) {
         Ok(test_cases) => test_cases,

@@ -1,0 +1,10 @@
+target = "evm-ethereum-london"
+
+#[(10.i256, 255.i8) -> 255.i8]
+func private %store_load(v0.i256, v1.i8) -> i8 {
+    block0:
+        v2.*i8 = int_to_ptr v0 *i8;
+        mstore v2 v1 i8;
+        v3.i8 = mload v2 i8;
+        return v3;
+}

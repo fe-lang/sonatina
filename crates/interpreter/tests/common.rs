@@ -2,7 +2,7 @@ use std::io::Write;
 
 use once_cell::sync::Lazy;
 use regex::Regex;
-use sonatina_interpreter::machine::Machine;
+use sonatina_interpreter::Machine;
 use sonatina_ir::{interpret::EvalValue, module::FuncRef, Immediate};
 use sonatina_parser::{
     ast::{Value, ValueKind},
@@ -18,7 +18,7 @@ pub fn parse_module(file_path: &str) -> ParsedModule {
         Err(errs) => {
             let mut v: Vec<u8> = Vec::new();
             for err in errs {
-                err.print(&mut v, &file_path, &content, false).unwrap();
+                err.print(&mut v, file_path, &content, false).unwrap();
                 writeln!(&mut v).unwrap();
             }
             let err_str = String::from_utf8(v).unwrap();
@@ -90,13 +90,17 @@ impl TestCase {
                 &format!("invalid `{comment}`, `#[(args_list) -> ret]` is expected"),
             ));
         };
-        let args = caps["args"]
-            .split(",")
-            .map(|arg| {
-                let arg = arg.trim();
-                parse_value(module, func, arg)
-            })
-            .collect::<Result<_, _>>()?;
+        let args = if !caps["args"].is_empty() {
+            caps["args"]
+                .split(",")
+                .map(|arg| {
+                    let arg = arg.trim();
+                    parse_value(module, func, arg)
+                })
+                .collect::<Result<_, _>>()?
+        } else {
+            vec![]
+        };
 
         let ret = caps
             .name("ret")
@@ -150,8 +154,8 @@ static PATTERN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"(?x)
         \[
-        \((?P<args>[a-zA-Z0-9_.@*]+(?:,\s*[a-zA-Z0-9_.@*]+)*,?)\)
-        (?:\s*->\s*(?P<ret>[a-zA-Z0-9_.@*]+))?
+        \((?P<args>[a-zA-Z0-9_.@*-]*(?:,\s*[a-zA-Z0-9_.@*-]+)*,?)\)
+        (?:\s*->\s*(?P<ret>[a-zA-Z0-9_.@*-]+))?
         \]
     ",
     )
