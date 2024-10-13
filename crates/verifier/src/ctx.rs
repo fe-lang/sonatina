@@ -27,9 +27,9 @@ impl<'a> VerificationCtx<'a> {
         }
     }
 
-    pub fn report_nonfatal(&mut self, errs: &[ErrorData]) {
+    pub fn report_nonfatal(&mut self, errs: impl IntoIterator<Item = ErrorData>) {
         for e in errs {
-            let _err_ref = self.error_stack.push(*e);
+            let _err_ref = self.error_stack.push(e);
         }
     }
 
