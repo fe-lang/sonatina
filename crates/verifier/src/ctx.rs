@@ -2,7 +2,10 @@
 
 use sonatina_ir::{module::FuncRef, ControlFlowGraph, Function};
 
-use crate::{error::ErrorData, ErrorStack};
+use crate::{
+    error::{ErrorData, ErrorKind, TraceInfo},
+    ErrorStack,
+};
 
 pub struct VerificationCtx<'a> {
     pub func_ref: FuncRef,
@@ -30,7 +33,7 @@ impl<'a> VerificationCtx<'a> {
         }
     }
 
-    pub fn report_fatal(&mut self, e: ErrorData) {
-        self.error_stack.fatal_error = Some(e);
+    pub fn report_fatal(&mut self, kind: ErrorKind, trace_info: TraceInfo) {
+        self.error_stack.fatal_error = Some(ErrorData::new(kind, trace_info));
     }
 }

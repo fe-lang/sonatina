@@ -1,20 +1,13 @@
-use sonatina_ir::{module::FuncRef, BlockId, InstId};
-
 use crate::{
-    error::{ErrorData, ErrorKind, TraceInfoBuilder},
+    error::{
+        ErrorKind::{NotEndedByTerminator, TerminatorBeforeEnd},
+        TraceInfoBuilder,
+    },
     pass::VerificationResult,
     VerificationCtx, VerificationPass,
 };
 
 pub struct EndInTerminator;
-
-impl EndInTerminator {
-    pub fn new_error_at(&mut self, inst: InstId, block: BlockId, func_ref: FuncRef) -> ErrorData {
-        let trace_info = TraceInfoBuilder::new(func_ref).block(block).build();
-
-        ErrorData::new(ErrorKind::NotEndedByTerminator(inst), trace_info)
-    }
-}
 
 impl VerificationPass for EndInTerminator {
     fn run(&mut self, ctx: &mut VerificationCtx) -> VerificationResult {
@@ -26,8 +19,8 @@ impl VerificationPass for EndInTerminator {
 
             // check last instruction in block is terminator
             if !dfg.is_terminator(last_inst) {
-                let e = self.new_error_at(last_inst, block, ctx.func_ref);
-                ctx.report_fatal(e);
+                let trace_info = TraceInfoBuilder::new(ctx.func_ref).block(block).build();
+                ctx.report_fatal(NotEndedByTerminator(last_inst), trace_info);
 
                 return VerificationResult::FailFatal;
             }
@@ -39,8 +32,8 @@ impl VerificationPass for EndInTerminator {
                 }
 
                 if dfg.is_terminator(inst) {
-                    let e = self.new_error_at(inst, block, ctx.func_ref);
-                    ctx.report_fatal(e);
+                    let trace_info = TraceInfoBuilder::new(ctx.func_ref).block(block).build();
+                    ctx.report_fatal(TerminatorBeforeEnd(inst), trace_info);
 
                     return VerificationResult::FailFatal;
                 }
