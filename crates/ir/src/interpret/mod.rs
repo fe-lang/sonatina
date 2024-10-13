@@ -31,6 +31,7 @@ pub trait Interpret {
         inst::cast::Sext,
         inst::cast::Zext,
         inst::cast::Trunc,
+        inst::cast::IntToPtr,
         inst::cmp::Lt,
         inst::cmp::Gt,
         inst::cmp::Slt,

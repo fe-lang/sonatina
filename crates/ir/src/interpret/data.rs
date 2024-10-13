@@ -76,7 +76,7 @@ impl Interpret for Gep {
 
                 CompoundTypeData::Struct(s) => {
                     let mut local_offset = 0;
-                    for i in 0..idx_value.saturating_sub(1) {
+                    for i in 0..idx_value {
                         let field_ty = s.fields[i];
                         let size = state.dfg().ctx.size_of(field_ty);
                         let align = state.dfg().ctx.align_of(field_ty);

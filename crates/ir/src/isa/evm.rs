@@ -39,6 +39,15 @@ struct EvmTypeLayout {}
 impl TypeLayout for EvmTypeLayout {
     fn size_of(&self, ty: crate::Type, ctx: &ModuleCtx) -> usize {
         match ty {
+            Type::Unit => 0,
+            Type::I1 => 1,
+            Type::I8 => 1,
+            Type::I16 => 2,
+            Type::I32 => 4,
+            Type::I64 => 8,
+            Type::I128 => 16,
+            Type::I256 => 32,
+
             Type::Compound(cmpd) => {
                 let cmpd_data = ctx.with_ty_store(|s| s.resolve_compound(cmpd).clone());
                 match cmpd_data {
@@ -60,10 +69,6 @@ impl TypeLayout for EvmTypeLayout {
                     }
                 }
             }
-
-            Type::Unit => 0,
-
-            _ => 32,
         }
     }
 

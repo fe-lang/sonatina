@@ -19,6 +19,7 @@ pub struct EvmInstSet(
     cast::Zext,
     cast::Trunc,
     cast::Bitcast,
+    cast::IntToPtr,
     cmp::Lt,
     cmp::Gt,
     cmp::Slt,
