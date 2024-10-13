@@ -34,6 +34,10 @@ impl Module {
     pub fn is_external(&self, func_ref: FuncRef) -> bool {
         self.funcs[func_ref].sig.linkage() == Linkage::External
     }
+
+    pub fn sig(&self, func_ref: FuncRef) -> &Signature {
+        &self.funcs[func_ref].sig
+    }
 }
 
 #[derive(Clone)]

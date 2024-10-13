@@ -11,8 +11,7 @@ pub struct Machine {
     frames: Vec<Frame>,
     pc: InstId,
     action: Action,
-    // FIXME: Machine shouldn't have `Module`.
-    module: Module,
+    pub module: Module,
     memory: Vec<u8>,
 }
 
@@ -33,6 +32,11 @@ impl Machine {
         self.frames.push(frame);
         self.action = Action::Continue;
         self.run_on_func()
+    }
+
+    pub fn clear_state(&mut self) {
+        self.frames.clear();
+        self.memory.clear();
     }
 
     fn top_frame(&self) -> &Frame {
