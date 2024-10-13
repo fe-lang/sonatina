@@ -6,7 +6,7 @@ pub trait VerificationPass {
     fn run(&mut self, ctx: &mut VerificationCtx) -> VerificationResult;
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum VerificationResult {
     Pass,
     Fail,

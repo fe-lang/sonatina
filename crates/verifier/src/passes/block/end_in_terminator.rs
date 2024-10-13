@@ -43,3 +43,57 @@ impl VerificationPass for EndInTerminator {
         VerificationResult::Pass
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fmt::Write;
+
+    use sonatina_ir::{builder::test_util::test_func_builder, inst::logic::Xor, isa::Isa, Type};
+
+    use super::*;
+
+    #[test]
+    fn last_inst_not_terminator() {
+        let (evm, mut builder) = test_func_builder(&[Type::I1], Type::Unit);
+        let is = evm.inst_set();
+
+        let b0 = builder.append_block();
+
+        let arg = builder.args()[0];
+
+        builder.switch_to_block(b0);
+        let c1 = builder.make_imm_value(false);
+        builder.insert_inst_with(|| Xor::new(is, arg, c1), Type::I1);
+
+        builder.seal_all();
+
+        let module = builder.finish().build();
+        let func_ref = module.iter_functions().next().unwrap();
+        let func = &module.funcs[func_ref];
+
+        let mut ctx = VerificationCtx::new(func_ref, func);
+        let res = EndInTerminator.run(&mut ctx);
+        assert_eq!(res, VerificationResult::FailFatal);
+
+        let mut err_msgs = String::new();
+
+        let errs = ctx
+            .error_stack
+            .into_errs_iter(func, func_ref)
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        for e in errs {
+            write!(&mut err_msgs, "{}\n", e).unwrap();
+        }
+
+        assert_eq!(
+            "last instruction not terminator, xor v0 0.i1
+trace_info:
+0: block0
+1: func public %test_func(i1) -> unit
+",
+            err_msgs
+        );
+    }
+}
