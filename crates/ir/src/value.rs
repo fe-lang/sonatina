@@ -142,7 +142,7 @@ impl Immediate {
     }
 
     pub fn trunc(self, ty: Type) -> Self {
-        debug_assert!(self.ty() > ty);
+        debug_assert!(self.ty() >= ty);
 
         Self::from_i256(self.as_i256(), ty)
     }
