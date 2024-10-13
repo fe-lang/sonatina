@@ -33,6 +33,13 @@ impl Interpret for Trunc {
     }
 }
 
+impl Interpret for Bitcast {
+    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+        state.set_action(Action::Continue);
+        state.lookup_val(*self.from())
+    }
+}
+
 impl Interpret for IntToPtr {
     fn interpret(&self, state: &mut dyn State) -> EvalValue {
         state.set_action(Action::Continue);

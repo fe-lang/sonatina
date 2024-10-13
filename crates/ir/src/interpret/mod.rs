@@ -33,6 +33,7 @@ pub trait Interpret {
         inst::cast::Trunc,
         inst::cast::IntToPtr,
         inst::cast::PtrToInt,
+        inst::cast::Bitcast,
         inst::cmp::Lt,
         inst::cmp::Gt,
         inst::cmp::Slt,
