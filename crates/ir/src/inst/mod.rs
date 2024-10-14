@@ -30,7 +30,7 @@ cranelift_entity::entity_impl!(InstId);
 pub trait Inst: inst_set::sealed::Registered + Any {
     fn visit_values(&self, f: &mut dyn FnMut(ValueId));
     fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut ValueId));
-    fn has_side_effect(&self) -> bool;
+    fn side_effect(&self) -> SideEffect;
     fn as_text(&self) -> &'static str;
     fn is_terminator(&self) -> bool;
 
@@ -183,6 +183,19 @@ pub trait InstDowncastMut: Sized {
     {
         let data = Self::downcast_mut(isb, inst)?;
         Some(f(data))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SideEffect {
+    None,
+    Read,
+    Write,
+}
+
+impl SideEffect {
+    pub fn has_effect(&self) -> bool {
+        !matches!(self, Self::None)
     }
 }
 

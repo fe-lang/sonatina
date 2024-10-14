@@ -176,7 +176,7 @@ impl SccpSolver {
         };
 
         let inst = func.dfg.inst(inst_id);
-        if inst.has_side_effect() {
+        if inst.side_effect().has_effect() {
             return;
         }
 

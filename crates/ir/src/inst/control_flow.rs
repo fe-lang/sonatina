@@ -115,7 +115,7 @@ impl InstWrite for Phi {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
-#[inst(has_side_effect)]
+#[inst(side_effect(super::SideEffect::Write))]
 #[inst(terminator)]
 pub struct Call {
     callee: FuncRef,
@@ -143,7 +143,7 @@ impl InstWrite for Call {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
-#[inst(has_side_effect)]
+#[inst(side_effect(super::SideEffect::Write))]
 #[inst(terminator)]
 pub struct Return {
     #[inst(value)]

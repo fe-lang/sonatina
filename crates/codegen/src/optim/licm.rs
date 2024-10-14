@@ -80,7 +80,7 @@ impl LicmSolver {
 
     /// Returns `true` if the `inst` is safe to hoist.
     fn is_safe_to_hoist(&self, func: &Function, inst_id: InstId) -> bool {
-        !(func.dfg.has_side_effect(inst_id)
+        !(func.dfg.side_effect(inst_id).has_effect()
             || func.dfg.is_branch(inst_id)
             || func.dfg.is_phi(inst_id))
     }
