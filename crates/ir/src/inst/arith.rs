@@ -1,93 +1,100 @@
 use macros::Inst;
 
-use crate::Value;
+use crate::{inst::impl_inst_write, ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Neg {
     #[inst(value)]
-    arg: Value,
+    arg: ValueId,
 }
+impl_inst_write!(Neg);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Add {
     #[inst(value)]
-    lhs: Value,
+    lhs: ValueId,
     #[inst(value)]
-    rhs: Value,
+    rhs: ValueId,
 }
+impl_inst_write!(Add);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Mul {
     #[inst(value)]
-    lhs: Value,
+    lhs: ValueId,
     #[inst(value)]
-    rhs: Value,
+    rhs: ValueId,
 }
+impl_inst_write!(Mul);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Sub {
     #[inst(value)]
-    lhs: Value,
+    lhs: ValueId,
     #[inst(value)]
-    rhs: Value,
+    rhs: ValueId,
 }
+impl_inst_write!(Sub);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(has_side_effect)]
 pub struct Sdiv {
     #[inst(value)]
-    lhs: Value,
+    lhs: ValueId,
     #[inst(value)]
-    rhs: Value,
+    rhs: ValueId,
 }
+impl_inst_write!(Sdiv);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(has_side_effect)]
 pub struct Udiv {
     #[inst(value)]
-    lhs: Value,
+    lhs: ValueId,
     #[inst(value)]
-    rhs: Value,
+    rhs: ValueId,
 }
+impl_inst_write!(Udiv);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(has_side_effect)]
 pub struct Umod {
     #[inst(value)]
-    lhs: Value,
+    lhs: ValueId,
     #[inst(value)]
-    rhs: Value,
+    rhs: ValueId,
 }
+impl_inst_write!(Umod);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(has_side_effect)]
 pub struct Smod {
     #[inst(value)]
-    lhs: Value,
+    lhs: ValueId,
     #[inst(value)]
-    rhs: Value,
+    rhs: ValueId,
 }
+impl_inst_write!(Smod);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Shl {
     #[inst(value)]
-    bits: Value,
+    bits: ValueId,
     #[inst(value)]
-    value: Value,
+    value: ValueId,
 }
+impl_inst_write!(Shl);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Shr {
     #[inst(value)]
-    bits: Value,
+    bits: ValueId,
     #[inst(value)]
-    value: Value,
+    value: ValueId,
 }
+impl_inst_write!(Shr);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Sar {
     #[inst(value)]
-    bits: Value,
+    bits: ValueId,
     #[inst(value)]
-    value: Value,
+    value: ValueId,
 }
+impl_inst_write!(Sar);

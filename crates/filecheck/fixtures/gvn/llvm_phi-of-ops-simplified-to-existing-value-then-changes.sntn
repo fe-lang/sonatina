@@ -30,7 +30,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln: block8:
 # nextln:     return;
-func public %llvm_pr36501(v0.i1) -> void {
+func public %llvm_pr36501(v0.i1) -> unit {
     block0:
         jump block1;
 
@@ -76,7 +76,7 @@ func public %llvm_pr36501(v0.i1) -> void {
 # nextln: block11:
 # nextln:     v5.i32 = phi (v4 block16) (0.i32 block2);
 # nextln:     v6.i1 = eq v5 0.i32;
-# nextln:     store @memory v31 v6;
+# nextln:     mstore v31 v6;
 # nextln:     v7.i1 = eq v3 0.i32;
 # nextln:     v8.i1 = not v7;
 # nextln:     br v8 block18 block19;
@@ -87,9 +87,9 @@ func public %llvm_pr36501(v0.i1) -> void {
 # nextln: block19:
 # nextln:     $(var=$VALUE).i1 = phi (v6 block11) (0.i1 block18);
 # nextln:     v9.i32 = phi (v5 block11) (1.i32 block18);
-# nextln:     store @memory v31 $var;
+# nextln:     mstore v31 $var;
 # nextln:     return;
-func public %llvm_PR42557(v0.i32, v1.i1, v2.i1, v31.*i32) -> void {
+func public %llvm_PR42557(v0.i32, v1.i1, v2.i1, v31.*i32) -> unit {
     block0:
         jump block1;
 
@@ -107,7 +107,7 @@ func public %llvm_PR42557(v0.i32, v1.i1, v2.i1, v31.*i32) -> void {
     block11:
         v5.i32 = phi (v4 block16) (0.i32 block2);
         v6.i1 = eq v5 0.i32;
-        store @memory v31 v6;
+        mstore v31 v6;
         v7.i1 = eq v3 0.i32;
         v8.i1 = not v7;
         br v8 block18 block19;
@@ -118,6 +118,6 @@ func public %llvm_PR42557(v0.i32, v1.i1, v2.i1, v31.*i32) -> void {
     block19:
         v9.i32 = phi (v5 block11) (1.i32 block18);
         v10.i1 = eq v9 0.i32;
-        store @memory v31 v10;
+        mstore v31 v10;
         return;
 }

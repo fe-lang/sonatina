@@ -1,16 +1,16 @@
 //! This module contains implementation of `Post Dominator Tree`.
 
-use super::domtree::{DFSet, DomTree};
+use sonatina_ir::{BlockId, ControlFlowGraph, Function};
 
-use sonatina_ir::{Block, ControlFlowGraph, Function};
+use super::domtree::{DFSet, DomTree};
 
 #[derive(Debug)]
 pub struct PostDomTree {
     /// Dummy entry block to calculate CDG.
-    entry: Block,
-    /// Canonical dummy exit block to calculate CDG. All blocks ends with `return` has an edge to
-    /// this block.
-    exit: Block,
+    entry: BlockId,
+    /// Canonical dummy exit block to calculate CDG. All blocks ends with
+    /// `return` has an edge to this block.
+    exit: BlockId,
 
     /// Reverse control flow graph of the function.
     rcfg: ControlFlowGraph,
@@ -22,8 +22,8 @@ pub struct PostDomTree {
 impl Default for PostDomTree {
     fn default() -> Self {
         Self {
-            entry: Block(0),
-            exit: Block(0),
+            entry: BlockId(0),
+            exit: BlockId(0),
             rcfg: ControlFlowGraph::default(),
             domtree: DomTree::default(),
         }
@@ -44,8 +44,8 @@ impl PostDomTree {
         }
         let real_entry = self.rcfg.entry().unwrap();
 
-        self.entry = Block(func.dfg.blocks.len() as u32);
-        self.exit = Block(self.entry.0 + 1);
+        self.entry = BlockId(func.dfg.blocks.len() as u32);
+        self.exit = BlockId(self.entry.0 + 1);
 
         // Add edges from dummy entry block to real entry block and dummy exit block.
         self.rcfg.add_edge(self.entry, real_entry);
@@ -61,7 +61,7 @@ impl PostDomTree {
         self.domtree.compute(&self.rcfg);
     }
 
-    pub fn idom_of(&self, block: Block) -> Option<PDTIdom> {
+    pub fn idom_of(&self, block: BlockId) -> Option<PDTIdom> {
         match self.domtree.idom_of(block)? {
             block if block == self.entry => Some(PDTIdom::DummyEntry(self.entry)),
             block if block == self.exit => Some(PDTIdom::DummyExit(self.exit)),
@@ -86,42 +86,42 @@ impl PostDomTree {
     }
 
     /// Returns `true` if block is reachable from the exit blocks.
-    pub fn is_reachable(&self, block: Block) -> bool {
+    pub fn is_reachable(&self, block: BlockId) -> bool {
         self.domtree.is_reachable(block)
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum PDTIdom {
-    DummyEntry(Block),
-    DummyExit(Block),
-    Real(Block),
+    DummyEntry(BlockId),
+    DummyExit(BlockId),
+    Real(BlockId),
 }
 
 /// Post Dominance frontiers of each blocks.
 #[derive(Debug)]
 pub struct PDFSet {
     /// Dummy entry block of the post dominator tree.
-    entry: Block,
+    entry: BlockId,
 
     /// Canonical dummy exit block of the post dominator tree.
-    exit: Block,
+    exit: BlockId,
 
     df_set: DFSet,
 }
 
 impl PDFSet {
-    pub fn frontiers(&self, block: Block) -> impl Iterator<Item = &Block> {
+    pub fn frontiers(&self, block: BlockId) -> impl Iterator<Item = &BlockId> {
         self.df_set
             .frontiers(block)
             .filter(|block| **block != self.entry && **block != self.exit)
     }
 
-    pub fn in_frontier_of(&self, block: Block, of: Block) -> bool {
+    pub fn in_frontier_of(&self, block: BlockId, of: BlockId) -> bool {
         self.df_set.in_frontier_of(block, of)
     }
 
-    pub fn frontier_num_of(&self, of: Block) -> usize {
+    pub fn frontier_num_of(&self, of: BlockId) -> usize {
         self.frontiers(of).count()
     }
 
@@ -133,8 +133,8 @@ impl PDFSet {
 impl Default for PDFSet {
     fn default() -> Self {
         Self {
-            entry: Block(0),
-            exit: Block(0),
+            entry: BlockId(0),
+            exit: BlockId(0),
             df_set: DFSet::default(),
         }
     }
@@ -144,8 +144,17 @@ impl Default for PDFSet {
 mod tests {
     #![allow(clippy::many_single_char_names)]
 
+    use sonatina_ir::{
+        builder::test_util::*,
+        inst::{
+            arith::Add,
+            control_flow::{Br, Jump, Phi, Return},
+        },
+        prelude::*,
+        Type,
+    };
+
     use super::*;
-    use sonatina_ir::{builder::test_util::*, Type};
 
     fn calc_dom(func: &Function) -> (PostDomTree, PDFSet) {
         let mut post_dom_tree = PostDomTree::new();
@@ -154,7 +163,7 @@ mod tests {
         (post_dom_tree, pdf)
     }
 
-    fn test_pdf(pdf: &PDFSet, of: Block, frontieres: &[Block]) -> bool {
+    fn test_pdf(pdf: &PDFSet, of: BlockId, frontieres: &[BlockId]) -> bool {
         if pdf.frontier_num_of(of) != frontieres.len() {
             return false;
         }
@@ -170,7 +179,8 @@ mod tests {
 
     #[test]
     fn pd_if_else() {
-        let mut builder = test_func_builder(&[Type::I64], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[Type::I32], Type::Unit);
+        let is = evm.inst_set();
 
         let entry_block = builder.append_block();
         let then_block = builder.append_block();
@@ -180,20 +190,23 @@ mod tests {
         let arg0 = builder.args()[0];
 
         builder.switch_to_block(entry_block);
-        builder.br(arg0, then_block, else_block);
+        builder.insert_inst_no_result_with(|| Br::new(is, arg0, then_block, else_block));
 
         builder.switch_to_block(then_block);
         let v1 = builder.make_imm_value(1i64);
-        builder.jump(merge_block);
+        builder.insert_inst_no_result_with(|| Jump::new(is, merge_block));
 
         builder.switch_to_block(else_block);
         let v2 = builder.make_imm_value(2i64);
-        builder.jump(merge_block);
+        builder.insert_inst_no_result_with(|| Jump::new(is, merge_block));
 
         builder.switch_to_block(merge_block);
-        let v3 = builder.phi(Type::I64, &[(v1, then_block), (v2, else_block)]);
-        builder.add(v3, arg0);
-        builder.ret(None);
+        let v3 = builder.insert_inst_with(
+            || Phi::new(is, vec![(v1, then_block), (v2, else_block)]),
+            Type::I64,
+        );
+        builder.insert_inst_with(|| Add::new(is, v3, arg0), Type::I64);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
 
@@ -215,11 +228,12 @@ mod tests {
 
     #[test]
     fn infinite_loop() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let is = evm.inst_set();
 
         let a = builder.append_block();
         builder.switch_to_block(a);
-        builder.jump(a);
+        builder.insert_inst_no_result_with(|| Jump::new(is, a));
 
         builder.seal_all();
 
@@ -234,7 +248,8 @@ mod tests {
 
     #[test]
     fn test_multiple_return() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let is = evm.inst_set();
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -244,19 +259,19 @@ mod tests {
 
         builder.switch_to_block(a);
         let v0 = builder.make_imm_value(1i8);
-        builder.br(v0, b, c);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, b, c));
 
         builder.switch_to_block(b);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.switch_to_block(c);
-        builder.br(v0, d, e);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, d, e));
 
         builder.switch_to_block(d);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.switch_to_block(e);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
 
@@ -280,7 +295,8 @@ mod tests {
 
     #[test]
     fn pd_complex() {
-        let mut builder = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let is = evm.inst_set();
 
         let a = builder.append_block();
         let b = builder.append_block();
@@ -293,28 +309,28 @@ mod tests {
 
         builder.switch_to_block(a);
         let v0 = builder.make_imm_value(1i8);
-        builder.br(v0, b, c);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, b, c));
 
         builder.switch_to_block(b);
-        builder.jump(g);
+        builder.insert_inst_no_result_with(|| Jump::new(is, g));
 
         builder.switch_to_block(c);
-        builder.br(v0, d, e);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, d, e));
 
         builder.switch_to_block(d);
-        builder.jump(f);
+        builder.insert_inst_no_result_with(|| Jump::new(is, f));
 
         builder.switch_to_block(e);
-        builder.jump(f);
+        builder.insert_inst_no_result_with(|| Jump::new(is, f));
 
         builder.switch_to_block(f);
-        builder.jump(g);
+        builder.insert_inst_no_result_with(|| Jump::new(is, g));
 
         builder.switch_to_block(g);
-        builder.br(v0, a, h);
+        builder.insert_inst_no_result_with(|| Br::new(is, v0, a, h));
 
         builder.switch_to_block(h);
-        builder.ret(None);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
 

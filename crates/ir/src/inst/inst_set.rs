@@ -1,16 +1,20 @@
-use super::{arith, cast, cmp, control_flow, data, evm, logic, Inst};
-
 use macros::define_inst_set_base;
+
+use super::{arith, cast, cmp, control_flow, data, evm, logic, Inst};
 
 define_inst_set_base! {
     /// This trait is used to determine whether a certain instruction set includes a specific inst in runtime.
     /// If a certain instruction set `IS` implements `HasInst<I>`,
     /// the corresponding `has_i(&self) -> Option<&dyn HasInst<I>>` method always returns `Some`.
     ///
-    /// Since all instruction set implements `HasInst<Inst>` if it containst `Inst`,
-    /// this trait is naturally intened to be used as a trait object.
+    /// Since all instruction set implements `HasInst<Inst>` if it contains `Inst`,
+    /// this trait is naturally intended to be used as a trait object.
     ///
     /// NOTE: Do NOT implement this trait manually, use `sonatina-macro::inst_set` instead.
+    ///
+    /// Currently, all paths to the inst types should be the relative path from `inst` module,
+    /// other than that, this macro won't work.
+    /// We should fix this in the future of course.
     trait InstSetBase {
         arith::Neg,
         arith::Add,
@@ -107,24 +111,29 @@ define_inst_set_base! {
     }
 }
 
-/// This trait provides the concrete mapping from `Inst` to corresponding enum variant.
-/// All instruction set that are defined by `sonatina_macros::inst_set` automatically defines an enum which represents all instructions in the set.
+/// This trait provides the concrete mapping from `Inst` to corresponding enum
+/// variant. All instruction set that are defined by `sonatina_macros::inst_set`
+/// automatically defines an enum which represents all instructions in the set.
 /// e.g.
 ///
 /// ```rust,ignore
-/// use sonatina_ir::inst::basic::*;
+/// use sonatina_ir::inst::{arith::*, control_flow::*};
 /// #[inst_set(InstKind = "InstKind")]
-/// struct InstSet(Add, Sub);
+/// struct InstSet(Jump, Phi, Add, Sub);
 /// ```
 /// defines
 ///
 /// ```rust
-/// use sonatina_ir::inst::arith::*;
+/// use sonatina_ir::inst::{arith::*, control_flow::*};
 /// enum InstKind<'i> {
+///     Jump(&'i Jump),
+///     Phi(&'i Phi),
 ///     Add(&'i Add),
 ///     Sub(&'i Sub),
 /// }
 /// enum InstKindMut<'i> {
+///     Jump(&'i mut Jump),
+///     Phi(&'i mut Phi),
 ///     Add(&'i mut Add),
 ///     Sub(&'i mut Sub),
 /// }
@@ -133,8 +142,9 @@ define_inst_set_base! {
 /// Assuming that the all instructions are created with this instruction set,
 /// the cast(resolution) from dynamic inst object to this enum always succeed.
 ///
-/// This macro provides the way to these safe downcast, and allow us to focus on the
-/// restricted concrete instruction set, instead of "all possible" instructions.
+/// This macro provides the way to these safe downcast, and allow us to focus on
+/// the restricted concrete instruction set, instead of "all possible"
+/// instructions.
 pub trait InstSetExt: InstSetBase {
     type InstKind<'i>;
     type InstKindMut<'i>;
@@ -145,12 +155,13 @@ pub trait InstSetExt: InstSetBase {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::Value;
     use arith::*;
     use control_flow::*;
     use logic::*;
     use macros::inst_set;
+
+    use super::*;
+    use crate::{InstDowncast, InstDowncastMut, ValueId};
 
     #[inst_set(InstKind = "TestInstKind")]
     struct TestInstSet(Add, Sub, Not, Phi, Jump);
@@ -176,9 +187,37 @@ mod tests {
     #[test]
     fn inst_creation() {
         let inst_set = TestInstSet::new();
-        let v = Value::from_u32(1);
+        let v = ValueId::from_u32(1);
         let _add = Add::new(&inst_set, v, v);
         let _sub = Sub::new(&inst_set, v, v);
+    }
+
+    #[test]
+    fn inst_downcast() {
+        let mut insts: Vec<Box<dyn Inst>> = Vec::new();
+        let inst_set = TestInstSet::new();
+        let v = ValueId::from_u32(1);
+        let add = Add::new(&inst_set, v, v);
+        insts.push(Box::new(add));
+        let sub = Sub::new(&inst_set, v, v);
+        insts.push(Box::new(sub));
+
+        assert!(
+            <&Add as InstDowncast>::downcast(&inst_set, insts.first().unwrap().as_ref()).is_some()
+        );
+        assert!(
+            <&Sub as InstDowncast>::downcast(&inst_set, insts.get(1).unwrap().as_ref()).is_some()
+        );
+        assert!(<&mut Add as InstDowncastMut>::downcast_mut(
+            &inst_set,
+            insts.get_mut(0).unwrap().as_mut()
+        )
+        .is_some());
+        assert!(<&mut Sub as InstDowncastMut>::downcast_mut(
+            &inst_set,
+            insts.get_mut(1).unwrap().as_mut()
+        )
+        .is_some());
     }
 
     #[test]
@@ -186,7 +225,7 @@ mod tests {
         let inst_set = TestInstSet::new();
         let mut insts: Vec<Box<dyn Inst>> = Vec::new();
 
-        let value = Value::from_u32(1);
+        let value = ValueId::from_u32(1);
         let add = Add::new(&inst_set, value, value);
         insts.push(Box::new(add));
         let sub = Sub::new(&inst_set, value, value);
@@ -213,6 +252,6 @@ mod tests {
 pub(super) mod sealed {
     /// This trait has two roles,
     /// 1. works as a sealed trait.
-    /// 2. ensure that an `Inst` is definitely registered to the `InstGroup`.
+    /// 2. ensure that an `Inst` is definitely registered to the `InstSetBase`.
     pub trait Registered {}
 }

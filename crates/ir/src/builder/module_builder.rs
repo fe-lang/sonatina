@@ -1,15 +1,13 @@
 use cranelift_entity::PrimaryMap;
 use rustc_hash::FxHashMap;
 
+use super::FunctionBuilder;
 use crate::{
     func_cursor::{CursorLocation, FuncCursor},
     module::{FuncRef, ModuleCtx},
-    Function, GlobalVariable, GlobalVariableData, Module, Signature, Type,
+    Function, GlobalVariable, GlobalVariableData, InstSetBase, Module, Signature, Type,
 };
 
-use super::FunctionBuilder;
-
-#[derive(Debug)]
 pub struct ModuleBuilder {
     pub funcs: PrimaryMap<FuncRef, Function>,
 
@@ -33,9 +31,10 @@ impl ModuleBuilder {
             panic!("{} is already declared.", sig.name())
         } else {
             let name = sig.name().to_string();
-            let func = Function::new(&self.ctx, sig);
+            let func = Function::new(&self.ctx, sig.clone());
             let func_ref = self.funcs.push(func);
             self.declared_funcs.insert(name, func_ref);
+            self.ctx.declared_funcs[func_ref] = sig;
             func_ref
         }
     }
@@ -90,5 +89,9 @@ impl ModuleBuilder {
             funcs: self.funcs,
             ctx: self.ctx,
         }
+    }
+
+    pub fn inst_set(&self) -> &'static dyn InstSetBase {
+        self.ctx.inst_set
     }
 }

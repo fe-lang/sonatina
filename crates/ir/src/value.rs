@@ -1,82 +1,24 @@
 //! This module contains Sonatine IR value definition.
+use core::fmt;
+use std::ops;
 
-use std::{fmt, ops};
+use super::Type;
+use crate::{
+    inst::InstId,
+    ir_writer::{WriteWithFunc, WriteWithModule},
+    GlobalVariable, I256,
+};
 
-use crate::{types::DisplayType, DataFlowGraph, GlobalVariable};
-
-use super::{Insn, Type, I256, U256};
-
-/// An opaque reference to [`ValueData`].
+/// An opaque reference to [`Value`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
-pub struct Value(pub u32);
-cranelift_entity::entity_impl!(Value);
-
-pub struct DisplayResultValue<'a> {
-    insn: Insn,
-    dfg: &'a DataFlowGraph,
-}
-
-impl<'a> DisplayResultValue<'a> {
-    pub fn new(insn: Insn, dfg: &'a DataFlowGraph) -> Self {
-        Self { insn, dfg }
-    }
-}
-
-impl<'a> fmt::Display for DisplayResultValue<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let Self { insn, dfg } = *self;
-        if let Some(value) = dfg.insn_result(insn) {
-            let ty = dfg.insn_result_ty(insn).unwrap();
-            let ty = DisplayType::new(ty, dfg);
-            return write!(f, "v{}.{ty} = ", value.0);
-        }
-        Ok(())
-    }
-}
-
-pub struct DisplayArgValue<'a> {
-    arg: Value,
-    dfg: &'a DataFlowGraph,
-}
-
-impl<'a> DisplayArgValue<'a> {
-    pub fn new(arg: Value, dfg: &'a DataFlowGraph) -> Self {
-        Self { arg, dfg }
-    }
-}
-
-impl<'a> fmt::Display for DisplayArgValue<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { arg, dfg } = *self;
-        match *dfg.value_data(arg) {
-            ValueData::Immediate { imm, ty } => {
-                let ty = DisplayType::new(ty, dfg);
-                write!(f, "{imm}.{ty}")
-            }
-            _ => write!(f, "v{}", arg.0),
-        }
-    }
-}
-
-pub fn display_arg_values(
-    f: &mut fmt::Formatter,
-    args: &[Value],
-    dfg: &DataFlowGraph,
-) -> fmt::Result {
-    let arg0 = DisplayArgValue::new(args[0], dfg);
-    write!(f, "{arg0}")?;
-    for arg in &args[1..] {
-        let arg = DisplayArgValue::new(*arg, dfg);
-        write!(f, " {arg}")?;
-    }
-    Ok(())
-}
+pub struct ValueId(pub u32);
+cranelift_entity::entity_impl!(ValueId);
 
 /// An value data definition.
 #[derive(Debug, Clone)]
-pub enum ValueData {
+pub enum Value {
     /// The value is defined by an instruction.
-    Insn { insn: Insn, ty: Type },
+    Inst { inst: InstId, ty: Type },
 
     /// The value is a function argument.
     Arg { ty: Type, idx: usize },
@@ -86,6 +28,33 @@ pub enum ValueData {
 
     /// The value is global value.
     Global { gv: GlobalVariable, ty: Type },
+}
+
+impl WriteWithFunc for ValueId {
+    fn write(
+        &self,
+        ctx: &crate::ir_writer::FuncWriteCtx,
+        w: &mut impl std::io::Write,
+    ) -> std::io::Result<()> {
+        if let Some(name) = ctx.dbg.value_name(ctx.func, ctx.func_ref, *self) {
+            write!(w, "{name}")
+        } else {
+            match ctx.func.dfg.value(*self) {
+                Value::Immediate { imm, ty } => {
+                    write!(w, "{}.", imm)?;
+                    ty.write(ctx.func.ctx(), w)
+                }
+                Value::Global { gv, .. } => ctx
+                    .func
+                    .dfg
+                    .ctx
+                    .with_gv_store(|s| write!(w, "%{}", s.gv_data(*gv).symbol)),
+                _ => {
+                    write!(w, "v{}", self.0)
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -153,12 +122,12 @@ impl Immediate {
     }
 
     pub fn sext(self, ty: Type) -> Self {
-        debug_assert!(self.ty() < ty);
+        debug_assert!(self.ty() <= ty);
         Self::from_i256(self.as_i256(), ty)
     }
 
     pub fn zext(self, ty: Type) -> Self {
-        debug_assert!(self.ty() < ty);
+        debug_assert!(self.ty() <= ty);
         let i256: I256 = match self {
             Self::I1(val) => (val as u8).into(),
             Self::I8(val) => (val as u8).into(),
@@ -363,6 +332,22 @@ impl ops::Neg for Immediate {
     }
 }
 
+impl ops::Shl for Immediate {
+    type Output = Self;
+
+    fn shl(self, rhs: Self) -> Self::Output {
+        self.apply_binop(rhs, ops::Shl::shl)
+    }
+}
+
+impl ops::Shr for Immediate {
+    type Output = Self;
+
+    fn shr(self, rhs: Self) -> Self::Output {
+        self.apply_binop(rhs, ops::Shl::shl)
+    }
+}
+
 impl fmt::Display for Immediate {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -405,9 +390,3 @@ imm_from_primary!(u64, i64, Immediate::I64);
 imm_from_primary!(i128, i128, Immediate::I128);
 imm_from_primary!(u128, i128, Immediate::I128);
 imm_from_primary!(I256, I256, Immediate::I256);
-
-impl From<U256> for Immediate {
-    fn from(imm: U256) -> Self {
-        Self::I256(imm.into())
-    }
-}

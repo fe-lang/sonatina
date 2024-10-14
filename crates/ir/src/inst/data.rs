@@ -1,25 +1,31 @@
 use macros::Inst;
 use smallvec::SmallVec;
 
-use crate::Value;
+use crate::{inst::impl_inst_write, Type, ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(has_side_effect)]
 pub struct Mload {
     #[inst(value)]
-    addr: Value,
+    addr: ValueId,
+    ty: Type,
 }
+impl_inst_write!(Mload, (addr: ValueId, ty: Type));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(has_side_effect)]
 pub struct Mstore {
     #[inst(value)]
-    value: Value,
+    value: ValueId,
     #[inst(value)]
-    addr: Value,
+    addr: ValueId,
+    ty: Type,
 }
+impl_inst_write!(Mstore, (value: ValueId, addr: ValueId, ty: Type));
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 pub struct Gep {
     #[inst(value)]
-    values: SmallVec<[Value; 8]>,
+    values: SmallVec<[ValueId; 8]>,
 }
+impl_inst_write!(Gep);

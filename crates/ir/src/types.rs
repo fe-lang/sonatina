@@ -1,11 +1,11 @@
 //! This module contains Sonatina IR types definitions.
-use std::{cmp, fmt};
+use std::{cmp, io};
 
 use cranelift_entity::PrimaryMap;
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
-use crate::DataFlowGraph;
+use crate::{ir_writer::WriteWithModule, module::ModuleCtx};
 
 #[derive(Debug, Default)]
 pub struct TypeStore {
@@ -132,115 +132,19 @@ pub enum Type {
     I256,
     Compound(CompoundType),
     #[default]
-    Void,
-}
-
-/// An opaque reference to [`CompoundTypeData`].
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
-pub struct CompoundType(u32);
-cranelift_entity::entity_impl!(CompoundType);
-
-pub struct DisplayCompoundType<'a> {
-    cmpd_ty: CompoundType,
-    dfg: &'a DataFlowGraph,
-}
-
-impl<'a> DisplayCompoundType<'a> {
-    pub fn new(cmpd_ty: CompoundType, dfg: &'a DataFlowGraph) -> Self {
-        Self { cmpd_ty, dfg }
-    }
-}
-
-impl<'a> fmt::Display for DisplayCompoundType<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use CompoundTypeData::*;
-        let dfg = self.dfg;
-        dfg.ctx
-            .with_ty_store(|s| match s.resolve_compound(self.cmpd_ty) {
-                Array { elem: ty, len } => {
-                    let ty = DisplayType::new(*ty, dfg);
-                    write!(f, "[{ty};{len}]")
-                }
-                Ptr(ty) => {
-                    let ty = DisplayType::new(*ty, dfg);
-                    write!(f, "*{ty}")
-                }
-                Struct(StructData { name, packed, .. }) => {
-                    if *packed {
-                        write!(f, "<{{{name}}}>")
-                    } else {
-                        write!(f, "{{{name}}}")
-                    }
-                }
-            })
-    }
-}
-
-pub struct DisplayType<'a> {
-    ty: Type,
-    dfg: &'a DataFlowGraph,
-}
-
-impl<'a> DisplayType<'a> {
-    pub fn new(ty: Type, dfg: &'a DataFlowGraph) -> Self {
-        Self { ty, dfg }
-    }
-}
-
-impl<'a> fmt::Display for DisplayType<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use Type::*;
-        match self.ty {
-            I1 => write!(f, "i1"),
-            I8 => write!(f, "i8"),
-            I16 => write!(f, "i16"),
-            I32 => write!(f, "i32"),
-            I64 => write!(f, "i64"),
-            I128 => write!(f, "i128"),
-            I256 => write!(f, "i256"),
-            Compound(cmpd_ty) => {
-                let dfg = self.dfg;
-                write!(f, "{}", DisplayCompoundType { cmpd_ty, dfg })
-            }
-            Void => write!(f, "()"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CompoundTypeData {
-    Array { elem: Type, len: usize },
-    Ptr(Type),
-    Struct(StructData),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StructData {
-    pub name: String,
-    pub fields: Vec<Type>,
-    pub packed: bool,
-}
-
-impl CompoundTypeData {
-    pub fn is_array(&self) -> bool {
-        matches!(self, Self::Array { .. })
-    }
-
-    pub fn is_ptr(&self) -> bool {
-        matches!(self, Self::Ptr(_))
-    }
+    Unit,
 }
 
 impl Type {
-    pub fn is_integral(&self) -> bool {
+    pub fn is_integral(self) -> bool {
         matches!(
             self,
             Self::I1 | Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::I128 | Self::I256
         )
     }
 
-    pub fn to_string(&self, dfg: &DataFlowGraph) -> String {
-        DisplayType { ty: *self, dfg }.to_string()
+    pub fn is_pointer(self, ctx: &ModuleCtx) -> bool {
+        ctx.with_ty_store(|store| store.is_ptr(self))
     }
 }
 
@@ -271,5 +175,97 @@ impl cmp::PartialOrd for Type {
             (I256, _) => Some(cmp::Ordering::Greater),
             (_, _) => unreachable!(),
         }
+    }
+}
+
+impl WriteWithModule for Type {
+    fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
+        match self {
+            Type::I1 => write!(w, "i1"),
+            Type::I8 => write!(w, "i8"),
+            Type::I16 => write!(w, "i16"),
+            Type::I32 => write!(w, "i32"),
+            Type::I64 => write!(w, "i64"),
+            Type::I128 => write!(w, "i128"),
+            Type::I256 => write!(w, "i256"),
+            Type::Compound(cmpd_ty) => cmpd_ty.write(module, w),
+            Type::Unit => write!(w, "unit"),
+        }
+    }
+}
+
+/// An opaque reference to [`CompoundTypeData`].
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
+pub struct CompoundType(u32);
+cranelift_entity::entity_impl!(CompoundType);
+
+impl WriteWithModule for CompoundType {
+    fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
+        module.with_ty_store(|s| match s.resolve_compound(*self) {
+            CompoundTypeData::Array { elem: ty, len } => {
+                write!(w, "[")?;
+                ty.write(module, &mut *w)?;
+                write!(w, "; {len}]")
+            }
+            CompoundTypeData::Ptr(ty) => {
+                write!(w, "*")?;
+                ty.write(module, w)
+            }
+            CompoundTypeData::Struct(StructData { name, packed, .. }) => {
+                if *packed {
+                    write!(w, "@<{name}>")
+                } else {
+                    write!(w, "@{name}")
+                }
+            }
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CompoundTypeData {
+    Array { elem: Type, len: usize },
+    Ptr(Type),
+    Struct(StructData),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StructData {
+    pub name: String,
+    pub fields: Vec<Type>,
+    pub packed: bool,
+}
+
+impl WriteWithModule for StructData {
+    fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
+        write!(w, "type @{} = ", self.name)?;
+        if self.packed {
+            write!(w, "<{{")?;
+        } else {
+            write!(w, "{{")?;
+        }
+
+        let mut delim = "";
+        for &ty in &self.fields {
+            write!(w, "{delim}")?;
+            ty.write(module, &mut *w)?;
+            delim = ", ";
+        }
+
+        if self.packed {
+            write!(w, "}}>;")
+        } else {
+            write!(w, "}};")
+        }
+    }
+}
+
+impl CompoundTypeData {
+    pub fn is_array(&self) -> bool {
+        matches!(self, Self::Array { .. })
+    }
+
+    pub fn is_ptr(&self) -> bool {
+        matches!(self, Self::Ptr(_))
     }
 }

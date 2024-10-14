@@ -20,3 +20,4 @@ smallvec = "1.7.0"
 rustc-hash = "2.0.0"
 sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
 sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
+sonatina-macros = { path = "../macros", version = "0.0.3-alpha" }

@@ -1,14 +1,14 @@
 target = "evm-ethereum-london"
 
 # check:  block0:
-# nextln:     v1.i32 = sext v0;
+# nextln:     v1.i32 = sext v0 i32;
 # nextln:     jump block2;
 # nextln: 
 # nextln: block2:
 # nextln:     return v1;
 func public %rewrite_dest(v0.i1) -> i32 {
     block0:
-        v1.i32 = sext v0;
+        v1.i32 = sext v0 i32;
         br v0 block1 block2;
 
     block1:

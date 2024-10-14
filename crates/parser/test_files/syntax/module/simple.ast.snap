@@ -7,8 +7,8 @@ Module {
     target: Some(
         TargetTriple {
             architecture: Evm,
-            chain: Ethereum,
-            version: EvmVersion(
+            vendor: Ethereum,
+            operating_system: Evm(
                 London,
             ),
         },
@@ -16,9 +16,10 @@ Module {
     declared_functions: [
         FuncDeclaration {
             linkage: External,
-            name: FunctionName(
-                "add_i8",
-            ),
+            name: FunctionName {
+                name: "add_i8",
+                ..
+            },
             params: [
                 Type {
                     kind: Int(
@@ -106,9 +107,10 @@ Module {
         Func {
             signature: FuncSignature {
                 linkage: Public,
-                name: FunctionName(
-                    "main",
-                ),
+                name: FunctionName {
+                    name: "main",
+                    ..
+                },
                 params: [],
                 ret_type: None,
             },
@@ -122,7 +124,7 @@ Module {
                     },
                     stmts: [
                         Stmt {
-                            kind: Define(
+                            kind: Assign(
                                 ValueDeclaration(
                                     ValueName {
                                         string: "v0",
@@ -135,32 +137,52 @@ Module {
                                         ..
                                     },
                                 ),
-                                Call(
-                                    Call(
-                                        Spanned {
-                                            inner: FunctionName(
-                                                "foo",
+                                Inst {
+                                    name: InstName {
+                                        name: "call",
+                                        ..
+                                    },
+                                    args: [
+                                        InstArg {
+                                            kind: FuncRef(
+                                                FunctionName {
+                                                    name: "foo",
+                                                    ..
+                                                },
                                             ),
                                             ..
                                         },
-                                        [
-                                            Value {
-                                                kind: Immediate(
-                                                    I8(
-                                                        100,
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Immediate(
+                                                        I8(
+                                                            100,
+                                                        ),
                                                     ),
-                                                ),
-                                                ..
-                                            },
-                                        ],
-                                    ),
-                                ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                    ],
+                                    ..
+                                },
                             ),
+                            ..
                         },
                         Stmt {
-                            kind: Return(
-                                None,
+                            kind: Inst(
+                                Inst {
+                                    name: InstName {
+                                        name: "return",
+                                        ..
+                                    },
+                                    args: [],
+                                    ..
+                                },
                             ),
+                            ..
                         },
                     ],
                 },
@@ -170,9 +192,10 @@ Module {
         Func {
             signature: FuncSignature {
                 linkage: Private,
-                name: FunctionName(
-                    "foo",
-                ),
+                name: FunctionName {
+                    name: "foo",
+                    ..
+                },
                 params: [
                     ValueDeclaration(
                         ValueName {
@@ -206,7 +229,7 @@ Module {
                     },
                     stmts: [
                         Stmt {
-                            kind: Define(
+                            kind: Assign(
                                 ValueDeclaration(
                                     ValueName {
                                         string: "v1",
@@ -219,30 +242,47 @@ Module {
                                         ..
                                     },
                                 ),
-                                Binary(
-                                    Mul,
-                                    Value {
-                                        kind: Named(
-                                            ValueName {
-                                                string: "v0",
-                                                ..
-                                            },
-                                        ),
+                                Inst {
+                                    name: InstName {
+                                        name: "mul",
                                         ..
                                     },
-                                    Value {
-                                        kind: Immediate(
-                                            I8(
-                                                2,
+                                    args: [
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Named(
+                                                        ValueName {
+                                                            string: "v0",
+                                                            ..
+                                                        },
+                                                    ),
+                                                    ..
+                                                },
                                             ),
-                                        ),
-                                        ..
-                                    },
-                                ),
+                                            ..
+                                        },
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Immediate(
+                                                        I8(
+                                                            2,
+                                                        ),
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                    ],
+                                    ..
+                                },
                             ),
+                            ..
                         },
                         Stmt {
-                            kind: Define(
+                            kind: Assign(
                                 ValueDeclaration(
                                     ValueName {
                                         string: "v2",
@@ -255,52 +295,82 @@ Module {
                                         ..
                                     },
                                 ),
-                                Call(
-                                    Call(
-                                        Spanned {
-                                            inner: FunctionName(
-                                                "add_i8",
+                                Inst {
+                                    name: InstName {
+                                        name: "call",
+                                        ..
+                                    },
+                                    args: [
+                                        InstArg {
+                                            kind: FuncRef(
+                                                FunctionName {
+                                                    name: "add_i8",
+                                                    ..
+                                                },
                                             ),
                                             ..
                                         },
-                                        [
-                                            Value {
-                                                kind: Named(
-                                                    ValueName {
-                                                        string: "v0",
-                                                        ..
-                                                    },
-                                                ),
-                                                ..
-                                            },
-                                            Value {
-                                                kind: Named(
-                                                    ValueName {
-                                                        string: "v1",
-                                                        ..
-                                                    },
-                                                ),
-                                                ..
-                                            },
-                                        ],
-                                    ),
-                                ),
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Named(
+                                                        ValueName {
+                                                            string: "v0",
+                                                            ..
+                                                        },
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Named(
+                                                        ValueName {
+                                                            string: "v1",
+                                                            ..
+                                                        },
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                    ],
+                                    ..
+                                },
                             ),
+                            ..
                         },
                         Stmt {
-                            kind: Return(
-                                Some(
-                                    Value {
-                                        kind: Named(
-                                            ValueName {
-                                                string: "v2",
-                                                ..
-                                            },
-                                        ),
+                            kind: Inst(
+                                Inst {
+                                    name: InstName {
+                                        name: "return",
                                         ..
                                     },
-                                ),
+                                    args: [
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Named(
+                                                        ValueName {
+                                                            string: "v2",
+                                                            ..
+                                                        },
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                    ],
+                                    ..
+                                },
                             ),
+                            ..
                         },
                     ],
                 },
@@ -312,9 +382,10 @@ Module {
         Func {
             signature: FuncSignature {
                 linkage: Private,
-                name: FunctionName(
-                    "types",
-                ),
+                name: FunctionName {
+                    name: "types",
+                    ..
+                },
                 params: [
                     ValueDeclaration(
                         ValueName {
@@ -440,9 +511,17 @@ Module {
                     },
                     stmts: [
                         Stmt {
-                            kind: Return(
-                                None,
+                            kind: Inst(
+                                Inst {
+                                    name: InstName {
+                                        name: "return",
+                                        ..
+                                    },
+                                    args: [],
+                                    ..
+                                },
                             ),
+                            ..
                         },
                     ],
                 },
@@ -452,9 +531,10 @@ Module {
         Func {
             signature: FuncSignature {
                 linkage: Private,
-                name: FunctionName(
-                    "table",
-                ),
+                name: FunctionName {
+                    name: "table",
+                    ..
+                },
                 params: [
                     ValueDeclaration(
                         ValueName {
@@ -481,59 +561,85 @@ Module {
                     },
                     stmts: [
                         Stmt {
-                            kind: BranchTable(
-                                Value {
-                                    kind: Named(
-                                        ValueName {
-                                            string: "v0",
-                                            ..
-                                        },
-                                    ),
-                                    ..
-                                },
-                                Some(
-                                    BlockId {
-                                        id: Some(
-                                            0,
-                                        ),
+                            kind: Inst(
+                                Inst {
+                                    name: InstName {
+                                        name: "br_table",
                                         ..
                                     },
-                                ),
-                                [
-                                    (
-                                        Value {
-                                            kind: Immediate(
-                                                I8(
-                                                    1,
+                                    args: [
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Named(
+                                                        ValueName {
+                                                            string: "v0",
+                                                            ..
+                                                        },
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                        InstArg {
+                                            kind: Block(
+                                                BlockId {
+                                                    id: Some(
+                                                        0,
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                        InstArg {
+                                            kind: ValueBlockMap(
+                                                (
+                                                    Value {
+                                                        kind: Immediate(
+                                                            I8(
+                                                                1,
+                                                            ),
+                                                        ),
+                                                        ..
+                                                    },
+                                                    BlockId {
+                                                        id: Some(
+                                                            1,
+                                                        ),
+                                                        ..
+                                                    },
                                                 ),
                                             ),
                                             ..
                                         },
-                                        BlockId {
-                                            id: Some(
-                                                1,
-                                            ),
-                                            ..
-                                        },
-                                    ),
-                                    (
-                                        Value {
-                                            kind: Immediate(
-                                                I8(
-                                                    2,
+                                        InstArg {
+                                            kind: ValueBlockMap(
+                                                (
+                                                    Value {
+                                                        kind: Immediate(
+                                                            I8(
+                                                                2,
+                                                            ),
+                                                        ),
+                                                        ..
+                                                    },
+                                                    BlockId {
+                                                        id: Some(
+                                                            2,
+                                                        ),
+                                                        ..
+                                                    },
                                                 ),
                                             ),
                                             ..
                                         },
-                                        BlockId {
-                                            id: Some(
-                                                2,
-                                            ),
-                                            ..
-                                        },
-                                    ),
-                                ],
+                                    ],
+                                    ..
+                                },
                             ),
+                            ..
                         },
                     ],
                 },
@@ -546,18 +652,31 @@ Module {
                     },
                     stmts: [
                         Stmt {
-                            kind: Return(
-                                Some(
-                                    Value {
-                                        kind: Immediate(
-                                            I8(
-                                                1,
-                                            ),
-                                        ),
+                            kind: Inst(
+                                Inst {
+                                    name: InstName {
+                                        name: "return",
                                         ..
                                     },
-                                ),
+                                    args: [
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Immediate(
+                                                        I8(
+                                                            1,
+                                                        ),
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                    ],
+                                    ..
+                                },
                             ),
+                            ..
                         },
                     ],
                 },
@@ -570,18 +689,31 @@ Module {
                     },
                     stmts: [
                         Stmt {
-                            kind: Return(
-                                Some(
-                                    Value {
-                                        kind: Immediate(
-                                            I8(
-                                                2,
-                                            ),
-                                        ),
+                            kind: Inst(
+                                Inst {
+                                    name: InstName {
+                                        name: "return",
                                         ..
                                     },
-                                ),
+                                    args: [
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Immediate(
+                                                        I8(
+                                                            2,
+                                                        ),
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                    ],
+                                    ..
+                                },
                             ),
+                            ..
                         },
                     ],
                 },
@@ -591,9 +723,10 @@ Module {
         Func {
             signature: FuncSignature {
                 linkage: Private,
-                name: FunctionName(
-                    "flow",
-                ),
+                name: FunctionName {
+                    name: "flow",
+                    ..
+                },
                 params: [
                     ValueDeclaration(
                         ValueName {
@@ -627,14 +760,29 @@ Module {
                     },
                     stmts: [
                         Stmt {
-                            kind: Jump(
-                                BlockId {
-                                    id: Some(
-                                        1,
-                                    ),
+                            kind: Inst(
+                                Inst {
+                                    name: InstName {
+                                        name: "jump",
+                                        ..
+                                    },
+                                    args: [
+                                        InstArg {
+                                            kind: Block(
+                                                BlockId {
+                                                    id: Some(
+                                                        1,
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                    ],
                                     ..
                                 },
                             ),
+                            ..
                         },
                     ],
                 },
@@ -647,7 +795,7 @@ Module {
                     },
                     stmts: [
                         Stmt {
-                            kind: Define(
+                            kind: Assign(
                                 ValueDeclaration(
                                     ValueName {
                                         string: "v1",
@@ -660,47 +808,63 @@ Module {
                                         ..
                                     },
                                 ),
-                                Phi(
-                                    [
-                                        (
-                                            Value {
-                                                kind: Named(
-                                                    ValueName {
-                                                        string: "v0",
+                                Inst {
+                                    name: InstName {
+                                        name: "phi",
+                                        ..
+                                    },
+                                    args: [
+                                        InstArg {
+                                            kind: ValueBlockMap(
+                                                (
+                                                    Value {
+                                                        kind: Named(
+                                                            ValueName {
+                                                                string: "v0",
+                                                                ..
+                                                            },
+                                                        ),
+                                                        ..
+                                                    },
+                                                    BlockId {
+                                                        id: Some(
+                                                            0,
+                                                        ),
                                                         ..
                                                     },
                                                 ),
-                                                ..
-                                            },
-                                            BlockId {
-                                                id: Some(
-                                                    0,
+                                            ),
+                                            ..
+                                        },
+                                        InstArg {
+                                            kind: ValueBlockMap(
+                                                (
+                                                    Value {
+                                                        kind: Immediate(
+                                                            I64(
+                                                                100,
+                                                            ),
+                                                        ),
+                                                        ..
+                                                    },
+                                                    BlockId {
+                                                        id: Some(
+                                                            2,
+                                                        ),
+                                                        ..
+                                                    },
                                                 ),
-                                                ..
-                                            },
-                                        ),
-                                        (
-                                            Value {
-                                                kind: Immediate(
-                                                    I64(
-                                                        100,
-                                                    ),
-                                                ),
-                                                ..
-                                            },
-                                            BlockId {
-                                                id: Some(
-                                                    2,
-                                                ),
-                                                ..
-                                            },
-                                        ),
+                                            ),
+                                            ..
+                                        },
                                     ],
-                                ),
+                                    ..
+                                },
                             ),
+                            ..
                         },
                         Stmt {
-                            kind: Define(
+                            kind: Assign(
                                 ValueDeclaration(
                                     ValueName {
                                         string: "v2",
@@ -713,52 +877,94 @@ Module {
                                         ..
                                     },
                                 ),
-                                Binary(
-                                    Gt,
-                                    Value {
-                                        kind: Named(
-                                            ValueName {
-                                                string: "v1",
-                                                ..
-                                            },
-                                        ),
+                                Inst {
+                                    name: InstName {
+                                        name: "gt",
                                         ..
                                     },
-                                    Value {
-                                        kind: Immediate(
-                                            I64(
-                                                10,
+                                    args: [
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Named(
+                                                        ValueName {
+                                                            string: "v1",
+                                                            ..
+                                                        },
+                                                    ),
+                                                    ..
+                                                },
                                             ),
-                                        ),
-                                        ..
-                                    },
-                                ),
-                            ),
-                        },
-                        Stmt {
-                            kind: Branch(
-                                Value {
-                                    kind: Named(
-                                        ValueName {
-                                            string: "v2",
                                             ..
                                         },
-                                    ),
-                                    ..
-                                },
-                                BlockId {
-                                    id: Some(
-                                        2,
-                                    ),
-                                    ..
-                                },
-                                BlockId {
-                                    id: Some(
-                                        3,
-                                    ),
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Immediate(
+                                                        I64(
+                                                            10,
+                                                        ),
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                    ],
                                     ..
                                 },
                             ),
+                            ..
+                        },
+                        Stmt {
+                            kind: Inst(
+                                Inst {
+                                    name: InstName {
+                                        name: "br",
+                                        ..
+                                    },
+                                    args: [
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Named(
+                                                        ValueName {
+                                                            string: "v2",
+                                                            ..
+                                                        },
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                        InstArg {
+                                            kind: Block(
+                                                BlockId {
+                                                    id: Some(
+                                                        2,
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                        InstArg {
+                                            kind: Block(
+                                                BlockId {
+                                                    id: Some(
+                                                        3,
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                    ],
+                                    ..
+                                },
+                            ),
+                            ..
                         },
                     ],
                 },
@@ -771,14 +977,29 @@ Module {
                     },
                     stmts: [
                         Stmt {
-                            kind: Jump(
-                                BlockId {
-                                    id: Some(
-                                        1,
-                                    ),
+                            kind: Inst(
+                                Inst {
+                                    name: InstName {
+                                        name: "jump",
+                                        ..
+                                    },
+                                    args: [
+                                        InstArg {
+                                            kind: Block(
+                                                BlockId {
+                                                    id: Some(
+                                                        1,
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                    ],
                                     ..
                                 },
                             ),
+                            ..
                         },
                     ],
                 },
@@ -791,19 +1012,32 @@ Module {
                     },
                     stmts: [
                         Stmt {
-                            kind: Return(
-                                Some(
-                                    Value {
-                                        kind: Named(
-                                            ValueName {
-                                                string: "v1",
-                                                ..
-                                            },
-                                        ),
+                            kind: Inst(
+                                Inst {
+                                    name: InstName {
+                                        name: "return",
                                         ..
                                     },
-                                ),
+                                    args: [
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Named(
+                                                        ValueName {
+                                                            string: "v1",
+                                                            ..
+                                                        },
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                    ],
+                                    ..
+                                },
                             ),
+                            ..
                         },
                     ],
                 },

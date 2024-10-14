@@ -1,10 +1,10 @@
 target = "evm-ethereum-london"
 
-type %foo = { i8, i16, *%s1 };
+type @foo = { i8, i16, *@s1 };
 
 func public %main() {
     block0:
-        v0.i8 = call %foo 100.i8;
+        v0.i8 = call @foo 100.i8;
         v2.i8 = add v0 v1;
         v3.i8 = add v1 v1;
         jump block2;

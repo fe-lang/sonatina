@@ -1,8 +1,10 @@
-use crate::inst::*;
 use macros::inst_set;
+
+use crate::inst::*;
 
 #[inst_set(InstKind = "EvmInstKind")]
 pub struct EvmInstSet(
+    arith::Neg,
     arith::Add,
     arith::Mul,
     arith::Sub,

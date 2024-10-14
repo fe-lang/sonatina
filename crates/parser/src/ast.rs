@@ -1,23 +1,21 @@
-use super::{syntax::Node, Error};
-use crate::{
-    syntax::{FromSyntax, Parser, Rule, Spanned},
-    Span,
-};
-use either::Either;
-use hex::FromHex;
-pub use ir::{
-    insn::{BinaryOp, CastOp, UnaryOp},
-    DataLocationKind, Immediate, Linkage,
-};
-use ir::{I256, U256};
-use pest::Parser as _;
-use smol_str::SmolStr;
-pub use sonatina_triple::{InvalidTriple, TargetTriple};
 use std::str::FromStr;
 
 // `Span`s aren't printed in the Debug output because the pest
 // code locations differ on windows vs *nix, which breaks the ast tests.
 use derive_more::Debug as Dbg;
+use either::Either;
+use hex::FromHex;
+pub use ir::{Immediate, Linkage};
+use ir::{I256, U256};
+use pest::Parser as _;
+use smol_str::SmolStr;
+pub use sonatina_triple::{InvalidTriple, TargetTriple};
+
+use super::{syntax::Node, Error};
+use crate::{
+    syntax::{FromSyntax, Parser, Rule},
+    Span,
+};
 
 pub fn parse(input: &str) -> Result<Module, Vec<Error>> {
     match Parser::parse(Rule::module, input) {
@@ -212,12 +210,19 @@ impl FromSyntax<Error> for FuncSignature {
 }
 
 /// Doesn't include `%` prefix.
-#[derive(Debug)]
-pub struct FunctionName(pub SmolStr);
+#[derive(Dbg)]
+pub struct FunctionName {
+    pub name: SmolStr,
+    #[debug(skip)]
+    pub span: Span,
+}
 
 impl FromSyntax<Error> for FunctionName {
     fn from_syntax(node: &mut Node<Error>) -> Self {
-        FunctionName(node.parse_str(Rule::function_name))
+        FunctionName {
+            name: node.parse_str(Rule::function_name),
+            span: node.span,
+        }
     }
 }
 
@@ -261,51 +266,218 @@ impl FromSyntax<Error> for BlockId {
     }
 }
 
-#[derive(Debug)]
+#[derive(Dbg)]
 pub struct Stmt {
     pub kind: StmtKind,
+    #[debug(skip)]
+    pub span: Span,
 }
 
 impl FromSyntax<Error> for Stmt {
     fn from_syntax(node: &mut Node<Error>) -> Self {
         node.descend();
         let kind = match node.rule {
-            Rule::define_stmt => StmtKind::Define(
+            Rule::assign_stmt => StmtKind::Assign(
                 node.single(Rule::value_declaration),
-                node.single(Rule::expr),
+                node.single(Rule::inst),
             ),
-            Rule::store_stmt => StmtKind::Store(
-                node.parse_str(Rule::location),
-                node.single(Rule::value),
-                node.single(Rule::value),
-            ),
-            Rule::return_stmt => StmtKind::Return(node.single_opt(Rule::value)),
-            Rule::jump_stmt => StmtKind::Jump(node.single(Rule::block_ident)),
-            Rule::br_stmt => StmtKind::Branch(
-                node.single(Rule::value),
-                node.single(Rule::block_ident),
-                node.single(Rule::block_ident),
-            ),
-            Rule::br_table_stmt => StmtKind::BranchTable(
-                node.single(Rule::value),
-                node.single_opt(Rule::block_ident),
-                node.multi(Rule::br_table_case),
-            ),
+            Rule::inst_stmt => StmtKind::Inst(node.single(Rule::inst)),
             _ => unreachable!(),
         };
-        Stmt { kind }
+
+        Stmt {
+            kind,
+            span: node.span,
+        }
     }
 }
 
 #[derive(Debug)]
 pub enum StmtKind {
-    Define(ValueDeclaration, Expr),
-    Store(DataLocationKind, Value, Value),
-    Return(Option<Value>),
-    Jump(BlockId),
-    Branch(Value, BlockId, BlockId),
-    BranchTable(Value, Option<BlockId>, Vec<(Value, BlockId)>),
-    Call(Call),
+    Assign(ValueDeclaration, Inst),
+    Inst(Inst),
+}
+
+#[derive(Dbg)]
+pub struct Inst {
+    pub name: InstName,
+    pub args: Vec<InstArg>,
+    #[debug(skip)]
+    pub span: Span,
+}
+
+impl FromSyntax<Error> for Inst {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        let name = node.single(Rule::inst_name);
+        let args = node.multi(Rule::inst_arg);
+        Self {
+            name,
+            args,
+            span: node.span,
+        }
+    }
+}
+
+#[derive(Dbg)]
+pub struct InstName {
+    pub name: SmolStr,
+    #[debug(skip)]
+    pub span: Span,
+}
+
+impl FromSyntax<Error> for InstName {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        InstName {
+            name: node.parse_str(Rule::inst_identifier),
+            span: node.span,
+        }
+    }
+}
+
+#[derive(Dbg)]
+pub struct InstArg {
+    pub kind: InstArgKind,
+    #[debug(skip)]
+    pub span: Span,
+}
+
+impl InstArg {
+    pub fn expect_value(&self) -> Result<&Value, Box<Error>> {
+        if let InstArgKind::Value(value) = &self.kind {
+            Ok(value)
+        } else {
+            Err(Box::new(Error::InstArgKindMismatch {
+                expected: "value".into(),
+                actual: self.kind.discriminant_name().into(),
+                span: self.span,
+            }))
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a InstArg> for &'a Value {
+    type Error = Box<Error>;
+
+    fn try_from(arg: &'a InstArg) -> Result<Self, Self::Error> {
+        if let InstArgKind::Value(value) = &arg.kind {
+            Ok(value)
+        } else {
+            Err(Box::new(Error::InstArgKindMismatch {
+                expected: "value".into(),
+                actual: arg.kind.discriminant_name().into(),
+                span: arg.span,
+            }))
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a InstArg> for &'a Type {
+    type Error = Box<Error>;
+
+    fn try_from(arg: &'a InstArg) -> Result<Self, Self::Error> {
+        if let InstArgKind::Ty(ty) = &arg.kind {
+            Ok(ty)
+        } else {
+            Err(Box::new(Error::InstArgKindMismatch {
+                expected: "type".into(),
+                actual: arg.kind.discriminant_name().into(),
+                span: arg.span,
+            }))
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a InstArg> for &'a BlockId {
+    type Error = Box<Error>;
+
+    fn try_from(arg: &'a InstArg) -> Result<Self, Self::Error> {
+        if let InstArgKind::Block(block) = &arg.kind {
+            Ok(block)
+        } else {
+            Err(Box::new(Error::InstArgKindMismatch {
+                expected: "block".into(),
+                actual: arg.kind.discriminant_name().into(),
+                span: arg.span,
+            }))
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a InstArg> for (&'a Value, &'a BlockId) {
+    type Error = Box<Error>;
+
+    fn try_from(arg: &'a InstArg) -> Result<Self, Self::Error> {
+        if let InstArgKind::ValueBlockMap(map) = &arg.kind {
+            Ok((&map.0, &map.1))
+        } else {
+            Err(Box::new(Error::InstArgKindMismatch {
+                expected: "(value, block)".into(),
+                actual: arg.kind.discriminant_name().into(),
+                span: arg.span,
+            }))
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a InstArg> for &'a FunctionName {
+    type Error = Box<Error>;
+
+    fn try_from(arg: &'a InstArg) -> Result<Self, Self::Error> {
+        if let InstArgKind::FuncRef(name) = &arg.kind {
+            Ok(name)
+        } else {
+            Err(Box::new(Error::InstArgKindMismatch {
+                expected: "function name".into(),
+                actual: arg.kind.discriminant_name().into(),
+                span: arg.span,
+            }))
+        }
+    }
+}
+
+impl FromSyntax<Error> for InstArg {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        let kind = if let Some(value) = node.single_opt(Rule::value) {
+            InstArgKind::Value(value)
+        } else if let Some(ty) = node.single_opt(Rule::type_name) {
+            InstArgKind::Ty(ty)
+        } else if let Some(block) = node.single_opt(Rule::block_ident) {
+            InstArgKind::Block(block)
+        } else if let Some(vb_map) = node.single_opt(Rule::value_block_map) {
+            InstArgKind::ValueBlockMap(vb_map)
+        } else if let Some(func) = node.single_opt(Rule::function_identifier) {
+            InstArgKind::FuncRef(func)
+        } else {
+            unreachable!()
+        };
+
+        Self {
+            kind,
+            span: node.span,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum InstArgKind {
+    Value(Value),
+    Ty(Type),
+    Block(BlockId),
+    ValueBlockMap((Value, BlockId)),
+    FuncRef(FunctionName),
+}
+
+impl InstArgKind {
+    fn discriminant_name(&self) -> SmolStr {
+        match self {
+            Self::Value(_) => "value",
+            Self::Ty(_) => "type",
+            Self::Block(_) => "block",
+            Self::ValueBlockMap(_) => "(value, block)",
+            Self::FuncRef(_) => "function name",
+        }
+        .into()
+    }
 }
 
 impl FromSyntax<Error> for (Value, BlockId) {
@@ -319,16 +491,6 @@ pub struct Type {
     pub kind: TypeKind,
     #[debug(skip)]
     pub span: Span,
-}
-
-#[derive(Debug)]
-pub enum TypeKind {
-    Int(IntType),
-    Ptr(Box<Type>),
-    Array(Box<Type>, usize),
-    Struct(SmolStr),
-    Void,
-    Error,
 }
 
 impl FromSyntax<Error> for Type {
@@ -347,7 +509,7 @@ impl FromSyntax<Error> for Type {
                 };
                 TypeKind::Array(Box::new(node.single(Rule::type_name)), size)
             }
-            Rule::void_type => TypeKind::Void,
+            Rule::unit_type => TypeKind::Unit,
             Rule::struct_identifier => TypeKind::Struct(node.parse_str(Rule::struct_name)),
             _ => unreachable!(),
         };
@@ -356,6 +518,16 @@ impl FromSyntax<Error> for Type {
             span: node.span,
         }
     }
+}
+
+#[derive(Debug)]
+pub enum TypeKind {
+    Int(IntType),
+    Ptr(Box<Type>),
+    Array(Box<Type>, usize),
+    Struct(SmolStr),
+    Unit,
+    Error,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -382,46 +554,6 @@ impl From<IntType> for ir::Type {
         }
     }
 }
-
-#[derive(Debug)]
-pub enum Expr {
-    Binary(BinaryOp, Value, Value),
-    Unary(UnaryOp, Value),
-    Cast(CastOp, Value),
-    Load(DataLocationKind, Value),
-    Alloca(Type),
-    Call(Call),
-    Gep(Vec<Value>),
-    Phi(Vec<(Value, BlockId)>),
-}
-
-impl FromSyntax<Error> for Expr {
-    fn from_syntax(node: &mut Node<Error>) -> Self {
-        node.descend();
-        match node.rule {
-            Rule::bin_expr => Expr::Binary(
-                node.parse_str(Rule::bin_op),
-                node.single(Rule::value),
-                node.single(Rule::value),
-            ),
-            Rule::una_expr => Expr::Unary(node.parse_str(Rule::una_op), node.single(Rule::value)),
-            Rule::alloca_expr => Expr::Alloca(node.single(Rule::type_name)),
-            Rule::call_expr => Expr::Call(Call(
-                node.single(Rule::function_identifier),
-                node.multi(Rule::value),
-            )),
-            Rule::cast_expr => Expr::Cast(node.parse_str(Rule::cast_op), node.single(Rule::value)),
-
-            Rule::gep_expr => Expr::Gep(node.multi(Rule::value)),
-            Rule::load_expr => Expr::Load(node.parse_str(Rule::location), node.single(Rule::value)),
-            Rule::phi_expr => Expr::Phi(node.multi(Rule::phi_value)),
-            _ => unreachable!(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct Call(pub Spanned<FunctionName>, pub Vec<Value>);
 
 #[derive(Dbg)]
 pub struct ValueName {

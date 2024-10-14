@@ -2,16 +2,14 @@ pub mod kind;
 
 mod trace_info;
 
-pub use kind::ErrorKind;
-pub use trace_info::{TraceInfo, TraceInfoBuilder};
-
-use kind::DisplayErrorKind;
-use trace_info::DisplayTraceInfo;
-
-use std::{error, fmt};
+use std::fmt;
 
 use cranelift_entity::entity_impl;
-use sonatina_ir::Function;
+use kind::DisplayErrorKind;
+pub use kind::ErrorKind;
+use sonatina_ir::{module::FuncRef, Function};
+use trace_info::DisplayTraceInfo;
+pub use trace_info::{TraceInfo, TraceInfoBuilder};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ErrorRef(u32);
@@ -31,68 +29,76 @@ impl ErrorData {
 }
 
 /// Reportable verifier error.
-#[derive(Debug)]
 pub struct Error<'a> {
     err: ErrorData,
     func: &'a Function,
+    func_ref: FuncRef,
 }
 
 impl<'a> Error<'a> {
-    pub fn new(err: ErrorData, func: &'a Function) -> Self {
-        Self { err, func }
+    pub fn new(err: ErrorData, func: &'a Function, func_ref: FuncRef) -> Self {
+        Self {
+            err,
+            func,
+            func_ref,
+        }
     }
 }
 
 impl<'a> fmt::Display for Error<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { err, func } = *self;
-        let ErrorData { kind, trace_info } = err;
-        let kind = DisplayErrorKind::new(kind, func);
-        let trace_info = DisplayTraceInfo::new(&trace_info, func);
+        let ErrorData { kind, trace_info } = self.err;
+        let kind = DisplayErrorKind::new(kind, self.func, self.func_ref);
+        let trace_info = DisplayTraceInfo::new(&trace_info, self.func, self.func_ref);
 
         write!(f, "{kind}\n{trace_info}")
     }
 }
 
-impl<'a> error::Error for Error<'a> {}
-
 #[cfg(test)]
 mod test {
-    use sonatina_ir::{builder::test_util::test_func_builder, Type};
+    use sonatina_ir::{
+        builder::test_util::test_func_builder,
+        inst::{arith::Add, control_flow::Return},
+        isa::Isa,
+        Type,
+    };
     use trace_info::TraceInfoBuilder;
 
     use super::*;
 
     #[test]
     fn display_verifier_error() {
-        let mut func_builder = test_func_builder(&[], Type::Void);
+        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let is = evm.inst_set();
 
-        let b0 = func_builder.append_block();
+        let b0 = builder.append_block();
 
-        func_builder.switch_to_block(b0);
-        let value0 = func_builder.make_imm_value(28i32);
-        let value1 = func_builder.make_imm_value(0i8);
-        let ret = func_builder.add(value0, value1);
-        func_builder.ret(ret.into());
+        builder.switch_to_block(b0);
+        let value0 = builder.make_imm_value(28i32);
+        let value1 = builder.make_imm_value(0i8);
 
-        func_builder.seal_all();
+        let ret = builder.insert_inst_with(|| Add::new(is, value0, value1), Type::I32);
+        builder.insert_inst_no_result_with(|| Return::new(is, Some(ret)));
 
-        let module = func_builder.finish().build();
+        builder.seal_all();
+
+        let module = builder.finish().build();
         let func_ref = module.iter_functions().next().unwrap();
 
         let func = &module.funcs[func_ref];
-        let insn = func.layout.iter_insn(b0).next().unwrap();
+        let insn = func.layout.iter_inst(b0).next().unwrap();
 
         let trace_info = TraceInfoBuilder::new(func_ref)
             .block(b0)
-            .insn(insn)
+            .inst_id(insn)
             .value(value1)
             .ty(Type::I8)
             .build();
 
-        let err = ErrorData::new(ErrorKind::InsnArgWrongType(Type::I8), trace_info);
+        let err = ErrorData::new(ErrorKind::InstArgWrongType(Type::I8), trace_info);
 
-        let err = Error::new(err, func);
+        let err = Error::new(err, func, func_ref);
 
         assert_eq!(
             "argument type inconsistent with instruction, i8
@@ -101,7 +107,7 @@ trace_info:
 1: 0.i8
 2: v2.i32 = add 28.i32 0.i8;
 3: block0
-4: func public %test_func() -> ()",
+4: func public %test_func() -> unit",
             err.to_string()
         );
     }

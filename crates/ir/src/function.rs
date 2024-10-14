@@ -1,19 +1,20 @@
-use super::{module::FuncRef, DataFlowGraph, Layout, Type, Value};
-use crate::{module::ModuleCtx, types::DisplayType, Linkage};
-use rustc_hash::FxHashMap;
-use smallvec::SmallVec;
-use std::fmt::{self, Write};
+use std::io;
 
-#[derive(Debug, Clone)]
+use smallvec::SmallVec;
+
+use super::{DataFlowGraph, Layout, Type, ValueId};
+use crate::{
+    ir_writer::{FuncWriteCtx, WriteWithFunc, WriteWithModule},
+    module::ModuleCtx,
+    InstSetBase, Linkage,
+};
+
 pub struct Function {
     /// Signature of the function.
     pub sig: Signature,
-    pub arg_values: smallvec::SmallVec<[Value; 8]>,
+    pub arg_values: smallvec::SmallVec<[ValueId; 8]>,
     pub dfg: DataFlowGraph,
     pub layout: Layout,
-
-    /// Stores signatures of all functions that are called by the function.
-    pub callees: FxHashMap<FuncRef, Signature>,
 }
 
 impl Function {
@@ -34,8 +35,15 @@ impl Function {
             arg_values,
             dfg,
             layout: Layout::default(),
-            callees: FxHashMap::default(),
         }
+    }
+
+    pub fn ctx(&self) -> &ModuleCtx {
+        &self.dfg.ctx
+    }
+
+    pub fn inst_set(&self) -> &'static dyn InstSetBase {
+        self.dfg.inst_set()
     }
 }
 
@@ -82,36 +90,27 @@ impl Signature {
     }
 }
 
-pub struct DisplaySignature<'a, 'b> {
-    sig: &'a Signature,
-    dfg: &'b DataFlowGraph,
-}
-
-impl<'a, 'b> DisplaySignature<'a, 'b> {
-    pub fn new(sig: &'a Signature, dfg: &'b DataFlowGraph) -> Self {
-        Self { sig, dfg }
-    }
-}
-
-impl<'a, 'b> fmt::Display for DisplaySignature<'a, 'b> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let Self { sig, dfg } = *self;
+impl WriteWithFunc for Signature {
+    fn write(&self, ctx: &FuncWriteCtx, w: &mut impl io::Write) -> io::Result<()> {
         let Signature {
             name,
             linkage,
             args,
             ret_ty,
-        } = sig;
+        } = self;
 
-        let mut args_ty = String::new();
-        for arg_ty in args {
-            let ty = DisplayType::new(*arg_ty, dfg);
-            write!(&mut args_ty, "{ty} ")?;
+        write!(w, "func {linkage} %{name}(")?;
+        let mut args = args.iter();
+        if let Some(arg) = args.next() {
+            arg.write(ctx.module_ctx(), &mut *w)?;
+        };
+
+        for arg in args {
+            write!(w, " ")?;
+            arg.write(ctx.module_ctx(), &mut *w)?;
         }
-        let args_ty = args_ty.trim();
+        write!(w, ") -> ")?;
 
-        let ret_ty = DisplayType::new(*ret_ty, dfg);
-
-        write!(f, "func {linkage} %{name}({args_ty}) -> {ret_ty}")
+        ret_ty.write(ctx.module_ctx(), &mut *w)
     }
 }

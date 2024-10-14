@@ -1,26 +1,31 @@
 //! This module contains Sonatine IR data flow graph.
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, io};
 
 use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, SecondaryMap};
 use rustc_hash::FxHashMap;
-use smallvec::SmallVec;
 
-use crate::{global_variable::ConstantValue, module::ModuleCtx, GlobalVariable};
+use super::{Immediate, Type, Value, ValueId};
+use crate::{
+    inst::{
+        control_flow::{self, Branch, Jump, Phi},
+        InstId,
+    },
+    ir_writer::{FuncWriteCtx, WriteWithFunc},
+    module::ModuleCtx,
+    GlobalVariable, Inst, InstDowncast, InstDowncastMut, InstSetBase,
+};
 
-use super::{BranchInfo, Immediate, Insn, InsnData, Type, Value, ValueData};
-
-#[derive(Debug, Clone)]
 pub struct DataFlowGraph {
     pub ctx: ModuleCtx,
     #[doc(hidden)]
-    pub blocks: PrimaryMap<Block, BlockData>,
+    pub blocks: PrimaryMap<BlockId, Block>,
     #[doc(hidden)]
-    pub values: PrimaryMap<Value, ValueData>,
-    insns: PrimaryMap<Insn, InsnData>,
-    insn_results: SecondaryMap<Insn, PackedOption<Value>>,
+    pub values: PrimaryMap<ValueId, Value>,
+    insts: PrimaryMap<InstId, Box<dyn Inst>>,
+    inst_results: SecondaryMap<InstId, PackedOption<ValueId>>,
     #[doc(hidden)]
-    pub immediates: FxHashMap<Immediate, Value>,
-    users: SecondaryMap<Value, BTreeSet<Insn>>,
+    pub immediates: FxHashMap<Immediate, ValueId>,
+    users: SecondaryMap<ValueId, BTreeSet<InstId>>,
 }
 
 impl DataFlowGraph {
@@ -29,28 +34,32 @@ impl DataFlowGraph {
             ctx,
             blocks: PrimaryMap::default(),
             values: PrimaryMap::default(),
-            insns: PrimaryMap::default(),
-            insn_results: SecondaryMap::default(),
+            insts: PrimaryMap::default(),
+            inst_results: SecondaryMap::default(),
             immediates: FxHashMap::default(),
             users: SecondaryMap::default(),
         }
     }
 
-    pub fn make_block(&mut self) -> Block {
-        self.blocks.push(BlockData::new())
+    pub fn make_block(&mut self) -> BlockId {
+        self.blocks.push(Block::new())
     }
 
-    pub fn make_value(&mut self, value: ValueData) -> Value {
+    pub fn make_value(&mut self, value: Value) -> ValueId {
         self.values.push(value)
     }
 
-    pub fn make_insn(&mut self, insn: InsnData) -> Insn {
-        let insn = self.insns.push(insn);
-        self.attach_user(insn);
-        insn
+    pub fn make_inst<I: Inst>(&mut self, inst: I) -> InstId {
+        self.make_inst_dyn(Box::new(inst))
     }
 
-    pub fn make_imm_value<Imm>(&mut self, imm: Imm) -> Value
+    pub fn make_inst_dyn(&mut self, inst: Box<dyn Inst>) -> InstId {
+        let inst_id = self.insts.push(inst);
+        self.attach_user(inst_id);
+        inst_id
+    }
+
+    pub fn make_imm_value<Imm>(&mut self, imm: Imm) -> ValueId
     where
         Imm: Into<Immediate>,
     {
@@ -60,294 +69,247 @@ impl DataFlowGraph {
         }
 
         let ty = imm.ty();
-        let value_data = ValueData::Immediate { imm, ty };
+        let value_data = Value::Immediate { imm, ty };
         let value = self.make_value(value_data);
         self.immediates.insert(imm, value);
         value
     }
 
-    pub fn make_global_value(&mut self, gv: GlobalVariable) -> Value {
+    /// Returns inst if the value is originated from inst.
+    pub fn value_inst(&self, value: ValueId) -> Option<InstId> {
+        match self.value(value) {
+            Value::Inst { inst, .. } => Some(*inst),
+            _ => None,
+        }
+    }
+
+    /// Returns immediate if the value is immediate value.
+    pub fn value_imm(&self, value: ValueId) -> Option<Immediate> {
+        match self.value(value) {
+            Value::Immediate { imm, .. } => Some(*imm),
+            _ => None,
+        }
+    }
+
+    pub fn make_global_value(&mut self, gv: GlobalVariable) -> ValueId {
         let gv_ty = self.ctx.with_gv_store(|s| s.ty(gv));
         let ty = self.ctx.with_ty_store_mut(|s| s.make_ptr(gv_ty));
-        let value_data = ValueData::Global { gv, ty };
+        let value_data = Value::Global { gv, ty };
         self.make_value(value_data)
     }
 
-    pub fn replace_insn(&mut self, insn: Insn, insn_data: InsnData) {
-        for i in 0..self.insn_args_num(insn) {
-            let arg = self.insn_arg(insn, i);
-            self.remove_user(arg, insn);
-        }
-        self.insns[insn] = insn_data;
-        self.attach_user(insn);
+    pub fn replace_inst(&mut self, inst_id: InstId, new: Box<dyn Inst>) {
+        let slot = &mut self.insts[inst_id];
+        let old = &mut std::mem::replace(slot, new);
+
+        // Remove the arguments of the old inst from the user set.
+        old.visit_values(&mut |value| {
+            self.remove_user(value, inst_id);
+        });
+
+        // Attach new inst.
+        self.attach_user(inst_id);
     }
 
-    pub fn change_to_alias(&mut self, value: Value, alias: Value) {
+    pub fn attach_result(&mut self, inst_id: InstId, value_id: ValueId) {
+        debug_assert!(self.inst_results[inst_id].is_none());
+        self.inst_results[inst_id] = value_id.into();
+    }
+
+    pub fn make_arg_value(&mut self, ty: Type, idx: usize) -> Value {
+        Value::Arg { ty, idx }
+    }
+
+    pub fn inst(&self, inst_id: InstId) -> &dyn Inst {
+        self.insts[inst_id].as_ref()
+    }
+
+    pub fn inst_mut(&mut self, inst_id: InstId) -> &mut dyn Inst {
+        self.insts[inst_id].as_mut()
+    }
+
+    pub fn value(&self, value_id: ValueId) -> &Value {
+        &self.values[value_id]
+    }
+
+    pub fn value_ty(&self, value_id: ValueId) -> Type {
+        match &self.values[value_id] {
+            Value::Inst { ty, .. }
+            | Value::Arg { ty, .. }
+            | Value::Immediate { ty, .. }
+            | Value::Global { ty, .. } => *ty,
+        }
+    }
+
+    pub fn attach_user(&mut self, inst_id: InstId) {
+        let inst = &self.insts[inst_id];
+        inst.visit_values(&mut |value| {
+            self.users[value].insert(inst_id);
+        })
+    }
+
+    pub fn untrack_inst(&mut self, inst_id: InstId) {
+        let inst = &self.insts[inst_id];
+        inst.visit_values(&mut |value| {
+            self.users[value].remove(&inst_id);
+        })
+    }
+
+    pub fn remove_user(&mut self, value: ValueId, user: InstId) {
+        self.users[value].remove(&user);
+    }
+
+    /// Returns the all instructions that use the `value_id`.
+    pub fn users(&self, value_id: ValueId) -> impl Iterator<Item = &InstId> {
+        self.users[value_id].iter()
+    }
+
+    /// Returns the number of instructions that use the `value_id`.
+    pub fn users_num(&self, value_id: ValueId) -> usize {
+        self.users[value_id].len()
+    }
+
+    pub fn inst_result(&self, inst_id: InstId) -> Option<ValueId> {
+        self.inst_results[inst_id].expand()
+    }
+
+    pub fn branch_info(&self, inst: InstId) -> Option<&dyn Branch> {
+        let inst = self.inst(inst);
+        InstDowncast::downcast(self.ctx.inst_set, inst)
+    }
+
+    pub fn is_terminator(&self, inst: InstId) -> bool {
+        self.inst(inst).is_terminator()
+    }
+
+    pub fn is_exit(&self, inst: InstId) -> bool {
+        self.is_terminator(inst) && self.branch_info(inst).is_none()
+    }
+
+    pub fn append_phi_arg(&mut self, inst_id: InstId, value: ValueId, block: BlockId) {
+        let Some(phi) = self.cast_phi_mut(inst_id) else {
+            return;
+        };
+        phi.append_phi_arg(value, block);
+        self.attach_user(inst_id);
+    }
+
+    pub fn inst_set(&self) -> &'static dyn InstSetBase {
+        self.ctx.inst_set
+    }
+
+    pub fn cast_phi(&self, inst_id: InstId) -> Option<&control_flow::Phi> {
+        let inst = self.inst(inst_id);
+        let is = self.inst_set();
+        InstDowncast::downcast(is, inst)
+    }
+
+    pub fn cast_phi_mut(&mut self, inst_id: InstId) -> Option<&mut control_flow::Phi> {
+        let is = self.inst_set();
+        let inst = self.inst_mut(inst_id);
+        InstDowncastMut::downcast_mut(is, inst)
+    }
+
+    pub fn cast_jump(&self, inst_id: InstId) -> Option<&control_flow::Jump> {
+        let inst = self.inst(inst_id);
+        let is = self.inst_set();
+        InstDowncast::downcast(is, inst)
+    }
+
+    pub fn cast_jump_mut(&mut self, inst_id: InstId) -> Option<&mut control_flow::Jump> {
+        let is = self.inst_set();
+        let inst = self.inst_mut(inst_id);
+        InstDowncastMut::downcast_mut(is, inst)
+    }
+
+    pub fn make_phi(&self, args: Vec<(ValueId, BlockId)>) -> Phi {
+        let has_phi = self.inst_set().phi();
+        Phi::new(has_phi, args)
+    }
+
+    pub fn make_jump(&self, to: BlockId) -> Jump {
+        let has_jump = self.inst_set().jump();
+        Jump::new(has_jump, to)
+    }
+
+    pub fn change_to_alias(&mut self, value: ValueId, alias: ValueId) {
         let mut users = std::mem::take(&mut self.users[value]);
-        for insn in &users {
-            for arg in self.insns[*insn].args_mut() {
-                if *arg == value {
-                    *arg = alias;
+        for inst in &users {
+            self.insts[*inst].visit_values_mut(&mut |user_value| {
+                if *user_value == value {
+                    *user_value = alias;
                 }
-            }
+            });
         }
         self.users[alias].append(&mut users);
     }
 
-    pub fn make_result(&mut self, insn: Insn) -> Option<ValueData> {
-        let ty = self.insns[insn].result_type(self)?;
-        Some(ValueData::Insn { insn, ty })
+    pub fn has_side_effect(&self, inst: InstId) -> bool {
+        self.inst(inst).has_side_effect()
     }
 
-    pub fn attach_result(&mut self, insn: Insn, value: Value) {
-        debug_assert!(self.insn_results[insn].is_none());
-        self.insn_results[insn] = value.into();
+    pub fn is_branch(&self, inst: InstId) -> bool {
+        self.branch_info(inst).is_some()
     }
 
-    pub fn make_arg_value(&mut self, ty: Type, idx: usize) -> ValueData {
-        ValueData::Arg { ty, idx }
+    pub fn is_phi(&self, inst: InstId) -> bool {
+        self.cast_phi(inst).is_some()
     }
 
-    pub fn insn_data(&self, insn: Insn) -> &InsnData {
-        &self.insns[insn]
+    pub fn rewrite_branch_dest(&mut self, inst: InstId, from: BlockId, to: BlockId) {
+        let inst_set = self.ctx.inst_set;
+        let Some(branch) = self.branch_info(inst) else {
+            return;
+        };
+
+        let new_inst = branch.rewrite_dest(inst_set, from, to);
+        self.remove_old_users(inst, new_inst.as_ref());
+
+        self.insts[inst] = new_inst;
     }
 
-    pub fn value_data(&self, value: Value) -> &ValueData {
-        &self.values[value]
+    pub fn remove_branch_dest(&mut self, inst: InstId, dest: BlockId) {
+        let inst_set = self.ctx.inst_set;
+        let Some(branch) = self.branch_info(inst) else {
+            return;
+        };
+
+        let new_inst = branch.remove_dest(inst_set, dest);
+        self.remove_old_users(inst, new_inst.as_ref());
+
+        self.insts[inst] = new_inst;
     }
 
-    pub fn has_side_effect(&self, insn: Insn) -> bool {
-        self.insns[insn].has_side_effect()
-    }
+    fn remove_old_users(&mut self, inst: InstId, new: &dyn Inst) {
+        let old_values = self.inst(inst).collect_value_set();
+        let new_values = new.collect_value_set();
+        assert!(old_values.is_superset(&new_values));
 
-    pub fn may_trap(&self, insn: Insn) -> bool {
-        self.insns[insn].may_trap()
-    }
-
-    pub fn attach_user(&mut self, insn: Insn) {
-        let data = &self.insns[insn];
-        for arg in data.args() {
-            self.users[*arg].insert(insn);
+        let removed_values = old_values.difference(&new_values);
+        for &removed in removed_values {
+            self.users[removed].remove(&inst);
         }
-    }
-
-    pub fn users(&self, value: Value) -> impl Iterator<Item = &Insn> {
-        self.users[value].iter()
-    }
-
-    pub fn users_num(&self, value: Value) -> usize {
-        self.users[value].len()
-    }
-
-    pub fn remove_user(&mut self, value: Value, user: Insn) {
-        self.users[value].remove(&user);
-    }
-
-    pub fn user(&self, value: Value, idx: usize) -> Insn {
-        *self.users(value).nth(idx).unwrap()
-    }
-
-    pub fn block_data(&self, block: Block) -> &BlockData {
-        &self.blocks[block]
-    }
-
-    pub fn value_insn(&self, value: Value) -> Option<Insn> {
-        match self.value_data(value) {
-            ValueData::Insn { insn, .. } => Some(*insn),
-            _ => None,
-        }
-    }
-
-    pub fn value_ty(&self, value: Value) -> Type {
-        match &self.values[value] {
-            ValueData::Insn { ty, .. }
-            | ValueData::Arg { ty, .. }
-            | ValueData::Immediate { ty, .. }
-            | ValueData::Global { ty, .. } => *ty,
-        }
-    }
-
-    pub fn insn_result_ty(&self, insn: Insn) -> Option<Type> {
-        self.insn_result(insn).map(|value| self.value_ty(value))
-    }
-
-    pub fn value_imm(&self, value: Value) -> Option<Immediate> {
-        match self.value_data(value) {
-            ValueData::Immediate { imm, .. } => Some(*imm),
-            ValueData::Global { gv, .. } => self.ctx.with_gv_store(|s| {
-                if !s.is_const(*gv) {
-                    return None;
-                }
-                match s.init_data(*gv)? {
-                    ConstantValue::Immediate(data) => Some(*data),
-                    _ => None,
-                }
-            }),
-            _ => None,
-        }
-    }
-
-    pub fn value_gv(&self, value: Value) -> Option<GlobalVariable> {
-        match self.value_data(value) {
-            ValueData::Global { gv, .. } => Some(*gv),
-            _ => None,
-        }
-    }
-
-    pub fn phi_blocks(&self, insn: Insn) -> &[Block] {
-        self.insns[insn].phi_blocks()
-    }
-
-    pub fn phi_blocks_mut(&mut self, insn: Insn) -> &mut [Block] {
-        self.insns[insn].phi_blocks_mut()
-    }
-
-    pub fn append_phi_arg(&mut self, insn: Insn, value: Value, block: Block) {
-        self.insns[insn].append_phi_arg(value, block);
-        self.attach_user(insn);
-    }
-
-    /// Remove phi arg that flow through the `from`.
-    ///
-    /// # Panics
-    /// If `insn` is not a phi insn or there is no phi argument from the block, then the function panics.
-    pub fn remove_phi_arg(&mut self, insn: Insn, from: Block) -> Value {
-        let removed = self.insns[insn].remove_phi_arg(from);
-        self.remove_user(removed, insn);
-        removed
-    }
-
-    pub fn insn_args(&self, insn: Insn) -> &[Value] {
-        self.insn_data(insn).args()
-    }
-
-    pub fn insn_args_num(&self, insn: Insn) -> usize {
-        self.insn_args(insn).len()
-    }
-
-    pub fn insn_arg(&self, insn: Insn, idx: usize) -> Value {
-        self.insn_args(insn)[idx]
-    }
-
-    pub fn replace_insn_arg(&mut self, insn: Insn, new_arg: Value, idx: usize) -> Value {
-        let data = &mut self.insns[insn];
-        let args = data.args_mut();
-        self.users[new_arg].insert(insn);
-        let old_arg = std::mem::replace(&mut args[idx], new_arg);
-        if args.iter().all(|arg| *arg != old_arg) {
-            self.remove_user(old_arg, insn);
-        }
-
-        old_arg
-    }
-
-    pub fn insn_result(&self, insn: Insn) -> Option<Value> {
-        self.insn_results[insn].expand()
-    }
-
-    pub fn analyze_branch(&self, insn: Insn) -> BranchInfo {
-        self.insns[insn].analyze_branch()
-    }
-
-    pub fn remove_branch_dest(&mut self, insn: Insn, dest: Block) {
-        let this = &mut self.insns[insn];
-        match this {
-            InsnData::Jump { .. } => panic!("can't remove destination from `Jump` insn"),
-
-            InsnData::Branch { dests, args } => {
-                let remain = if dests[0] == dest {
-                    dests[1]
-                } else if dests[1] == dest {
-                    dests[0]
-                } else {
-                    panic!("no dests found in the branch destination")
-                };
-                self.users[args[0]].remove(&insn);
-                *this = InsnData::jump(remain);
-            }
-
-            InsnData::BrTable {
-                default,
-                table,
-                args,
-            } => {
-                if Some(dest) == *default {
-                    *default = None;
-                } else if let Some((lhs, rest)) = args.split_first() {
-                    type V<T> = SmallVec<[T; 8]>;
-                    let (keep, drop): (V<_>, V<_>) = table
-                        .iter()
-                        .copied()
-                        .zip(rest.iter().copied())
-                        .partition(|(b, _)| *b != dest);
-                    let (b, mut a): (V<_>, V<_>) = keep.into_iter().unzip();
-                    a.insert(0, *lhs);
-                    *args = a;
-                    *table = b;
-
-                    for (_, val) in drop {
-                        self.users[val].remove(&insn);
-                    }
-                }
-
-                let branch_info = this.analyze_branch();
-                if branch_info.dests_num() == 1 {
-                    for val in this.args() {
-                        self.users[*val].remove(&insn);
-                    }
-                    *this = InsnData::jump(branch_info.iter_dests().next().unwrap());
-                }
-            }
-
-            _ => panic!("not a branch"),
-        }
-    }
-
-    pub fn rewrite_branch_dest(&mut self, insn: Insn, from: Block, to: Block) {
-        self.insns[insn].rewrite_branch_dest(from, to)
-    }
-
-    pub fn is_phi(&self, insn: Insn) -> bool {
-        self.insns[insn].is_phi()
-    }
-
-    pub fn is_return(&self, insn: Insn) -> bool {
-        self.insns[insn].is_return()
-    }
-
-    pub fn is_branch(&self, insn: Insn) -> bool {
-        self.insns[insn].is_branch()
-    }
-
-    /// Returns `true` if `value` is an immediate.
-    pub fn is_imm(&self, value: Value) -> bool {
-        self.value_imm(value).is_some()
-    }
-
-    /// Returns `true` if `value` is a function argument.
-    pub fn is_arg(&self, value: Value) -> bool {
-        matches!(self.value_data(value), ValueData::Arg { .. })
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum ValueDef {
-    Insn(Insn),
-    Arg(usize),
-}
-
-/// An opaque reference to [`BlockData`]
+/// An opaque reference to [`Block`]
 #[derive(Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
-pub struct Block(pub u32);
-entity_impl!(Block, "block");
+pub struct BlockId(pub u32);
+entity_impl!(BlockId, "block");
+
+impl WriteWithFunc for BlockId {
+    fn write(&self, _ctx: &FuncWriteCtx, w: &mut impl io::Write) -> io::Result<()> {
+        write!(w, "block{}", self.0)
+    }
+}
 
 /// A block data definition.
-/// A Block data doesn't hold any information for layout of a program. It is managed by
-/// [`super::layout::Layout`].
+/// A Block data doesn't hold any information for layout of a program. It is
+/// managed by [`super::layout::Layout`].
 #[derive(Debug, Clone, Default)]
-pub struct BlockData {}
+pub struct Block {}
 
-impl BlockData {
+impl Block {
     pub fn new() -> Self {
         Self::default()
     }

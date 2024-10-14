@@ -48,6 +48,16 @@ impl I256 {
         }
     }
 
+    pub fn from_be_bytes(bytes: &[u8]) -> Self {
+        let u256_val = U256::from_big_endian(bytes);
+        Self::from_u256(u256_val)
+    }
+
+    pub fn from_le_bytes(bytes: &[u8]) -> Self {
+        let u256_val = U256::from_little_endian(bytes);
+        Self::from_u256(u256_val)
+    }
+
     pub fn zero() -> Self {
         Self::from_u256(U256::zero())
     }
@@ -167,6 +177,20 @@ impl ops::BitXor for I256 {
 
     fn bitxor(self, rhs: Self) -> Self {
         Self::from_u256(self.to_u256() ^ rhs.to_u256())
+    }
+}
+
+impl ops::Shl for I256 {
+    type Output = Self;
+    fn shl(self, rhs: Self) -> Self::Output {
+        Self::from_u256(self.to_u256() << rhs.to_u256())
+    }
+}
+
+impl ops::Shr for I256 {
+    type Output = Self;
+    fn shr(self, rhs: Self) -> Self::Output {
+        Self::from_u256(self.to_u256() >> rhs.to_u256())
     }
 }
 

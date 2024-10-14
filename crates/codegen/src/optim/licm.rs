@@ -1,16 +1,15 @@
 // TODO: Add control flow hoisting.
 use rustc_hash::{FxHashMap, FxHashSet};
+use sonatina_ir::{
+    func_cursor::{CursorLocation, FuncCursor, InstInserter},
+    BlockId, ControlFlowGraph, Function, InstId, ValueId,
+};
 
 use crate::loop_analysis::{Loop, LoopTree};
 
-use sonatina_ir::{
-    func_cursor::{CursorLocation, FuncCursor, InsnInserter},
-    Block, ControlFlowGraph, Function, Insn, InsnData, Value,
-};
-
 #[derive(Debug)]
 pub struct LicmSolver {
-    invariants: Vec<Insn>,
+    invariants: Vec<InstId>,
 }
 
 impl LicmSolver {
@@ -52,84 +51,86 @@ impl LicmSolver {
 
         let mut loop_var = FxHashSet::default();
         for block in block_in_loop_rpo {
-            for insn in func.layout.iter_insn(block) {
-                if self.is_invariant(func, &loop_var, insn) {
-                    self.invariants.push(insn);
-                } else if let Some(result) = func.dfg.insn_result(insn) {
+            for inst in func.layout.iter_inst(block) {
+                if self.is_invariant(func, &loop_var, inst) {
+                    self.invariants.push(inst);
+                } else if let Some(result) = func.dfg.inst_result(inst) {
                     loop_var.insert(result);
                 }
             }
         }
     }
 
-    /// Returns `true` if the insn is loop invariant.
-    fn is_invariant(&self, func: &Function, loop_var: &FxHashSet<Value>, insn: Insn) -> bool {
-        if !self.is_safe_to_hoist(func, insn) {
+    /// Returns `true` if the inst is loop invariant.
+    fn is_invariant(
+        &self,
+        func: &Function,
+        loop_var: &FxHashSet<ValueId>,
+        inst_id: InstId,
+    ) -> bool {
+        if !self.is_safe_to_hoist(func, inst_id) {
             return false;
         }
 
-        for arg in func.dfg.insn_args(insn) {
-            if loop_var.contains(arg) {
-                return false;
-            }
-        }
-
-        true
+        let mut invariant = true;
+        let inst = func.dfg.inst(inst_id);
+        inst.visit_values(&mut |value| invariant &= !loop_var.contains(&value));
+        invariant
     }
 
-    /// Returns `true` if the `insn` is safe to hoist.
-    fn is_safe_to_hoist(&self, func: &Function, insn: Insn) -> bool {
-        !(func.dfg.has_side_effect(insn)
-            || func.dfg.is_branch(insn)
-            || func.dfg.may_trap(insn)
-            || func.dfg.is_phi(insn))
+    /// Returns `true` if the `inst` is safe to hoist.
+    fn is_safe_to_hoist(&self, func: &Function, inst_id: InstId) -> bool {
+        !(func.dfg.has_side_effect(inst_id)
+            || func.dfg.is_branch(inst_id)
+            || func.dfg.is_phi(inst_id))
     }
 
     /// Returns preheader of the loop.
-    /// 1. If there is natural preheader for the loop, then returns it without any modification of
-    ///    function.
-    /// 2. If no natural preheader for the loop, then create the preheader and modify function
-    ///    layout, `cfg`, and `lpt`.
+    /// 1. If there is natural preheader for the loop, then returns it without
+    ///    any modification of function.
+    /// 2. If no natural preheader for the loop, then create the preheader and
+    ///    modify function layout, `cfg`, and `lpt`.
     fn create_preheader(
         &self,
         func: &mut Function,
         cfg: &mut ControlFlowGraph,
         lpt: &mut LoopTree,
         lp: Loop,
-    ) -> Block {
+    ) -> BlockId {
         let lp_header = lpt.loop_header(lp);
-        let original_preheaders: Vec<Block> = cfg
+        let original_preheaders: Vec<BlockId> = cfg
             .preds_of(lp_header)
             .copied()
             .filter(|block| !lpt.is_in_loop(*block, lp))
             .collect();
 
-        // If the loop header already has a single preheader and the edge is not a critical edge,
-        // then it's possible to use the preheader as is.
+        // If the loop header already has a single preheader and the edge is not a
+        // critical edge, then it's possible to use the preheader as is.
         if original_preheaders.len() == 1 && cfg.succs_of(original_preheaders[0]).count() == 1 {
             return original_preheaders[0];
         }
 
         // Create preheader and insert it before the loop header.
         let new_preheader = func.dfg.make_block();
-        let mut inserter = InsnInserter::at_location(CursorLocation::BlockTop(lp_header));
+        let mut inserter = InstInserter::at_location(CursorLocation::BlockTop(lp_header));
         inserter.insert_block_before(func, new_preheader);
 
-        // Insert jump insn of which destination is the loop header.
+        // Insert jump inst of which destination is the loop header.
         inserter.set_location(CursorLocation::BlockTop(new_preheader));
-        inserter.insert_insn_data(func, InsnData::jump(lp_header));
+        let jump_inst = func.dfg.make_jump(lp_header);
+        inserter.insert_inst_data(func, jump_inst);
         cfg.add_edge(new_preheader, lp_header);
 
         // Rewrite branch destination of original preheaders and modify cfg.
         for block in original_preheaders.iter().copied() {
-            let last_insn = func.layout.last_insn_of(block).unwrap();
+            let last_inst = func.layout.last_inst_of(block).unwrap();
             func.dfg
-                .rewrite_branch_dest(last_insn, lp_header, new_preheader);
+                .rewrite_branch_dest(last_inst, lp_header, new_preheader);
             cfg.remove_edge(block, lp_header);
             cfg.add_edge(block, new_preheader);
         }
 
-        self.modify_phi_insn(func, lp_header, &original_preheaders, new_preheader);
+        self.modify_phi_inst(func, lp_header, &original_preheaders, new_preheader);
 
         // Map new preheader to the parent loop if exists.
         if let Some(parent_lp) = lpt.parent_loop(lp) {
@@ -140,65 +141,69 @@ impl LicmSolver {
     }
 
     /// Hoist invariants to the preheader.
-    fn hoist_invariants(&self, func: &mut Function, preheader: Block) {
-        let last_insn = func.layout.last_insn_of(preheader).unwrap();
+    fn hoist_invariants(&self, func: &mut Function, preheader: BlockId) {
+        let last_inst = func.layout.last_inst_of(preheader).unwrap();
         for invariant in self.invariants.iter().copied() {
-            func.layout.remove_insn(invariant);
-            func.layout.insert_insn_before(invariant, last_insn);
+            func.layout.remove_inst(invariant);
+            func.layout.insert_inst_before(invariant, last_inst);
         }
     }
 
-    // Modify phi insns in loop header.
-    fn modify_phi_insn(
+    // Modify phi insts in loop header.
+    fn modify_phi_inst(
         &self,
         func: &mut Function,
-        lp_header: Block,
-        original_preheaders: &[Block],
-        new_preheader: Block,
+        lp_header: BlockId,
+        original_preheaders: &[BlockId],
+        new_preheader: BlockId,
     ) {
         // Record inserted phis to avoid duplication of the same phi.
         let mut inserted_phis = FxHashMap::default();
 
-        let mut next_insn = func.layout.first_insn_of(lp_header);
-        while let Some(insn) = next_insn {
-            if !func.dfg.is_phi(insn) {
+        let mut next_inst = func.layout.first_inst_of(lp_header);
+        while let Some(phi_inst_id) = next_inst {
+            if func.dfg.cast_phi(phi_inst_id).is_none() {
                 break;
-            }
+            };
 
-            // Create new phi insn that should be inserted to the preheader, and remove insn
+            // Create new phi inst that should be inserted to the preheader, and remove inst
             // arguments passing through original preheaders.
-            let mut phi_insn_data = InsnData::phi(func.dfg.insn_result_ty(insn).unwrap());
+            let mut new_phi = func.dfg.make_phi(vec![]);
+            let old_phi = func.dfg.cast_phi_mut(phi_inst_id).unwrap();
+
             for &block in original_preheaders {
                 // Remove an argument.
-                let value = func.dfg.remove_phi_arg(insn, block);
-                // Add an argument to newly inserted phi insn.
-                phi_insn_data.append_phi_arg(value, block);
+                let value = old_phi.remove_phi_arg(block).unwrap();
+                // Add an argument to newly inserted phi inst.
+                new_phi.append_phi_arg(value, block);
             }
 
-            let phi_result = match inserted_phis.get(&phi_insn_data) {
+            let phi_result = match inserted_phis.get(&new_phi) {
                 // If the same phi is already inserted in the preheader, reuse its result.
                 Some(&value) => value,
 
                 // Insert new phi to the preheader if there is no same phi in the preheader.
                 None => {
-                    // Insert new phi insn to the preheader.
+                    // Insert new phi inst to the preheader.
                     let mut inserter =
-                        InsnInserter::at_location(CursorLocation::BlockTop(new_preheader));
-                    let new_phi_insn = inserter.insert_insn_data(func, phi_insn_data.clone());
-                    let result = inserter.make_result(func, new_phi_insn).unwrap();
-                    inserter.attach_result(func, new_phi_insn, result);
+                        InstInserter::at_location(CursorLocation::BlockTop(new_preheader));
+                    let new_phi_inst = inserter.insert_inst_data(func, new_phi.clone());
+                    let ty = func.dfg.value_ty(new_phi.args()[0].0);
+                    let result = inserter.make_result(func, new_phi_inst, ty);
+                    inserter.attach_result(func, new_phi_inst, result);
 
-                    // Add phi_insn_data to `inserted_phis` for reusing.
-                    inserted_phis.insert(phi_insn_data, result);
+                    // Add phi_inst_data to `inserted_phis` for reusing.
+                    inserted_phis.insert(new_phi, result);
 
                     result
                 }
             };
 
-            // Append the result of new phi insn.
-            func.dfg.append_phi_arg(insn, phi_result, new_preheader);
+            // Append the result of new phi inst.
+            func.dfg
+                .append_phi_arg(phi_inst_id, phi_result, new_preheader);
 
-            next_insn = func.layout.next_insn_of(insn);
+            next_inst = func.layout.next_inst_of(phi_inst_id);
         }
     }
 }

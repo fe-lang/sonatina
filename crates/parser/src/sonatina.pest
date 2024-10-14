@@ -13,7 +13,7 @@ declaration              = _{ function_declaration | struct_declaration }
 function_declaration     =  { "declare" ~ function_linkage? ~ function_identifier ~ function_param_type_list ~ function_ret_type? ~ ";" }
 function_param_type_list =  { "(" ~ (type_name ~ ",")* ~ type_name? ~ ")" }
 struct_declaration       =  { "type" ~ struct_identifier ~ "=" ~ struct_fields ~ ";" }
-struct_identifier        = ${ "%" ~ struct_name }
+struct_identifier        = ${ "@" ~ struct_name }
 struct_fields            = _{ normal_field_list | packed_field_list }
 normal_field_list        =  { "{" ~ type_list ~ "}" }
 packed_field_list        =  { "<{" ~ type_list ~ "}>" }
@@ -36,61 +36,29 @@ block_ident  = ${ "block" ~ block_number }
 block_number =  { ASCII_DIGIT+ }
 value_name   = ${ "v" ~ ASCII_DIGIT+ }
 
-type_name      =  { primitive_type | ptr_type | array_type | void_type | struct_identifier }
+type_name      =  { primitive_type | ptr_type | array_type | unit_type | struct_identifier }
 primitive_type =  { "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "i1" }
 ptr_type       = ${ "*" ~ type_name }
 array_type     = !{ "[" ~ type_name ~ ";" ~ array_size ~ "]" }
 array_size     =  { ASCII_DIGIT+ }
-void_type      =  { "void" }
+unit_type      =  { "unit" }
 
 value_declaration = ${ value_name ~ "." ~ type_name }
 
 // Stmts
-stmt          = { (define_stmt | store_stmt | return_stmt | jump_stmt | br_stmt | br_table_stmt) ~ ";" }
-store_stmt    = { "store" ~ location ~ value ~ value }
-location      = { "@memory" | "@storage" }
-return_stmt   = { "return" ~ value? }
-jump_stmt     = { "jump" ~ block_ident }
-br_stmt       = { "br" ~ value ~ block_ident ~ block_ident }
-br_table_stmt = { "br_table" ~ value ~ block_ident? ~ ("(" ~ br_table_case ~ ")")+ }
-br_table_case = { value ~ block_ident }
+stmt = { (assign_stmt | inst_stmt) ~ ";" }
+assign_stmt =  { value_declaration ~ "=" ~ inst }
+inst_stmt = { inst }
 
-define_stmt =  { value_declaration ~ "=" ~ expr }
-expr        =  { bin_expr | una_expr | alloca_expr | call_expr | cast_expr | gep_expr | load_expr | phi_expr }
-bin_expr    =  { bin_op ~ value ~ value }
-bin_op      =  {
-    "add"
-  | "sub"
-  | "mul"
-  | "udiv"
-  | "sdiv"
-  | "lt"
-  | "gt"
-  | "slt"
-  | "sgt"
-  | "le"
-  | "ge"
-  | "sle"
-  | "sge"
-  | "eq"
-  | "ne"
-  | "and"
-  | "or"
-  | "xor"
-}
-una_expr    =  { una_op ~ value }
-una_op      =  { "not" | "neg" }
+inst = { inst_name ~ inst_arg* }
+inst_name = { inst_identifier }
+inst_identifier = @{ ident_start_char ~ ident_body_char* }
+inst_arg = { value | type_name | block_ident | value_block_map | function_identifier}
+value_block_map = { "(" ~ value ~ block_ident ~ ")" }
+
 value       =  { value_name | imm_number }
 imm_number  = ${ number ~ "." ~ primitive_type }
 number      = _{ hex | decimal }
 decimal     = @{ "-"? ~ ASCII_DIGIT+ }
 hex         = @{ "0x" ~ ASCII_HEX_DIGIT+ }
 
-alloca_expr = { "alloca" ~ type_name }
-call_expr   = { "call" ~ function_identifier ~ value* }
-load_expr   = { "load" ~ location ~ value }
-gep_expr    = { "gep" ~ value{2, } }
-cast_expr   = { cast_op ~ value }
-cast_op     = { "sext" | "zext" | "bitcast" | "trunc" }
-phi_expr    = { "phi" ~ phi_value+ }
-phi_value   = { "(" ~ value ~ block_ident ~ ")" }

@@ -7,8 +7,8 @@ Module {
     target: Some(
         TargetTriple {
             architecture: Evm,
-            chain: Ethereum,
-            version: EvmVersion(
+            vendor: Ethereum,
+            operating_system: Evm(
                 London,
             ),
         },
@@ -19,9 +19,10 @@ Module {
         Func {
             signature: FuncSignature {
                 linkage: Public,
-                name: FunctionName(
-                    "main",
-                ),
+                name: FunctionName {
+                    name: "main",
+                    ..
+                },
                 params: [],
                 ret_type: None,
             },
@@ -35,7 +36,7 @@ Module {
                     },
                     stmts: [
                         Stmt {
-                            kind: Define(
+                            kind: Assign(
                                 ValueDeclaration(
                                     ValueName {
                                         string: "v0",
@@ -48,31 +49,56 @@ Module {
                                         ..
                                     },
                                 ),
-                                Binary(
-                                    Add,
-                                    Value {
-                                        kind: Immediate(
-                                            I8(
-                                                1,
-                                            ),
-                                        ),
+                                Inst {
+                                    name: InstName {
+                                        name: "add",
                                         ..
                                     },
-                                    Value {
-                                        kind: Immediate(
-                                            I8(
-                                                2,
+                                    args: [
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Immediate(
+                                                        I8(
+                                                            1,
+                                                        ),
+                                                    ),
+                                                    ..
+                                                },
                                             ),
-                                        ),
-                                        ..
-                                    },
-                                ),
+                                            ..
+                                        },
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Immediate(
+                                                        I8(
+                                                            2,
+                                                        ),
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                    ],
+                                    ..
+                                },
                             ),
+                            ..
                         },
                         Stmt {
-                            kind: Return(
-                                None,
+                            kind: Inst(
+                                Inst {
+                                    name: InstName {
+                                        name: "return",
+                                        ..
+                                    },
+                                    args: [],
+                                    ..
+                                },
                             ),
+                            ..
                         },
                     ],
                 },
