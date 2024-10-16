@@ -1,3 +1,5 @@
+use std::fmt;
+
 use macros::inst_prop;
 
 use crate::{inst, module::FuncRef, BlockId, DataFlowGraph, Immediate, Type, ValueId};
@@ -7,6 +9,7 @@ mod cast;
 mod cmp;
 mod control_flow;
 mod data;
+mod evm;
 mod logic;
 
 #[inst_prop]
@@ -24,6 +27,7 @@ pub trait Interpret {
         inst::arith::Udiv,
         inst::arith::Shl,
         inst::arith::Shr,
+        inst::arith::Sar,
         inst::logic::Not,
         inst::logic::And,
         inst::logic::Or,
@@ -33,6 +37,7 @@ pub trait Interpret {
         inst::cast::Trunc,
         inst::cast::IntToPtr,
         inst::cast::PtrToInt,
+        inst::cast::Bitcast,
         inst::cmp::Lt,
         inst::cmp::Gt,
         inst::cmp::Slt,
@@ -137,6 +142,19 @@ impl EvalValue {
         match self {
             Self::Imm(imm) => Some(*imm),
             _ => None,
+        }
+    }
+
+    pub fn is_undef(&self) -> bool {
+        matches!(self, Self::Undef)
+    }
+}
+
+impl fmt::Display for EvalValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Imm(imm) => write!(f, "{imm}"),
+            Self::Undef => write!(f, "undef"),
         }
     }
 }

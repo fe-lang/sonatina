@@ -20,3 +20,6 @@ sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
 
 [dev-dependencies]
 sonatina-parser = { path = "../parser" }
+dir-test = "0.3"
+regex = "1.11"
+once_cell = "1.20"

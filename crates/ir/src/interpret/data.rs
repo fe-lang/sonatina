@@ -14,8 +14,8 @@ impl Interpret for Mstore {
     fn interpret(&self, state: &mut dyn State) -> EvalValue {
         state.set_action(Action::Continue);
 
-        let value = state.lookup_val(*self.addr());
         let addr = state.lookup_val(*self.addr());
+        let value = state.lookup_val(*self.value());
         state.store(addr, value, *self.ty())
     }
 }

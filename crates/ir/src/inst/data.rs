@@ -16,9 +16,9 @@ impl_inst_write!(Mload, (addr: ValueId, ty: Type));
 #[inst(side_effect(super::SideEffect::Write))]
 pub struct Mstore {
     #[inst(value)]
-    value: ValueId,
-    #[inst(value)]
     addr: ValueId,
+    #[inst(value)]
+    value: ValueId,
     ty: Type,
 }
 impl_inst_write!(Mstore, (value: ValueId, addr: ValueId, ty: Type));

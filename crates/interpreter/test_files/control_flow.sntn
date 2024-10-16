@@ -1,0 +1,50 @@
+target = "evm-ethereum-london"
+
+#[() -> 0.i1]
+func private %jump() -> i1 {
+    block0:
+        jump block2;
+    block1:
+        return 1.i1;
+    block2:
+        return 0.i1;
+}
+
+#[(1.i1) -> 1.i8]
+#[(0.i1) -> 2.i8]
+func private %branch(v0.i1) -> i8 {
+    block0:
+        br v0 block1 block2;
+    block1:
+        return 1.i8;
+    block2:
+        return 2.i8;
+}
+
+#[(3.i64) -> 1.i64]
+#[(10.i64) -> 2.i64]
+#[(0.i64) -> 3.i64]
+#[(20.i64) -> 3.i64]
+func private %br_table(v0.i64) -> i64 {
+    block0:
+        br_table v0 block3 (3.i64 block1) (10.i64 block2);
+    block1:
+        return 1.i64;
+    block2:
+        return 2.i64;
+    block3:
+        return 3.i64;
+}
+
+
+#[(0.i1) -> 1.i8]
+#[(1.i1) -> -1.i8]
+func private %simple_phi(v0.i1) -> i8 {
+    block0:
+        br v0 block1 block2;
+    block1:
+        jump block2;
+    block2:
+        v1.i8 = phi (1.i8 block0) (-1.i8 block1);
+        return v1;
+}

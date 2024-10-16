@@ -1,0 +1,17 @@
+target = "evm-ethereum-london"
+
+
+func public %mult_by_two(v0.i8) -> i8 {
+    block0:
+        v1.i8 = mul v0 2.i8;
+        return v1;
+}
+
+#[(0.i8) -> 0.i8]
+#[(2.i8) -> 4.i8]
+func public %call_test(v0.i8) -> i8 {
+    block0:
+        v1.i8 = call %mult_by_two v0;
+        return v1;
+}
+

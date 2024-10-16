@@ -142,7 +142,7 @@ impl Immediate {
     }
 
     pub fn trunc(self, ty: Type) -> Self {
-        debug_assert!(self.ty() > ty);
+        debug_assert!(self.ty() >= ty);
 
         Self::from_i256(self.as_i256(), ty)
     }
@@ -214,8 +214,8 @@ impl Immediate {
     }
 
     pub fn as_usize(self) -> usize {
-        debug_assert!(!self.is_negative());
-        self.as_i256().to_u256().as_usize()
+        let val = if self.is_negative() { -self } else { self };
+        val.as_i256().to_u256().as_usize()
     }
 
     pub fn from_i256(val: I256, ty: Type) -> Self {

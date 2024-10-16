@@ -25,6 +25,7 @@ mod error;
 mod inst;
 
 type Bimap<K, V> = bimap::BiHashMap<K, V, BuildHasherDefault<FxHasher>>;
+pub use pest::Parser as PestParser;
 
 pub struct ParsedModule {
     pub module: Module,
