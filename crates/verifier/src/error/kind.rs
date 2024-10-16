@@ -67,7 +67,7 @@ impl<'a> DisplayErrorKind<'a> {
     }
 }
 
-impl<'a> fmt::Display for DisplayErrorKind<'a> {
+impl fmt::Display for DisplayErrorKind<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use ErrorKind::*;
         match self.kind {

@@ -28,7 +28,7 @@ impl<'a> BlockNode<'a> {
     }
 }
 
-impl<'a> BlockNode<'a> {
+impl BlockNode<'_> {
     pub(super) fn label(self) -> label::Text<'static> {
         let Self { block, ctx, .. } = self;
         let Function { sig, layout, .. } = &ctx.func;

@@ -124,7 +124,7 @@ pub(super) struct BlockEdge<'a> {
     ctx: &'a FuncWriteCtx<'a>,
 }
 
-impl<'a> BlockEdge<'a> {
+impl BlockEdge<'_> {
     fn label(self) -> Text<'static> {
         let Self { from, to, ctx } = self;
         let to = to.block;
