@@ -89,7 +89,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         for e in errs {
-            write!(&mut err_msgs, "{}\n", e).unwrap();
+            writeln!(&mut err_msgs, "{}", e).unwrap();
         }
 
         assert_eq!(
