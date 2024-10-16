@@ -3,9 +3,9 @@ use smallvec::SmallVec;
 
 use crate::{ast, error::ArityBound, BuildCtx, Error};
 
-super::impl_inst_build! {Mload, has_mload, (addr: ValueId, ty: Type)}
-super::impl_inst_build! {Mstore, has_mstore, (addr: ValueId, value: ValueId, ty: Type)}
-super::impl_inst_build_common! {Gep, has_gep, ArityBound::AtLeast(2), build_gep}
+super::impl_inst_build! {Mload, (addr: ValueId, ty: Type)}
+super::impl_inst_build! {Mstore, (addr: ValueId, value: ValueId, ty: Type)}
+super::impl_inst_build_common! {Gep, ArityBound::AtLeast(2), build_gep}
 
 fn build_gep(
     ctx: &mut BuildCtx,

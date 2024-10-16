@@ -27,7 +27,7 @@ pub use graphviz::render_to;
 pub(crate) use inst::ValueVisitable;
 pub use inst::{
     inst_set::{InstSetBase, InstSetExt},
-    HasInst, Inst, InstDowncast, InstDowncastMut, InstId,
+    HasInst, Inst, InstDowncast, InstDowncastMut, InstExt, InstId,
 };
 pub use layout::Layout;
 pub use linkage::Linkage;
@@ -39,7 +39,7 @@ pub mod prelude {
     pub use crate::{
         inst::{
             inst_set::{InstSetBase, InstSetExt},
-            HasInst, Inst, InstDowncast, InstDowncastMut,
+            HasInst, Inst, InstDowncast, InstDowncastMut, InstExt,
         },
         isa::Isa,
     };

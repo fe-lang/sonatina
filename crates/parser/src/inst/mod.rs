@@ -47,10 +47,9 @@ impl InstBuild for Box<dyn Inst> {
 }
 
 macro_rules! impl_inst_build {
-    ($ty:ty, $has_inst:ident, ($($arg_name:ident: $arg_kind:ident ),*)) => {
+    ($ty:ty, ($($arg_name:ident: $arg_kind:ident ),*)) => {
         crate::inst::impl_inst_build_common!(
             $ty,
-            $has_inst,
             crate::error::ArityBound::Exact(crate::inst::__count_args!($( $arg_kind ),*)),
             |ctx: &mut crate::BuildCtx,
             fb: &mut ir::builder::FunctionBuilder<ir::func_cursor::InstInserter>,
@@ -67,7 +66,7 @@ macro_rules! impl_inst_build {
 }
 
 macro_rules! impl_inst_build_common {
-    ($ty:ty, $has_inst:ident, $expected_args:expr, $build_expr:expr) => {
+    ($ty:ty, $expected_args:expr, $build_expr:expr) => {
         impl crate::inst::InstBuild for $ty {
             #[allow(unused)]
             fn build(
@@ -77,7 +76,7 @@ macro_rules! impl_inst_build_common {
             ) -> Result<Self, Box<crate::Error>> {
                 assert_eq!(Self::inst_name(), ast_inst.name.name.as_str());
 
-                let Some(has_inst) = fb.inst_set().$has_inst() else {
+                let Some(has_inst) = <$ty as ir::InstExt>::belongs_to(fb.inst_set()) else {
                     return Err(Box::new(crate::Error::UnsupportedInst {
                         triple: fb.ctx().triple.clone(),
                         inst: ast_inst.name.name.clone(),

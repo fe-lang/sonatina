@@ -216,8 +216,7 @@ impl Branch for Br {
             return Box::new(self.clone());
         };
 
-        let has_jump = isb.jump();
-        let jump = Jump::new(has_jump, remain);
+        let jump = Jump::new(isb.jump(), remain);
         Box::new(jump)
     }
 
@@ -272,8 +271,7 @@ impl Branch for BrTable {
 
         let dest_num = brt.dests().len();
         if dest_num == 1 {
-            let has_jump = isb.jump();
-            let jump = Jump::new(has_jump, brt.dests()[0]);
+            let jump = Jump::new(isb.jump(), brt.dests()[0]);
             Box::new(jump)
         } else {
             Box::new(brt)
@@ -317,8 +315,7 @@ fn try_convert_branch_to_jump(isb: &dyn InstSetBase, branch: &dyn Branch) -> Opt
         .skip(1)
         .all(|dest| *dest == first_dest);
     if is_dest_unique {
-        let has_jump = isb.jump();
-        let jump = Jump::new(has_jump, first_dest);
+        let jump = Jump::new(isb.jump(), first_dest);
         Some(Box::new(jump))
     } else {
         None

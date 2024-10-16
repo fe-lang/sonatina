@@ -223,13 +223,11 @@ impl DataFlowGraph {
     }
 
     pub fn make_phi(&self, args: Vec<(ValueId, BlockId)>) -> Phi {
-        let has_phi = self.inst_set().phi();
-        Phi::new(has_phi, args)
+        Phi::new(self.inst_set().phi(), args)
     }
 
     pub fn make_jump(&self, to: BlockId) -> Jump {
-        let has_jump = self.inst_set().jump();
-        Jump::new(has_jump, to)
+        Jump::new(self.inst_set().jump(), to)
     }
 
     pub fn change_to_alias(&mut self, value: ValueId, alias: ValueId) {
