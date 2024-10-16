@@ -46,6 +46,8 @@ define_inst_set_base! {
         cast::Zext,
         cast::Trunc,
         cast::Bitcast,
+        cast::IntToPtr,
+        cast::PtrToInt,
         data::Mload,
         data::Mstore,
         data::Gep,

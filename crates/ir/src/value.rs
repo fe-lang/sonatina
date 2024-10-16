@@ -135,7 +135,7 @@ impl Immediate {
             Self::I32(val) => (val as u32).into(),
             Self::I64(val) => (val as u64).into(),
             Self::I128(val) => (val as u128).into(),
-            Self::I256(_) => unreachable!(),
+            Self::I256(val) => val,
         };
 
         Self::from_i256(i256, ty)
