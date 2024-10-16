@@ -4,9 +4,6 @@ use super::{arith, cast, cmp, control_flow, data, evm, logic, Inst};
 
 define_inst_set_base! {
     /// This trait is used to determine whether a certain instruction set includes a specific inst in runtime.
-    /// If a certain instruction set `IS` implements `HasInst<I>`,
-    /// the corresponding `has_i(&self) -> Option<&dyn HasInst<I>>` method always returns `Some`.
-    ///
     /// Since all instruction set implements `HasInst<Inst>` if it contains `Inst`,
     /// this trait is naturally intended to be used as a trait object.
     ///

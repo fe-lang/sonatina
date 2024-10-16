@@ -55,11 +55,13 @@ impl InstStruct {
     fn build(self) -> syn::Result<proc_macro2::TokenStream> {
         let impl_method = self.impl_method();
         let impl_inst = self.impl_inst();
+        let impl_inst_ext = self.impl_inst_ext();
         let impl_inst_cast = self.impl_inst_cast();
         Ok(quote! {
            #impl_method
            #impl_inst_cast
            #impl_inst
+           #impl_inst_ext
         })
     }
 
@@ -258,6 +260,19 @@ impl InstStruct {
 
                 fn as_text(&self) -> &'static str {
                     Self::inst_name()
+                }
+            }
+        }
+    }
+
+    fn impl_inst_ext(&self) -> proc_macro2::TokenStream {
+        let struct_name = &self.struct_name;
+        let has_inst_method = ty_name_to_method_name(struct_name);
+
+        quote! {
+            impl crate::InstExt for #struct_name {
+                fn belongs_to(isb: &dyn crate::InstSetBase) -> Option<&dyn crate::HasInst<Self>> {
+                    isb.#has_inst_method()
                 }
             }
         }

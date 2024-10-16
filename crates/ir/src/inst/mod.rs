@@ -51,6 +51,17 @@ pub trait Inst: inst_set::sealed::Registered + Any {
     }
 }
 
+pub trait InstExt: Inst {
+    /// Checks if the this instruction type belongs to the given `InstSetBase`.
+    ///
+    /// # Returns
+    ///
+    /// * `Option<&dyn HasInst<Self>>` - If this instruction type belongs to the
+    ///   set, returns `Some` with a reference to the corresponding `HasInst`.
+    ///   Otherwise, returns `None`.
+    fn belongs_to(isb: &dyn InstSetBase) -> Option<&dyn HasInst<Self>>;
+}
+
 impl WriteWithFunc for InstId {
     fn write(&self, ctx: &FuncWriteCtx, w: &mut impl io::Write) -> io::Result<()> {
         let inst = ctx.func.dfg.inst(*self);

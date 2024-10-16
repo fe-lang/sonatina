@@ -3,12 +3,12 @@ use smallvec::SmallVec;
 
 use crate::{ast, error::ArityBound, BuildCtx, Error};
 
-super::impl_inst_build! {Jump, has_jump, (dest: BlockId)}
-super::impl_inst_build! {Br, has_br, (cond: ValueId, nz_dest: BlockId, z_dest: BlockId)}
-super::impl_inst_build_common! {BrTable, has_br_table, ArityBound::AtLeast(1), build_br_table}
-super::impl_inst_build_common! {Phi, has_phi, ArityBound::AtLeast(1), build_phi}
-super::impl_inst_build_common! {Call, has_call, ArityBound::AtLeast(1), build_call}
-super::impl_inst_build_common! {Return, has_return, ArityBound::AtMost(1), build_return}
+super::impl_inst_build! {Jump, (dest: BlockId)}
+super::impl_inst_build! {Br, (cond: ValueId, nz_dest: BlockId, z_dest: BlockId)}
+super::impl_inst_build_common! {BrTable, ArityBound::AtLeast(1), build_br_table}
+super::impl_inst_build_common! {Phi, ArityBound::AtLeast(1), build_phi}
+super::impl_inst_build_common! {Call, ArityBound::AtLeast(1), build_call}
+super::impl_inst_build_common! {Return, ArityBound::AtMost(1), build_return}
 
 fn build_br_table(
     ctx: &mut BuildCtx,

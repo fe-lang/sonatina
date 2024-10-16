@@ -32,6 +32,7 @@ impl TraitDefinition {
         let methods = self.insts.iter().map(|path| {
             let method_name = path_to_method_name(path);
             quote! {
+                #[doc(hidden)]
                 fn #method_name(&self) -> Option<&dyn crate::HasInst<#path>> { None }
             }
         });
