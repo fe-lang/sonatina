@@ -95,6 +95,6 @@ impl Interpret for Gep {
 }
 
 fn align_to(offset: usize, alignment: usize) -> usize {
-    assert!(alignment & (alignment - 1) == 0);
+    assert!(alignment.is_power_of_two());
     (offset + alignment - 1) & !(alignment - 1)
 }

@@ -67,7 +67,7 @@ impl<'a, 'b> DisplayTraceInfo<'a, 'b> {
     }
 }
 
-impl<'a, 'b> fmt::Display for DisplayTraceInfo<'a, 'b> {
+impl fmt::Display for DisplayTraceInfo<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let TraceInfo {
             block,

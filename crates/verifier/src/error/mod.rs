@@ -45,7 +45,7 @@ impl<'a> Error<'a> {
     }
 }
 
-impl<'a> fmt::Display for Error<'a> {
+impl fmt::Display for Error<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let ErrorData { kind, trace_info } = self.err;
         let kind = DisplayErrorKind::new(kind, self.func, self.func_ref);
