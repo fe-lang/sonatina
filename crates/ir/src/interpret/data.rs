@@ -94,6 +94,12 @@ impl Interpret for Gep {
     }
 }
 
+impl Interpret for Alloca {
+    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+        state.alloca(*self.ty())
+    }
+}
+
 fn align_to(offset: usize, alignment: usize) -> usize {
     assert!(alignment & (alignment - 1) == 0);
     (offset + alignment - 1) & !(alignment - 1)

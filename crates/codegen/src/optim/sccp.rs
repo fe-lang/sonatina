@@ -517,6 +517,10 @@ impl<'a, 'i> State for CellState<'a, 'i> {
         panic!("instruction with side effect must not be interpreted")
     }
 
+    fn alloca(&mut self, _ty: Type) -> EvalValue {
+        panic!("instruction with side effect must not be interpreted")
+    }
+
     fn dfg(&self) -> &DataFlowGraph {
         self.dfg
     }

@@ -40,6 +40,7 @@ pub struct EvmInstSet(
     data::Mload,
     data::Mstore,
     data::Gep,
+    data::Alloca,
     logic::Not,
     logic::And,
     logic::Or,

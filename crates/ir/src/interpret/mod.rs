@@ -52,6 +52,7 @@ pub trait Interpret {
         inst::data::Mload,
         inst::data::Mstore,
         inst::data::Gep,
+        inst::data::Alloca,
         inst::control_flow::Jump,
         inst::control_flow::Br,
         inst::control_flow::BrTable,
@@ -92,6 +93,8 @@ pub trait State {
     fn load(&mut self, addr: EvalValue, ty: Type) -> EvalValue;
 
     fn store(&mut self, addr: EvalValue, value: EvalValue, ty: Type) -> EvalValue;
+
+    fn alloca(&mut self, ty: Type) -> EvalValue;
 
     fn dfg(&self) -> &DataFlowGraph;
 }

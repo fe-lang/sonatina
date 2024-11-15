@@ -13,6 +13,7 @@ pub struct Machine {
     action: Action,
     pub module: Module,
     memory: Vec<u8>,
+    free_region: usize,
 }
 
 impl Machine {
@@ -24,6 +25,7 @@ impl Machine {
             action: Action::Continue,
             module,
             memory: Vec::new(),
+            free_region: 0,
         }
     }
 
@@ -217,6 +219,12 @@ impl State for Machine {
         }
 
         EvalValue::Undef
+    }
+
+    fn alloca(&mut self, ty: Type) -> EvalValue {
+        let ptr = self.free_region;
+        self.free_region += self.module.ctx.size_of(ty);
+        EvalValue::Imm(Immediate::I256(I256::from(ptr)))
     }
 
     fn dfg(&self) -> &DataFlowGraph {

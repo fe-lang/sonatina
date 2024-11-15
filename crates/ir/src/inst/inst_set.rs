@@ -48,6 +48,7 @@ define_inst_set_base! {
         data::Mload,
         data::Mstore,
         data::Gep,
+        data::Alloca,
         control_flow::Call,
         control_flow::Jump,
         control_flow::Br,
