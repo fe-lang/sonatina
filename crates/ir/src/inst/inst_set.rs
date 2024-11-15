@@ -108,6 +108,7 @@ define_inst_set_base! {
         evm::EvmStaticCall,
         evm::EvmRevert,
         evm::EvmSelfDestruct,
+        evm::EvmMalloc,
     }
 }
 

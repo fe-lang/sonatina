@@ -52,3 +52,4 @@ super::impl_inst_build! {EvmCreate2, (val: ValueId, addr: ValueId, len: ValueId,
 super::impl_inst_build! {EvmStaticCall, (gas: ValueId, ext_addr: ValueId, arg_addr: ValueId, arg_len: ValueId, ret_addr: ValueId, ret_len: ValueId)}
 super::impl_inst_build! {EvmRevert, (addr: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmSelfDestruct, (addr: ValueId)}
+super::impl_inst_build! {EvmMalloc, (size: ValueId)}

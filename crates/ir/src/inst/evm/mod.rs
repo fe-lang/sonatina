@@ -476,3 +476,11 @@ pub struct EvmSelfDestruct {
     addr: ValueId,
 }
 impl_inst_write!(EvmSelfDestruct);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Write))]
+pub struct EvmMalloc {
+    #[inst(value)]
+    size: ValueId,
+}
+impl_inst_write!(EvmMalloc);

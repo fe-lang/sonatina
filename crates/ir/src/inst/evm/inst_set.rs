@@ -95,4 +95,5 @@ pub struct EvmInstSet(
     evm::EvmStaticCall,
     evm::EvmRevert,
     evm::EvmSelfDestruct,
+    evm::EvmMalloc,
 );
