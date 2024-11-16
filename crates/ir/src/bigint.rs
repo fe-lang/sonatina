@@ -48,6 +48,23 @@ impl I256 {
         }
     }
 
+    pub fn overflowing_rem(self, rhs: I256) -> (I256, bool) {
+        if rhs.is_zero() {
+            panic!("attempt to divide by zero");
+        }
+
+        if self.is_minimum() && rhs.is_negative && rhs.abs == U256::one() {
+            return (I256::zero(), true);
+        }
+
+        let rem_abs = self.abs % rhs.abs;
+
+        match self.is_negative {
+            true => (I256::make_negative(rem_abs), false),
+            false => (I256::make_positive(rem_abs), false),
+        }
+    }
+
     pub fn from_be_bytes(bytes: &[u8]) -> Self {
         let u256_val = U256::from_big_endian(bytes);
         Self::from_u256(u256_val)

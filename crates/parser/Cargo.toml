@@ -23,10 +23,12 @@ either = { version = "1.12.0", default-features = false }
 annotate-snippets = "0.11.4"
 rustc-hash = "2.0.0"
 bimap = "0.6.3"
-derive_more = { version = "=1.0.0", default-features = false, features = ["debug"] }
+derive_more = { version = "=1.0.0", default-features = false, features = [
+    "debug",
+] }
 smallvec = "1.13.2"
 
 [dev-dependencies]
 dir-test = "0.3"
-insta = { version = "1.38.0" }
+insta = { version = "1.41" }
 indenter = "0.3.3"

@@ -18,7 +18,7 @@ func public %all_dests_removed() -> i8 {
         jump block3;
 
     block2:
-        v4.i8 = sdiv v0 2.i8;
+        v4.i8 = evm_sdiv v0 2.i8;
         v5.i8 = sext v1 i8;
         v6.i8 = add v1 v5;
         jump block3;
@@ -44,7 +44,7 @@ func public %all_dests_removed2(v0.i8) -> i8 {
         jump block3;
 
     block2:
-        v4.i8 = sdiv v0 2.i8;
+        v4.i8 = evm_sdiv v0 2.i8;
         v5.i8 = sext v1 i8;
         v6.i8 = add v1 v5;
         jump block3;

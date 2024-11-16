@@ -6,6 +6,6 @@ target = "evm-ethereum-london"
 func public %simple(v0.i8) -> i8 {
     block0:
         v1.i8 = sub v0 1.i8;
-        v2.i8 = udiv v1 v0;
+        v2.i8 = evm_udiv v1 v0;
         return 2.i8;
 }

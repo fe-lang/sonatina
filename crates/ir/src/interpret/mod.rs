@@ -25,6 +25,8 @@ pub trait Interpret {
         inst::arith::Mul,
         inst::arith::Sdiv,
         inst::arith::Udiv,
+        inst::arith::Umod,
+        inst::arith::Smod,
         inst::arith::Shl,
         inst::arith::Shr,
         inst::arith::Sar,
@@ -52,12 +54,19 @@ pub trait Interpret {
         inst::data::Mload,
         inst::data::Mstore,
         inst::data::Gep,
+        inst::data::Alloca,
         inst::control_flow::Jump,
         inst::control_flow::Br,
         inst::control_flow::BrTable,
         inst::control_flow::Phi,
         inst::control_flow::Call,
         inst::control_flow::Return,
+        inst::evm::EvmUdiv,
+        inst::evm::EvmSdiv,
+        inst::evm::EvmUmod,
+        inst::evm::EvmSmod,
+        inst::evm::EvmAddMod,
+        inst::evm::EvmMulMod,
     );
 }
 
@@ -92,6 +101,8 @@ pub trait State {
     fn load(&mut self, addr: EvalValue, ty: Type) -> EvalValue;
 
     fn store(&mut self, addr: EvalValue, value: EvalValue, ty: Type) -> EvalValue;
+
+    fn alloca(&mut self, ty: Type) -> EvalValue;
 
     fn dfg(&self) -> &DataFlowGraph;
 }

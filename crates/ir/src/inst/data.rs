@@ -29,3 +29,10 @@ pub struct Gep {
     values: SmallVec<[ValueId; 8]>,
 }
 impl_inst_write!(Gep);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(super::SideEffect::Write))]
+pub struct Alloca {
+    ty: Type,
+}
+impl_inst_write!(Alloca);

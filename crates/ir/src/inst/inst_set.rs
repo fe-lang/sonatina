@@ -48,6 +48,7 @@ define_inst_set_base! {
         data::Mload,
         data::Mstore,
         data::Gep,
+        data::Alloca,
         control_flow::Call,
         control_flow::Jump,
         control_flow::Br,
@@ -55,6 +56,10 @@ define_inst_set_base! {
         control_flow::Return,
         control_flow::Phi,
         // Evm specific
+        evm::EvmUdiv,
+        evm::EvmSdiv,
+        evm::EvmUmod,
+        evm::EvmSmod,
         evm::EvmStop,
         evm::EvmAddMod,
         evm::EvmMulMod,
@@ -107,6 +112,7 @@ define_inst_set_base! {
         evm::EvmStaticCall,
         evm::EvmRevert,
         evm::EvmSelfDestruct,
+        evm::EvmMalloc,
     }
 }
 

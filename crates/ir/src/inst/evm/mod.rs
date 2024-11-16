@@ -4,6 +4,42 @@ pub mod inst_set;
 use crate::{inst::impl_inst_write, value::ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct EvmUdiv {
+    #[inst(value)]
+    lhs: ValueId,
+    #[inst(value)]
+    rhs: ValueId,
+}
+impl_inst_write!(EvmUdiv);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct EvmSdiv {
+    #[inst(value)]
+    lhs: ValueId,
+    #[inst(value)]
+    rhs: ValueId,
+}
+impl_inst_write!(EvmSdiv);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct EvmUmod {
+    #[inst(value)]
+    lhs: ValueId,
+    #[inst(value)]
+    rhs: ValueId,
+}
+impl_inst_write!(EvmUmod);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct EvmSmod {
+    #[inst(value)]
+    lhs: ValueId,
+    #[inst(value)]
+    rhs: ValueId,
+}
+impl_inst_write!(EvmSmod);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Write))]
 #[inst(terminator)]
 pub struct EvmStop {}
@@ -476,3 +512,11 @@ pub struct EvmSelfDestruct {
     addr: ValueId,
 }
 impl_inst_write!(EvmSelfDestruct);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Write))]
+pub struct EvmMalloc {
+    #[inst(value)]
+    size: ValueId,
+}
+impl_inst_write!(EvmMalloc);

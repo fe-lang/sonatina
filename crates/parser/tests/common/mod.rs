@@ -25,14 +25,13 @@ macro_rules! snap_test {
         };
         settings.bind(|| {
             insta::_macro_support::assert_snapshot(
-                name.into(),
-                &$value,
-                env!("CARGO_MANIFEST_DIR"),
+                (name, $value.as_str()).into(),
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
                 fixture_name,
                 module_path!(),
                 file!(),
                 line!(),
-                stringify!($value),
+                &$value,
             )
             .unwrap()
         })
