@@ -56,6 +56,10 @@ define_inst_set_base! {
         control_flow::Return,
         control_flow::Phi,
         // Evm specific
+        evm::EvmUdiv,
+        evm::EvmSdiv,
+        evm::EvmUmod,
+        evm::EvmSmod,
         evm::EvmStop,
         evm::EvmAddMod,
         evm::EvmMulMod,

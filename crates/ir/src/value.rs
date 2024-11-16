@@ -89,6 +89,14 @@ impl Immediate {
         self.apply_binop(rhs, |lhs, rhs| lhs.overflowing_div(rhs).0)
     }
 
+    pub fn urem(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, |lhs, rhs| (lhs.to_u256() / rhs.to_u256()).into())
+    }
+
+    pub fn srem(self, rhs: Self) -> Self {
+        self.apply_binop(rhs, |lhs, rhs| lhs.overflowing_rem(rhs).0)
+    }
+
     pub fn lt(self, rhs: Self) -> Self {
         self.apply_binop_raw(rhs, |lhs, rhs| (lhs.to_u256() < rhs.to_u256()).into())
     }

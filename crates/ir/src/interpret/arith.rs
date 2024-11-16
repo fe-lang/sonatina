@@ -66,6 +66,28 @@ impl Interpret for Udiv {
     }
 }
 
+impl Interpret for Umod {
+    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+
+        EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| lhs.urem(rhs))
+    }
+}
+
+impl Interpret for Smod {
+    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+
+        EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| lhs.srem(rhs))
+    }
+}
+
 impl Interpret for Shl {
     fn interpret(&self, state: &mut dyn State) -> EvalValue {
         state.set_action(Action::Continue);
