@@ -337,6 +337,18 @@ impl_inst_write!(EvmTstore);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Write))]
+pub struct EvmMcopy {
+    #[inst(value)]
+    dest: ValueId,
+    #[inst(value)]
+    addr: ValueId,
+    #[inst(value)]
+    len: ValueId,
+}
+impl_inst_write!(EvmMcopy);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Write))]
 pub struct EvmLog0 {
     #[inst(value)]
     addr: ValueId,

@@ -100,6 +100,7 @@ define_inst_set_base! {
         evm::EvmGas,
         evm::EvmTload,
         evm::EvmTstore,
+        evm::EvmMcopy,
         evm::EvmLog0,
         evm::EvmLog1,
         evm::EvmLog2,

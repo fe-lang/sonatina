@@ -82,6 +82,7 @@ pub struct EvmInstSet(
     evm::EvmMsize,
     evm::EvmGas,
     evm::EvmTload,
+    evm::EvmMcopy,
     evm::EvmTstore,
     evm::EvmLog0,
     evm::EvmLog1,

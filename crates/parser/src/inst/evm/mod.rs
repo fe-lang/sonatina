@@ -44,6 +44,7 @@ super::impl_inst_build! {EvmMsize, ()}
 super::impl_inst_build! {EvmGas, ()}
 super::impl_inst_build! {EvmTload, (key: ValueId)}
 super::impl_inst_build! {EvmTstore, (key: ValueId, val: ValueId)}
+super::impl_inst_build! {EvmMcopy, (dest: ValueId, addr: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmLog0, (addr: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmLog1, (addr: ValueId, len: ValueId, topic0: ValueId)}
 super::impl_inst_build! {EvmLog2, (addr: ValueId, len: ValueId, topic0: ValueId, topic1: ValueId)}
