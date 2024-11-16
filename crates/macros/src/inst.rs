@@ -139,16 +139,29 @@ impl InstStruct {
     }
 
     fn make_ctor(&self) -> proc_macro2::TokenStream {
-        let ctor_args = self.fields.iter().map(|f| {
-            let ident = &f.ident;
-            let ty = &f.ty;
-            quote! {#ident: #ty}
-        });
+        let ctor_args: Vec<_> = self
+            .fields
+            .iter()
+            .map(|f| {
+                let ident = &f.ident;
+                let ty = &f.ty;
+                quote! {#ident: #ty}
+            })
+            .collect();
 
-        let field_names = self.fields.iter().map(|f| &f.ident);
+        let field_names: Vec<_> = self.fields.iter().map(|f| &f.ident).collect();
+        let has_inst_method = ty_name_to_method_name(&self.struct_name);
         quote! {
             #[allow(clippy::too_many_arguments)]
             pub fn new(hi: &dyn crate::HasInst<Self>, #(#ctor_args),*) -> Self {
+                Self {
+                    #(#field_names: #field_names),*
+                }
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn new_unchecked(isb: &dyn crate::InstSetBase, #(#ctor_args),*) -> Self {
+                isb.#has_inst_method().unwrap();
                 Self {
                     #(#field_names: #field_names),*
                 }
