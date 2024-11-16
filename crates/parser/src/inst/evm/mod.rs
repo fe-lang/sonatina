@@ -52,6 +52,7 @@ super::impl_inst_build! {EvmLog3, (addr: ValueId, len: ValueId, topic0: ValueId,
 super::impl_inst_build! {EvmLog4, (addr: ValueId, len: ValueId, topic0: ValueId, topic1: ValueId, topic2: ValueId, topic3: ValueId)}
 super::impl_inst_build! {EvmCreate, (val: ValueId, addr: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmCall, (gas: ValueId, addr: ValueId, val: ValueId, arg_addr: ValueId, arg_len: ValueId, ret_addr: ValueId, ret_offset: ValueId)}
+super::impl_inst_build! {EvmCallCode, (gas: ValueId, addr: ValueId, val: ValueId, arg_addr: ValueId, arg_len: ValueId, ret_addr: ValueId, ret_offset: ValueId)}
 super::impl_inst_build! {EvmReturn, (addr: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmDelegateCall, (gas: ValueId, ext_addr: ValueId, arg_addr: ValueId, arg_len: ValueId, ret_addr: ValueId, ret_len: ValueId)}
 super::impl_inst_build! {EvmCreate2, (val: ValueId, addr: ValueId, len: ValueId, salt: ValueId)}

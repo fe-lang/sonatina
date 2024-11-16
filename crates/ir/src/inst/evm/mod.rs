@@ -451,6 +451,26 @@ impl_inst_write!(EvmCall);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Write))]
+pub struct EvmCallCode {
+    #[inst(value)]
+    gas: ValueId,
+    #[inst(value)]
+    addr: ValueId,
+    #[inst(value)]
+    val: ValueId,
+    #[inst(value)]
+    arg_addr: ValueId,
+    #[inst(value)]
+    arg_len: ValueId,
+    #[inst(value)]
+    ret_addr: ValueId,
+    #[inst(value)]
+    ret_offset: ValueId,
+}
+impl_inst_write!(EvmCallCode);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Write))]
 #[inst(terminator)]
 pub struct EvmReturn {
     #[inst(value)]

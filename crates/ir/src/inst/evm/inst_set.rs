@@ -91,6 +91,7 @@ pub struct EvmInstSet(
     evm::EvmLog4,
     evm::EvmCreate,
     evm::EvmCall,
+    evm::EvmCallCode,
     evm::EvmReturn,
     evm::EvmDelegateCall,
     evm::EvmCreate2,
