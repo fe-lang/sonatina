@@ -39,6 +39,10 @@ impl ModuleBuilder {
         }
     }
 
+    pub fn lookup_func(&self, name: &str) -> Option<FuncRef> {
+        self.declared_funcs.get(name).copied()
+    }
+
     pub fn sig(&self, func: FuncRef) -> &Signature {
         &self.funcs[func].sig
     }

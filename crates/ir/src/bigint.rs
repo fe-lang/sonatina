@@ -142,14 +142,14 @@ impl I256 {
         self.is_negative && self.abs != U256::zero() && (self.abs & I256_MASK) == U256::zero()
     }
 
-    fn make_positive(abs: U256) -> Self {
+    pub fn make_positive(abs: U256) -> Self {
         Self {
             is_negative: false,
             abs,
         }
     }
 
-    fn make_negative(abs: U256) -> Self {
+    pub fn make_negative(abs: U256) -> Self {
         Self {
             is_negative: true,
             abs,

@@ -132,6 +132,21 @@ where
         result
     }
 
+    pub fn insert_inst_dyn(&mut self, inst: Box<dyn Inst>, ret_ty: Type) -> ValueId {
+        let inst_id = self.cursor.insert_inst_data_dyn(&mut self.func, inst);
+        self.append_pred(inst_id);
+
+        let result = Value::Inst {
+            inst: inst_id,
+            ty: ret_ty,
+        };
+        let result = self.func.dfg.make_value(result);
+        self.func.dfg.attach_result(inst_id, result);
+
+        self.cursor.set_location(CursorLocation::At(inst_id));
+        result
+    }
+
     pub fn insert_inst_with<F, I>(&mut self, f: F, ret_ty: Type) -> ValueId
     where
         F: FnOnce() -> I,
@@ -151,6 +166,12 @@ where
     ///   trait.
     pub fn insert_inst_no_result<I: Inst>(&mut self, inst: I) {
         let inst_id = self.cursor.insert_inst_data(&mut self.func, inst);
+        self.append_pred(inst_id);
+        self.cursor.set_location(CursorLocation::At(inst_id));
+    }
+
+    pub fn insert_inst_no_result_dyn(&mut self, inst: Box<dyn Inst>) {
+        let inst_id = self.cursor.insert_inst_data_dyn(&mut self.func, inst);
         self.append_pred(inst_id);
         self.cursor.set_location(CursorLocation::At(inst_id));
     }
