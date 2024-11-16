@@ -130,6 +130,11 @@ pub struct EvmCallDataLoad {
 impl_inst_write!(EvmCallDataLoad);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Read))]
+pub struct EvmCallDataSize {}
+impl_inst_write!(EvmCallDataSize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Write))]
 pub struct EvmCallDataCopy {
     #[inst(value)]

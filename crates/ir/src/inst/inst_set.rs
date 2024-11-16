@@ -73,6 +73,7 @@ define_inst_set_base! {
         evm::EvmCallValue,
         evm::EvmCallDataLoad,
         evm::EvmCallDataCopy,
+        evm::EvmCallDataSize,
         evm::EvmCodeSize,
         evm::EvmCodeCopy,
         evm::EvmGasPrice,

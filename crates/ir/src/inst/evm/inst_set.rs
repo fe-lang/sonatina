@@ -58,6 +58,7 @@ pub struct EvmInstSet(
     evm::EvmCallValue,
     evm::EvmCallDataLoad,
     evm::EvmCallDataCopy,
+    evm::EvmCallDataSize,
     evm::EvmCodeSize,
     evm::EvmCodeCopy,
     evm::EvmExtCodeCopy,
