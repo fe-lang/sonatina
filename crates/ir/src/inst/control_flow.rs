@@ -7,7 +7,7 @@ use super::InstWrite;
 use crate::{
     ir_writer::{FuncWriteCtx, WriteWithFunc},
     module::FuncRef,
-    BlockId, Inst, InstSetBase, Type, ValueId,
+    BlockId, Inst, InstSetBase, ValueId,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
@@ -122,8 +122,6 @@ pub struct Call {
 
     #[inst(value)]
     args: SmallVec<[ValueId; 8]>,
-    // TODO: Is `ret_ty` necessary?
-    ret_ty: Type,
 }
 impl InstWrite for Call {
     fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
