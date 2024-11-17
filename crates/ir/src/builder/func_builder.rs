@@ -201,6 +201,23 @@ where
         self.ssa_builder.def_var(var, value, block);
     }
 
+    pub fn current_block(&self) -> Option<BlockId> {
+        self.cursor.block(&self.func)
+    }
+
+    pub fn last_inst(&self) -> Option<InstId> {
+        let current_block = self.current_block()?;
+        self.last_inst_of(current_block)
+    }
+
+    pub fn last_inst_of(&self, block: BlockId) -> Option<InstId> {
+        self.func.layout.last_inst_of(block)
+    }
+
+    pub fn is_terminator(&self, inst: InstId) -> bool {
+        self.func.dfg.is_terminator(inst)
+    }
+
     pub fn seal_block(&mut self) {
         let block = self.cursor.block(&self.func).unwrap();
         self.ssa_builder.seal_block(&mut self.func, block);

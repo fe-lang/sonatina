@@ -143,6 +143,10 @@ impl Type {
         )
     }
 
+    pub fn is_unit(self) -> bool {
+        matches!(self, Self::Unit)
+    }
+
     pub fn is_pointer(self, ctx: &ModuleCtx) -> bool {
         ctx.with_ty_store(|store| store.is_ptr(self))
     }
