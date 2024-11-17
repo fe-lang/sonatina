@@ -61,6 +61,7 @@ define_inst_set_base! {
         evm::EvmUmod,
         evm::EvmSmod,
         evm::EvmStop,
+        evm::EvmInvalid,
         evm::EvmAddMod,
         evm::EvmMulMod,
         evm::EvmExp,

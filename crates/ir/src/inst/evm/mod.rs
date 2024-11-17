@@ -46,6 +46,12 @@ pub struct EvmStop {}
 impl_inst_write!(EvmStop);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Write))]
+#[inst(terminator)]
+pub struct EvmInvalid {}
+impl_inst_write!(EvmInvalid);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct EvmAddMod {
     #[inst(value)]
     lhs: ValueId,

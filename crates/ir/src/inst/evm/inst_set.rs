@@ -46,6 +46,7 @@ pub struct EvmInstSet(
     evm::EvmUmod,
     evm::EvmSmod,
     evm::EvmStop,
+    evm::EvmInvalid,
     evm::EvmAddMod,
     evm::EvmMulMod,
     evm::EvmExp,
