@@ -56,8 +56,9 @@ inst_identifier = @{ ident_start_char ~ ident_body_char* }
 inst_arg = { value | type_name | block_ident | value_block_map | function_identifier}
 value_block_map = { "(" ~ value ~ block_ident ~ ")" }
 
-value       =  { value_name | imm_number }
+value       =  { value_name | imm_number | undef }
 imm_number  = ${ number ~ "." ~ primitive_type }
+undef = ${ "undef" ~ "." ~ type_name }
 number      = _{ hex | decimal }
 decimal     = @{ "-"? ~ ASCII_DIGIT+ }
 hex         = @{ "0x" ~ ASCII_HEX_DIGIT+ }

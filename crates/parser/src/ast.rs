@@ -590,6 +590,7 @@ pub struct Value {
 #[derive(Debug)]
 pub enum ValueKind {
     Immediate(Immediate),
+    Undef(Type),
     Named(ValueName),
     Error,
 }
@@ -689,6 +690,10 @@ impl FromSyntax<Error> for Value {
                     },
                     _ => unreachable!(),
                 }
+            }
+            Rule::undef => {
+                let ty = node.single(Rule::type_name);
+                ValueKind::Undef(ty)
             }
             _ => unreachable!(),
         };

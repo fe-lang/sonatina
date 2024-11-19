@@ -263,6 +263,10 @@ impl BuildCtx {
                     ));
                     ir::ValueId(0)
                 }),
+            ast::ValueKind::Undef(ty) => {
+                let ty = self.type_(&mut fb.module_builder, ty);
+                fb.make_undef_value(ty)
+            }
             ast::ValueKind::Error => unreachable!(),
         }
     }
