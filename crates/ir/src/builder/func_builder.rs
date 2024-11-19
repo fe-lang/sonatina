@@ -66,6 +66,10 @@ where
         block
     }
 
+    pub fn make_block(&mut self) -> BlockId {
+        self.cursor.make_block(&mut self.func)
+    }
+
     pub fn append_phi_arg(&mut self, phi_res: ValueId, value: ValueId, block: BlockId) {
         let phi_inst = self
             .func

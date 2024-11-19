@@ -18,16 +18,32 @@ cranelift_entity::entity_impl!(ValueId);
 #[derive(Debug, Clone)]
 pub enum Value {
     /// The value is defined by an instruction.
-    Inst { inst: InstId, ty: Type },
+    Inst {
+        inst: InstId,
+        ty: Type,
+    },
 
     /// The value is a function argument.
-    Arg { ty: Type, idx: usize },
+    Arg {
+        ty: Type,
+        idx: usize,
+    },
 
     /// The value is immediate value.
-    Immediate { imm: Immediate, ty: Type },
+    Immediate {
+        imm: Immediate,
+        ty: Type,
+    },
 
     /// The value is global value.
-    Global { gv: GlobalVariable, ty: Type },
+    Global {
+        gv: GlobalVariable,
+        ty: Type,
+    },
+
+    Undef {
+        ty: Type,
+    },
 }
 
 impl WriteWithFunc for ValueId {
@@ -49,6 +65,10 @@ impl WriteWithFunc for ValueId {
                     .dfg
                     .ctx
                     .with_gv_store(|s| write!(w, "%{}", s.gv_data(*gv).symbol)),
+                Value::Undef { ty } => {
+                    write!(w, "undef.")?;
+                    ty.write(ctx.func.ctx(), w)
+                }
                 _ => {
                     write!(w, "v{}", self.0)
                 }
