@@ -4,6 +4,7 @@ use sonatina_ir::{
     isa::Endian,
     module::FuncRef,
     prelude::*,
+    types::CompoundTypeData,
     BlockId, DataFlowGraph, Function, Immediate, InstId, Module, Type, Value, ValueId, I256,
 };
 
@@ -72,7 +73,7 @@ impl Machine {
                 self.top_frame_mut().map_val(inst_result, e_val);
             };
 
-            match self.action {
+            match self.action.clone() {
                 Action::Continue => {
                     self.pc = self.top_func().layout.next_inst_of(self.pc).unwrap();
                 }
@@ -130,7 +131,7 @@ impl State for Machine {
             Value::Global { .. } => {
                 todo!()
             }
-            _ => self.top_frame().locals[value_id],
+            _ => self.top_frame().locals[value_id].clone(),
         }
     }
 
@@ -158,21 +159,51 @@ impl State for Machine {
     }
 
     fn load(&mut self, addr: EvalValue, ty: Type) -> EvalValue {
-        if !(ty.is_integral() || ty.is_pointer(&self.module.ctx)) {
-            // TODO: we need to decide how to handle load of aggregate type when it fits
-            // into register/stack-slot size.
-            todo!();
-        }
-
         let Some(addr) = addr.as_imm() else {
-            panic!("udnef address in load")
+            return EvalValue::Undef;
         };
+
         let addr = addr.as_usize();
         let size = self.module.ctx.size_of(ty);
         if addr + size > self.memory.len() {
-            panic!("uninitialized memory access is detected");
+            return EvalValue::Undef;
         }
 
+        // Store a value of aggregate type.
+        if !(ty.is_integral() || ty.is_pointer(&self.module.ctx)) {
+            let mut fields = Vec::new();
+
+            match ty.resolve_compound(&self.module.ctx).unwrap() {
+                CompoundTypeData::Array { elem: elem_ty, len } => {
+                    let mut addr = addr;
+                    let elem_size = self.module.ctx.size_of(elem_ty);
+                    for _ in 0..len {
+                        let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
+                        let elem = self.load(elem_addr, elem_ty);
+                        fields.push(elem);
+                        addr += elem_size;
+                    }
+                }
+
+                CompoundTypeData::Struct(s) => {
+                    let mut addr = addr;
+                    for field_ty in s.fields.into_iter() {
+                        let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
+                        let field = self.load(elem_addr, field_ty);
+                        fields.push(field);
+                        addr += self.module.ctx.size_of(field_ty);
+                    }
+                }
+
+                CompoundTypeData::Ptr(_) => {
+                    unreachable!()
+                }
+            }
+
+            return EvalValue::Aggregate { fields, ty };
+        }
+
+        // Store a value of integer/pointer type.
         let slice = &self.memory[addr..addr + size];
         let value_i256 = match self.module.ctx.endian() {
             Endian::Be => I256::from_be_bytes(slice),
@@ -184,10 +215,8 @@ impl State for Machine {
     }
 
     fn store(&mut self, addr: EvalValue, value: EvalValue, ty: Type) -> EvalValue {
-        if !(ty.is_integral() || ty.is_pointer(&self.module.ctx)) {
-            // TODO: we need to decide how to handle load of aggregate type when it fits
-            // into register/stack-slot size.
-            todo!();
+        if value.is_undef() {
+            return EvalValue::Undef;
         }
 
         let Some(addr) = addr.as_imm() else {
@@ -199,6 +228,40 @@ impl State for Machine {
             self.memory.resize(addr + size, 0);
         }
 
+        // Store a value of aggregate type.
+        if !(ty.is_integral() || ty.is_pointer(&self.module.ctx)) {
+            let EvalValue::Aggregate { fields, ty } = value else {
+                unreachable!();
+            };
+            match ty.resolve_compound(&self.module.ctx).unwrap() {
+                CompoundTypeData::Array { elem: elem_ty, .. } => {
+                    let mut addr = addr;
+                    let elem_size = self.module.ctx.size_of(elem_ty);
+                    for field in &fields {
+                        let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
+                        self.store(field.clone(), elem_addr, elem_ty);
+                        addr += elem_size;
+                    }
+                }
+
+                CompoundTypeData::Struct(s) => {
+                    let mut addr = addr;
+                    for (i, field_ty) in s.fields.into_iter().enumerate() {
+                        let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
+                        self.store(fields[i].clone(), elem_addr, field_ty);
+                        addr += self.module.ctx.size_of(field_ty);
+                    }
+                }
+
+                CompoundTypeData::Ptr(_) => {
+                    unreachable!()
+                }
+            }
+
+            return EvalValue::Undef;
+        }
+
+        // Store a value of integer/pointer type.
         let Some(value) = value.as_imm() else {
             panic!("undef value in store");
         };
