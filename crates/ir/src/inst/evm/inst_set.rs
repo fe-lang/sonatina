@@ -37,6 +37,8 @@ pub struct EvmInstSet(
     data::Mstore,
     data::Gep,
     data::Alloca,
+    data::InsertValue,
+    data::ExtractValue,
     logic::Not,
     logic::And,
     logic::Or,

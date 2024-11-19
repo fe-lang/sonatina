@@ -36,3 +36,23 @@ pub struct Alloca {
     ty: Type,
 }
 impl_inst_write!(Alloca);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+pub struct InsertValue {
+    #[inst(value)]
+    dest: ValueId,
+    #[inst(value)]
+    idx: ValueId,
+    #[inst(value)]
+    value: ValueId,
+}
+impl_inst_write!(InsertValue);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+pub struct ExtractValue {
+    #[inst(value)]
+    dest: ValueId,
+    #[inst(value)]
+    idx: ValueId,
+}
+impl_inst_write!(ExtractValue);

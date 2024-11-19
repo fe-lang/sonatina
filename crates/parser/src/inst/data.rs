@@ -7,6 +7,8 @@ super::impl_inst_build! {Mload, (addr: ValueId, ty: Type)}
 super::impl_inst_build! {Mstore, (addr: ValueId, value: ValueId, ty: Type)}
 super::impl_inst_build_common! {Gep, ArityBound::AtLeast(2), build_gep}
 super::impl_inst_build! {Alloca, (ty: Type)}
+super::impl_inst_build! {InsertValue, (dest: ValueId, idx: ValueId, value: ValueId)}
+super::impl_inst_build! {ExtractValue, (dest: ValueId, idx: ValueId)}
 
 fn build_gep(
     ctx: &mut BuildCtx,
