@@ -1,0 +1,24 @@
+target = "evm-ethereum-london"
+
+type @s1 = {i32, i64, i1};
+
+#[(3.i32, 2.i64, 1.i1) -> 6.i64]
+func private %insert_value_basic(v0.i32, v1.i64, v2.i1) -> i64 {
+    block0:
+        v3.@s1 = insert_value undef.@s1 0.i256 v0;
+        v4.@s1 = insert_value v3 1.i256 v1;
+        v5.@s1 = insert_value v4 2.i256 v2;
+
+        v6.i32 = extract_value v5 0.i256;
+        v7.i64 = extract_value v5 1.i256;
+        v8.i1 = extract_value v5 2.i256;
+
+        v9.i64 = sext v6 i64;
+        v10.i64 = zext v8 i64;
+
+        v11.i64 = add v7 v9;
+        v12.i64 = add v11 v10;
+
+        return v12;
+}
+

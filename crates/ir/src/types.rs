@@ -150,6 +150,14 @@ impl Type {
     pub fn is_pointer(self, ctx: &ModuleCtx) -> bool {
         ctx.with_ty_store(|store| store.is_ptr(self))
     }
+
+    pub fn resolve_compound(self, ctx: &ModuleCtx) -> Option<CompoundTypeData> {
+        let Self::Compound(cmpd) = self else {
+            return None;
+        };
+
+        Some(ctx.with_ty_store(|s| s.resolve_compound(cmpd).clone()))
+    }
 }
 
 impl cmp::PartialOrd for Type {
@@ -183,7 +191,7 @@ impl cmp::PartialOrd for Type {
 }
 
 impl WriteWithModule for Type {
-    fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
+    fn write(&self, ctx: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
         match self {
             Type::I1 => write!(w, "i1"),
             Type::I8 => write!(w, "i8"),
@@ -192,7 +200,7 @@ impl WriteWithModule for Type {
             Type::I64 => write!(w, "i64"),
             Type::I128 => write!(w, "i128"),
             Type::I256 => write!(w, "i256"),
-            Type::Compound(cmpd_ty) => cmpd_ty.write(module, w),
+            Type::Compound(cmpd_ty) => cmpd_ty.write(ctx, w),
             Type::Unit => write!(w, "unit"),
         }
     }
@@ -204,16 +212,16 @@ pub struct CompoundType(u32);
 cranelift_entity::entity_impl!(CompoundType);
 
 impl WriteWithModule for CompoundType {
-    fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
-        module.with_ty_store(|s| match s.resolve_compound(*self) {
+    fn write(&self, ctx: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
+        ctx.with_ty_store(|s| match s.resolve_compound(*self) {
             CompoundTypeData::Array { elem: ty, len } => {
                 write!(w, "[")?;
-                ty.write(module, &mut *w)?;
+                ty.write(ctx, &mut *w)?;
                 write!(w, "; {len}]")
             }
             CompoundTypeData::Ptr(ty) => {
                 write!(w, "*")?;
-                ty.write(module, w)
+                ty.write(ctx, w)
             }
             CompoundTypeData::Struct(StructData { name, packed, .. }) => {
                 if *packed {

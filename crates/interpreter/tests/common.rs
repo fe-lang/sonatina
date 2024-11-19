@@ -126,6 +126,7 @@ fn parse_func_cases(module: &ParsedModule, func_ref: FuncRef) -> Result<Vec<Test
         .collect()
 }
 
+// TODO: Allow Compound value.
 fn parse_value(module: &ParsedModule, func_ref: FuncRef, input: &str) -> Result<Immediate, String> {
     let value = match Parser::parse(Rule::value, input) {
         Ok(mut pairs) => {

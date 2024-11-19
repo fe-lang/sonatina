@@ -75,7 +75,7 @@ impl DataFlowGraph {
         value
     }
 
-    pub fn make_undef(&mut self, ty: Type) -> ValueId {
+    pub fn make_undef_value(&mut self, ty: Type) -> ValueId {
         let value_data = Value::Undef { ty };
         self.make_value(value_data)
     }

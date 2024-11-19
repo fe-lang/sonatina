@@ -100,6 +100,59 @@ impl Interpret for Alloca {
     }
 }
 
+impl Interpret for InsertValue {
+    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+        state.set_action(Action::Continue);
+
+        let dest = state.lookup_val(*self.dest());
+        let ty = state.dfg().value_ty(*self.dest());
+
+        let mut fields = match dest {
+            EvalValue::Aggregate { fields, .. } => fields.clone(),
+
+            EvalValue::Undef => {
+                let len = match ty.resolve_compound(&state.dfg().ctx).unwrap() {
+                    CompoundTypeData::Array { len, .. } => len,
+                    CompoundTypeData::Struct(s) => s.fields.len(),
+                    CompoundTypeData::Ptr(_) => unreachable!(),
+                };
+                vec![EvalValue::Undef; len]
+            }
+
+            EvalValue::Imm(_) => {
+                unreachable!()
+            }
+        };
+
+        let idx = state.lookup_val(*self.idx()).as_imm().unwrap().as_usize();
+        fields[idx] = state.lookup_val(*self.value());
+
+        EvalValue::Aggregate { fields, ty }
+    }
+}
+
+impl Interpret for ExtractValue {
+    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+        state.set_action(Action::Continue);
+
+        let dest = state.lookup_val(*self.dest());
+        let dest = match dest {
+            EvalValue::Aggregate { fields, .. } => fields,
+
+            EvalValue::Undef => {
+                return EvalValue::Undef;
+            }
+
+            EvalValue::Imm(_) => {
+                unreachable!()
+            }
+        };
+
+        let idx = state.lookup_val(*self.idx()).as_imm().unwrap().as_usize();
+        dest.into_iter().nth(idx).unwrap()
+    }
+}
+
 fn align_to(offset: usize, alignment: usize) -> usize {
     assert!(alignment & (alignment - 1) == 0);
     (offset + alignment - 1) & !(alignment - 1)
