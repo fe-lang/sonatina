@@ -22,3 +22,5 @@ sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
 macros = { package = "sonatina-macros", path = "../macros", version = "0.0.3-alpha" }
 indexmap = "2.0.0"
 dot2 = { git = "https://github.com/sanpii/dot2.rs.git" }
+dashmap = { version = "6.1", features = ["rayon"] }
+rayon = { version = "1" }

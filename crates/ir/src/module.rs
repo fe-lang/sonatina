@@ -1,9 +1,10 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
-use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
+use cranelift_entity::{entity_impl, SecondaryMap};
+use dashmap::{DashMap, ReadOnlyView};
+use rayon::prelude::ParallelIterator;
 use sonatina_triple::TargetTriple;
 
-use super::Linkage;
 use crate::{
     global_variable::GlobalVariableStore,
     isa::{Endian, Isa, TypeLayout},
@@ -12,7 +13,7 @@ use crate::{
 };
 
 pub struct Module {
-    pub funcs: PrimaryMap<FuncRef, Function>,
+    pub funcs: FuncStore,
     pub ctx: ModuleCtx,
 }
 
@@ -20,25 +21,84 @@ impl Module {
     #[doc(hidden)]
     pub fn new<T: Isa>(isa: &T) -> Self {
         Self {
-            funcs: PrimaryMap::default(),
+            funcs: FuncStore::new(),
             ctx: ModuleCtx::new(isa),
         }
     }
 
-    /// Returns `func_ref` in the module.
-    pub fn iter_functions(&self) -> impl Iterator<Item = FuncRef> {
-        self.funcs.keys()
-    }
-
-    /// Returns `true` if the function has external linkage.
-    pub fn is_external(&self, func_ref: FuncRef) -> bool {
-        self.funcs[func_ref].sig.linkage() == Linkage::External
-    }
-
-    pub fn sig(&self, func_ref: FuncRef) -> &Signature {
-        &self.funcs[func_ref].sig
+    pub fn funcs(&self) -> Vec<FuncRef> {
+        self.funcs.funcs()
     }
 }
+
+pub struct FuncStore {
+    funcs: DashMap<FuncRef, Function>,
+    _guard: Mutex<()>,
+}
+
+impl FuncStore {
+    pub fn update(&self, func_ref: FuncRef, func: Function) {
+        self.funcs.insert(func_ref, func).unwrap();
+    }
+
+    pub fn insert(&self, func: Function) -> FuncRef {
+        let _guard = self._guard.lock().unwrap();
+
+        let func_ref = FuncRef::from_u32(self.funcs.len() as u32);
+        self.funcs.insert(func_ref, func);
+        func_ref
+    }
+
+    pub fn view<F, R>(&self, func_ref: FuncRef, f: F) -> R
+    where
+        F: FnOnce(&Function) -> R,
+    {
+        self.funcs.view(&func_ref, |_, func| f(func)).unwrap()
+    }
+
+    pub fn modify<F, R>(&self, func_ref: FuncRef, f: F) -> R
+    where
+        F: FnOnce(&mut Function) -> R,
+    {
+        let mut entry = self.funcs.get_mut(&func_ref).unwrap();
+        f(entry.value_mut())
+    }
+
+    pub fn par_for_each<F>(&self, f: F)
+    where
+        F: Fn(&mut Function) + Sync + Send,
+    {
+        self.funcs
+            .par_iter_mut()
+            .for_each(|mut entry| f(entry.value_mut()))
+    }
+
+    pub fn funcs(&self) -> Vec<FuncRef> {
+        let _guard = self._guard.lock().unwrap();
+        let len = self.funcs.len();
+        (0..len).map(|n| FuncRef::from_u32(n as u32)).collect()
+    }
+
+    pub fn into_read_only(self) -> RoFuncStore {
+        self.funcs.into_read_only()
+    }
+
+    pub fn from_read_only(ro_fs: RoFuncStore) -> Self {
+        Self {
+            funcs: ro_fs.into_inner(),
+            _guard: Mutex::new(()),
+        }
+    }
+
+    pub(crate) fn new() -> Self {
+        Self {
+            funcs: DashMap::new(),
+            _guard: Mutex::new(()),
+        }
+    }
+}
+
+pub type RoFuncStore = ReadOnlyView<FuncRef, Function>;
 
 #[derive(Clone)]
 pub struct ModuleCtx {

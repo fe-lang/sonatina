@@ -40,7 +40,7 @@ impl TraitDefinition {
 
         quote! {
             #(#attrs)*
-            pub trait InstSetBase: crate::HasInst<crate::inst::control_flow::Phi> + crate::HasInst<crate::inst::control_flow::Jump> {
+            pub trait InstSetBase: crate::HasInst<crate::inst::control_flow::Phi> + crate::HasInst<crate::inst::control_flow::Jump> + Send + Sync {
                 #(#methods)*
 
                 fn phi(&self) -> &dyn crate::HasInst<crate::inst::control_flow::Phi> {

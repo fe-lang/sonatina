@@ -27,7 +27,7 @@ use crate::{
 pub struct InstId(pub u32);
 cranelift_entity::entity_impl!(InstId);
 
-pub trait Inst: inst_set::sealed::Registered + Any {
+pub trait Inst: inst_set::sealed::Registered + Any + Send + Sync {
     fn visit_values(&self, f: &mut dyn FnMut(ValueId));
     fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut ValueId));
     fn side_effect(&self) -> SideEffect;

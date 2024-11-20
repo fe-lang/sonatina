@@ -94,6 +94,10 @@ impl I256 {
         Self { is_negative, abs }
     }
 
+    pub fn from_usize(val: usize) -> Self {
+        Self::from_u256(val.into())
+    }
+
     pub fn to_u256(&self) -> U256 {
         if self.is_negative {
             !self.abs + U256::one()

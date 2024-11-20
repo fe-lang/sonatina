@@ -26,7 +26,7 @@ pub fn render_to<W: io::Write>(
 mod test {
     use super::*;
     use crate::{
-        builder::test_util::test_func_builder,
+        builder::test_util::{test_func_builder, test_module_builder},
         inst::{
             arith::Add,
             control_flow::{Br, Jump, Phi, Return},
@@ -37,7 +37,8 @@ mod test {
 
     #[test]
     fn test_dump_ir() {
-        let (evm, mut builder) = test_func_builder(&[Type::I64], Type::Unit);
+        let mut mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mut mb, &[Type::I64], Type::Unit);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();
@@ -70,12 +71,17 @@ mod test {
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
 
         let mut text = vec![];
-        render_to(&module.funcs[func_ref], func_ref, &mut text).unwrap();
+        module.funcs.view(func_ref, |func| {
+            render_to(func, func_ref, &mut text).unwrap();
+        });
         let text = String::from_utf8(text).unwrap();
+
         let expected = "digraph test_func {
     block3[label=<<table border=\"0\" cellborder=\"1\" cellspacing=\"0\"><tr><td bgcolor=\"gray\" align=\"center\" colspan=\"1\">block3</td></tr><tr><td align=\"left\" balign=\"left\">v3.i64 = phi (1.i64 block1) (2.i64 block2);<br/>v4.i64 = add v3 v0;<br/>return;<br/></td></tr></table>>][shape=\"none\"];
     block2[label=<<table border=\"0\" cellborder=\"1\" cellspacing=\"0\"><tr><td bgcolor=\"gray\" align=\"center\" colspan=\"1\">block2</td></tr><tr><td align=\"left\" balign=\"left\">jump block3;<br/></td></tr></table>>][shape=\"none\"];

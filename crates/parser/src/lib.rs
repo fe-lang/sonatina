@@ -9,8 +9,8 @@ use ir::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     ir_writer::DebugProvider,
     isa::evm::Evm,
-    module::{FuncRef, ModuleCtx},
-    Function, Module, Signature,
+    module::{FuncRef, Module, ModuleCtx},
+    Function, Signature,
 };
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smol_str::SmolStr;
@@ -86,8 +86,8 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
     let mut func_comments = SecondaryMap::default();
 
     for func in ast.functions {
-        let id = builder.get_func_ref(&func.signature.name.name).unwrap();
-        builder = ctx.build_func(builder.build_function(id), id, &func);
+        let id = builder.lookup_func(&func.signature.name.name).unwrap();
+        ctx.build_func(builder.build_function(id), id, &func);
 
         func_comments[id] = func.comments;
     }
@@ -134,7 +134,7 @@ impl BuildCtx {
         mut fb: FunctionBuilder<InstInserter>,
         func_ref: FuncRef,
         func: &ast::Func,
-    ) -> ModuleBuilder {
+    ) {
         self.blocks.clear();
 
         for (i, ValueDeclaration(name, _ty)) in func.signature.params.iter().enumerate() {
@@ -144,7 +144,7 @@ impl BuildCtx {
 
         for stmt in func.blocks.iter().flat_map(|b| b.stmts.iter()) {
             if let StmtKind::Assign(ValueDeclaration(name, ty), _) = &stmt.kind {
-                let ty = self.type_(&mut fb.module_builder, ty);
+                let ty = self.type_(fb.module_builder, ty);
                 self.declare_value(&mut fb.func, name, ty);
             }
         }
@@ -175,7 +175,7 @@ impl BuildCtx {
                         };
 
                         // xxx cleanup
-                        let ty = self.type_(&mut fb.module_builder, type_);
+                        let ty = self.type_(fb.module_builder, type_);
                         let value = *self.func_value_names.get_by_right(&name.string).unwrap();
                         let inst_id = fb.cursor.insert_inst_data_dyn(&mut fb.func, inst);
                         fb.func.dfg.values[value] = ir::Value::Inst { inst: inst_id, ty };
@@ -202,11 +202,11 @@ impl BuildCtx {
         let names = std::mem::take(&mut self.func_value_names);
         self.value_names.insert(func_ref, names);
         fb.seal_all();
-        fb.finish()
+        fb.finish();
     }
 
     fn func_ref(&mut self, mb: &mut ModuleBuilder, name: &ast::FunctionName) -> FuncRef {
-        mb.get_func_ref(&name.name).unwrap_or_else(|| {
+        mb.lookup_func(&name.name).unwrap_or_else(|| {
             self.errors.push(Error::Undefined(
                 UndefinedKind::Func(name.name.clone()),
                 name.span,
@@ -264,7 +264,7 @@ impl BuildCtx {
                     ir::ValueId(0)
                 }),
             ast::ValueKind::Undef(ty) => {
-                let ty = self.type_(&mut fb.module_builder, ty);
+                let ty = self.type_(fb.module_builder, ty);
                 fb.make_undef_value(ty)
             }
             ast::ValueKind::Error => unreachable!(),

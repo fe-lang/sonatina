@@ -5,23 +5,24 @@ use super::{
 use crate::{
     func_cursor::{CursorLocation, FuncCursor},
     module::{FuncRef, ModuleCtx},
-    BlockId, Function, GlobalVariable, Immediate, Inst, InstId, InstSetBase, Type, Value, ValueId,
+    BlockId, Function, GlobalVariable, Immediate, Inst, InstId, InstSetBase, Signature, Type,
+    Value, ValueId,
 };
 
-pub struct FunctionBuilder<C> {
-    pub module_builder: ModuleBuilder,
+pub struct FunctionBuilder<'a, C> {
+    pub module_builder: &'a mut ModuleBuilder,
     pub func: Function,
     func_ref: FuncRef,
     pub cursor: C,
     ssa_builder: SsaBuilder,
 }
 
-impl<C> FunctionBuilder<C>
+impl<'a, C> FunctionBuilder<'a, C>
 where
     C: FuncCursor,
 {
-    pub fn new(module_builder: ModuleBuilder, func_ref: FuncRef, cursor: C) -> Self {
-        let sig = module_builder.funcs[func_ref].sig.clone();
+    pub fn new(module_builder: &'a mut ModuleBuilder, func_ref: FuncRef, cursor: C) -> Self {
+        let sig = module_builder.funcs.view(func_ref, |func| func.sig.clone());
         let func = Function::new(&module_builder.ctx, sig);
 
         Self {
@@ -33,7 +34,11 @@ where
         }
     }
 
-    pub fn finish(self) -> ModuleBuilder {
+    pub fn func_sig(&self) -> &Signature {
+        &self.func.sig
+    }
+
+    pub fn finish(self) {
         if cfg!(debug_assertions) {
             for block in self.func.layout.iter_block() {
                 debug_assert!(self.is_sealed(block), "all blocks must be sealed");
@@ -41,14 +46,13 @@ where
         }
 
         let Self {
-            mut module_builder,
+            module_builder,
             func,
             func_ref,
             ..
         } = self;
 
-        module_builder.funcs[func_ref] = func;
-        module_builder
+        module_builder.funcs.update(func_ref, func);
     }
 
     pub fn append_parameter(&mut self, ty: Type) -> ValueId {
@@ -281,7 +285,8 @@ mod tests {
 
     #[test]
     fn entry_block() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let mut mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let b0 = builder.append_block();
@@ -297,9 +302,10 @@ mod tests {
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
         assert_eq!(
             dump_func(&module, func_ref),
             "func public %test_func() -> unit {
@@ -315,7 +321,8 @@ mod tests {
 
     #[test]
     fn entry_block_with_args() {
-        let (evm, mut builder) = test_func_builder(&[Type::I32, Type::I64], Type::Unit);
+        let mut mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mut mb, &[Type::I32, Type::I64], Type::Unit);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();
@@ -331,9 +338,10 @@ mod tests {
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
         assert_eq!(
             dump_func(&module, func_ref),
             "func public %test_func(v0.i32, v1.i64) -> unit {
@@ -349,7 +357,8 @@ mod tests {
 
     #[test]
     fn entry_block_with_return() {
-        let (evm, mut builder) = test_func_builder(&[], Type::I32);
+        let mut mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::I32);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();
@@ -359,9 +368,10 @@ mod tests {
         let ret = Return::new(is, Some(v0));
         builder.insert_inst_no_result(ret);
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
         assert_eq!(
             dump_func(&module, func_ref),
             "func public %test_func() -> i32 {
@@ -375,7 +385,8 @@ mod tests {
 
     #[test]
     fn then_else_merge_block() {
-        let (evm, mut builder) = test_func_builder(&[Type::I64], Type::Unit);
+        let mut mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mut mb, &[Type::I64], Type::Unit);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();
@@ -408,9 +419,10 @@ mod tests {
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
         assert_eq!(
             dump_func(&module, func_ref),
             "func public %test_func(v0.i64) -> unit {

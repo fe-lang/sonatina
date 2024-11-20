@@ -12,7 +12,7 @@ pub trait Isa {
     fn type_layout(&self) -> &'static dyn TypeLayout;
 }
 
-pub trait TypeLayout {
+pub trait TypeLayout: Send + Sync {
     fn size_of(&self, ty: Type, ctx: &ModuleCtx) -> usize;
     fn align_of(&self, ty: Type, ctx: &ModuleCtx) -> usize;
     fn pointer_repl(&self) -> Type;

@@ -43,10 +43,11 @@ impl<'a> ModuleWriter<'a> {
             io::Result::Ok(())
         })?;
 
-        for func_ref in self.module.funcs.keys() {
-            let func = &self.module.funcs[func_ref];
-            let mut writer = FuncWriter::with_debug_provider(func, func_ref, self.dbg);
-            writer.write(&mut *w)?;
+        for func_ref in self.module.funcs.funcs() {
+            self.module.funcs.view(func_ref, |func| {
+                let mut writer = FuncWriter::with_debug_provider(func, func_ref, self.dbg);
+                writer.write(&mut *w)
+            })?;
         }
 
         Ok(())
@@ -97,7 +98,7 @@ pub struct FuncWriter<'a> {
 }
 
 impl<'a> FuncWriter<'a> {
-    pub fn new(func: &'a Function, func_ref: FuncRef) -> Self {
+    pub fn new(func_ref: FuncRef, func: &'a Function) -> Self {
         Self::with_debug_provider(func, func_ref, &DEFAULT_PROVIDER)
     }
 

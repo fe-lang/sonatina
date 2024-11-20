@@ -1,38 +1,40 @@
-use cranelift_entity::PrimaryMap;
-use rustc_hash::FxHashMap;
+use std::sync::Arc;
+
+use dashmap::DashMap;
 
 use super::FunctionBuilder;
 use crate::{
     func_cursor::{CursorLocation, FuncCursor},
-    module::{FuncRef, ModuleCtx},
+    module::{FuncRef, FuncStore, ModuleCtx},
     Function, GlobalVariable, GlobalVariableData, InstSetBase, Module, Signature, Type,
 };
 
+#[derive(Clone)]
 pub struct ModuleBuilder {
-    pub funcs: PrimaryMap<FuncRef, Function>,
+    pub funcs: Arc<FuncStore>,
 
     pub ctx: ModuleCtx,
 
     /// Map function name -> FuncRef to avoid duplicated declaration.
-    declared_funcs: FxHashMap<String, FuncRef>,
+    declared_funcs: Arc<DashMap<String, FuncRef>>,
 }
 
 impl ModuleBuilder {
     pub fn new(ctx: ModuleCtx) -> Self {
         Self {
-            funcs: PrimaryMap::default(),
+            funcs: Arc::new(FuncStore::new()),
             ctx,
-            declared_funcs: FxHashMap::default(),
+            declared_funcs: Arc::new(DashMap::default()),
         }
     }
 
     pub fn declare_function(&mut self, sig: Signature) -> FuncRef {
-        if self.declared_funcs.contains_key(sig.name()) {
-            panic!("{} is already declared.", sig.name())
+        if let Some(func_ref) = self.declared_funcs.get(sig.name()) {
+            *func_ref
         } else {
             let name = sig.name().to_string();
             let func = Function::new(&self.ctx, sig.clone());
-            let func_ref = self.funcs.push(func);
+            let func_ref = self.funcs.insert(func);
             self.declared_funcs.insert(name, func_ref);
             self.ctx.declared_funcs[func_ref] = sig;
             func_ref
@@ -40,11 +42,7 @@ impl ModuleBuilder {
     }
 
     pub fn lookup_func(&self, name: &str) -> Option<FuncRef> {
-        self.declared_funcs.get(name).copied()
-    }
-
-    pub fn sig(&self, func: FuncRef) -> &Signature {
-        &self.funcs[func].sig
+        self.declared_funcs.get(name).map(|func_ref| *func_ref)
     }
 
     pub fn make_global(&self, global: GlobalVariableData) -> GlobalVariable {
@@ -72,15 +70,7 @@ impl ModuleBuilder {
         self.ctx.with_ty_store_mut(|s| s.make_ptr(ty))
     }
 
-    pub fn get_func_ref(&self, name: &str) -> Option<FuncRef> {
-        self.declared_funcs.get(name).copied()
-    }
-
-    pub fn get_sig(&self, func: FuncRef) -> &Signature {
-        &self.funcs[func].sig
-    }
-
-    pub fn build_function<C>(self, func: FuncRef) -> FunctionBuilder<C>
+    pub fn build_function<C>(&mut self, func: FuncRef) -> FunctionBuilder<C>
     where
         C: FuncCursor,
     {
@@ -90,7 +80,7 @@ impl ModuleBuilder {
 
     pub fn build(self) -> Module {
         Module {
-            funcs: self.funcs,
+            funcs: Arc::into_inner(self.funcs).unwrap(),
             ctx: self.ctx,
         }
     }

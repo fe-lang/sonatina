@@ -228,7 +228,8 @@ mod tests {
 
     #[test]
     fn use_var_local() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let mut mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
@@ -244,9 +245,10 @@ mod tests {
         let ret = Return::new(is, None);
         builder.insert_inst_no_result(ret);
         builder.seal_block();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
 
         assert_eq!(
             dump_func(&module, func_ref),
@@ -262,7 +264,8 @@ mod tests {
 
     #[test]
     fn use_var_global_if() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let mut mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
@@ -298,9 +301,10 @@ mod tests {
         let ret = Return::new(is, None);
         builder.insert_inst_no_result(ret);
         builder.seal_block();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
 
         assert_eq!(
             dump_func(&module, func_ref),
@@ -325,7 +329,8 @@ mod tests {
 
     #[test]
     fn use_var_global_many_preds() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let mut mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let var0 = builder.declare_var(Type::I32);
@@ -388,9 +393,10 @@ mod tests {
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
 
         assert_eq!(
             dump_func(&module, func_ref),
@@ -429,7 +435,8 @@ mod tests {
 
     #[test]
     fn use_var_global_loop() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let mut mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
@@ -467,9 +474,10 @@ mod tests {
         let ret = Return::new(is, None);
         builder.insert_inst_no_result(ret);
         builder.seal_block();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
 
         assert_eq!(
             dump_func(&module, func_ref),
@@ -495,7 +503,8 @@ mod tests {
 
     #[test]
     fn use_var_global_complex() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let mut mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
@@ -551,9 +560,10 @@ mod tests {
         let ret = Return::new(is, None);
         builder.insert_inst_no_result(ret);
         builder.seal_block();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
 
         assert_eq!(
             dump_func(&module, func_ref),
@@ -589,7 +599,8 @@ mod tests {
 
     #[test]
     fn use_var_global_complex_seal_all() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let mut mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
@@ -640,9 +651,10 @@ mod tests {
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
 
         assert_eq!(
             dump_func(&module, func_ref),
@@ -678,7 +690,8 @@ mod tests {
 
     #[test]
     fn br_table() {
-        let (evm, mut builder) = test_func_builder(&[Type::I32], Type::I32);
+        let mut mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mut mb, &[Type::I32], Type::I32);
         let is = evm.inst_set();
         let var = builder.declare_var(Type::I32);
 
@@ -725,9 +738,10 @@ mod tests {
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
 
         assert_eq!(
             dump_func(&module, func_ref),
@@ -756,7 +770,8 @@ mod tests {
     #[test]
     #[should_panic]
     fn undef_use() {
-        let (_, mut builder) = test_func_builder(&[], Type::Unit);
+        let mut mb = test_module_builder();
+        let (_, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();
@@ -768,7 +783,8 @@ mod tests {
     #[test]
     #[should_panic]
     fn unreachable_use() {
-        let (_, mut builder) = test_func_builder(&[], Type::Unit);
+        let mut mb = test_module_builder();
+        let (_, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();
