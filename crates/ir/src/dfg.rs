@@ -148,6 +148,10 @@ impl DataFlowGraph {
         }
     }
 
+    pub fn value_is_imm(&self, value_id: ValueId) -> bool {
+        matches!(self.values[value_id], Value::Immediate { .. })
+    }
+
     pub fn attach_user(&mut self, inst_id: InstId) {
         let inst = &self.insts[inst_id];
         inst.for_each_value(&mut |value| {

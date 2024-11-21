@@ -131,6 +131,12 @@ pub struct DebugInfo {
     pub value_names: FxHashMap<FuncRef, Bimap<ir::ValueId, SmolStr>>,
 }
 
+impl DebugInfo {
+    pub fn value(&self, func: FuncRef, name: &str) -> Option<ir::ValueId> {
+        self.value_names.get(&func)?.get_by_right(name).copied()
+    }
+}
+
 impl DebugProvider for DebugInfo {
     fn value_name(&self, _func: &Function, func_ref: FuncRef, value: ir::ValueId) -> Option<&str> {
         let names = self.value_names.get(&func_ref)?;
