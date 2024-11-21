@@ -9,19 +9,19 @@ use crate::{
     Value, ValueId,
 };
 
-pub struct FunctionBuilder<'a, C> {
-    pub module_builder: &'a mut ModuleBuilder,
+pub struct FunctionBuilder<C> {
+    pub module_builder: ModuleBuilder,
     pub func: Function,
     func_ref: FuncRef,
     pub cursor: C,
     ssa_builder: SsaBuilder,
 }
 
-impl<'a, C> FunctionBuilder<'a, C>
+impl<C> FunctionBuilder<C>
 where
     C: FuncCursor,
 {
-    pub fn new(module_builder: &'a mut ModuleBuilder, func_ref: FuncRef, cursor: C) -> Self {
+    pub fn new(module_builder: ModuleBuilder, func_ref: FuncRef, cursor: C) -> Self {
         let sig = module_builder.funcs.view(func_ref, |func| func.sig.clone());
         let func = Function::new(&module_builder.ctx, sig);
 
@@ -285,8 +285,8 @@ mod tests {
 
     #[test]
     fn entry_block() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let b0 = builder.append_block();
@@ -321,8 +321,8 @@ mod tests {
 
     #[test]
     fn entry_block_with_args() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[Type::I32, Type::I64], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I32, Type::I64], Type::Unit);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();
@@ -357,8 +357,8 @@ mod tests {
 
     #[test]
     fn entry_block_with_return() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::I32);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I32);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();
@@ -385,8 +385,8 @@ mod tests {
 
     #[test]
     fn then_else_merge_block() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[Type::I64], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I64], Type::Unit);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();

@@ -235,8 +235,8 @@ mod tests {
 
     #[test]
     fn dom_tree_if_else() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();
@@ -277,8 +277,8 @@ mod tests {
 
     #[test]
     fn unreachable_edge() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();
@@ -326,8 +326,8 @@ mod tests {
 
     #[test]
     fn dom_tree_complex() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();
@@ -420,8 +420,8 @@ mod tests {
 
     #[test]
     fn dom_tree_br_table() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();

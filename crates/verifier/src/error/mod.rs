@@ -69,8 +69,8 @@ mod test {
 
     #[test]
     fn display_verifier_error() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let b0 = builder.append_block();

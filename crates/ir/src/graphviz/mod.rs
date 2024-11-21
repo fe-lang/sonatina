@@ -37,8 +37,8 @@ mod test {
 
     #[test]
     fn test_dump_ir() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[Type::I64], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I64], Type::Unit);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();

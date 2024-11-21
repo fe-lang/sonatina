@@ -28,7 +28,7 @@ impl ModuleBuilder {
         }
     }
 
-    pub fn declare_function(&mut self, sig: Signature) -> FuncRef {
+    pub fn declare_function(&self, sig: Signature) -> FuncRef {
         if let Some(func_ref) = self.declared_funcs.get(sig.name()) {
             *func_ref
         } else {
@@ -36,13 +36,20 @@ impl ModuleBuilder {
             let func = Function::new(&self.ctx, sig.clone());
             let func_ref = self.funcs.insert(func);
             self.declared_funcs.insert(name, func_ref);
-            self.ctx.declared_funcs[func_ref] = sig;
+            self.ctx.declared_funcs.insert(func_ref, sig);
             func_ref
         }
     }
 
     pub fn lookup_func(&self, name: &str) -> Option<FuncRef> {
         self.declared_funcs.get(name).map(|func_ref| *func_ref)
+    }
+
+    pub fn sig<F, R>(&self, func_ref: FuncRef, f: F) -> R
+    where
+        F: FnOnce(&Signature) -> R,
+    {
+        self.funcs.view(func_ref, |func| f(&func.sig))
     }
 
     pub fn make_global(&self, global: GlobalVariableData) -> GlobalVariable {
@@ -53,7 +60,7 @@ impl ModuleBuilder {
         self.ctx.with_gv_store(|s| s.gv_by_symbol(name))
     }
 
-    pub fn declare_struct_type(&mut self, name: &str, fields: &[Type], packed: bool) -> Type {
+    pub fn declare_struct_type(&self, name: &str, fields: &[Type], packed: bool) -> Type {
         self.ctx
             .with_ty_store_mut(|s| s.make_struct(name, fields, packed))
     }
@@ -62,20 +69,20 @@ impl ModuleBuilder {
         self.ctx.with_ty_store(|s| s.struct_type_by_name(name))
     }
 
-    pub fn declare_array_type(&mut self, elem: Type, len: usize) -> Type {
+    pub fn declare_array_type(&self, elem: Type, len: usize) -> Type {
         self.ctx.with_ty_store_mut(|s| s.make_array(elem, len))
     }
 
-    pub fn ptr_type(&mut self, ty: Type) -> Type {
+    pub fn ptr_type(&self, ty: Type) -> Type {
         self.ctx.with_ty_store_mut(|s| s.make_ptr(ty))
     }
 
-    pub fn build_function<C>(&mut self, func: FuncRef) -> FunctionBuilder<C>
+    pub fn build_function<C>(&self, func: FuncRef) -> FunctionBuilder<C>
     where
         C: FuncCursor,
     {
         let cursor = C::at_location(CursorLocation::NoWhere);
-        FunctionBuilder::new(self, func, cursor)
+        FunctionBuilder::new(self.clone(), func, cursor)
     }
 
     pub fn build(self) -> Module {

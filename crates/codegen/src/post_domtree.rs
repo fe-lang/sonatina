@@ -179,8 +179,8 @@ mod tests {
 
     #[test]
     fn pd_if_else() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[Type::I32], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I32], Type::Unit);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();
@@ -229,8 +229,8 @@ mod tests {
 
     #[test]
     fn infinite_loop() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();
@@ -250,8 +250,8 @@ mod tests {
 
     #[test]
     fn test_multiple_return() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();
@@ -298,8 +298,8 @@ mod tests {
 
     #[test]
     fn pd_complex() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();

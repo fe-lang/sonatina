@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex, RwLock};
 
-use cranelift_entity::{entity_impl, SecondaryMap};
+use cranelift_entity::entity_impl;
 use dashmap::{DashMap, ReadOnlyView};
 use rayon::prelude::ParallelIterator;
 use sonatina_triple::TargetTriple;
@@ -105,7 +105,7 @@ pub struct ModuleCtx {
     pub triple: TargetTriple,
     pub inst_set: &'static dyn InstSetBase,
     pub type_layout: &'static dyn TypeLayout,
-    pub declared_funcs: SecondaryMap<FuncRef, Signature>,
+    pub declared_funcs: Arc<DashMap<FuncRef, Signature>>,
     type_store: Arc<RwLock<TypeStore>>,
     gv_store: Arc<RwLock<GlobalVariableStore>>,
 }
@@ -117,7 +117,7 @@ impl ModuleCtx {
             inst_set: isa.inst_set(),
             type_layout: isa.type_layout(),
             type_store: Arc::new(RwLock::new(TypeStore::default())),
-            declared_funcs: SecondaryMap::default(),
+            declared_funcs: Arc::new(DashMap::new()),
             gv_store: Arc::new(RwLock::new(GlobalVariableStore::default())),
         }
     }
@@ -130,8 +130,13 @@ impl ModuleCtx {
         self.type_layout.align_of(ty, self)
     }
 
-    pub fn func_sig(&self, func: FuncRef) -> Option<&Signature> {
-        self.declared_funcs.get(func)
+    pub fn func_sig<F, R>(&self, func_ref: FuncRef, f: F) -> R
+    where
+        F: FnOnce(&Signature) -> R,
+    {
+        self.declared_funcs
+            .view(&func_ref, |_, sig| f(sig))
+            .unwrap()
     }
 
     pub fn endian(&self) -> Endian {

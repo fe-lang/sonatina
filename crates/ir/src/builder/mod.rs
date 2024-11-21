@@ -33,11 +33,11 @@ pub mod test_util {
         ModuleBuilder::new(ctx)
     }
 
-    pub fn test_func_builder<'a>(
-        mb: &'a mut ModuleBuilder,
+    pub fn test_func_builder(
+        mb: &ModuleBuilder,
         args: &[Type],
         ret_ty: Type,
-    ) -> (Evm, FunctionBuilder<'a, InstInserter>) {
+    ) -> (Evm, FunctionBuilder<InstInserter>) {
         let sig = Signature::new("test_func", Linkage::Public, args, ret_ty);
         let func_ref = mb.declare_function(sig);
         (test_isa(), mb.build_function(func_ref))

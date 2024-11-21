@@ -228,8 +228,8 @@ mod tests {
 
     #[test]
     fn use_var_local() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
@@ -264,8 +264,8 @@ mod tests {
 
     #[test]
     fn use_var_global_if() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
@@ -329,8 +329,8 @@ mod tests {
 
     #[test]
     fn use_var_global_many_preds() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let var0 = builder.declare_var(Type::I32);
@@ -435,8 +435,8 @@ mod tests {
 
     #[test]
     fn use_var_global_loop() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
@@ -503,8 +503,8 @@ mod tests {
 
     #[test]
     fn use_var_global_complex() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
@@ -599,8 +599,8 @@ mod tests {
 
     #[test]
     fn use_var_global_complex_seal_all() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let var = builder.declare_var(Type::I32);
@@ -690,8 +690,8 @@ mod tests {
 
     #[test]
     fn br_table() {
-        let mut mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mut mb, &[Type::I32], Type::I32);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I32], Type::I32);
         let is = evm.inst_set();
         let var = builder.declare_var(Type::I32);
 
@@ -770,8 +770,8 @@ mod tests {
     #[test]
     #[should_panic]
     fn undef_use() {
-        let mut mb = test_module_builder();
-        let (_, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
+        let mb = test_module_builder();
+        let (_, mut builder) = test_func_builder(&mb, &[], Type::Unit);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();
@@ -783,8 +783,8 @@ mod tests {
     #[test]
     #[should_panic]
     fn unreachable_use() {
-        let mut mb = test_module_builder();
-        let (_, mut builder) = test_func_builder(&mut mb, &[], Type::Unit);
+        let mb = test_module_builder();
+        let (_, mut builder) = test_func_builder(&mb, &[], Type::Unit);
 
         let var = builder.declare_var(Type::I32);
         let b1 = builder.append_block();

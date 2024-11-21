@@ -126,12 +126,10 @@ pub struct Call {
 impl InstWrite for Call {
     fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
         let name = self.as_text();
-        let callee = ctx
-            .func
-            .ctx()
-            .func_sig(self.callee)
-            .map_or("undef", |sig| sig.name());
-        write!(w, "{name} %{callee}")?;
+        ctx.func.ctx().func_sig(self.callee, |sig| {
+            let callee = sig.name();
+            write!(w, "{name} %{callee}")
+        })?;
         for value in &self.args {
             write!(w, " ")?;
             value.write(ctx, &mut w)?;
