@@ -139,8 +139,8 @@ impl TraitDefinition {
             /// This macro is intended to be invoked from the `[inst_prop]` macro and.
             macro_rules! inst_downcast_from_all_insts {
                 (&dyn $prop:path) => {
-                    impl $crate::prelude::InstDowncast for &dyn $prop {
-                        fn downcast(isb: &dyn $crate::prelude::InstSetBase, inst: &dyn $crate::prelude::Inst) -> Option<Self> {
+                    impl<'a> $crate::prelude::InstDowncast<'a> for &'a dyn $prop {
+                        fn downcast(isb: &dyn $crate::prelude::InstSetBase, inst: &'a dyn $crate::prelude::Inst) -> Option<Self> {
                             match inst.type_id() {
                                 #(#arms)*
                                 _ => None
@@ -151,8 +151,8 @@ impl TraitDefinition {
                 };
 
                 (&mut dyn $prop:path) => {
-                    impl $crate::prelude::InstDowncastMut for &mut dyn $prop {
-                        fn downcast_mut(isb: &dyn $crate::prelude::InstSetBase, inst: &mut dyn $crate::prelude::Inst) -> Option<Self> {
+                    impl<'a> $crate::prelude::InstDowncastMut<'a> for &'a mut dyn $prop {
+                        fn downcast_mut(isb: &dyn $crate::prelude::InstSetBase, inst: &'a mut dyn $crate::prelude::Inst) -> Option<Self> {
                             match inst.type_id() {
                                 #(#arms_mut)*
                                 _ => None

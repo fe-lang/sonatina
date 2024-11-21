@@ -13,6 +13,7 @@ use std::{
     io,
 };
 
+use dyn_clone::DynClone;
 use macros::inst_prop;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
@@ -27,7 +28,7 @@ use crate::{
 pub struct InstId(pub u32);
 cranelift_entity::entity_impl!(InstId);
 
-pub trait Inst: inst_set::sealed::Registered + Any + Send + Sync {
+pub trait Inst: inst_set::sealed::Registered + DynClone + Any + Send + Sync {
     fn visit_values(&self, f: &mut dyn FnMut(ValueId));
     fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut ValueId));
     fn side_effect(&self) -> SideEffect;
@@ -164,10 +165,10 @@ where
     }
 }
 
-pub trait InstDowncast: Sized {
-    fn downcast(isb: &dyn InstSetBase, inst: &dyn Inst) -> Option<Self>;
+pub trait InstDowncast<'a>: Sized {
+    fn downcast(isb: &dyn InstSetBase, inst: &'a dyn Inst) -> Option<Self>;
 
-    fn map<F, R>(isb: &dyn InstSetBase, inst: &dyn Inst, f: F) -> Option<R>
+    fn map<F, R>(isb: &dyn InstSetBase, inst: &'a dyn Inst, f: F) -> Option<R>
     where
         F: FnOnce(Self) -> R,
     {
@@ -176,19 +177,19 @@ pub trait InstDowncast: Sized {
     }
 }
 
-impl<T> InstDowncastMut for T
+impl<'a, T> InstDowncastMut<'a> for T
 where
-    T: InstDowncast,
+    T: InstDowncast<'a>,
 {
-    fn downcast_mut(isb: &dyn InstSetBase, inst: &mut dyn Inst) -> Option<Self> {
+    fn downcast_mut(isb: &dyn InstSetBase, inst: &'a mut dyn Inst) -> Option<Self> {
         InstDowncast::downcast(isb, inst)
     }
 }
 
-pub trait InstDowncastMut: Sized {
-    fn downcast_mut(isb: &dyn InstSetBase, inst: &mut dyn Inst) -> Option<Self>;
+pub trait InstDowncastMut<'a>: Sized {
+    fn downcast_mut(isb: &dyn InstSetBase, inst: &'a mut dyn Inst) -> Option<Self>;
 
-    fn map_mut<F, R>(isb: &dyn InstSetBase, inst: &mut dyn Inst, f: F) -> Option<R>
+    fn map_mut<F, R>(isb: &dyn InstSetBase, inst: &'a mut dyn Inst, f: F) -> Option<R>
     where
         F: FnOnce(Self) -> R,
     {

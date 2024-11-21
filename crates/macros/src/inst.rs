@@ -195,8 +195,8 @@ impl InstStruct {
         let struct_name = &self.struct_name;
         let has_inst_method = ty_name_to_method_name(struct_name);
         quote! {
-            impl crate::InstDowncast for &#struct_name {
-                fn downcast(isb: &dyn crate::InstSetBase, inst: &dyn crate::Inst) -> Option<Self> {
+            impl<'a> crate::InstDowncast<'a> for &'a #struct_name {
+                fn downcast(isb: &dyn crate::InstSetBase, inst: &'a dyn crate::Inst) -> Option<Self> {
                     let hi = isb.#has_inst_method()?;
                     if hi.is(inst) {
                         unsafe { Some(&*(inst as *const dyn crate::Inst as *const #struct_name)) }
@@ -206,8 +206,8 @@ impl InstStruct {
                 }
             }
 
-            impl crate::InstDowncastMut for &mut #struct_name {
-                fn downcast_mut(isb: &dyn crate::InstSetBase, inst: &mut dyn crate::Inst) -> Option<Self> {
+            impl<'a> crate::InstDowncastMut<'a> for &'a mut #struct_name {
+                fn downcast_mut(isb: &dyn crate::InstSetBase, inst: &'a mut dyn crate::Inst) -> Option<Self> {
                     let hi = isb.#has_inst_method()?;
                     if hi.is(inst) {
                         unsafe { Some(&mut *(inst as *mut dyn crate::Inst as *mut #struct_name)) }

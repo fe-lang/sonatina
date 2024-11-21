@@ -65,8 +65,9 @@ impl Machine {
 
         loop {
             let inst = self.top_func().dfg.inst(self.pc);
+            let inst = dyn_clone::clone_box(inst);
             let Some(interpretable): Option<&dyn Interpret> =
-                InstDowncast::downcast(self.top_func().inst_set(), inst)
+                InstDowncast::downcast(self.top_func().inst_set(), inst.as_ref())
             else {
                 panic!("`Intepret is not yet implemented for `{}`", inst.as_text());
             };

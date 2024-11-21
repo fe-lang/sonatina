@@ -237,8 +237,8 @@ impl InstProp {
 
         let inst_downcast_impl = if self.config.is_mut {
             quote! {
-                impl #path_prefix::prelude::InstDowncastMut for &mut dyn #trait_name {
-                    fn downcast_mut(isb: &dyn #path_prefix::prelude::InstSetBase, inst: &mut dyn #path_prefix::prelude::Inst) -> Option<Self> {
+                impl<'a> #path_prefix::prelude::InstDowncastMut<'a> for &'a mut dyn #trait_name {
+                    fn downcast_mut(isb: &dyn #path_prefix::prelude::InstSetBase, inst: &'a mut dyn #path_prefix::prelude::Inst) -> Option<Self> {
                         match inst.type_id() {
                             #(#arms)*
                             _ => None
@@ -249,8 +249,8 @@ impl InstProp {
             }
         } else {
             quote! {
-                impl #path_prefix::prelude::InstDowncast for &dyn #trait_name {
-                    fn downcast(isb: &dyn #path_prefix::prelude::InstSetBase, inst: &dyn #path_prefix::prelude::Inst) -> Option<Self> {
+                impl<'a> #path_prefix::prelude::InstDowncast<'a> for &'a dyn #trait_name {
+                    fn downcast(isb: &dyn #path_prefix::prelude::InstSetBase, inst: &'a dyn #path_prefix::prelude::Inst) -> Option<Self> {
                         match inst.type_id() {
                             #(#arms)*
                             _ => None
