@@ -81,6 +81,10 @@ pub struct Phi {
     args: Vec<(ValueId, BlockId)>,
 }
 impl Phi {
+    pub fn iter_args(&self) -> impl Iterator<Item = &(ValueId, BlockId)> {
+        self.args.iter()
+    }
+
     pub fn append_phi_arg(&mut self, value: ValueId, block: BlockId) {
         self.args.push((value, block))
     }
