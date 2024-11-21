@@ -77,7 +77,7 @@ impl ModuleBuilder {
         self.ctx.with_ty_store_mut(|s| s.make_ptr(ty))
     }
 
-    pub fn build_function<C>(&self, func: FuncRef) -> FunctionBuilder<C>
+    pub fn func_builder<C>(&self, func: FuncRef) -> FunctionBuilder<C>
     where
         C: FuncCursor,
     {

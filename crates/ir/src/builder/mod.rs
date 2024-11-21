@@ -40,7 +40,7 @@ pub mod test_util {
     ) -> (Evm, FunctionBuilder<InstInserter>) {
         let sig = Signature::new("test_func", Linkage::Public, args, ret_ty);
         let func_ref = mb.declare_function(sig);
-        (test_isa(), mb.build_function(func_ref))
+        (test_isa(), mb.func_builder(func_ref))
     }
 
     pub fn dump_func(module: &Module, func_ref: FuncRef) -> String {

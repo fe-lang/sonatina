@@ -87,7 +87,7 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
 
     for func in ast.functions {
         let id = builder.lookup_func(&func.signature.name.name).unwrap();
-        ctx.build_func(builder.build_function(id), id, &func);
+        ctx.build_func(builder.func_builder(id), id, &func);
 
         func_comments[id] = func.comments;
     }
