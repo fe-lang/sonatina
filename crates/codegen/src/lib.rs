@@ -1,6 +1,8 @@
 pub mod cfg_edit;
+mod bitset;
 pub mod critical_edge;
 pub mod domtree;
+pub mod liveness;
 pub mod loop_analysis;
 pub mod module_analysis;
 pub mod optim;
