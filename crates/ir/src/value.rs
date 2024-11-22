@@ -110,7 +110,7 @@ impl Immediate {
     }
 
     pub fn urem(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, |lhs, rhs| (lhs.to_u256() / rhs.to_u256()).into())
+        self.apply_binop(rhs, |lhs, rhs| (lhs.to_u256() % rhs.to_u256()).into())
     }
 
     pub fn srem(self, rhs: Self) -> Self {
