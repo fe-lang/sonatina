@@ -2,6 +2,7 @@
 //! Construction of Static Single Assignment Form`](https://link.springer.com/chapter/10.1007/978-3-642-37051-9_6).
 
 use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap, SparseSet};
+use rustc_hash::FxHashMap;
 
 use crate::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
@@ -25,6 +26,7 @@ pub(super) struct SsaBuilder {
 
     /// Records trivial phis.
     trivial_phis: SparseSet<InstId>,
+    aliases: FxHashMap<ValueId, ValueId>,
 }
 
 impl SsaBuilder {
@@ -33,6 +35,7 @@ impl SsaBuilder {
             blocks: SecondaryMap::default(),
             vars: PrimaryMap::default(),
             trivial_phis: SparseSet::new(),
+            aliases: FxHashMap::default(),
         }
     }
     pub(super) fn declare_var(&mut self, ty: Type) -> Variable {
@@ -49,11 +52,12 @@ impl SsaBuilder {
         var: Variable,
         block: BlockId,
     ) -> ValueId {
-        if let Some(value) = self.blocks[block].use_var_local(var) {
+        let value = if let Some(value) = self.blocks[block].use_var_local(var) {
             value
         } else {
             self.use_var_recursive(func, var, block)
-        }
+        };
+        *self.aliases.get(&value).unwrap_or(&value)
     }
 
     pub(super) fn var_ty(&mut self, var: Variable) -> Type {
@@ -136,7 +140,7 @@ impl SsaBuilder {
             return;
         }
 
-        func.dfg.change_to_alias(phi_value, first_value);
+        self.change_to_alias(func, phi_value, first_value);
         self.trivial_phis.insert(inst_id);
         InstInserter::at_location(CursorLocation::At(inst_id)).remove_inst(func);
 
@@ -163,6 +167,11 @@ impl SsaBuilder {
         let value = func.dfg.make_value(Value::Inst { inst, ty });
         cursor.attach_result(func, inst, value);
         (inst, value)
+    }
+
+    fn change_to_alias(&mut self, func: &mut Function, value: ValueId, alias: ValueId) {
+        func.dfg.change_to_alias(value, alias);
+        self.aliases.insert(value, alias);
     }
 }
 
