@@ -265,7 +265,6 @@ mod tests {
     block0:
         v1.i32 = add 1.i32 1.i32;
         return;
-
 }
 "
         );
@@ -330,7 +329,6 @@ mod tests {
     block3:
         v3.i32 = phi (2.i32 block1) (3.i32 block2);
         return;
-
 }
 "
         );
@@ -436,7 +434,6 @@ mod tests {
         v5.i32 = phi (1.i32 block1) (2.i32 block3) (3.i32 block5) (4.i32 block6);
         v7.i32 = add v5 v6;
         return;
-
 }
 "
         )
@@ -504,7 +501,6 @@ mod tests {
     block3:
         v3.i32 = add v4 v4;
         return;
-
 }
 "
         );
@@ -600,7 +596,6 @@ mod tests {
     block6:
         v3.i32 = add v4 v4;
         return;
-
 }
 "
         );
@@ -691,7 +686,6 @@ mod tests {
     block6:
         v3.i32 = add v4 v4;
         return;
-
 }
 "
         );
@@ -770,7 +764,6 @@ mod tests {
     block4:
         v5.i32 = phi (0.i32 block0) (1.i32 block1) (2.i32 block2) (3.i32 block3);
         return v5;
-
 }
 "
         )

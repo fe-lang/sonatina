@@ -58,8 +58,8 @@ impl InstWrite for BrTable {
         write!(w, "{}", self.as_text())?;
         write!(w, " ")?;
         self.scrutinee.write(ctx, &mut w)?;
-        write!(w, " ")?;
         if let Some(default) = self.default {
+            write!(w, " ")?;
             default.write(ctx, &mut w)?;
         };
 

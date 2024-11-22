@@ -184,7 +184,6 @@ mod tests {
 
     block3:
         jump block2;
-
 }
 "
         );
@@ -262,7 +261,6 @@ mod tests {
 
     block6:
         jump block3;
-
 }
 "
         );
@@ -322,7 +320,6 @@ mod tests {
 
     block3:
         jump block1;
-
 }
 "
         );
@@ -401,7 +398,6 @@ mod tests {
 
     block7:
         jump block4;
-
 }
 "
         );

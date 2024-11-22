@@ -41,7 +41,10 @@ where
     pub fn finish(self) {
         if cfg!(debug_assertions) {
             for block in self.func.layout.iter_block() {
-                debug_assert!(self.is_sealed(block), "all blocks must be sealed");
+                debug_assert!(
+                    self.is_sealed(block),
+                    "all blocks must be sealed: `{block}` is not sealed"
+                );
             }
         }
 
@@ -313,7 +316,6 @@ mod tests {
         v2.i8 = add 1.i8 2.i8;
         v3.i8 = sub v2 1.i8;
         return;
-
 }
 "
         );
@@ -349,7 +351,6 @@ mod tests {
         v2.i64 = sext v0 i64;
         v3.i64 = mul v2 v1;
         return;
-
 }
 "
         );
@@ -377,7 +378,6 @@ mod tests {
             "func public %test_func() -> i32 {
     block0:
         return 1.i32;
-
 }
 "
         );
@@ -439,7 +439,6 @@ mod tests {
         v3.i64 = phi (1.i64 block1) (2.i64 block2);
         v4.i64 = add v3 v0;
         return;
-
 }
 "
         );
