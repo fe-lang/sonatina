@@ -288,6 +288,13 @@ impl BuildCtx {
                     .push(Error::Undefined(UndefinedKind::Type(name.clone()), t.span));
                 ir::Type::Unit
             }),
+
+            ast::TypeKind::Func { args, ret_ty } => {
+                let args: Vec<_> = args.iter().map(|t| self.type_(mb, t)).collect();
+                let ret_ty = self.type_(mb, ret_ty);
+                mb.declare_func_type(&args, ret_ty)
+            }
+
             ast::TypeKind::Error => unreachable!(),
         }
     }

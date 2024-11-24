@@ -169,7 +169,7 @@ impl State for Machine {
         };
 
         let addr = addr.as_usize();
-        let size = self.module_ctx.size_of(ty);
+        let size = self.module_ctx.size_of_unchecked(ty);
         if addr + size > self.memory.len() {
             return EvalValue::Undef;
         }
@@ -181,7 +181,7 @@ impl State for Machine {
             match ty.resolve_compound(&self.module_ctx).unwrap() {
                 CompoundTypeData::Array { elem: elem_ty, len } => {
                     let mut addr = addr;
-                    let elem_size = self.module_ctx.size_of(elem_ty);
+                    let elem_size = self.module_ctx.size_of_unchecked(elem_ty);
                     for _ in 0..len {
                         let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
                         let elem = self.load(elem_addr, elem_ty);
@@ -196,12 +196,16 @@ impl State for Machine {
                         let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
                         let field = self.load(elem_addr, field_ty);
                         fields.push(field);
-                        addr += self.module_ctx.size_of(field_ty);
+                        addr += self.module_ctx.size_of_unchecked(field_ty);
                     }
                 }
 
                 CompoundTypeData::Ptr(_) => {
                     unreachable!()
+                }
+
+                CompoundTypeData::Func { .. } => {
+                    panic!("function type can't be placed in memory");
                 }
             }
 
@@ -228,7 +232,7 @@ impl State for Machine {
             panic!("udnef address in store")
         };
         let addr = addr.as_usize();
-        let size = self.module_ctx.size_of(ty);
+        let size = self.module_ctx.size_of_unchecked(ty);
         if addr + size > self.memory.len() {
             self.memory.resize(addr + size, 0);
         }
@@ -241,7 +245,7 @@ impl State for Machine {
             match ty.resolve_compound(&self.module_ctx).unwrap() {
                 CompoundTypeData::Array { elem: elem_ty, .. } => {
                     let mut addr = addr;
-                    let elem_size = self.module_ctx.size_of(elem_ty);
+                    let elem_size = self.module_ctx.size_of_unchecked(elem_ty);
                     for field in &fields {
                         let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
                         self.store(field.clone(), elem_addr, elem_ty);
@@ -254,12 +258,16 @@ impl State for Machine {
                     for (i, field_ty) in s.fields.into_iter().enumerate() {
                         let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
                         self.store(fields[i].clone(), elem_addr, field_ty);
-                        addr += self.module_ctx.size_of(field_ty);
+                        addr += self.module_ctx.size_of_unchecked(field_ty);
                     }
                 }
 
                 CompoundTypeData::Ptr(_) => {
                     unreachable!()
+                }
+
+                CompoundTypeData::Func { .. } => {
+                    panic!("Function can't be stored in memory");
                 }
             }
 
@@ -291,7 +299,7 @@ impl State for Machine {
 
     fn alloca(&mut self, ty: Type) -> EvalValue {
         let ptr = self.free_region;
-        self.free_region += self.module_ctx.size_of(ty);
+        self.free_region += self.module_ctx.size_of_unchecked(ty);
         EvalValue::Imm(Immediate::I256(I256::from(ptr)))
     }
 

@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use sonatina_triple::{Architecture, TargetTriple};
 
-use super::{Endian, Isa, TypeLayout};
+use super::{Endian, Isa, TypeLayout, TypeLayoutError};
 use crate::{inst::evm::inst_set::EvmInstSet, module::ModuleCtx, types::CompoundTypeData, Type};
 
 #[derive(Debug, Clone, Copy)]
@@ -37,8 +37,8 @@ impl Isa for Evm {
 
 struct EvmTypeLayout {}
 impl TypeLayout for EvmTypeLayout {
-    fn size_of(&self, ty: crate::Type, ctx: &ModuleCtx) -> usize {
-        match ty {
+    fn size_of(&self, ty: crate::Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
+        let size = match ty {
             Type::Unit => 0,
             Type::I1 => 1,
             Type::I8 => 1,
@@ -51,10 +51,7 @@ impl TypeLayout for EvmTypeLayout {
             Type::Compound(cmpd) => {
                 let cmpd_data = ctx.with_ty_store(|s| s.resolve_compound(cmpd).clone());
                 match cmpd_data {
-                    CompoundTypeData::Array { elem, len } => {
-                        // TODO: alignment!
-                        self.size_of(elem, ctx) * len
-                    }
+                    CompoundTypeData::Array { elem, len } => self.size_of(elem, ctx)? * len,
 
                     CompoundTypeData::Ptr(_) => 32,
 
@@ -62,22 +59,30 @@ impl TypeLayout for EvmTypeLayout {
                         if s.packed {
                             panic!("packed data is not supported yet!");
                         }
-                        s.fields
-                            .iter()
-                            .copied()
-                            .fold(0, |acc, ty| acc + self.size_of(ty, ctx))
+                        let mut size = 0;
+                        for &field in &s.fields {
+                            size += self.size_of(field, ctx)?;
+                        }
+
+                        size
+                    }
+
+                    CompoundTypeData::Func { .. } => {
+                        return Err(TypeLayoutError::UnrepresentableType(ty))
                     }
                 }
             }
-        }
+        };
+
+        Ok(size)
     }
 
     fn pointer_repl(&self) -> Type {
         Type::I256
     }
 
-    fn align_of(&self, _ty: Type, _ctx: &ModuleCtx) -> usize {
-        1
+    fn align_of(&self, _ty: Type, _ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
+        Ok(1)
     }
 
     fn endian(&self) -> Endian {

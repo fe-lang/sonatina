@@ -4,6 +4,7 @@ use std::{cmp, io};
 use cranelift_entity::PrimaryMap;
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 use crate::{ir_writer::WriteWithModule, module::ModuleCtx};
 
@@ -37,6 +38,14 @@ impl TypeStore {
             "struct {name} is already defined"
         );
         self.struct_types.insert(name.to_string(), compound);
+        Type::Compound(compound)
+    }
+
+    pub fn make_func(&mut self, args: &[Type], ret_ty: Type) -> Type {
+        let compound = self.make_compound(CompoundTypeData::Func {
+            args: args.into(),
+            ret_ty,
+        });
         Type::Compound(compound)
     }
 
@@ -230,15 +239,37 @@ impl WriteWithModule for CompoundType {
                     write!(w, "@{name}")
                 }
             }
+
+            CompoundTypeData::Func { args, ret_ty: ret } => {
+                write!(w, "(")?;
+                let mut args = args.iter();
+                if let Some(arg_ty) = args.next() {
+                    arg_ty.write(ctx, w)?;
+                };
+                for arg_ty in args {
+                    write!(w, ", ")?;
+                    arg_ty.write(ctx, w)?;
+                }
+
+                write!(w, ") -> ")?;
+                ret.write(ctx, w)
+            }
         })
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CompoundTypeData {
-    Array { elem: Type, len: usize },
+    Array {
+        elem: Type,
+        len: usize,
+    },
     Ptr(Type),
     Struct(StructData),
+    Func {
+        args: SmallVec<[Type; 8]>,
+        ret_ty: Type,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

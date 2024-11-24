@@ -73,6 +73,10 @@ impl ModuleBuilder {
         self.ctx.with_ty_store_mut(|s| s.make_array(elem, len))
     }
 
+    pub fn declare_func_type(&self, args: &[Type], ret_ty: Type) -> Type {
+        self.ctx.with_ty_store_mut(|s| s.make_func(args, ret_ty))
+    }
+
     pub fn ptr_type(&self, ty: Type) -> Type {
         self.ctx.with_ty_store_mut(|s| s.make_ptr(ty))
     }

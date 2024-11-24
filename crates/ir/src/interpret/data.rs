@@ -63,13 +63,13 @@ impl Interpret for Gep {
 
             match cmpd_data {
                 CompoundTypeData::Array { elem, .. } => {
-                    let elem_size = state.dfg().ctx.size_of(elem);
+                    let elem_size = state.dfg().ctx.size_of_unchecked(elem);
                     offset += elem_size * idx_value;
                     current_ty = elem;
                 }
 
                 CompoundTypeData::Ptr(ty) => {
-                    let size = state.dfg().ctx.size_of(ty);
+                    let size = state.dfg().ctx.size_of_unchecked(ty);
                     offset += size * idx_value;
                     current_ty = ty;
                 }
@@ -78,12 +78,18 @@ impl Interpret for Gep {
                     let mut local_offset = 0;
                     for i in 0..idx_value {
                         let field_ty = s.fields[i];
-                        let size = state.dfg().ctx.size_of(field_ty);
-                        let align = state.dfg().ctx.align_of(field_ty);
+                        let size = state.dfg().ctx.size_of_unchecked(field_ty);
+                        let align = state.dfg().ctx.align_of_unchecked(field_ty);
                         local_offset += align_to(offset + size, align);
                     }
                     offset += local_offset;
                     current_ty = s.fields[idx_value];
+                }
+
+                CompoundTypeData::Func { .. } => {
+                    panic!(
+                        "Invalid GEP: indexing into a function type with more indices remaining"
+                    );
                 }
             }
         }
@@ -115,6 +121,7 @@ impl Interpret for InsertValue {
                     CompoundTypeData::Array { len, .. } => len,
                     CompoundTypeData::Struct(s) => s.fields.len(),
                     CompoundTypeData::Ptr(_) => unreachable!(),
+                    CompoundTypeData::Func { .. } => unreachable!(),
                 };
                 vec![EvalValue::Undef; len]
             }

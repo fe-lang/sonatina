@@ -84,6 +84,13 @@ impl Signature {
         self.ret_ty
     }
 
+    pub fn func_ptr_type(&self, ctx: &ModuleCtx) -> Type {
+        ctx.with_ty_store_mut(|s| {
+            let func_ty = s.make_func(&self.args, self.ret_ty);
+            s.make_ptr(func_ty)
+        })
+    }
+
     #[doc(hidden)]
     pub fn set_ret_ty(&mut self, ty: Type) {
         self.ret_ty = ty;

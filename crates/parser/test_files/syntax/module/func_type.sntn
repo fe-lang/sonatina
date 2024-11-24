@@ -1,0 +1,6 @@
+target = "evm-ethereum-london"
+
+func public %higher_order(v0.*(i256, i256) -> i32) {
+    block0:
+        return;
+}

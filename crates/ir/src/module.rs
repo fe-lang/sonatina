@@ -7,7 +7,7 @@ use sonatina_triple::TargetTriple;
 
 use crate::{
     global_variable::GlobalVariableStore,
-    isa::{Endian, Isa, TypeLayout},
+    isa::{Endian, Isa, TypeLayout, TypeLayoutError},
     types::TypeStore,
     Function, InstSetBase, Signature, Type,
 };
@@ -122,12 +122,20 @@ impl ModuleCtx {
         }
     }
 
-    pub fn size_of(&self, ty: Type) -> usize {
+    pub fn size_of(&self, ty: Type) -> Result<usize, TypeLayoutError> {
         self.type_layout.size_of(ty, self)
     }
 
-    pub fn align_of(&self, ty: Type) -> usize {
+    pub fn align_of(&self, ty: Type) -> Result<usize, TypeLayoutError> {
         self.type_layout.align_of(ty, self)
+    }
+
+    pub fn size_of_unchecked(&self, ty: Type) -> usize {
+        self.size_of(ty).unwrap()
+    }
+
+    pub fn align_of_unchecked(&self, ty: Type) -> usize {
+        self.align_of(ty).unwrap()
     }
 
     pub fn func_sig<F, R>(&self, func_ref: FuncRef, f: F) -> R
@@ -175,3 +183,9 @@ impl ModuleCtx {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FuncRef(u32);
 entity_impl!(FuncRef);
+
+impl FuncRef {
+    pub fn as_ptr_ty(self, ctx: &ModuleCtx) -> Type {
+        ctx.func_sig(self, |sig| sig.func_ptr_type(ctx))
+    }
+}
