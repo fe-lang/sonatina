@@ -123,6 +123,7 @@ impl OperatingSystem {
                     "constantinople" => EvmVersion::Constantinople,
                     "istanbul" => EvmVersion::Istanbul,
                     "london" => EvmVersion::London,
+                    "cancun" => EvmVersion::Cancun,
                     _ => return Err(InvalidTriple::OsNotSupported),
                 };
                 Ok(Self::Evm(evm_version))
@@ -147,6 +148,7 @@ pub enum EvmVersion {
     Constantinople,
     Istanbul,
     London,
+    Cancun,
 }
 
 #[derive(Debug, Clone, Error)]
@@ -176,6 +178,7 @@ impl Display for EvmVersion {
             Self::Constantinople => write!(f, "constantinople"),
             Self::Istanbul => write!(f, "istanbul"),
             Self::London => write!(f, "london"),
+            Self::Cancun => write!(f, "cancun"),
         }
     }
 }

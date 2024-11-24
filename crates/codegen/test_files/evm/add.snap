@@ -1,0 +1,41 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(v).unwrap()"
+input_file: test_files/evm/add.sntn
+---
+// func public %add() -> i32
+add:
+  block0:
+    JUMPDEST
+    PUSH1 0x9c (156)  // v1.i32 = add 100000.i32 -100.i32;
+    PUSH0
+    SIGNEXTEND
+    PUSH3 0x186a0 (100000)
+    ADD
+    PUSH2 0x384 (900)  // v2.i32 = sub v1 900.i32;
+    SWAP1
+    SUB
+    PUSH0  // mstore v2 0.i32 i32;
+    MSTORE
+
+
+
+---------------
+
+// func public %add() -> i32
+add:
+  block0:
+    0    JUMPDEST
+    1    PUSH1 0x9c (156)  // v1.i32 = add 100000.i32 -100.i32;
+    3    PUSH0
+    4    SIGNEXTEND
+    5    PUSH3 0x186a0 (100000)
+    9    ADD
+   10    PUSH2 0x384 (900)  // v2.i32 = sub v1 900.i32;
+   13    SWAP1
+   14    SUB
+   15    PUSH0  // mstore v2 0.i32 i32;
+   16    MSTORE
+
+
+0x5b609c5f0b620186a00161038490035f52

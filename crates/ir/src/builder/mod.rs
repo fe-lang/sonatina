@@ -12,7 +12,7 @@ pub mod test_util {
     use super::*;
     use crate::{
         func_cursor::InstInserter,
-        ir_writer::FuncWriter,
+        ir_writer::{FuncWriteCtx, WriteWithFunc},
         isa::evm::Evm,
         module::{FuncRef, ModuleCtx},
         Linkage, Module, Signature, Type,
@@ -39,6 +39,6 @@ pub mod test_util {
 
     pub fn dump_func(module: &Module, func_ref: FuncRef) -> String {
         let func = &module.funcs[func_ref];
-        FuncWriter::new(func, func_ref).dump_string()
+        func_ref.dump_string(&FuncWriteCtx::new(func, func_ref))
     }
 }
