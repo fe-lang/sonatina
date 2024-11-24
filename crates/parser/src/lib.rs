@@ -78,28 +78,32 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
         builder.declare_function(sig).unwrap();
     }
 
-    for func in ast.functions.iter() {
-        if !ctx.check_duplicated_func(&builder, &func.signature.name) {
-            continue;
-        }
+    let func_order = ast
+        .functions
+        .iter()
+        .flat_map(|func| {
+            if !ctx.check_duplicated_func(&builder, &func.signature.name) {
+                return None;
+            }
 
-        let sig = &func.signature;
-        let args = sig
-            .params
-            .iter()
-            .map(|decl| ctx.type_(&builder, &decl.1))
-            .collect::<Vec<_>>();
+            let sig = &func.signature;
+            let args = sig
+                .params
+                .iter()
+                .map(|decl| ctx.type_(&builder, &decl.1))
+                .collect::<Vec<_>>();
 
-        let ret_ty = sig
-            .ret_type
-            .as_ref()
-            .map(|t| ctx.type_(&builder, t))
-            .unwrap_or(ir::Type::Unit);
-        let sig = Signature::new(&sig.name.name, sig.linkage, &args, ret_ty);
+            let ret_ty = sig
+                .ret_type
+                .as_ref()
+                .map(|t| ctx.type_(&builder, t))
+                .unwrap_or(ir::Type::Unit);
+            let sig = Signature::new(&sig.name.name, sig.linkage, &args, ret_ty);
 
-        // Safe to unwrap: function name checked for duplicate above
-        builder.declare_function(sig).unwrap();
-    }
+            // Safe to unwrap: function name checked for duplicate above
+            Some(builder.declare_function(sig).unwrap())
+        })
+        .collect();
 
     let mut func_comments = SecondaryMap::default();
 
@@ -115,6 +119,7 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
         Ok(ParsedModule {
             module,
             debug: DebugInfo {
+                func_order,
                 module_comments: ast.comments,
                 func_comments,
                 value_names: ctx.value_names,
@@ -126,6 +131,7 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
 }
 
 pub struct DebugInfo {
+    pub func_order: Vec<FuncRef>,
     pub module_comments: Vec<String>,
     pub func_comments: SecondaryMap<FuncRef, Vec<String>>,
     pub value_names: FxHashMap<FuncRef, Bimap<ir::ValueId, SmolStr>>,

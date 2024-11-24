@@ -1,0 +1,85 @@
+target = "evm-ethereum-london"
+
+func public %entry() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = add 1.i256 2.i256;
+        v1.i256 = add 3.i256 4.i256;
+        v2.i256 = add 5.i256 6.i256;
+        v3.i256 = add 7.i256 8.i256;
+        v4.i256 = add 9.i256 10.i256;
+        v5.i256 = add 11.i256 12.i256;
+        v6.i256 = add 13.i256 14.i256;
+        v7.i256 = add 15.i256 16.i256;
+        v8.i256 = add 17.i256 18.i256;
+        v9.i256 = add 19.i256 20.i256;
+        v10.i256 = add 21.i256 22.i256;
+        v11.i256 = add 23.i256 24.i256;
+        v12.i256 = add 25.i256 26.i256;
+        v13.i256 = add 27.i256 28.i256;
+        v14.i256 = add 29.i256 30.i256;
+        v15.i256 = add 31.i256 32.i256;
+        v16.i256 = add 33.i256 34.i256;
+
+        v17.i256 = add v0 v16;
+
+        v18.i256 = add v17 v1;
+        v19.i256 = add v18 v2;
+        v20.i256 = add v19 v3;
+        v21.i256 = add v20 v4;
+        v22.i256 = add v21 v5;
+        v23.i256 = add v22 v6;
+        v24.i256 = add v23 v7;
+        v25.i256 = add v24 v8;
+        v26.i256 = add v25 v9;
+        v27.i256 = add v26 v10;
+        v28.i256 = add v27 v11;
+        v29.i256 = add v28 v12;
+        v30.i256 = add v29 v13;
+        v31.i256 = add v30 v14;
+        v32.i256 = add v31 v15;
+
+        jump block2;
+
+    block2:
+        v33.i256 = add 35.i256 36.i256;
+        v34.i256 = add 37.i256 38.i256;
+        v35.i256 = add 39.i256 40.i256;
+        v36.i256 = add 41.i256 42.i256;
+        v37.i256 = add 43.i256 44.i256;
+        v38.i256 = add 45.i256 46.i256;
+        v39.i256 = add 47.i256 48.i256;
+        v40.i256 = add 49.i256 50.i256;
+        v41.i256 = add 51.i256 52.i256;
+        v42.i256 = add 53.i256 54.i256;
+        v43.i256 = add 55.i256 56.i256;
+        v44.i256 = add 57.i256 58.i256;
+        v45.i256 = add 59.i256 60.i256;
+        v46.i256 = add 61.i256 62.i256;
+        v47.i256 = add 63.i256 64.i256;
+        v48.i256 = add 65.i256 66.i256;
+        v49.i256 = add 67.i256 68.i256;
+
+        v50.i256 = add v33 v49;
+
+        v51.i256 = add v50 v34;
+        v52.i256 = add v51 v35;
+        v53.i256 = add v52 v36;
+        v54.i256 = add v53 v37;
+        v55.i256 = add v54 v38;
+        v56.i256 = add v55 v39;
+        v57.i256 = add v56 v40;
+        v58.i256 = add v57 v41;
+        v59.i256 = add v58 v42;
+        v60.i256 = add v59 v43;
+        v61.i256 = add v60 v44;
+        v62.i256 = add v61 v45;
+        v63.i256 = add v62 v46;
+        v64.i256 = add v63 v47;
+        v65.i256 = add v64 v48;
+
+        mstore 0.i32 v65 i256;
+        evm_return 0.i8 32.i8;
+}

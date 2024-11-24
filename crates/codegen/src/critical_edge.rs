@@ -75,12 +75,13 @@ impl CriticalEdgeSplitter {
         func.dfg
             .rewrite_branch_dest(inst, original_dest, inserted_dest);
         self.modify_cfg(cfg, source_block, original_dest, inserted_dest);
-        self.modify_phi_blocks(func, original_dest, inserted_dest);
+        self.modify_phi_blocks(func, source_block, original_dest, inserted_dest);
     }
 
     fn modify_phi_blocks(
         &self,
         func: &mut Function,
+        source_block: BlockId,
         original_dest: BlockId,
         inserted_dest: BlockId,
     ) {
@@ -90,7 +91,7 @@ impl CriticalEdgeSplitter {
             };
 
             for (_, block) in phi.args_mut() {
-                if *block == original_dest {
+                if *block == source_block {
                     *block = inserted_dest;
                 }
             }

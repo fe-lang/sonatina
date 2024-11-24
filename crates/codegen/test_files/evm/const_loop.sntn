@@ -1,0 +1,23 @@
+target = "evm-ethereum-london"
+
+func public %entry() {
+    block0:
+        v0.i8 = call %const_loop;
+
+        mstore 0.i32 v0 i8;
+        evm_return 0.i8 1.i8;
+}
+
+func public %const_loop() -> i8 {
+    block1:
+        jump block2;
+
+    block2:
+        v1.i8 = phi (1.i8 block1) (v2 block2);
+        v2.i8 = add v1 10.i8;
+        v3.i1 = gt v2 v1;
+        br v3 block3 block2;
+
+    block3:
+        return v2;
+}

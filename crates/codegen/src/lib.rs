@@ -1,8 +1,11 @@
 mod bitset;
 pub mod critical_edge;
 pub mod domtree;
+pub mod isa;
 pub mod liveness;
 pub mod loop_analysis;
+pub mod machinst;
 pub mod module_analysis;
 pub mod optim;
 pub mod post_domtree;
+pub mod stackalloc;

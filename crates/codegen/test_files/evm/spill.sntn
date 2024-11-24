@@ -1,0 +1,51 @@
+target = "evm-ethereum-london"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i64 = shr 224.i32 v0;
+        v2.i32 = shl 32.i32 v0;
+        v3.i64 = shr 224.i32 v2;
+        v4.i64 = call %spill v1 v3 0.i64 0.i64 0.i64 0.i64 0.i64 200.i64;
+
+        mstore 0.i32 v4 i64;
+        evm_return 0.i8 8.i8;
+}
+
+func public %sum8(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64) -> i64 {
+    block0:
+        v8.i64 = add v0 v1;
+        v9.i64 = add v2 v3;
+        v10.i64 = add v4 v5;
+        v11.i64 = add v6 v7;
+        v12.i64 = add v8 v9;
+        v13.i64 = add v10 v11;
+        v14.i64 = add v12 v13;
+        return v14;
+}
+
+func public %spill(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64) -> i64 {
+    block1:
+        v8.i64 = add v0 v1;
+        v9.i64 = add v2 v3;
+        v10.i64 = add v4 v5;
+        v11.i64 = add v6 v7;
+        v12.i64 = add v8 v9;
+        v13.i64 = add v10 v11;
+        v14.i64 = add v12 v13;
+
+        jump block2;
+    block2:
+        v15.i64 = phi (v14 block1) (v19 block2);
+
+        v16.i64 = call %sum8 v0 v1 v2 v3 v4 v5 v6 v7;
+        v17.i64 = call %sum8 v8 v9 v10 v11 v12 v13 v14 v15;
+        v18.i64 = add v16 v17;
+        v19.i64 = add v7 v18;
+
+        v20.i1 = gt v19 1000.i64;
+        br v20 block3 block2;
+
+    block3:
+        return v18;
+}

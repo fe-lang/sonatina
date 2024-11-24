@@ -1,0 +1,354 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(v).unwrap()"
+input_file: test_files/evm/deep_dead.sntn
+---
+// func public %entry()
+  block0 P=[] T=[]
+    - stack=[]
+      pre: [PUSH(0)]
+      evm_calldata_load [0] -> v0
+    - stack=[v0], last_use=[v0]
+      not [v0] -> v1
+    - stack=[v1]
+      pre: [DUP1]
+      not [v1] -> v2
+    - stack=[v2, v1]
+      pre: [DUP1]
+      not [v2] -> v3
+    - stack=[v3, v2, v1]
+      pre: [DUP1]
+      not [v3] -> v4
+    - stack=[v4, v3, v2, v1]
+      pre: [DUP1]
+      not [v4] -> v5
+    - stack=[v5, v4, v3, v2, v1]
+      pre: [DUP1]
+      not [v5] -> v6
+    - stack=[v6, v5, v4, v3, v2, v1]
+      pre: [DUP1]
+      not [v6] -> v7
+    - stack=[v7, v6, v5, v4, v3, v2, v1]
+      pre: [DUP1]
+      not [v7] -> v8
+    - stack=[v8, v7, v6, v5, v4, v3, v2, v1]
+      pre: [DUP1]
+      not [v8] -> v9
+    - stack=[v9, v8, v7, v6, v5, v4, v3, v2, v1]
+      pre: [DUP1]
+      not [v9] -> v10
+    - stack=[v10, v9, v8, v7, v6, v5, v4, v3, v2, v1]
+      pre: [DUP1]
+      not [v10] -> v11
+    - stack=[v11, v10, v9, v8, v7, v6, v5, v4, v3, v2, v1]
+      pre: [DUP1]
+      not [v11] -> v12
+    - stack=[v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2, v1]
+      pre: [DUP1]
+      not [v12] -> v13
+    - stack=[v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2, v1]
+      pre: [DUP1]
+      not [v13] -> v14
+    - stack=[v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2, v1]
+      pre: [DUP1]
+      not [v14] -> v15
+    - stack=[v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2, v1]
+      pre: [DUP1]
+      not [v15] -> v16
+    - stack=[v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2, v1]
+      pre: [DUP1]
+      not [v16] -> v17
+    - stack=[v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2, v1]
+      jump -> block1
+  block1 P=[] T=[v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2, v1]
+    - stack=[v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2, v1], last_use=[v1, v2]
+      pre: [SWAP15, SWAP1, SWAP16]
+      add [v1, v2] -> v18
+    - stack=[v18, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v17, v16], last_use=[v3, v18]
+      pre: [SWAP1, SWAP13]
+      add [v3, v18] -> v19
+    - stack=[v19, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v15, v17, v16], last_use=[v4, v19]
+      pre: [SWAP1, SWAP11]
+      add [v4, v19] -> v20
+    - stack=[v20, v13, v12, v11, v10, v9, v8, v7, v6, v5, v14, v15, v17, v16], last_use=[v5, v20]
+      pre: [SWAP1, SWAP9]
+      add [v5, v20] -> v21
+    - stack=[v21, v12, v11, v10, v9, v8, v7, v6, v13, v14, v15, v17, v16], last_use=[v6, v21]
+      pre: [SWAP1, SWAP7]
+      add [v6, v21] -> v22
+    - stack=[v22, v11, v10, v9, v8, v7, v12, v13, v14, v15, v17, v16], last_use=[v7, v22]
+      pre: [SWAP1, SWAP5]
+      add [v7, v22] -> v23
+    - stack=[v23, v10, v9, v8, v11, v12, v13, v14, v15, v17, v16], last_use=[v8, v23]
+      pre: [SWAP1, SWAP3]
+      add [v8, v23] -> v24
+    - stack=[v24, v9, v10, v11, v12, v13, v14, v15, v17, v16], last_use=[v9, v24]
+      add [v24, v9] -> v25
+    - stack=[v25, v10, v11, v12, v13, v14, v15, v17, v16], last_use=[v10, v25]
+      add [v25, v10] -> v26
+    - stack=[v26, v11, v12, v13, v14, v15, v17, v16], last_use=[v11, v26]
+      add [v26, v11] -> v27
+    - stack=[v27, v12, v13, v14, v15, v17, v16], last_use=[v12, v27]
+      add [v27, v12] -> v28
+    - stack=[v28, v13, v14, v15, v17, v16], last_use=[v13, v28]
+      add [v28, v13] -> v29
+    - stack=[v29, v14, v15, v17, v16], last_use=[v14, v29]
+      add [v29, v14] -> v30
+    - stack=[v30, v15, v17, v16], last_use=[v15, v30]
+      add [v30, v15] -> v31
+    - stack=[v31, v17, v16], last_use=[v16, v31]
+      pre: [SWAP1, SWAP2]
+      add [v16, v31] -> v32
+    - stack=[v32, v17], last_use=[v17, v32]
+      add [v32, v17] -> v33
+    - stack=[v33], last_use=[v33]
+      pre: [PUSH(0)]
+      mstore [0, v33]
+    - stack=[]
+      pre: [PUSH(32), PUSH(0)]
+      evm_return [0, 32]
+
+// func public %entry()
+entry:
+  block0:
+    JUMPDEST
+    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
+    CALLDATALOAD
+    NOT  // v1.i256 = not v0;
+    DUP1  // v2.i256 = not v1;
+    NOT
+    DUP1  // v3.i256 = not v2;
+    NOT
+    DUP1  // v4.i256 = not v3;
+    NOT
+    DUP1  // v5.i256 = not v4;
+    NOT
+    DUP1  // v6.i256 = not v5;
+    NOT
+    DUP1  // v7.i256 = not v6;
+    NOT
+    DUP1  // v8.i256 = not v7;
+    NOT
+    DUP1  // v9.i256 = not v8;
+    NOT
+    DUP1  // v10.i256 = not v9;
+    NOT
+    DUP1  // v11.i256 = not v10;
+    NOT
+    DUP1  // v12.i256 = not v11;
+    NOT
+    DUP1  // v13.i256 = not v12;
+    NOT
+    DUP1  // v14.i256 = not v13;
+    NOT
+    DUP1  // v15.i256 = not v14;
+    NOT
+    DUP1  // v16.i256 = not v15;
+    NOT
+    DUP1  // v17.i256 = not v16;
+    NOT
+  block1:
+    JUMPDEST
+    SWAP15  // v18.i256 = add v1 v2;
+    SWAP1
+    SWAP16
+    ADD
+    SWAP1  // v19.i256 = add v18 v3;
+    SWAP13
+    ADD
+    SWAP1  // v20.i256 = add v19 v4;
+    SWAP11
+    ADD
+    SWAP1  // v21.i256 = add v20 v5;
+    SWAP9
+    ADD
+    SWAP1  // v22.i256 = add v21 v6;
+    SWAP7
+    ADD
+    SWAP1  // v23.i256 = add v22 v7;
+    SWAP5
+    ADD
+    SWAP1  // v24.i256 = add v23 v8;
+    SWAP3
+    ADD
+    ADD  // v25.i256 = add v24 v9;
+    ADD  // v26.i256 = add v25 v10;
+    ADD  // v27.i256 = add v26 v11;
+    ADD  // v28.i256 = add v27 v12;
+    ADD  // v29.i256 = add v28 v13;
+    ADD  // v30.i256 = add v29 v14;
+    ADD  // v31.i256 = add v30 v15;
+    SWAP1  // v32.i256 = add v31 v16;
+    SWAP2
+    ADD
+    ADD  // v33.i256 = add v32 v17;
+    PUSH0  // mstore 0.i32 v33 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH0
+    RETURN
+
+
+
+---------------
+
+// func public %entry()
+entry:
+  block0:
+    0    JUMPDEST
+    1    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
+    2    CALLDATALOAD
+    3    NOT  // v1.i256 = not v0;
+    4    DUP1  // v2.i256 = not v1;
+    5    NOT
+    6    DUP1  // v3.i256 = not v2;
+    7    NOT
+    8    DUP1  // v4.i256 = not v3;
+    9    NOT
+   10    DUP1  // v5.i256 = not v4;
+   11    NOT
+   12    DUP1  // v6.i256 = not v5;
+   13    NOT
+   14    DUP1  // v7.i256 = not v6;
+   15    NOT
+   16    DUP1  // v8.i256 = not v7;
+   17    NOT
+   18    DUP1  // v9.i256 = not v8;
+   19    NOT
+   20    DUP1  // v10.i256 = not v9;
+   21    NOT
+   22    DUP1  // v11.i256 = not v10;
+   23    NOT
+   24    DUP1  // v12.i256 = not v11;
+   25    NOT
+   26    DUP1  // v13.i256 = not v12;
+   27    NOT
+   28    DUP1  // v14.i256 = not v13;
+   29    NOT
+   30    DUP1  // v15.i256 = not v14;
+   31    NOT
+   32    DUP1  // v16.i256 = not v15;
+   33    NOT
+   34    DUP1  // v17.i256 = not v16;
+   35    NOT
+  block1:
+   36    JUMPDEST
+   37    SWAP15  // v18.i256 = add v1 v2;
+   38    SWAP1
+   39    SWAP16
+   40    ADD
+   41    SWAP1  // v19.i256 = add v18 v3;
+   42    SWAP13
+   43    ADD
+   44    SWAP1  // v20.i256 = add v19 v4;
+   45    SWAP11
+   46    ADD
+   47    SWAP1  // v21.i256 = add v20 v5;
+   48    SWAP9
+   49    ADD
+   50    SWAP1  // v22.i256 = add v21 v6;
+   51    SWAP7
+   52    ADD
+   53    SWAP1  // v23.i256 = add v22 v7;
+   54    SWAP5
+   55    ADD
+   56    SWAP1  // v24.i256 = add v23 v8;
+   57    SWAP3
+   58    ADD
+   59    ADD  // v25.i256 = add v24 v9;
+   60    ADD  // v26.i256 = add v25 v10;
+   61    ADD  // v27.i256 = add v26 v11;
+   62    ADD  // v28.i256 = add v27 v12;
+   63    ADD  // v29.i256 = add v28 v13;
+   64    ADD  // v30.i256 = add v29 v14;
+   65    ADD  // v31.i256 = add v30 v15;
+   66    SWAP1  // v32.i256 = add v31 v16;
+   67    SWAP2
+   68    ADD
+   69    ADD  // v33.i256 = add v32 v17;
+   70    PUSH0  // mstore 0.i32 v33 i256;
+   71    MSTORE
+   72    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+   74    PUSH0
+   75    RETURN
+
+0x5b5f351980198019801980198019801980198019801980198019801980198019801980195b9e909f01909c01909a0190980190960190940190920101010101010101909101015f5260205ff3
+
+Success { reason: Return, gas_used: 21274, gas_refunded: 0, logs: [], output: Call(0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffff7) }
+
+    pc  opcode            input (stack grows to the right)
+     0  5b  JUMPDEST      []
+     1  5f  PUSH0         []
+     2  35  CALLDATALOAD  [0x0]
+     3  19  NOT           [0xb00000016000000000000000000000000000000000000000000000000]
+     4  80  DUP1          [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff]
+     5  19  NOT           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff]
+     6  80  DUP1          [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000]
+     7  19  NOT           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000]
+     8  80  DUP1          [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff]
+     9  19  NOT           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff]
+    10  80  DUP1          [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000]
+    11  19  NOT           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000]
+    12  80  DUP1          [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff]
+    13  19  NOT           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff]
+    14  80  DUP1          [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000]
+    15  19  NOT           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000] (len=7)
+    16  80  DUP1          [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=7)
+    17  19  NOT           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=8)
+    18  80  DUP1          [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000] (len=8)
+    19  19  NOT           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000] (len=9)
+    20  80  DUP1          [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=9)
+    21  19  NOT           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=10)
+    22  80  DUP1          [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000] (len=10)
+    23  19  NOT           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000] (len=11)
+    24  80  DUP1          [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=11)
+    25  19  NOT           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=12)
+    26  80  DUP1          [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000] (len=12)
+    27  19  NOT           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000] (len=13)
+    28  80  DUP1          [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=13)
+    29  19  NOT           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=14)
+    30  80  DUP1          [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000] (len=14)
+    31  19  NOT           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000] (len=15)
+    32  80  DUP1          [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=15)
+    33  19  NOT           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=16)
+    34  80  DUP1          [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000] (len=16)
+    35  19  NOT           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000] (len=17)
+    36  5b  JUMPDEST      [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=17)
+    37  9e  SWAP15        [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=17)
+    38  90  SWAP1         [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000] (len=17)
+    39  9f  SWAP16        [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000] (len=17)
+    40  01  ADD           [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=17)
+    41  90  SWAP1         [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff] (len=16)
+    42  9c  SWAP13        [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=16)
+    43  01  ADD           [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=16)
+    44  90  SWAP1         [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffffe] (len=15)
+    45  9a  SWAP11        [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffffe, 0xb00000016000000000000000000000000000000000000000000000000] (len=15)
+    46  01  ADD           [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffffe, 0xb00000016000000000000000000000000000000000000000000000000] (len=15)
+    47  90  SWAP1         [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe] (len=14)
+    48  98  SWAP9         [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=14)
+    49  01  ADD           [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=14)
+    50  90  SWAP1         [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffffd] (len=13)
+    51  96  SWAP7         [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffffd, 0xb00000016000000000000000000000000000000000000000000000000] (len=13)
+    52  01  ADD           [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffffd, 0xb00000016000000000000000000000000000000000000000000000000] (len=13)
+    53  90  SWAP1         [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd] (len=12)
+    54  94  SWAP5         [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=12)
+    55  01  ADD           [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff] (len=12)
+    56  90  SWAP1         [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffffc] (len=11)
+    57  92  SWAP3         [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffffc, 0xb00000016000000000000000000000000000000000000000000000000] (len=11)
+    58  01  ADD           [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffffc, 0xb00000016000000000000000000000000000000000000000000000000] (len=11)
+    59  01  ADD           [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc] (len=10)
+    60  01  ADD           [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffffb] (len=9)
+    61  01  ADD           [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffb] (len=8)
+    62  01  ADD           [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, …, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffffa] (len=7)
+    63  01  ADD           [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffa]
+    64  01  ADD           [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffff9]
+    65  01  ADD           [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff9]
+    66  90  SWAP1         [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffff8]
+    67  91  SWAP2         [0xb00000016000000000000000000000000000000000000000000000000, 0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffff8, 0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff]
+    68  01  ADD           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffff8, 0xb00000016000000000000000000000000000000000000000000000000]
+    69  01  ADD           [0xfffffff4ffffffe9ffffffffffffffffffffffffffffffffffffffffffffffff, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff8]
+    70  5f  PUSH0         [0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffff7]
+    71  52  MSTORE        [0xfffffff4ffffffe9fffffffffffffffffffffffffffffffffffffffffffffff7, 0x0]
+    72  60  PUSH1         0x20  []
+    74  5f  PUSH0         [0x20]
+    75  f3  RETURN        [0x20, 0x0]

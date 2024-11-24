@@ -1,7 +1,6 @@
 use bit_set::BitSet as Bs;
 use cranelift_entity::EntityRef;
-use std::fmt;
-use std::marker::PhantomData;
+use std::{fmt, marker::PhantomData};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BitSet<T> {

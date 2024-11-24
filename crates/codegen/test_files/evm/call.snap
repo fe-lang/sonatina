@@ -1,0 +1,316 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(v).unwrap()"
+input_file: test_files/evm/call.sntn
+---
+// func public %entry()
+  block0 P=[] T=[]
+    - stack=[]
+      pre: [PUSH(0)]
+      evm_calldata_load [0] -> v0
+    - stack=[v0]
+      pre: [DUP1, PUSH(248)]
+      shr [248, v0] -> v1
+    - stack=[v1, v0], last_use=[v0]
+      pre: [SWAP1, PUSH(32)]
+      shl [32, v0] -> v2
+    - stack=[v2, v1], last_use=[v2]
+      pre: [PUSH(224)]
+      shr [224, v2] -> v3
+    - stack=[v3, v1], last_use=[v1, v3]
+      pre: [PUSH_CONT, SWAP2]
+      call [v1, v3] -> v4
+    - stack=[v4], last_use=[v4]
+      pre: [PUSH(0)]
+      mstore [0, v4]
+    - stack=[]
+      pre: [PUSH(8), PUSH(0)]
+      evm_return [0, 8]
+
+// func private %square(v0.i64) -> i64
+  block0 P=[v0] T=[]
+    - stack=[v0, <RET>], last_use=[v0]
+      pre: [DUP1]
+      mul [v0, v0] -> v1
+    - stack=[v1, <RET>]
+      return [v1]
+
+// func private %invert(v0.i64) -> i64
+  block0 P=[v0] T=[]
+    - stack=[v0, <RET>], last_use=[v0]
+      pre: [PUSH(-1)]
+      mul [-1, v0] -> v1
+    - stack=[v1, <RET>]
+      return [v1]
+
+// func public %main(v0.i8, v1.i64) -> i64
+  block0 P=[v0, v1] T=[]
+    - stack=[v0, v1, <RET>]
+      br_table
+  block1 P=[] T=[v1]
+    inherited from block0: [v0x, v1, <RET>]
+    prologue: [POP]
+    - stack=[v1, <RET>], last_use=[v1]
+      pre: [PUSH_CONT, SWAP1]
+      call [v1] -> v2
+    - stack=[v2, <RET>]
+      jump -> block4
+  block2 P=[] T=[v1]
+    inherited from block0: [v0x, v1, <RET>]
+    prologue: [POP]
+    - stack=[v1, <RET>], last_use=[v1]
+      pre: [PUSH_CONT, SWAP1]
+      call [v1] -> v3
+    - stack=[v3, <RET>]
+      jump -> block4
+  block3 P=[] T=[v0]
+    inherited from block0: [v0, v1x, <RET>]
+    prologue: [SWAP1, POP]
+    - stack=[v0, <RET>]
+      jump -> block4
+  block4 P=[v4] T=[]
+    - stack=[v4, <RET>]
+      return [v4]
+
+// func public %entry()
+entry:
+  block0:
+    JUMPDEST
+    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
+    CALLDATALOAD
+    DUP1  // v1.i8 = shr 248.i32 v0;
+    PUSH1 0xf8 (248)
+    SHR
+    SWAP1  // v2.i32 = shl 32.i32 v0;
+    PUSH1 0x20 (32)
+    SHL
+    PUSH1 0xe0 (224)  // v3.i64 = shr 224.i32 v2;
+    SHR
+    PUSH1 `pc + (4)`  // v4.i64 = call %main v1 v3;
+    SWAP2
+    PUSH1 FuncRef(3)
+    JUMP
+    JUMPDEST
+    PUSH0  // mstore 0.i32 v4 i64;
+    SWAP1
+    PUSH1 0xc0 (192)
+    SHL
+    SWAP1
+    MSTORE
+    PUSH1 0x8 (8)  // evm_return 0.i8 8.i8;
+    PUSH0
+    RETURN
+
+// func private %square(v0.i64) -> i64
+square:
+  block0:
+    JUMPDEST
+    DUP1  // v1.i64 = mul v0 v0;
+    MUL
+    SWAP1  // return v1;
+    JUMP
+
+// func private %invert(v0.i64) -> i64
+invert:
+  block0:
+    JUMPDEST
+    PUSH1 0xff (255)  // v1.i64 = mul v0 -1.i64;
+    PUSH0
+    SIGNEXTEND
+    MUL
+    SWAP1  // return v1;
+    JUMP
+
+// func public %main(v0.i8, v1.i64) -> i64
+main:
+  block0:
+    JUMPDEST
+    PUSH0  // br_table v0 block3 (0.i8 block1) (1.i8 block2);
+    DUP2
+    EQ
+    PUSH1 block1
+    JUMPI
+    PUSH1 0x1 (1)
+    DUP2
+    EQ
+    PUSH1 block2
+    JUMPI
+    PUSH1 block3
+    JUMP
+  block1:
+    JUMPDEST
+    POP  // v2.i64 = call %square v1;
+    PUSH1 `pc + (4)`
+    SWAP1
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH1 block4  // jump block4;
+    JUMP
+  block2:
+    JUMPDEST
+    POP  // v3.i64 = call %invert v1;
+    PUSH1 `pc + (4)`
+    SWAP1
+    PUSH1 FuncRef(2)
+    JUMP
+    JUMPDEST
+    PUSH1 block4  // jump block4;
+    JUMP
+  block3:
+    JUMPDEST
+    SWAP1  // jump block4;
+    POP
+  block4:
+    JUMPDEST
+    SWAP1  // return v4;
+    JUMP
+
+
+
+---------------
+
+// func public %entry()
+entry:
+  block0:
+    0    JUMPDEST
+    1    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
+    2    CALLDATALOAD
+    3    DUP1  // v1.i8 = shr 248.i32 v0;
+    4    PUSH1 0xf8 (248)
+    6    SHR
+    7    SWAP1  // v2.i32 = shl 32.i32 v0;
+    8    PUSH1 0x20 (32)
+   10    SHL
+   11    PUSH1 0xe0 (224)  // v3.i64 = shr 224.i32 v2;
+   13    SHR
+   14    PUSH1 20  // v4.i64 = call %main v1 v3;
+   16    SWAP2
+   17    PUSH1 45 (FuncRef(3))
+   19    JUMP
+   20    JUMPDEST
+   21    PUSH0  // mstore 0.i32 v4 i64;
+   22    SWAP1
+   23    PUSH1 0xc0 (192)
+   25    SHL
+   26    SWAP1
+   27    MSTORE
+   28    PUSH1 0x8 (8)  // evm_return 0.i8 8.i8;
+   30    PUSH0
+   31    RETURN
+// func private %square(v0.i64) -> i64
+square:
+  block0:
+   32    JUMPDEST
+   33    DUP1  // v1.i64 = mul v0 v0;
+   34    MUL
+   35    SWAP1  // return v1;
+   36    JUMP
+// func private %invert(v0.i64) -> i64
+invert:
+  block0:
+   37    JUMPDEST
+   38    PUSH1 0xff (255)  // v1.i64 = mul v0 -1.i64;
+   40    PUSH0
+   41    SIGNEXTEND
+   42    MUL
+   43    SWAP1  // return v1;
+   44    JUMP
+// func public %main(v0.i8, v1.i64) -> i64
+main:
+  block0:
+   45    JUMPDEST
+   46    PUSH0  // br_table v0 block3 (0.i8 block1) (1.i8 block2);
+   47    DUP2
+   48    EQ
+   49    PUSH1 62 (block1)
+   51    JUMPI
+   52    PUSH1 0x1 (1)
+   54    DUP2
+   55    EQ
+   56    PUSH1 74 (block2)
+   58    JUMPI
+   59    PUSH1 86 (block3)
+   61    JUMP
+  block1:
+   62    JUMPDEST
+   63    POP  // v2.i64 = call %square v1;
+   64    PUSH1 70
+   66    SWAP1
+   67    PUSH1 32 (FuncRef(1))
+   69    JUMP
+   70    JUMPDEST
+   71    PUSH1 89 (block4)  // jump block4;
+   73    JUMP
+  block2:
+   74    JUMPDEST
+   75    POP  // v3.i64 = call %invert v1;
+   76    PUSH1 82
+   78    SWAP1
+   79    PUSH1 37 (FuncRef(2))
+   81    JUMP
+   82    JUMPDEST
+   83    PUSH1 89 (block4)  // jump block4;
+   85    JUMP
+  block3:
+   86    JUMPDEST
+   87    SWAP1  // jump block4;
+   88    POP
+  block4:
+   89    JUMPDEST
+   90    SWAP1  // return v4;
+   91    JUMP
+
+0x5b5f358060f81c9060201b60e01c601491602d565b5f9060c01b905260085ff35b800290565b60ff5f0b0290565b5f8114603e5760018114604a576056565b506046906020565b6059565b506052906025565b6059565b90505b9056
+
+Success { reason: Return, gas_used: 21215, gas_refunded: 0, logs: [], output: Call(0x00000000000001e4) }
+
+    pc  opcode            input (stack grows to the right)
+     0  5b  JUMPDEST      []
+     1  5f  PUSH0         []
+     2  35  CALLDATALOAD  [0x0]
+     3  80  DUP1          [0xb00000016000000000000000000000000000000000000000000000000]
+     4  60  PUSH1         0xf8  [0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000]
+     6  1c  SHR           [0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000, 0xf8]
+     7  90  SWAP1         [0xb00000016000000000000000000000000000000000000000000000000, 0x0]
+     8  60  PUSH1         0x20  [0x0, 0xb00000016000000000000000000000000000000000000000000000000]
+    10  1b  SHL           [0x0, 0xb00000016000000000000000000000000000000000000000000000000, 0x20]
+    11  60  PUSH1         0xe0  [0x0, 0x1600000000000000000000000000000000000000000000000000000000]
+    13  1c  SHR           [0x0, 0x1600000000000000000000000000000000000000000000000000000000, 0xe0]
+    14  60  PUSH1         0x14  [0x0, 0x16]
+    16  91  SWAP2         [0x0, 0x16, 0x14]
+    17  60  PUSH1         0x2d  [0x14, 0x16, 0x0]
+    19  56  JUMP          [0x14, 0x16, 0x0, 0x2d]
+    45  5b  JUMPDEST      [0x14, 0x16, 0x0]
+    46  5f  PUSH0         [0x14, 0x16, 0x0]
+    47  81  DUP2          [0x14, 0x16, 0x0, 0x0]
+    48  14  EQ            [0x14, 0x16, 0x0, 0x0, 0x0]
+    49  60  PUSH1         0x3e  [0x14, 0x16, 0x0, 0x1]
+    51  57  JUMPI         [0x14, 0x16, 0x0, 0x1, 0x3e]
+    62  5b  JUMPDEST      [0x14, 0x16, 0x0]
+    63  50  POP           [0x14, 0x16, 0x0]
+    64  60  PUSH1         0x46  [0x14, 0x16]
+    66  90  SWAP1         [0x14, 0x16, 0x46]
+    67  60  PUSH1         0x20  [0x14, 0x46, 0x16]
+    69  56  JUMP          [0x14, 0x46, 0x16, 0x20]
+    32  5b  JUMPDEST      [0x14, 0x46, 0x16]
+    33  80  DUP1          [0x14, 0x46, 0x16]
+    34  02  MUL           [0x14, 0x46, 0x16, 0x16]
+    35  90  SWAP1         [0x14, 0x46, 0x1e4]
+    36  56  JUMP          [0x14, 0x1e4, 0x46]
+    70  5b  JUMPDEST      [0x14, 0x1e4]
+    71  60  PUSH1         0x59  [0x14, 0x1e4]
+    73  56  JUMP          [0x14, 0x1e4, 0x59]
+    89  5b  JUMPDEST      [0x14, 0x1e4]
+    90  90  SWAP1         [0x14, 0x1e4]
+    91  56  JUMP          [0x1e4, 0x14]
+    20  5b  JUMPDEST      [0x1e4]
+    21  5f  PUSH0         [0x1e4]
+    22  90  SWAP1         [0x1e4, 0x0]
+    23  60  PUSH1         0xc0  [0x0, 0x1e4]
+    25  1b  SHL           [0x0, 0x1e4, 0xc0]
+    26  90  SWAP1         [0x0, 0x1e4000000000000000000000000000000000000000000000000]
+    27  52  MSTORE        [0x1e4000000000000000000000000000000000000000000000000, 0x0]
+    28  60  PUSH1         0x08  []
+    30  5f  PUSH0         [0x8]
+    31  f3  RETURN        [0x8, 0x0]
