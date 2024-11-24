@@ -9,8 +9,8 @@ use ir::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     ir_writer::DebugProvider,
     isa::evm::Evm,
-    module::{FuncRef, ModuleCtx},
-    Function, Module, Signature,
+    module::{FuncRef, Module, ModuleCtx},
+    Function, Signature,
 };
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smol_str::SmolStr;
@@ -36,7 +36,7 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
     let ast = ast::parse(input)?;
 
     let module_ctx = module_ctx_from_triple(ast.target.unwrap());
-    let mut builder = ModuleBuilder::new(module_ctx);
+    let builder = ModuleBuilder::new(module_ctx);
 
     let mut ctx = BuildCtx::default();
 
@@ -44,7 +44,7 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
         let fields = st
             .fields
             .iter()
-            .map(|t| ctx.type_(&mut builder, t))
+            .map(|t| ctx.type_(&builder, t))
             .collect::<Vec<_>>();
         builder.declare_struct_type(&st.name.0, &fields, false);
     }
@@ -53,12 +53,12 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
         let params = func
             .params
             .iter()
-            .map(|t| ctx.type_(&mut builder, t))
+            .map(|t| ctx.type_(&builder, t))
             .collect::<Vec<_>>();
         let ret_ty = func
             .ret_type
             .as_ref()
-            .map(|t| ctx.type_(&mut builder, t))
+            .map(|t| ctx.type_(&builder, t))
             .unwrap_or(ir::Type::Unit);
 
         let sig = Signature::new(&func.name.name, func.linkage, &params, ret_ty);
@@ -70,13 +70,13 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
         let args = sig
             .params
             .iter()
-            .map(|decl| ctx.type_(&mut builder, &decl.1))
+            .map(|decl| ctx.type_(&builder, &decl.1))
             .collect::<Vec<_>>();
 
         let ret_ty = sig
             .ret_type
             .as_ref()
-            .map(|t| ctx.type_(&mut builder, t))
+            .map(|t| ctx.type_(&builder, t))
             .unwrap_or(ir::Type::Unit);
         let sig = Signature::new(&sig.name.name, sig.linkage, &args, ret_ty);
 
@@ -86,8 +86,8 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
     let mut func_comments = SecondaryMap::default();
 
     for func in ast.functions {
-        let id = builder.get_func_ref(&func.signature.name.name).unwrap();
-        builder = ctx.build_func(builder.build_function(id), id, &func);
+        let id = builder.lookup_func(&func.signature.name.name).unwrap();
+        ctx.build_func(builder.func_builder(id), id, &func);
 
         func_comments[id] = func.comments;
     }
@@ -134,7 +134,7 @@ impl BuildCtx {
         mut fb: FunctionBuilder<InstInserter>,
         func_ref: FuncRef,
         func: &ast::Func,
-    ) -> ModuleBuilder {
+    ) {
         self.blocks.clear();
 
         for (i, ValueDeclaration(name, _ty)) in func.signature.params.iter().enumerate() {
@@ -144,7 +144,7 @@ impl BuildCtx {
 
         for stmt in func.blocks.iter().flat_map(|b| b.stmts.iter()) {
             if let StmtKind::Assign(ValueDeclaration(name, ty), _) = &stmt.kind {
-                let ty = self.type_(&mut fb.module_builder, ty);
+                let ty = self.type_(&fb.module_builder, ty);
                 self.declare_value(&mut fb.func, name, ty);
             }
         }
@@ -175,7 +175,7 @@ impl BuildCtx {
                         };
 
                         // xxx cleanup
-                        let ty = self.type_(&mut fb.module_builder, type_);
+                        let ty = self.type_(&fb.module_builder, type_);
                         let value = *self.func_value_names.get_by_right(&name.string).unwrap();
                         let inst_id = fb.cursor.insert_inst_data_dyn(&mut fb.func, inst);
                         fb.func.dfg.values[value] = ir::Value::Inst { inst: inst_id, ty };
@@ -202,11 +202,11 @@ impl BuildCtx {
         let names = std::mem::take(&mut self.func_value_names);
         self.value_names.insert(func_ref, names);
         fb.seal_all();
-        fb.finish()
+        fb.finish();
     }
 
     fn func_ref(&mut self, mb: &mut ModuleBuilder, name: &ast::FunctionName) -> FuncRef {
-        mb.get_func_ref(&name.name).unwrap_or_else(|| {
+        mb.lookup_func(&name.name).unwrap_or_else(|| {
             self.errors.push(Error::Undefined(
                 UndefinedKind::Func(name.name.clone()),
                 name.span,
@@ -263,11 +263,15 @@ impl BuildCtx {
                     ));
                     ir::ValueId(0)
                 }),
+            ast::ValueKind::Undef(ty) => {
+                let ty = self.type_(&fb.module_builder, ty);
+                fb.make_undef_value(ty)
+            }
             ast::ValueKind::Error => unreachable!(),
         }
     }
 
-    fn type_(&mut self, mb: &mut ModuleBuilder, t: &ast::Type) -> ir::Type {
+    fn type_(&mut self, mb: &ModuleBuilder, t: &ast::Type) -> ir::Type {
         match &t.kind {
             ast::TypeKind::Int(i) => (*i).into(),
             ast::TypeKind::Ptr(t) => {
@@ -284,6 +288,13 @@ impl BuildCtx {
                     .push(Error::Undefined(UndefinedKind::Type(name.clone()), t.span));
                 ir::Type::Unit
             }),
+
+            ast::TypeKind::Func { args, ret_ty } => {
+                let args: Vec<_> = args.iter().map(|t| self.type_(mb, t)).collect();
+                let ret_ty = self.type_(mb, ret_ty);
+                mb.declare_func_type(&args, ret_ty)
+            }
+
             ast::TypeKind::Error => unreachable!(),
         }
     }

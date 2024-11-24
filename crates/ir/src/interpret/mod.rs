@@ -55,6 +55,8 @@ pub trait Interpret {
         inst::data::Mstore,
         inst::data::Gep,
         inst::data::Alloca,
+        inst::data::InsertValue,
+        inst::data::ExtractValue,
         inst::control_flow::Jump,
         inst::control_flow::Br,
         inst::control_flow::BrTable,
@@ -119,9 +121,13 @@ pub enum Action {
     Return(EvalValue),
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum EvalValue {
     Imm(Immediate),
+    Aggregate {
+        fields: Vec<EvalValue>,
+        ty: Type,
+    },
     #[default]
     Undef,
 }
@@ -134,6 +140,7 @@ impl EvalValue {
     {
         match self {
             EvalValue::Imm(value) => f(value).into(),
+            EvalValue::Aggregate { .. } => panic!("Type checker needs to handle this!"),
             EvalValue::Undef => EvalValue::Undef,
         }
     }
@@ -145,6 +152,8 @@ impl EvalValue {
     {
         match (lhs, rhs) {
             (EvalValue::Imm(l), EvalValue::Imm(r)) => f(l, r).into(),
+            (EvalValue::Aggregate { .. }, _) => panic!("Type checker needs to handle this!"),
+            (_, EvalValue::Aggregate { .. }) => panic!("Type checker needs to handle this!"),
             _ => EvalValue::Undef,
         }
     }
@@ -165,6 +174,17 @@ impl fmt::Display for EvalValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Imm(imm) => write!(f, "{imm}"),
+            Self::Aggregate { fields, .. } => {
+                write!(f, "{{ ")?;
+                let mut fields = fields.iter();
+                if let Some(field) = fields.next() {
+                    write!(f, "{field} ")?;
+                }
+                for field in fields {
+                    write!(f, ",{field} ")?;
+                }
+                write!(f, " }}")
+            }
             Self::Undef => write!(f, "undef"),
         }
     }

@@ -7,7 +7,7 @@ use super::InstWrite;
 use crate::{
     ir_writer::{FuncWriteCtx, WriteWithFunc},
     module::FuncRef,
-    BlockId, Inst, InstSetBase, Type, ValueId,
+    BlockId, Inst, InstSetBase, ValueId,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
@@ -58,8 +58,8 @@ impl InstWrite for BrTable {
         write!(w, "{}", self.as_text())?;
         write!(w, " ")?;
         self.scrutinee.write(ctx, &mut w)?;
-        write!(w, " ")?;
         if let Some(default) = self.default {
+            write!(w, " ")?;
             default.write(ctx, &mut w)?;
         };
 
@@ -122,18 +122,14 @@ pub struct Call {
 
     #[inst(value)]
     args: SmallVec<[ValueId; 8]>,
-    // TODO: Is `ret_ty` necessary?
-    ret_ty: Type,
 }
 impl InstWrite for Call {
     fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
         let name = self.as_text();
-        let callee = ctx
-            .func
-            .ctx()
-            .func_sig(self.callee)
-            .map_or("undef", |sig| sig.name());
-        write!(w, "{name} %{callee}")?;
+        ctx.func.ctx().func_sig(self.callee, |sig| {
+            let callee = sig.name();
+            write!(w, "{name} %{callee}")
+        })?;
         for value in &self.args {
             write!(w, " ")?;
             value.write(ctx, &mut w)?;

@@ -75,6 +75,11 @@ impl DataFlowGraph {
         value
     }
 
+    pub fn make_undef_value(&mut self, ty: Type) -> ValueId {
+        let value_data = Value::Undef { ty };
+        self.make_value(value_data)
+    }
+
     /// Returns inst if the value is originated from inst.
     pub fn value_inst(&self, value: ValueId) -> Option<InstId> {
         match self.value(value) {
@@ -137,7 +142,8 @@ impl DataFlowGraph {
             Value::Inst { ty, .. }
             | Value::Arg { ty, .. }
             | Value::Immediate { ty, .. }
-            | Value::Global { ty, .. } => *ty,
+            | Value::Global { ty, .. }
+            | Value::Undef { ty } => *ty,
         }
     }
 

@@ -1,12 +1,11 @@
 ---
 source: crates/parser/tests/syntax.rs
-expression: w.dump_string()
-input_file: crates/parser/test_files/syntax/module/newlines.sntn
+expression: "target = evm-ethereum-london\nfunc public %main() -> unit {\n    block0:\n        v0.i8 = add 1.i8 2.i8;\n        return;\n}\n"
+input_file: test_files/syntax/module/newlines.sntn
 ---
 target = evm-ethereum-london
 func public %main() -> unit {
     block0:
         v0.i8 = add 1.i8 2.i8;
         return;
-
 }

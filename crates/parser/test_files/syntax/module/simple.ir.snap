@@ -1,31 +1,32 @@
 ---
 source: crates/parser/tests/syntax.rs
-expression: w.dump_string()
-input_file: crates/parser/test_files/syntax/module/simple.sntn
+expression: "target = evm-ethereum-london\ntype @foo = {i8, i16, *i64};\ntype @bar = {i8, [i8; 31]};\nfunc external %add_i8(v0.i8, v1.i8) -> i8 {\n}\n\nfunc public %main() -> unit {\n    block0:\n        v0.i8 = call %foo 100.i8;\n        return;\n}\n\nfunc private %foo(v0.i8) -> i8 {\n    block0:\n        v1.i8 = mul v0 2.i8;\n        v2.i8 = call %add_i8 v0 v1;\n        return v2;\n}\n\nfunc private %types(v0.*i8, v1.[i8; 2], v2.[*i8; 2], v3.[[i8; 2]; 2], v4.@foo, v5.*@foo) -> unit {\n    block0:\n        return;\n}\n\nfunc private %table(v0.i8) -> unit {\n    block0:\n        br_table v0 block0 (1.i8 block1) (2.i8 block2);\n\n    block1:\n        return 1.i8;\n\n    block2:\n        return 2.i8;\n}\n\nfunc private %flow(v0.i64) -> i64 {\n    block0:\n        jump block1;\n\n    block1:\n        v1.i64 = phi (v0 block0) (100.i64 block2);\n        v2.i1 = gt v1 10.i64;\n        br v2 block2 block3;\n\n    block2:\n        jump block1;\n\n    block3:\n        return v1;\n}\n\n"
+input_file: test_files/syntax/module/simple.sntn
 ---
 target = evm-ethereum-london
 type @foo = {i8, i16, *i64};
 type @bar = {i8, [i8; 31]};
 func external %add_i8(v0.i8, v1.i8) -> i8 {
 }
+
 func public %main() -> unit {
     block0:
         v0.i8 = call %foo 100.i8;
         return;
-
 }
+
 func private %foo(v0.i8) -> i8 {
     block0:
         v1.i8 = mul v0 2.i8;
         v2.i8 = call %add_i8 v0 v1;
         return v2;
-
 }
+
 func private %types(v0.*i8, v1.[i8; 2], v2.[*i8; 2], v3.[[i8; 2]; 2], v4.@foo, v5.*@foo) -> unit {
     block0:
         return;
-
 }
+
 func private %table(v0.i8) -> unit {
     block0:
         br_table v0 block0 (1.i8 block1) (2.i8 block2);
@@ -35,8 +36,8 @@ func private %table(v0.i8) -> unit {
 
     block2:
         return 2.i8;
-
 }
+
 func private %flow(v0.i64) -> i64 {
     block0:
         jump block1;
@@ -51,5 +52,4 @@ func private %flow(v0.i64) -> i64 {
 
     block3:
         return v1;
-
 }
