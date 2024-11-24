@@ -125,4 +125,13 @@ impl<'a, Op: Default> Lower<'a, Op> {
     pub fn is_entry(&self, block: BlockId) -> bool {
         self.function.layout.entry_block() == Some(block)
     }
+
+    /// Check if the given `BlockId` is next in the layout.
+    /// Used for avoiding unnecessary `jump` operations.
+    pub fn is_next_block(&self, block: BlockId) -> bool {
+        let Some(cur) = self.cur_block else {
+            return false;
+        };
+        self.function.layout.next_block_of(cur) == Some(block)
+    }
 }

@@ -63,8 +63,6 @@ spill:
     DUP3
     ADD
     DUP1  // jump block2;
-    PUSH1 block2
-    JUMP
   block2:
     JUMPDEST
     PUSH1 `pc + (11)`  // v16.i64 = call %sum8 v0 v1 v2 v3 v4 v5 v6 v7;
@@ -196,52 +194,53 @@ spill:
    50    DUP3
    51    ADD
    52    DUP1  // jump block2;
-   53    PUSH1 56 (block2)
-   55    JUMP
   block2:
-   56    JUMPDEST
-   57    PUSH1 69  // v16.i64 = call %sum8 v0 v1 v2 v3 v4 v5 v6 v7;
+   53    JUMPDEST
+   54    PUSH1 66  // v16.i64 = call %sum8 v0 v1 v2 v3 v4 v5 v6 v7;
+   56    DUP16
+   57    DUP16
+   58    DUP16
    59    DUP16
    60    DUP16
    61    DUP16
    62    DUP16
    63    DUP16
-   64    DUP16
-   65    DUP16
-   66    DUP16
-   67    PUSH0 0 (FuncRef(0))
-   68    JUMP
-   69    JUMPDEST
-   70    PUSH1 82  // v17.i64 = call %sum8 v8 v9 v10 v11 v12 v13 v14 v15;
-   72    SWAP1
-   73    DUP3
-   74    DUP5
-   75    DUP7
-   76    DUP9
-   77    DUP11
-   78    DUP13
-   79    DUP15
-   80    PUSH0 0 (FuncRef(0))
-   81    JUMP
-   82    JUMPDEST
-   83    SWAP1  // v18.i64 = add v16 v17;
-   84    ADD
-   85    DUP1  // v19.i64 = add v7 v18;
-   86    PUSH0
-   87    MLOAD
-   88    MLOAD
-   89    ADD
-   90    PUSH2 0x3e8 (1000)  // v20.i1 = gt v19 1000.i64;
-   93    DUP2
-   94    GT
-   95    PUSH1 101 (block3)  // br v20 block3 block4;
-   97    JUMPI
-   98    PUSH1 121 (block4)
-  100    JUMP
+   64    PUSH0 0 (FuncRef(0))
+   65    JUMP
+   66    JUMPDEST
+   67    PUSH1 79  // v17.i64 = call %sum8 v8 v9 v10 v11 v12 v13 v14 v15;
+   69    SWAP1
+   70    DUP3
+   71    DUP5
+   72    DUP7
+   73    DUP9
+   74    DUP11
+   75    DUP13
+   76    DUP15
+   77    PUSH0 0 (FuncRef(0))
+   78    JUMP
+   79    JUMPDEST
+   80    SWAP1  // v18.i64 = add v16 v17;
+   81    ADD
+   82    DUP1  // v19.i64 = add v7 v18;
+   83    PUSH0
+   84    MLOAD
+   85    MLOAD
+   86    ADD
+   87    PUSH2 0x3e8 (1000)  // v20.i1 = gt v19 1000.i64;
+   90    DUP2
+   91    GT
+   92    PUSH1 98 (block3)  // br v20 block3 block4;
+   94    JUMPI
+   95    PUSH1 118 (block4)
+   97    JUMP
   block3:
-  101    JUMPDEST
-  102    POP  // return v18;
-  103    SWAP15
+   98    JUMPDEST
+   99    POP  // return v18;
+  100    SWAP15
+  101    POP
+  102    POP
+  103    POP
   104    POP
   105    POP
   106    POP
@@ -254,17 +253,14 @@ spill:
   113    POP
   114    POP
   115    POP
-  116    POP
-  117    POP
-  118    POP
-  119    SWAP1
-  120    JUMP
+  116    SWAP1
+  117    JUMP
   block4:
-  121    JUMPDEST
-  122    SWAP1  // jump block2;
-  123    POP
-  124    PUSH1 56 (block2)
-  126    JUMP
+  118    JUMPDEST
+  119    SWAP1  // jump block2;
+  120    POP
+  121    PUSH1 53 (block2)
+  123    JUMP
 
 
-0x5b01919001928201948401929001905090830190019150509056875f51525b8181018484018787018a8a01828401818301808201806038565b60458f8f8f8f8f8f8f8f5f565b605290828486888a8c8e5f565b9001805f5151016103e881116065576079565b509e50505050505050505050505050505090565b9050603856
+0x5b01919001928201948401929001905090830190019150509056875f51525b8181018484018787018a8a01828401818301808201805b60428f8f8f8f8f8f8f8f5f565b604f90828486888a8c8e5f565b9001805f5151016103e881116062576076565b509e50505050505050505050505050505090565b9050603556

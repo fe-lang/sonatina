@@ -98,9 +98,12 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::Jump(jump) => {
                 let dest = *jump.dest();
                 perform_actions(ctx, &alloc.read(insn, &[]));
-                let push_op = ctx.push(OpCode::PUSH1);
-                ctx.add_label_reference(push_op, Label::Block(dest));
-                ctx.push(OpCode::JUMP);
+
+                if !ctx.is_next_block(dest) {
+                    let push_op = ctx.push(OpCode::PUSH1);
+                    ctx.add_label_reference(push_op, Label::Block(dest));
+                    ctx.push(OpCode::JUMP);
+                }
             }
             EvmInstKind::Br(br) => {
                 let nz_dest = *br.nz_dest();
@@ -112,8 +115,10 @@ impl LowerBackend for EvmBackend {
                 ctx.push_jump_target(OpCode::PUSH1, Label::Block(nz_dest));
                 ctx.push(OpCode::JUMPI);
 
-                ctx.push_jump_target(OpCode::PUSH1, Label::Block(z_dest));
-                ctx.push(OpCode::JUMP);
+                if !ctx.is_next_block(z_dest) {
+                    ctx.push_jump_target(OpCode::PUSH1, Label::Block(z_dest));
+                    ctx.push(OpCode::JUMP);
+                }
             }
             EvmInstKind::Phi(_) => {}
 
@@ -132,9 +137,11 @@ impl LowerBackend for EvmBackend {
                 }
 
                 if let Some(dest) = default {
-                    let p = ctx.push(OpCode::PUSH1);
-                    ctx.add_label_reference(p, Label::Block(dest));
-                    ctx.push(OpCode::JUMP);
+                    if !ctx.is_next_block(dest) {
+                        let p = ctx.push(OpCode::PUSH1);
+                        ctx.add_label_reference(p, Label::Block(dest));
+                        ctx.push(OpCode::JUMP);
+                    }
                 }
             }
 
