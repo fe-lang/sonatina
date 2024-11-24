@@ -61,3 +61,4 @@ super::impl_inst_build! {EvmStaticCall, (gas: ValueId, ext_addr: ValueId, arg_ad
 super::impl_inst_build! {EvmRevert, (addr: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmSelfDestruct, (addr: ValueId)}
 super::impl_inst_build! {EvmMalloc, (size: ValueId)}
+super::impl_inst_build! {EvmContractSize, (contract: FuncRef)}
