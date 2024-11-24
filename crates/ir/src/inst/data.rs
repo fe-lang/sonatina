@@ -1,7 +1,7 @@
 use macros::Inst;
 use smallvec::SmallVec;
 
-use crate::{inst::impl_inst_write, Type, ValueId};
+use crate::{inst::impl_inst_write, module::FuncRef, Type, ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Read))]
@@ -29,6 +29,12 @@ pub struct Gep {
     values: SmallVec<[ValueId; 8]>,
 }
 impl_inst_write!(Gep);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+pub struct GetFunctionPtr {
+    func: FuncRef,
+}
+impl_inst_write!(GetFunctionPtr);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Write))]

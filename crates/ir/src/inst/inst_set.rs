@@ -48,6 +48,7 @@ define_inst_set_base! {
         data::Mload,
         data::Mstore,
         data::Gep,
+        data::GetFunctionPtr,
         data::Alloca,
         data::InsertValue,
         data::ExtractValue,
