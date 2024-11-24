@@ -1,7 +1,7 @@
 //! Compute the "liveness" of values in a control flow graph.
 //!
 //! This is an implementation of "Liveness Sets using Path Exploration",
-//! as described in https://hal.inria.fr/hal-00761555/file/habilitation.pdf
+//! as described in <https://hal.inria.fr/hal-00761555/file/habilitation.pdf>
 //! Section 2.5.1:
 //!
 //! > a variable is live at a program point p, if p belongs to a path of the CFG
@@ -154,7 +154,7 @@ pub fn value_uses_in_block_matching_predicate(
 fn for_each_use(func: &Function, block: BlockId, mut f: impl FnMut(ValueId, Option<BlockId>)) {
     for inst in func.layout.iter_inst(block) {
         if let Some(phi) = func.dfg.cast_phi(inst) {
-            for (val, block) in phi.iter_args() {
+            for (val, block) in phi.args().iter() {
                 f(*val, Some(*block))
             }
         } else {

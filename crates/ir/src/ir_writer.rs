@@ -45,8 +45,8 @@ impl<'a> ModuleWriter<'a> {
 
         for func_ref in self.module.funcs.keys() {
             let func = &self.module.funcs[func_ref];
-            let mut writer = FuncWriter::with_debug_provider(func, func_ref, self.dbg);
-            writer.write(&mut *w)?;
+            let ctx = FuncWriteCtx::with_debug_provider(func, func_ref, self.dbg);
+            func_ref.write(&ctx, w)?;
         }
 
         Ok(())
@@ -89,97 +89,88 @@ impl<'a> FuncWriteCtx<'a> {
     pub fn module_ctx(&self) -> &ModuleCtx {
         self.func.ctx()
     }
-}
 
-pub struct FuncWriter<'a> {
-    ctx: FuncWriteCtx<'a>,
-    level: u8,
-}
-
-impl<'a> FuncWriter<'a> {
-    pub fn new(func: &'a Function, func_ref: FuncRef) -> Self {
-        Self::with_debug_provider(func, func_ref, &DEFAULT_PROVIDER)
-    }
-
-    pub fn with_debug_provider(
-        func: &'a Function,
-        func_ref: FuncRef,
-        dbg: &'a dyn DebugProvider,
-    ) -> Self {
-        let ctx = FuncWriteCtx::with_debug_provider(func, func_ref, dbg);
-        Self { ctx, level: 0 }
-    }
-
-    pub fn write(&mut self, w: &mut impl io::Write) -> io::Result<()> {
+    pub fn write_function_signature(&self, w: &mut impl io::Write) -> io::Result<()> {
         w.write_fmt(format_args!(
             "func {} %{}(",
-            self.ctx.func.sig.linkage(),
-            self.ctx.func.sig.name()
+            self.func.sig.linkage(),
+            self.func.sig.name()
         ))?;
         write_iter_with_delim(
             &mut *w,
-            &self.ctx,
-            self.ctx.func.arg_values.iter().map(|v| ValueWithTy(*v)),
+            self,
+            self.func.arg_values.iter().map(|v| ValueWithTy(*v)),
             ", ",
         )?;
         write!(w, ") -> ")?;
-        self.ctx
-            .func
-            .sig
-            .ret_ty()
-            .write(self.ctx.module_ctx(), &mut *w)?;
-        writeln!(w, " {{")?;
+        self.func.sig.ret_ty().write(self.module_ctx(), &mut *w)
+    }
+}
 
-        self.level += 1;
-        for block in self.ctx.func.layout.iter_block() {
-            self.write_block_with_inst(block, &mut *w)?;
+impl WriteWithFunc for FuncRef {
+    fn write(&self, ctx: &FuncWriteCtx, w: &mut impl io::Write) -> io::Result<()> {
+        struct FuncWriter<'a> {
+            ctx: &'a FuncWriteCtx<'a>,
+            level: u8,
         }
 
-        self.level -= 1;
-        writeln!(w, "}}")
-    }
+        impl<'a> FuncWriter<'a> {
+            pub fn write(&mut self, w: &mut impl io::Write) -> io::Result<()> {
+                self.ctx.write_function_signature(w)?;
+                writeln!(w, " {{")?;
 
-    pub fn dump_string(&mut self) -> String {
-        let mut s = Vec::new();
-        self.write(&mut s).unwrap();
-        unsafe { String::from_utf8_unchecked(s) }
-    }
+                self.level += 1;
+                for block in self.ctx.func.layout.iter_block() {
+                    self.write_block_with_inst(block, &mut *w)?;
+                }
 
-    fn write_block_with_inst(&mut self, block: BlockId, w: &mut impl io::Write) -> io::Result<()> {
-        self.indent(&mut *w)?;
-        block.write(&self.ctx, &mut *w)?;
+                self.level -= 1;
+                writeln!(w, "}}")
+            }
 
-        self.enter(&mut *w)?;
-        for inst in self.ctx.func.layout.iter_inst(block) {
-            self.write_inst_in_block(inst, &mut *w)?;
+            fn write_block_with_inst(
+                &mut self,
+                block: BlockId,
+                w: &mut impl io::Write,
+            ) -> io::Result<()> {
+                self.indent(&mut *w)?;
+                block.write(self.ctx, &mut *w)?;
+
+                self.enter(&mut *w)?;
+                for inst in self.ctx.func.layout.iter_inst(block) {
+                    self.write_inst_in_block(inst, &mut *w)?;
+                }
+                self.leave();
+
+                writeln!(w)
+            }
+
+            fn write_inst_in_block(
+                &mut self,
+                inst: InstId,
+                w: &mut impl io::Write,
+            ) -> io::Result<()> {
+                self.indent(&mut *w)?;
+                let inst_with_res = InstStatement(inst);
+                inst_with_res.write(self.ctx, &mut *w)?;
+                writeln!(w)
+            }
+
+            fn indent(&self, mut w: impl io::Write) -> io::Result<()> {
+                write!(w, "{}", " ".repeat(self.level as usize * 4))
+            }
+
+            fn enter(&mut self, mut w: impl io::Write) -> io::Result<()> {
+                self.level += 1;
+                writeln!(w, ":")
+            }
+
+            fn leave(&mut self) {
+                self.level -= 1;
+            }
         }
-        self.leave();
 
-        self.newline(w)
-    }
-
-    fn write_inst_in_block(&mut self, inst: InstId, w: &mut impl io::Write) -> io::Result<()> {
-        self.indent(&mut *w)?;
-        let inst_with_res = InstStatement(inst);
-        inst_with_res.write(&self.ctx, &mut *w)?;
-        writeln!(w)
-    }
-
-    fn indent(&self, mut w: impl io::Write) -> io::Result<()> {
-        write!(w, "{}", " ".repeat(self.level as usize * 4))
-    }
-
-    fn newline(&self, mut w: impl io::Write) -> io::Result<()> {
-        writeln!(w)
-    }
-
-    fn enter(&mut self, mut w: impl io::Write) -> io::Result<()> {
-        self.level += 1;
-        writeln!(w, ":")
-    }
-
-    fn leave(&mut self) {
-        self.level -= 1;
+        FuncWriter { ctx, level: 0 }.write(w)
     }
 }
 

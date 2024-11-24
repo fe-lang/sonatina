@@ -1,0 +1,8 @@
+target = "evm-ethereum-london"
+
+func public %add() -> i32 {
+    block0:
+        v1.i32 = add 100000.i32 -100.i32;
+        v2.i32 = sub v1 900.i32;
+        mstore 0.i32 v2 i32;
+}

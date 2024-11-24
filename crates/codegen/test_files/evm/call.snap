@@ -1,0 +1,147 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(v).unwrap()"
+input_file: test_files/evm/call.sntn
+---
+// func private %square(v0.i64) -> i64
+square:
+  block0:
+    JUMPDEST
+    MUL  // v1.i64 = mul v0 v0;
+    SWAP1  // return v1;
+    JUMP
+
+// func private %invert(v0.i64) -> i64
+invert:
+  block0:
+    JUMPDEST
+    PUSH1 0xff (255)  // v1.i64 = mul v0 -1.i64;
+    PUSH0
+    SIGNEXTEND
+    SWAP1
+    MUL
+    SWAP1  // return v1;
+    JUMP
+
+// func public %main(v0.i8, v1.i64) -> i64
+main:
+  block0:
+    JUMPDEST
+    DUP1  // br_table v0 block3 (0.i8 block1) (1.i8 block2);
+    PUSH0
+    EQ
+    PUSH1 block1
+    JUMPI
+    DUP1
+    PUSH1 0x1 (1)
+    EQ
+    PUSH1 block2
+    JUMPI
+    PUSH1 block3
+    JUMP
+  block1:
+    JUMPDEST
+    PUSH1 `pc + (4)`  // v2.i64 = call %square v1;
+    SWAP1
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    SWAP1  // jump block4;
+    POP
+    PUSH1 block4
+    JUMP
+  block2:
+    JUMPDEST
+    PUSH1 `pc + (4)`  // v3.i64 = call %invert v1;
+    SWAP1
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    SWAP1  // jump block4;
+    POP
+    PUSH1 block4
+    JUMP
+  block3:
+    JUMPDEST
+    SWAP1  // jump block4;
+    POP
+    PUSH1 block4
+    JUMP
+  block4:
+    JUMPDEST
+    SWAP1  // return v4;
+    JUMP
+
+
+
+---------------
+
+// func private %square(v0.i64) -> i64
+square:
+  block0:
+    0    JUMPDEST
+    1    MUL  // v1.i64 = mul v0 v0;
+    2    SWAP1  // return v1;
+    3    JUMP
+// func private %invert(v0.i64) -> i64
+invert:
+  block0:
+    4    JUMPDEST
+    5    PUSH1 0xff (255)  // v1.i64 = mul v0 -1.i64;
+    7    PUSH0
+    8    SIGNEXTEND
+    9    SWAP1
+   10    MUL
+   11    SWAP1  // return v1;
+   12    JUMP
+// func public %main(v0.i8, v1.i64) -> i64
+main:
+  block0:
+   13    JUMPDEST
+   14    DUP1  // br_table v0 block3 (0.i8 block1) (1.i8 block2);
+   15    PUSH0
+   16    EQ
+   17    PUSH1 30 (block1)
+   19    JUMPI
+   20    DUP1
+   21    PUSH1 0x1 (1)
+   23    EQ
+   24    PUSH1 42 (block2)
+   26    JUMPI
+   27    PUSH1 55 (block3)
+   29    JUMP
+  block1:
+   30    JUMPDEST
+   31    PUSH1 36  // v2.i64 = call %square v1;
+   33    SWAP1
+   34    PUSH0 0 (FuncRef(0))
+   35    JUMP
+   36    JUMPDEST
+   37    SWAP1  // jump block4;
+   38    POP
+   39    PUSH1 61 (block4)
+   41    JUMP
+  block2:
+   42    JUMPDEST
+   43    PUSH1 49  // v3.i64 = call %invert v1;
+   45    SWAP1
+   46    PUSH1 4 (FuncRef(1))
+   48    JUMP
+   49    JUMPDEST
+   50    SWAP1  // jump block4;
+   51    POP
+   52    PUSH1 61 (block4)
+   54    JUMP
+  block3:
+   55    JUMPDEST
+   56    SWAP1  // jump block4;
+   57    POP
+   58    PUSH1 61 (block4)
+   60    JUMP
+  block4:
+   61    JUMPDEST
+   62    SWAP1  // return v4;
+   63    JUMP
+
+
+0x5b0290565b60ff5f0b900290565b805f14601e5780600114602a576037565b6024905f565b9050603d565b6031906004565b9050603d565b9050603d565b9056

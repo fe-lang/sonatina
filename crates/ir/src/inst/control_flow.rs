@@ -1,7 +1,7 @@
 use std::io;
 
 use macros::{inst_prop, Inst};
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
 use super::InstWrite;
 use crate::{
@@ -81,10 +81,6 @@ pub struct Phi {
     args: Vec<(ValueId, BlockId)>,
 }
 impl Phi {
-    pub fn iter_args(&self) -> impl Iterator<Item = &(ValueId, BlockId)> {
-        self.args.iter()
-    }
-
     pub fn append_phi_arg(&mut self, value: ValueId, block: BlockId) {
         self.args.push((value, block))
     }
@@ -166,7 +162,7 @@ impl InstWrite for Return {
 
 #[inst_prop]
 pub trait Branch {
-    fn dests(&self) -> Vec<BlockId>;
+    fn dests(&self) -> SmallVec<[BlockId; 2]>;
     fn num_dests(&self) -> usize;
     fn remove_dest(&self, isb: &dyn InstSetBase, dest: BlockId) -> Box<dyn Inst>;
     fn rewrite_dest(&self, isb: &dyn InstSetBase, from: BlockId, to: BlockId) -> Box<dyn Inst>;
@@ -176,8 +172,8 @@ pub trait Branch {
 }
 
 impl Branch for Jump {
-    fn dests(&self) -> Vec<BlockId> {
-        vec![self.dest]
+    fn dests(&self) -> SmallVec<[BlockId; 2]> {
+        smallvec![self.dest]
     }
 
     fn num_dests(&self) -> usize {
@@ -203,8 +199,8 @@ impl Branch for Jump {
 }
 
 impl Branch for Br {
-    fn dests(&self) -> Vec<BlockId> {
-        vec![self.nz_dest, self.z_dest]
+    fn dests(&self) -> SmallVec<[BlockId; 2]> {
+        smallvec![self.nz_dest, self.z_dest]
     }
 
     fn num_dests(&self) -> usize {
@@ -238,11 +234,11 @@ impl Branch for Br {
 }
 
 impl Branch for BrTable {
-    fn dests(&self) -> Vec<BlockId> {
+    fn dests(&self) -> SmallVec<[BlockId; 2]> {
         let mut dests = if let Some(default) = self.default {
-            vec![default]
+            smallvec![default]
         } else {
-            vec![]
+            smallvec![]
         };
         dests.extend(self.table.iter().map(|(_, block)| *block));
 

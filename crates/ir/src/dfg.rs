@@ -226,6 +226,12 @@ impl DataFlowGraph {
         InstDowncastMut::downcast_mut(is, inst)
     }
 
+    pub fn cast_call(&self, inst_id: InstId) -> Option<&control_flow::Call> {
+        let inst = self.inst(inst_id);
+        let is = self.inst_set();
+        InstDowncast::downcast(is, inst)
+    }
+
     pub fn make_phi(&self, args: Vec<(ValueId, BlockId)>) -> Phi {
         Phi::new(self.inst_set().phi(), args)
     }
@@ -256,6 +262,15 @@ impl DataFlowGraph {
 
     pub fn is_phi(&self, inst: InstId) -> bool {
         self.cast_phi(inst).is_some()
+    }
+
+    pub fn is_call(&self, inst: InstId) -> bool {
+        self.cast_call(inst).is_some()
+    }
+
+    pub fn is_return(&self, inst: InstId) -> bool {
+        <&control_flow::Return as InstDowncast>::downcast(self.inst_set(), self.inst(inst))
+            .is_some()
     }
 
     pub fn rewrite_branch_dest(&mut self, inst: InstId, from: BlockId, to: BlockId) {

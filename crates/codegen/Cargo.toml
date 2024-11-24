@@ -22,6 +22,11 @@ sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
 sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
 sonatina-macros = { path = "../macros", version = "0.0.3-alpha" }
 bit-set = "0.8.0"
+indexmap = "2.6.0"
+if_chain = "1.0.2"
 
 [dev-dependencies]
+dir-test = "0.4.0"
+hex = "0.4.3"
+insta = "1.41.1"
 sonatina-parser = { path = "../parser", version = "0.0.3-alpha" }

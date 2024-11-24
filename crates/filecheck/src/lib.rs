@@ -11,7 +11,11 @@ use std::{
     time,
 };
 
-use sonatina_ir::{ir_writer::FuncWriter, module::FuncRef, Function};
+use sonatina_ir::{
+    ir_writer::{FuncWriteCtx, WriteWithFunc},
+    module::FuncRef,
+    Function,
+};
 use sonatina_parser::{parse_module, ParsedModule};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use walkdir::WalkDir;
@@ -147,8 +151,8 @@ impl<'a> FileChecker<'a> {
         let comments = &parsed_module.debug.func_comments[func_ref];
 
         self.transformer.transform(func);
-        let func_ir =
-            FuncWriter::with_debug_provider(func, func_ref, &parsed_module.debug).dump_string();
+        let write_ctx = FuncWriteCtx::with_debug_provider(func, func_ref, &parsed_module.debug);
+        let func_ir = func_ref.dump_string(&write_ctx);
 
         let checker = self.build_checker(comments);
 
