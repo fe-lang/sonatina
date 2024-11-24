@@ -1,0 +1,45 @@
+target = "evm-ethereum-london"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i8 = shr 248.i32 v0;
+        v2.i32 = shl 32.i32 v0;
+        v3.i64 = shr 224.i32 v2;
+        v4.i64 = call %main v1 v3;
+
+        mstore 0.i32 v4 i64;
+        evm_return 0.i8 8.i8;
+}
+
+func private %square(v0.i64) -> i64 {
+    block0:
+        v1.i64 = mul v0 v0;
+        return v1;
+}
+
+func private %invert(v0.i64) -> i64 {
+    block0:
+        v1.i64 = mul v0 -1.i64;
+        return v1;
+}
+
+func public %main(v0.i8, v1.i64) -> i64 {
+    block0:
+        br_table v0 block3 (0.i8 block1) (1.i8 block2);
+
+    block1:
+        v2.i64 = call %square v1;
+        jump block4;
+
+    block2:
+        v3.i64 = call %invert v1;
+        jump block4;
+
+    block3:
+        jump block4;
+
+    block4:
+        v4.i64 = phi (v2 block1) (v3 block2) (v0 block3);
+        return v4;
+}

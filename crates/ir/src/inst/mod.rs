@@ -15,11 +15,14 @@ use std::{
 
 use dyn_clone::DynClone;
 use macros::inst_prop;
+use rustc_hash::FxHashSet;
+use smallvec::SmallVec;
 
 use crate::{
     InstSetBase,
     ir_writer::{FuncWriteCtx, IrWrite},
     visitor::{Visitable, VisitableMut},
+ValueId,
 };
 
 /// An opaque reference to dynamic [`Inst`].
@@ -33,6 +36,22 @@ pub trait Inst:
     fn side_effect(&self) -> SideEffect;
     fn as_text(&self) -> &'static str;
     fn is_terminator(&self) -> bool;
+
+    fn collect_values(&self) -> SmallVec<[ValueId; 2]> {
+        let mut vs = SmallVec::new();
+
+        self.for_each_value(&mut |v| vs.push(v));
+        vs
+    }
+
+    fn collect_value_set(&self) -> FxHashSet<ValueId> {
+        let mut vs = FxHashSet::default();
+
+        self.for_each_value(&mut |v| {
+            vs.insert(v);
+        });
+        vs
+    }
 }
 
 pub trait InstExt: Inst {

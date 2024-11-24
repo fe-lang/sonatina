@@ -1,0 +1,1046 @@
+---
+source: crates/codegen/tests/evm.rs
+assertion_line: 153
+expression: "String::from_utf8(v).unwrap()"
+input_file: test_files/evm/spill.sntn
+---
+// func public %entry()
+  block0 P=[] T=[]
+    - stack=[]
+      pre: [PUSH(0)]
+      evm_calldata_load [0] -> v0
+    - stack=[v0]
+      pre: [DUP1, PUSH(224)]
+      shr [224, v0] -> v1
+    - stack=[v1, v0], last_use=[v0]
+      pre: [SWAP1, PUSH(32)]
+      shl [32, v0] -> v2
+    - stack=[v2, v1], last_use=[v2]
+      pre: [PUSH(224)]
+      shr [224, v2] -> v3
+    - stack=[v3, v1], last_use=[v1, v3]
+      pre: [PUSH_CONT, PUSH(200), PUSH(0), PUSH(0), PUSH(0), PUSH(0), PUSH(0), DUP8, DUP10]
+      call [v1, v3, 0, 0, 0, 0, 0, 200] -> v4
+    - stack=[v4, v3x, v1x], last_use=[v4]
+      cleanup: [SWAP2, POP, POP]
+      pre: [PUSH(0)]
+      mstore [0, v4]
+    - stack=[]
+      pre: [PUSH(8), PUSH(0)]
+      evm_return [0, 8]
+
+// func public %sum8(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64) -> i64
+  block0 P=[v0, v1, v2, v3, v4, v5, v6, v7] T=[]
+    - stack=[v0, v1, v2, v3, v4, v5, v6, v7, <RET>], last_use=[v0, v1]
+      add [v0, v1] -> v8
+    - stack=[v8, v2, v3, v4, v5, v6, v7, <RET>], last_use=[v2, v3]
+      pre: [SWAP2]
+      add [v3, v2] -> v9
+    - stack=[v9, v8, v4, v5, v6, v7, <RET>], last_use=[v4, v5]
+      pre: [SWAP3, SWAP1, SWAP2]
+      add [v4, v5] -> v10
+    - stack=[v10, v8, v9, v6, v7, <RET>], last_use=[v6, v7]
+      pre: [SWAP4, SWAP1, SWAP3]
+      add [v6, v7] -> v11
+    - stack=[v11, v9, v8, v10, <RET>], last_use=[v8, v9]
+      pre: [SWAP2]
+      add [v8, v9] -> v12
+    - stack=[v12, v11, v10, <RET>], last_use=[v10, v11]
+      pre: [SWAP2]
+      add [v10, v11] -> v13
+    - stack=[v13, v12, <RET>], last_use=[v12, v13]
+      add [v13, v12] -> v14
+    - stack=[v14, <RET>]
+      return [v14]
+
+// func public %spill(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64) -> i64
+spill_set: 0=v0, 1=v1, 2=v2, 3=v3
+  block1 P=[v0, v1, v2, v3, v4, v5, v6, v7] T=[]
+    - stack=[v0, v1, v2, v3, v4, v5, v6, v7, <RET>]
+      pre: [DUP2, DUP2]
+      add [v0, v1] -> v8
+    - stack=[v8, v0, v1, v2, v3, v4, v5, v6, v7, <RET>]
+      pre: [DUP5, DUP5]
+      add [v2, v3] -> v9
+    - stack=[v9, v8, v0, v1, v2, v3, v4, v5, v6, v7, <RET>]
+      pre: [DUP8, DUP8]
+      add [v4, v5] -> v10
+    - stack=[v10, v9, v8, v0, v1, v2, v3, v4, v5, v6, v7, <RET>]
+      pre: [DUP11, DUP11]
+      add [v6, v7] -> v11
+    - stack=[v11, v10, v9, v8, v0, v1, v2, v3, v4, v5, v6, v7, <RET>]
+      pre: [DUP3, DUP5]
+      add [v8, v9] -> v12
+    - stack=[v12, v11, v10, v9, v8, v0, v1, v2, v3, v4, v5, v6, v7, <RET>]
+      pre: [DUP2, DUP4]
+      add [v10, v11] -> v13
+    - stack=[v13, v12, v11, v10, v9, v8, v0, v1, v2, v3, v4, v5, v6, v7, <RET>]
+      pre: [DUP1, DUP3]
+      add [v12, v13] -> v14
+    - stack=[v14, v13, v12, v11, v10, v9, v8, v0, v1, v2, v3, v4, v5, v6, v7, <RET>]
+      exit(block2): [SWAP10, POP, SWAP8, POP, SWAP6, POP, SWAP4, POP, SWAP7, SWAP10, SWAP8, SWAP9, SWAP8, SWAP7, SWAP2, SWAP6, SWAP1, SWAP5, SWAP2, SWAP4, SWAP2, SWAP1, DUP1]
+      jump -> block2
+  block2 P=[v15] T=[v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4]
+    - stack=[v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, <RET>]
+      pre: [PUSH_CONT, DUP10, DUP12, DUP14, DUP16, MLOAD_SLOT(3), MLOAD_SLOT(2), MLOAD_SLOT(1), MLOAD_SLOT(0)]
+      call [v0, v1, v2, v3, v4, v5, v6, v7] -> v16
+    - stack=[v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, <RET>], last_use=[v15]
+      pre: [PUSH_CONT, SWAP1, SWAP2, DUP4, DUP6, DUP8, DUP10, DUP12, DUP14, DUP16]
+      call [v8, v9, v10, v11, v12, v13, v14, v15] -> v17
+    - stack=[v17, v16, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, <RET>], last_use=[v16, v17]
+      add [v17, v16] -> v18
+    - stack=[v18, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, <RET>]
+      pre: [DUP1, DUP10]
+      add [v7, v18] -> v19
+    - stack=[v19, v18, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, <RET>]
+      pre: [PUSH(1000), DUP2]
+      gt [v19, 1000] -> v20
+    - stack=[v20, v19, v18, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, <RET>]
+      br [v20] -> [block3, block4]
+  block3 P=[] T=[v18]
+    inherited from block2: [v19x, v18, v14x, v13x, v12x, v11x, v10x, v9x, v8x, v7x, v6x, v5x, v4x, <RET>]
+    prologue: [POP, SWAP1, SWAP2, SWAP3, SWAP4, SWAP5, SWAP6, SWAP7, SWAP8, SWAP9, SWAP10, SWAP11, POP, SWAP1, SWAP2, SWAP3, SWAP4, SWAP5, SWAP6, SWAP7, SWAP8, SWAP9, SWAP10, POP, SWAP1, SWAP2, SWAP3, SWAP4, SWAP5, SWAP6, SWAP7, SWAP8, SWAP9, POP, SWAP1, SWAP2, SWAP3, SWAP4, SWAP5, SWAP6, SWAP7, SWAP8, POP, SWAP1, SWAP2, SWAP3, SWAP4, SWAP5, SWAP6, SWAP7, POP, SWAP1, SWAP2, SWAP3, SWAP4, SWAP5, SWAP6, POP, SWAP1, SWAP2, SWAP3, SWAP4, SWAP5, POP, SWAP1, SWAP2, SWAP3, SWAP4, POP, SWAP1, SWAP2, SWAP3, POP, SWAP1, SWAP2, POP, SWAP1, POP]
+    - stack=[v18, <RET>]
+      return [v18]
+  block4 P=[] T=[v19, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4]
+    inherited from block2: [v19, v18x, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, <RET>]
+    prologue: [SWAP1, POP]
+    - stack=[v19, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, <RET>]
+      jump -> block2
+
+// func public %entry()
+entry:
+  block0:
+    JUMPDEST
+    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
+    CALLDATALOAD
+    DUP1  // v1.i64 = shr 224.i32 v0;
+    PUSH1 0xe0 (224)
+    SHR
+    SWAP1  // v2.i32 = shl 32.i32 v0;
+    PUSH1 0x20 (32)
+    SHL
+    PUSH1 0xe0 (224)  // v3.i64 = shr 224.i32 v2;
+    SHR
+    PUSH1 `pc + (11)`  // v4.i64 = call %spill v1 v3 0.i64 0.i64 0.i64 0.i64 0.i64 200.i64;
+    PUSH1 0xc8 (200)
+    PUSH0
+    PUSH0
+    PUSH0
+    PUSH0
+    PUSH0
+    DUP8
+    DUP10
+    PUSH1 FuncRef(2)
+    JUMP
+    JUMPDEST
+    SWAP2  // mstore 0.i32 v4 i64;
+    POP
+    POP
+    PUSH0
+    SWAP1
+    PUSH1 0xc0 (192)
+    SHL
+    SWAP1
+    MSTORE
+    PUSH1 0x8 (8)  // evm_return 0.i8 8.i8;
+    PUSH0
+    RETURN
+
+// func public %sum8(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64) -> i64
+sum8:
+  block0:
+    JUMPDEST
+    ADD  // v8.i64 = add v0 v1;
+    SWAP2  // v9.i64 = add v2 v3;
+    ADD
+    SWAP3  // v10.i64 = add v4 v5;
+    SWAP1
+    SWAP2
+    ADD
+    SWAP4  // v11.i64 = add v6 v7;
+    SWAP1
+    SWAP3
+    ADD
+    SWAP2  // v12.i64 = add v8 v9;
+    ADD
+    SWAP2  // v13.i64 = add v10 v11;
+    ADD
+    ADD  // v14.i64 = add v12 v13;
+    SWAP1  // return v14;
+    JUMP
+
+// func public %spill(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64) -> i64
+spill:
+  block1:
+    JUMPDEST
+    PUSH1 0x40 (64)
+    MLOAD
+    DUP1
+    ISZERO
+    ISZERO
+    PUSH1 `pc + (7)`
+    JUMPI
+    POP
+    PUSH1 0x80 (128)
+    DUP1
+    PUSH1 0x40 (64)
+    MSTORE
+    JUMPDEST
+    PUSH1 0x60 (96)
+    MLOAD
+    DUP2
+    MSTORE
+    DUP1
+    PUSH1 0x20 (32)
+    ADD
+    DUP1
+    PUSH1 0x60 (96)
+    MSTORE
+    PUSH1 0x80 (128)
+    ADD
+    PUSH1 0x40 (64)
+    MSTORE
+    POP
+    DUP1
+    PUSH1 0x60 (96)
+    MLOAD
+    MSTORE
+    DUP2
+    PUSH1 0x60 (96)
+    MLOAD
+    PUSH1 0x20 (32)
+    ADD
+    MSTORE
+    DUP3
+    PUSH1 0x60 (96)
+    MLOAD
+    PUSH1 0x40 (64)
+    ADD
+    MSTORE
+    DUP4
+    PUSH1 0x60 (96)
+    MLOAD
+    PUSH1 0x60 (96)
+    ADD
+    MSTORE
+    DUP2  // v8.i64 = add v0 v1;
+    DUP2
+    ADD
+    DUP5  // v9.i64 = add v2 v3;
+    DUP5
+    ADD
+    DUP8  // v10.i64 = add v4 v5;
+    DUP8
+    ADD
+    DUP11  // v11.i64 = add v6 v7;
+    DUP11
+    ADD
+    DUP3  // v12.i64 = add v8 v9;
+    DUP5
+    ADD
+    DUP2  // v13.i64 = add v10 v11;
+    DUP4
+    ADD
+    DUP1  // v14.i64 = add v12 v13;
+    DUP3
+    ADD
+    SWAP10  // jump block2;
+    POP
+    SWAP8
+    POP
+    SWAP6
+    POP
+    SWAP4
+    POP
+    SWAP7
+    SWAP10
+    SWAP8
+    SWAP9
+    SWAP8
+    SWAP7
+    SWAP2
+    SWAP6
+    SWAP1
+    SWAP5
+    SWAP2
+    SWAP4
+    SWAP2
+    SWAP1
+    DUP1
+  block2:
+    JUMPDEST
+    PUSH1 `pc + (25)`  // v16.i64 = call %sum8 v0 v1 v2 v3 v4 v5 v6 v7;
+    DUP10
+    DUP12
+    DUP14
+    DUP16
+    PUSH1 0x60 (96)
+    MLOAD
+    PUSH1 0x60 (96)
+    ADD
+    MLOAD
+    PUSH1 0x60 (96)
+    MLOAD
+    PUSH1 0x40 (64)
+    ADD
+    MLOAD
+    PUSH1 0x60 (96)
+    MLOAD
+    PUSH1 0x20 (32)
+    ADD
+    MLOAD
+    PUSH1 0x60 (96)
+    MLOAD
+    MLOAD
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH1 `pc + (12)`  // v17.i64 = call %sum8 v8 v9 v10 v11 v12 v13 v14 v15;
+    SWAP1
+    SWAP2
+    DUP4
+    DUP6
+    DUP8
+    DUP10
+    DUP12
+    DUP14
+    DUP16
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    ADD  // v18.i64 = add v16 v17;
+    DUP1  // v19.i64 = add v7 v18;
+    DUP10
+    ADD
+    PUSH2 0x3e8 (1000)  // v20.i1 = gt v19 1000.i64;
+    DUP2
+    GT
+    ISZERO  // br v20 block3 block4;
+    PUSH1 block4
+    JUMPI
+  block3:
+    JUMPDEST
+    POP  // return v18;
+    SWAP1
+    SWAP2
+    SWAP3
+    SWAP4
+    SWAP5
+    SWAP6
+    SWAP7
+    SWAP8
+    SWAP9
+    SWAP10
+    SWAP11
+    POP
+    SWAP1
+    SWAP2
+    SWAP3
+    SWAP4
+    SWAP5
+    SWAP6
+    SWAP7
+    SWAP8
+    SWAP9
+    SWAP10
+    POP
+    SWAP1
+    SWAP2
+    SWAP3
+    SWAP4
+    SWAP5
+    SWAP6
+    SWAP7
+    SWAP8
+    SWAP9
+    POP
+    SWAP1
+    SWAP2
+    SWAP3
+    SWAP4
+    SWAP5
+    SWAP6
+    SWAP7
+    SWAP8
+    POP
+    SWAP1
+    SWAP2
+    SWAP3
+    SWAP4
+    SWAP5
+    SWAP6
+    SWAP7
+    POP
+    SWAP1
+    SWAP2
+    SWAP3
+    SWAP4
+    SWAP5
+    SWAP6
+    POP
+    SWAP1
+    SWAP2
+    SWAP3
+    SWAP4
+    SWAP5
+    POP
+    SWAP1
+    SWAP2
+    SWAP3
+    SWAP4
+    POP
+    SWAP1
+    SWAP2
+    SWAP3
+    POP
+    SWAP1
+    SWAP2
+    POP
+    SWAP1
+    POP
+    PUSH1 0x20 (32)
+    PUSH1 0x60 (96)
+    MLOAD
+    SUB
+    DUP1
+    MLOAD
+    PUSH1 0x60 (96)
+    MSTORE
+    PUSH1 0x40 (64)
+    MSTORE
+    SWAP1
+    JUMP
+  block4:
+    JUMPDEST
+    SWAP1  // jump block2;
+    POP
+    PUSH1 block2
+    JUMP
+
+
+
+---------------
+
+// func public %entry()
+entry:
+  block0:
+    0    JUMPDEST
+    1    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
+    2    CALLDATALOAD
+    3    DUP1  // v1.i64 = shr 224.i32 v0;
+    4    PUSH1 0xe0 (224)
+    6    SHR
+    7    SWAP1  // v2.i32 = shl 32.i32 v0;
+    8    PUSH1 0x20 (32)
+   10    SHL
+   11    PUSH1 0xe0 (224)  // v3.i64 = shr 224.i32 v2;
+   13    SHR
+   14    PUSH1 28  // v4.i64 = call %spill v1 v3 0.i64 0.i64 0.i64 0.i64 0.i64 200.i64;
+   16    PUSH1 0xc8 (200)
+   18    PUSH0
+   19    PUSH0
+   20    PUSH0
+   21    PUSH0
+   22    PUSH0
+   23    DUP8
+   24    DUP10
+   25    PUSH1 62 (FuncRef(2))
+   27    JUMP
+   28    JUMPDEST
+   29    SWAP2  // mstore 0.i32 v4 i64;
+   30    POP
+   31    POP
+   32    PUSH0
+   33    SWAP1
+   34    PUSH1 0xc0 (192)
+   36    SHL
+   37    SWAP1
+   38    MSTORE
+   39    PUSH1 0x8 (8)  // evm_return 0.i8 8.i8;
+   41    PUSH0
+   42    RETURN
+// func public %sum8(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64) -> i64
+sum8:
+  block0:
+   43    JUMPDEST
+   44    ADD  // v8.i64 = add v0 v1;
+   45    SWAP2  // v9.i64 = add v2 v3;
+   46    ADD
+   47    SWAP3  // v10.i64 = add v4 v5;
+   48    SWAP1
+   49    SWAP2
+   50    ADD
+   51    SWAP4  // v11.i64 = add v6 v7;
+   52    SWAP1
+   53    SWAP3
+   54    ADD
+   55    SWAP2  // v12.i64 = add v8 v9;
+   56    ADD
+   57    SWAP2  // v13.i64 = add v10 v11;
+   58    ADD
+   59    ADD  // v14.i64 = add v12 v13;
+   60    SWAP1  // return v14;
+   61    JUMP
+// func public %spill(v0.i64, v1.i64, v2.i64, v3.i64, v4.i64, v5.i64, v6.i64, v7.i64) -> i64
+spill:
+  block1:
+   62    JUMPDEST
+   63    PUSH1 0x40 (64)
+   65    MLOAD
+   66    DUP1
+   67    ISZERO
+   68    ISZERO
+   69    PUSH1 79
+   71    JUMPI
+   72    POP
+   73    PUSH1 0x80 (128)
+   75    DUP1
+   76    PUSH1 0x40 (64)
+   78    MSTORE
+   79    JUMPDEST
+   80    PUSH1 0x60 (96)
+   82    MLOAD
+   83    DUP2
+   84    MSTORE
+   85    DUP1
+   86    PUSH1 0x20 (32)
+   88    ADD
+   89    DUP1
+   90    PUSH1 0x60 (96)
+   92    MSTORE
+   93    PUSH1 0x80 (128)
+   95    ADD
+   96    PUSH1 0x40 (64)
+   98    MSTORE
+   99    POP
+  100    DUP1
+  101    PUSH1 0x60 (96)
+  103    MLOAD
+  104    MSTORE
+  105    DUP2
+  106    PUSH1 0x60 (96)
+  108    MLOAD
+  109    PUSH1 0x20 (32)
+  111    ADD
+  112    MSTORE
+  113    DUP3
+  114    PUSH1 0x60 (96)
+  116    MLOAD
+  117    PUSH1 0x40 (64)
+  119    ADD
+  120    MSTORE
+  121    DUP4
+  122    PUSH1 0x60 (96)
+  124    MLOAD
+  125    PUSH1 0x60 (96)
+  127    ADD
+  128    MSTORE
+  129    DUP2  // v8.i64 = add v0 v1;
+  130    DUP2
+  131    ADD
+  132    DUP5  // v9.i64 = add v2 v3;
+  133    DUP5
+  134    ADD
+  135    DUP8  // v10.i64 = add v4 v5;
+  136    DUP8
+  137    ADD
+  138    DUP11  // v11.i64 = add v6 v7;
+  139    DUP11
+  140    ADD
+  141    DUP3  // v12.i64 = add v8 v9;
+  142    DUP5
+  143    ADD
+  144    DUP2  // v13.i64 = add v10 v11;
+  145    DUP4
+  146    ADD
+  147    DUP1  // v14.i64 = add v12 v13;
+  148    DUP3
+  149    ADD
+  150    SWAP10  // jump block2;
+  151    POP
+  152    SWAP8
+  153    POP
+  154    SWAP6
+  155    POP
+  156    SWAP4
+  157    POP
+  158    SWAP7
+  159    SWAP10
+  160    SWAP8
+  161    SWAP9
+  162    SWAP8
+  163    SWAP7
+  164    SWAP2
+  165    SWAP6
+  166    SWAP1
+  167    SWAP5
+  168    SWAP2
+  169    SWAP4
+  170    SWAP2
+  171    SWAP1
+  172    DUP1
+  block2:
+  173    JUMPDEST
+  174    PUSH1 208  // v16.i64 = call %sum8 v0 v1 v2 v3 v4 v5 v6 v7;
+  176    DUP10
+  177    DUP12
+  178    DUP14
+  179    DUP16
+  180    PUSH1 0x60 (96)
+  182    MLOAD
+  183    PUSH1 0x60 (96)
+  185    ADD
+  186    MLOAD
+  187    PUSH1 0x60 (96)
+  189    MLOAD
+  190    PUSH1 0x40 (64)
+  192    ADD
+  193    MLOAD
+  194    PUSH1 0x60 (96)
+  196    MLOAD
+  197    PUSH1 0x20 (32)
+  199    ADD
+  200    MLOAD
+  201    PUSH1 0x60 (96)
+  203    MLOAD
+  204    MLOAD
+  205    PUSH1 43 (FuncRef(1))
+  207    JUMP
+  208    JUMPDEST
+  209    PUSH1 223  // v17.i64 = call %sum8 v8 v9 v10 v11 v12 v13 v14 v15;
+  211    SWAP1
+  212    SWAP2
+  213    DUP4
+  214    DUP6
+  215    DUP8
+  216    DUP10
+  217    DUP12
+  218    DUP14
+  219    DUP16
+  220    PUSH1 43 (FuncRef(1))
+  222    JUMP
+  223    JUMPDEST
+  224    ADD  // v18.i64 = add v16 v17;
+  225    DUP1  // v19.i64 = add v7 v18;
+  226    DUP10
+  227    ADD
+  228    PUSH2 0x3e8 (1000)  // v20.i1 = gt v19 1000.i64;
+  231    DUP2
+  232    GT
+  233    ISZERO  // br v20 block3 block4;
+  234    PUSH2 333 (block4)
+  237    JUMPI
+  block3:
+  238    JUMPDEST
+  239    POP  // return v18;
+  240    SWAP1
+  241    SWAP2
+  242    SWAP3
+  243    SWAP4
+  244    SWAP5
+  245    SWAP6
+  246    SWAP7
+  247    SWAP8
+  248    SWAP9
+  249    SWAP10
+  250    SWAP11
+  251    POP
+  252    SWAP1
+  253    SWAP2
+  254    SWAP3
+  255    SWAP4
+  256    SWAP5
+  257    SWAP6
+  258    SWAP7
+  259    SWAP8
+  260    SWAP9
+  261    SWAP10
+  262    POP
+  263    SWAP1
+  264    SWAP2
+  265    SWAP3
+  266    SWAP4
+  267    SWAP5
+  268    SWAP6
+  269    SWAP7
+  270    SWAP8
+  271    SWAP9
+  272    POP
+  273    SWAP1
+  274    SWAP2
+  275    SWAP3
+  276    SWAP4
+  277    SWAP5
+  278    SWAP6
+  279    SWAP7
+  280    SWAP8
+  281    POP
+  282    SWAP1
+  283    SWAP2
+  284    SWAP3
+  285    SWAP4
+  286    SWAP5
+  287    SWAP6
+  288    SWAP7
+  289    POP
+  290    SWAP1
+  291    SWAP2
+  292    SWAP3
+  293    SWAP4
+  294    SWAP5
+  295    SWAP6
+  296    POP
+  297    SWAP1
+  298    SWAP2
+  299    SWAP3
+  300    SWAP4
+  301    SWAP5
+  302    POP
+  303    SWAP1
+  304    SWAP2
+  305    SWAP3
+  306    SWAP4
+  307    POP
+  308    SWAP1
+  309    SWAP2
+  310    SWAP3
+  311    POP
+  312    SWAP1
+  313    SWAP2
+  314    POP
+  315    SWAP1
+  316    POP
+  317    PUSH1 0x20 (32)
+  319    PUSH1 0x60 (96)
+  321    MLOAD
+  322    SUB
+  323    DUP1
+  324    MLOAD
+  325    PUSH1 0x60 (96)
+  327    MSTORE
+  328    PUSH1 0x40 (64)
+  330    MSTORE
+  331    SWAP1
+  332    JUMP
+  block4:
+  333    JUMPDEST
+  334    SWAP1  // jump block2;
+  335    POP
+  336    PUSH1 173 (block2)
+  338    JUMP
+
+0x5b5f358060e01c9060201b60e01c601c60c85f5f5f5f5f8789603e565b9150505f9060c01b905260085ff35b0191019290910193909201910191010190565b604051801515604f57506080806040525b606051815280602001806060526080016040525080606051528160605160200152826060516040015283606051606001528181018484018787018a8a0182840181830180820199509750955093509699979897969195909491939190805b60d0898b8d8f60605160600151606051604001516060516020015160605151602b565b60df9091838587898b8d8f602b565b018089016103e881111561014d575b50909192939495969798999a509091929394959697989950909192939495969798509091929394959697509091929394959650909192939495509091929394509091929350909192509091509050602060605103805160605260405290565b905060ad56
+
+Success { reason: Return, gas_used: 22003, gas_refunded: 0, logs: [], output: Call(0x000000000000048d) }
+
+    pc  opcode            input (stack grows to the right)
+     0  5b  JUMPDEST      []
+     1  5f  PUSH0         []
+     2  35  CALLDATALOAD  [0x0]
+     3  80  DUP1          [0xb00000016000000000000000000000000000000000000000000000000]
+     4  60  PUSH1         0xe0  [0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000]
+     6  1c  SHR           [0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000, 0xe0]
+     7  90  SWAP1         [0xb00000016000000000000000000000000000000000000000000000000, 0xb]
+     8  60  PUSH1         0x20  [0xb, 0xb00000016000000000000000000000000000000000000000000000000]
+    10  1b  SHL           [0xb, 0xb00000016000000000000000000000000000000000000000000000000, 0x20]
+    11  60  PUSH1         0xe0  [0xb, 0x1600000000000000000000000000000000000000000000000000000000]
+    13  1c  SHR           [0xb, 0x1600000000000000000000000000000000000000000000000000000000, 0xe0]
+    14  60  PUSH1         0x1c  [0xb, 0x16]
+    16  60  PUSH1         0xc8  [0xb, 0x16, 0x1c]
+    18  5f  PUSH0         [0xb, 0x16, 0x1c, 0xc8]
+    19  5f  PUSH0         [0xb, 0x16, 0x1c, 0xc8, 0x0]
+    20  5f  PUSH0         [0xb, 0x16, 0x1c, 0xc8, 0x0, 0x0]
+    21  5f  PUSH0         [0xb, 0x16, …, 0x0, 0x0, 0x0] (len=7)
+    22  5f  PUSH0         [0xb, 0x16, …, 0x0, 0x0, 0x0] (len=8)
+    23  87  DUP8          [0xb, 0x16, …, 0x0, 0x0, 0x0] (len=9)
+    24  89  DUP10         [0xb, 0x16, …, 0x0, 0x0, 0x16] (len=10)
+    25  60  PUSH1         0x3e  [0xb, 0x16, …, 0x0, 0x16, 0xb] (len=11)
+    27  56  JUMP          [0xb, 0x16, …, 0x16, 0xb, 0x3e] (len=12)
+    62  5b  JUMPDEST      [0xb, 0x16, …, 0x0, 0x16, 0xb] (len=11)
+    63  60  PUSH1         0x40  [0xb, 0x16, …, 0x0, 0x16, 0xb] (len=11)
+    65  51  MLOAD         [0xb, 0x16, …, 0x16, 0xb, 0x40] (len=12)
+    66  80  DUP1          [0xb, 0x16, …, 0x16, 0xb, 0x0] (len=12)
+    67  15  ISZERO        [0xb, 0x16, …, 0xb, 0x0, 0x0] (len=13)
+    68  15  ISZERO        [0xb, 0x16, …, 0xb, 0x0, 0x1] (len=13)
+    69  60  PUSH1         0x4f  [0xb, 0x16, …, 0xb, 0x0, 0x0] (len=13)
+    71  57  JUMPI         [0xb, 0x16, …, 0x0, 0x0, 0x4f] (len=14)
+    72  50  POP           [0xb, 0x16, …, 0x16, 0xb, 0x0] (len=12)
+    73  60  PUSH1         0x80  [0xb, 0x16, …, 0x0, 0x16, 0xb] (len=11)
+    75  80  DUP1          [0xb, 0x16, …, 0x16, 0xb, 0x80] (len=12)
+    76  60  PUSH1         0x40  [0xb, 0x16, …, 0xb, 0x80, 0x80] (len=13)
+    78  52  MSTORE        [0xb, 0x16, …, 0x80, 0x80, 0x40] (len=14)
+    79  5b  JUMPDEST      [0xb, 0x16, …, 0x16, 0xb, 0x80] (len=12)
+    80  60  PUSH1         0x60  [0xb, 0x16, …, 0x16, 0xb, 0x80] (len=12)
+    82  51  MLOAD         [0xb, 0x16, …, 0xb, 0x80, 0x60] (len=13)
+    83  81  DUP2          [0xb, 0x16, …, 0xb, 0x80, 0x0] (len=13)
+    84  52  MSTORE        [0xb, 0x16, …, 0x80, 0x0, 0x80] (len=14)
+    85  80  DUP1          [0xb, 0x16, …, 0x16, 0xb, 0x80] (len=12)
+    86  60  PUSH1         0x20  [0xb, 0x16, …, 0xb, 0x80, 0x80] (len=13)
+    88  01  ADD           [0xb, 0x16, …, 0x80, 0x80, 0x20] (len=14)
+    89  80  DUP1          [0xb, 0x16, …, 0xb, 0x80, 0xa0] (len=13)
+    90  60  PUSH1         0x60  [0xb, 0x16, …, 0x80, 0xa0, 0xa0] (len=14)
+    92  52  MSTORE        [0xb, 0x16, …, 0xa0, 0xa0, 0x60] (len=15)
+    93  60  PUSH1         0x80  [0xb, 0x16, …, 0xb, 0x80, 0xa0] (len=13)
+    95  01  ADD           [0xb, 0x16, …, 0x80, 0xa0, 0x80] (len=14)
+    96  60  PUSH1         0x40  [0xb, 0x16, …, 0xb, 0x80, 0x120] (len=13)
+    98  52  MSTORE        [0xb, 0x16, …, 0x80, 0x120, 0x40] (len=14)
+    99  50  POP           [0xb, 0x16, …, 0x16, 0xb, 0x80] (len=12)
+   100  80  DUP1          [0xb, 0x16, …, 0x0, 0x16, 0xb] (len=11)
+   101  60  PUSH1         0x60  [0xb, 0x16, …, 0x16, 0xb, 0xb] (len=12)
+   103  51  MLOAD         [0xb, 0x16, …, 0xb, 0xb, 0x60] (len=13)
+   104  52  MSTORE        [0xb, 0x16, …, 0xb, 0xb, 0xa0] (len=13)
+   105  81  DUP2          [0xb, 0x16, …, 0x0, 0x16, 0xb] (len=11)
+   106  60  PUSH1         0x60  [0xb, 0x16, …, 0x16, 0xb, 0x16] (len=12)
+   108  51  MLOAD         [0xb, 0x16, …, 0xb, 0x16, 0x60] (len=13)
+   109  60  PUSH1         0x20  [0xb, 0x16, …, 0xb, 0x16, 0xa0] (len=13)
+   111  01  ADD           [0xb, 0x16, …, 0x16, 0xa0, 0x20] (len=14)
+   112  52  MSTORE        [0xb, 0x16, …, 0xb, 0x16, 0xc0] (len=13)
+   113  82  DUP3          [0xb, 0x16, …, 0x0, 0x16, 0xb] (len=11)
+   114  60  PUSH1         0x60  [0xb, 0x16, …, 0x16, 0xb, 0x0] (len=12)
+   116  51  MLOAD         [0xb, 0x16, …, 0xb, 0x0, 0x60] (len=13)
+   117  60  PUSH1         0x40  [0xb, 0x16, …, 0xb, 0x0, 0xa0] (len=13)
+   119  01  ADD           [0xb, 0x16, …, 0x0, 0xa0, 0x40] (len=14)
+   120  52  MSTORE        [0xb, 0x16, …, 0xb, 0x0, 0xe0] (len=13)
+   121  83  DUP4          [0xb, 0x16, …, 0x0, 0x16, 0xb] (len=11)
+   122  60  PUSH1         0x60  [0xb, 0x16, …, 0x16, 0xb, 0x0] (len=12)
+   124  51  MLOAD         [0xb, 0x16, …, 0xb, 0x0, 0x60] (len=13)
+   125  60  PUSH1         0x60  [0xb, 0x16, …, 0xb, 0x0, 0xa0] (len=13)
+   127  01  ADD           [0xb, 0x16, …, 0x0, 0xa0, 0x60] (len=14)
+   128  52  MSTORE        [0xb, 0x16, …, 0xb, 0x0, 0x100] (len=13)
+   129  81  DUP2          [0xb, 0x16, …, 0x0, 0x16, 0xb] (len=11)
+   130  81  DUP2          [0xb, 0x16, …, 0x16, 0xb, 0x16] (len=12)
+   131  01  ADD           [0xb, 0x16, …, 0xb, 0x16, 0xb] (len=13)
+   132  84  DUP5          [0xb, 0x16, …, 0x16, 0xb, 0x21] (len=12)
+   133  84  DUP5          [0xb, 0x16, …, 0xb, 0x21, 0x0] (len=13)
+   134  01  ADD           [0xb, 0x16, …, 0x21, 0x0, 0x0] (len=14)
+   135  87  DUP8          [0xb, 0x16, …, 0xb, 0x21, 0x0] (len=13)
+   136  87  DUP8          [0xb, 0x16, …, 0x21, 0x0, 0x0] (len=14)
+   137  01  ADD           [0xb, 0x16, …, 0x0, 0x0, 0x0] (len=15)
+   138  8a  DUP11         [0xb, 0x16, …, 0x21, 0x0, 0x0] (len=14)
+   139  8a  DUP11         [0xb, 0x16, …, 0x0, 0x0, 0xc8] (len=15)
+   140  01  ADD           [0xb, 0x16, …, 0x0, 0xc8, 0x0] (len=16)
+   141  82  DUP3          [0xb, 0x16, …, 0x0, 0x0, 0xc8] (len=15)
+   142  84  DUP5          [0xb, 0x16, …, 0x0, 0xc8, 0x0] (len=16)
+   143  01  ADD           [0xb, 0x16, …, 0xc8, 0x0, 0x21] (len=17)
+   144  81  DUP2          [0xb, 0x16, …, 0x0, 0xc8, 0x21] (len=16)
+   145  83  DUP4          [0xb, 0x16, …, 0xc8, 0x21, 0xc8] (len=17)
+   146  01  ADD           [0xb, 0x16, …, 0x21, 0xc8, 0x0] (len=18)
+   147  80  DUP1          [0xb, 0x16, …, 0xc8, 0x21, 0xc8] (len=17)
+   148  82  DUP3          [0xb, 0x16, …, 0x21, 0xc8, 0xc8] (len=18)
+   149  01  ADD           [0xb, 0x16, …, 0xc8, 0xc8, 0x21] (len=19)
+   150  99  SWAP10        [0xb, 0x16, …, 0x21, 0xc8, 0xe9] (len=18)
+   151  50  POP           [0xb, 0x16, …, 0x21, 0xc8, 0x0] (len=18)
+   152  97  SWAP8         [0xb, 0x16, …, 0xc8, 0x21, 0xc8] (len=17)
+   153  50  POP           [0xb, 0x16, …, 0xc8, 0x21, 0x0] (len=17)
+   154  95  SWAP6         [0xb, 0x16, …, 0x0, 0xc8, 0x21] (len=16)
+   155  50  POP           [0xb, 0x16, …, 0x0, 0xc8, 0x16] (len=16)
+   156  93  SWAP4         [0xb, 0x16, …, 0x0, 0x0, 0xc8] (len=15)
+   157  50  POP           [0xb, 0x16, …, 0x0, 0x0, 0xb] (len=15)
+   158  96  SWAP7         [0xb, 0x16, …, 0x21, 0x0, 0x0] (len=14)
+   159  99  SWAP10        [0xb, 0x16, …, 0x21, 0x0, 0x0] (len=14)
+   160  97  SWAP8         [0xb, 0x16, …, 0x21, 0x0, 0xc8] (len=14)
+   161  98  SWAP9         [0xb, 0x16, …, 0x21, 0x0, 0x0] (len=14)
+   162  97  SWAP8         [0xb, 0x16, …, 0x21, 0x0, 0x0] (len=14)
+   163  96  SWAP7         [0xb, 0x16, …, 0x21, 0x0, 0xc8] (len=14)
+   164  91  SWAP2         [0xb, 0x16, …, 0x21, 0x0, 0x0] (len=14)
+   165  95  SWAP6         [0xb, 0x16, …, 0x0, 0x0, 0x21] (len=14)
+   166  90  SWAP1         [0xb, 0x16, …, 0x0, 0x0, 0xe9] (len=14)
+   167  94  SWAP5         [0xb, 0x16, …, 0x0, 0xe9, 0x0] (len=14)
+   168  91  SWAP2         [0xb, 0x16, …, 0x0, 0xe9, 0xc8] (len=14)
+   169  93  SWAP4         [0xb, 0x16, …, 0xc8, 0xe9, 0x0] (len=14)
+   170  91  SWAP2         [0xb, 0x16, …, 0xc8, 0xe9, 0x21] (len=14)
+   171  90  SWAP1         [0xb, 0x16, …, 0x21, 0xe9, 0xc8] (len=14)
+   172  80  DUP1          [0xb, 0x16, …, 0x21, 0xc8, 0xe9] (len=14)
+   173  5b  JUMPDEST      [0xb, 0x16, …, 0xc8, 0xe9, 0xe9] (len=15)
+   174  60  PUSH1         0xd0  [0xb, 0x16, …, 0xc8, 0xe9, 0xe9] (len=15)
+   176  89  DUP10         [0xb, 0x16, …, 0xe9, 0xe9, 0xd0] (len=16)
+   177  8b  DUP12         [0xb, 0x16, …, 0xe9, 0xd0, 0xc8] (len=17)
+   178  8d  DUP14         [0xb, 0x16, …, 0xd0, 0xc8, 0x0] (len=18)
+   179  8f  DUP16         [0xb, 0x16, …, 0xc8, 0x0, 0x0] (len=19)
+   180  60  PUSH1         0x60  [0xb, 0x16, …, 0x0, 0x0, 0x0] (len=20)
+   182  51  MLOAD         [0xb, 0x16, …, 0x0, 0x0, 0x60] (len=21)
+   183  60  PUSH1         0x60  [0xb, 0x16, …, 0x0, 0x0, 0xa0] (len=21)
+   185  01  ADD           [0xb, 0x16, …, 0x0, 0xa0, 0x60] (len=22)
+   186  51  MLOAD         [0xb, 0x16, …, 0x0, 0x0, 0x100] (len=21)
+   187  60  PUSH1         0x60  [0xb, 0x16, …, 0x0, 0x0, 0x0] (len=21)
+   189  51  MLOAD         [0xb, 0x16, …, 0x0, 0x0, 0x60] (len=22)
+   190  60  PUSH1         0x40  [0xb, 0x16, …, 0x0, 0x0, 0xa0] (len=22)
+   192  01  ADD           [0xb, 0x16, …, 0x0, 0xa0, 0x40] (len=23)
+   193  51  MLOAD         [0xb, 0x16, …, 0x0, 0x0, 0xe0] (len=22)
+   194  60  PUSH1         0x60  [0xb, 0x16, …, 0x0, 0x0, 0x0] (len=22)
+   196  51  MLOAD         [0xb, 0x16, …, 0x0, 0x0, 0x60] (len=23)
+   197  60  PUSH1         0x20  [0xb, 0x16, …, 0x0, 0x0, 0xa0] (len=23)
+   199  01  ADD           [0xb, 0x16, …, 0x0, 0xa0, 0x20] (len=24)
+   200  51  MLOAD         [0xb, 0x16, …, 0x0, 0x0, 0xc0] (len=23)
+   201  60  PUSH1         0x60  [0xb, 0x16, …, 0x0, 0x0, 0x16] (len=23)
+   203  51  MLOAD         [0xb, 0x16, …, 0x0, 0x16, 0x60] (len=24)
+   204  51  MLOAD         [0xb, 0x16, …, 0x0, 0x16, 0xa0] (len=24)
+   205  60  PUSH1         0x2b  [0xb, 0x16, …, 0x0, 0x16, 0xb] (len=24)
+   207  56  JUMP          [0xb, 0x16, …, 0x16, 0xb, 0x2b] (len=25)
+    43  5b  JUMPDEST      [0xb, 0x16, …, 0x0, 0x16, 0xb] (len=24)
+    44  01  ADD           [0xb, 0x16, …, 0x0, 0x16, 0xb] (len=24)
+    45  91  SWAP2         [0xb, 0x16, …, 0x0, 0x0, 0x21] (len=23)
+    46  01  ADD           [0xb, 0x16, …, 0x21, 0x0, 0x0] (len=23)
+    47  92  SWAP3         [0xb, 0x16, …, 0x0, 0x21, 0x0] (len=22)
+    48  90  SWAP1         [0xb, 0x16, …, 0x0, 0x21, 0x0] (len=22)
+    49  91  SWAP2         [0xb, 0x16, …, 0x0, 0x0, 0x21] (len=22)
+    50  01  ADD           [0xb, 0x16, …, 0x21, 0x0, 0x0] (len=22)
+    51  93  SWAP4         [0xb, 0x16, …, 0x0, 0x21, 0x0] (len=21)
+    52  90  SWAP1         [0xb, 0x16, …, 0x0, 0x21, 0xc8] (len=21)
+    53  92  SWAP3         [0xb, 0x16, …, 0x0, 0xc8, 0x21] (len=21)
+    54  01  ADD           [0xb, 0x16, …, 0x0, 0xc8, 0x0] (len=21)
+    55  91  SWAP2         [0xb, 0x16, …, 0x21, 0x0, 0xc8] (len=20)
+    56  01  ADD           [0xb, 0x16, …, 0xc8, 0x0, 0x21] (len=20)
+    57  91  SWAP2         [0xb, 0x16, …, 0x0, 0xc8, 0x21] (len=19)
+    58  01  ADD           [0xb, 0x16, …, 0x21, 0xc8, 0x0] (len=19)
+    59  01  ADD           [0xb, 0x16, …, 0xd0, 0x21, 0xc8] (len=18)
+    60  90  SWAP1         [0xb, 0x16, …, 0xe9, 0xd0, 0xe9] (len=17)
+    61  56  JUMP          [0xb, 0x16, …, 0xe9, 0xe9, 0xd0] (len=17)
+   208  5b  JUMPDEST      [0xb, 0x16, …, 0xe9, 0xe9, 0xe9] (len=16)
+   209  60  PUSH1         0xdf  [0xb, 0x16, …, 0xe9, 0xe9, 0xe9] (len=16)
+   211  90  SWAP1         [0xb, 0x16, …, 0xe9, 0xe9, 0xdf] (len=17)
+   212  91  SWAP2         [0xb, 0x16, …, 0xe9, 0xdf, 0xe9] (len=17)
+   213  83  DUP4          [0xb, 0x16, …, 0xe9, 0xdf, 0xe9] (len=17)
+   214  85  DUP6          [0xb, 0x16, …, 0xdf, 0xe9, 0xe9] (len=18)
+   215  87  DUP8          [0xb, 0x16, …, 0xe9, 0xe9, 0xc8] (len=19)
+   216  89  DUP10         [0xb, 0x16, …, 0xe9, 0xc8, 0x21] (len=20)
+   217  8b  DUP12         [0xb, 0x16, …, 0xc8, 0x21, 0xc8] (len=21)
+   218  8d  DUP14         [0xb, 0x16, …, 0x21, 0xc8, 0x0] (len=22)
+   219  8f  DUP16         [0xb, 0x16, …, 0xc8, 0x0, 0x0] (len=23)
+   220  60  PUSH1         0x2b  [0xb, 0x16, …, 0x0, 0x0, 0x21] (len=24)
+   222  56  JUMP          [0xb, 0x16, …, 0x0, 0x21, 0x2b] (len=25)
+    43  5b  JUMPDEST      [0xb, 0x16, …, 0x0, 0x0, 0x21] (len=24)
+    44  01  ADD           [0xb, 0x16, …, 0x0, 0x0, 0x21] (len=24)
+    45  91  SWAP2         [0xb, 0x16, …, 0xc8, 0x0, 0x21] (len=23)
+    46  01  ADD           [0xb, 0x16, …, 0x21, 0x0, 0xc8] (len=23)
+    47  92  SWAP3         [0xb, 0x16, …, 0x21, 0x21, 0xc8] (len=22)
+    48  90  SWAP1         [0xb, 0x16, …, 0x21, 0x21, 0xc8] (len=22)
+    49  91  SWAP2         [0xb, 0x16, …, 0x21, 0xc8, 0x21] (len=22)
+    50  01  ADD           [0xb, 0x16, …, 0x21, 0xc8, 0x21] (len=22)
+    51  93  SWAP4         [0xb, 0x16, …, 0xc8, 0x21, 0xe9] (len=21)
+    52  90  SWAP1         [0xb, 0x16, …, 0xc8, 0x21, 0xe9] (len=21)
+    53  92  SWAP3         [0xb, 0x16, …, 0xc8, 0xe9, 0x21] (len=21)
+    54  01  ADD           [0xb, 0x16, …, 0xc8, 0xe9, 0xe9] (len=21)
+    55  91  SWAP2         [0xb, 0x16, …, 0x21, 0xc8, 0x1d2] (len=20)
+    56  01  ADD           [0xb, 0x16, …, 0x1d2, 0xc8, 0x21] (len=20)
+    57  91  SWAP2         [0xb, 0x16, …, 0xe9, 0x1d2, 0xe9] (len=19)
+    58  01  ADD           [0xb, 0x16, …, 0xe9, 0x1d2, 0xe9] (len=19)
+    59  01  ADD           [0xb, 0x16, …, 0xdf, 0xe9, 0x2bb] (len=18)
+    60  90  SWAP1         [0xb, 0x16, …, 0xe9, 0xdf, 0x3a4] (len=17)
+    61  56  JUMP          [0xb, 0x16, …, 0xe9, 0x3a4, 0xdf] (len=17)
+   223  5b  JUMPDEST      [0xb, 0x16, …, 0xe9, 0xe9, 0x3a4] (len=16)
+   224  01  ADD           [0xb, 0x16, …, 0xe9, 0xe9, 0x3a4] (len=16)
+   225  80  DUP1          [0xb, 0x16, …, 0xc8, 0xe9, 0x48d] (len=15)
+   226  89  DUP10         [0xb, 0x16, …, 0xe9, 0x48d, 0x48d] (len=16)
+   227  01  ADD           [0xb, 0x16, …, 0x48d, 0x48d, 0xc8] (len=17)
+   228  61  PUSH2         0x03e8  [0xb, 0x16, …, 0xe9, 0x48d, 0x555] (len=16)
+   231  81  DUP2          [0xb, 0x16, …, 0x48d, 0x555, 0x3e8] (len=17)
+   232  11  GT            [0xb, 0x16, …, 0x555, 0x3e8, 0x555] (len=18)
+   233  15  ISZERO        [0xb, 0x16, …, 0x48d, 0x555, 0x1] (len=17)
+   234  61  PUSH2         0x014d  [0xb, 0x16, …, 0x48d, 0x555, 0x0] (len=17)
+   237  57  JUMPI         [0xb, 0x16, …, 0x555, 0x0, 0x14d] (len=18)
+   238  5b  JUMPDEST      [0xb, 0x16, …, 0xe9, 0x48d, 0x555] (len=16)
+   239  50  POP           [0xb, 0x16, …, 0xe9, 0x48d, 0x555] (len=16)
+   240  90  SWAP1         [0xb, 0x16, …, 0xc8, 0xe9, 0x48d] (len=15)
+   241  91  SWAP2         [0xb, 0x16, …, 0xc8, 0x48d, 0xe9] (len=15)
+   242  92  SWAP3         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=15)
+   243  93  SWAP4         [0xb, 0x16, …, 0xe9, 0x48d, 0x21] (len=15)
+   244  94  SWAP5         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=15)
+   245  95  SWAP6         [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=15)
+   246  96  SWAP7         [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=15)
+   247  97  SWAP8         [0xb, 0x16, …, 0xe9, 0x48d, 0x21] (len=15)
+   248  98  SWAP9         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=15)
+   249  99  SWAP10        [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=15)
+   250  9a  SWAP11        [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=15)
+   251  50  POP           [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=15)
+   252  90  SWAP1         [0xb, 0x16, …, 0xc8, 0xe9, 0x48d] (len=14)
+   253  91  SWAP2         [0xb, 0x16, …, 0xc8, 0x48d, 0xe9] (len=14)
+   254  92  SWAP3         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=14)
+   255  93  SWAP4         [0xb, 0x16, …, 0xe9, 0x48d, 0x21] (len=14)
+   256  94  SWAP5         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=14)
+   257  95  SWAP6         [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=14)
+   258  96  SWAP7         [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=14)
+   259  97  SWAP8         [0xb, 0x16, …, 0xe9, 0x48d, 0x21] (len=14)
+   260  98  SWAP9         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=14)
+   261  99  SWAP10        [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=14)
+   262  50  POP           [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=14)
+   263  90  SWAP1         [0xb, 0x16, …, 0xc8, 0xe9, 0x48d] (len=13)
+   264  91  SWAP2         [0xb, 0x16, …, 0xc8, 0x48d, 0xe9] (len=13)
+   265  92  SWAP3         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=13)
+   266  93  SWAP4         [0xb, 0x16, …, 0xe9, 0x48d, 0x21] (len=13)
+   267  94  SWAP5         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=13)
+   268  95  SWAP6         [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=13)
+   269  96  SWAP7         [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=13)
+   270  97  SWAP8         [0xb, 0x16, …, 0xe9, 0x48d, 0x21] (len=13)
+   271  98  SWAP9         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=13)
+   272  50  POP           [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=13)
+   273  90  SWAP1         [0xb, 0x16, …, 0xc8, 0xe9, 0x48d] (len=12)
+   274  91  SWAP2         [0xb, 0x16, …, 0xc8, 0x48d, 0xe9] (len=12)
+   275  92  SWAP3         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=12)
+   276  93  SWAP4         [0xb, 0x16, …, 0xe9, 0x48d, 0x21] (len=12)
+   277  94  SWAP5         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=12)
+   278  95  SWAP6         [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=12)
+   279  96  SWAP7         [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=12)
+   280  97  SWAP8         [0xb, 0x16, …, 0xe9, 0x48d, 0x21] (len=12)
+   281  50  POP           [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=12)
+   282  90  SWAP1         [0xb, 0x16, …, 0xc8, 0xe9, 0x48d] (len=11)
+   283  91  SWAP2         [0xb, 0x16, …, 0xc8, 0x48d, 0xe9] (len=11)
+   284  92  SWAP3         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=11)
+   285  93  SWAP4         [0xb, 0x16, …, 0xe9, 0x48d, 0x21] (len=11)
+   286  94  SWAP5         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=11)
+   287  95  SWAP6         [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=11)
+   288  96  SWAP7         [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=11)
+   289  50  POP           [0xb, 0x16, …, 0xe9, 0x48d, 0x21] (len=11)
+   290  90  SWAP1         [0xb, 0x16, …, 0xc8, 0xe9, 0x48d] (len=10)
+   291  91  SWAP2         [0xb, 0x16, …, 0xc8, 0x48d, 0xe9] (len=10)
+   292  92  SWAP3         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=10)
+   293  93  SWAP4         [0xb, 0x16, …, 0xe9, 0x48d, 0x21] (len=10)
+   294  94  SWAP5         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=10)
+   295  95  SWAP6         [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=10)
+   296  50  POP           [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=10)
+   297  90  SWAP1         [0xb, 0x16, …, 0xc8, 0xe9, 0x48d] (len=9)
+   298  91  SWAP2         [0xb, 0x16, …, 0xc8, 0x48d, 0xe9] (len=9)
+   299  92  SWAP3         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=9)
+   300  93  SWAP4         [0xb, 0x16, …, 0xe9, 0x48d, 0x21] (len=9)
+   301  94  SWAP5         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=9)
+   302  50  POP           [0xb, 0x16, …, 0xe9, 0x48d, 0x0] (len=9)
+   303  90  SWAP1         [0xb, 0x16, …, 0xc8, 0xe9, 0x48d] (len=8)
+   304  91  SWAP2         [0xb, 0x16, …, 0xc8, 0x48d, 0xe9] (len=8)
+   305  92  SWAP3         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=8)
+   306  93  SWAP4         [0xb, 0x16, …, 0xe9, 0x48d, 0x21] (len=8)
+   307  50  POP           [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=8)
+   308  90  SWAP1         [0xb, 0x16, …, 0xc8, 0xe9, 0x48d] (len=7)
+   309  91  SWAP2         [0xb, 0x16, …, 0xc8, 0x48d, 0xe9] (len=7)
+   310  92  SWAP3         [0xb, 0x16, …, 0xe9, 0x48d, 0xc8] (len=7)
+   311  50  POP           [0xb, 0x16, …, 0xe9, 0x48d, 0x21] (len=7)
+   312  90  SWAP1         [0xb, 0x16, 0x1c, 0xc8, 0xe9, 0x48d]
+   313  91  SWAP2         [0xb, 0x16, 0x1c, 0xc8, 0x48d, 0xe9]
+   314  50  POP           [0xb, 0x16, 0x1c, 0xe9, 0x48d, 0xc8]
+   315  90  SWAP1         [0xb, 0x16, 0x1c, 0xe9, 0x48d]
+   316  50  POP           [0xb, 0x16, 0x1c, 0x48d, 0xe9]
+   317  60  PUSH1         0x20  [0xb, 0x16, 0x1c, 0x48d]
+   319  60  PUSH1         0x60  [0xb, 0x16, 0x1c, 0x48d, 0x20]
+   321  51  MLOAD         [0xb, 0x16, 0x1c, 0x48d, 0x20, 0x60]
+   322  03  SUB           [0xb, 0x16, 0x1c, 0x48d, 0x20, 0xa0]
+   323  80  DUP1          [0xb, 0x16, 0x1c, 0x48d, 0x80]
+   324  51  MLOAD         [0xb, 0x16, 0x1c, 0x48d, 0x80, 0x80]
+   325  60  PUSH1         0x60  [0xb, 0x16, 0x1c, 0x48d, 0x80, 0x0]
+   327  52  MSTORE        [0xb, 0x16, …, 0x80, 0x0, 0x60] (len=7)
+   328  60  PUSH1         0x40  [0xb, 0x16, 0x1c, 0x48d, 0x80]
+   330  52  MSTORE        [0xb, 0x16, 0x1c, 0x48d, 0x80, 0x40]
+   331  90  SWAP1         [0xb, 0x16, 0x1c, 0x48d]
+   332  56  JUMP          [0xb, 0x16, 0x48d, 0x1c]
+    28  5b  JUMPDEST      [0xb, 0x16, 0x48d]
+    29  91  SWAP2         [0xb, 0x16, 0x48d]
+    30  50  POP           [0x48d, 0x16, 0xb]
+    31  50  POP           [0x48d, 0x16]
+    32  5f  PUSH0         [0x48d]
+    33  90  SWAP1         [0x48d, 0x0]
+    34  60  PUSH1         0xc0  [0x0, 0x48d]
+    36  1b  SHL           [0x0, 0x48d, 0xc0]
+    37  90  SWAP1         [0x0, 0x48d000000000000000000000000000000000000000000000000]
+    38  52  MSTORE        [0x48d000000000000000000000000000000000000000000000000, 0x0]
+    39  60  PUSH1         0x08  []
+    41  5f  PUSH0         [0x8]
+    42  f3  RETURN        [0x8, 0x0]

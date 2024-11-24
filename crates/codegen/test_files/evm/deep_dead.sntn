@@ -1,0 +1,48 @@
+target = "evm-ethereum-london"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+
+        v1.i256 = not v0;
+        v2.i256 = not v1;
+        v3.i256 = not v2;
+        v4.i256 = not v3;
+        v5.i256 = not v4;
+        v6.i256 = not v5;
+        v7.i256 = not v6;
+        v8.i256 = not v7;
+        v9.i256 = not v8;
+        v10.i256 = not v9;
+        v11.i256 = not v10;
+        v12.i256 = not v11;
+        v13.i256 = not v12;
+        v14.i256 = not v13;
+        v15.i256 = not v14;
+        v16.i256 = not v15;
+        v17.i256 = not v16;
+
+        jump block1;
+
+    block1:
+        v18.i256 = add v1 v2;
+        v19.i256 = add v18 v3;
+        v20.i256 = add v19 v4;
+        v21.i256 = add v20 v5;
+        v22.i256 = add v21 v6;
+        v23.i256 = add v22 v7;
+        v24.i256 = add v23 v8;
+        v25.i256 = add v24 v9;
+        v26.i256 = add v25 v10;
+        v27.i256 = add v26 v11;
+        v28.i256 = add v27 v12;
+        v29.i256 = add v28 v13;
+        v30.i256 = add v29 v14;
+        v31.i256 = add v30 v15;
+        v32.i256 = add v31 v16;
+        v33.i256 = add v32 v17;
+
+        mstore 0.i32 v33 i256;
+        evm_return 0.i8 32.i8;
+}
+

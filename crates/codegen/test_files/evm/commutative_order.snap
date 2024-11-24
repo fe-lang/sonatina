@@ -1,0 +1,231 @@
+---
+source: crates/codegen/tests/evm.rs
+assertion_line: 153
+expression: "String::from_utf8(v).unwrap()"
+input_file: test_files/evm/commutative_order.sntn
+---
+// func public %entry()
+  block0 P=[] T=[]
+    - stack=[]
+      pre: [PUSH_CONT, PUSH(15), PUSH(14), PUSH(13), PUSH(12), PUSH(11), PUSH(10), PUSH(9), PUSH(8), PUSH(7), PUSH(6), PUSH(5), PUSH(4), PUSH(3), PUSH(2), PUSH(1), PUSH(0)]
+      call [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] -> v0
+    - stack=[v0], last_use=[v0]
+      pre: [PUSH(0)]
+      mstore [0, v0]
+    - stack=[]
+      pre: [PUSH(4), PUSH(0)]
+      evm_return [0, 4]
+
+// func private %comm_add16(v0.i32, v1.i32, v2.i32, v3.i32, v4.i32, v5.i32, v6.i32, v7.i32, v8.i32, v9.i32, v10.i32, v11.i32, v12.i32, v13.i32, v14.i32, v15.i32) -> i32
+  block0 P=[v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15] T=[]
+    - stack=[v0, v1, v2x, v3x, v4x, v5x, v6x, v7x, v8x, v9x, v10x, v11x, v12x, v13x, v14x, v15, <RET>], last_use=[v15]
+      pre: [SWAP15, PUSH(1)]
+      add [1, v15] -> v16
+    - stack=[v16, v1, v2x, v3x, v4x, v5x, v6x, v7x, v8x, v9x, v10x, v11x, v12x, v13x, v14x, v0, <RET>]
+      exit(block1): [SWAP14, POP, SWAP12, POP, POP, POP, POP, POP, POP, POP, POP, POP, POP, POP, POP, SWAP2, SWAP1]
+      jump -> block1
+  block1 P=[] T=[v16, v0, v1]
+    - stack=[v16, v0, v1, <RET>], last_use=[v0, v1]
+      pre: [SWAP2]
+      add [v1, v0] -> v17
+    - stack=[v17x, v16, <RET>]
+      cleanup: [POP]
+      return [v16]
+
+// func public %entry()
+entry:
+  block0:
+    JUMPDEST
+    PUSH1 `pc + (19)`  // v0.i32 = call %comm_add16 0.i32 1.i32 2.i32 3.i32 4.i32 5.i32 6.i32 7.i32 8.i32 9.i32 10.i32 11.i32 12.i32 13.i32 14.i32 15.i32;
+    PUSH1 0xf (15)
+    PUSH1 0xe (14)
+    PUSH1 0xd (13)
+    PUSH1 0xc (12)
+    PUSH1 0xb (11)
+    PUSH1 0xa (10)
+    PUSH1 0x9 (9)
+    PUSH1 0x8 (8)
+    PUSH1 0x7 (7)
+    PUSH1 0x6 (6)
+    PUSH1 0x5 (5)
+    PUSH1 0x4 (4)
+    PUSH1 0x3 (3)
+    PUSH1 0x2 (2)
+    PUSH1 0x1 (1)
+    PUSH0
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH0  // mstore 0.i32 v0 i32;
+    SWAP1
+    PUSH1 0xe0 (224)
+    SHL
+    SWAP1
+    MSTORE
+    PUSH1 0x4 (4)  // evm_return 0.i8 4.i8;
+    PUSH0
+    RETURN
+
+// func private %comm_add16(v0.i32, v1.i32, v2.i32, v3.i32, v4.i32, v5.i32, v6.i32, v7.i32, v8.i32, v9.i32, v10.i32, v11.i32, v12.i32, v13.i32, v14.i32, v15.i32) -> i32
+comm_add16:
+  block0:
+    JUMPDEST
+    SWAP15  // v16.i32 = add v15 1.i32;
+    PUSH1 0x1 (1)
+    ADD
+    SWAP14  // jump block1;
+    POP
+    SWAP12
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    SWAP2
+    SWAP1
+  block1:
+    JUMPDEST
+    SWAP2  // v17.i32 = add v0 v1;
+    ADD
+    POP  // return v16;
+    SWAP1
+    JUMP
+
+
+
+---------------
+
+// func public %entry()
+entry:
+  block0:
+    0    JUMPDEST
+    1    PUSH1 37  // v0.i32 = call %comm_add16 0.i32 1.i32 2.i32 3.i32 4.i32 5.i32 6.i32 7.i32 8.i32 9.i32 10.i32 11.i32 12.i32 13.i32 14.i32 15.i32;
+    3    PUSH1 0xf (15)
+    5    PUSH1 0xe (14)
+    7    PUSH1 0xd (13)
+    9    PUSH1 0xc (12)
+   11    PUSH1 0xb (11)
+   13    PUSH1 0xa (10)
+   15    PUSH1 0x9 (9)
+   17    PUSH1 0x8 (8)
+   19    PUSH1 0x7 (7)
+   21    PUSH1 0x6 (6)
+   23    PUSH1 0x5 (5)
+   25    PUSH1 0x4 (4)
+   27    PUSH1 0x3 (3)
+   29    PUSH1 0x2 (2)
+   31    PUSH1 0x1 (1)
+   33    PUSH0
+   34    PUSH1 49 (FuncRef(1))
+   36    JUMP
+   37    JUMPDEST
+   38    PUSH0  // mstore 0.i32 v0 i32;
+   39    SWAP1
+   40    PUSH1 0xe0 (224)
+   42    SHL
+   43    SWAP1
+   44    MSTORE
+   45    PUSH1 0x4 (4)  // evm_return 0.i8 4.i8;
+   47    PUSH0
+   48    RETURN
+// func private %comm_add16(v0.i32, v1.i32, v2.i32, v3.i32, v4.i32, v5.i32, v6.i32, v7.i32, v8.i32, v9.i32, v10.i32, v11.i32, v12.i32, v13.i32, v14.i32, v15.i32) -> i32
+comm_add16:
+  block0:
+   49    JUMPDEST
+   50    SWAP15  // v16.i32 = add v15 1.i32;
+   51    PUSH1 0x1 (1)
+   53    ADD
+   54    SWAP14  // jump block1;
+   55    POP
+   56    SWAP12
+   57    POP
+   58    POP
+   59    POP
+   60    POP
+   61    POP
+   62    POP
+   63    POP
+   64    POP
+   65    POP
+   66    POP
+   67    POP
+   68    POP
+   69    SWAP2
+   70    SWAP1
+  block1:
+   71    JUMPDEST
+   72    SWAP2  // v17.i32 = add v0 v1;
+   73    ADD
+   74    POP  // return v16;
+   75    SWAP1
+   76    JUMP
+
+0x5b6025600f600e600d600c600b600a6009600860076006600560046003600260015f6031565b5f9060e01b905260045ff35b9e6001019d509b50505050505050505050505091905b9101509056
+
+Success { reason: Return, gas_used: 21212, gas_refunded: 0, logs: [], output: Call(0x00000010) }
+
+    pc  opcode            input (stack grows to the right)
+     0  5b  JUMPDEST      []
+     1  60  PUSH1         0x25  []
+     3  60  PUSH1         0x0f  [0x25]
+     5  60  PUSH1         0x0e  [0x25, 0xf]
+     7  60  PUSH1         0x0d  [0x25, 0xf, 0xe]
+     9  60  PUSH1         0x0c  [0x25, 0xf, 0xe, 0xd]
+    11  60  PUSH1         0x0b  [0x25, 0xf, 0xe, 0xd, 0xc]
+    13  60  PUSH1         0x0a  [0x25, 0xf, 0xe, 0xd, 0xc, 0xb]
+    15  60  PUSH1         0x09  [0x25, 0xf, …, 0xc, 0xb, 0xa] (len=7)
+    17  60  PUSH1         0x08  [0x25, 0xf, …, 0xb, 0xa, 0x9] (len=8)
+    19  60  PUSH1         0x07  [0x25, 0xf, …, 0xa, 0x9, 0x8] (len=9)
+    21  60  PUSH1         0x06  [0x25, 0xf, …, 0x9, 0x8, 0x7] (len=10)
+    23  60  PUSH1         0x05  [0x25, 0xf, …, 0x8, 0x7, 0x6] (len=11)
+    25  60  PUSH1         0x04  [0x25, 0xf, …, 0x7, 0x6, 0x5] (len=12)
+    27  60  PUSH1         0x03  [0x25, 0xf, …, 0x6, 0x5, 0x4] (len=13)
+    29  60  PUSH1         0x02  [0x25, 0xf, …, 0x5, 0x4, 0x3] (len=14)
+    31  60  PUSH1         0x01  [0x25, 0xf, …, 0x4, 0x3, 0x2] (len=15)
+    33  5f  PUSH0         [0x25, 0xf, …, 0x3, 0x2, 0x1] (len=16)
+    34  60  PUSH1         0x31  [0x25, 0xf, …, 0x2, 0x1, 0x0] (len=17)
+    36  56  JUMP          [0x25, 0xf, …, 0x1, 0x0, 0x31] (len=18)
+    49  5b  JUMPDEST      [0x25, 0xf, …, 0x2, 0x1, 0x0] (len=17)
+    50  9e  SWAP15        [0x25, 0xf, …, 0x2, 0x1, 0x0] (len=17)
+    51  60  PUSH1         0x01  [0x25, 0x0, …, 0x2, 0x1, 0xf] (len=17)
+    53  01  ADD           [0x25, 0x0, …, 0x1, 0xf, 0x1] (len=18)
+    54  9d  SWAP14        [0x25, 0x0, …, 0x2, 0x1, 0x10] (len=17)
+    55  50  POP           [0x25, 0x0, …, 0x2, 0x1, 0xe] (len=17)
+    56  9b  SWAP12        [0x25, 0x0, …, 0x3, 0x2, 0x1] (len=16)
+    57  50  POP           [0x25, 0x0, …, 0x3, 0x2, 0xd] (len=16)
+    58  50  POP           [0x25, 0x0, …, 0x4, 0x3, 0x2] (len=15)
+    59  50  POP           [0x25, 0x0, …, 0x5, 0x4, 0x3] (len=14)
+    60  50  POP           [0x25, 0x0, …, 0x6, 0x5, 0x4] (len=13)
+    61  50  POP           [0x25, 0x0, …, 0x7, 0x6, 0x5] (len=12)
+    62  50  POP           [0x25, 0x0, …, 0x8, 0x7, 0x6] (len=11)
+    63  50  POP           [0x25, 0x0, …, 0x9, 0x8, 0x7] (len=10)
+    64  50  POP           [0x25, 0x0, …, 0xa, 0x9, 0x8] (len=9)
+    65  50  POP           [0x25, 0x0, …, 0xb, 0xa, 0x9] (len=8)
+    66  50  POP           [0x25, 0x0, …, 0xc, 0xb, 0xa] (len=7)
+    67  50  POP           [0x25, 0x0, 0x10, 0x1, 0xc, 0xb]
+    68  50  POP           [0x25, 0x0, 0x10, 0x1, 0xc]
+    69  91  SWAP2         [0x25, 0x0, 0x10, 0x1]
+    70  90  SWAP1         [0x25, 0x1, 0x10, 0x0]
+    71  5b  JUMPDEST      [0x25, 0x1, 0x0, 0x10]
+    72  91  SWAP2         [0x25, 0x1, 0x0, 0x10]
+    73  01  ADD           [0x25, 0x10, 0x0, 0x1]
+    74  50  POP           [0x25, 0x10, 0x1]
+    75  90  SWAP1         [0x25, 0x10]
+    76  56  JUMP          [0x10, 0x25]
+    37  5b  JUMPDEST      [0x10]
+    38  5f  PUSH0         [0x10]
+    39  90  SWAP1         [0x10, 0x0]
+    40  60  PUSH1         0xe0  [0x0, 0x10]
+    42  1b  SHL           [0x0, 0x10, 0xe0]
+    43  90  SWAP1         [0x0, 0x1000000000000000000000000000000000000000000000000000000000]
+    44  52  MSTORE        [0x1000000000000000000000000000000000000000000000000000000000, 0x0]
+    45  60  PUSH1         0x04  []
+    47  5f  PUSH0         [0x4]
+    48  f3  RETURN        [0x4, 0x0]

@@ -1,0 +1,19 @@
+target = "evm-ethereum-london"
+
+func public %entry() {
+    block0:
+        v0.i32 = call %comm_add16 0.i32 1.i32 2.i32 3.i32 4.i32 5.i32 6.i32 7.i32 8.i32 9.i32 10.i32 11.i32 12.i32 13.i32 14.i32 15.i32;
+
+        mstore 0.i32 v0 i32;
+        evm_return 0.i8 4.i8;
+}
+
+func private %comm_add16(v0.i32, v1.i32, v2.i32, v3.i32, v4.i32, v5.i32, v6.i32, v7.i32, v8.i32, v9.i32, v10.i32, v11.i32, v12.i32, v13.i32, v14.i32, v15.i32) -> i32 {
+    block0:
+        v16.i32 = add v15 1.i32;
+        jump block1;
+
+    block1:
+        v17.i32 = add v0 v1;
+        return v16;
+}

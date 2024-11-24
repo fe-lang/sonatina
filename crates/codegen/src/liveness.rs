@@ -1,7 +1,7 @@
 //! Compute the "liveness" of values in a control flow graph.
 //!
 //! This is an implementation of "Liveness Sets using Path Exploration",
-//! as described in https://hal.inria.fr/hal-00761555/file/habilitation.pdf
+//! as described in <https://hal.inria.fr/hal-00761555/file/habilitation.pdf>
 //! Section 2.5.1:
 //!
 //! > a variable is live at a program point p, if p belongs to a path of the CFG
@@ -154,11 +154,11 @@ pub fn value_uses_in_block_matching_predicate(
 fn for_each_use(func: &Function, block: BlockId, mut f: impl FnMut(ValueId, Option<BlockId>)) {
     for inst in func.layout.iter_inst(block) {
         if let Some(phi) = func.dfg.cast_phi(inst) {
-            for (val, block) in phi.iter_args() {
+            for (val, block) in phi.args().iter() {
                 f(*val, Some(*block))
             }
         } else {
-            func.dfg.inst(inst).visit_values(&mut |v| f(v, None));
+            func.dfg.inst(inst).for_each_value(&mut |v| f(v, None));
         }
     }
 }
@@ -215,14 +215,17 @@ func public %complex_loop(v0.i8, v20.i8) -> i8 {
     #[test]
     fn test() {
         let parsed = parse_module(SRC).unwrap();
-        let (funcref, function) = parsed.module.funcs.iter().next().unwrap();
-        let mut cfg = ControlFlowGraph::new();
-        cfg.compute(function);
+        let funcref = *parsed.module.funcs().first().unwrap();
+
+        let live = parsed.module.func_store.view(funcref, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+            let mut live = Liveness::default();
+            live.compute(function, &cfg);
+            live
+        });
 
         let v = |n: usize| parsed.debug.value(funcref, &format!("v{n}")).unwrap();
-
-        let mut live = Liveness::default();
-        live.compute(function, &cfg);
 
         assert_eq!(live.block_live_ins(BlockId(1)), &[v(0)].as_slice().into());
         assert_eq!(live.block_live_outs(BlockId(1)), &[v(0)].as_slice().into());
