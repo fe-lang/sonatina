@@ -29,6 +29,6 @@ derive_more = { version = "=1.0.0", default-features = false, features = [
 smallvec = "1.13.2"
 
 [dev-dependencies]
-dir-test = "0.3"
+dir-test = "0.4"
 insta = { version = "1.41" }
 indenter = "0.3.3"
