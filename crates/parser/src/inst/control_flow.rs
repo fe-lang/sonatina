@@ -87,11 +87,10 @@ fn build_call(
         ast_args.next();
     }
 
-    let sig = fb.module_builder.get_sig(callee);
     if let Some(arg) = ast_args.next() {
         Err(Box::new(Error::UnexpectedTrailingInstArg(arg.span)))
     } else {
-        Ok(Call::new(has_inst, callee, args, sig.ret_ty()))
+        Ok(Call::new(has_inst, callee, args))
     }
 }
 

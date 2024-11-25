@@ -179,7 +179,8 @@ mod tests {
 
     #[test]
     fn pd_if_else() {
-        let (evm, mut builder) = test_func_builder(&[Type::I32], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I32], Type::Unit);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();
@@ -209,11 +210,11 @@ mod tests {
         builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
-        let (post_dom_tree, pdf) = calc_dom(func);
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        let (post_dom_tree, pdf) = module.funcs.view(func_ref, calc_dom);
 
         assert!(post_dom_tree.is_reachable(entry_block));
         assert!(post_dom_tree.is_reachable(else_block));
@@ -228,7 +229,8 @@ mod tests {
 
     #[test]
     fn infinite_loop() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();
@@ -236,11 +238,11 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, a));
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
-        let (post_dom_tree, pdf) = calc_dom(func);
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        let (post_dom_tree, pdf) = module.funcs.view(func_ref, calc_dom);
 
         assert!(!post_dom_tree.is_reachable(a));
         assert!(test_pdf(&pdf, a, &[]));
@@ -248,7 +250,8 @@ mod tests {
 
     #[test]
     fn test_multiple_return() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();
@@ -274,11 +277,11 @@ mod tests {
         builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
-        let (post_dom_tree, pdf) = calc_dom(func);
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        let (post_dom_tree, pdf) = module.funcs.view(func_ref, calc_dom);
 
         assert!(post_dom_tree.is_reachable(a));
         assert!(post_dom_tree.is_reachable(b));
@@ -295,7 +298,8 @@ mod tests {
 
     #[test]
     fn pd_complex() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();
@@ -333,11 +337,11 @@ mod tests {
         builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
-        let (post_dom_tree, pdf) = calc_dom(func);
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        let (post_dom_tree, pdf) = module.funcs.view(func_ref, calc_dom);
 
         assert!(post_dom_tree.is_reachable(a));
         assert!(post_dom_tree.is_reachable(b));

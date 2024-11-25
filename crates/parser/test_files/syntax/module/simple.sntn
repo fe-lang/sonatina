@@ -22,12 +22,12 @@ v2.i8 = call %add_i8 v0 v1;
 return v2;
 }
 
-func %types(v0.*i8, v1.[i8; 2], v2.[*i8; 2], v3.[[i8; 2]; 2], v4.@foo, v5.*@foo) {
+func private %types(v0.*i8, v1.[i8; 2], v2.[*i8; 2], v3.[[i8; 2]; 2], v4.@foo, v5.*@foo) {
     block0:
         return;
 }
 
-func %table(v0.i8) {
+func private %table(v0.i8) {
     block0:
         br_table v0 block0 (1.i8 block1) (2.i8 block2);
     block1:
@@ -36,7 +36,7 @@ func %table(v0.i8) {
         return 2.i8;
 }
 
-func %flow(v0.i64) -> i64 {
+func private %flow(v0.i64) -> i64 {
     block0:
         jump block1;
     block1:

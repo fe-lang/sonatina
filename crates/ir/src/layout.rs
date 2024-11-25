@@ -1,4 +1,5 @@
-//! This module contains function layout information including block order and instruction order.
+//! This module contains function layout information including block order and
+//! instruction order.
 use cranelift_entity::SecondaryMap;
 
 use super::{BlockId, InstId};
@@ -33,6 +34,10 @@ impl Layout {
 
     pub fn last_block(&self) -> Option<BlockId> {
         self.last_block
+    }
+
+    pub fn is_last_block(&self, block: BlockId) -> bool {
+        self.last_block == Some(block)
     }
 
     pub fn is_block_empty(&self, block: BlockId) -> bool {
@@ -351,6 +356,7 @@ impl InstNode {
 
 #[cfg(test)]
 mod tests {
+    use super::{super::dfg::DataFlowGraph, *};
     use crate::{
         builder::test_util::test_isa,
         inst::{self, arith::Add, InstId},
@@ -358,10 +364,6 @@ mod tests {
         module::ModuleCtx,
         HasInst,
     };
-
-    use super::*;
-
-    use super::super::dfg::DataFlowGraph;
 
     impl DataFlowGraph {
         /// Returns dummy instruction.

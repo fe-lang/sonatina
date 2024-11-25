@@ -1,7 +1,7 @@
 use macros::Inst;
 pub mod inst_set;
 
-use crate::{inst::impl_inst_write, value::ValueId};
+use crate::{inst::impl_inst_write, module::FuncRef, value::ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct EvmUdiv {
@@ -44,6 +44,12 @@ impl_inst_write!(EvmSmod);
 #[inst(terminator)]
 pub struct EvmStop {}
 impl_inst_write!(EvmStop);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Write))]
+#[inst(terminator)]
+pub struct EvmInvalid {}
+impl_inst_write!(EvmInvalid);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct EvmAddMod {
@@ -128,6 +134,11 @@ pub struct EvmCallDataLoad {
     data_offset: ValueId,
 }
 impl_inst_write!(EvmCallDataLoad);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Read))]
+pub struct EvmCallDataSize {}
+impl_inst_write!(EvmCallDataSize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Write))]
@@ -332,6 +343,18 @@ impl_inst_write!(EvmTstore);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Write))]
+pub struct EvmMcopy {
+    #[inst(value)]
+    dest: ValueId,
+    #[inst(value)]
+    addr: ValueId,
+    #[inst(value)]
+    len: ValueId,
+}
+impl_inst_write!(EvmMcopy);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Write))]
 pub struct EvmLog0 {
     #[inst(value)]
     addr: ValueId,
@@ -434,6 +457,26 @@ impl_inst_write!(EvmCall);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Write))]
+pub struct EvmCallCode {
+    #[inst(value)]
+    gas: ValueId,
+    #[inst(value)]
+    addr: ValueId,
+    #[inst(value)]
+    val: ValueId,
+    #[inst(value)]
+    arg_addr: ValueId,
+    #[inst(value)]
+    arg_len: ValueId,
+    #[inst(value)]
+    ret_addr: ValueId,
+    #[inst(value)]
+    ret_offset: ValueId,
+}
+impl_inst_write!(EvmCallCode);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Write))]
 #[inst(terminator)]
 pub struct EvmReturn {
     #[inst(value)]
@@ -520,3 +563,11 @@ pub struct EvmMalloc {
     size: ValueId,
 }
 impl_inst_write!(EvmMalloc);
+
+/// An instruction that takes the main function of a contract
+/// as an argument and returns the size of the contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct EvmContractSize {
+    contract: FuncRef,
+}
+impl_inst_write!(EvmContractSize);

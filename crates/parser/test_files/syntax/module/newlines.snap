@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/syntax.rs
-expression: s
-input_file: crates/parser/test_files/syntax/module/newlines.sntn
+expression: "module \"target = \"evm-ethereum-london\"\nfunc public %main() {\n    block0:\n        v0.i8 = add 1.i8 2.i8;\n        return;\n}\n\"\n  target_triple \"evm-ethereum-london\"\n  function \"func public %main() {\n      block0:\n          v0.i8 = add 1.i8 2.i8;\n          return;\n  }\"\n    function_signature \"func public %main() \"\n      linkage \"public\"\n      function_identifier \"%main\"\n        function_name \"main\"\n      function_params \"()\"\n    block \"block0:\n            v0.i8 = add 1.i8 2.i8;\n            return;\"\n      block_ident \"block0\"\n        block_number \"0\"\n      stmt \"v0.i8 = add 1.i8 2.i8;\"\n        assign_stmt \"v0.i8 = add 1.i8 2.i8\"\n          value_declaration \"v0.i8\"\n            value_name \"v0\"\n            type_name \"i8\"\n              primitive_type \"i8\"\n          inst \"add 1.i8 2.i8\"\n            inst_name \"add\"\n              inst_identifier \"add\"\n            inst_arg \"1.i8\"\n              value \"1.i8\"\n                imm_number \"1.i8\"\n                  decimal \"1\"\n                  primitive_type \"i8\"\n            inst_arg \"2.i8\"\n              value \"2.i8\"\n                imm_number \"2.i8\"\n                  decimal \"2\"\n                  primitive_type \"i8\"\n      stmt \"return;\"\n        inst_stmt \"return\"\n          inst \"return\"\n            inst_name \"return\"\n              inst_identifier \"return\"\n  EOI \"\"\n"
+input_file: test_files/syntax/module/newlines.sntn
 ---
 module "target = "evm-ethereum-london"
 func public %main() {
@@ -17,7 +17,7 @@ func public %main() {
           return;
   }"
     function_signature "func public %main() "
-      function_linkage "public"
+      linkage "public"
       function_identifier "%main"
         function_name "main"
       function_params "()"

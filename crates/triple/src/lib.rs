@@ -13,7 +13,7 @@ pub struct TargetTriple {
 }
 
 impl TargetTriple {
-    pub fn new(
+    pub const fn new(
         architecture: Architecture,
         vendor: Vendor,
         operating_system: OperatingSystem,
@@ -121,8 +121,12 @@ impl OperatingSystem {
                     "homestead" => EvmVersion::Homestead,
                     "byzantium" => EvmVersion::Byzantium,
                     "constantinople" => EvmVersion::Constantinople,
+                    "berlin" => EvmVersion::Berlin,
                     "istanbul" => EvmVersion::Istanbul,
                     "london" => EvmVersion::London,
+                    "paris" => EvmVersion::Paris,
+                    "Shanghai" => EvmVersion::Shanghai,
+                    "cancun" => EvmVersion::Cancun,
                     _ => return Err(InvalidTriple::OsNotSupported),
                 };
                 Ok(Self::Evm(evm_version))
@@ -146,7 +150,11 @@ pub enum EvmVersion {
     Byzantium,
     Constantinople,
     Istanbul,
+    Berlin,
     London,
+    Paris,
+    Shanghai,
+    Cancun,
 }
 
 #[derive(Debug, Clone, Error)]
@@ -175,7 +183,11 @@ impl Display for EvmVersion {
             Self::Byzantium => write!(f, "byzantium"),
             Self::Constantinople => write!(f, "constantinople"),
             Self::Istanbul => write!(f, "istanbul"),
+            Self::Berlin => write!(f, "berlin"),
             Self::London => write!(f, "london"),
+            Self::Paris => write!(f, "paris"),
+            Self::Shanghai => write!(f, "shanghai"),
+            Self::Cancun => write!(f, "cancun"),
         }
     }
 }
