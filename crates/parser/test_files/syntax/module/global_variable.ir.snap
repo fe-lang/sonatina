@@ -1,0 +1,12 @@
+---
+source: crates/parser/tests/syntax.rs
+expression: "target = evm-ethereum-cancun\ntype @foo = {i8, i16, *i64};\nglobal private const i256 %ZERO = 0\nglobal public *i256 %PTR = 1\nglobal private [i8; 4] %ARRAY = [0, 1, 2, 3]\nglobal private @foo %FOO = {1, 2, 3}\nglobal private [@foo; 2] %FOO_ARRAY = [{1, 2, 3}, {3, 4, 5}]\n"
+input_file: test_files/syntax/module/global_variable.sntn
+---
+target = evm-ethereum-cancun
+type @foo = {i8, i16, *i64};
+global private const i256 %ZERO = 0
+global public *i256 %PTR = 1
+global private [i8; 4] %ARRAY = [0, 1, 2, 3]
+global private @foo %FOO = {1, 2, 3}
+global private [@foo; 2] %FOO_ARRAY = [{1, 2, 3}, {3, 4, 5}]

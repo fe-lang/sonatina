@@ -9,8 +9,8 @@ ident_body_char  = { ASCII_ALPHANUMERIC | "_" }
 target_specifier = _{ "target" ~ "=" ~ "\"" ~ target_triple ~ "\"" }
 target_triple    = @{ ASCII_ALPHA* ~ "-" ~ ASCII_ALPHA* ~ "-" ~ ASCII_ALPHA* }
 
-declaration              = _{ function_declaration | struct_declaration }
-function_declaration     =  { "declare" ~ function_linkage? ~ function_identifier ~ function_param_type_list ~ function_ret_type? ~ ";" }
+declaration              = _{ function_declaration | struct_declaration | gv_declaration }
+function_declaration     =  { "declare" ~ linkage ~ function_identifier ~ function_param_type_list ~ function_ret_type? ~ ";" }
 function_param_type_list =  { "(" ~ (type_name ~ ",")* ~ type_name? ~ ")" }
 struct_declaration       =  { "type" ~ struct_identifier ~ "=" ~ struct_fields ~ ";" }
 struct_identifier        = ${ "@" ~ struct_name }
@@ -20,17 +20,27 @@ packed_field_list        =  { "<{" ~ type_list ~ "}>" }
 type_list                = _{ (type_name ~ ",")* ~ type_name? }
 struct_name              = @{ ident_start_char ~ ident_body_char* }
 
+
 function            =  { function_signature ~ function_body }
 _functions          = _{ (NEWLINE* ~ function ~ NEWLINE*)* }
-function_signature  =  { "func" ~ function_linkage? ~ function_identifier ~ function_params ~ function_ret_type? }
+function_signature  =  { "func" ~ linkage ~ function_identifier ~ function_params ~ function_ret_type? }
 function_ret_type   =  { "->" ~ type_name }
-function_linkage    =  { "public" | "private" | "external" }
+linkage             =  { "public" | "private" | "external" }
 function_identifier = ${ "%" ~ function_name }
 function_name       = @{ ident_start_char ~ ident_body_char* }
 function_params     =  { "(" ~ (value_declaration ~ ",")* ~ value_declaration? ~ ")" }
 function_body       = _{ "{" ~ (NEWLINE+ ~ block?)* ~ "}" }
 block               =  { block_ident ~ ":" ~ (NEWLINE+ ~ stmt)* }
 _stmts              = _{ (stmt ~ NEWLINE+)* }
+
+gv_declaration      =  { "global" ~ linkage ~ gv_const? ~ type_name ~ gv_identifier ~ ("=" ~ gv_initializer)? } 
+gv_identifier       = ${ "%" ~ gv_name }
+gv_name             = @{ ident_start_char ~ ident_body_char* }
+gv_const               =  { "const" }
+gv_initializer            =  { gv_value_imm | gv_value_array | gv_value_struct }
+gv_value_imm        =  { number }
+gv_value_array      =  { "[" ~ (gv_initializer ~ ",")* ~ gv_initializer? ~ "]" }
+gv_value_struct     =  { "{" ~ (gv_initializer ~ ",")* ~ gv_initializer? ~ "}" }
 
 block_ident  = ${ "block" ~ block_number }
 block_number =  { ASCII_DIGIT+ }
@@ -48,9 +58,9 @@ unit_type          =  { "unit" }
 value_declaration = ${ value_name ~ "." ~ type_name }
 
 // Stmts
-stmt = { (assign_stmt | inst_stmt) ~ ";" }
+stmt        = { (assign_stmt | inst_stmt) ~ ";" }
 assign_stmt =  { value_declaration ~ "=" ~ inst }
-inst_stmt = { inst }
+inst_stmt   = { inst }
 
 inst = { inst_name ~ inst_arg* }
 inst_name = { inst_identifier }
@@ -60,8 +70,7 @@ value_block_map = { "(" ~ value ~ block_ident ~ ")" }
 
 value       =  { value_name | imm_number | undef }
 imm_number  = ${ number ~ "." ~ primitive_type }
-undef = ${ "undef" ~ "." ~ type_name }
+undef       = ${ "undef" ~ "." ~ type_name }
 number      = _{ hex | decimal }
 decimal     = @{ "-"? ~ ASCII_DIGIT+ }
 hex         = @{ "0x" ~ ASCII_HEX_DIGIT+ }
-

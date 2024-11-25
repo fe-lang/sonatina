@@ -34,6 +34,11 @@ pub enum Error {
         inst: SmolStr,
         span: Span,
     },
+
+    TypeError {
+        expected: String,
+        span: Span,
+    },
 }
 
 #[derive(Debug)]
@@ -61,6 +66,7 @@ impl Error {
             Error::InstArgKindMismatch { span, .. } => *span,
             Error::InstArgNumMismatch { span, .. } => *span,
             Error::UnsupportedInst { span, .. } => *span,
+            Error::TypeError { span, .. } => *span,
         }
     }
 
@@ -113,6 +119,10 @@ impl Error {
 
             Error::UnsupportedInst { triple, inst, .. } => {
                 format!("{triple} doesn't support {inst}")
+            }
+
+            Error::TypeError { expected, .. } => {
+                format!("type error: expected `{expected}` here")
             }
         };
         let snippet = Level::Error.title("parse error").snippet(

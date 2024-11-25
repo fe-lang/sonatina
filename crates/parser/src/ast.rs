@@ -40,6 +40,7 @@ pub fn parse(input: &str) -> Result<Module, Vec<Error>> {
 pub struct Module {
     pub target: Option<TargetTriple>,
     pub declared_functions: Vec<FuncDeclaration>,
+    pub declared_gvs: Vec<GlobalVariable>,
     pub struct_types: Vec<Struct>,
     pub functions: Vec<Func>,
     pub comments: Vec<String>,
@@ -59,6 +60,7 @@ impl FromSyntax<Error> for Module {
 
         let mut struct_types = vec![];
         let mut declared_functions = vec![];
+        let mut declared_gvs = vec![];
         let mut functions = vec![];
 
         loop {
@@ -74,6 +76,8 @@ impl FromSyntax<Error> for Module {
                 struct_types.push(struct_);
             } else if let Some(func) = node.single_opt(Rule::function_declaration) {
                 declared_functions.push(func);
+            } else if let Some(gv) = node.single_opt(Rule::gv_declaration) {
+                declared_gvs.push(gv)
             } else {
                 match node.single_opt::<Func>(Rule::function) {
                     Some(mut func) => {
@@ -84,9 +88,11 @@ impl FromSyntax<Error> for Module {
                 }
             }
         }
+
         Module {
             target,
             declared_functions,
+            declared_gvs,
             struct_types,
             functions,
             comments: module_comments,
@@ -122,9 +128,7 @@ pub struct FuncDeclaration {
 
 impl FromSyntax<Error> for FuncDeclaration {
     fn from_syntax(node: &mut Node<Error>) -> Self {
-        let linkage = node
-            .parse_str_opt(Rule::function_linkage)
-            .unwrap_or(Linkage::Private);
+        let linkage = node.parse_str(Rule::linkage);
 
         FuncDeclaration {
             linkage,
@@ -132,6 +136,91 @@ impl FromSyntax<Error> for FuncDeclaration {
             params: node.descend_into(Rule::function_param_type_list, |n| n.multi(Rule::type_name)),
             ret_type: node.descend_into_opt(Rule::function_ret_type, |n| n.single(Rule::type_name)),
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct GlobalVariable {
+    pub name: GvName,
+    pub ty: Type,
+    pub linkage: Linkage,
+    pub is_const: bool,
+    pub init: Option<GvInitializer>,
+}
+
+impl FromSyntax<Error> for GlobalVariable {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        let linkage = node.parse_str(Rule::linkage);
+        Self {
+            name: node.single(Rule::gv_identifier),
+            ty: node.single(Rule::type_name),
+            linkage,
+            is_const: node.get_opt(Rule::gv_const).is_some(),
+            init: node.single_opt(Rule::gv_initializer),
+        }
+    }
+}
+
+/// Doesn't include `%` prefix.
+#[derive(Dbg)]
+pub struct GvName {
+    pub name: SmolStr,
+    #[debug(skip)]
+    pub span: Span,
+}
+
+impl FromSyntax<Error> for GvName {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        Self {
+            name: node.parse_str(Rule::gv_name),
+            span: node.span,
+        }
+    }
+}
+
+#[derive(Dbg)]
+pub struct GvInitializer {
+    pub kind: GvValueKind,
+    #[debug(skip)]
+    pub span: Span,
+}
+
+impl FromSyntax<Error> for GvInitializer {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        node.descend();
+        let kind = match node.rule {
+            Rule::gv_value_imm => {
+                node.descend();
+                match node.rule {
+                    Rule::decimal => parse_i256_gv_value(node, node.txt, false),
+                    Rule::hex => parse_i256_gv_value(node, node.txt, true),
+                    _ => unreachable!(),
+                }
+            }
+
+            Rule::gv_value_array => GvValueKind::Array(node.multi(Rule::gv_initializer)),
+            Rule::gv_value_struct => GvValueKind::Struct(node.multi(Rule::gv_initializer)),
+            _ => unreachable!(),
+        };
+
+        Self {
+            kind,
+            span: node.span,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum GvValueKind {
+    Immediate(Immediate),
+    Array(Vec<GvInitializer>),
+    Struct(Vec<GvInitializer>),
+    Error,
+}
+
+impl From<Immediate> for GvValueKind {
+    fn from(value: Immediate) -> Self {
+        Self::Immediate(value)
     }
 }
 
@@ -196,9 +285,7 @@ pub struct FuncSignature {
 
 impl FromSyntax<Error> for FuncSignature {
     fn from_syntax(node: &mut Node<Error>) -> Self {
-        let linkage = node
-            .parse_str_opt(Rule::function_linkage)
-            .unwrap_or(Linkage::Private);
+        let linkage = node.parse_str(Rule::linkage);
 
         FuncSignature {
             linkage,
@@ -605,6 +692,12 @@ pub enum ValueKind {
     Error,
 }
 
+impl From<Immediate> for ValueKind {
+    fn from(value: Immediate) -> Self {
+        Self::Immediate(value)
+    }
+}
+
 macro_rules! parse_dec {
     ($node:ident, $imm:expr, $ity:ty, $uty:ty) => {
         match $node
@@ -642,14 +735,18 @@ impl FromSyntax<Error> for Value {
                 let mut txt = node.txt;
                 match node.rule {
                     Rule::decimal => match ty {
-                        IntType::I1 => imm_or_err(node, || {
-                            let b = match u8::from_str(txt).ok()? {
-                                0 => false,
-                                1 => true,
-                                _ => return None,
-                            };
-                            Some(Immediate::I1(b))
-                        }),
+                        IntType::I1 => imm_or_err(
+                            node,
+                            || {
+                                let b = match u8::from_str(txt).ok()? {
+                                    0 => false,
+                                    1 => true,
+                                    _ => return None,
+                                };
+                                Some(Immediate::I1(b))
+                            },
+                            ValueKind::Error,
+                        ),
                         IntType::I8 => parse_dec!(node, Immediate::I8, i8, u8),
                         IntType::I16 => parse_dec!(node, Immediate::I16, i16, u16),
                         IntType::I32 => parse_dec!(node, Immediate::I32, i32, u32),
@@ -661,13 +758,17 @@ impl FromSyntax<Error> for Value {
                             let is_negative = s.is_some();
                             txt = s.unwrap_or(txt);
 
-                            imm_or_err(node, || {
-                                let mut i256 = U256::from_dec_str(txt).ok()?.into();
-                                if is_negative {
-                                    i256 = I256::zero().overflowing_sub(i256).0;
-                                }
-                                Some(Immediate::I256(i256))
-                            })
+                            imm_or_err(
+                                node,
+                                || {
+                                    let mut i256 = U256::from_dec_str(txt).ok()?.into();
+                                    if is_negative {
+                                        i256 = I256::zero().overflowing_sub(i256).0;
+                                    }
+                                    Some(Immediate::I256(i256))
+                                },
+                                ValueKind::Error,
+                            )
                         }
                     },
 
@@ -731,16 +832,17 @@ impl FromStr for IntType {
     }
 }
 
-fn imm_or_err<F>(node: &mut Node<Error>, f: F) -> ValueKind
+fn imm_or_err<F, R>(node: &mut Node<Error>, f: F, default: R) -> R
 where
-    F: Fn() -> Option<Immediate>,
+    F: FnOnce() -> Option<Immediate>,
+    R: From<Immediate>,
 {
     let Some(imm) = f() else {
         let span = node.span;
         node.error(Error::NumberOutOfBounds(span));
-        return ValueKind::Error;
+        return default;
     };
-    ValueKind::Immediate(imm)
+    imm.into()
 }
 
 fn hex_bytes<const N: usize>(mut s: &str) -> Option<[u8; N]> {
@@ -754,4 +856,35 @@ fn hex_bytes<const N: usize>(mut s: &str) -> Option<[u8; N]> {
     let mut out = [0; N];
     out[N - bytes.len()..].copy_from_slice(&bytes);
     Some(out)
+}
+
+fn parse_i256_gv_value(node: &mut Node<Error>, mut txt: &str, is_hex: bool) -> GvValueKind {
+    let s = txt.strip_prefix('-');
+    let is_negative = s.is_some();
+    txt = s.unwrap_or(txt);
+
+    if is_hex {
+        if let Some(bytes) = hex_bytes::<32>(txt) {
+            let mut i256 = U256::from_big_endian(&bytes).into();
+            if is_negative {
+                i256 = I256::zero().overflowing_sub(i256).0;
+            }
+            GvValueKind::Immediate(Immediate::I256(i256))
+        } else {
+            node.error(Error::NumberOutOfBounds(node.span));
+            GvValueKind::Error
+        }
+    } else {
+        imm_or_err(
+            node,
+            || {
+                let mut i256 = U256::from_dec_str(txt).ok()?.into();
+                if is_negative {
+                    i256 = I256::zero().overflowing_sub(i256).0;
+                }
+                Some(Immediate::I256(i256))
+            },
+            GvValueKind::Error,
+        )
+    }
 }

@@ -1,4 +1,4 @@
-func %foo() -> i32 {
+func private %foo() -> i32 {
 block0:
     jump block1;
 block1:

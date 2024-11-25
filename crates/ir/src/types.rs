@@ -49,7 +49,7 @@ impl TypeStore {
         Type::Compound(compound)
     }
 
-    /// Returns `[StructDef]` if the given type is a struct type.
+    /// Returns `[StructData]` if the given type is a struct type.
     pub fn struct_def(&self, ty: Type) -> Option<&StructData> {
         match ty {
             Type::Compound(compound) => match self.compounds[compound] {

@@ -7,10 +7,11 @@ use ir::{
     self,
     builder::{FunctionBuilder, ModuleBuilder},
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    ir_writer::DebugProvider,
+    global_variable::GvInitializer,
+    ir_writer::{DebugProvider, WriteWithModule},
     isa::evm::Evm,
     module::{FuncRef, Module, ModuleCtx},
-    Function, Signature,
+    Function, GlobalVariable, GlobalVariableData, Immediate, Signature, Type,
 };
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smol_str::SmolStr;
@@ -63,6 +64,10 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
 
         let sig = Signature::new(&func.name.name, func.linkage, &params, ret_ty);
         builder.declare_function(sig);
+    }
+
+    for gv in ast.declared_gvs {
+        ctx.global_variable(&builder, &gv);
     }
 
     for func in ast.functions.iter() {
@@ -296,6 +301,94 @@ impl BuildCtx {
             }
 
             ast::TypeKind::Error => unreachable!(),
+        }
+    }
+
+    fn global_variable(&mut self, mb: &ModuleBuilder, gv: &ast::GlobalVariable) -> GlobalVariable {
+        let name = gv.name.name.to_string();
+        let ty = self.type_(mb, &gv.ty);
+        let linkage = gv.linkage;
+        let is_const = gv.is_const;
+        let value = gv
+            .init
+            .as_ref()
+            .and_then(|init| self.gv_initializer(mb, init, ty));
+        let data = GlobalVariableData::new(name, ty, linkage, is_const, value);
+
+        mb.make_global(data)
+    }
+
+    fn gv_initializer(
+        &mut self,
+        mb: &ModuleBuilder,
+        init: &ast::GvInitializer,
+        ty: Type,
+    ) -> Option<GvInitializer> {
+        let mut type_error = |ty: Type| {
+            let ty = ty.dump_string(&mb.ctx);
+            self.errors.push(Error::TypeError {
+                expected: ty,
+                span: init.span,
+            });
+        };
+
+        match &init.kind {
+            ast::GvValueKind::Immediate(imm) => {
+                let ty = if ty.is_integral() {
+                    ty
+                } else if ty.is_pointer(&mb.ctx) {
+                    mb.ctx.type_layout.pointer_repl()
+                } else {
+                    type_error(ty);
+                    return None;
+                };
+
+                // TODO: Integer range check.
+                let inner = imm.as_i256();
+                let imm = Immediate::from_i256(inner, ty);
+                Some(GvInitializer::Immediate(imm))
+            }
+
+            ast::GvValueKind::Array(arr) => {
+                let Some((ty, len)) = mb.ctx.with_ty_store(|s| s.array_def(ty)) else {
+                    type_error(ty);
+                    return None;
+                };
+
+                if arr.len() != len {
+                    type_error(ty);
+                    return None;
+                }
+
+                let elems = arr
+                    .iter()
+                    .map(|elem| self.gv_initializer(mb, elem, ty))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(GvInitializer::make_array(elems))
+            }
+
+            ast::GvValueKind::Struct(fields) => {
+                let Some(s_data) = mb.ctx.with_ty_store(|s| s.struct_def(ty).cloned()) else {
+                    type_error(ty);
+                    return None;
+                };
+
+                if fields.len() != s_data.fields.len() {
+                    type_error(ty);
+                    return None;
+                }
+
+                let elems = fields
+                    .iter()
+                    .zip(s_data.fields)
+                    .map(|(elem, field_ty)| self.gv_initializer(mb, elem, field_ty))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(GvInitializer::make_struct(elems))
+            }
+
+            &ast::GvValueKind::Error => {
+                unreachable!();
+            }
         }
     }
 }

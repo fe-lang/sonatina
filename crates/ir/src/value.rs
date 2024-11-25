@@ -60,16 +60,19 @@ impl WriteWithFunc for ValueId {
                     write!(w, "{}.", imm)?;
                     ty.write(ctx.func.ctx(), w)
                 }
+
                 Value::Global { gv, .. } => ctx
                     .func
                     .dfg
                     .ctx
                     .with_gv_store(|s| write!(w, "%{}", s.gv_data(*gv).symbol)),
+
                 Value::Undef { ty } => {
                     write!(w, "undef.")?;
                     ty.write(ctx.func.ctx(), w)
                 }
-                _ => {
+
+                Value::Arg { .. } | Value::Inst { .. } => {
                     write!(w, "v{}", self.0)
                 }
             }

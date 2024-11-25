@@ -1,1 +1,1 @@
-func %foo() {}
+func private %foo() {}
