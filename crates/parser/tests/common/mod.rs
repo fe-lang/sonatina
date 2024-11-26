@@ -17,6 +17,8 @@ macro_rules! snap_test {
         settings.set_snapshot_path(fixture_dir);
         settings.set_input_file($fixture_path);
         settings.set_prepend_module_to_snapshot(false);
+        settings.set_omit_expression(true);
+
         let suffix: Option<&str> = $suffix;
         let name = if let Some(suffix) = suffix {
             format!("{fixture_name}.{suffix}")

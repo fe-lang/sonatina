@@ -1,0 +1,15 @@
+---
+source: crates/parser/tests/errors.rs
+input_file: test_files/errors/duplicated_declaration.sntn
+---
+error: parse error
+ --> duplicated_declaration.sntn:3:27
+  |
+3 | global public const *i256 $ZERO = 0
+  |                           ^^^^^ ZERO is already declared
+  |error: parse error
+  --> duplicated_declaration.sntn:10:14
+   |
+10 | func private %foo(v0.i256) {
+   |              ^^^^ foo is already declared
+   |

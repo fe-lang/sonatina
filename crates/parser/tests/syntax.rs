@@ -12,14 +12,6 @@ use sonatina_parser::{
 mod common;
 
 #[dir_test(
-    dir: "$CARGO_MANIFEST_DIR/test_files/syntax/stmts",
-    glob: "*.sntn"
-)]
-fn test_stmts(fixture: Fixture<&str>) {
-    test_rule(Rule::_stmts, fixture)
-}
-
-#[dir_test(
     dir: "$CARGO_MANIFEST_DIR/test_files/syntax/func",
     glob: "*.sntn"
 )]

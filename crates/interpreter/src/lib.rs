@@ -2,8 +2,9 @@ use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     interpret::{Action, EvalValue, Interpret, State},
     isa::Endian,
-    module::FuncRef,
+    module::{FuncRef, ModuleCtx, RoFuncStore},
     prelude::*,
+    types::CompoundTypeData,
     BlockId, DataFlowGraph, Function, Immediate, InstId, Module, Type, Value, ValueId, I256,
 };
 
@@ -11,7 +12,8 @@ pub struct Machine {
     frames: Vec<Frame>,
     pc: InstId,
     action: Action,
-    pub module: Module,
+    pub funcs: RoFuncStore,
+    pub module_ctx: ModuleCtx,
     memory: Vec<u8>,
     free_region: usize,
 }
@@ -23,14 +25,16 @@ impl Machine {
             // Dummy pc
             pc: InstId(0),
             action: Action::Continue,
-            module,
+            funcs: module.funcs.into_read_only(),
+            module_ctx: module.ctx,
             memory: Vec::new(),
             free_region: 0,
         }
     }
 
-    pub fn run(&mut self, func: FuncRef, args: Vec<EvalValue>) -> EvalValue {
-        let frame = Frame::new(func, &self.module, args);
+    pub fn run(&mut self, func_ref: FuncRef, args: Vec<EvalValue>) -> EvalValue {
+        let func = self.funcs.get(&func_ref).unwrap();
+        let frame = Frame::new(func_ref, func, args);
         self.frames.push(frame);
         self.action = Action::Continue;
         self.run_on_func()
@@ -50,19 +54,20 @@ impl Machine {
     }
 
     fn top_func(&self) -> &Function {
-        &self.module.funcs[self.top_frame().func]
+        self.funcs.get(&self.top_frame().func).unwrap()
     }
 
     fn run_on_func(&mut self) -> EvalValue {
         let layout = &self.top_func().layout;
-
         let entry_block = layout.entry_block().unwrap();
-        self.pc = layout.first_inst_of(entry_block).unwrap();
+        let first_inst = layout.first_inst_of(entry_block).unwrap();
+        self.pc = first_inst;
 
         loop {
             let inst = self.top_func().dfg.inst(self.pc);
+            let inst = dyn_clone::clone_box(inst);
             let Some(interpretable): Option<&dyn Interpret> =
-                InstDowncast::downcast(self.top_func().inst_set(), inst)
+                InstDowncast::downcast(self.top_func().inst_set(), inst.as_ref())
             else {
                 panic!("`Intepret is not yet implemented for `{}`", inst.as_text());
             };
@@ -72,7 +77,7 @@ impl Machine {
                 self.top_frame_mut().map_val(inst_result, e_val);
             };
 
-            match self.action {
+            match self.action.clone() {
                 Action::Continue => {
                     self.pc = self.top_func().layout.next_inst_of(self.pc).unwrap();
                 }
@@ -100,12 +105,12 @@ pub struct Frame {
 }
 
 impl Frame {
-    fn new(func: FuncRef, module: &Module, arg_e_values: Vec<EvalValue>) -> Self {
-        let arg_values = &module.funcs[func].arg_values;
+    fn new(func_ref: FuncRef, func: &Function, arg_e_values: Vec<EvalValue>) -> Self {
+        let arg_values = &func.arg_values;
         assert_eq!(arg_values.len(), arg_e_values.len());
 
         let mut frame = Self {
-            func,
+            func: func_ref,
             locals: SecondaryMap::default(),
             prev_block: None,
         };
@@ -130,14 +135,15 @@ impl State for Machine {
             Value::Global { .. } => {
                 todo!()
             }
-            _ => self.top_frame().locals[value_id],
+            _ => self.top_frame().locals[value_id].clone(),
         }
     }
 
-    fn call_func(&mut self, func: FuncRef, args: Vec<EvalValue>) -> EvalValue {
+    fn call_func(&mut self, func_ref: FuncRef, args: Vec<EvalValue>) -> EvalValue {
         let ret_addr = self.pc;
 
-        let new_frame = Frame::new(func, &self.module, args);
+        let func = self.funcs.get(&func_ref).unwrap();
+        let new_frame = Frame::new(func_ref, func, args);
         self.frames.push(new_frame);
 
         let result = self.run_on_func();
@@ -158,23 +164,57 @@ impl State for Machine {
     }
 
     fn load(&mut self, addr: EvalValue, ty: Type) -> EvalValue {
-        if !(ty.is_integral() || ty.is_pointer(&self.module.ctx)) {
-            // TODO: we need to decide how to handle load of aggregate type when it fits
-            // into register/stack-slot size.
-            todo!();
-        }
-
         let Some(addr) = addr.as_imm() else {
-            panic!("udnef address in load")
+            return EvalValue::Undef;
         };
+
         let addr = addr.as_usize();
-        let size = self.module.ctx.size_of(ty);
+        let size = self.module_ctx.size_of_unchecked(ty);
         if addr + size > self.memory.len() {
-            panic!("uninitialized memory access is detected");
+            return EvalValue::Undef;
         }
 
+        // Store a value of aggregate type.
+        if !(ty.is_integral() || ty.is_pointer(&self.module_ctx)) {
+            let mut fields = Vec::new();
+
+            match ty.resolve_compound(&self.module_ctx).unwrap() {
+                CompoundTypeData::Array { elem: elem_ty, len } => {
+                    let mut addr = addr;
+                    let elem_size = self.module_ctx.size_of_unchecked(elem_ty);
+                    for _ in 0..len {
+                        let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
+                        let elem = self.load(elem_addr, elem_ty);
+                        fields.push(elem);
+                        addr += elem_size;
+                    }
+                }
+
+                CompoundTypeData::Struct(s) => {
+                    let mut addr = addr;
+                    for field_ty in s.fields.into_iter() {
+                        let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
+                        let field = self.load(elem_addr, field_ty);
+                        fields.push(field);
+                        addr += self.module_ctx.size_of_unchecked(field_ty);
+                    }
+                }
+
+                CompoundTypeData::Ptr(_) => {
+                    unreachable!()
+                }
+
+                CompoundTypeData::Func { .. } => {
+                    panic!("function type can't be placed in memory");
+                }
+            }
+
+            return EvalValue::Aggregate { fields, ty };
+        }
+
+        // Store a value of integer/pointer type.
         let slice = &self.memory[addr..addr + size];
-        let value_i256 = match self.module.ctx.endian() {
+        let value_i256 = match self.module_ctx.endian() {
             Endian::Be => I256::from_be_bytes(slice),
             Endian::Le => I256::from_le_bytes(slice),
         };
@@ -184,26 +224,62 @@ impl State for Machine {
     }
 
     fn store(&mut self, addr: EvalValue, value: EvalValue, ty: Type) -> EvalValue {
-        if !(ty.is_integral() || ty.is_pointer(&self.module.ctx)) {
-            // TODO: we need to decide how to handle load of aggregate type when it fits
-            // into register/stack-slot size.
-            todo!();
+        if value.is_undef() {
+            return EvalValue::Undef;
         }
 
         let Some(addr) = addr.as_imm() else {
             panic!("udnef address in store")
         };
         let addr = addr.as_usize();
-        let size = self.module.ctx.size_of(ty);
+        let size = self.module_ctx.size_of_unchecked(ty);
         if addr + size > self.memory.len() {
             self.memory.resize(addr + size, 0);
         }
 
+        // Store a value of aggregate type.
+        if !(ty.is_integral() || ty.is_pointer(&self.module_ctx)) {
+            let EvalValue::Aggregate { fields, ty } = value else {
+                unreachable!();
+            };
+            match ty.resolve_compound(&self.module_ctx).unwrap() {
+                CompoundTypeData::Array { elem: elem_ty, .. } => {
+                    let mut addr = addr;
+                    let elem_size = self.module_ctx.size_of_unchecked(elem_ty);
+                    for field in &fields {
+                        let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
+                        self.store(field.clone(), elem_addr, elem_ty);
+                        addr += elem_size;
+                    }
+                }
+
+                CompoundTypeData::Struct(s) => {
+                    let mut addr = addr;
+                    for (i, field_ty) in s.fields.into_iter().enumerate() {
+                        let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
+                        self.store(fields[i].clone(), elem_addr, field_ty);
+                        addr += self.module_ctx.size_of_unchecked(field_ty);
+                    }
+                }
+
+                CompoundTypeData::Ptr(_) => {
+                    unreachable!()
+                }
+
+                CompoundTypeData::Func { .. } => {
+                    panic!("Function can't be stored in memory");
+                }
+            }
+
+            return EvalValue::Undef;
+        }
+
+        // Store a value of integer/pointer type.
         let Some(value) = value.as_imm() else {
             panic!("undef value in store");
         };
 
-        match self.module.ctx.endian() {
+        match self.module_ctx.endian() {
             Endian::Be => {
                 let v = value.as_i256().to_u256();
                 let bytes = v.to_big_endian();
@@ -223,7 +299,7 @@ impl State for Machine {
 
     fn alloca(&mut self, ty: Type) -> EvalValue {
         let ptr = self.free_region;
-        self.free_region += self.module.ctx.size_of(ty);
+        self.free_region += self.module_ctx.size_of_unchecked(ty);
         EvalValue::Imm(Immediate::I256(I256::from(ptr)))
     }
 

@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/syntax.rs
-expression: s
-input_file: crates/parser/test_files/syntax/module/simple.sntn
+input_file: test_files/syntax/module/simple.sntn
+snapshot_kind: text
 ---
 module "target = "evm-ethereum-london"
 
@@ -27,12 +27,12 @@ v2.i8 = call %add_i8 v0 v1;
 return v2;
 }
 
-func %types(v0.*i8, v1.[i8; 2], v2.[*i8; 2], v3.[[i8; 2]; 2], v4.@foo, v5.*@foo) {
+func private %types(v0.*i8, v1.[i8; 2], v2.[*i8; 2], v3.[[i8; 2]; 2], v4.@foo, v5.*@foo) {
     block0:
         return;
 }
 
-func %table(v0.i8) {
+func private %table(v0.i8) {
     block0:
         br_table v0 block0 (1.i8 block1) (2.i8 block2);
     block1:
@@ -41,7 +41,7 @@ func %table(v0.i8) {
         return 2.i8;
 }
 
-func %flow(v0.i64) -> i64 {
+func private %flow(v0.i64) -> i64 {
     block0:
         jump block1;
     block1:
@@ -58,7 +58,7 @@ func %flow(v0.i64) -> i64 {
   COMMENT "#! this is a module"
   COMMENT "#! with two functions"
   function_declaration "declare external %add_i8(i8, i8) -> i8;"
-    function_linkage "external"
+    linkage "external"
     function_identifier "%add_i8"
       function_name "add_i8"
     function_param_type_list "(i8, i8)"
@@ -98,7 +98,7 @@ func %flow(v0.i64) -> i64 {
           return;
   }"
     function_signature "func public %main() "
-      function_linkage "public"
+      linkage "public"
       function_identifier "%main"
         function_name "main"
       function_params "()"
@@ -137,7 +137,7 @@ func %flow(v0.i64) -> i64 {
   return v2;
   }"
     function_signature "func private %foo(v0.i8) -> i8"
-      function_linkage "private"
+      linkage "private"
       function_identifier "%foo"
         function_name "foo"
       function_params "(v0.i8)"
@@ -197,11 +197,12 @@ func %flow(v0.i64) -> i64 {
             inst_arg "v2"
               value "v2"
                 value_name "v2"
-  function "func %types(v0.*i8, v1.[i8; 2], v2.[*i8; 2], v3.[[i8; 2]; 2], v4.@foo, v5.*@foo) {
+  function "func private %types(v0.*i8, v1.[i8; 2], v2.[*i8; 2], v3.[[i8; 2]; 2], v4.@foo, v5.*@foo) {
       block0:
           return;
   }"
-    function_signature "func %types(v0.*i8, v1.[i8; 2], v2.[*i8; 2], v3.[[i8; 2]; 2], v4.@foo, v5.*@foo) "
+    function_signature "func private %types(v0.*i8, v1.[i8; 2], v2.[*i8; 2], v3.[[i8; 2]; 2], v4.@foo, v5.*@foo) "
+      linkage "private"
       function_identifier "%types"
         function_name "types"
       function_params "(v0.*i8, v1.[i8; 2], v2.[*i8; 2], v3.[[i8; 2]; 2], v4.@foo, v5.*@foo)"
@@ -258,7 +259,7 @@ func %flow(v0.i64) -> i64 {
           inst "return"
             inst_name "return"
               inst_identifier "return"
-  function "func %table(v0.i8) {
+  function "func private %table(v0.i8) {
       block0:
           br_table v0 block0 (1.i8 block1) (2.i8 block2);
       block1:
@@ -266,7 +267,8 @@ func %flow(v0.i64) -> i64 {
       block2:
           return 2.i8;
   }"
-    function_signature "func %table(v0.i8) "
+    function_signature "func private %table(v0.i8) "
+      linkage "private"
       function_identifier "%table"
         function_name "table"
       function_params "(v0.i8)"
@@ -333,7 +335,7 @@ func %flow(v0.i64) -> i64 {
                 imm_number "2.i8"
                   decimal "2"
                   primitive_type "i8"
-  function "func %flow(v0.i64) -> i64 {
+  function "func private %flow(v0.i64) -> i64 {
       block0:
           jump block1;
       block1:
@@ -345,7 +347,8 @@ func %flow(v0.i64) -> i64 {
       block3:
           return v1;
   }"
-    function_signature "func %flow(v0.i64) -> i64"
+    function_signature "func private %flow(v0.i64) -> i64"
+      linkage "private"
       function_identifier "%flow"
         function_name "flow"
       function_params "(v0.i64)"

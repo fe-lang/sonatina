@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/errors.rs
-expression: s
-input_file: crates/parser/test_files/errors/undefined.sntn
+input_file: test_files/errors/undefined.sntn
+snapshot_kind: text
 ---
 error: parse error
  --> undefined.sntn:2:25

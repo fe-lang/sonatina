@@ -273,7 +273,8 @@ mod tests {
 
     #[test]
     fn simple_loop() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let b0 = builder.append_block();
@@ -301,11 +302,11 @@ mod tests {
         builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
-        let lpt = compute_loop(func);
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        let lpt = &module.funcs.view(func_ref, compute_loop);
 
         debug_assert_eq!(lpt.loop_num(), 1);
         let lp0 = lpt.loops().next().unwrap();
@@ -319,7 +320,8 @@ mod tests {
 
     #[test]
     fn continue_loop() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let b0 = builder.append_block();
@@ -365,11 +367,11 @@ mod tests {
         builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
-        let lpt = compute_loop(func);
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        let lpt = &module.funcs.view(func_ref, compute_loop);
 
         debug_assert_eq!(lpt.loop_num(), 1);
         let lp0 = lpt.loops().next().unwrap();
@@ -387,7 +389,8 @@ mod tests {
 
     #[test]
     fn single_block_loop() {
-        let (evm, mut builder) = test_func_builder(&[Type::I1], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I1], Type::Unit);
         let is = evm.inst_set();
 
         let b0 = builder.append_block();
@@ -406,11 +409,11 @@ mod tests {
         builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
-        let lpt = compute_loop(func);
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        let lpt = &module.funcs.view(func_ref, compute_loop);
 
         debug_assert_eq!(lpt.loop_num(), 1);
         let lp0 = lpt.loops().next().unwrap();
@@ -422,7 +425,8 @@ mod tests {
 
     #[test]
     fn nested_loop() {
-        let (evm, mut builder) = test_func_builder(&[Type::I1], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I1], Type::Unit);
         let is = evm.inst_set();
 
         let b0 = builder.append_block();
@@ -477,11 +481,11 @@ mod tests {
         builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
-        let lpt = compute_loop(func);
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        let lpt = &module.funcs.view(func_ref, compute_loop);
 
         debug_assert_eq!(lpt.loop_num(), 4);
         let l0 = lpt.loop_of_block(b1).unwrap();

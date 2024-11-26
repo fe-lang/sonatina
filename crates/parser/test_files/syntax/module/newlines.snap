@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/syntax.rs
-expression: s
-input_file: crates/parser/test_files/syntax/module/newlines.sntn
+input_file: test_files/syntax/module/newlines.sntn
+snapshot_kind: text
 ---
 module "target = "evm-ethereum-london"
 func public %main() {
@@ -17,7 +17,7 @@ func public %main() {
           return;
   }"
     function_signature "func public %main() "
-      function_linkage "public"
+      linkage "public"
       function_identifier "%main"
         function_name "main"
       function_params "()"

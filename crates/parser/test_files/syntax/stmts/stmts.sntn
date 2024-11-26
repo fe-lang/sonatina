@@ -1,7 +1,0 @@
-store @memory v1 v2;
-store @storage 0.i32 1000.i64;
-v1.i64 = load @storage v0;
-v1.i64 = load @memory 0.i32;
-v4.i64 = call %foo v0 0.i8 v1 v2 v3;
-v0.i64 = gep v0 0.i8 1.i8 1.i8;
-v1.i8 = phi v0 (0.i8 block1) (1.i8 block2) (v5 block3) (v32 block4);

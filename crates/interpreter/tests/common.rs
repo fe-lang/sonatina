@@ -30,7 +30,7 @@ pub fn parse_module(file_path: &str) -> ParsedModule {
 
 pub fn parse_test_cases(module: &ParsedModule) -> Result<Vec<TestCase>, String> {
     let mut cases = Vec::new();
-    for func in module.module.funcs.keys() {
+    for func in module.module.funcs() {
         let func_cases = parse_func_cases(module, func)?;
         cases.extend(func_cases.into_iter());
     }
@@ -74,7 +74,8 @@ impl TestCase {
 
         if let Some((expected, evaluated)) = err_pair {
             let text = &self.text;
-            let func_name = machine.module.sig(self.func).name();
+            let func = machine.funcs.get(&self.func).unwrap();
+            let func_name = func.sig.name();
             let msg = format!("{text}\nexpected: {expected}\nevaluated: {evaluated}\n");
             Err(format_error(func_name, &msg))
         } else {
@@ -82,20 +83,22 @@ impl TestCase {
         }
     }
 
-    fn parse(module: &ParsedModule, func: FuncRef, comment: &str) -> Result<Self, String> {
+    fn parse(module: &ParsedModule, func_ref: FuncRef, comment: &str) -> Result<Self, String> {
         let Some(caps) = PATTERN.captures(comment) else {
-            let func_name = module.module.sig(func).name();
-            return Err(format_error(
-                func_name,
-                &format!("invalid `{comment}`, `#[(args_list) -> ret]` is expected"),
-            ));
+            return module.module.funcs.view(func_ref, |func| {
+                let func_name = func.sig.name();
+                Err(format_error(
+                    func_name,
+                    &format!("invalid `{comment}`, `#[(args_list) -> ret]` is expected"),
+                ))
+            });
         };
         let args = if !caps["args"].is_empty() {
             caps["args"]
                 .split(",")
                 .map(|arg| {
                     let arg = arg.trim();
-                    parse_value(module, func, arg)
+                    parse_value(module, func_ref, arg)
                 })
                 .collect::<Result<_, _>>()?
         } else {
@@ -106,7 +109,7 @@ impl TestCase {
             .name("ret")
             .map(|m| {
                 let ret_val = m.as_str();
-                parse_value(module, func, ret_val)
+                parse_value(module, func_ref, ret_val)
             })
             .transpose()?;
 
@@ -114,7 +117,7 @@ impl TestCase {
             args,
             ret,
             text: comment.to_string(),
-            func,
+            func: func_ref,
         })
     }
 }
@@ -126,6 +129,7 @@ fn parse_func_cases(module: &ParsedModule, func_ref: FuncRef) -> Result<Vec<Test
         .collect()
 }
 
+// TODO: Allow Compound value.
 fn parse_value(module: &ParsedModule, func_ref: FuncRef, input: &str) -> Result<Immediate, String> {
     let value = match Parser::parse(Rule::value, input) {
         Ok(mut pairs) => {
@@ -138,8 +142,10 @@ fn parse_value(module: &ParsedModule, func_ref: FuncRef, input: &str) -> Result<
 
         Err(err) => {
             let err = err.to_string();
-            let func_name = module.module.funcs[func_ref].sig.name();
-            return Err(format_error(func_name, &err.to_string()));
+            return module.module.funcs.view(func_ref, |func| {
+                let func_name = func.sig.name();
+                Err(format_error(func_name, &err.to_string()))
+            });
         }
     };
 

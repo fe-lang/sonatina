@@ -1,6 +1,6 @@
 target = "evm-ethereum-london"
 
-func %f() {
+func private %f() {
     v0.i8 = call %foo 100.i8;
     v1
 }

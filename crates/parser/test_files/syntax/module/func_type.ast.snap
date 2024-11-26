@@ -1,0 +1,96 @@
+---
+source: crates/parser/tests/syntax.rs
+input_file: test_files/syntax/module/func_type.sntn
+snapshot_kind: text
+---
+Module {
+    target: Some(
+        TargetTriple {
+            architecture: Evm,
+            vendor: Ethereum,
+            operating_system: Evm(
+                London,
+            ),
+        },
+    ),
+    declared_functions: [],
+    declared_gvs: [],
+    struct_types: [],
+    functions: [
+        Func {
+            signature: FuncSignature {
+                linkage: Public,
+                name: FunctionName {
+                    name: "higher_order",
+                    ..
+                },
+                params: [
+                    ValueDeclaration(
+                        ValueName {
+                            string: "v0",
+                            ..
+                        },
+                        Type {
+                            kind: Ptr(
+                                Type {
+                                    kind: Func {
+                                        args: [
+                                            Type {
+                                                kind: Int(
+                                                    I256,
+                                                ),
+                                                ..
+                                            },
+                                            Type {
+                                                kind: Int(
+                                                    I256,
+                                                ),
+                                                ..
+                                            },
+                                        ],
+                                        ret_ty: Type {
+                                            kind: Int(
+                                                I32,
+                                            ),
+                                            ..
+                                        },
+                                    },
+                                    ..
+                                },
+                            ),
+                            ..
+                        },
+                    ),
+                ],
+                ret_type: None,
+            },
+            blocks: [
+                Block {
+                    id: BlockId {
+                        id: Some(
+                            0,
+                        ),
+                        ..
+                    },
+                    stmts: [
+                        Stmt {
+                            kind: Inst(
+                                Inst {
+                                    name: InstName {
+                                        name: "return",
+                                        ..
+                                    },
+                                    args: [],
+                                    ..
+                                },
+                            ),
+                            ..
+                        },
+                    ],
+                },
+            ],
+            comments: [],
+        },
+    ],
+    comments: [],
+}

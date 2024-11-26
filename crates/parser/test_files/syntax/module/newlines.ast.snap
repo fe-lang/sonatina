@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/syntax.rs
-expression: "format!(\"{:#?}\", module)"
-input_file: crates/parser/test_files/syntax/module/newlines.sntn
+input_file: test_files/syntax/module/newlines.sntn
+snapshot_kind: text
 ---
 Module {
     target: Some(
@@ -14,6 +14,7 @@ Module {
         },
     ),
     declared_functions: [],
+    declared_gvs: [],
     struct_types: [],
     functions: [
         Func {

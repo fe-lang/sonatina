@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/errors.rs
-expression: s
-input_file: crates/parser/test_files/errors/parse_error.sntn
+input_file: test_files/errors/parse_error.sntn
+snapshot_kind: text
 ---
 error: parse error
  --> parse_error.sntn:3:5

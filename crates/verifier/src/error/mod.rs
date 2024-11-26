@@ -58,7 +58,7 @@ impl<'a> fmt::Display for Error<'a> {
 #[cfg(test)]
 mod test {
     use sonatina_ir::{
-        builder::test_util::test_func_builder,
+        builder::test_util::{test_func_builder, test_module_builder},
         inst::{arith::Add, control_flow::Return},
         isa::Isa,
         Type,
@@ -69,7 +69,8 @@ mod test {
 
     #[test]
     fn display_verifier_error() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let b0 = builder.append_block();
@@ -82,23 +83,24 @@ mod test {
         builder.insert_inst_no_result_with(|| Return::new(is, Some(ret)));
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
 
-        let func = &module.funcs[func_ref];
-        let insn = func.layout.iter_inst(b0).next().unwrap();
+        let err_msg = module.funcs.view(func_ref, |func| {
+            let inst = func.layout.iter_inst(b0).next().unwrap();
 
-        let trace_info = TraceInfoBuilder::new(func_ref)
-            .block(b0)
-            .inst_id(insn)
-            .value(value1)
-            .ty(Type::I8)
-            .build();
+            let trace_info = TraceInfoBuilder::new(func_ref)
+                .block(b0)
+                .inst_id(inst)
+                .value(value1)
+                .ty(Type::I8)
+                .build();
 
-        let err = ErrorData::new(ErrorKind::InstArgWrongType(Type::I8), trace_info);
-
-        let err = Error::new(err, func, func_ref);
+            let err = ErrorData::new(ErrorKind::InstArgWrongType(Type::I8), trace_info);
+            Error::new(err, func, func_ref).to_string()
+        });
 
         assert_eq!(
             "argument type inconsistent with instruction, i8
@@ -108,7 +110,7 @@ trace_info:
 2: v2.i32 = add 28.i32 0.i8;
 3: block0
 4: func public %test_func() -> unit",
-            err.to_string()
+            err_msg
         );
     }
 }
