@@ -14,6 +14,7 @@ pub enum Error {
     SyntaxError(pest::error::Error<Rule>),
     Undefined(UndefinedKind, Span),
     DuplicateValueName(SmolStr, Span),
+    DuplicatedDeclaration(SmolStr, Span),
 
     InstArgKindMismatch {
         expected: SmolStr,
@@ -56,8 +57,9 @@ impl Error {
             Error::NumberOutOfBounds(span) => *span,
             Error::InvalidTarget(_, span) => *span,
             Error::Undefined(_, span) => *span,
-
             Error::DuplicateValueName(_, span) => *span,
+            Error::DuplicatedDeclaration(_, span) => *span,
+
             Error::SyntaxError(err) => match err.location {
                 pest::error::InputLocation::Pos(p) => Span(p as u32, p as u32),
                 pest::error::InputLocation::Span((s, e)) => Span(s as u32, e as u32),
@@ -92,6 +94,7 @@ impl Error {
                 UndefinedKind::Inst(name) => format!("unknown inst: `{name}`"),
             },
 
+            Error::DuplicatedDeclaration(name, _) => format!("{name} is already declared"),
             Error::DuplicateValueName(name, _) => format!("value name `{name}` is already defined"),
 
             Error::UnexpectedTrailingInstArg(_) => "unexpected trailing inst argument".to_string(),

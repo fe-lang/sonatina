@@ -50,7 +50,15 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
         builder.declare_struct_type(&st.name.0, &fields, false);
     }
 
+    for gv in ast.declared_gvs {
+        ctx.declare_gv(&builder, &gv);
+    }
+
     for func in ast.declared_functions {
+        if !ctx.check_duplicated_func(&builder, &func.name) {
+            continue;
+        }
+
         let params = func
             .params
             .iter()
@@ -66,11 +74,11 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
         builder.declare_function(sig);
     }
 
-    for gv in ast.declared_gvs {
-        ctx.global_variable(&builder, &gv);
-    }
-
     for func in ast.functions.iter() {
+        if !ctx.check_duplicated_func(&builder, &func.signature.name) {
+            continue;
+        }
+
         let sig = &func.signature;
         let args = sig
             .params
@@ -130,7 +138,6 @@ struct BuildCtx {
     errors: Vec<Error>,
     blocks: FxHashSet<ir::BlockId>,
     value_names: FxHashMap<FuncRef, Bimap<ir::ValueId, SmolStr>>,
-    gv_names: FxHashMap<SmolStr, GlobalVariable>,
     func_value_names: Bimap<ir::ValueId, SmolStr>,
 }
 
@@ -274,11 +281,15 @@ impl BuildCtx {
                 fb.make_undef_value(ty)
             }
             ast::ValueKind::Global(name) => {
-                let Some(gv) = self.gv_names.get(&name.string) else {
+                let Some(gv) = fb.module_builder.lookup_global(&name.string) else {
+                    self.errors.push(Error::Undefined(
+                        UndefinedKind::Value(name.string.clone()),
+                        val.span,
+                    ));
                     return ir::ValueId(0);
                 };
 
-                fb.make_global_value(*gv)
+                fb.make_global_value(gv)
             }
 
             ast::ValueKind::Error => unreachable!(),
@@ -313,13 +324,24 @@ impl BuildCtx {
         }
     }
 
-    fn global_variable(
-        &mut self,
-        mb: &ModuleBuilder,
-        ast_gv: &ast::GlobalVariable,
-    ) -> GlobalVariable {
-        // TODO: Check duplicated definition.
-        let name = ast_gv.name.string.to_string();
+    fn check_duplicated_func(&mut self, mb: &ModuleBuilder, name: &ast::FunctionName) -> bool {
+        if mb.lookup_func(&name.name).is_some() {
+            self.errors
+                .push(Error::DuplicatedDeclaration(name.name.clone(), name.span));
+            false
+        } else {
+            true
+        }
+    }
+
+    fn declare_gv(&mut self, mb: &ModuleBuilder, ast_gv: &ast::GlobalVariable) -> GlobalVariable {
+        let name = &ast_gv.name.string;
+        if let Some(gv) = mb.lookup_global(name) {
+            self.errors
+                .push(Error::DuplicatedDeclaration(name.clone(), ast_gv.name.span));
+            return gv;
+        }
+
         let ty = self.type_(mb, &ast_gv.ty);
         let linkage = ast_gv.linkage;
         let is_const = ast_gv.is_const;
@@ -327,11 +349,8 @@ impl BuildCtx {
             .init
             .as_ref()
             .and_then(|init| self.gv_initializer(mb, init, ty));
-        let data = GlobalVariableData::new(name, ty, linkage, is_const, init);
-        let gv = mb.make_global(data);
-
-        self.gv_names.insert(ast_gv.name.string.clone(), gv);
-        gv
+        let data = GlobalVariableData::new(name.to_string(), ty, linkage, is_const, init);
+        mb.make_global(data)
     }
 
     fn gv_initializer(

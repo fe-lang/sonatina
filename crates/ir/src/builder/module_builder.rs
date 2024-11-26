@@ -28,6 +28,7 @@ impl ModuleBuilder {
         }
     }
 
+    // TODO: Return result to check duplicated func declaration.
     pub fn declare_function(&self, sig: Signature) -> FuncRef {
         if let Some(func_ref) = self.declared_funcs.get(sig.name()) {
             *func_ref
@@ -56,7 +57,7 @@ impl ModuleBuilder {
         self.ctx.with_gv_store_mut(|s| s.make_gv(global))
     }
 
-    pub fn global_by_name(&self, name: &str) -> Option<GlobalVariable> {
+    pub fn lookup_global(&self, name: &str) -> Option<GlobalVariable> {
         self.ctx.with_gv_store(|s| s.gv_by_symbol(name))
     }
 
