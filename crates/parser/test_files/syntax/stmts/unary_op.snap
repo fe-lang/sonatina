@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/syntax.rs
-expression: s
-input_file: crates/parser/test_files/syntax/stmts/unary_op.sntn
+input_file: test_files/syntax/stmts/unary_op.sntn
+snapshot_kind: text
 ---
 stmt "v1.i1 = not v0;"
   assign_stmt "v1.i1 = not v0"

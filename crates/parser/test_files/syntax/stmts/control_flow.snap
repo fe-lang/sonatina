@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/syntax.rs
-expression: s
-input_file: crates/parser/test_files/syntax/stmts/control_flow.sntn
+input_file: test_files/syntax/stmts/control_flow.sntn
+snapshot_kind: text
 ---
 stmt "jump block0;"
   inst_stmt "jump block0"

@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/syntax.rs
-expression: "module \"target = \"evm-ethereum-london\"\n\nfunc public %higher_order(v0.*(i256, i256) -> i32) {\n    block0:\n        return;\n}\n\"\n  target_triple \"evm-ethereum-london\"\n  function \"func public %higher_order(v0.*(i256, i256) -> i32) {\n      block0:\n          return;\n  }\"\n    function_signature \"func public %higher_order(v0.*(i256, i256) -> i32) \"\n      linkage \"public\"\n      function_identifier \"%higher_order\"\n        function_name \"higher_order\"\n      function_params \"(v0.*(i256, i256) -> i32)\"\n        value_declaration \"v0.*(i256, i256) -> i32\"\n          value_name \"v0\"\n          type_name \"*(i256, i256) -> i32\"\n            ptr_type \"*(i256, i256) -> i32\"\n              type_name \"(i256, i256) -> i32\"\n                function_type \"(i256, i256) -> i32\"\n                  function_type_arg \"(i256, i256)\"\n                    type_name \"i256\"\n                      primitive_type \"i256\"\n                    type_name \"i256\"\n                      primitive_type \"i256\"\n                  function_ret_type \"-> i32\"\n                    type_name \"i32\"\n                      primitive_type \"i32\"\n    block \"block0:\n            return;\"\n      block_ident \"block0\"\n        block_number \"0\"\n      stmt \"return;\"\n        inst_stmt \"return\"\n          inst \"return\"\n            inst_name \"return\"\n              inst_identifier \"return\"\n  EOI \"\"\n"
 input_file: test_files/syntax/module/func_type.sntn
+snapshot_kind: text
 ---
 module "target = "evm-ethereum-london"
 

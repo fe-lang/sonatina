@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/syntax.rs
-expression: "target = evm-ethereum-london\nfunc public %higher_order(v0.*(i256, i256) -> i32) -> unit {\n    block0:\n        return;\n}\n\n"
 input_file: test_files/syntax/module/func_type.sntn
+snapshot_kind: text
 ---
 target = evm-ethereum-london
 func public %higher_order(v0.*(i256, i256) -> i32) -> unit {

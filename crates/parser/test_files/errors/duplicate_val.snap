@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/errors.rs
-expression: s
-input_file: crates/parser/test_files/errors/duplicate_val.sntn
+input_file: test_files/errors/duplicate_val.sntn
+snapshot_kind: text
 ---
 error: parse error
  --> duplicate_val.sntn:5:9

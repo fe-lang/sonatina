@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/errors.rs
-expression: s
-input_file: crates/parser/test_files/errors/numbers.sntn
+input_file: test_files/errors/numbers.sntn
+snapshot_kind: text
 ---
 error: parse error
  --> numbers.sntn:4:27

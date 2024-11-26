@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/syntax.rs
-expression: s
-input_file: crates/parser/test_files/syntax/stmts/cast.sntn
+input_file: test_files/syntax/stmts/cast.sntn
+snapshot_kind: text
 ---
 stmt "v0.i32 = sext v1 i32;"
   assign_stmt "v0.i32 = sext v1 i32"

@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/syntax.rs
-expression: s
-input_file: crates/parser/test_files/syntax/stmts/bin_op.sntn
+input_file: test_files/syntax/stmts/bin_op.sntn
+snapshot_kind: text
 ---
 stmt "v1.i64 = add 0x10.i64 v0;"
   assign_stmt "v1.i64 = add 0x10.i64 v0"
