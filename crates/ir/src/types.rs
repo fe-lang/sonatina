@@ -167,6 +167,10 @@ impl Type {
 
         Some(ctx.with_ty_store(|s| s.resolve_compound(cmpd).clone()))
     }
+
+    pub fn to_ptr(self, ctx: &ModuleCtx) -> Type {
+        ctx.with_ty_store_mut(|s| s.make_ptr(self))
+    }
 }
 
 impl cmp::PartialOrd for Type {

@@ -55,6 +55,12 @@ impl GlobalVariableStore {
 pub struct GlobalVariable(pub u32);
 cranelift_entity::entity_impl!(GlobalVariable);
 
+impl GlobalVariable {
+    pub fn ty(self, module: &ModuleCtx) -> Type {
+        module.with_gv_store(|s| s.ty(self))
+    }
+}
+
 impl WriteWithModule for GlobalVariable {
     fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
         module.with_gv_store(|s| s.gv_data(*self).write(module, w))
