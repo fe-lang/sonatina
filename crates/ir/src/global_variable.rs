@@ -106,7 +106,7 @@ impl WriteWithModule for GlobalVariableData {
         }
         self.ty.write(module, &mut *w)?;
 
-        write!(w, " %{}", self.symbol)?;
+        write!(w, " ${}", self.symbol)?;
         if let Some(data) = &self.data {
             write!(w, " = {data}")?;
         }
@@ -183,7 +183,7 @@ mod test {
             ))
         });
 
-        assert_eq!(gv.dump_string(&ctx), "global public const i32 %foo = 1618");
+        assert_eq!(gv.dump_string(&ctx), "global public const i32 $foo = 1618");
     }
 
     #[test]
@@ -207,7 +207,7 @@ mod test {
 
         assert_eq!(
             gv.dump_string(&ctx),
-            "global private const [i32; 3] %foo = [8, 4, 2]"
+            "global private const [i32; 3] $foo = [8, 4, 2]"
         );
     }
 }

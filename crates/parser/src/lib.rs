@@ -130,6 +130,7 @@ struct BuildCtx {
     errors: Vec<Error>,
     blocks: FxHashSet<ir::BlockId>,
     value_names: FxHashMap<FuncRef, Bimap<ir::ValueId, SmolStr>>,
+    gv_names: FxHashMap<SmolStr, GlobalVariable>,
     func_value_names: Bimap<ir::ValueId, SmolStr>,
 }
 
@@ -272,6 +273,14 @@ impl BuildCtx {
                 let ty = self.type_(&fb.module_builder, ty);
                 fb.make_undef_value(ty)
             }
+            ast::ValueKind::Global(name) => {
+                let Some(gv) = self.gv_names.get(&name.string) else {
+                    return ir::ValueId(0);
+                };
+
+                fb.make_global_value(*gv)
+            }
+
             ast::ValueKind::Error => unreachable!(),
         }
     }
@@ -304,18 +313,25 @@ impl BuildCtx {
         }
     }
 
-    fn global_variable(&mut self, mb: &ModuleBuilder, gv: &ast::GlobalVariable) -> GlobalVariable {
-        let name = gv.name.name.to_string();
-        let ty = self.type_(mb, &gv.ty);
-        let linkage = gv.linkage;
-        let is_const = gv.is_const;
-        let value = gv
+    fn global_variable(
+        &mut self,
+        mb: &ModuleBuilder,
+        ast_gv: &ast::GlobalVariable,
+    ) -> GlobalVariable {
+        // TODO: Check duplicated definition.
+        let name = ast_gv.name.string.to_string();
+        let ty = self.type_(mb, &ast_gv.ty);
+        let linkage = ast_gv.linkage;
+        let is_const = ast_gv.is_const;
+        let init = ast_gv
             .init
             .as_ref()
             .and_then(|init| self.gv_initializer(mb, init, ty));
-        let data = GlobalVariableData::new(name, ty, linkage, is_const, value);
+        let data = GlobalVariableData::new(name, ty, linkage, is_const, init);
+        let gv = mb.make_global(data);
 
-        mb.make_global(data)
+        self.gv_names.insert(ast_gv.name.string.clone(), gv);
+        gv
     }
 
     fn gv_initializer(
@@ -333,7 +349,7 @@ impl BuildCtx {
         };
 
         match &init.kind {
-            ast::GvValueKind::Immediate(imm) => {
+            ast::GvInitializerKind::Immediate(imm) => {
                 let ty = if ty.is_integral() {
                     ty
                 } else if ty.is_pointer(&mb.ctx) {
@@ -349,7 +365,7 @@ impl BuildCtx {
                 Some(GvInitializer::Immediate(imm))
             }
 
-            ast::GvValueKind::Array(arr) => {
+            ast::GvInitializerKind::Array(arr) => {
                 let Some((ty, len)) = mb.ctx.with_ty_store(|s| s.array_def(ty)) else {
                     type_error(ty);
                     return None;
@@ -367,7 +383,7 @@ impl BuildCtx {
                 Some(GvInitializer::make_array(elems))
             }
 
-            ast::GvValueKind::Struct(fields) => {
+            ast::GvInitializerKind::Struct(fields) => {
                 let Some(s_data) = mb.ctx.with_ty_store(|s| s.struct_def(ty).cloned()) else {
                     type_error(ty);
                     return None;
@@ -386,7 +402,7 @@ impl BuildCtx {
                 Some(GvInitializer::make_struct(elems))
             }
 
-            &ast::GvValueKind::Error => {
+            &ast::GvInitializerKind::Error => {
                 unreachable!();
             }
         }

@@ -65,7 +65,7 @@ impl WriteWithFunc for ValueId {
                     .func
                     .dfg
                     .ctx
-                    .with_gv_store(|s| write!(w, "%{}", s.gv_data(*gv).symbol)),
+                    .with_gv_store(|s| write!(w, "${}", s.gv_data(*gv).symbol)),
 
                 Value::Undef { ty } => {
                     write!(w, "undef.")?;

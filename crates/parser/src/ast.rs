@@ -164,7 +164,7 @@ impl FromSyntax<Error> for GlobalVariable {
 /// Doesn't include `%` prefix.
 #[derive(Dbg)]
 pub struct GvName {
-    pub name: SmolStr,
+    pub string: SmolStr,
     #[debug(skip)]
     pub span: Span,
 }
@@ -172,7 +172,7 @@ pub struct GvName {
 impl FromSyntax<Error> for GvName {
     fn from_syntax(node: &mut Node<Error>) -> Self {
         Self {
-            name: node.parse_str(Rule::gv_name),
+            string: node.parse_str(Rule::gv_name),
             span: node.span,
         }
     }
@@ -180,7 +180,7 @@ impl FromSyntax<Error> for GvName {
 
 #[derive(Dbg)]
 pub struct GvInitializer {
-    pub kind: GvValueKind,
+    pub kind: GvInitializerKind,
     #[debug(skip)]
     pub span: Span,
 }
@@ -198,8 +198,8 @@ impl FromSyntax<Error> for GvInitializer {
                 }
             }
 
-            Rule::gv_value_array => GvValueKind::Array(node.multi(Rule::gv_initializer)),
-            Rule::gv_value_struct => GvValueKind::Struct(node.multi(Rule::gv_initializer)),
+            Rule::gv_value_array => GvInitializerKind::Array(node.multi(Rule::gv_initializer)),
+            Rule::gv_value_struct => GvInitializerKind::Struct(node.multi(Rule::gv_initializer)),
             _ => unreachable!(),
         };
 
@@ -211,14 +211,14 @@ impl FromSyntax<Error> for GvInitializer {
 }
 
 #[derive(Debug)]
-pub enum GvValueKind {
+pub enum GvInitializerKind {
     Immediate(Immediate),
     Array(Vec<GvInitializer>),
     Struct(Vec<GvInitializer>),
     Error,
 }
 
-impl From<Immediate> for GvValueKind {
+impl From<Immediate> for GvInitializerKind {
     fn from(value: Immediate) -> Self {
         Self::Immediate(value)
     }
@@ -689,6 +689,7 @@ pub enum ValueKind {
     Immediate(Immediate),
     Undef(Type),
     Named(ValueName),
+    Global(GvName),
     Error,
 }
 
@@ -802,10 +803,17 @@ impl FromSyntax<Error> for Value {
                     _ => unreachable!(),
                 }
             }
+
             Rule::undef => {
                 let ty = node.single(Rule::type_name);
                 ValueKind::Undef(ty)
             }
+
+            Rule::global_value => {
+                let name = node.single(Rule::gv_identifier);
+                ValueKind::Global(name)
+            }
+
             _ => unreachable!(),
         };
         Value {
@@ -858,7 +866,7 @@ fn hex_bytes<const N: usize>(mut s: &str) -> Option<[u8; N]> {
     Some(out)
 }
 
-fn parse_i256_gv_value(node: &mut Node<Error>, mut txt: &str, is_hex: bool) -> GvValueKind {
+fn parse_i256_gv_value(node: &mut Node<Error>, mut txt: &str, is_hex: bool) -> GvInitializerKind {
     let s = txt.strip_prefix('-');
     let is_negative = s.is_some();
     txt = s.unwrap_or(txt);
@@ -869,10 +877,10 @@ fn parse_i256_gv_value(node: &mut Node<Error>, mut txt: &str, is_hex: bool) -> G
             if is_negative {
                 i256 = I256::zero().overflowing_sub(i256).0;
             }
-            GvValueKind::Immediate(Immediate::I256(i256))
+            GvInitializerKind::Immediate(Immediate::I256(i256))
         } else {
             node.error(Error::NumberOutOfBounds(node.span));
-            GvValueKind::Error
+            GvInitializerKind::Error
         }
     } else {
         imm_or_err(
@@ -884,7 +892,7 @@ fn parse_i256_gv_value(node: &mut Node<Error>, mut txt: &str, is_hex: bool) -> G
                 }
                 Some(Immediate::I256(i256))
             },
-            GvValueKind::Error,
+            GvInitializerKind::Error,
         )
     }
 }

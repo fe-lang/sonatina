@@ -1,7 +1,6 @@
 ---
 source: crates/parser/tests/syntax.rs
 input_file: test_files/syntax/module/global_variable.sntn
-snapshot_kind: text
 ---
 Module {
     target: Some(
@@ -17,7 +16,7 @@ Module {
     declared_gvs: [
         GlobalVariable {
             name: GvName {
-                name: "ZERO",
+                string: "ZERO",
                 ..
             },
             ty: Type {
@@ -44,7 +43,7 @@ Module {
         },
         GlobalVariable {
             name: GvName {
-                name: "PTR",
+                string: "PTR",
                 ..
             },
             ty: Type {
@@ -76,7 +75,7 @@ Module {
         },
         GlobalVariable {
             name: GvName {
-                name: "ARRAY",
+                string: "ARRAY",
                 ..
             },
             ty: Type {
@@ -149,7 +148,7 @@ Module {
         },
         GlobalVariable {
             name: GvName {
-                name: "FOO",
+                string: "FOO",
                 ..
             },
             ty: Type {
@@ -205,7 +204,7 @@ Module {
         },
         GlobalVariable {
             name: GvName {
-                name: "FOO_ARRAY",
+                string: "FOO_ARRAY",
                 ..
             },
             ty: Type {
@@ -346,6 +345,100 @@ Module {
             packed: false,
         },
     ],
-    functions: [],
+    functions: [
+        Func {
+            signature: FuncSignature {
+                linkage: Public,
+                name: FunctionName {
+                    name: "main",
+                    ..
+                },
+                params: [],
+                ret_type: Some(
+                    Type {
+                        kind: Unit,
+                        ..
+                    },
+                ),
+            },
+            blocks: [
+                Block {
+                    id: BlockId {
+                        id: Some(
+                            0,
+                        ),
+                        ..
+                    },
+                    stmts: [
+                        Stmt {
+                            kind: Assign(
+                                ValueDeclaration(
+                                    ValueName {
+                                        string: "v0",
+                                        ..
+                                    },
+                                    Type {
+                                        kind: Int(
+                                            I256,
+                                        ),
+                                        ..
+                                    },
+                                ),
+                                Inst {
+                                    name: InstName {
+                                        name: "mload",
+                                        ..
+                                    },
+                                    args: [
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Global(
+                                                        GvName {
+                                                            string: "PTR",
+                                                            ..
+                                                        },
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                        InstArg {
+                                            kind: Ty(
+                                                Type {
+                                                    kind: Int(
+                                                        I256,
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                    ],
+                                    ..
+                                },
+                            ),
+                            ..
+                        },
+                        Stmt {
+                            kind: Inst(
+                                Inst {
+                                    name: InstName {
+                                        name: "return",
+                                        ..
+                                    },
+                                    args: [],
+                                    ..
+                                },
+                            ),
+                            ..
+                        },
+                    ],
+                },
+            ],
+            comments: [],
+        },
+    ],
     comments: [],
 }
