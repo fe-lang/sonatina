@@ -36,6 +36,7 @@ pub struct EvmInstSet(
     data::Mload,
     data::Mstore,
     data::Gep,
+    data::GetFunctionPtr,
     data::Alloca,
     data::InsertValue,
     data::ExtractValue,
@@ -102,4 +103,5 @@ pub struct EvmInstSet(
     evm::EvmRevert,
     evm::EvmSelfDestruct,
     evm::EvmMalloc,
+    evm::EvmContractSize,
 );
