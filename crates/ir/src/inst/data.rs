@@ -1,7 +1,10 @@
+use std::io;
+
 use macros::Inst;
 use smallvec::SmallVec;
 
-use crate::{inst::impl_inst_write, module::FuncRef, Type, ValueId};
+use super::{Inst, InstWrite};
+use crate::{inst::impl_inst_write, ir_writer::FuncWriteCtx, module::FuncRef, Type, ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Read))]
@@ -34,7 +37,16 @@ impl_inst_write!(Gep);
 pub struct GetFunctionPtr {
     func: FuncRef,
 }
-impl_inst_write!(GetFunctionPtr);
+impl InstWrite for GetFunctionPtr {
+    fn write(&self, ctx: &FuncWriteCtx, w: &mut dyn io::Write) -> io::Result<()> {
+        let name = self.as_text();
+        ctx.func.ctx().func_sig(self.func, |sig| {
+            let callee = sig.name();
+            write!(w, "{name} %{callee}")
+        })?;
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Write))]
