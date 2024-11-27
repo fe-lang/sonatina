@@ -44,7 +44,7 @@ pub mod test_util {
     }
 
     pub fn dump_func(module: &Module, func_ref: FuncRef) -> String {
-        module.funcs.view(func_ref, |func| {
+        module.func_store.view(func_ref, |func| {
             FuncWriter::new(func_ref, func).dump_string()
         })
     }

@@ -48,6 +48,14 @@ impl GlobalVariableStore {
     pub fn all_gv_data(&self) -> impl Iterator<Item = &GlobalVariableData> {
         self.gv_data.values()
     }
+
+    pub fn len(&self) -> usize {
+        self.gv_data.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.gv_data.is_empty()
+    }
 }
 
 /// An opaque reference to [`GlobalVariableData`].

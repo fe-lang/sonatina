@@ -88,7 +88,7 @@ mod test {
         let module = mb.build();
         let func_ref = module.funcs()[0];
 
-        let err_msg = module.funcs.view(func_ref, |func| {
+        let err_msg = module.func_store.view(func_ref, |func| {
             let inst = func.layout.iter_inst(b0).next().unwrap();
 
             let trace_info = TraceInfoBuilder::new(func_ref)
