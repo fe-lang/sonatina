@@ -125,7 +125,7 @@ impl<'a> FileChecker<'a> {
     }
 
     fn check(&mut self) -> Vec<FileCheckResult> {
-        let mut parsed_module = match self.parse_file() {
+        let parsed_module = match self.parse_file() {
             Ok(module) => module,
             Err(msg) => return vec![FileCheckResult::new(self.file_path.to_owned(), Err(msg))],
         };
@@ -133,23 +133,22 @@ impl<'a> FileChecker<'a> {
         let module = &parsed_module.module;
 
         module
-            .iter_functions()
-            .map(|func_ref| self.check_func(&mut parsed_module, func_ref))
+            .funcs()
+            .into_iter()
+            .map(|func_ref| self.check_func(&parsed_module, func_ref))
             .collect()
     }
 
-    fn check_func(
-        &mut self,
-        parsed_module: &mut ParsedModule,
-        func_ref: FuncRef,
-    ) -> FileCheckResult {
-        let func = &mut parsed_module.module.funcs[func_ref];
+    fn check_func(&mut self, parsed_module: &ParsedModule, func_ref: FuncRef) -> FileCheckResult {
         let comments = &parsed_module.debug.func_comments[func_ref];
 
-        self.transformer.transform(func);
-        let func_ir =
-            FuncWriter::with_debug_provider(func, func_ref, &parsed_module.debug).dump_string();
-
+        let (func_ir, func_name) = parsed_module.module.funcs.modify(func_ref, |func| {
+            self.transformer.transform(func);
+            (
+                FuncWriter::with_debug_provider(func, func_ref, &parsed_module.debug).dump_string(),
+                func.sig.name().to_string(),
+            )
+        });
         let checker = self.build_checker(comments);
 
         let result = match checker.explain(&func_ir, &()) {
@@ -159,7 +158,7 @@ impl<'a> FileChecker<'a> {
         };
 
         let mut test_path = self.file_path.to_owned();
-        test_path.push(func.sig.name());
+        test_path.push(func_name);
         FileCheckResult::new(test_path, result)
     }
 

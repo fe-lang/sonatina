@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/errors.rs
-expression: s
-input_file: crates/parser/test_files/errors/bad_target.sntn
+input_file: test_files/errors/bad_target.sntn
+snapshot_kind: text
 ---
 error: parse error
 --> bad_target.sntn:0:11

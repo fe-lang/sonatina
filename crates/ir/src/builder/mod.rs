@@ -28,17 +28,24 @@ pub mod test_util {
         Evm::new(triple)
     }
 
-    pub fn test_func_builder(args: &[Type], ret_ty: Type) -> (Evm, FunctionBuilder<InstInserter>) {
+    pub fn test_module_builder() -> ModuleBuilder {
         let ctx = ModuleCtx::new(&test_isa());
-        let mut mb = ModuleBuilder::new(ctx);
+        ModuleBuilder::new(ctx)
+    }
 
+    pub fn test_func_builder(
+        mb: &ModuleBuilder,
+        args: &[Type],
+        ret_ty: Type,
+    ) -> (Evm, FunctionBuilder<InstInserter>) {
         let sig = Signature::new("test_func", Linkage::Public, args, ret_ty);
         let func_ref = mb.declare_function(sig);
-        (test_isa(), mb.build_function(func_ref))
+        (test_isa(), mb.func_builder(func_ref))
     }
 
     pub fn dump_func(module: &Module, func_ref: FuncRef) -> String {
-        let func = &module.funcs[func_ref];
-        FuncWriter::new(func, func_ref).dump_string()
+        module.funcs.view(func_ref, |func| {
+            FuncWriter::new(func_ref, func).dump_string()
+        })
     }
 }

@@ -1,0 +1,9 @@
+target = "evm-ethereum-cancun"
+
+type @foo = { i8, i16, *i64 };
+type @bar = { i16, @foo };
+
+global private i256 $IMM = [0]
+global public const [i8; 1] $ARRAY = [1, 2]
+global public const @foo $FOO = { 1, 2 }
+global public const @bar $BAR = { 1, {1, 2} }

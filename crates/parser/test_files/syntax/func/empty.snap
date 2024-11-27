@@ -1,10 +1,11 @@
 ---
-source: crates/parser2/tests/syntax.rs
-expression: s
-input_file: crates/parser2/test_files/syntax/func/empty.sntn
+source: crates/parser/tests/syntax.rs
+input_file: test_files/syntax/func/empty.sntn
+snapshot_kind: text
 ---
-function "func %foo() {}"
-  function_signature "func %foo() "
+function "func private %foo() {}"
+  function_signature "func private %foo() "
+    linkage "private"
     function_identifier "%foo"
       function_name "foo"
     function_params "()"

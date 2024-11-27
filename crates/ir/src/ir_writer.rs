@@ -43,10 +43,12 @@ impl<'a> ModuleWriter<'a> {
             io::Result::Ok(())
         })?;
 
-        for func_ref in self.module.funcs.keys() {
-            let func = &self.module.funcs[func_ref];
-            let mut writer = FuncWriter::with_debug_provider(func, func_ref, self.dbg);
-            writer.write(&mut *w)?;
+        for func_ref in self.module.funcs.funcs() {
+            self.module.funcs.view(func_ref, |func| {
+                let mut writer = FuncWriter::with_debug_provider(func, func_ref, self.dbg);
+                writer.write(&mut *w)
+            })?;
+            writeln!(w)?;
         }
 
         Ok(())
@@ -97,7 +99,7 @@ pub struct FuncWriter<'a> {
 }
 
 impl<'a> FuncWriter<'a> {
-    pub fn new(func: &'a Function, func_ref: FuncRef) -> Self {
+    pub fn new(func_ref: FuncRef, func: &'a Function) -> Self {
         Self::with_debug_provider(func, func_ref, &DEFAULT_PROVIDER)
     }
 
@@ -131,8 +133,12 @@ impl<'a> FuncWriter<'a> {
         writeln!(w, " {{")?;
 
         self.level += 1;
+
         for block in self.ctx.func.layout.iter_block() {
             self.write_block_with_inst(block, &mut *w)?;
+            if !self.ctx.func.layout.is_last_block(block) {
+                writeln!(w)?;
+            }
         }
 
         self.level -= 1;
@@ -155,7 +161,7 @@ impl<'a> FuncWriter<'a> {
         }
         self.leave();
 
-        self.newline(w)
+        Ok(())
     }
 
     fn write_inst_in_block(&mut self, inst: InstId, w: &mut impl io::Write) -> io::Result<()> {
@@ -167,10 +173,6 @@ impl<'a> FuncWriter<'a> {
 
     fn indent(&self, mut w: impl io::Write) -> io::Result<()> {
         write!(w, "{}", " ".repeat(self.level as usize * 4))
-    }
-
-    fn newline(&self, mut w: impl io::Write) -> io::Result<()> {
-        writeln!(w)
     }
 
     fn enter(&mut self, mut w: impl io::Write) -> io::Result<()> {

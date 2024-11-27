@@ -139,16 +139,29 @@ impl InstStruct {
     }
 
     fn make_ctor(&self) -> proc_macro2::TokenStream {
-        let ctor_args = self.fields.iter().map(|f| {
-            let ident = &f.ident;
-            let ty = &f.ty;
-            quote! {#ident: #ty}
-        });
+        let ctor_args: Vec<_> = self
+            .fields
+            .iter()
+            .map(|f| {
+                let ident = &f.ident;
+                let ty = &f.ty;
+                quote! {#ident: #ty}
+            })
+            .collect();
 
-        let field_names = self.fields.iter().map(|f| &f.ident);
+        let field_names: Vec<_> = self.fields.iter().map(|f| &f.ident).collect();
+        let has_inst_method = ty_name_to_method_name(&self.struct_name);
         quote! {
             #[allow(clippy::too_many_arguments)]
             pub fn new(hi: &dyn crate::HasInst<Self>, #(#ctor_args),*) -> Self {
+                Self {
+                    #(#field_names: #field_names),*
+                }
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn new_unchecked(isb: &dyn crate::InstSetBase, #(#ctor_args),*) -> Self {
+                isb.#has_inst_method().unwrap();
                 Self {
                     #(#field_names: #field_names),*
                 }
@@ -182,8 +195,8 @@ impl InstStruct {
         let struct_name = &self.struct_name;
         let has_inst_method = ty_name_to_method_name(struct_name);
         quote! {
-            impl crate::InstDowncast for &#struct_name {
-                fn downcast(isb: &dyn crate::InstSetBase, inst: &dyn crate::Inst) -> Option<Self> {
+            impl<'a> crate::InstDowncast<'a> for &'a #struct_name {
+                fn downcast(isb: &dyn crate::InstSetBase, inst: &'a dyn crate::Inst) -> Option<Self> {
                     let hi = isb.#has_inst_method()?;
                     if hi.is(inst) {
                         unsafe { Some(&*(inst as *const dyn crate::Inst as *const #struct_name)) }
@@ -193,8 +206,8 @@ impl InstStruct {
                 }
             }
 
-            impl crate::InstDowncastMut for &mut #struct_name {
-                fn downcast_mut(isb: &dyn crate::InstSetBase, inst: &mut dyn crate::Inst) -> Option<Self> {
+            impl<'a> crate::InstDowncastMut<'a> for &'a mut #struct_name {
+                fn downcast_mut(isb: &dyn crate::InstSetBase, inst: &'a mut dyn crate::Inst) -> Option<Self> {
                     let hi = isb.#has_inst_method()?;
                     if hi.is(inst) {
                         unsafe { Some(&mut *(inst as *mut dyn crate::Inst as *mut #struct_name)) }

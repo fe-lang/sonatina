@@ -235,7 +235,8 @@ mod tests {
 
     #[test]
     fn dom_tree_if_else() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let entry_block = builder.append_block();
@@ -257,12 +258,12 @@ mod tests {
         builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        let (dom_tree, df) = module.funcs.view(func_ref, calc_dom);
 
-        let (dom_tree, df) = calc_dom(func);
         assert_eq!(dom_tree.idom_of(entry_block), None);
         assert_eq!(dom_tree.idom_of(then_block), Some(entry_block));
         assert_eq!(dom_tree.idom_of(else_block), Some(entry_block));
@@ -276,7 +277,8 @@ mod tests {
 
     #[test]
     fn unreachable_edge() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();
@@ -302,12 +304,12 @@ mod tests {
         builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        let (dom_tree, df) = module.funcs.view(func_ref, calc_dom);
 
-        let (dom_tree, df) = calc_dom(func);
         assert_eq!(dom_tree.idom_of(a), None);
         assert_eq!(dom_tree.idom_of(b), Some(a));
         assert_eq!(dom_tree.idom_of(c), Some(a));
@@ -324,7 +326,8 @@ mod tests {
 
     #[test]
     fn dom_tree_complex() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();
@@ -382,12 +385,12 @@ mod tests {
         builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        let (dom_tree, df) = module.funcs.view(func_ref, calc_dom);
 
-        let (dom_tree, df) = calc_dom(func);
         assert_eq!(dom_tree.idom_of(a), None);
         assert_eq!(dom_tree.idom_of(b), Some(a));
         assert_eq!(dom_tree.idom_of(c), Some(a));
@@ -417,7 +420,8 @@ mod tests {
 
     #[test]
     fn dom_tree_br_table() {
-        let (evm, mut builder) = test_func_builder(&[], Type::Unit);
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
         let is = evm.inst_set();
 
         let a = builder.append_block();
@@ -451,12 +455,12 @@ mod tests {
         builder.insert_inst_no_result_with(|| Return::new(is, None));
 
         builder.seal_all();
+        builder.finish();
 
-        let module = builder.finish().build();
-        let func_ref = module.iter_functions().next().unwrap();
-        let func = &module.funcs[func_ref];
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        let (dom_tree, df) = module.funcs.view(func_ref, calc_dom);
 
-        let (dom_tree, df) = calc_dom(func);
         assert_eq!(dom_tree.idom_of(a), None);
         assert_eq!(dom_tree.idom_of(b), Some(a));
         assert_eq!(dom_tree.idom_of(c), Some(a));

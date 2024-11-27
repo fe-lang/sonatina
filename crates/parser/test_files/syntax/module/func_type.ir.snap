@@ -1,11 +1,10 @@
 ---
 source: crates/parser/tests/syntax.rs
-input_file: test_files/syntax/module/newlines.sntn
+input_file: test_files/syntax/module/func_type.sntn
 snapshot_kind: text
 ---
 target = evm-ethereum-london
-func public %main() -> unit {
+func public %higher_order(v0.*(i256, i256) -> i32) -> unit {
     block0:
-        v0.i8 = add 1.i8 2.i8;
         return;
 }

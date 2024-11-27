@@ -1,0 +1,46 @@
+---
+source: crates/parser/tests/syntax.rs
+input_file: test_files/syntax/module/func_type.sntn
+snapshot_kind: text
+---
+module "target = "evm-ethereum-london"
+
+func public %higher_order(v0.*(i256, i256) -> i32) {
+    block0:
+        return;
+}
+"
+  target_triple "evm-ethereum-london"
+  function "func public %higher_order(v0.*(i256, i256) -> i32) {
+      block0:
+          return;
+  }"
+    function_signature "func public %higher_order(v0.*(i256, i256) -> i32) "
+      linkage "public"
+      function_identifier "%higher_order"
+        function_name "higher_order"
+      function_params "(v0.*(i256, i256) -> i32)"
+        value_declaration "v0.*(i256, i256) -> i32"
+          value_name "v0"
+          type_name "*(i256, i256) -> i32"
+            ptr_type "*(i256, i256) -> i32"
+              type_name "(i256, i256) -> i32"
+                function_type "(i256, i256) -> i32"
+                  function_type_arg "(i256, i256)"
+                    type_name "i256"
+                      primitive_type "i256"
+                    type_name "i256"
+                      primitive_type "i256"
+                  function_ret_type "-> i32"
+                    type_name "i32"
+                      primitive_type "i32"
+    block "block0:
+            return;"
+      block_ident "block0"
+        block_number "0"
+      stmt "return;"
+        inst_stmt "return"
+          inst "return"
+            inst_name "return"
+              inst_identifier "return"
+  EOI ""

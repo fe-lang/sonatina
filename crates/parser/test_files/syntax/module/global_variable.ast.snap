@@ -1,0 +1,444 @@
+---
+source: crates/parser/tests/syntax.rs
+input_file: test_files/syntax/module/global_variable.sntn
+---
+Module {
+    target: Some(
+        TargetTriple {
+            architecture: Evm,
+            vendor: Ethereum,
+            operating_system: Evm(
+                Cancun,
+            ),
+        },
+    ),
+    declared_functions: [],
+    declared_gvs: [
+        GlobalVariable {
+            name: GvName {
+                string: "ZERO",
+                ..
+            },
+            ty: Type {
+                kind: Int(
+                    I256,
+                ),
+                ..
+            },
+            linkage: Private,
+            is_const: true,
+            init: Some(
+                GvInitializer {
+                    kind: Immediate(
+                        I256(
+                            I256 {
+                                is_negative: false,
+                                abs: 0,
+                            },
+                        ),
+                    ),
+                    ..
+                },
+            ),
+        },
+        GlobalVariable {
+            name: GvName {
+                string: "PTR",
+                ..
+            },
+            ty: Type {
+                kind: Ptr(
+                    Type {
+                        kind: Int(
+                            I256,
+                        ),
+                        ..
+                    },
+                ),
+                ..
+            },
+            linkage: Public,
+            is_const: false,
+            init: Some(
+                GvInitializer {
+                    kind: Immediate(
+                        I256(
+                            I256 {
+                                is_negative: false,
+                                abs: 1,
+                            },
+                        ),
+                    ),
+                    ..
+                },
+            ),
+        },
+        GlobalVariable {
+            name: GvName {
+                string: "ARRAY",
+                ..
+            },
+            ty: Type {
+                kind: Array(
+                    Type {
+                        kind: Int(
+                            I8,
+                        ),
+                        ..
+                    },
+                    4,
+                ),
+                ..
+            },
+            linkage: Private,
+            is_const: false,
+            init: Some(
+                GvInitializer {
+                    kind: Array(
+                        [
+                            GvInitializer {
+                                kind: Immediate(
+                                    I256(
+                                        I256 {
+                                            is_negative: false,
+                                            abs: 0,
+                                        },
+                                    ),
+                                ),
+                                ..
+                            },
+                            GvInitializer {
+                                kind: Immediate(
+                                    I256(
+                                        I256 {
+                                            is_negative: false,
+                                            abs: 1,
+                                        },
+                                    ),
+                                ),
+                                ..
+                            },
+                            GvInitializer {
+                                kind: Immediate(
+                                    I256(
+                                        I256 {
+                                            is_negative: false,
+                                            abs: 2,
+                                        },
+                                    ),
+                                ),
+                                ..
+                            },
+                            GvInitializer {
+                                kind: Immediate(
+                                    I256(
+                                        I256 {
+                                            is_negative: false,
+                                            abs: 3,
+                                        },
+                                    ),
+                                ),
+                                ..
+                            },
+                        ],
+                    ),
+                    ..
+                },
+            ),
+        },
+        GlobalVariable {
+            name: GvName {
+                string: "FOO",
+                ..
+            },
+            ty: Type {
+                kind: Struct(
+                    "foo",
+                ),
+                ..
+            },
+            linkage: Private,
+            is_const: false,
+            init: Some(
+                GvInitializer {
+                    kind: Struct(
+                        [
+                            GvInitializer {
+                                kind: Immediate(
+                                    I256(
+                                        I256 {
+                                            is_negative: false,
+                                            abs: 1,
+                                        },
+                                    ),
+                                ),
+                                ..
+                            },
+                            GvInitializer {
+                                kind: Immediate(
+                                    I256(
+                                        I256 {
+                                            is_negative: false,
+                                            abs: 2,
+                                        },
+                                    ),
+                                ),
+                                ..
+                            },
+                            GvInitializer {
+                                kind: Immediate(
+                                    I256(
+                                        I256 {
+                                            is_negative: false,
+                                            abs: 3,
+                                        },
+                                    ),
+                                ),
+                                ..
+                            },
+                        ],
+                    ),
+                    ..
+                },
+            ),
+        },
+        GlobalVariable {
+            name: GvName {
+                string: "FOO_ARRAY",
+                ..
+            },
+            ty: Type {
+                kind: Array(
+                    Type {
+                        kind: Struct(
+                            "foo",
+                        ),
+                        ..
+                    },
+                    2,
+                ),
+                ..
+            },
+            linkage: Private,
+            is_const: false,
+            init: Some(
+                GvInitializer {
+                    kind: Array(
+                        [
+                            GvInitializer {
+                                kind: Struct(
+                                    [
+                                        GvInitializer {
+                                            kind: Immediate(
+                                                I256(
+                                                    I256 {
+                                                        is_negative: false,
+                                                        abs: 1,
+                                                    },
+                                                ),
+                                            ),
+                                            ..
+                                        },
+                                        GvInitializer {
+                                            kind: Immediate(
+                                                I256(
+                                                    I256 {
+                                                        is_negative: false,
+                                                        abs: 2,
+                                                    },
+                                                ),
+                                            ),
+                                            ..
+                                        },
+                                        GvInitializer {
+                                            kind: Immediate(
+                                                I256(
+                                                    I256 {
+                                                        is_negative: false,
+                                                        abs: 3,
+                                                    },
+                                                ),
+                                            ),
+                                            ..
+                                        },
+                                    ],
+                                ),
+                                ..
+                            },
+                            GvInitializer {
+                                kind: Struct(
+                                    [
+                                        GvInitializer {
+                                            kind: Immediate(
+                                                I256(
+                                                    I256 {
+                                                        is_negative: false,
+                                                        abs: 3,
+                                                    },
+                                                ),
+                                            ),
+                                            ..
+                                        },
+                                        GvInitializer {
+                                            kind: Immediate(
+                                                I256(
+                                                    I256 {
+                                                        is_negative: false,
+                                                        abs: 4,
+                                                    },
+                                                ),
+                                            ),
+                                            ..
+                                        },
+                                        GvInitializer {
+                                            kind: Immediate(
+                                                I256(
+                                                    I256 {
+                                                        is_negative: false,
+                                                        abs: 5,
+                                                    },
+                                                ),
+                                            ),
+                                            ..
+                                        },
+                                    ],
+                                ),
+                                ..
+                            },
+                        ],
+                    ),
+                    ..
+                },
+            ),
+        },
+    ],
+    struct_types: [
+        Struct {
+            name: StructName(
+                "foo",
+            ),
+            fields: [
+                Type {
+                    kind: Int(
+                        I8,
+                    ),
+                    ..
+                },
+                Type {
+                    kind: Int(
+                        I16,
+                    ),
+                    ..
+                },
+                Type {
+                    kind: Ptr(
+                        Type {
+                            kind: Int(
+                                I64,
+                            ),
+                            ..
+                        },
+                    ),
+                    ..
+                },
+            ],
+            packed: false,
+        },
+    ],
+    functions: [
+        Func {
+            signature: FuncSignature {
+                linkage: Public,
+                name: FunctionName {
+                    name: "main",
+                    ..
+                },
+                params: [],
+                ret_type: Some(
+                    Type {
+                        kind: Unit,
+                        ..
+                    },
+                ),
+            },
+            blocks: [
+                Block {
+                    id: BlockId {
+                        id: Some(
+                            0,
+                        ),
+                        ..
+                    },
+                    stmts: [
+                        Stmt {
+                            kind: Assign(
+                                ValueDeclaration(
+                                    ValueName {
+                                        string: "v0",
+                                        ..
+                                    },
+                                    Type {
+                                        kind: Int(
+                                            I256,
+                                        ),
+                                        ..
+                                    },
+                                ),
+                                Inst {
+                                    name: InstName {
+                                        name: "mload",
+                                        ..
+                                    },
+                                    args: [
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Global(
+                                                        GvName {
+                                                            string: "PTR",
+                                                            ..
+                                                        },
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                        InstArg {
+                                            kind: Ty(
+                                                Type {
+                                                    kind: Int(
+                                                        I256,
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                    ],
+                                    ..
+                                },
+                            ),
+                            ..
+                        },
+                        Stmt {
+                            kind: Inst(
+                                Inst {
+                                    name: InstName {
+                                        name: "return",
+                                        ..
+                                    },
+                                    args: [],
+                                    ..
+                                },
+                            ),
+                            ..
+                        },
+                    ],
+                },
+            ],
+            comments: [],
+        },
+    ],
+    comments: [],
+}

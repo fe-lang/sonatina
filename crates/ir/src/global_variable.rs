@@ -33,7 +33,7 @@ impl GlobalVariableStore {
         self.symbols.get(symbol).copied()
     }
 
-    pub fn init_data(&self, gv: GlobalVariable) -> Option<&ConstantValue> {
+    pub fn init_data(&self, gv: GlobalVariable) -> Option<&GvInitializer> {
         self.gv_data[gv].data.as_ref()
     }
 
@@ -55,6 +55,12 @@ impl GlobalVariableStore {
 pub struct GlobalVariable(pub u32);
 cranelift_entity::entity_impl!(GlobalVariable);
 
+impl GlobalVariable {
+    pub fn ty(self, module: &ModuleCtx) -> Type {
+        module.with_gv_store(|s| s.ty(self))
+    }
+}
+
 impl WriteWithModule for GlobalVariable {
     fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
         module.with_gv_store(|s| s.gv_data(*self).write(module, w))
@@ -67,7 +73,7 @@ pub struct GlobalVariableData {
     pub ty: Type,
     pub linkage: Linkage,
     pub is_const: bool,
-    pub data: Option<ConstantValue>,
+    pub data: Option<GvInitializer>,
 }
 
 impl GlobalVariableData {
@@ -76,7 +82,7 @@ impl GlobalVariableData {
         ty: Type,
         linkage: Linkage,
         is_const: bool,
-        data: Option<ConstantValue>,
+        data: Option<GvInitializer>,
     ) -> Self {
         Self {
             symbol,
@@ -87,7 +93,7 @@ impl GlobalVariableData {
         }
     }
 
-    pub fn constant(symbol: String, ty: Type, linkage: Linkage, data: ConstantValue) -> Self {
+    pub fn constant(symbol: String, ty: Type, linkage: Linkage, data: GvInitializer) -> Self {
         Self {
             symbol,
             ty,
@@ -100,48 +106,42 @@ impl GlobalVariableData {
 
 impl WriteWithModule for GlobalVariableData {
     fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
-        let GlobalVariableData {
-            symbol: _,
-            ty,
-            linkage,
-            is_const,
-            data,
-        } = &self;
-
-        ty.write(module, &mut *w)?;
-        if *is_const {
-            write!(w, " const")?;
+        write!(w, "global {} ", self.linkage)?;
+        if self.is_const {
+            write!(w, "const ")?;
         }
-        write!(w, " {linkage}")?;
-        if let Some(data) = data {
-            write!(w, " {data}")?;
+        self.ty.write(module, &mut *w)?;
+
+        write!(w, " ${}", self.symbol)?;
+        if let Some(data) = &self.data {
+            write!(w, " = {data}")?;
         }
         Ok(())
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ConstantValue {
+pub enum GvInitializer {
     Immediate(Immediate),
-    Array(Vec<ConstantValue>),
-    Struct(Vec<ConstantValue>),
+    Array(Vec<GvInitializer>),
+    Struct(Vec<GvInitializer>),
 }
 
-impl ConstantValue {
+impl GvInitializer {
     pub fn make_imm(data: impl Into<Immediate>) -> Self {
         Self::Immediate(data.into())
     }
 
-    pub fn make_array(data: Vec<ConstantValue>) -> Self {
+    pub fn make_array(data: Vec<GvInitializer>) -> Self {
         Self::Array(data)
     }
 
-    pub fn make_struct(data: Vec<ConstantValue>) -> Self {
+    pub fn make_struct(data: Vec<GvInitializer>) -> Self {
         Self::Struct(data)
     }
 }
 
-impl fmt::Display for ConstantValue {
+impl fmt::Display for GvInitializer {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Immediate(data) => write!(f, "{}", data),
@@ -178,7 +178,7 @@ mod test {
     fn display_gv() {
         let ctx = ModuleCtx::new(&test_isa());
 
-        let cv = ConstantValue::make_imm(1618i32);
+        let cv = GvInitializer::make_imm(1618i32);
         let gv = ctx.with_gv_store_mut(|s| {
             s.make_gv(GlobalVariableData::new(
                 String::from("foo"),
@@ -189,17 +189,17 @@ mod test {
             ))
         });
 
-        assert_eq!(gv.dump_string(&ctx), "i32 const public 1618");
+        assert_eq!(gv.dump_string(&ctx), "global public const i32 $foo = 1618");
     }
 
     #[test]
     fn display_gv_array() {
         let ctx = ModuleCtx::new(&test_isa());
 
-        let cv0 = ConstantValue::make_imm(8i32);
-        let cv1 = ConstantValue::make_imm(4i32);
-        let cv2 = ConstantValue::make_imm(2i32);
-        let const_arr = ConstantValue::make_array(vec![cv0, cv1, cv2]);
+        let cv0 = GvInitializer::make_imm(8i32);
+        let cv1 = GvInitializer::make_imm(4i32);
+        let cv2 = GvInitializer::make_imm(2i32);
+        let const_arr = GvInitializer::make_array(vec![cv0, cv1, cv2]);
         let ty = ctx.with_ty_store_mut(|s| s.make_array(Type::I32, 3));
         let gv = ctx.with_gv_store_mut(|s| {
             s.make_gv(GlobalVariableData::new(
@@ -211,6 +211,9 @@ mod test {
             ))
         });
 
-        assert_eq!(gv.dump_string(&ctx), "[i32; 3] const private [8, 4, 2]");
+        assert_eq!(
+            gv.dump_string(&ctx),
+            "global private const [i32; 3] $foo = [8, 4, 2]"
+        );
     }
 }

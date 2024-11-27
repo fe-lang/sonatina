@@ -18,16 +18,32 @@ cranelift_entity::entity_impl!(ValueId);
 #[derive(Debug, Clone)]
 pub enum Value {
     /// The value is defined by an instruction.
-    Inst { inst: InstId, ty: Type },
+    Inst {
+        inst: InstId,
+        ty: Type,
+    },
 
     /// The value is a function argument.
-    Arg { ty: Type, idx: usize },
+    Arg {
+        ty: Type,
+        idx: usize,
+    },
 
     /// The value is immediate value.
-    Immediate { imm: Immediate, ty: Type },
+    Immediate {
+        imm: Immediate,
+        ty: Type,
+    },
 
     /// The value is global value.
-    Global { gv: GlobalVariable, ty: Type },
+    Global {
+        gv: GlobalVariable,
+        ty: Type,
+    },
+
+    Undef {
+        ty: Type,
+    },
 }
 
 impl WriteWithFunc for ValueId {
@@ -44,12 +60,19 @@ impl WriteWithFunc for ValueId {
                     write!(w, "{}.", imm)?;
                     ty.write(ctx.func.ctx(), w)
                 }
+
                 Value::Global { gv, .. } => ctx
                     .func
                     .dfg
                     .ctx
-                    .with_gv_store(|s| write!(w, "%{}", s.gv_data(*gv).symbol)),
-                _ => {
+                    .with_gv_store(|s| write!(w, "${}", s.gv_data(*gv).symbol)),
+
+                Value::Undef { ty } => {
+                    write!(w, "undef.")?;
+                    ty.write(ctx.func.ctx(), w)
+                }
+
+                Value::Arg { .. } | Value::Inst { .. } => {
                     write!(w, "v{}", self.0)
                 }
             }
@@ -90,7 +113,7 @@ impl Immediate {
     }
 
     pub fn urem(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, |lhs, rhs| (lhs.to_u256() / rhs.to_u256()).into())
+        self.apply_binop(rhs, |lhs, rhs| (lhs.to_u256() % rhs.to_u256()).into())
     }
 
     pub fn srem(self, rhs: Self) -> Self {

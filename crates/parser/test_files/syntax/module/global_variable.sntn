@@ -1,0 +1,15 @@
+target = "evm-ethereum-cancun"
+
+type @foo = { i8, i16, *i64 };
+
+global private const i256 $ZERO = 0
+global public *i256 $PTR = 1
+global private [i8; 4] $ARRAY = [0, 1, 2, 3]
+global private @foo $FOO = {1, 2, 3}
+global private [@foo; 2] $FOO_ARRAY = [{1, 2, 3}, {3, 4, 5}]
+
+func public %main() -> unit {
+    block0: 
+        v0.i256 = mload $PTR i256;
+        return;
+}

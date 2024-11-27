@@ -63,13 +63,13 @@ impl Interpret for Gep {
 
             match cmpd_data {
                 CompoundTypeData::Array { elem, .. } => {
-                    let elem_size = state.dfg().ctx.size_of(elem);
+                    let elem_size = state.dfg().ctx.size_of_unchecked(elem);
                     offset += elem_size * idx_value;
                     current_ty = elem;
                 }
 
                 CompoundTypeData::Ptr(ty) => {
-                    let size = state.dfg().ctx.size_of(ty);
+                    let size = state.dfg().ctx.size_of_unchecked(ty);
                     offset += size * idx_value;
                     current_ty = ty;
                 }
@@ -78,12 +78,18 @@ impl Interpret for Gep {
                     let mut local_offset = 0;
                     for i in 0..idx_value {
                         let field_ty = s.fields[i];
-                        let size = state.dfg().ctx.size_of(field_ty);
-                        let align = state.dfg().ctx.align_of(field_ty);
+                        let size = state.dfg().ctx.size_of_unchecked(field_ty);
+                        let align = state.dfg().ctx.align_of_unchecked(field_ty);
                         local_offset += align_to(offset + size, align);
                     }
                     offset += local_offset;
                     current_ty = s.fields[idx_value];
+                }
+
+                CompoundTypeData::Func { .. } => {
+                    panic!(
+                        "Invalid GEP: indexing into a function type with more indices remaining"
+                    );
                 }
             }
         }
@@ -97,6 +103,60 @@ impl Interpret for Gep {
 impl Interpret for Alloca {
     fn interpret(&self, state: &mut dyn State) -> EvalValue {
         state.alloca(*self.ty())
+    }
+}
+
+impl Interpret for InsertValue {
+    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+        state.set_action(Action::Continue);
+
+        let dest = state.lookup_val(*self.dest());
+        let ty = state.dfg().value_ty(*self.dest());
+
+        let mut fields = match dest {
+            EvalValue::Aggregate { fields, .. } => fields.clone(),
+
+            EvalValue::Undef => {
+                let len = match ty.resolve_compound(&state.dfg().ctx).unwrap() {
+                    CompoundTypeData::Array { len, .. } => len,
+                    CompoundTypeData::Struct(s) => s.fields.len(),
+                    CompoundTypeData::Ptr(_) => unreachable!(),
+                    CompoundTypeData::Func { .. } => unreachable!(),
+                };
+                vec![EvalValue::Undef; len]
+            }
+
+            EvalValue::Imm(_) => {
+                unreachable!()
+            }
+        };
+
+        let idx = state.lookup_val(*self.idx()).as_imm().unwrap().as_usize();
+        fields[idx] = state.lookup_val(*self.value());
+
+        EvalValue::Aggregate { fields, ty }
+    }
+}
+
+impl Interpret for ExtractValue {
+    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+        state.set_action(Action::Continue);
+
+        let dest = state.lookup_val(*self.dest());
+        let dest = match dest {
+            EvalValue::Aggregate { fields, .. } => fields,
+
+            EvalValue::Undef => {
+                return EvalValue::Undef;
+            }
+
+            EvalValue::Imm(_) => {
+                unreachable!()
+            }
+        };
+
+        let idx = state.lookup_val(*self.idx()).as_imm().unwrap().as_usize();
+        dest.into_iter().nth(idx).unwrap()
     }
 }
 

@@ -7,10 +7,11 @@ use ir::{
     self,
     builder::{FunctionBuilder, ModuleBuilder},
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    ir_writer::DebugProvider,
+    global_variable::GvInitializer,
+    ir_writer::{DebugProvider, WriteWithModule},
     isa::evm::Evm,
-    module::{FuncRef, ModuleCtx},
-    Function, Module, Signature,
+    module::{FuncRef, Module, ModuleCtx},
+    Function, GlobalVariable, GlobalVariableData, Immediate, Signature, Type,
 };
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smol_str::SmolStr;
@@ -36,7 +37,7 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
     let ast = ast::parse(input)?;
 
     let module_ctx = module_ctx_from_triple(ast.target.unwrap());
-    let mut builder = ModuleBuilder::new(module_ctx);
+    let builder = ModuleBuilder::new(module_ctx);
 
     let mut ctx = BuildCtx::default();
 
@@ -44,21 +45,29 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
         let fields = st
             .fields
             .iter()
-            .map(|t| ctx.type_(&mut builder, t))
+            .map(|t| ctx.type_(&builder, t))
             .collect::<Vec<_>>();
         builder.declare_struct_type(&st.name.0, &fields, false);
     }
 
+    for gv in ast.declared_gvs {
+        ctx.declare_gv(&builder, &gv);
+    }
+
     for func in ast.declared_functions {
+        if !ctx.check_duplicated_func(&builder, &func.name) {
+            continue;
+        }
+
         let params = func
             .params
             .iter()
-            .map(|t| ctx.type_(&mut builder, t))
+            .map(|t| ctx.type_(&builder, t))
             .collect::<Vec<_>>();
         let ret_ty = func
             .ret_type
             .as_ref()
-            .map(|t| ctx.type_(&mut builder, t))
+            .map(|t| ctx.type_(&builder, t))
             .unwrap_or(ir::Type::Unit);
 
         let sig = Signature::new(&func.name.name, func.linkage, &params, ret_ty);
@@ -66,17 +75,21 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
     }
 
     for func in ast.functions.iter() {
+        if !ctx.check_duplicated_func(&builder, &func.signature.name) {
+            continue;
+        }
+
         let sig = &func.signature;
         let args = sig
             .params
             .iter()
-            .map(|decl| ctx.type_(&mut builder, &decl.1))
+            .map(|decl| ctx.type_(&builder, &decl.1))
             .collect::<Vec<_>>();
 
         let ret_ty = sig
             .ret_type
             .as_ref()
-            .map(|t| ctx.type_(&mut builder, t))
+            .map(|t| ctx.type_(&builder, t))
             .unwrap_or(ir::Type::Unit);
         let sig = Signature::new(&sig.name.name, sig.linkage, &args, ret_ty);
 
@@ -86,8 +99,8 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
     let mut func_comments = SecondaryMap::default();
 
     for func in ast.functions {
-        let id = builder.get_func_ref(&func.signature.name.name).unwrap();
-        builder = ctx.build_func(builder.build_function(id), id, &func);
+        let id = builder.lookup_func(&func.signature.name.name).unwrap();
+        ctx.build_func(builder.func_builder(id), id, &func);
 
         func_comments[id] = func.comments;
     }
@@ -134,7 +147,7 @@ impl BuildCtx {
         mut fb: FunctionBuilder<InstInserter>,
         func_ref: FuncRef,
         func: &ast::Func,
-    ) -> ModuleBuilder {
+    ) {
         self.blocks.clear();
 
         for (i, ValueDeclaration(name, _ty)) in func.signature.params.iter().enumerate() {
@@ -144,7 +157,7 @@ impl BuildCtx {
 
         for stmt in func.blocks.iter().flat_map(|b| b.stmts.iter()) {
             if let StmtKind::Assign(ValueDeclaration(name, ty), _) = &stmt.kind {
-                let ty = self.type_(&mut fb.module_builder, ty);
+                let ty = self.type_(&fb.module_builder, ty);
                 self.declare_value(&mut fb.func, name, ty);
             }
         }
@@ -175,7 +188,7 @@ impl BuildCtx {
                         };
 
                         // xxx cleanup
-                        let ty = self.type_(&mut fb.module_builder, type_);
+                        let ty = self.type_(&fb.module_builder, type_);
                         let value = *self.func_value_names.get_by_right(&name.string).unwrap();
                         let inst_id = fb.cursor.insert_inst_data_dyn(&mut fb.func, inst);
                         fb.func.dfg.values[value] = ir::Value::Inst { inst: inst_id, ty };
@@ -202,11 +215,11 @@ impl BuildCtx {
         let names = std::mem::take(&mut self.func_value_names);
         self.value_names.insert(func_ref, names);
         fb.seal_all();
-        fb.finish()
+        fb.finish();
     }
 
     fn func_ref(&mut self, mb: &mut ModuleBuilder, name: &ast::FunctionName) -> FuncRef {
-        mb.get_func_ref(&name.name).unwrap_or_else(|| {
+        mb.lookup_func(&name.name).unwrap_or_else(|| {
             self.errors.push(Error::Undefined(
                 UndefinedKind::Func(name.name.clone()),
                 name.span,
@@ -263,11 +276,27 @@ impl BuildCtx {
                     ));
                     ir::ValueId(0)
                 }),
+            ast::ValueKind::Undef(ty) => {
+                let ty = self.type_(&fb.module_builder, ty);
+                fb.make_undef_value(ty)
+            }
+            ast::ValueKind::Global(name) => {
+                let Some(gv) = fb.module_builder.lookup_global(&name.string) else {
+                    self.errors.push(Error::Undefined(
+                        UndefinedKind::Value(name.string.clone()),
+                        val.span,
+                    ));
+                    return ir::ValueId(0);
+                };
+
+                fb.make_global_value(gv)
+            }
+
             ast::ValueKind::Error => unreachable!(),
         }
     }
 
-    fn type_(&mut self, mb: &mut ModuleBuilder, t: &ast::Type) -> ir::Type {
+    fn type_(&mut self, mb: &ModuleBuilder, t: &ast::Type) -> ir::Type {
         match &t.kind {
             ast::TypeKind::Int(i) => (*i).into(),
             ast::TypeKind::Ptr(t) => {
@@ -284,7 +313,117 @@ impl BuildCtx {
                     .push(Error::Undefined(UndefinedKind::Type(name.clone()), t.span));
                 ir::Type::Unit
             }),
+
+            ast::TypeKind::Func { args, ret_ty } => {
+                let args: Vec<_> = args.iter().map(|t| self.type_(mb, t)).collect();
+                let ret_ty = self.type_(mb, ret_ty);
+                mb.declare_func_type(&args, ret_ty)
+            }
+
             ast::TypeKind::Error => unreachable!(),
+        }
+    }
+
+    fn check_duplicated_func(&mut self, mb: &ModuleBuilder, name: &ast::FunctionName) -> bool {
+        if mb.lookup_func(&name.name).is_some() {
+            self.errors
+                .push(Error::DuplicatedDeclaration(name.name.clone(), name.span));
+            false
+        } else {
+            true
+        }
+    }
+
+    fn declare_gv(&mut self, mb: &ModuleBuilder, ast_gv: &ast::GlobalVariable) -> GlobalVariable {
+        let name = &ast_gv.name.string;
+        if let Some(gv) = mb.lookup_global(name) {
+            self.errors
+                .push(Error::DuplicatedDeclaration(name.clone(), ast_gv.name.span));
+            return gv;
+        }
+
+        let ty = self.type_(mb, &ast_gv.ty);
+        let linkage = ast_gv.linkage;
+        let is_const = ast_gv.is_const;
+        let init = ast_gv
+            .init
+            .as_ref()
+            .and_then(|init| self.gv_initializer(mb, init, ty));
+        let data = GlobalVariableData::new(name.to_string(), ty, linkage, is_const, init);
+        mb.make_global(data)
+    }
+
+    fn gv_initializer(
+        &mut self,
+        mb: &ModuleBuilder,
+        init: &ast::GvInitializer,
+        ty: Type,
+    ) -> Option<GvInitializer> {
+        let mut type_error = |ty: Type| {
+            let ty = ty.dump_string(&mb.ctx);
+            self.errors.push(Error::TypeError {
+                expected: ty,
+                span: init.span,
+            });
+        };
+
+        match &init.kind {
+            ast::GvInitializerKind::Immediate(imm) => {
+                let ty = if ty.is_integral() {
+                    ty
+                } else if ty.is_pointer(&mb.ctx) {
+                    mb.ctx.type_layout.pointer_repl()
+                } else {
+                    type_error(ty);
+                    return None;
+                };
+
+                // TODO: Integer range check.
+                let inner = imm.as_i256();
+                let imm = Immediate::from_i256(inner, ty);
+                Some(GvInitializer::Immediate(imm))
+            }
+
+            ast::GvInitializerKind::Array(arr) => {
+                let Some((ty, len)) = mb.ctx.with_ty_store(|s| s.array_def(ty)) else {
+                    type_error(ty);
+                    return None;
+                };
+
+                if arr.len() != len {
+                    type_error(ty);
+                    return None;
+                }
+
+                let elems = arr
+                    .iter()
+                    .map(|elem| self.gv_initializer(mb, elem, ty))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(GvInitializer::make_array(elems))
+            }
+
+            ast::GvInitializerKind::Struct(fields) => {
+                let Some(s_data) = mb.ctx.with_ty_store(|s| s.struct_def(ty).cloned()) else {
+                    type_error(ty);
+                    return None;
+                };
+
+                if fields.len() != s_data.fields.len() {
+                    type_error(ty);
+                    return None;
+                }
+
+                let elems = fields
+                    .iter()
+                    .zip(s_data.fields)
+                    .map(|(elem, field_ty)| self.gv_initializer(mb, elem, field_ty))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(GvInitializer::make_struct(elems))
+            }
+
+            &ast::GvInitializerKind::Error => {
+                unreachable!();
+            }
         }
     }
 }

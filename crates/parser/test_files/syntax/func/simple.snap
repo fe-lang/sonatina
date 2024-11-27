@@ -1,18 +1,20 @@
 ---
 source: crates/parser/tests/syntax.rs
-expression: s
-input_file: crates/parser/test_files/syntax/func/simple.sntn
+input_file: test_files/syntax/func/simple.sntn
+snapshot_kind: text
 ---
-function "func %foo() -> i32 {
+function "func private %foo() -> i32 {
 block0:
     jump block1;
 block1:
     v0.i32 = phi (v1 block2) (100.i32 block0);
     v1.i32 = add 1.i32 1.i32;
 block2:
+    v2.i32 = add 1.i32 undef.i32;
     jump block1;
 }"
-  function_signature "func %foo() -> i32"
+  function_signature "func private %foo() -> i32"
+    linkage "private"
     function_identifier "%foo"
       function_name "foo"
     function_params "()"
@@ -79,9 +81,29 @@ block2:
                 decimal "1"
                 primitive_type "i32"
   block "block2:
+      v2.i32 = add 1.i32 undef.i32;
       jump block1;"
     block_ident "block2"
       block_number "2"
+    stmt "v2.i32 = add 1.i32 undef.i32;"
+      assign_stmt "v2.i32 = add 1.i32 undef.i32"
+        value_declaration "v2.i32"
+          value_name "v2"
+          type_name "i32"
+            primitive_type "i32"
+        inst "add 1.i32 undef.i32"
+          inst_name "add"
+            inst_identifier "add"
+          inst_arg "1.i32"
+            value "1.i32"
+              imm_number "1.i32"
+                decimal "1"
+                primitive_type "i32"
+          inst_arg "undef.i32"
+            value "undef.i32"
+              undef "undef.i32"
+                type_name "i32"
+                  primitive_type "i32"
     stmt "jump block1;"
       inst_stmt "jump block1"
         inst "jump block1"
