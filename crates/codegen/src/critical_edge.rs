@@ -165,7 +165,7 @@ mod tests {
         let module = mb.build();
         let func_ref = module.funcs()[0];
         let mut cfg = ControlFlowGraph::default();
-        module.funcs.modify(func_ref, |func| {
+        module.func_store.modify(func_ref, |func| {
             cfg.compute(func);
             CriticalEdgeSplitter::new().run(func, &mut cfg);
         });
@@ -189,7 +189,9 @@ mod tests {
         );
 
         let mut cfg_split = ControlFlowGraph::default();
-        module.funcs.view(func_ref, |func| cfg_split.compute(func));
+        module
+            .func_store
+            .view(func_ref, |func| cfg_split.compute(func));
         assert_eq!(cfg, cfg_split);
     }
 
@@ -233,7 +235,7 @@ mod tests {
         let module = mb.build();
         let func_ref = module.funcs()[0];
         let mut cfg = ControlFlowGraph::default();
-        module.funcs.modify(func_ref, |func| {
+        module.func_store.modify(func_ref, |func| {
             cfg.compute(func);
             CriticalEdgeSplitter::new().run(func, &mut cfg);
         });
@@ -266,7 +268,9 @@ mod tests {
         );
 
         let mut cfg_split = ControlFlowGraph::default();
-        module.funcs.view(func_ref, |func| cfg_split.compute(func));
+        module
+            .func_store
+            .view(func_ref, |func| cfg_split.compute(func));
         assert_eq!(cfg, cfg_split);
     }
 
@@ -300,7 +304,7 @@ mod tests {
         let module = mb.build();
         let func_ref = module.funcs()[0];
         let mut cfg = ControlFlowGraph::default();
-        module.funcs.modify(func_ref, |func| {
+        module.func_store.modify(func_ref, |func| {
             cfg.compute(func);
             CriticalEdgeSplitter::new().run(func, &mut cfg);
         });
@@ -325,7 +329,9 @@ mod tests {
         );
 
         let mut cfg_split = ControlFlowGraph::default();
-        module.funcs.view(func_ref, |func| cfg_split.compute(func));
+        module
+            .func_store
+            .view(func_ref, |func| cfg_split.compute(func));
         assert_eq!(cfg, cfg_split);
     }
 
@@ -367,7 +373,7 @@ mod tests {
         let module = mb.build();
         let func_ref = module.funcs()[0];
         let mut cfg = ControlFlowGraph::default();
-        module.funcs.modify(func_ref, |func| {
+        module.func_store.modify(func_ref, |func| {
             cfg.compute(func);
             CriticalEdgeSplitter::new().run(func, &mut cfg);
         });
@@ -403,7 +409,9 @@ mod tests {
         );
 
         let mut cfg_split = ControlFlowGraph::default();
-        module.funcs.view(func_ref, |func| cfg_split.compute(func));
+        module
+            .func_store
+            .view(func_ref, |func| cfg_split.compute(func));
         assert_eq!(cfg, cfg_split);
     }
 }

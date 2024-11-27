@@ -1,7 +1,10 @@
+use std::io;
+
 use macros::Inst;
 pub mod inst_set;
 
-use crate::{inst::impl_inst_write, module::FuncRef, value::ValueId};
+use super::{Inst, InstWrite};
+use crate::{inst::impl_inst_write, ir_writer::FuncWriteCtx, module::FuncRef, value::ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct EvmUdiv {
@@ -570,4 +573,13 @@ impl_inst_write!(EvmMalloc);
 pub struct EvmContractSize {
     contract: FuncRef,
 }
-impl_inst_write!(EvmContractSize);
+impl InstWrite for EvmContractSize {
+    fn write(&self, ctx: &FuncWriteCtx, w: &mut dyn io::Write) -> io::Result<()> {
+        let name = self.as_text();
+        ctx.func.ctx().func_sig(self.contract, |sig| {
+            let callee = sig.name();
+            write!(w, "{name} %{callee}")
+        })?;
+        Ok(())
+    }
+}

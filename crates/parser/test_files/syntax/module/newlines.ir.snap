@@ -1,9 +1,9 @@
 ---
 source: crates/parser/tests/syntax.rs
 input_file: test_files/syntax/module/newlines.sntn
-snapshot_kind: text
 ---
 target = evm-ethereum-london
+
 func public %main() -> unit {
     block0:
         v0.i8 = add 1.i8 2.i8;

@@ -77,7 +77,7 @@ mod test {
         let func_ref = module.funcs()[0];
 
         let mut text = vec![];
-        module.funcs.view(func_ref, |func| {
+        module.func_store.view(func_ref, |func| {
             render_to(func, func_ref, &mut text).unwrap();
         });
         let text = String::from_utf8(text).unwrap();

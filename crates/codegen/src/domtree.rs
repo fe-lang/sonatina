@@ -262,7 +262,7 @@ mod tests {
 
         let module = mb.build();
         let func_ref = module.funcs()[0];
-        let (dom_tree, df) = module.funcs.view(func_ref, calc_dom);
+        let (dom_tree, df) = module.func_store.view(func_ref, calc_dom);
 
         assert_eq!(dom_tree.idom_of(entry_block), None);
         assert_eq!(dom_tree.idom_of(then_block), Some(entry_block));
@@ -308,7 +308,7 @@ mod tests {
 
         let module = mb.build();
         let func_ref = module.funcs()[0];
-        let (dom_tree, df) = module.funcs.view(func_ref, calc_dom);
+        let (dom_tree, df) = module.func_store.view(func_ref, calc_dom);
 
         assert_eq!(dom_tree.idom_of(a), None);
         assert_eq!(dom_tree.idom_of(b), Some(a));
@@ -389,7 +389,7 @@ mod tests {
 
         let module = mb.build();
         let func_ref = module.funcs()[0];
-        let (dom_tree, df) = module.funcs.view(func_ref, calc_dom);
+        let (dom_tree, df) = module.func_store.view(func_ref, calc_dom);
 
         assert_eq!(dom_tree.idom_of(a), None);
         assert_eq!(dom_tree.idom_of(b), Some(a));
@@ -459,7 +459,7 @@ mod tests {
 
         let module = mb.build();
         let func_ref = module.funcs()[0];
-        let (dom_tree, df) = module.funcs.view(func_ref, calc_dom);
+        let (dom_tree, df) = module.func_store.view(func_ref, calc_dom);
 
         assert_eq!(dom_tree.idom_of(a), None);
         assert_eq!(dom_tree.idom_of(b), Some(a));

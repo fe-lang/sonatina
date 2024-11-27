@@ -25,7 +25,7 @@ impl Machine {
             // Dummy pc
             pc: InstId(0),
             action: Action::Continue,
-            funcs: module.funcs.into_read_only(),
+            funcs: module.func_store.into_read_only(),
             module_ctx: module.ctx,
             memory: Vec::new(),
             free_region: 0,

@@ -214,7 +214,7 @@ mod tests {
 
         let module = mb.build();
         let func_ref = module.funcs()[0];
-        let (post_dom_tree, pdf) = module.funcs.view(func_ref, calc_dom);
+        let (post_dom_tree, pdf) = module.func_store.view(func_ref, calc_dom);
 
         assert!(post_dom_tree.is_reachable(entry_block));
         assert!(post_dom_tree.is_reachable(else_block));
@@ -242,7 +242,7 @@ mod tests {
 
         let module = mb.build();
         let func_ref = module.funcs()[0];
-        let (post_dom_tree, pdf) = module.funcs.view(func_ref, calc_dom);
+        let (post_dom_tree, pdf) = module.func_store.view(func_ref, calc_dom);
 
         assert!(!post_dom_tree.is_reachable(a));
         assert!(test_pdf(&pdf, a, &[]));
@@ -281,7 +281,7 @@ mod tests {
 
         let module = mb.build();
         let func_ref = module.funcs()[0];
-        let (post_dom_tree, pdf) = module.funcs.view(func_ref, calc_dom);
+        let (post_dom_tree, pdf) = module.func_store.view(func_ref, calc_dom);
 
         assert!(post_dom_tree.is_reachable(a));
         assert!(post_dom_tree.is_reachable(b));
@@ -341,7 +341,7 @@ mod tests {
 
         let module = mb.build();
         let func_ref = module.funcs()[0];
-        let (post_dom_tree, pdf) = module.funcs.view(func_ref, calc_dom);
+        let (post_dom_tree, pdf) = module.func_store.view(func_ref, calc_dom);
 
         assert!(post_dom_tree.is_reachable(a));
         assert!(post_dom_tree.is_reachable(b));

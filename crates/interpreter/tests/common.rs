@@ -85,7 +85,7 @@ impl TestCase {
 
     fn parse(module: &ParsedModule, func_ref: FuncRef, comment: &str) -> Result<Self, String> {
         let Some(caps) = PATTERN.captures(comment) else {
-            return module.module.funcs.view(func_ref, |func| {
+            return module.module.func_store.view(func_ref, |func| {
                 let func_name = func.sig.name();
                 Err(format_error(
                     func_name,
@@ -142,7 +142,7 @@ fn parse_value(module: &ParsedModule, func_ref: FuncRef, input: &str) -> Result<
 
         Err(err) => {
             let err = err.to_string();
-            return module.module.funcs.view(func_ref, |func| {
+            return module.module.func_store.view(func_ref, |func| {
                 let func_name = func.sig.name();
                 Err(format_error(func_name, &err.to_string()))
             });

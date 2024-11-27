@@ -306,7 +306,7 @@ mod tests {
 
         let module = mb.build();
         let func_ref = module.funcs()[0];
-        let lpt = &module.funcs.view(func_ref, compute_loop);
+        let lpt = &module.func_store.view(func_ref, compute_loop);
 
         debug_assert_eq!(lpt.loop_num(), 1);
         let lp0 = lpt.loops().next().unwrap();
@@ -371,7 +371,7 @@ mod tests {
 
         let module = mb.build();
         let func_ref = module.funcs()[0];
-        let lpt = &module.funcs.view(func_ref, compute_loop);
+        let lpt = &module.func_store.view(func_ref, compute_loop);
 
         debug_assert_eq!(lpt.loop_num(), 1);
         let lp0 = lpt.loops().next().unwrap();
@@ -413,7 +413,7 @@ mod tests {
 
         let module = mb.build();
         let func_ref = module.funcs()[0];
-        let lpt = &module.funcs.view(func_ref, compute_loop);
+        let lpt = &module.func_store.view(func_ref, compute_loop);
 
         debug_assert_eq!(lpt.loop_num(), 1);
         let lp0 = lpt.loops().next().unwrap();
@@ -485,7 +485,7 @@ mod tests {
 
         let module = mb.build();
         let func_ref = module.funcs()[0];
-        let lpt = &module.funcs.view(func_ref, compute_loop);
+        let lpt = &module.func_store.view(func_ref, compute_loop);
 
         debug_assert_eq!(lpt.loop_num(), 4);
         let l0 = lpt.loop_of_block(b1).unwrap();

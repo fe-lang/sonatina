@@ -23,13 +23,21 @@ impl<'a> ModuleWriter<'a> {
     pub fn write(&mut self, w: &mut impl io::Write) -> io::Result<()> {
         // Write target.
         writeln!(w, "target = {}", self.module.ctx.triple)?;
+        writeln!(w)?;
 
         // Write struct types defined in the module.
         self.module.ctx.with_ty_store(|s| {
+            let mut has_type_def = false;
             for s in s.all_struct_data() {
+                has_type_def = true;
                 s.write(&self.module.ctx, &mut *w)?;
                 writeln!(w)?;
             }
+
+            if has_type_def {
+                writeln!(w)?;
+            }
+
             io::Result::Ok(())
         })?;
 
@@ -40,11 +48,15 @@ impl<'a> ModuleWriter<'a> {
                 writeln!(w)?;
             }
 
+            if !s.is_empty() {
+                writeln!(w)?;
+            }
+
             io::Result::Ok(())
         })?;
 
-        for func_ref in self.module.funcs.funcs() {
-            self.module.funcs.view(func_ref, |func| {
+        for func_ref in self.module.func_store.funcs() {
+            self.module.func_store.view(func_ref, |func| {
                 let mut writer = FuncWriter::with_debug_provider(func, func_ref, self.dbg);
                 writer.write(&mut *w)
             })?;

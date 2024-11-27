@@ -92,7 +92,7 @@ impl ModuleBuilder {
 
     pub fn build(self) -> Module {
         Module {
-            funcs: Arc::into_inner(self.funcs).unwrap(),
+            func_store: Arc::into_inner(self.funcs).unwrap(),
             ctx: self.ctx,
         }
     }

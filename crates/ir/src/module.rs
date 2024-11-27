@@ -13,7 +13,7 @@ use crate::{
 };
 
 pub struct Module {
-    pub funcs: FuncStore,
+    pub func_store: FuncStore,
     pub ctx: ModuleCtx,
 }
 
@@ -21,13 +21,13 @@ impl Module {
     #[doc(hidden)]
     pub fn new<T: Isa>(isa: &T) -> Self {
         Self {
-            funcs: FuncStore::new(),
+            func_store: FuncStore::new(),
             ctx: ModuleCtx::new(isa),
         }
     }
 
     pub fn funcs(&self) -> Vec<FuncRef> {
-        self.funcs.funcs()
+        self.func_store.funcs()
     }
 }
 

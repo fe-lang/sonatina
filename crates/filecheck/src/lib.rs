@@ -142,7 +142,7 @@ impl<'a> FileChecker<'a> {
     fn check_func(&mut self, parsed_module: &ParsedModule, func_ref: FuncRef) -> FileCheckResult {
         let comments = &parsed_module.debug.func_comments[func_ref];
 
-        let (func_ir, func_name) = parsed_module.module.funcs.modify(func_ref, |func| {
+        let (func_ir, func_name) = parsed_module.module.func_store.modify(func_ref, |func| {
             self.transformer.transform(func);
             (
                 FuncWriter::with_debug_provider(func, func_ref, &parsed_module.debug).dump_string(),
