@@ -481,7 +481,7 @@ impl<'a, 'i> CellState<'a, 'i> {
     }
 }
 
-impl<'a, 'i> State for CellState<'a, 'i> {
+impl State for CellState<'_, '_> {
     fn lookup_val(&mut self, value: ValueId) -> EvalValue {
         self.used_val.insert(value);
 

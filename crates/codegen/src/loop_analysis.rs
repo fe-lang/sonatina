@@ -203,7 +203,7 @@ impl<'a, 'b> BlocksInLoopPostOrder<'a, 'b> {
     }
 }
 
-impl<'a, 'b> Iterator for BlocksInLoopPostOrder<'a, 'b> {
+impl Iterator for BlocksInLoopPostOrder<'_, '_> {
     type Item = BlockId;
 
     fn next(&mut self) -> Option<Self::Item> {

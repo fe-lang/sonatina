@@ -38,6 +38,7 @@ pub fn define_inst_set_base(input: proc_macro::TokenStream) -> proc_macro::Token
 }
 
 /// A macro to define an instruction set that is specific to an target arch.
+///
 /// In sonatina, an InstructionSet is defined as a type that implements
 /// `HasInst<{Inst}>` for all `{Inst}` it contains, and also implements
 /// `InstSetBase` and `InstSetExt`. This macro automatically implements these
@@ -69,9 +70,11 @@ pub fn inst_set(
     inst_set::define_inst_set(attr, input)
 }
 
-/// A procedural macro attribute that facilitates defining a trait with a
-/// specific set of instruction types (implementing the `Inst` trait) and
-/// automatically implements downcasting functionality for the trait.
+/// A procedural macro attribute for instruction set construction.
+///
+/// Facilitates defining a trait with a specific set of instruction types
+/// (implementing the `Inst` trait) and automatically implements downcasting
+/// functionality for the trait.
 ///
 /// # Usage
 ///
