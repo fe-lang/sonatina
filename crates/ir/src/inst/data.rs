@@ -24,7 +24,7 @@ pub struct Mstore {
     value: ValueId,
     ty: Type,
 }
-impl_inst_write!(Mstore, (value: ValueId, addr: ValueId, ty: Type));
+impl_inst_write!(Mstore, (addr: ValueId, value: ValueId, ty: Type));
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 pub struct Gep {
