@@ -6,6 +6,7 @@ use super::Type;
 use crate::{
     inst::InstId,
     ir_writer::{FuncWriteCtx, IrWrite},
+    module::ModuleCtx,
     GlobalVariable, I256,
 };
 
@@ -375,6 +376,32 @@ impl ops::Shr for Immediate {
 
     fn shr(self, rhs: Self) -> Self::Output {
         self.apply_binop(rhs, ops::Shl::shl)
+    }
+}
+
+impl<Ctx> IrWrite<Ctx> for Immediate
+where
+    Ctx: AsRef<ModuleCtx>,
+{
+    fn write<W>(&self, w: &mut W, _ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        match self {
+            Self::I1(v) => {
+                if *v {
+                    write!(w, "1")
+                } else {
+                    write!(w, "0")
+                }
+            }
+            Self::I8(v) => write!(w, "{}", v),
+            Self::I16(v) => write!(w, "{}", v),
+            Self::I32(v) => write!(w, "{}", v),
+            Self::I64(v) => write!(w, "{}", v),
+            Self::I128(v) => write!(w, "{}", v),
+            Self::I256(v) => write!(w, "{}", v),
+        }
     }
 }
 

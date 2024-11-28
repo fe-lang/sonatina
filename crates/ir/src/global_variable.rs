@@ -1,4 +1,4 @@
-use std::{fmt, io};
+use std::io;
 
 use cranelift_entity::PrimaryMap;
 use rustc_hash::FxHashMap;
@@ -168,9 +168,9 @@ impl<Ctx> IrWrite<Ctx> for GvInitializer
 where
     Ctx: AsRef<ModuleCtx>,
 {
-    fn write<W>(&self, w: &mut W, _ctx: &Ctx) -> io::Result<()>
+    fn write<W>(&self, w: &mut W, ctx: &Ctx) -> io::Result<()>
     where
-        W: io::Write + ?Sized,
+        W: io::Write,
     {
         match self {
             Self::Immediate(data) => write!(w, "{}", data),
@@ -180,7 +180,7 @@ where
                     if i > 0 {
                         write!(w, ", ")?;
                     }
-                    write!(w, "{}", v)?;
+                    v.write(w, ctx)?;
                 }
                 write!(w, "]")
             }
@@ -190,37 +190,9 @@ where
                     if i > 0 {
                         write!(w, ", ")?;
                     }
-                    write!(w, "{}", v)?;
+                    v.write(w, ctx)?;
                 }
                 write!(w, "}}")
-            }
-        }
-    }
-}
-
-impl fmt::Display for GvInitializer {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Immediate(data) => write!(f, "{}", data),
-            Self::Array(data) => {
-                write!(f, "[")?;
-                for (i, v) in data.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", v)?;
-                }
-                write!(f, "]")
-            }
-            Self::Struct(data) => {
-                write!(f, "{{")?;
-                for (i, v) in data.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", v)?;
-                }
-                write!(f, "}}")
             }
         }
     }

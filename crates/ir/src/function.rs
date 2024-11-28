@@ -101,17 +101,11 @@ where
     where
         W: io::Write,
     {
-        let Signature {
-            name,
-            linkage,
-            args,
-            ret_ty,
-        } = self;
-
-        write!(w, "func {linkage} %{name}(")?;
-        args.write_with_delim(w, " ", ctx)?;
-
+        write!(w, "func ")?;
+        self.linkage.write(w, ctx)?;
+        write!(w, " %{}(", self.name)?;
+        self.args.write_with_delim(w, " ", ctx)?;
         write!(w, ") -> ")?;
-        ret_ty.write(w, ctx)
+        self.ret_ty.write(w, ctx)
     }
 }

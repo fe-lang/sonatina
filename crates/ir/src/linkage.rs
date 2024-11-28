@@ -1,4 +1,4 @@
-use std::{fmt, io, str::FromStr};
+use std::{io, str::FromStr};
 
 use crate::{ir_writer::IrWrite, module::ModuleCtx};
 
@@ -17,6 +17,7 @@ pub enum Linkage {
     /// The symbol is defined outside of the module.
     External,
 }
+
 impl<Ctx> IrWrite<Ctx> for Linkage
 where
     Ctx: AsRef<ModuleCtx>,
@@ -29,16 +30,6 @@ where
             Self::Public => write!(w, "public"),
             Self::Private => write!(w, "private"),
             Self::External => write!(w, "external"),
-        }
-    }
-}
-
-impl fmt::Display for Linkage {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Public => write!(f, "public"),
-            Self::Private => write!(f, "private"),
-            Self::External => write!(f, "external"),
         }
     }
 }
