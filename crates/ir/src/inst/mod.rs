@@ -63,7 +63,7 @@ pub trait InstExt: Inst {
     fn belongs_to(isb: &dyn InstSetBase) -> Option<&dyn HasInst<Self>>;
 }
 
-impl<'a> IrWrite<FuncWriteCtx<'a>> for InstId {
+impl IrWrite<FuncWriteCtx<'_>> for InstId {
     fn write<W>(&self, w: &mut W, ctx: &FuncWriteCtx) -> io::Result<()>
     where
         W: io::Write,

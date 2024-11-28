@@ -15,7 +15,7 @@ use crate::{
 pub struct ValueId(pub u32);
 cranelift_entity::entity_impl!(ValueId);
 
-impl<'a> IrWrite<FuncWriteCtx<'a>> for ValueId {
+impl IrWrite<FuncWriteCtx<'_>> for ValueId {
     fn write<W>(&self, w: &mut W, ctx: &FuncWriteCtx) -> io::Result<()>
     where
         W: io::Write,

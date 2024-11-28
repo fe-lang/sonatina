@@ -301,7 +301,7 @@ struct BlockIter<'a> {
     blocks: &'a SecondaryMap<BlockId, BlockNode>,
 }
 
-impl<'a> Iterator for BlockIter<'a> {
+impl Iterator for BlockIter<'_> {
     type Item = BlockId;
 
     fn next(&mut self) -> Option<BlockId> {
@@ -316,7 +316,7 @@ struct InstIter<'a> {
     insts: &'a SecondaryMap<InstId, InstNode>,
 }
 
-impl<'a> Iterator for InstIter<'a> {
+impl Iterator for InstIter<'_> {
     type Item = InstId;
 
     fn next(&mut self) -> Option<InstId> {

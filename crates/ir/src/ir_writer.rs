@@ -81,7 +81,7 @@ pub struct FuncWriteCtx<'a> {
     pub dbg: &'a dyn DebugProvider,
 }
 
-impl<'a> AsRef<ModuleCtx> for FuncWriteCtx<'a> {
+impl AsRef<ModuleCtx> for FuncWriteCtx<'_> {
     fn as_ref(&self) -> &ModuleCtx {
         self.module_ctx()
     }
@@ -364,7 +364,7 @@ where
 
 #[derive(Clone, Copy)]
 pub struct ValueWithTy(pub ValueId);
-impl<'a> IrWrite<FuncWriteCtx<'a>> for ValueWithTy {
+impl IrWrite<FuncWriteCtx<'_>> for ValueWithTy {
     fn write<W>(&self, w: &mut W, ctx: &FuncWriteCtx) -> io::Result<()>
     where
         W: io::Write,
@@ -382,7 +382,7 @@ impl<'a> IrWrite<FuncWriteCtx<'a>> for ValueWithTy {
 }
 
 pub struct InstStatement(pub InstId);
-impl<'a> IrWrite<FuncWriteCtx<'a>> for InstStatement {
+impl IrWrite<FuncWriteCtx<'_>> for InstStatement {
     fn write<W>(&self, w: &mut W, ctx: &FuncWriteCtx) -> io::Result<()>
     where
         W: io::Write,
