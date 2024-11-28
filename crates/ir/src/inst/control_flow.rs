@@ -1,22 +1,13 @@
-use std::io;
-
 use macros::{inst_prop, Inst};
 use smallvec::SmallVec;
 
-use super::InstWrite;
-use crate::{
-    inst::impl_inst_write,
-    ir_writer::{FuncWriteCtx, IrWrite},
-    module::FuncRef,
-    BlockId, Inst, InstSetBase, ValueId,
-};
+use crate::{module::FuncRef, BlockId, Inst, InstSetBase, ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(terminator)]
 pub struct Jump {
     dest: BlockId,
 }
-impl_inst_write!(Jump, { dest });
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(terminator)]
@@ -26,7 +17,6 @@ pub struct Br {
     nz_dest: BlockId,
     z_dest: BlockId,
 }
-impl_inst_write !(Br, {cond, nz_dest, z_dest});
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(terminator)]
@@ -38,14 +28,13 @@ pub struct BrTable {
     #[inst(value)]
     table: Vec<(ValueId, BlockId)>,
 }
-impl_inst_write!(BrTable, { scrutinee, default, table });
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 pub struct Phi {
     #[inst(value)]
     args: Vec<(ValueId, BlockId)>,
 }
-impl_inst_write!(Phi, { args });
+
 impl Phi {
     pub fn append_phi_arg(&mut self, value: ValueId, block: BlockId) {
         self.args.push((value, block))
@@ -74,7 +63,6 @@ pub struct Call {
     #[inst(value)]
     args: SmallVec<[ValueId; 8]>,
 }
-impl_inst_write!(Call, { callee, args });
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Write))]
@@ -83,7 +71,6 @@ pub struct Return {
     #[inst(value)]
     arg: Option<ValueId>,
 }
-impl_inst_write!(Return, { arg });
 
 #[inst_prop]
 pub trait Branch {

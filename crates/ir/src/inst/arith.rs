@@ -1,13 +1,12 @@
 use macros::Inst;
 
-use crate::{inst::impl_inst_write, ValueId};
+use crate::ValueId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Neg {
     #[inst(value)]
     arg: ValueId,
 }
-impl_inst_write!(Neg);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Add {
@@ -16,7 +15,6 @@ pub struct Add {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_inst_write!(Add);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Mul {
@@ -25,7 +23,6 @@ pub struct Mul {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_inst_write!(Mul);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Sub {
@@ -34,7 +31,6 @@ pub struct Sub {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_inst_write!(Sub);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Sdiv {
@@ -43,7 +39,6 @@ pub struct Sdiv {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_inst_write!(Sdiv);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Udiv {
@@ -52,7 +47,6 @@ pub struct Udiv {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_inst_write!(Udiv);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Umod {
@@ -61,7 +55,6 @@ pub struct Umod {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_inst_write!(Umod);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Smod {
@@ -70,7 +63,6 @@ pub struct Smod {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_inst_write!(Smod);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Shl {
@@ -79,7 +71,6 @@ pub struct Shl {
     #[inst(value)]
     value: ValueId,
 }
-impl_inst_write!(Shl);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Shr {
@@ -88,7 +79,6 @@ pub struct Shr {
     #[inst(value)]
     value: ValueId,
 }
-impl_inst_write!(Shr);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Sar {
@@ -97,4 +87,3 @@ pub struct Sar {
     #[inst(value)]
     value: ValueId,
 }
-impl_inst_write!(Sar);

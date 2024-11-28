@@ -57,11 +57,13 @@ impl InstStruct {
         let impl_inst = self.impl_inst();
         let impl_inst_ext = self.impl_inst_ext();
         let impl_inst_cast = self.impl_inst_cast();
+        let impl_inst_write = self.impl_inst_write();
         Ok(quote! {
            #impl_method
            #impl_inst_cast
            #impl_inst
            #impl_inst_ext
+           #impl_inst_write
         })
     }
 
@@ -273,6 +275,29 @@ impl InstStruct {
 
                 fn as_text(&self) -> &'static str {
                     Self::inst_name()
+                }
+            }
+        }
+    }
+
+    fn impl_inst_write(&self) -> proc_macro2::TokenStream {
+        let struct_name = &self.struct_name;
+        let fields = self.fields.iter().map(|f| {
+            let f = &f.ident;
+            quote!{
+                if crate::ir_writer::IrWrite::<crate::ir_writer::FuncWriteCtx>::has_content(self.#f()) {
+                    write!(&mut w, " ")?;
+                    crate::ir_writer::IrWrite::write(self.#f(), &mut w, ctx)?;
+                }
+            }
+        });
+
+        quote! {
+            impl crate::inst::InstWrite for #struct_name {
+                fn write(&self, mut w: &mut dyn std::io::Write, ctx: &crate::ir_writer::FuncWriteCtx) -> std::io::Result<()> {
+                    write!(w, "{}", crate::Inst::as_text(self))?;
+                    #(#fields)*
+                    Ok(())
                 }
             }
         }

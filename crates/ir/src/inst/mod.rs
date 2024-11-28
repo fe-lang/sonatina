@@ -70,7 +70,7 @@ impl<'a> IrWrite<FuncWriteCtx<'a>> for InstId {
     {
         let inst = ctx.func.dfg.inst(*self);
         let write: &dyn InstWrite = InstDowncast::downcast(ctx.func.inst_set(), inst).unwrap();
-        write.write(ctx, w)
+        write.write(w, ctx)
     }
 }
 
@@ -216,57 +216,6 @@ impl SideEffect {
 
 #[inst_prop]
 trait InstWrite {
-    fn write(&self, ctx: &FuncWriteCtx, w: &mut dyn io::Write) -> io::Result<()>;
+    fn write(&self, w: &mut dyn io::Write, ctx: &FuncWriteCtx) -> io::Result<()>;
     type Members = All;
 }
-
-macro_rules! impl_inst_write {
-    ($ty:ty) => {
-        impl $crate::inst::InstWrite for $ty {
-            fn write(
-                &self,
-                ctx: &crate::ir_writer::FuncWriteCtx,
-                mut w: &mut dyn std::io::Write,
-            ) -> std::io::Result<()> {
-                w.write_fmt(format_args!("{}", crate::Inst::as_text(self)))?;
-                let values = crate::Inst::collect_values(self);
-                if $crate::ir_writer::IrWrite::has_content(&values) {
-                    write!(w, " ")?;
-                }
-                $crate::ir_writer::IrWrite::write_with_delim(values.as_slice(), &mut w, " ", ctx)?;
-                Ok(())
-            }
-        }
-    };
-
-    ($ty:ty, {$($field:ident),+}) => {
-        impl $crate::inst::InstWrite for $ty {
-            fn write(
-                &self,
-                ctx: &crate::ir_writer::FuncWriteCtx,
-                mut w: &mut dyn std::io::Write,
-            ) -> std::io::Result<()> {
-                w.write_fmt(format_args!("{}", crate::Inst::as_text(self)))?;
-                $crate::inst::__write_args!(self, &mut w, ctx, {$($field),+});
-                Ok(())
-            }
-        }
-    };
-}
-
-macro_rules! __write_args {
-    ($self:expr, $w:expr, $ctx:expr, {$field:ident $(,$fields:ident)+}) => {
-        $crate::inst::__write_args!($self, $w, $ctx, {$field});
-        $crate::inst::__write_args!($self, $w, $ctx, {$($fields),+});
-    };
-
-    ($self:expr, $w:expr, $ctx:expr, {$field:ident}) => {
-       if $crate::ir_writer::IrWrite::<$crate::ir_writer::FuncWriteCtx>::has_content($self.$field()) {
-           write!($w, " ")?;
-       }
-        $crate::ir_writer::IrWrite::write($self.$field(), $w, $ctx)?
-    }
-}
-
-use __write_args;
-use impl_inst_write;
