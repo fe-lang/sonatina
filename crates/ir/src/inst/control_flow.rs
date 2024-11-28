@@ -54,9 +54,12 @@ impl Phi {
     }
 }
 
+// TODO: We need to perform analysis or modify function signature definition to
+// know if
+// * the function call has side effect
+// * the function call is terminator
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Write))]
-#[inst(terminator)]
 pub struct Call {
     callee: FuncRef,
 
