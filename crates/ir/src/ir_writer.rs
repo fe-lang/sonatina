@@ -1,5 +1,7 @@
 use std::io;
 
+use smallvec::{Array, SmallVec};
+
 use super::{BlockId, Function};
 use crate::{
     module::{FuncRef, ModuleCtx},
@@ -30,7 +32,7 @@ impl<'a> ModuleWriter<'a> {
             let mut has_type_def = false;
             for s in s.all_struct_data() {
                 has_type_def = true;
-                s.write(&self.module.ctx, &mut *w)?;
+                s.write(w, &self.module.ctx)?;
                 writeln!(w)?;
             }
 
@@ -44,7 +46,7 @@ impl<'a> ModuleWriter<'a> {
         // Write module level global variables.
         self.module.ctx.with_gv_store(|s| {
             for gv in s.all_gv_data() {
-                gv.write(&self.module.ctx, &mut *w)?;
+                gv.write(w, &self.module.ctx)?;
                 writeln!(w)?;
             }
 
@@ -77,6 +79,12 @@ pub struct FuncWriteCtx<'a> {
     pub func: &'a Function,
     pub func_ref: FuncRef,
     pub dbg: &'a dyn DebugProvider,
+}
+
+impl<'a> AsRef<ModuleCtx> for FuncWriteCtx<'a> {
+    fn as_ref(&self) -> &ModuleCtx {
+        self.module_ctx()
+    }
 }
 
 impl<'a> FuncWriteCtx<'a> {
@@ -130,24 +138,23 @@ impl<'a> FuncWriter<'a> {
             self.ctx.func.sig.linkage(),
             self.ctx.func.sig.name()
         ))?;
-        write_iter_with_delim(
-            &mut *w,
-            &self.ctx,
-            self.ctx.func.arg_values.iter().map(|v| ValueWithTy(*v)),
-            ", ",
-        )?;
-        write!(w, ") -> ")?;
-        self.ctx
+        let arg_values: SmallVec<[ValueWithTy; 8]> = self
+            .ctx
             .func
-            .sig
-            .ret_ty()
-            .write(self.ctx.module_ctx(), &mut *w)?;
+            .arg_values
+            .iter()
+            .map(|value| ValueWithTy(*value))
+            .collect();
+        arg_values.write_with_delim(w, ", ", &self.ctx)?;
+
+        write!(w, ") -> ")?;
+        self.ctx.func.sig.ret_ty().write(w, &self.ctx)?;
         writeln!(w, " {{")?;
 
         self.level += 1;
 
         for block in self.ctx.func.layout.iter_block() {
-            self.write_block_with_inst(block, &mut *w)?;
+            self.write_block_with_inst(w, block)?;
             if !self.ctx.func.layout.is_last_block(block) {
                 writeln!(w)?;
             }
@@ -163,27 +170,27 @@ impl<'a> FuncWriter<'a> {
         unsafe { String::from_utf8_unchecked(s) }
     }
 
-    fn write_block_with_inst(&mut self, block: BlockId, w: &mut impl io::Write) -> io::Result<()> {
-        self.indent(&mut *w)?;
-        block.write(&self.ctx, &mut *w)?;
+    fn write_block_with_inst(&mut self, w: &mut impl io::Write, block: BlockId) -> io::Result<()> {
+        self.indent(w)?;
+        block.write(w, &self.ctx)?;
 
         self.enter(&mut *w)?;
         for inst in self.ctx.func.layout.iter_inst(block) {
-            self.write_inst_in_block(inst, &mut *w)?;
+            self.write_inst_in_block(w, inst)?;
         }
         self.leave();
 
         Ok(())
     }
 
-    fn write_inst_in_block(&mut self, inst: InstId, w: &mut impl io::Write) -> io::Result<()> {
+    fn write_inst_in_block(&mut self, w: &mut impl io::Write, inst: InstId) -> io::Result<()> {
         self.indent(&mut *w)?;
         let inst_with_res = InstStatement(inst);
-        inst_with_res.write(&self.ctx, &mut *w)?;
+        inst_with_res.write(w, &self.ctx)?;
         writeln!(w)
     }
 
-    fn indent(&self, mut w: impl io::Write) -> io::Result<()> {
+    fn indent(&self, w: &mut impl io::Write) -> io::Result<()> {
         write!(w, "{}", " ".repeat(self.level as usize * 4))
     }
 
@@ -197,92 +204,199 @@ impl<'a> FuncWriter<'a> {
     }
 }
 
-pub trait WriteWithModule {
-    fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()>;
+pub trait IrWrite<Ctx> {
+    fn write<W>(&self, w: &mut W, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write;
 
-    fn dump_string(&self, module: &ModuleCtx) -> String {
-        let mut s = Vec::new();
-        self.write(module, &mut s).unwrap();
-        unsafe { String::from_utf8_unchecked(s) }
+    fn write_with_delim<W>(&self, w: &mut W, _delim: &str, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        self.write(w, ctx)
+    }
+
+    fn dump_string(&self, ctx: &Ctx) -> String {
+        let mut bytes = Vec::new();
+        self.write(&mut bytes, ctx).unwrap();
+        unsafe { String::from_utf8_unchecked(bytes) }
+    }
+
+    fn has_content(&self) -> bool {
+        true
     }
 }
 
-impl<T> WriteWithModule for &T
+impl<Ctx, T, U> IrWrite<Ctx> for (T, U)
 where
-    T: WriteWithModule,
+    T: IrWrite<Ctx>,
+    U: IrWrite<Ctx>,
 {
-    fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
-        (*self).write(module, w)
+    fn write<W>(&self, w: &mut W, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        self.write_with_delim(w, " ", ctx)
+    }
+
+    fn write_with_delim<W>(&self, w: &mut W, delim: &str, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        write!(w, "(")?;
+        self.0.write(w, ctx)?;
+        if self.has_content() {
+            write!(w, "{delim}")?;
+            self.1.write(w, ctx)?;
+        }
+        write!(w, ")")
+    }
+
+    fn has_content(&self) -> bool {
+        self.1.has_content() || self.has_content()
     }
 }
 
-pub trait WriteWithFunc {
-    fn write(&self, ctx: &FuncWriteCtx, w: &mut impl io::Write) -> io::Result<()>;
-
-    fn dump_string(&self, ctx: &FuncWriteCtx) -> String {
-        let mut s = Vec::new();
-        self.write(ctx, &mut s).unwrap();
-        unsafe { String::from_utf8_unchecked(s) }
-    }
-}
-
-impl<T> WriteWithFunc for &T
+impl<T, Ctx> IrWrite<Ctx> for [T]
 where
-    T: WriteWithFunc,
+    T: IrWrite<Ctx>,
 {
-    fn write(&self, ctx: &FuncWriteCtx, w: &mut impl io::Write) -> io::Result<()> {
-        (*self).write(ctx, w)
+    fn write<W>(&self, w: &mut W, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        self.write_with_delim(w, " ", ctx)
+    }
+
+    fn write_with_delim<W>(&self, w: &mut W, delim: &str, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        let mut iter = self.iter();
+        let mut has_written = false;
+
+        if let Some(value) = iter.next() {
+            has_written |= value.has_content();
+            value.write(w, ctx)?;
+        }
+
+        for value in iter {
+            if has_written {
+                write!(w, "{delim}")?;
+            }
+            value.write_with_delim(w, delim, ctx)?;
+            has_written |= value.has_content();
+        }
+
+        Ok(())
+    }
+
+    fn has_content(&self) -> bool {
+        self.iter().any(|x| x.has_content())
+    }
+}
+
+impl<T, Ctx> IrWrite<Ctx> for Vec<T>
+where
+    T: IrWrite<Ctx>,
+{
+    fn write<W>(&self, w: &mut W, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        self.as_slice().write(w, ctx)
+    }
+
+    fn write_with_delim<W>(&self, w: &mut W, delim: &str, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        self.as_slice().write_with_delim(w, delim, ctx)
+    }
+
+    fn has_content(&self) -> bool {
+        self.as_slice().has_content()
+    }
+}
+
+impl<T, Ctx, const N: usize> IrWrite<Ctx> for SmallVec<[T; N]>
+where
+    [T; N]: Array<Item = T>,
+    T: IrWrite<Ctx>,
+{
+    fn write<W>(&self, w: &mut W, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        self.as_slice().write(w, ctx)
+    }
+
+    fn write_with_delim<W>(&self, w: &mut W, delim: &str, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        self.as_slice().write_with_delim(w, delim, ctx)
+    }
+
+    fn has_content(&self) -> bool {
+        self.as_slice().has_content()
+    }
+}
+
+impl<T, Ctx> IrWrite<Ctx> for Option<T>
+where
+    T: IrWrite<Ctx>,
+{
+    fn write<W>(&self, w: &mut W, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        if let Some(content) = self {
+            content.write(w, ctx)?;
+        }
+
+        Ok(())
+    }
+
+    fn has_content(&self) -> bool {
+        self.as_ref().map(|x| x.has_content()).unwrap_or_default()
     }
 }
 
 #[derive(Clone, Copy)]
 pub struct ValueWithTy(pub ValueId);
-impl WriteWithFunc for ValueWithTy {
-    fn write(&self, ctx: &FuncWriteCtx, w: &mut impl io::Write) -> io::Result<()> {
+impl<'a> IrWrite<FuncWriteCtx<'a>> for ValueWithTy {
+    fn write<W>(&self, w: &mut W, ctx: &FuncWriteCtx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
         let value = self.0;
-        value.write(ctx, w)?;
+        value.write(w, ctx)?;
         if let Value::Immediate { .. } = ctx.dfg().value(self.0) {
             Ok(())
         } else {
             let ty = ctx.dfg().value_ty(self.0);
             write!(w, ".")?;
-            ty.write(ctx.module_ctx(), &mut *w)
+            ty.write(w, ctx)
         }
     }
 }
 
 pub struct InstStatement(pub InstId);
-impl WriteWithFunc for InstStatement {
-    fn write(&self, ctx: &FuncWriteCtx, w: &mut impl io::Write) -> io::Result<()> {
+impl<'a> IrWrite<FuncWriteCtx<'a>> for InstStatement {
+    fn write<W>(&self, w: &mut W, ctx: &FuncWriteCtx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
         if let Some(result) = ctx.func.dfg.inst_result(self.0) {
             let result_with_ty = ValueWithTy(result);
-            result_with_ty.write(ctx, &mut *w)?;
+            result_with_ty.write(w, ctx)?;
             write!(w, " = ")?;
         };
 
-        self.0.write(ctx, w)?;
+        self.0.write(w, ctx)?;
         write!(w, ";")
     }
-}
-
-pub fn write_iter_with_delim<T>(
-    w: &mut impl io::Write,
-    ctx: &FuncWriteCtx,
-    iter: impl Iterator<Item = T>,
-    delim: &str,
-) -> io::Result<()>
-where
-    T: WriteWithFunc,
-{
-    let mut iter = iter.peekable();
-    while let Some(item) = iter.next() {
-        item.write(ctx, &mut *w)?;
-        if iter.peek().is_some() {
-            write!(w, "{delim}")?;
-        }
-    }
-
-    Ok(())
 }
 
 pub trait DebugProvider {

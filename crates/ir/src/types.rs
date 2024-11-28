@@ -6,7 +6,7 @@ use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
-use crate::{ir_writer::WriteWithModule, module::ModuleCtx};
+use crate::{ir_writer::IrWrite, module::ModuleCtx};
 
 #[derive(Debug, Default)]
 pub struct TypeStore {
@@ -203,8 +203,14 @@ impl cmp::PartialOrd for Type {
     }
 }
 
-impl WriteWithModule for Type {
-    fn write(&self, ctx: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
+impl<Ctx> IrWrite<Ctx> for Type
+where
+    Ctx: AsRef<ModuleCtx>,
+{
+    fn write<W>(&self, w: &mut W, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
         match self {
             Type::I1 => write!(w, "i1"),
             Type::I8 => write!(w, "i8"),
@@ -213,7 +219,7 @@ impl WriteWithModule for Type {
             Type::I64 => write!(w, "i64"),
             Type::I128 => write!(w, "i128"),
             Type::I256 => write!(w, "i256"),
-            Type::Compound(cmpd_ty) => cmpd_ty.write(ctx, w),
+            Type::Compound(cmpd_ty) => cmpd_ty.write(w, ctx),
             Type::Unit => write!(w, "unit"),
         }
     }
@@ -224,41 +230,40 @@ impl WriteWithModule for Type {
 pub struct CompoundType(u32);
 cranelift_entity::entity_impl!(CompoundType);
 
-impl WriteWithModule for CompoundType {
-    fn write(&self, ctx: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
-        ctx.with_ty_store(|s| match s.resolve_compound(*self) {
-            CompoundTypeData::Array { elem: ty, len } => {
-                write!(w, "[")?;
-                ty.write(ctx, &mut *w)?;
-                write!(w, "; {len}]")
-            }
-            CompoundTypeData::Ptr(ty) => {
-                write!(w, "*")?;
-                ty.write(ctx, w)
-            }
-            CompoundTypeData::Struct(StructData { name, packed, .. }) => {
-                if *packed {
-                    write!(w, "@<{name}>")
-                } else {
-                    write!(w, "@{name}")
+impl<Ctx> IrWrite<Ctx> for CompoundType
+where
+    Ctx: AsRef<ModuleCtx>,
+{
+    fn write<W>(&self, w: &mut W, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        ctx.as_ref()
+            .with_ty_store(|s| match s.resolve_compound(*self) {
+                CompoundTypeData::Array { elem: ty, len } => {
+                    write!(w, "[")?;
+                    ty.write(w, ctx)?;
+                    write!(w, "; {len}]")
                 }
-            }
-
-            CompoundTypeData::Func { args, ret_ty: ret } => {
-                write!(w, "(")?;
-                let mut args = args.iter();
-                if let Some(arg_ty) = args.next() {
-                    arg_ty.write(ctx, w)?;
-                };
-                for arg_ty in args {
-                    write!(w, ", ")?;
-                    arg_ty.write(ctx, w)?;
+                CompoundTypeData::Ptr(ty) => {
+                    write!(w, "*")?;
+                    ty.write(w, ctx)
+                }
+                CompoundTypeData::Struct(StructData { name, packed, .. }) => {
+                    if *packed {
+                        write!(w, "@<{name}>")
+                    } else {
+                        write!(w, "@{name}")
+                    }
                 }
 
-                write!(w, ") -> ")?;
-                ret.write(ctx, w)
-            }
-        })
+                CompoundTypeData::Func { args, ret_ty: ret } => {
+                    write!(w, "(")?;
+                    args.write_with_delim(w, ", ", ctx)?;
+                    write!(w, ") -> ")?;
+                    ret.write(w, ctx)
+                }
+            })
     }
 }
 
@@ -283,8 +288,14 @@ pub struct StructData {
     pub packed: bool,
 }
 
-impl WriteWithModule for StructData {
-    fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
+impl<Ctx> IrWrite<Ctx> for StructData
+where
+    Ctx: AsRef<ModuleCtx>,
+{
+    fn write<W>(&self, w: &mut W, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
         write!(w, "type @{} = ", self.name)?;
         if self.packed {
             write!(w, "<{{")?;
@@ -292,13 +303,7 @@ impl WriteWithModule for StructData {
             write!(w, "{{")?;
         }
 
-        let mut delim = "";
-        for &ty in &self.fields {
-            write!(w, "{delim}")?;
-            ty.write(module, &mut *w)?;
-            delim = ", ";
-        }
-
+        self.fields.write_with_delim(w, ", ", ctx)?;
         if self.packed {
             write!(w, "}}>;")
         } else {

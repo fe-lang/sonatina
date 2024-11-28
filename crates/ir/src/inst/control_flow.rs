@@ -5,7 +5,8 @@ use smallvec::SmallVec;
 
 use super::InstWrite;
 use crate::{
-    ir_writer::{FuncWriteCtx, WriteWithFunc},
+    inst::impl_inst_write,
+    ir_writer::{FuncWriteCtx, IrWrite},
     module::FuncRef,
     BlockId, Inst, InstSetBase, ValueId,
 };
@@ -15,13 +16,7 @@ use crate::{
 pub struct Jump {
     dest: BlockId,
 }
-impl InstWrite for Jump {
-    fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
-        let name = self.as_text();
-        write!(w, "{name} ")?;
-        self.dest.write(ctx, &mut w)
-    }
-}
+impl_inst_write!(Jump, { dest });
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(terminator)]
@@ -31,17 +26,7 @@ pub struct Br {
     nz_dest: BlockId,
     z_dest: BlockId,
 }
-impl InstWrite for Br {
-    fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
-        write!(w, "{}", self.as_text())?;
-        write!(w, " ")?;
-        self.cond.write(ctx, &mut w)?;
-        write!(w, " ")?;
-        self.nz_dest.write(ctx, &mut w)?;
-        write!(w, " ")?;
-        self.z_dest.write(ctx, &mut w)
-    }
-}
+impl_inst_write !(Br, {cond, nz_dest, z_dest});
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(terminator)]
@@ -53,33 +38,14 @@ pub struct BrTable {
     #[inst(value)]
     table: Vec<(ValueId, BlockId)>,
 }
-impl InstWrite for BrTable {
-    fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
-        write!(w, "{}", self.as_text())?;
-        write!(w, " ")?;
-        self.scrutinee.write(ctx, &mut w)?;
-        if let Some(default) = self.default {
-            write!(w, " ")?;
-            default.write(ctx, &mut w)?;
-        };
-
-        for (value, block) in &self.table {
-            write!(w, " (")?;
-            value.write(ctx, &mut w)?;
-            write!(w, " ")?;
-            block.write(ctx, &mut w)?;
-            write!(w, ")")?;
-        }
-
-        Ok(())
-    }
-}
+impl_inst_write!(BrTable, { scrutinee, default, table });
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 pub struct Phi {
     #[inst(value)]
     args: Vec<(ValueId, BlockId)>,
 }
+impl_inst_write!(Phi, { args });
 impl Phi {
     pub fn append_phi_arg(&mut self, value: ValueId, block: BlockId) {
         self.args.push((value, block))
@@ -98,21 +64,6 @@ impl Phi {
         self.args.retain(|(_, block)| f(*block))
     }
 }
-impl InstWrite for Phi {
-    fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
-        write!(w, "{}", self.as_text())?;
-
-        for (value, block) in &self.args {
-            write!(w, " (")?;
-            value.write(ctx, &mut w)?;
-            write!(w, " ")?;
-            block.write(ctx, &mut w)?;
-            write!(w, ")")?;
-        }
-
-        Ok(())
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Write))]
@@ -123,20 +74,7 @@ pub struct Call {
     #[inst(value)]
     args: SmallVec<[ValueId; 8]>,
 }
-impl InstWrite for Call {
-    fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
-        let name = self.as_text();
-        ctx.func.ctx().func_sig(self.callee, |sig| {
-            let callee = sig.name();
-            write!(w, "{name} %{callee}")
-        })?;
-        for value in &self.args {
-            write!(w, " ")?;
-            value.write(ctx, &mut w)?;
-        }
-        Ok(())
-    }
-}
+impl_inst_write!(Call, { callee, args });
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Write))]
@@ -145,16 +83,7 @@ pub struct Return {
     #[inst(value)]
     arg: Option<ValueId>,
 }
-impl InstWrite for Return {
-    fn write(&self, ctx: &FuncWriteCtx, mut w: &mut dyn io::Write) -> io::Result<()> {
-        write!(w, "{}", self.as_text())?;
-        if let Some(arg) = self.arg {
-            write!(w, " ")?;
-            arg.write(ctx, &mut w)?;
-        }
-        Ok(())
-    }
-}
+impl_inst_write!(Return, { arg });
 
 #[inst_prop]
 pub trait Branch {

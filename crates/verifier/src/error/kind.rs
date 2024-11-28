@@ -1,7 +1,7 @@
 use std::fmt;
 
 use sonatina_ir::{
-    ir_writer::{FuncWriteCtx, ValueWithTy, WriteWithFunc, WriteWithModule},
+    ir_writer::{FuncWriteCtx, IrWrite, ValueWithTy},
     module::FuncRef,
     BlockId, Function, InstId, Type, ValueId,
 };

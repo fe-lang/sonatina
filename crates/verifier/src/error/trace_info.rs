@@ -2,7 +2,7 @@ use std::fmt;
 
 use cranelift_entity::packed_option::PackedOption;
 use sonatina_ir::{
-    ir_writer::{FuncWriteCtx, InstStatement, ValueWithTy, WriteWithFunc, WriteWithModule},
+    ir_writer::{FuncWriteCtx, InstStatement, IrWrite, ValueWithTy},
     module::FuncRef,
     types::CompoundType,
     BlockId, Function, GlobalVariable, InstId, Type, ValueId,

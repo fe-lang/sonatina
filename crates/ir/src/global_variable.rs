@@ -3,7 +3,7 @@ use std::{fmt, io};
 use cranelift_entity::PrimaryMap;
 use rustc_hash::FxHashMap;
 
-use crate::{ir_writer::WriteWithModule, module::ModuleCtx, Immediate, Linkage, Type};
+use crate::{ir_writer::IrWrite, module::ModuleCtx, Immediate, Linkage, Type};
 
 #[derive(Debug, Default)]
 pub struct GlobalVariableStore {
@@ -34,7 +34,7 @@ impl GlobalVariableStore {
     }
 
     pub fn init_data(&self, gv: GlobalVariable) -> Option<&GvInitializer> {
-        self.gv_data[gv].data.as_ref()
+        self.gv_data[gv].initializer.as_ref()
     }
 
     pub fn is_const(&self, gv: GlobalVariable) -> bool {
@@ -68,10 +68,16 @@ impl GlobalVariable {
         module.with_gv_store(|s| s.ty(self))
     }
 }
-
-impl WriteWithModule for GlobalVariable {
-    fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
-        module.with_gv_store(|s| s.gv_data(*self).write(module, w))
+impl<Ctx> IrWrite<Ctx> for GlobalVariable
+where
+    Ctx: AsRef<ModuleCtx>,
+{
+    fn write<W>(&self, w: &mut W, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        ctx.as_ref()
+            .with_gv_store(|s| s.gv_data(*self).write(w, ctx))
     }
 }
 
@@ -81,7 +87,7 @@ pub struct GlobalVariableData {
     pub ty: Type,
     pub linkage: Linkage,
     pub is_const: bool,
-    pub data: Option<GvInitializer>,
+    pub initializer: Option<GvInitializer>,
 }
 
 impl GlobalVariableData {
@@ -97,7 +103,7 @@ impl GlobalVariableData {
             ty,
             linkage,
             is_const,
-            data,
+            initializer: data,
         }
     }
 
@@ -107,22 +113,31 @@ impl GlobalVariableData {
             ty,
             linkage,
             is_const: true,
-            data: Some(data),
+            initializer: Some(data),
         }
     }
 }
 
-impl WriteWithModule for GlobalVariableData {
-    fn write(&self, module: &ModuleCtx, w: &mut impl io::Write) -> io::Result<()> {
-        write!(w, "global {} ", self.linkage)?;
+impl<Ctx> IrWrite<Ctx> for GlobalVariableData
+where
+    Ctx: AsRef<ModuleCtx>,
+{
+    fn write<W>(&self, w: &mut W, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        write!(w, "global ")?;
+        self.linkage.write(w, ctx)?;
         if self.is_const {
-            write!(w, "const ")?;
+            write!(w, " const")?;
         }
-        self.ty.write(module, &mut *w)?;
+        write!(w, " ")?;
+        self.ty.write(w, ctx)?;
 
         write!(w, " ${}", self.symbol)?;
-        if let Some(data) = &self.data {
-            write!(w, " = {data}")?;
+        if let Some(initializer) = &self.initializer {
+            write!(w, " = ")?;
+            initializer.write(w, ctx)?;
         }
         Ok(())
     }
@@ -146,6 +161,40 @@ impl GvInitializer {
 
     pub fn make_struct(data: Vec<GvInitializer>) -> Self {
         Self::Struct(data)
+    }
+}
+
+impl<Ctx> IrWrite<Ctx> for GvInitializer
+where
+    Ctx: AsRef<ModuleCtx>,
+{
+    fn write<W>(&self, w: &mut W, _ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write + ?Sized,
+    {
+        match self {
+            Self::Immediate(data) => write!(w, "{}", data),
+            Self::Array(data) => {
+                write!(w, "[")?;
+                for (i, v) in data.iter().enumerate() {
+                    if i > 0 {
+                        write!(w, ", ")?;
+                    }
+                    write!(w, "{}", v)?;
+                }
+                write!(w, "]")
+            }
+            Self::Struct(data) => {
+                write!(w, "{{")?;
+                for (i, v) in data.iter().enumerate() {
+                    if i > 0 {
+                        write!(w, ", ")?;
+                    }
+                    write!(w, "{}", v)?;
+                }
+                write!(w, "}}")
+            }
+        }
     }
 }
 

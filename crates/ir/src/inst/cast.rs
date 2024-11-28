@@ -8,7 +8,7 @@ pub struct Sext {
     from: ValueId,
     ty: Type,
 }
-impl_inst_write!(Sext, (from: ValueId, ty: Type));
+impl_inst_write!(Sext, {from, ty});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Zext {
@@ -16,7 +16,7 @@ pub struct Zext {
     from: ValueId,
     ty: Type,
 }
-impl_inst_write!(Zext, (from: ValueId, ty: Type));
+impl_inst_write!(Zext, {from, ty});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Trunc {
@@ -24,7 +24,7 @@ pub struct Trunc {
     from: ValueId,
     ty: Type,
 }
-impl_inst_write!(Trunc, (from: ValueId, ty: Type));
+impl_inst_write!(Trunc, {from, ty});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Bitcast {
@@ -32,7 +32,7 @@ pub struct Bitcast {
     from: ValueId,
     ty: Type,
 }
-impl_inst_write!(Bitcast, (from: ValueId, ty: Type));
+impl_inst_write!(Bitcast, {from, ty});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct IntToPtr {
@@ -40,7 +40,7 @@ pub struct IntToPtr {
     from: ValueId,
     ty: Type,
 }
-impl_inst_write!(IntToPtr, (from: ValueId, ty: Type));
+impl_inst_write!(IntToPtr, {from, ty});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct PtrToInt {
@@ -48,4 +48,4 @@ pub struct PtrToInt {
     from: ValueId,
     ty: Type,
 }
-impl_inst_write!(PtrToInt, (from: ValueId, ty: Type));
+impl_inst_write!(PtrToInt, {from, ty});

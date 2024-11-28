@@ -5,7 +5,7 @@ use dot2::{label::Text, GraphWalk, Id, Labeller, Style};
 use super::block::BlockNode;
 use crate::{
     inst::control_flow::Phi,
-    ir_writer::{FuncWriteCtx, WriteWithFunc},
+    ir_writer::{FuncWriteCtx, IrWrite},
     prelude::*,
     BlockId, ControlFlowGraph,
 };

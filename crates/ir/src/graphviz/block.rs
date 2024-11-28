@@ -4,7 +4,7 @@ use dot2::label;
 
 use super::function::DUMMY_BLOCK;
 use crate::{
-    ir_writer::{FuncWriteCtx, ValueWithTy, WriteWithFunc},
+    ir_writer::{FuncWriteCtx, IrWrite, ValueWithTy},
     BlockId, ControlFlowGraph, Function,
 };
 

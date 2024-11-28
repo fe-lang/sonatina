@@ -19,7 +19,7 @@ use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 
 use crate::{
-    ir_writer::{FuncWriteCtx, WriteWithFunc},
+    ir_writer::{FuncWriteCtx, IrWrite},
     InstSetBase, ValueId,
 };
 
@@ -63,8 +63,11 @@ pub trait InstExt: Inst {
     fn belongs_to(isb: &dyn InstSetBase) -> Option<&dyn HasInst<Self>>;
 }
 
-impl WriteWithFunc for InstId {
-    fn write(&self, ctx: &FuncWriteCtx, w: &mut impl io::Write) -> io::Result<()> {
+impl<'a> IrWrite<FuncWriteCtx<'a>> for InstId {
+    fn write<W>(&self, w: &mut W, ctx: &FuncWriteCtx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
         let inst = ctx.func.dfg.inst(*self);
         let write: &dyn InstWrite = InstDowncast::downcast(ctx.func.inst_set(), inst).unwrap();
         write.write(ctx, w)
@@ -225,31 +228,26 @@ macro_rules! impl_inst_write {
                 ctx: &crate::ir_writer::FuncWriteCtx,
                 mut w: &mut dyn std::io::Write,
             ) -> std::io::Result<()> {
-                w.write_fmt(format_args!("{} ", crate::Inst::as_text(self)))?;
+                w.write_fmt(format_args!("{}", crate::Inst::as_text(self)))?;
                 let values = crate::Inst::collect_values(self);
-                let mut values = values.iter();
-
-                if let Some(value) = values.next() {
-                    $crate::ir_writer::WriteWithFunc::write(value, ctx, &mut w)?
-                }
-                for value in values {
+                if $crate::ir_writer::IrWrite::has_content(&values) {
                     write!(w, " ")?;
-                    $crate::ir_writer::WriteWithFunc::write(value, ctx, &mut w)?
                 }
+                $crate::ir_writer::IrWrite::write_with_delim(values.as_slice(), &mut w, " ", ctx)?;
                 Ok(())
             }
         }
     };
 
-    ($ty:ty, ($($field:ident: $kind:ident),+)) => {
+    ($ty:ty, {$($field:ident),+}) => {
         impl $crate::inst::InstWrite for $ty {
             fn write(
                 &self,
                 ctx: &crate::ir_writer::FuncWriteCtx,
                 mut w: &mut dyn std::io::Write,
             ) -> std::io::Result<()> {
-                w.write_fmt(format_args!("{} ", crate::Inst::as_text(self)))?;
-                $crate::inst::__write_args!(self, ctx, &mut w, ($($field: $kind),+));
+                w.write_fmt(format_args!("{}", crate::Inst::as_text(self)))?;
+                $crate::inst::__write_args!(self, &mut w, ctx, {$($field),+});
                 Ok(())
             }
         }
@@ -257,19 +255,17 @@ macro_rules! impl_inst_write {
 }
 
 macro_rules! __write_args {
-    ($self:expr, $ctx:expr, $w:expr, ($field:ident: $kind:ident $(,$fields:ident: $kinds:ident)+)) => {
-        $crate::inst::__write_args!($self, $ctx, $w, ($field: $kind));
-        write!(&mut $w, " ")?;
-        $crate::inst::__write_args!($self, $ctx, $w, ($($fields: $kinds),+));
+    ($self:expr, $w:expr, $ctx:expr, {$field:ident $(,$fields:ident)+}) => {
+        $crate::inst::__write_args!($self, $w, $ctx, {$field});
+        $crate::inst::__write_args!($self, $w, $ctx, {$($fields),+});
     };
 
-    ($self:expr, $ctx:expr, $w:expr, ($field:ident: Type)) => {
-        $crate::ir_writer::WriteWithModule::write($self.$field(), $ctx.func.ctx(), $w)?
-    };
-
-    ($self:expr, $ctx:expr, $w:expr, ($field:ident: ValueId)) => {
-        $crate::ir_writer::WriteWithFunc::write($self.$field(), $ctx, $w)?
-    };
+    ($self:expr, $w:expr, $ctx:expr, {$field:ident}) => {
+       if $crate::ir_writer::IrWrite::<$crate::ir_writer::FuncWriteCtx>::has_content($self.$field()) {
+           write!($w, " ")?;
+       }
+        $crate::ir_writer::IrWrite::write($self.$field(), $w, $ctx)?
+    }
 }
 
 use __write_args;

@@ -1,10 +1,7 @@
-use std::io;
-
 use macros::Inst;
 use smallvec::SmallVec;
 
-use super::{Inst, InstWrite};
-use crate::{inst::impl_inst_write, ir_writer::FuncWriteCtx, module::FuncRef, Type, ValueId};
+use crate::{inst::impl_inst_write, module::FuncRef, Type, ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Read))]
@@ -13,7 +10,7 @@ pub struct Mload {
     addr: ValueId,
     ty: Type,
 }
-impl_inst_write!(Mload, (addr: ValueId, ty: Type));
+impl_inst_write!(Mload, {addr, ty});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Write))]
@@ -24,7 +21,7 @@ pub struct Mstore {
     value: ValueId,
     ty: Type,
 }
-impl_inst_write!(Mstore, (addr: ValueId, value: ValueId, ty: Type));
+impl_inst_write!(Mstore, {addr, value, ty});
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 pub struct Gep {
@@ -37,16 +34,7 @@ impl_inst_write!(Gep);
 pub struct GetFunctionPtr {
     func: FuncRef,
 }
-impl InstWrite for GetFunctionPtr {
-    fn write(&self, ctx: &FuncWriteCtx, w: &mut dyn io::Write) -> io::Result<()> {
-        let name = self.as_text();
-        ctx.func.ctx().func_sig(self.func, |sig| {
-            let callee = sig.name();
-            write!(w, "{name} %{callee}")
-        })?;
-        Ok(())
-    }
-}
+impl_inst_write!(GetFunctionPtr, { func });
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Write))]
