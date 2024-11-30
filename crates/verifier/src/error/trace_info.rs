@@ -4,7 +4,7 @@ use cranelift_entity::packed_option::PackedOption;
 use sonatina_ir::{
     ir_writer::{FuncWriteCtx, InstStatement, IrWrite, ValueWithTy},
     module::FuncRef,
-    types::CompoundType,
+    types::CompoundTypeRef,
     BlockId, Function, GlobalVariableRef, InstId, Type, ValueId,
 };
 
@@ -18,7 +18,7 @@ pub struct TraceInfo {
     value: PackedOption<ValueId>,
     gv: PackedOption<GlobalVariableRef>,
     ty: Option<Type>,
-    cmpd_ty: PackedOption<CompoundType>,
+    cmpd_ty: PackedOption<CompoundTypeRef>,
 }
 
 impl TraceInfo {
@@ -50,7 +50,7 @@ impl TraceInfo {
         self.ty
     }
 
-    pub fn cmpd_ty(&self) -> Option<CompoundType> {
+    pub fn cmpd_ty(&self) -> Option<CompoundTypeRef> {
         self.cmpd_ty.expand()
     }
 }
@@ -136,7 +136,7 @@ pub struct TraceInfoBuilder {
     value: PackedOption<ValueId>,
     gv: PackedOption<GlobalVariableRef>,
     ty: Option<Type>,
-    cmpd_ty: PackedOption<CompoundType>,
+    cmpd_ty: PackedOption<CompoundTypeRef>,
 }
 
 impl TraceInfoBuilder {
@@ -183,7 +183,7 @@ impl TraceInfoBuilder {
         self
     }
 
-    pub fn cmpd_ty(mut self, cmpd_ty: CompoundType) -> Self {
+    pub fn cmpd_ty(mut self, cmpd_ty: CompoundTypeRef) -> Self {
         self.cmpd_ty = cmpd_ty.into();
         self
     }

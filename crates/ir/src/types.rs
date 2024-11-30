@@ -10,9 +10,9 @@ use crate::{ir_writer::IrWrite, module::ModuleCtx};
 
 #[derive(Debug, Default)]
 pub struct TypeStore {
-    compounds: PrimaryMap<CompoundType, CompoundTypeData>,
-    rev_types: FxHashMap<CompoundTypeData, CompoundType>,
-    struct_types: IndexMap<String, CompoundType>,
+    compounds: PrimaryMap<CompoundTypeRef, CompoundTypeData>,
+    rev_types: FxHashMap<CompoundTypeData, CompoundTypeRef>,
+    struct_types: IndexMap<String, CompoundTypeRef>,
 }
 
 impl TypeStore {
@@ -114,7 +114,7 @@ impl TypeStore {
         }
     }
 
-    pub fn make_compound(&mut self, data: CompoundTypeData) -> CompoundType {
+    pub fn make_compound(&mut self, data: CompoundTypeData) -> CompoundTypeRef {
         if let Some(compound) = self.rev_types.get(&data) {
             *compound
         } else {
@@ -124,7 +124,7 @@ impl TypeStore {
         }
     }
 
-    pub fn resolve_compound(&self, compound: CompoundType) -> &CompoundTypeData {
+    pub fn resolve_compound(&self, compound: CompoundTypeRef) -> &CompoundTypeData {
         &self.compounds[compound]
     }
 }
@@ -139,7 +139,7 @@ pub enum Type {
     I64,
     I128,
     I256,
-    Compound(CompoundType),
+    Compound(CompoundTypeRef),
     #[default]
     Unit,
 }
@@ -227,10 +227,10 @@ where
 
 /// An opaque reference to [`CompoundTypeData`].
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
-pub struct CompoundType(u32);
-cranelift_entity::entity_impl!(CompoundType);
+pub struct CompoundTypeRef(u32);
+cranelift_entity::entity_impl!(CompoundTypeRef);
 
-impl<Ctx> IrWrite<Ctx> for CompoundType
+impl<Ctx> IrWrite<Ctx> for CompoundTypeRef
 where
     Ctx: AsRef<ModuleCtx>,
 {

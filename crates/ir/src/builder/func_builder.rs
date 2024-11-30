@@ -22,7 +22,9 @@ where
     C: FuncCursor,
 {
     pub fn new(module_builder: ModuleBuilder, func_ref: FuncRef, cursor: C) -> Self {
-        let sig = module_builder.funcs.view(func_ref, |func| func.sig.clone());
+        let sig = module_builder
+            .func_store
+            .view(func_ref, |func| func.sig.clone());
         let func = Function::new(&module_builder.ctx, sig);
 
         Self {
@@ -55,7 +57,7 @@ where
             ..
         } = self;
 
-        module_builder.funcs.update(func_ref, func);
+        module_builder.func_store.update(func_ref, func);
     }
 
     pub fn append_parameter(&mut self, ty: Type) -> ValueId {

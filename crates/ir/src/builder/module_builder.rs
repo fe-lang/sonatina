@@ -11,7 +11,7 @@ use crate::{
 
 #[derive(Clone)]
 pub struct ModuleBuilder {
-    pub funcs: Arc<FuncStore>,
+    pub func_store: Arc<FuncStore>,
 
     pub ctx: ModuleCtx,
 
@@ -22,9 +22,30 @@ pub struct ModuleBuilder {
 impl ModuleBuilder {
     pub fn new(ctx: ModuleCtx) -> Self {
         Self {
-            funcs: Arc::new(FuncStore::new()),
+            func_store: Arc::new(FuncStore::new()),
             ctx,
             declared_funcs: Arc::new(DashMap::default()),
+        }
+    }
+
+    /// Create a new module builder from a module.
+    /// This is used to link multiple modules to a single module for LTO.
+    ///
+    /// In normal use cases, it's recommended to use `ModuleBuilder::new` to
+    /// create a new module.
+    pub fn from_module(module: Module) -> Self {
+        let store = module.func_store;
+        let ctx = module.ctx;
+        let declared_funcs = DashMap::new();
+        for func_ref in store.funcs() {
+            let name = ctx.func_sig(func_ref, |sig| sig.name().to_string());
+            declared_funcs.insert(name, func_ref);
+        }
+
+        Self {
+            func_store: Arc::new(store),
+            ctx,
+            declared_funcs: Arc::new(declared_funcs),
         }
     }
 
@@ -35,7 +56,7 @@ impl ModuleBuilder {
         } else {
             let name = sig.name().to_string();
             let func = Function::new(&self.ctx, sig.clone());
-            let func_ref = self.funcs.insert(func);
+            let func_ref = self.func_store.insert(func);
             self.declared_funcs.insert(name, func_ref);
             self.ctx.declared_funcs.insert(func_ref, sig);
             func_ref
@@ -50,7 +71,7 @@ impl ModuleBuilder {
     where
         F: FnOnce(&Signature) -> R,
     {
-        self.funcs.view(func_ref, |func| f(&func.sig))
+        self.func_store.view(func_ref, |func| f(&func.sig))
     }
 
     pub fn make_global(&self, global: GlobalVariableData) -> GlobalVariableRef {
@@ -92,7 +113,7 @@ impl ModuleBuilder {
 
     pub fn build(self) -> Module {
         Module {
-            func_store: Arc::into_inner(self.funcs).unwrap(),
+            func_store: Arc::into_inner(self.func_store).unwrap(),
             ctx: self.ctx,
         }
     }
