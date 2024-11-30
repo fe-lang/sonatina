@@ -22,7 +22,7 @@ pub use builder::Variable;
 pub use cfg::ControlFlowGraph;
 pub use dfg::{Block, BlockId, DataFlowGraph};
 pub use function::{Function, Signature};
-pub use global_variable::{GlobalVariable, GlobalVariableData};
+pub use global_variable::{GlobalVariableData, GlobalVariableRef};
 pub use graphviz::render_to;
 pub(crate) use inst::ValueVisitable;
 pub use inst::{

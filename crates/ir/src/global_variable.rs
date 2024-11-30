@@ -7,12 +7,12 @@ use crate::{ir_writer::IrWrite, module::ModuleCtx, Immediate, Linkage, Type};
 
 #[derive(Debug, Default)]
 pub struct GlobalVariableStore {
-    gv_data: PrimaryMap<GlobalVariable, GlobalVariableData>,
-    symbols: FxHashMap<String, GlobalVariable>,
+    gv_data: PrimaryMap<GlobalVariableRef, GlobalVariableData>,
+    symbols: FxHashMap<String, GlobalVariableRef>,
 }
 
 impl GlobalVariableStore {
-    pub fn make_gv(&mut self, gv_data: GlobalVariableData) -> GlobalVariable {
+    pub fn make_gv(&mut self, gv_data: GlobalVariableData) -> GlobalVariableRef {
         match self.symbols.entry(gv_data.symbol.to_string()) {
             std::collections::hash_map::Entry::Occupied(_) => {
                 panic!("duplicate global symbol `{}`", gv_data.symbol);
@@ -25,23 +25,23 @@ impl GlobalVariableStore {
         }
     }
 
-    pub fn gv_data(&self, gv: GlobalVariable) -> &GlobalVariableData {
+    pub fn gv_data(&self, gv: GlobalVariableRef) -> &GlobalVariableData {
         &self.gv_data[gv]
     }
 
-    pub fn gv_by_symbol(&self, symbol: &str) -> Option<GlobalVariable> {
+    pub fn gv_by_symbol(&self, symbol: &str) -> Option<GlobalVariableRef> {
         self.symbols.get(symbol).copied()
     }
 
-    pub fn init_data(&self, gv: GlobalVariable) -> Option<&GvInitializer> {
+    pub fn init_data(&self, gv: GlobalVariableRef) -> Option<&GvInitializer> {
         self.gv_data[gv].initializer.as_ref()
     }
 
-    pub fn is_const(&self, gv: GlobalVariable) -> bool {
+    pub fn is_const(&self, gv: GlobalVariableRef) -> bool {
         self.gv_data[gv].is_const
     }
 
-    pub fn ty(&self, gv: GlobalVariable) -> Type {
+    pub fn ty(&self, gv: GlobalVariableRef) -> Type {
         self.gv_data[gv].ty
     }
 
@@ -60,15 +60,15 @@ impl GlobalVariableStore {
 
 /// An opaque reference to [`GlobalVariableData`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
-pub struct GlobalVariable(pub u32);
-cranelift_entity::entity_impl!(GlobalVariable);
+pub struct GlobalVariableRef(pub u32);
+cranelift_entity::entity_impl!(GlobalVariableRef);
 
-impl GlobalVariable {
+impl GlobalVariableRef {
     pub fn ty(self, module: &ModuleCtx) -> Type {
         module.with_gv_store(|s| s.ty(self))
     }
 }
-impl<Ctx> IrWrite<Ctx> for GlobalVariable
+impl<Ctx> IrWrite<Ctx> for GlobalVariableRef
 where
     Ctx: AsRef<ModuleCtx>,
 {

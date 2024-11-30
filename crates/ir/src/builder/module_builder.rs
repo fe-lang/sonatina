@@ -6,7 +6,7 @@ use super::FunctionBuilder;
 use crate::{
     func_cursor::{CursorLocation, FuncCursor},
     module::{FuncRef, FuncStore, ModuleCtx},
-    Function, GlobalVariable, GlobalVariableData, InstSetBase, Module, Signature, Type,
+    Function, GlobalVariableData, GlobalVariableRef, InstSetBase, Module, Signature, Type,
 };
 
 #[derive(Clone)]
@@ -53,11 +53,11 @@ impl ModuleBuilder {
         self.funcs.view(func_ref, |func| f(&func.sig))
     }
 
-    pub fn make_global(&self, global: GlobalVariableData) -> GlobalVariable {
+    pub fn make_global(&self, global: GlobalVariableData) -> GlobalVariableRef {
         self.ctx.with_gv_store_mut(|s| s.make_gv(global))
     }
 
-    pub fn lookup_global(&self, name: &str) -> Option<GlobalVariable> {
+    pub fn lookup_global(&self, name: &str) -> Option<GlobalVariableRef> {
         self.ctx.with_gv_store(|s| s.gv_by_symbol(name))
     }
 

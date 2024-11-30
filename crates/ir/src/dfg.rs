@@ -12,7 +12,7 @@ use crate::{
     },
     ir_writer::{FuncWriteCtx, IrWrite},
     module::ModuleCtx,
-    GlobalVariable, Inst, InstDowncast, InstDowncastMut, InstSetBase,
+    GlobalVariableRef, Inst, InstDowncast, InstDowncastMut, InstSetBase,
 };
 
 pub struct DataFlowGraph {
@@ -96,7 +96,7 @@ impl DataFlowGraph {
         }
     }
 
-    pub fn make_global_value(&mut self, gv: GlobalVariable) -> ValueId {
+    pub fn make_global_value(&mut self, gv: GlobalVariableRef) -> ValueId {
         let gv_ty = self.ctx.with_gv_store(|s| s.ty(gv));
         let ty = self.ctx.with_ty_store_mut(|s| s.make_ptr(gv_ty));
         let value_data = Value::Global { gv, ty };

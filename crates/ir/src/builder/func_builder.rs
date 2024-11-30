@@ -5,7 +5,7 @@ use super::{
 use crate::{
     func_cursor::{CursorLocation, FuncCursor},
     module::{FuncRef, ModuleCtx},
-    BlockId, Function, GlobalVariable, Immediate, Inst, InstId, InstSetBase, Signature, Type,
+    BlockId, Function, GlobalVariableRef, Immediate, Inst, InstId, InstSetBase, Signature, Type,
     Value, ValueId,
 };
 
@@ -103,7 +103,7 @@ where
     }
 
     /// Return pointer value to the global variable.
-    pub fn make_global_value(&mut self, gv: GlobalVariable) -> ValueId {
+    pub fn make_global_value(&mut self, gv: GlobalVariableRef) -> ValueId {
         self.func.dfg.make_global_value(gv)
     }
 

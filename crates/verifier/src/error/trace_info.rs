@@ -5,7 +5,7 @@ use sonatina_ir::{
     ir_writer::{FuncWriteCtx, InstStatement, IrWrite, ValueWithTy},
     module::FuncRef,
     types::CompoundType,
-    BlockId, Function, GlobalVariable, InstId, Type, ValueId,
+    BlockId, Function, GlobalVariableRef, InstId, Type, ValueId,
 };
 
 /// Execution context.
@@ -16,7 +16,7 @@ pub struct TraceInfo {
     inst_id: PackedOption<InstId>,
     callee: PackedOption<FuncRef>,
     value: PackedOption<ValueId>,
-    gv: PackedOption<GlobalVariable>,
+    gv: PackedOption<GlobalVariableRef>,
     ty: Option<Type>,
     cmpd_ty: PackedOption<CompoundType>,
 }
@@ -42,7 +42,7 @@ impl TraceInfo {
         self.value.expand()
     }
 
-    pub fn gv(&self) -> Option<GlobalVariable> {
+    pub fn gv(&self) -> Option<GlobalVariableRef> {
         self.gv.expand()
     }
 
@@ -134,7 +134,7 @@ pub struct TraceInfoBuilder {
     inst_id: PackedOption<InstId>,
     callee: PackedOption<FuncRef>,
     value: PackedOption<ValueId>,
-    gv: PackedOption<GlobalVariable>,
+    gv: PackedOption<GlobalVariableRef>,
     ty: Option<Type>,
     cmpd_ty: PackedOption<CompoundType>,
 }
@@ -173,7 +173,7 @@ impl TraceInfoBuilder {
         self
     }
 
-    pub fn gv(mut self, gv: GlobalVariable) -> Self {
+    pub fn gv(mut self, gv: GlobalVariableRef) -> Self {
         self.gv = gv.into();
         self
     }

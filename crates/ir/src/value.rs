@@ -7,7 +7,7 @@ use crate::{
     inst::InstId,
     ir_writer::{FuncWriteCtx, IrWrite},
     module::ModuleCtx,
-    GlobalVariable, I256,
+    GlobalVariableRef, I256,
 };
 
 /// An opaque reference to [`Value`].
@@ -71,7 +71,7 @@ pub enum Value {
 
     /// The value is global value.
     Global {
-        gv: GlobalVariable,
+        gv: GlobalVariableRef,
         ty: Type,
     },
 

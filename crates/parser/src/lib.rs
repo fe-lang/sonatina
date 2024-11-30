@@ -11,7 +11,7 @@ use ir::{
     ir_writer::{DebugProvider, IrWrite},
     isa::evm::Evm,
     module::{FuncRef, Module, ModuleCtx},
-    Function, GlobalVariable, GlobalVariableData, Immediate, Signature, Type,
+    Function, GlobalVariableData, GlobalVariableRef, Immediate, Signature, Type,
 };
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smol_str::SmolStr;
@@ -334,7 +334,11 @@ impl BuildCtx {
         }
     }
 
-    fn declare_gv(&mut self, mb: &ModuleBuilder, ast_gv: &ast::GlobalVariable) -> GlobalVariable {
+    fn declare_gv(
+        &mut self,
+        mb: &ModuleBuilder,
+        ast_gv: &ast::GlobalVariable,
+    ) -> GlobalVariableRef {
         let name = &ast_gv.name.string;
         if let Some(gv) = mb.lookup_global(name) {
             self.errors
