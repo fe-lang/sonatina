@@ -1,7 +1,7 @@
 use std::fmt;
 
 use sonatina_ir::{
-    ir_writer::{FuncWriteCtx, ValueWithTy, WriteWithFunc, WriteWithModule},
+    ir_writer::{FuncWriteCtx, IrWrite, ValueWithTy},
     module::FuncRef,
     BlockId, Function, InstId, Type, ValueId,
 };
@@ -67,7 +67,7 @@ impl<'a> DisplayErrorKind<'a> {
     }
 }
 
-impl<'a> fmt::Display for DisplayErrorKind<'a> {
+impl fmt::Display for DisplayErrorKind<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use ErrorKind::*;
         match self.kind {

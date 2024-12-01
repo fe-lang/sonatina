@@ -7,6 +7,7 @@ use sonatina_triple::TargetTriple;
 
 use crate::{
     global_variable::GlobalVariableStore,
+    ir_writer::IrWrite,
     isa::{Endian, Isa, TypeLayout, TypeLayoutError},
     types::TypeStore,
     Function, InstSetBase, Signature, Type,
@@ -109,6 +110,11 @@ pub struct ModuleCtx {
     type_store: Arc<RwLock<TypeStore>>,
     gv_store: Arc<RwLock<GlobalVariableStore>>,
 }
+impl AsRef<ModuleCtx> for ModuleCtx {
+    fn as_ref(&self) -> &ModuleCtx {
+        self
+    }
+}
 
 impl ModuleCtx {
     pub fn new<T: Isa>(isa: &T) -> Self {
@@ -187,5 +193,18 @@ entity_impl!(FuncRef);
 impl FuncRef {
     pub fn as_ptr_ty(self, ctx: &ModuleCtx) -> Type {
         ctx.func_sig(self, |sig| sig.func_ptr_type(ctx))
+    }
+}
+
+impl<Ctx> IrWrite<Ctx> for FuncRef
+where
+    Ctx: AsRef<ModuleCtx>,
+{
+    fn write<W>(&self, w: &mut W, ctx: &Ctx) -> std::io::Result<()>
+    where
+        W: std::io::Write + ?Sized,
+    {
+        ctx.as_ref()
+            .func_sig(*self, |sig| write!(w, "%{}", sig.name()))
     }
 }

@@ -66,7 +66,7 @@ fn report_error(err: pest::error::Error<Rule>, fixture: &Fixture<&str>) {
 
 struct PairsWrapper<'i>(Pairs<'i, Rule>);
 
-impl<'i> fmt::Debug for PairsWrapper<'i> {
+impl fmt::Debug for PairsWrapper<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for pair in self.0.clone() {
             let rule = pair.as_rule();

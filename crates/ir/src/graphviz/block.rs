@@ -4,7 +4,7 @@ use dot2::label;
 
 use super::function::DUMMY_BLOCK;
 use crate::{
-    ir_writer::{FuncWriteCtx, ValueWithTy, WriteWithFunc},
+    ir_writer::{FuncWriteCtx, IrWrite, ValueWithTy},
     BlockId, ControlFlowGraph, Function,
 };
 
@@ -28,7 +28,7 @@ impl<'a> BlockNode<'a> {
     }
 }
 
-impl<'a> BlockNode<'a> {
+impl BlockNode<'_> {
     pub(super) fn label(self) -> label::Text<'static> {
         let Self { block, ctx, .. } = self;
         let Function { sig, layout, .. } = &ctx.func;

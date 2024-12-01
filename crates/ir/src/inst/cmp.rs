@@ -1,6 +1,6 @@
 use macros::Inst;
 
-use crate::{inst::impl_inst_write, ValueId};
+use crate::ValueId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Lt {
@@ -9,7 +9,6 @@ pub struct Lt {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_inst_write!(Lt);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Gt {
@@ -18,7 +17,6 @@ pub struct Gt {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_inst_write!(Gt);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Slt {
@@ -27,7 +25,6 @@ pub struct Slt {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_inst_write!(Slt);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Sgt {
@@ -36,7 +33,6 @@ pub struct Sgt {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_inst_write!(Sgt);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Le {
@@ -45,7 +41,6 @@ pub struct Le {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_inst_write!(Le);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Ge {
@@ -54,7 +49,6 @@ pub struct Ge {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_inst_write!(Ge);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Sle {
@@ -63,7 +57,6 @@ pub struct Sle {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_inst_write!(Sle);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Sge {
@@ -72,7 +65,6 @@ pub struct Sge {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_inst_write!(Sge);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Eq {
@@ -81,7 +73,6 @@ pub struct Eq {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_inst_write!(Eq);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct Ne {
@@ -90,11 +81,9 @@ pub struct Ne {
     #[inst(value)]
     rhs: ValueId,
 }
-impl_inst_write!(Ne);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct IsZero {
     #[inst(value)]
     lhs: ValueId,
 }
-impl_inst_write!(IsZero);

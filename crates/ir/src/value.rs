@@ -1,11 +1,12 @@
 //! This module contains Sonatine IR value definition.
 use core::fmt;
-use std::ops;
+use std::{io, ops};
 
 use super::Type;
 use crate::{
     inst::InstId,
-    ir_writer::{WriteWithFunc, WriteWithModule},
+    ir_writer::{FuncWriteCtx, IrWrite},
+    module::ModuleCtx,
     GlobalVariable, I256,
 };
 
@@ -13,6 +14,39 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
 pub struct ValueId(pub u32);
 cranelift_entity::entity_impl!(ValueId);
+
+impl IrWrite<FuncWriteCtx<'_>> for ValueId {
+    fn write<W>(&self, w: &mut W, ctx: &FuncWriteCtx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        if let Some(name) = ctx.dbg.value_name(ctx.func, ctx.func_ref, *self) {
+            write!(w, "{name}")
+        } else {
+            match ctx.func.dfg.value(*self) {
+                Value::Immediate { imm, ty } => {
+                    write!(w, "{}.", imm)?;
+                    ty.write(w, ctx)
+                }
+
+                Value::Global { gv, .. } => ctx
+                    .func
+                    .dfg
+                    .ctx
+                    .with_gv_store(|s| write!(w, "${}", s.gv_data(*gv).symbol)),
+
+                Value::Undef { ty } => {
+                    write!(w, "undef.")?;
+                    ty.write(w, ctx)
+                }
+
+                Value::Arg { .. } | Value::Inst { .. } => {
+                    write!(w, "v{}", self.0)
+                }
+            }
+        }
+    }
+}
 
 /// An value data definition.
 #[derive(Debug, Clone)]
@@ -44,40 +78,6 @@ pub enum Value {
     Undef {
         ty: Type,
     },
-}
-
-impl WriteWithFunc for ValueId {
-    fn write(
-        &self,
-        ctx: &crate::ir_writer::FuncWriteCtx,
-        w: &mut impl std::io::Write,
-    ) -> std::io::Result<()> {
-        if let Some(name) = ctx.dbg.value_name(ctx.func, ctx.func_ref, *self) {
-            write!(w, "{name}")
-        } else {
-            match ctx.func.dfg.value(*self) {
-                Value::Immediate { imm, ty } => {
-                    write!(w, "{}.", imm)?;
-                    ty.write(ctx.func.ctx(), w)
-                }
-
-                Value::Global { gv, .. } => ctx
-                    .func
-                    .dfg
-                    .ctx
-                    .with_gv_store(|s| write!(w, "${}", s.gv_data(*gv).symbol)),
-
-                Value::Undef { ty } => {
-                    write!(w, "undef.")?;
-                    ty.write(ctx.func.ctx(), w)
-                }
-
-                Value::Arg { .. } | Value::Inst { .. } => {
-                    write!(w, "v{}", self.0)
-                }
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -376,6 +376,32 @@ impl ops::Shr for Immediate {
 
     fn shr(self, rhs: Self) -> Self::Output {
         self.apply_binop(rhs, ops::Shl::shl)
+    }
+}
+
+impl<Ctx> IrWrite<Ctx> for Immediate
+where
+    Ctx: AsRef<ModuleCtx>,
+{
+    fn write<W>(&self, w: &mut W, _ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        match self {
+            Self::I1(v) => {
+                if *v {
+                    write!(w, "1")
+                } else {
+                    write!(w, "0")
+                }
+            }
+            Self::I8(v) => write!(w, "{}", v),
+            Self::I16(v) => write!(w, "{}", v),
+            Self::I32(v) => write!(w, "{}", v),
+            Self::I64(v) => write!(w, "{}", v),
+            Self::I128(v) => write!(w, "{}", v),
+            Self::I256(v) => write!(w, "{}", v),
+        }
     }
 }
 

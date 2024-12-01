@@ -5,7 +5,7 @@ use dot2::{label::Text, GraphWalk, Id, Labeller, Style};
 use super::block::BlockNode;
 use crate::{
     inst::control_flow::Phi,
-    ir_writer::{FuncWriteCtx, WriteWithFunc},
+    ir_writer::{FuncWriteCtx, IrWrite},
     prelude::*,
     BlockId, ControlFlowGraph,
 };
@@ -124,7 +124,7 @@ pub(super) struct BlockEdge<'a> {
     ctx: &'a FuncWriteCtx<'a>,
 }
 
-impl<'a> BlockEdge<'a> {
+impl BlockEdge<'_> {
     fn label(self) -> Text<'static> {
         let Self { from, to, ctx } = self;
         let to = to.block;

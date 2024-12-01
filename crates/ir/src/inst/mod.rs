@@ -19,7 +19,7 @@ use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 
 use crate::{
-    ir_writer::{FuncWriteCtx, WriteWithFunc},
+    ir_writer::{FuncWriteCtx, IrWrite},
     InstSetBase, ValueId,
 };
 
@@ -63,11 +63,14 @@ pub trait InstExt: Inst {
     fn belongs_to(isb: &dyn InstSetBase) -> Option<&dyn HasInst<Self>>;
 }
 
-impl WriteWithFunc for InstId {
-    fn write(&self, ctx: &FuncWriteCtx, w: &mut impl io::Write) -> io::Result<()> {
+impl IrWrite<FuncWriteCtx<'_>> for InstId {
+    fn write<W>(&self, w: &mut W, ctx: &FuncWriteCtx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
         let inst = ctx.func.dfg.inst(*self);
         let write: &dyn InstWrite = InstDowncast::downcast(ctx.func.inst_set(), inst).unwrap();
-        write.write(ctx, w)
+        write.write(w, ctx)
     }
 }
 
@@ -213,64 +216,6 @@ impl SideEffect {
 
 #[inst_prop]
 trait InstWrite {
-    fn write(&self, ctx: &FuncWriteCtx, w: &mut dyn io::Write) -> io::Result<()>;
+    fn write(&self, w: &mut dyn io::Write, ctx: &FuncWriteCtx) -> io::Result<()>;
     type Members = All;
 }
-
-macro_rules! impl_inst_write {
-    ($ty:ty) => {
-        impl $crate::inst::InstWrite for $ty {
-            fn write(
-                &self,
-                ctx: &crate::ir_writer::FuncWriteCtx,
-                mut w: &mut dyn std::io::Write,
-            ) -> std::io::Result<()> {
-                w.write_fmt(format_args!("{} ", crate::Inst::as_text(self)))?;
-                let values = crate::Inst::collect_values(self);
-                let mut values = values.iter();
-
-                if let Some(value) = values.next() {
-                    $crate::ir_writer::WriteWithFunc::write(value, ctx, &mut w)?
-                }
-                for value in values {
-                    write!(w, " ")?;
-                    $crate::ir_writer::WriteWithFunc::write(value, ctx, &mut w)?
-                }
-                Ok(())
-            }
-        }
-    };
-
-    ($ty:ty, ($($field:ident: $kind:ident),+)) => {
-        impl $crate::inst::InstWrite for $ty {
-            fn write(
-                &self,
-                ctx: &crate::ir_writer::FuncWriteCtx,
-                mut w: &mut dyn std::io::Write,
-            ) -> std::io::Result<()> {
-                w.write_fmt(format_args!("{} ", crate::Inst::as_text(self)))?;
-                $crate::inst::__write_args!(self, ctx, &mut w, ($($field: $kind),+));
-                Ok(())
-            }
-        }
-    };
-}
-
-macro_rules! __write_args {
-    ($self:expr, $ctx:expr, $w:expr, ($field:ident: $kind:ident $(,$fields:ident: $kinds:ident)+)) => {
-        $crate::inst::__write_args!($self, $ctx, $w, ($field: $kind));
-        write!(&mut $w, " ")?;
-        $crate::inst::__write_args!($self, $ctx, $w, ($($fields: $kinds),+));
-    };
-
-    ($self:expr, $ctx:expr, $w:expr, ($field:ident: Type)) => {
-        $crate::ir_writer::WriteWithModule::write($self.$field(), $ctx.func.ctx(), $w)?
-    };
-
-    ($self:expr, $ctx:expr, $w:expr, ($field:ident: ValueId)) => {
-        $crate::ir_writer::WriteWithFunc::write($self.$field(), $ctx, $w)?
-    };
-}
-
-use __write_args;
-use impl_inst_write;

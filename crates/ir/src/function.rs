@@ -3,11 +3,7 @@ use std::io;
 use smallvec::SmallVec;
 
 use super::{DataFlowGraph, Layout, Type, ValueId};
-use crate::{
-    ir_writer::{FuncWriteCtx, WriteWithFunc, WriteWithModule},
-    module::ModuleCtx,
-    InstSetBase, Linkage,
-};
+use crate::{ir_writer::IrWrite, module::ModuleCtx, InstSetBase, Linkage};
 
 pub struct Function {
     /// Signature of the function.
@@ -97,27 +93,19 @@ impl Signature {
     }
 }
 
-impl WriteWithFunc for Signature {
-    fn write(&self, ctx: &FuncWriteCtx, w: &mut impl io::Write) -> io::Result<()> {
-        let Signature {
-            name,
-            linkage,
-            args,
-            ret_ty,
-        } = self;
-
-        write!(w, "func {linkage} %{name}(")?;
-        let mut args = args.iter();
-        if let Some(arg) = args.next() {
-            arg.write(ctx.module_ctx(), &mut *w)?;
-        };
-
-        for arg in args {
-            write!(w, " ")?;
-            arg.write(ctx.module_ctx(), &mut *w)?;
-        }
+impl<Ctx> IrWrite<Ctx> for Signature
+where
+    Ctx: AsRef<ModuleCtx>,
+{
+    fn write<W>(&self, w: &mut W, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        write!(w, "func ")?;
+        self.linkage.write(w, ctx)?;
+        write!(w, " %{}(", self.name)?;
+        self.args.write_with_delim(w, " ", ctx)?;
         write!(w, ") -> ")?;
-
-        ret_ty.write(ctx.module_ctx(), &mut *w)
+        self.ret_ty.write(w, ctx)
     }
 }

@@ -202,7 +202,7 @@ impl<'i, E> Node<'i, E> {
     }
 }
 
-impl<'i, E> std::default::Default for Node<'i, E> {
+impl<E> std::default::Default for Node<'_, E> {
     fn default() -> Self {
         Self {
             rule: Rule::EOI,

@@ -2,7 +2,7 @@ use std::fmt;
 
 use cranelift_entity::packed_option::PackedOption;
 use sonatina_ir::{
-    ir_writer::{FuncWriteCtx, InstStatement, ValueWithTy, WriteWithFunc, WriteWithModule},
+    ir_writer::{FuncWriteCtx, InstStatement, IrWrite, ValueWithTy},
     module::FuncRef,
     types::CompoundType,
     BlockId, Function, GlobalVariable, InstId, Type, ValueId,
@@ -67,7 +67,7 @@ impl<'a, 'b> DisplayTraceInfo<'a, 'b> {
     }
 }
 
-impl<'a, 'b> fmt::Display for DisplayTraceInfo<'a, 'b> {
+impl fmt::Display for DisplayTraceInfo<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let TraceInfo {
             block,

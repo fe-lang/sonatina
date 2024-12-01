@@ -10,7 +10,7 @@ use crate::{
         control_flow::{self, Branch, Jump, Phi},
         InstId, SideEffect,
     },
-    ir_writer::{FuncWriteCtx, WriteWithFunc},
+    ir_writer::{FuncWriteCtx, IrWrite},
     module::ModuleCtx,
     GlobalVariable, Inst, InstDowncast, InstDowncastMut, InstSetBase,
 };
@@ -301,8 +301,11 @@ impl DataFlowGraph {
 pub struct BlockId(pub u32);
 entity_impl!(BlockId, "block");
 
-impl WriteWithFunc for BlockId {
-    fn write(&self, _ctx: &FuncWriteCtx, w: &mut impl io::Write) -> io::Result<()> {
+impl<'a> IrWrite<FuncWriteCtx<'a>> for BlockId {
+    fn write<W>(&self, w: &mut W, _ctx: &FuncWriteCtx<'a>) -> io::Result<()>
+    where
+        W: io::Write + ?Sized,
+    {
         write!(w, "block{}", self.0)
     }
 }

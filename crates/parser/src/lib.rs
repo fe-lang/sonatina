@@ -8,7 +8,7 @@ use ir::{
     builder::{FunctionBuilder, ModuleBuilder},
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     global_variable::GvInitializer,
-    ir_writer::{DebugProvider, WriteWithModule},
+    ir_writer::{DebugProvider, IrWrite},
     isa::evm::Evm,
     module::{FuncRef, Module, ModuleCtx},
     Function, GlobalVariable, GlobalVariableData, Immediate, Signature, Type,
