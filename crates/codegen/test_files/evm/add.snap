@@ -1,0 +1,126 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(v).unwrap()"
+input_file: test_files/evm/add.sntn
+---
+// func public %entry() -> unit
+entry:
+  block0:
+    JUMPDEST
+    PUSH0  // v0.i256 = evm_call_data_load 0.i32;
+    CALLDATALOAD
+    DUP1  // v1.i32 = shr 224.i32 v0;
+    PUSH1 0xe0 (224)
+    SHR
+    SWAP1  // v2.i32 = shl 32.i32 v0;
+    PUSH1 0x20 (32)
+    SHL
+    PUSH1 0xe0 (224)  // v3.i32 = shr 224.i32 v2;
+    SHR
+    PUSH1 `pc + (5)`  // v4.i32 = call %add v1 v3;
+    SWAP1
+    DUP3
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    SWAP1  // mstore 0.i32 v4 i32;
+    POP
+    PUSH0
+    SWAP1
+    PUSH1 0xe0 (224)
+    SHL
+    SWAP1
+    MSTORE
+    PUSH1 0x4 (4)  // evm_return 0.i8 4.i8;
+    PUSH0
+    RETURN
+
+// func public %add(v0.i32, v1.i32) -> i32
+add:
+  block0:
+    JUMPDEST
+    ADD  // v2.i32 = add v0 v1;
+    SWAP1  // return v2;
+    JUMP
+
+
+
+---------------
+
+// func public %entry() -> unit
+entry:
+  block0:
+    0    JUMPDEST
+    1    PUSH0  // v0.i256 = evm_call_data_load 0.i32;
+    2    CALLDATALOAD
+    3    DUP1  // v1.i32 = shr 224.i32 v0;
+    4    PUSH1 0xe0 (224)
+    6    SHR
+    7    SWAP1  // v2.i32 = shl 32.i32 v0;
+    8    PUSH1 0x20 (32)
+   10    SHL
+   11    PUSH1 0xe0 (224)  // v3.i32 = shr 224.i32 v2;
+   13    SHR
+   14    PUSH1 21  // v4.i32 = call %add v1 v3;
+   16    SWAP1
+   17    DUP3
+   18    PUSH1 35 (FuncRef(1))
+   20    JUMP
+   21    JUMPDEST
+   22    SWAP1  // mstore 0.i32 v4 i32;
+   23    POP
+   24    PUSH0
+   25    SWAP1
+   26    PUSH1 0xe0 (224)
+   28    SHL
+   29    SWAP1
+   30    MSTORE
+   31    PUSH1 0x4 (4)  // evm_return 0.i8 4.i8;
+   33    PUSH0
+   34    RETURN
+// func public %add(v0.i32, v1.i32) -> i32
+add:
+  block0:
+   35    JUMPDEST
+   36    ADD  // v2.i32 = add v0 v1;
+   37    SWAP1  // return v2;
+   38    JUMP
+
+0x5b5f358060e01c9060201b60e01c601590826023565b90505f9060e01b905260045ff35b019056
+
+    pc  opcode            input (stack grows to the right)
+     0  5b  JUMPDEST      []
+     1  5f  PUSH0         []
+     2  35  CALLDATALOAD  [0]
+     3  80  DUP1          [296559413476753275919844142761603304720577249802198117070348472025088]
+     4  60  PUSH1         0xe0
+     6  1c  SHR           [296559413476753275919844142761603304720577249802198117070348472025088, 296559413476753275919844142761603304720577249802198117070348472025088, 224]
+     7  90  SWAP1         [296559413476753275919844142761603304720577249802198117070348472025088, 11]
+     8  60  PUSH1         0x20
+    10  1b  SHL           [11, 296559413476753275919844142761603304720577249802198117070348472025088, 32]
+    11  60  PUSH1         0xe0
+    13  1c  SHR           [11, 593118826677314075482674331914431874820017177295892594584279425482752, 224]
+    14  60  PUSH1         0x15
+    16  90  SWAP1         [11, 22, 21]
+    17  82  DUP3          [11, 21, 22]
+    18  60  PUSH1         0x23
+    20  56  JUMP          [11, 21, 22, 11, 35]
+    35  5b  JUMPDEST      [11, 21, 22, 11]
+    36  01  ADD           [11, 21, 22, 11]
+    37  90  SWAP1         [11, 21, 33]
+    38  56  JUMP          [11, 33, 21]
+    21  5b  JUMPDEST      [11, 33]
+    22  90  SWAP1         [11, 33]
+    23  50  POP           [33, 11]
+    24  5f  PUSH0         [33]
+    25  90  SWAP1         [33, 0]
+    26  60  PUSH1         0xe0
+    28  1b  SHL           [0, 33, 224]
+    29  90  SWAP1         [0, 889678240015971113224011497871647812230025765943838891876419138224128]
+    30  52  MSTORE        [889678240015971113224011497871647812230025765943838891876419138224128, 0]
+    31  60  PUSH1         0x04
+    33  5f  PUSH0         [4]
+    34  f3  RETURN        [4, 0]
+
+
+Success { reason: Return, gas_used: 21152, gas_refunded: 0, logs: [], output: Call(0x00000021) }

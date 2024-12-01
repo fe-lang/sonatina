@@ -35,8 +35,8 @@ pub trait Inst: inst_set::sealed::Registered + DynClone + Any + Send + Sync {
     fn as_text(&self) -> &'static str;
     fn is_terminator(&self) -> bool;
 
-    fn collect_values(&self) -> Vec<ValueId> {
-        let mut vs = Vec::new();
+    fn collect_values(&self) -> SmallVec<[ValueId; 2]> {
+        let mut vs = SmallVec::new();
 
         self.visit_values(&mut |v| vs.push(v));
         vs

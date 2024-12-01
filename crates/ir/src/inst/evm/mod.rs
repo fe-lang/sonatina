@@ -115,6 +115,7 @@ pub struct EvmCallValue {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Read))]
 pub struct EvmCallDataLoad {
+    #[inst(value)]
     data_offset: ValueId,
 }
 

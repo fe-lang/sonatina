@@ -133,21 +133,7 @@ impl<'a> FuncWriter<'a> {
     }
 
     pub fn write(&mut self, w: &mut impl io::Write) -> io::Result<()> {
-        let func = &self.ctx.func;
-        write!(w, "func ")?;
-        func.sig.linkage().write(w, &self.ctx)?;
-        write!(w, " %{}(", func.sig.name())?;
-        let arg_values: SmallVec<[ValueWithTy; 8]> = self
-            .ctx
-            .func
-            .arg_values
-            .iter()
-            .map(|value| ValueWithTy(*value))
-            .collect();
-        arg_values.write_with_delim(w, ", ", &self.ctx)?;
-
-        write!(w, ") -> ")?;
-        func.sig.ret_ty().write(w, &self.ctx)?;
+        FunctionSignature.write(w, &self.ctx)?;
         writeln!(w, " {{")?;
 
         self.level += 1;
@@ -359,6 +345,29 @@ where
 
     fn has_content(&self) -> bool {
         self.as_ref().map(|x| x.has_content()).unwrap_or_default()
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct FunctionSignature;
+impl IrWrite<FuncWriteCtx<'_>> for FunctionSignature {
+    fn write<W>(&self, w: &mut W, ctx: &FuncWriteCtx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        write!(w, "func ")?;
+        ctx.func.sig.linkage().write(w, &ctx)?;
+        write!(w, " %{}(", ctx.func.sig.name())?;
+        let arg_values: SmallVec<[ValueWithTy; 8]> = ctx
+            .func
+            .arg_values
+            .iter()
+            .map(|value| ValueWithTy(*value))
+            .collect();
+        arg_values.write_with_delim(w, ", ", ctx)?;
+
+        write!(w, ") -> ")?;
+        ctx.func.sig.ret_ty().write(w, &ctx)
     }
 }
 
