@@ -114,17 +114,18 @@ pub struct EvmCallValue {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Read))]
-pub struct EvmCallDataLoad {
+pub struct EvmCalldataLoad {
+    #[inst(value)]
     data_offset: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Read))]
-pub struct EvmCallDataSize {}
+pub struct EvmCalldataSize {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Write))]
-pub struct EvmCallDataCopy {
+pub struct EvmCalldataCopy {
     #[inst(value)]
     dst_addr: ValueId,
     #[inst(value)]
