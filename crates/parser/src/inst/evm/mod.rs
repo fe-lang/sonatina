@@ -16,9 +16,9 @@ super::impl_inst_build! {EvmBalance, (contract_addr: ValueId)}
 super::impl_inst_build! {EvmOrigin, ()}
 super::impl_inst_build! {EvmCaller, ()}
 super::impl_inst_build! {EvmCallValue, ()}
-super::impl_inst_build! {EvmCallDataLoad, (data_offset: ValueId)}
-super::impl_inst_build! {EvmCallDataCopy, (dst_addr: ValueId, data_offset: ValueId, len: ValueId)}
-super::impl_inst_build! {EvmCallDataSize, ()}
+super::impl_inst_build! {EvmCalldataLoad, (data_offset: ValueId)}
+super::impl_inst_build! {EvmCalldataCopy, (dst_addr: ValueId, data_offset: ValueId, len: ValueId)}
+super::impl_inst_build! {EvmCalldataSize, ()}
 super::impl_inst_build! {EvmCodeSize, ()}
 super::impl_inst_build! {EvmCodeCopy, (dst_addr: ValueId, code_offset: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmGasPrice, ()}
