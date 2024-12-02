@@ -29,7 +29,7 @@ impl GlobalVariableStore {
         &self.gv_data[gv]
     }
 
-    pub fn gv_by_symbol(&self, symbol: &str) -> Option<GlobalVariableRef> {
+    pub fn lookup_gv(&self, symbol: &str) -> Option<GlobalVariableRef> {
         self.symbols.get(symbol).copied()
     }
 
@@ -45,12 +45,29 @@ impl GlobalVariableStore {
         self.gv_data[gv].ty
     }
 
+    pub fn all_gv_refs(&self) -> impl Iterator<Item = GlobalVariableRef> {
+        self.gv_data.keys()
+    }
+
     pub fn all_gv_data(&self) -> impl Iterator<Item = &GlobalVariableData> {
         self.gv_data.values()
     }
 
     pub fn len(&self) -> usize {
         self.gv_data.len()
+    }
+
+    /// Update the linkage of a global variable.
+    pub fn update_linkage(&mut self, gv_ref: GlobalVariableRef, linkage: Linkage) {
+        self.gv_data[gv_ref].linkage = linkage;
+    }
+
+    pub fn update_initializer(
+        &mut self,
+        gv_ref: GlobalVariableRef,
+        initializer: Option<GvInitializer>,
+    ) {
+        self.gv_data[gv_ref].initializer = initializer;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -96,14 +113,14 @@ impl GlobalVariableData {
         ty: Type,
         linkage: Linkage,
         is_const: bool,
-        data: Option<GvInitializer>,
+        initializer: Option<GvInitializer>,
     ) -> Self {
         Self {
             symbol,
             ty,
             linkage,
             is_const,
-            initializer: data,
+            initializer,
         }
     }
 

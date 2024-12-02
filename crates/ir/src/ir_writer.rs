@@ -133,10 +133,15 @@ impl<'a> FuncWriter<'a> {
     }
 
     pub fn write(&mut self, w: &mut impl io::Write) -> io::Result<()> {
-        let func = &self.ctx.func;
+        let func_ref = self.ctx.func_ref;
+        let m_ctx = self.ctx.module_ctx();
+
         write!(w, "func ")?;
-        func.sig.linkage().write(w, &self.ctx)?;
-        write!(w, " %{}(", func.sig.name())?;
+        m_ctx.func_sig(func_ref, |sig| {
+            sig.linkage().write(w, &self.ctx)?;
+            write!(w, " %{}(", sig.name())?;
+            io::Result::Ok(())
+        })?;
         let arg_values: SmallVec<[ValueWithTy; 8]> = self
             .ctx
             .func
@@ -147,7 +152,7 @@ impl<'a> FuncWriter<'a> {
         arg_values.write_with_delim(w, ", ", &self.ctx)?;
 
         write!(w, ") -> ")?;
-        func.sig.ret_ty().write(w, &self.ctx)?;
+        m_ctx.func_sig(func_ref, |sig| sig.ret_ty().write(w, &self.ctx))?;
         writeln!(w, " {{")?;
 
         self.level += 1;

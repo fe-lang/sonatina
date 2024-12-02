@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
+use sonatina_triple::TargetTriple;
 
 use super::FunctionBuilder;
 use crate::{
     func_cursor::{CursorLocation, FuncCursor},
     module::{FuncRef, FuncStore, ModuleCtx},
+    types::{CompoundType, CompoundTypeRef},
     Function, GlobalVariableData, GlobalVariableRef, InstSetBase, Module, Signature, Type,
 };
 
@@ -49,46 +51,31 @@ impl ModuleBuilder {
         }
     }
 
+    pub fn triple(&self) -> TargetTriple {
+        self.ctx.triple
+    }
+
     // TODO: Return result to check duplicated func declaration.
     pub fn declare_function(&self, sig: Signature) -> FuncRef {
         if let Some(func_ref) = self.declared_funcs.get(sig.name()) {
             *func_ref
         } else {
             let name = sig.name().to_string();
-            let func = Function::new(&self.ctx, sig.clone());
+            let func = Function::new(&self.ctx, &sig);
             let func_ref = self.func_store.insert(func);
-            self.declared_funcs.insert(name, func_ref);
+            self.declared_funcs.insert(sig.name().to_string(), func_ref);
             self.ctx.declared_funcs.insert(func_ref, sig);
             func_ref
         }
     }
 
-    pub fn lookup_func(&self, name: &str) -> Option<FuncRef> {
-        self.declared_funcs.get(name).map(|func_ref| *func_ref)
-    }
-
-    pub fn sig<F, R>(&self, func_ref: FuncRef, f: F) -> R
-    where
-        F: FnOnce(&Signature) -> R,
-    {
-        self.func_store.view(func_ref, |func| f(&func.sig))
-    }
-
-    pub fn make_global(&self, global: GlobalVariableData) -> GlobalVariableRef {
+    pub fn declare_gv(&self, global: GlobalVariableData) -> GlobalVariableRef {
         self.ctx.with_gv_store_mut(|s| s.make_gv(global))
-    }
-
-    pub fn lookup_global(&self, name: &str) -> Option<GlobalVariableRef> {
-        self.ctx.with_gv_store(|s| s.gv_by_symbol(name))
     }
 
     pub fn declare_struct_type(&self, name: &str, fields: &[Type], packed: bool) -> Type {
         self.ctx
             .with_ty_store_mut(|s| s.make_struct(name, fields, packed))
-    }
-
-    pub fn get_struct_type(&self, name: &str) -> Option<Type> {
-        self.ctx.with_ty_store(|s| s.struct_type_by_name(name))
     }
 
     pub fn declare_array_type(&self, elem: Type, len: usize) -> Type {
@@ -97,6 +84,45 @@ impl ModuleBuilder {
 
     pub fn declare_func_type(&self, args: &[Type], ret_ty: Type) -> Type {
         self.ctx.with_ty_store_mut(|s| s.make_func(args, ret_ty))
+    }
+
+    pub fn lookup_func(&self, name: &str) -> Option<FuncRef> {
+        self.declared_funcs.get(name).map(|func_ref| *func_ref)
+    }
+
+    pub fn lookup_gv(&self, name: &str) -> Option<GlobalVariableRef> {
+        self.ctx.with_gv_store(|s| s.lookup_gv(name))
+    }
+
+    pub fn lookup_struct(&self, name: &str) -> Option<CompoundTypeRef> {
+        self.ctx.with_ty_store(|s| s.lookup_struct(name))
+    }
+
+    pub fn sig<F, R>(&self, func_ref: FuncRef, f: F) -> R
+    where
+        F: FnOnce(&Signature) -> R,
+    {
+        self.ctx.func_sig(func_ref, f)
+    }
+
+    /// Update the fields of a struct type. This should be used to update the
+    /// fields of a struct type especially when the struct type definition
+    /// is involved in an indirect recursive type.
+    ///
+    /// The corresponding [`Type`] will automatically point to the updated
+    /// struct, and old struct definition is removed from the module.
+    ///
+    /// # Panic
+    /// This function panics if the struct type with the given name is not
+    /// found.
+    pub fn update_struct_fields(&self, name: &str, fields: &[Type]) {
+        self.ctx
+            .with_ty_store_mut(|s| s.update_struct_fields(name, fields));
+    }
+
+    #[doc(hidden)]
+    pub fn make_compound(&self, cmpd: CompoundType) -> CompoundTypeRef {
+        self.ctx.with_ty_store_mut(|s| s.make_compound(cmpd))
     }
 
     pub fn ptr_type(&self, ty: Type) -> Type {

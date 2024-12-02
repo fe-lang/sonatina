@@ -10,75 +10,101 @@ use crate::{ir_writer::IrWrite, module::ModuleCtx};
 
 #[derive(Debug, Default)]
 pub struct TypeStore {
-    compounds: PrimaryMap<CompoundTypeRef, CompoundTypeData>,
-    rev_types: FxHashMap<CompoundTypeData, CompoundTypeRef>,
+    compounds: PrimaryMap<CompoundTypeRef, CompoundType>,
+    rev_types: FxHashMap<CompoundType, CompoundTypeRef>,
     struct_types: IndexMap<String, CompoundTypeRef>,
 }
 
 impl TypeStore {
     pub fn make_ptr(&mut self, ty: Type) -> Type {
-        let ty = self.make_compound(CompoundTypeData::Ptr(ty));
+        let ty = self.make_compound(CompoundType::Ptr(ty));
         Type::Compound(ty)
     }
 
     pub fn make_array(&mut self, elem: Type, len: usize) -> Type {
-        let ty = self.make_compound(CompoundTypeData::Array { elem, len });
+        let ty = self.make_compound(CompoundType::Array { elem, len });
         Type::Compound(ty)
     }
 
     pub fn make_struct(&mut self, name: &str, fields: &[Type], packed: bool) -> Type {
-        let compound_data = CompoundTypeData::Struct(StructData {
+        let compound_data = CompoundType::Struct(StructData {
             name: name.to_string(),
             fields: fields.to_vec(),
             packed,
         });
-        let compound = self.make_compound(compound_data);
-        debug_assert!(
-            !self.struct_types.contains_key(name),
-            "struct {name} is already defined"
-        );
-        self.struct_types.insert(name.to_string(), compound);
-        Type::Compound(compound)
+
+        let cmpd_ref = self.make_compound(compound_data);
+        Type::Compound(cmpd_ref)
     }
 
     pub fn make_func(&mut self, args: &[Type], ret_ty: Type) -> Type {
-        let compound = self.make_compound(CompoundTypeData::Func {
+        let cmpd_ref = self.make_compound(CompoundType::Func {
             args: args.into(),
             ret_ty,
         });
-        Type::Compound(compound)
+        Type::Compound(cmpd_ref)
     }
 
     /// Returns `[StructData]` if the given type is a struct type.
     pub fn struct_def(&self, ty: Type) -> Option<&StructData> {
         match ty {
-            Type::Compound(compound) => match self.compounds[compound] {
-                CompoundTypeData::Struct(ref def) => Some(def),
+            Type::Compound(cmpd_ref) => match self.compounds[cmpd_ref] {
+                CompoundType::Struct(ref def) => Some(def),
                 _ => None,
             },
             _ => None,
         }
+    }
+
+    pub fn all_compounds(&self) -> impl Iterator<Item = (CompoundTypeRef, &CompoundType)> {
+        self.compounds.iter()
     }
 
     pub fn array_def(&self, ty: Type) -> Option<(Type, usize)> {
         match ty {
-            Type::Compound(compound) => match self.compounds[compound] {
-                CompoundTypeData::Array { elem, len } => Some((elem, len)),
+            Type::Compound(cmpd_ref) => match self.compounds[cmpd_ref] {
+                CompoundType::Array { elem, len } => Some((elem, len)),
                 _ => None,
             },
             _ => None,
         }
     }
 
-    pub fn struct_type_by_name(&self, name: &str) -> Option<Type> {
-        self.struct_types.get(name).map(|ty| Type::Compound(*ty))
+    /// Lookup the struct type by name.
+    pub fn lookup_struct(&self, name: &str) -> Option<CompoundTypeRef> {
+        self.struct_types.get(name).copied()
+    }
+
+    /// Update struct fields.
+    /// The corresponding `CompoundTypeRef` is still valid after the update.
+    ///
+    /// # Panic
+    /// This function panics if the struct type with the given name is not
+    /// found.
+    pub fn update_struct_fields(&mut self, name: &str, fields: &[Type]) {
+        let Some(cmpd_ref) = self.struct_types.get(name).cloned() else {
+            panic!("struct {name} is not found");
+        };
+
+        let cmpd = &mut self.compounds[cmpd_ref];
+        // Remove old struct data from reverse lookup table.
+        self.rev_types.remove(cmpd);
+
+        let CompoundType::Struct(s_data) = cmpd else {
+            return;
+        };
+
+        // Update struct data.
+        s_data.fields = fields.to_vec();
+        // Update reverse lookup table.
+        self.rev_types.insert(cmpd.clone(), cmpd_ref);
     }
 
     pub fn all_struct_data(&self) -> impl Iterator<Item = &StructData> {
         self.struct_types
             .values()
             .map(|compound_type| match self.compounds[*compound_type] {
-                CompoundTypeData::Struct(ref def) => def,
+                CompoundType::Struct(ref def) => def,
                 _ => unreachable!(),
             })
     }
@@ -88,7 +114,7 @@ impl TypeStore {
             Type::Compound(ty) => {
                 let ty_data = &self.compounds[ty];
                 match ty_data {
-                    CompoundTypeData::Ptr(ty) => Some(*ty),
+                    CompoundType::Ptr(ty) => Some(*ty),
                     _ => None,
                 }
             }
@@ -102,30 +128,54 @@ impl TypeStore {
 
     pub fn is_ptr(&self, ty: Type) -> bool {
         match ty {
-            Type::Compound(compound) => self.compounds[compound].is_ptr(),
+            Type::Compound(cmpd_ref) => self.compounds[cmpd_ref].is_ptr(),
             _ => false,
         }
     }
 
     pub fn is_array(&self, ty: Type) -> bool {
         match ty {
-            Type::Compound(compound) => self.compounds[compound].is_array(),
+            Type::Compound(cmpd_ref) => self.compounds[cmpd_ref].is_array(),
             _ => false,
         }
     }
 
-    pub fn make_compound(&mut self, data: CompoundTypeData) -> CompoundTypeRef {
-        if let Some(compound) = self.rev_types.get(&data) {
-            *compound
-        } else {
-            let compound = self.compounds.push(data.clone());
-            self.rev_types.insert(data, compound);
-            compound
+    pub fn is_struct(&self, ty: Type) -> bool {
+        match ty {
+            Type::Compound(cmpd_ref) => self.compounds[cmpd_ref].is_struct(),
+            _ => false,
         }
     }
 
-    pub fn resolve_compound(&self, compound: CompoundTypeRef) -> &CompoundTypeData {
-        &self.compounds[compound]
+    pub fn is_func(&self, ty: Type) -> bool {
+        match ty {
+            Type::Compound(cmpd_ref) => self.compounds[cmpd_ref].is_func(),
+            _ => false,
+        }
+    }
+
+    pub fn make_compound(&mut self, data: CompoundType) -> CompoundTypeRef {
+        match self.rev_types.get(&data) {
+            Some(cmpd_ref) => *cmpd_ref,
+            None => {
+                let cmpd_ref = self.compounds.push(data.clone());
+                if let CompoundType::Struct(s) = &data {
+                    let name = &s.name;
+                    assert!(
+                        !self.struct_types.contains_key(name),
+                        "struct {name} is already defined"
+                    );
+                    self.struct_types.insert(name.to_string(), cmpd_ref);
+                }
+
+                self.rev_types.insert(data, cmpd_ref);
+                cmpd_ref
+            }
+        }
+    }
+
+    pub fn resolve_compound(&self, cmpd_ref: CompoundTypeRef) -> &CompoundType {
+        &self.compounds[cmpd_ref]
     }
 }
 
@@ -152,6 +202,10 @@ impl Type {
         )
     }
 
+    pub fn is_compound(self) -> bool {
+        matches!(self, Type::Compound(_))
+    }
+
     pub fn is_unit(self) -> bool {
         matches!(self, Self::Unit)
     }
@@ -160,7 +214,7 @@ impl Type {
         ctx.with_ty_store(|store| store.is_ptr(self))
     }
 
-    pub fn resolve_compound(self, ctx: &ModuleCtx) -> Option<CompoundTypeData> {
+    pub fn resolve_compound(self, ctx: &ModuleCtx) -> Option<CompoundType> {
         let Self::Compound(cmpd) = self else {
             return None;
         };
@@ -240,16 +294,16 @@ where
     {
         ctx.as_ref()
             .with_ty_store(|s| match s.resolve_compound(*self) {
-                CompoundTypeData::Array { elem: ty, len } => {
+                CompoundType::Array { elem: ty, len } => {
                     write!(w, "[")?;
                     ty.write(w, ctx)?;
                     write!(w, "; {len}]")
                 }
-                CompoundTypeData::Ptr(ty) => {
+                CompoundType::Ptr(ty) => {
                     write!(w, "*")?;
                     ty.write(w, ctx)
                 }
-                CompoundTypeData::Struct(StructData { name, packed, .. }) => {
+                CompoundType::Struct(StructData { name, packed, .. }) => {
                     if *packed {
                         write!(w, "@<{name}>")
                     } else {
@@ -257,7 +311,7 @@ where
                     }
                 }
 
-                CompoundTypeData::Func { args, ret_ty: ret } => {
+                CompoundType::Func { args, ret_ty: ret } => {
                     write!(w, "(")?;
                     args.write_with_delim(w, ", ", ctx)?;
                     write!(w, ") -> ")?;
@@ -268,7 +322,7 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CompoundTypeData {
+pub enum CompoundType {
     Array {
         elem: Type,
         len: usize,
@@ -312,12 +366,20 @@ where
     }
 }
 
-impl CompoundTypeData {
+impl CompoundType {
     pub fn is_array(&self) -> bool {
         matches!(self, Self::Array { .. })
     }
 
     pub fn is_ptr(&self) -> bool {
         matches!(self, Self::Ptr(_))
+    }
+
+    pub fn is_struct(&self) -> bool {
+        matches!(self, Self::Struct(..))
+    }
+
+    pub fn is_func(&self) -> bool {
+        matches!(self, Self::Func { .. })
     }
 }

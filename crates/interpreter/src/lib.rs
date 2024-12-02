@@ -4,7 +4,7 @@ use sonatina_ir::{
     isa::Endian,
     module::{FuncRef, ModuleCtx, RoFuncStore},
     prelude::*,
-    types::CompoundTypeData,
+    types::CompoundType,
     BlockId, DataFlowGraph, Function, Immediate, InstId, Module, Type, Value, ValueId, I256,
 };
 
@@ -179,7 +179,7 @@ impl State for Machine {
             let mut fields = Vec::new();
 
             match ty.resolve_compound(&self.module_ctx).unwrap() {
-                CompoundTypeData::Array { elem: elem_ty, len } => {
+                CompoundType::Array { elem: elem_ty, len } => {
                     let mut addr = addr;
                     let elem_size = self.module_ctx.size_of_unchecked(elem_ty);
                     for _ in 0..len {
@@ -190,7 +190,7 @@ impl State for Machine {
                     }
                 }
 
-                CompoundTypeData::Struct(s) => {
+                CompoundType::Struct(s) => {
                     let mut addr = addr;
                     for field_ty in s.fields.into_iter() {
                         let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
@@ -200,11 +200,11 @@ impl State for Machine {
                     }
                 }
 
-                CompoundTypeData::Ptr(_) => {
+                CompoundType::Ptr(_) => {
                     unreachable!()
                 }
 
-                CompoundTypeData::Func { .. } => {
+                CompoundType::Func { .. } => {
                     panic!("function type can't be placed in memory");
                 }
             }
@@ -243,7 +243,7 @@ impl State for Machine {
                 unreachable!();
             };
             match ty.resolve_compound(&self.module_ctx).unwrap() {
-                CompoundTypeData::Array { elem: elem_ty, .. } => {
+                CompoundType::Array { elem: elem_ty, .. } => {
                     let mut addr = addr;
                     let elem_size = self.module_ctx.size_of_unchecked(elem_ty);
                     for field in &fields {
@@ -253,7 +253,7 @@ impl State for Machine {
                     }
                 }
 
-                CompoundTypeData::Struct(s) => {
+                CompoundType::Struct(s) => {
                     let mut addr = addr;
                     for (i, field_ty) in s.fields.into_iter().enumerate() {
                         let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
@@ -262,11 +262,11 @@ impl State for Machine {
                     }
                 }
 
-                CompoundTypeData::Ptr(_) => {
+                CompoundType::Ptr(_) => {
                     unreachable!()
                 }
 
-                CompoundTypeData::Func { .. } => {
+                CompoundType::Func { .. } => {
                     panic!("Function can't be stored in memory");
                 }
             }

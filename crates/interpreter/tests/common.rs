@@ -75,9 +75,11 @@ impl TestCase {
         if let Some((expected, evaluated)) = err_pair {
             let text = &self.text;
             let func = machine.funcs.get(&self.func).unwrap();
-            let func_name = func.sig.name();
-            let msg = format!("{text}\nexpected: {expected}\nevaluated: {evaluated}\n");
-            Err(format_error(func_name, &msg))
+
+            func.ctx().func_sig(self.func, |sig| {
+                let msg = format!("{text}\nexpected: {expected}\nevaluated: {evaluated}\n");
+                Err(format_error(sig.name(), &msg))
+            })
         } else {
             Ok(())
         }
@@ -85,8 +87,8 @@ impl TestCase {
 
     fn parse(module: &ParsedModule, func_ref: FuncRef, comment: &str) -> Result<Self, String> {
         let Some(caps) = PATTERN.captures(comment) else {
-            return module.module.func_store.view(func_ref, |func| {
-                let func_name = func.sig.name();
+            return module.module.ctx.func_sig(func_ref, |sig| {
+                let func_name = sig.name();
                 Err(format_error(
                     func_name,
                     &format!("invalid `{comment}`, `#[(args_list) -> ret]` is expected"),
@@ -142,8 +144,8 @@ fn parse_value(module: &ParsedModule, func_ref: FuncRef, input: &str) -> Result<
 
         Err(err) => {
             let err = err.to_string();
-            return module.module.func_store.view(func_ref, |func| {
-                let func_name = func.sig.name();
+            return module.module.ctx.func_sig(func_ref, |sig| {
+                let func_name = sig.name();
                 Err(format_error(func_name, &err.to_string()))
             });
         }

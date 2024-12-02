@@ -5,8 +5,8 @@ use super::{
 use crate::{
     func_cursor::{CursorLocation, FuncCursor},
     module::{FuncRef, ModuleCtx},
-    BlockId, Function, GlobalVariableRef, Immediate, Inst, InstId, InstSetBase, Signature, Type,
-    Value, ValueId,
+    BlockId, Function, GlobalVariableRef, Immediate, Inst, InstId, InstSetBase, Type, Value,
+    ValueId,
 };
 
 pub struct FunctionBuilder<C> {
@@ -22,10 +22,9 @@ where
     C: FuncCursor,
 {
     pub fn new(module_builder: ModuleBuilder, func_ref: FuncRef, cursor: C) -> Self {
-        let sig = module_builder
-            .func_store
-            .view(func_ref, |func| func.sig.clone());
-        let func = Function::new(&module_builder.ctx, sig);
+        let func = module_builder
+            .ctx
+            .func_sig(func_ref, |sig| Function::new(&module_builder.ctx, sig));
 
         Self {
             module_builder,
@@ -34,10 +33,6 @@ where
             cursor,
             ssa_builder: SsaBuilder::new(),
         }
-    }
-
-    pub fn func_sig(&self) -> &Signature {
-        &self.func.sig
     }
 
     pub fn finish(self) {

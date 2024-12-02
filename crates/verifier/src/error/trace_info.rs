@@ -79,24 +79,23 @@ impl fmt::Display for DisplayTraceInfo<'_, '_> {
             ..
         } = self.trace_info;
 
-        let dfg = &self.ctx.func.dfg;
-
         "trace_info:".fmt(f)?;
 
         let mut line = 0;
 
+        let module_ctx = self.ctx.module_ctx();
         if let Some(cmpd_ty) = cmpd_ty.expand() {
-            let cmpd_ty = cmpd_ty.dump_string(&dfg.ctx);
+            let cmpd_ty = cmpd_ty.dump_string(module_ctx);
             write!(f, "\n{line}: {cmpd_ty}")?;
             line += 1;
         }
         if let Some(ty) = ty {
-            let ty = ty.dump_string(&dfg.ctx);
+            let ty = ty.dump_string(module_ctx);
             write!(f, "\n{line}: {ty}")?;
             line += 1;
         }
         if let Some(gv) = gv.expand() {
-            let gv = gv.dump_string(&dfg.ctx);
+            let gv = gv.dump_string(module_ctx);
             write!(f, "\n{line}: {gv}")?;
             line += 1;
         }
@@ -122,7 +121,7 @@ impl fmt::Display for DisplayTraceInfo<'_, '_> {
             line += 1;
         }
 
-        let sig = self.ctx.func.sig.dump_string(&self.ctx);
+        let sig = module_ctx.func_sig(self.ctx.func_ref, |sig| sig.dump_string(module_ctx));
         write!(f, "\n{line}: {sig}")
     }
 }
