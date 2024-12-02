@@ -10,7 +10,7 @@ use crate::{
     ir_writer::IrWrite,
     isa::{Endian, Isa, TypeLayout, TypeLayoutError},
     types::TypeStore,
-    Function, InstSetBase, Signature, Type,
+    Function, InstSetBase, Linkage, Signature, Type,
 };
 
 pub struct Module {
@@ -151,6 +151,18 @@ impl ModuleCtx {
         self.declared_funcs
             .view(&func_ref, |_, sig| f(sig))
             .unwrap()
+    }
+
+    /// Updated the function signature with the given linkage.
+    ///
+    /// # Panics
+    /// Panics if the function reference is not declared.
+    pub fn update_func_linkage(&self, func_ref: FuncRef, linkage: Linkage) {
+        self.declared_funcs
+            .get_mut(&func_ref)
+            .unwrap()
+            .value_mut()
+            .update_linkage(linkage);
     }
 
     pub fn endian(&self) -> Endian {

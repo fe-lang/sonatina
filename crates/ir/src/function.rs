@@ -69,6 +69,10 @@ impl Signature {
         self.linkage
     }
 
+    pub fn update_linkage(&mut self, linkage: Linkage) {
+        self.linkage = linkage;
+    }
+
     pub fn args(&self) -> &[Type] {
         &self.args
     }

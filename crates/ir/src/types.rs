@@ -60,6 +60,10 @@ impl TypeStore {
         self.compounds.iter()
     }
 
+    pub fn all_compound_refs(&self) -> impl Iterator<Item = CompoundTypeRef> {
+        self.compounds.keys()
+    }
+
     pub fn array_def(&self, ty: Type) -> Option<(Type, usize)> {
         match ty {
             Type::Compound(cmpd_ref) => match self.compounds[cmpd_ref] {

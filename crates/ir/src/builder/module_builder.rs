@@ -60,7 +60,6 @@ impl ModuleBuilder {
         if let Some(func_ref) = self.declared_funcs.get(sig.name()) {
             *func_ref
         } else {
-            let name = sig.name().to_string();
             let func = Function::new(&self.ctx, &sig);
             let func_ref = self.func_store.insert(func);
             self.declared_funcs.insert(sig.name().to_string(), func_ref);
