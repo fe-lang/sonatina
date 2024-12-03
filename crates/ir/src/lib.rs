@@ -25,7 +25,6 @@ pub use dfg::{Block, BlockId, DataFlowGraph};
 pub use function::{Function, Signature};
 pub use global_variable::{GlobalVariableData, GlobalVariableRef};
 pub use graphviz::render_to;
-pub(crate) use inst::ValueVisitable;
 pub use inst::{
     inst_set::{InstSetBase, InstSetExt},
     HasInst, Inst, InstDowncast, InstDowncastMut, InstExt, InstId,

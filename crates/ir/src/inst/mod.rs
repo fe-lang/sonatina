@@ -15,12 +15,11 @@ use std::{
 
 use dyn_clone::DynClone;
 use macros::inst_prop;
-use rustc_hash::FxHashSet;
-use smallvec::SmallVec;
 
 use crate::{
     ir_writer::{FuncWriteCtx, IrWrite},
-    InstSetBase, ValueId,
+    visitor::{Visitable, VisitableMut},
+    InstSetBase,
 };
 
 /// An opaque reference to dynamic [`Inst`].
@@ -28,28 +27,12 @@ use crate::{
 pub struct InstId(pub u32);
 cranelift_entity::entity_impl!(InstId);
 
-pub trait Inst: inst_set::sealed::Registered + DynClone + Any + Send + Sync {
-    fn visit_values(&self, f: &mut dyn FnMut(ValueId));
-    fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut ValueId));
+pub trait Inst:
+    inst_set::sealed::Registered + DynClone + Any + Send + Sync + Visitable + VisitableMut
+{
     fn side_effect(&self) -> SideEffect;
     fn as_text(&self) -> &'static str;
     fn is_terminator(&self) -> bool;
-
-    fn collect_values(&self) -> Vec<ValueId> {
-        let mut vs = Vec::new();
-
-        self.visit_values(&mut |v| vs.push(v));
-        vs
-    }
-
-    fn collect_value_set(&self) -> FxHashSet<ValueId> {
-        let mut vs = FxHashSet::default();
-
-        self.visit_values(&mut |v| {
-            vs.insert(v);
-        });
-        vs
-    }
 }
 
 pub trait InstExt: Inst {
@@ -80,91 +63,6 @@ impl IrWrite<FuncWriteCtx<'_>> for InstId {
 pub trait HasInst<I: Inst> {
     fn is(&self, inst: &dyn Inst) -> bool {
         inst.type_id() == TypeId::of::<I>()
-    }
-}
-
-pub(crate) trait ValueVisitable {
-    fn visit_with(&self, f: &mut dyn FnMut(ValueId));
-    fn visit_mut_with(&mut self, f: &mut dyn FnMut(&mut ValueId));
-}
-
-impl ValueVisitable for ValueId {
-    fn visit_with(&self, f: &mut dyn FnMut(ValueId)) {
-        f(*self)
-    }
-
-    fn visit_mut_with(&mut self, f: &mut dyn FnMut(&mut ValueId)) {
-        f(self)
-    }
-}
-
-impl<V> ValueVisitable for Option<V>
-where
-    V: ValueVisitable,
-{
-    fn visit_with(&self, f: &mut dyn FnMut(ValueId)) {
-        if let Some(value) = self {
-            value.visit_with(f)
-        }
-    }
-
-    fn visit_mut_with(&mut self, f: &mut dyn FnMut(&mut ValueId)) {
-        if let Some(value) = self.as_mut() {
-            value.visit_mut_with(f)
-        }
-    }
-}
-
-impl<V, T> ValueVisitable for (V, T)
-where
-    V: ValueVisitable,
-{
-    fn visit_with(&self, f: &mut dyn FnMut(ValueId)) {
-        self.0.visit_with(f)
-    }
-
-    fn visit_mut_with(&mut self, f: &mut dyn FnMut(&mut ValueId)) {
-        self.0.visit_mut_with(f)
-    }
-}
-
-impl<V> ValueVisitable for Vec<V>
-where
-    V: ValueVisitable,
-{
-    fn visit_with(&self, f: &mut dyn FnMut(ValueId)) {
-        self.iter().for_each(|v| v.visit_with(f))
-    }
-
-    fn visit_mut_with(&mut self, f: &mut dyn FnMut(&mut ValueId)) {
-        self.iter_mut().for_each(|v| v.visit_mut_with(f))
-    }
-}
-
-impl<V> ValueVisitable for [V]
-where
-    V: ValueVisitable,
-{
-    fn visit_with(&self, f: &mut dyn FnMut(ValueId)) {
-        self.iter().for_each(|v| v.visit_with(f))
-    }
-
-    fn visit_mut_with(&mut self, f: &mut dyn FnMut(&mut ValueId)) {
-        self.iter_mut().for_each(|v| v.visit_mut_with(f))
-    }
-}
-
-impl<V, const N: usize> ValueVisitable for SmallVec<[V; N]>
-where
-    V: ValueVisitable,
-    [V; N]: smallvec::Array<Item = V>,
-{
-    fn visit_with(&self, f: &mut dyn FnMut(ValueId)) {
-        self.iter().for_each(|v| v.visit_with(f))
-    }
-
-    fn visit_mut_with(&mut self, f: &mut dyn FnMut(&mut ValueId)) {
-        self.iter_mut().for_each(|v| v.visit_mut_with(f))
     }
 }
 

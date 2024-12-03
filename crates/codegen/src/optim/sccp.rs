@@ -128,7 +128,7 @@ impl SccpSolver {
             .reachable_blocks
             .contains(&func.layout.inst_block(inst)));
 
-        func.dfg.inst(inst).visit_values(&mut |value| {
+        func.dfg.inst(inst).for_each_value(&mut |value| {
             if let Some(imm) = func.dfg.value_imm(value) {
                 self.set_lattice_cell(value, LatticeCell::Const(imm));
             }
@@ -164,7 +164,7 @@ impl SccpSolver {
 
     fn eval_inst(&mut self, func: &Function, inst_id: InstId) {
         debug_assert!(!func.dfg.is_phi(inst_id));
-        func.dfg.inst(inst_id).visit_values(&mut |value| {
+        func.dfg.inst(inst_id).for_each_value(&mut |value| {
             if let Some(imm) = func.dfg.value_imm(value) {
                 self.set_lattice_cell(value, LatticeCell::Const(imm));
             }

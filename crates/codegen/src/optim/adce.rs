@@ -113,7 +113,7 @@ impl AdceSolver {
 
     fn mark_by_inst(&mut self, func: &Function, inst_id: InstId, pdf_set: &PDFSet) {
         let inst = func.dfg.inst(inst_id);
-        inst.visit_values(&mut |value| {
+        inst.for_each_value(&mut |value| {
             if let Some(value_inst) = func.dfg.value_inst(value) {
                 self.mark_inst(func, value_inst);
             }

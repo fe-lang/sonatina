@@ -26,7 +26,6 @@ struct InstStruct {
 struct InstField {
     ident: syn::Ident,
     ty: syn::Type,
-    value: bool,
 }
 
 impl InstStruct {
@@ -57,6 +56,7 @@ impl InstStruct {
         let impl_inst = self.impl_inst();
         let impl_inst_ext = self.impl_inst_ext();
         let impl_inst_cast = self.impl_inst_cast();
+        let impl_visitable = self.impl_visitable();
         let impl_inst_write = self.impl_inst_write();
         Ok(quote! {
            #impl_method
@@ -64,6 +64,7 @@ impl InstStruct {
            #impl_inst
            #impl_inst_ext
            #impl_inst_write
+           #impl_visitable
         })
     }
 
@@ -108,8 +109,6 @@ impl InstStruct {
         let mut inst_fields = Vec::new();
 
         for field in &fields.named {
-            let mut value = false;
-
             if !matches!(field.vis, syn::Visibility::Inherited) {
                 return Err(syn::Error::new_spanned(
                     field,
@@ -117,23 +116,9 @@ impl InstStruct {
                 ));
             }
 
-            for attr in &field.attrs {
-                if attr.path().is_ident("inst") {
-                    let meta = attr.parse_args::<syn::Meta>()?;
-                    if let syn::Meta::Path(path) = meta {
-                        if path.is_ident("value") {
-                            value = true;
-                        } else {
-                            return Err(syn::Error::new_spanned(attr, "only `value` is allowed"));
-                        }
-                    }
-                }
-            }
-
             inst_fields.push(InstField {
                 ident: field.ident.clone().unwrap(),
                 ty: field.ty.clone(),
-                value,
             });
         }
 
@@ -248,23 +233,8 @@ impl InstStruct {
             None => quote!(crate::inst::SideEffect::None),
         };
         let is_terminator = self.is_terminator;
-        let visit_fields: Vec<_> = self
-            .fields
-            .iter()
-            .filter(|f| f.value)
-            .map(|f| &f.ident)
-            .collect();
-
         quote! {
             impl crate::Inst for #struct_name {
-                fn visit_values(&self, f: &mut dyn FnMut(crate::ValueId)) {
-                    #(crate::ValueVisitable::visit_with(&self.#visit_fields, (f));)*
-                }
-
-                fn visit_values_mut(&mut self, f: &mut dyn FnMut(&mut crate::ValueId)) {
-                    #(crate::ValueVisitable::visit_mut_with(&mut self.#visit_fields, (f));)*
-                }
-
                 fn side_effect(&self) -> crate::inst::SideEffect {
                     #side_effect
                 }
@@ -298,6 +268,38 @@ impl InstStruct {
                     write!(w, "{}", crate::Inst::as_text(self))?;
                     #(#fields)*
                     Ok(())
+                }
+            }
+        }
+    }
+
+    fn impl_visitable(&self) -> proc_macro2::TokenStream {
+        let fields_accept = self.fields.iter().map(|f| {
+            let method = &f.ident;
+            quote! {
+                self.#method().accept(v);
+            }
+        });
+
+        let fields_accept_mut = self.fields.iter().map(|f| {
+            let method_mut = quote::format_ident!("{}_mut", &f.ident);
+            quote! {
+                self.#method_mut().accept_mut(v);
+            }
+        });
+
+        let struct_name = &self.struct_name;
+
+        quote! {
+            impl crate::visitor::Visitable for #struct_name {
+                fn accept(&self, v: &mut dyn crate::visitor::Visitor) {
+                    #(#fields_accept)*
+                }
+            }
+
+            impl crate::visitor::VisitableMut for #struct_name {
+                fn accept_mut(&mut self, v: &mut dyn crate::visitor::VisitorMut) {
+                    #(#fields_accept_mut)*
                 }
             }
         }

@@ -74,7 +74,7 @@ impl LicmSolver {
 
         let mut invariant = true;
         let inst = func.dfg.inst(inst_id);
-        inst.visit_values(&mut |value| invariant &= !loop_var.contains(&value));
+        inst.for_each_value(&mut |value| invariant &= !loop_var.contains(&value));
         invariant
     }
 

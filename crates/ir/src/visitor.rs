@@ -9,6 +9,46 @@ use crate::{module::FuncRef, BlockId, Type, ValueId};
 
 pub trait Visitable {
     fn accept(&self, visitor: &mut dyn Visitor);
+
+    /// Passes only values in the item to the `f`.
+    /// This is useful when you want to iterate over all values in the item
+    /// without implementing a `Visitor` trait.
+    fn for_each_value(&self, f: &mut dyn FnMut(ValueId)) {
+        struct ValueVisitor<'a> {
+            f: &'a mut dyn FnMut(ValueId),
+        }
+
+        impl Visitor for ValueVisitor<'_> {
+            fn visit_value_id(&mut self, item: ValueId) {
+                (self.f)(item)
+            }
+        }
+
+        let mut visitor = ValueVisitor { f };
+        self.accept(&mut visitor);
+    }
+}
+
+pub trait VisitableMut {
+    fn accept_mut(&mut self, visitor: &mut dyn VisitorMut);
+
+    /// Passes only mutable value references in the item to the `f`.
+    /// This is useful when you want to iterate over all values in the item
+    /// without implementing a `Visitor` trait.
+    fn for_each_value_mut(&mut self, f: &mut dyn FnMut(&mut ValueId)) {
+        struct ValueVisitorMut<'a> {
+            f: &'a mut dyn FnMut(&mut ValueId),
+        }
+
+        impl VisitorMut for ValueVisitorMut<'_> {
+            fn visit_value_id(&mut self, item: &mut ValueId) {
+                (self.f)(item)
+            }
+        }
+
+        let mut visitor = ValueVisitorMut { f };
+        self.accept_mut(&mut visitor);
+    }
 }
 
 #[allow(unused_variables)]
@@ -20,10 +60,6 @@ pub trait Visitor {
     fn visit_block_id(&mut self, item: BlockId) {}
 
     fn visit_func_ref(&mut self, item: FuncRef) {}
-}
-
-pub trait VisitableMut {
-    fn accept_mut(&mut self, visitor: &mut dyn VisitorMut);
 }
 
 #[allow(unused_variables)]
@@ -143,5 +179,27 @@ where
         for item in self {
             item.accept_mut(visitor);
         }
+    }
+}
+
+impl<T, U> Visitable for (T, U)
+where
+    T: Visitable,
+    U: Visitable,
+{
+    fn accept(&self, visitor: &mut dyn Visitor) {
+        self.0.accept(visitor);
+        self.1.accept(visitor);
+    }
+}
+
+impl<T, U> VisitableMut for (T, U)
+where
+    T: VisitableMut,
+    U: VisitableMut,
+{
+    fn accept_mut(&mut self, visitor: &mut dyn VisitorMut) {
+        self.0.accept_mut(visitor);
+        self.1.accept_mut(visitor);
     }
 }

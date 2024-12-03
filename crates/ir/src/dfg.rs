@@ -2,7 +2,7 @@
 use std::{collections::BTreeSet, io};
 
 use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, SecondaryMap};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{Immediate, Type, Value, ValueId};
 use crate::{
@@ -108,7 +108,7 @@ impl DataFlowGraph {
         let old = &mut std::mem::replace(slot, new);
 
         // Remove the arguments of the old inst from the user set.
-        old.visit_values(&mut |value| {
+        old.for_each_value(&mut |value| {
             self.remove_user(value, inst_id);
         });
 
@@ -149,14 +149,14 @@ impl DataFlowGraph {
 
     pub fn attach_user(&mut self, inst_id: InstId) {
         let inst = &self.insts[inst_id];
-        inst.visit_values(&mut |value| {
+        inst.for_each_value(&mut |value| {
             self.users[value].insert(inst_id);
         })
     }
 
     pub fn untrack_inst(&mut self, inst_id: InstId) {
         let inst = &self.insts[inst_id];
-        inst.visit_values(&mut |value| {
+        inst.for_each_value(&mut |value| {
             self.users[value].remove(&inst_id);
         })
     }
@@ -239,7 +239,7 @@ impl DataFlowGraph {
     pub fn change_to_alias(&mut self, value: ValueId, alias: ValueId) {
         let mut users = std::mem::take(&mut self.users[value]);
         for inst in &users {
-            self.insts[*inst].visit_values_mut(&mut |user_value| {
+            self.insts[*inst].for_each_value_mut(&mut |user_value| {
                 if *user_value == value {
                     *user_value = alias;
                 }
@@ -285,8 +285,16 @@ impl DataFlowGraph {
     }
 
     fn remove_old_users(&mut self, inst: InstId, new: &dyn Inst) {
-        let old_values = self.inst(inst).collect_value_set();
-        let new_values = new.collect_value_set();
+        let mut old_values = FxHashSet::default();
+        let mut new_values = FxHashSet::default();
+
+        self.inst(inst).for_each_value(&mut |value| {
+            old_values.insert(value);
+        });
+        new.for_each_value(&mut |value| {
+            new_values.insert(value);
+        });
+
         assert!(old_values.is_superset(&new_values));
 
         let removed_values = old_values.difference(&new_values);
