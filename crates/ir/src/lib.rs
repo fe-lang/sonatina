@@ -14,6 +14,7 @@ pub mod linkage;
 pub mod module;
 pub mod types;
 pub mod value;
+pub mod visitor;
 
 mod bigint;
 
