@@ -21,7 +21,8 @@ pub struct DataFlowGraph {
     pub blocks: PrimaryMap<BlockId, Block>,
     #[doc(hidden)]
     pub values: PrimaryMap<ValueId, Value>,
-    insts: PrimaryMap<InstId, Box<dyn Inst>>,
+    #[doc(hidden)]
+    pub insts: PrimaryMap<InstId, Box<dyn Inst>>,
     inst_results: SecondaryMap<InstId, PackedOption<ValueId>>,
     #[doc(hidden)]
     pub immediates: FxHashMap<Immediate, ValueId>,

@@ -18,6 +18,24 @@ pub enum Linkage {
     External,
 }
 
+impl Linkage {
+    pub fn is_public(self) -> bool {
+        matches!(self, Self::Public)
+    }
+
+    pub fn is_private(self) -> bool {
+        matches!(self, Self::Private)
+    }
+
+    pub fn is_external(self) -> bool {
+        matches!(self, Self::External)
+    }
+
+    pub fn has_definition(self) -> bool {
+        self.is_public() || self.is_private()
+    }
+}
+
 impl<Ctx> IrWrite<Ctx> for Linkage
 where
     Ctx: AsRef<ModuleCtx>,

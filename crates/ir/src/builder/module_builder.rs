@@ -13,6 +13,7 @@ use crate::{
 
 #[derive(Clone)]
 pub struct ModuleBuilder {
+    #[doc(hidden)]
     pub func_store: Arc<FuncStore>,
 
     pub ctx: ModuleCtx,

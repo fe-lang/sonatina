@@ -1,11 +1,14 @@
+use std::mem;
+
 use cranelift_entity::entity_impl;
-use dashmap::{DashMap, ReadOnlyView};
+use dashmap::{mapref::one::Ref, DashMap, ReadOnlyView};
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
     builder::ModuleBuilder,
     module::FuncRef,
     types::{CompoundType, CompoundTypeRef, StructData},
+    visitor::VisitorMut,
     Function, GlobalVariableRef, Linkage, Module, Signature, Type, Value,
 };
 
@@ -125,10 +128,16 @@ impl RefMap {
         self.gv_mapping[&gv]
     }
 
+    /// Converts a function reference to a function reference in a linked
+    /// module.
+    pub fn lookup_func(&self, func: FuncRef) -> FuncRef {
+        self.func_mapping[&func]
+    }
+
     /// Updates the value in-place from a source module to a linked module.
     ///
     /// This method doesn't modify an instruction that the value refers to.
-    pub fn update_value(&self, value: &mut Value) {
+    fn update_value(&self, value: &mut Value) {
         match value {
             Value::Inst { ty, .. } => {
                 *ty = self.lookup_type(*ty);
@@ -229,6 +238,7 @@ impl ModuleLinker {
     fn register_module(&mut self, module: Module) -> ModuleRef {
         let next_id = self.module_ref_map.len();
         let module_ref = ModuleRef(next_id as u32);
+        self.module_ref_map.insert(module_ref, Default::default());
         self.modules.insert(module_ref, module);
 
         module_ref
@@ -236,9 +246,29 @@ impl ModuleLinker {
 
     /// Performs linking.
     fn link(mut self) -> Result<LinkedModule, LinkError> {
-        self.link_refs()?;
-        self.update_funcs();
-        self.move_funcs();
+        let module_refs: Vec<_> = self.modules.keys().copied().collect();
+
+        // Links all references in the source modules to the linked module.
+        self.link_refs(&module_refs)?;
+
+        // Updates the references in the function body.
+        self.update_funcs(&module_refs);
+
+        let modules = mem::take(&mut self.modules);
+        // Move functions to the linked module.
+        for (module_ref, module) in modules {
+            let ref_map = self.module_ref_map.get(&module_ref).unwrap();
+
+            module.func_store.par_into_for_each(|func_ref, func| {
+                let linkage = func.dfg.ctx.func_sig(func_ref, |sig| sig.linkage());
+                if linkage.is_external() {
+                    return;
+                }
+
+                let linked_func_ref = ref_map.lookup_func(func_ref);
+                self.builder.func_store.update(linked_func_ref, func);
+            })
+        }
 
         let linked_module = LinkedModule {
             module: self.builder.build(),
@@ -257,34 +287,33 @@ impl ModuleLinker {
     /// This means after this process, the reference in the function body should
     /// be updated by referring to the reference map later, and also
     /// function body should be moved into linked module as a final process.
-    fn link_refs(&mut self) -> Result<(), LinkError> {
-        let module_refs: Vec<_> = self.modules.keys().copied().collect();
+    fn link_refs(&mut self, module_refs: &[ModuleRef]) -> Result<(), LinkError> {
         for module_ref in module_refs {
             // 1. Validate the target triple.
-            if self.builder.triple() != self.modules[&module_ref].ctx.triple {
+            if self.builder.triple() != self.modules[module_ref].ctx.triple {
                 return Err(LinkError::InconsistentTargetTriple);
             }
 
             // 2. Link compound type reference.
-            let cmpd_refs: Vec<_> = self.modules[&module_ref]
+            let cmpd_refs: Vec<_> = self.modules[module_ref]
                 .ctx
                 .with_ty_store(|s| s.all_compound_refs().collect());
             for cmpd_ref in cmpd_refs {
-                self.link_cmpd(module_ref, cmpd_ref)?;
+                self.link_cmpd(*module_ref, cmpd_ref)?;
             }
 
             // 3. Link global variable references.
-            let gv_refs: Vec<_> = self.modules[&module_ref]
+            let gv_refs: Vec<_> = self.modules[module_ref]
                 .ctx
                 .with_gv_store(|s| s.all_gv_refs().collect());
             for gv_ref in gv_refs {
-                self.link_gv(module_ref, gv_ref)?;
+                self.link_gv(*module_ref, gv_ref)?;
             }
 
             // 4. Link function references.
-            let func_refs = self.modules[&module_ref].funcs();
+            let func_refs = self.modules[module_ref].funcs();
             for func_ref in func_refs {
-                self.link_func_ref(module_ref, func_ref)?;
+                self.link_func_ref(*module_ref, func_ref)?;
             }
         }
 
@@ -536,11 +565,16 @@ impl ModuleLinker {
         Ok(linked_func_ref)
     }
 
-    fn update_funcs(&mut self) {
-        todo!()
+    fn update_funcs(&self, module_refs: &[ModuleRef]) {
+        for module_ref in module_refs {
+            let module = self.modules.get(module_ref).unwrap();
+            module
+                .func_store
+                .par_for_each(|_, func| self.update_func(*module_ref, func));
+        }
     }
 
-    fn update_func(&mut self, module_ref: ModuleRef, func: &mut Function) {
+    fn update_func(&self, module_ref: ModuleRef, func: &mut Function) {
         let ref_map = self.module_ref_map.get(&module_ref).unwrap();
 
         // Updates module context to the linked module.
@@ -551,16 +585,24 @@ impl ModuleLinker {
             ref_map.update_value(value);
         });
 
-        func.arg_values.iter().for_each(|arg| {
-            let value = &mut func.dfg.values[*arg];
-            ref_map.update_value(value)
-        });
+        // Updates the instructions to the linked module.
+        struct InstUpdater<'a> {
+            ref_map: Ref<'a, ModuleRef, RefMap>,
+        }
+        impl VisitorMut for InstUpdater<'_> {
+            fn visit_func_ref(&mut self, item: &mut FuncRef) {
+                *item = self.ref_map.lookup_func(*item);
+            }
 
-        // TODO: Updates the instruction to the linked module.
-        todo!()
-    }
+            fn visit_ty(&mut self, item: &mut Type) {
+                *item = self.ref_map.lookup_type(*item);
+            }
+        }
 
-    fn move_funcs(&mut self) {
-        todo!()
+        let mut visitor = InstUpdater { ref_map };
+        func.dfg
+            .insts
+            .values_mut()
+            .for_each(|value| value.accept_mut(&mut visitor))
     }
 }
