@@ -6,7 +6,7 @@ use sonatina_ir::{
     builder::ModuleBuilder,
     module::FuncRef,
     types::{CompoundType, CompoundTypeRef, StructData},
-    GlobalVariableRef, Linkage, Module, Signature, Type,
+    Function, GlobalVariableRef, Linkage, Module, Signature, Type, Value,
 };
 
 /// A struct represents a linked module, that is the result of the
@@ -48,7 +48,7 @@ pub enum LinkError {
 }
 
 impl LinkedModule {
-    /// Link multiple modules into a single module.
+    /// Links multiple modules into a single module.
     /// Returns a linked module and a list of module references.
     /// The order of module references are the same as the input modules.
     pub fn link(modules: Vec<Module>) -> Result<(Self, Vec<ModuleRef>), LinkError> {
@@ -111,7 +111,7 @@ pub struct RefMap {
 }
 
 impl RefMap {
-    /// Convert a type in a source module to a type in a linked module.
+    /// Converts a type in a source module to a type in a linked module.
     pub fn lookup_type(&self, source_ty: Type) -> Type {
         match source_ty {
             Type::Compound(cmpd_ref) => Type::Compound(self.cmpd_mapping[&cmpd_ref]),
@@ -119,7 +119,41 @@ impl RefMap {
         }
     }
 
-    /// Create a identity mapping with the given module.
+    /// Converts a global variable reference to a global variable reference in a
+    /// linked module.
+    pub fn lookup_gv(&self, gv: GlobalVariableRef) -> GlobalVariableRef {
+        self.gv_mapping[&gv]
+    }
+
+    /// Updates the value in-place from a source module to a linked module.
+    ///
+    /// This method doesn't modify an instruction that the value refers to.
+    pub fn update_value(&self, value: &mut Value) {
+        match value {
+            Value::Inst { ty, .. } => {
+                *ty = self.lookup_type(*ty);
+            }
+
+            Value::Arg { ty, .. } => {
+                *ty = self.lookup_type(*ty);
+            }
+
+            Value::Immediate { ty, .. } => {
+                *ty = self.lookup_type(*ty);
+            }
+
+            Value::Global { gv, ty } => {
+                *gv = self.lookup_gv(*gv);
+                *ty = self.lookup_type(*ty);
+            }
+
+            Value::Undef { ty } => {
+                *ty = self.lookup_type(*ty);
+            }
+        }
+    }
+
+    /// Creates a identity mapping with the given module.
     fn identity_with(module: &Module) -> Self {
         let mut ref_map = Self::default();
 
@@ -159,7 +193,7 @@ struct ModuleLinker {
 }
 
 impl ModuleLinker {
-    /// Take a `module` as a destination.
+    /// Takes a `module` as a destination.
     fn from_module(module: Module) -> (Self, ModuleRef) {
         let ref_map = RefMap::identity_with(&module);
 
@@ -177,7 +211,7 @@ impl ModuleLinker {
         (linker, module_ref)
     }
 
-    /// Take a linked module as a destination.
+    /// Takes a linked module as a destination.
     /// All module references in the `linked_module` are still
     /// valid after linking.
     fn from_linked_module(linked_module: LinkedModule) -> Self {
@@ -191,7 +225,7 @@ impl ModuleLinker {
         }
     }
 
-    /// Register module as a source module to be linked.
+    /// Registers module as a source module to be linked.
     fn register_module(&mut self, module: Module) -> ModuleRef {
         let next_id = self.module_ref_map.len();
         let module_ref = ModuleRef(next_id as u32);
@@ -200,7 +234,7 @@ impl ModuleLinker {
         module_ref
     }
 
-    /// Perform linking.
+    /// Performs linking.
     fn link(mut self) -> Result<LinkedModule, LinkError> {
         self.link_refs()?;
         self.update_funcs();
@@ -213,6 +247,16 @@ impl ModuleLinker {
         Ok(linked_module)
     }
 
+    /// Links all references in the source modules to the linked module.
+    ///
+    /// When the method performs successfully, all references in the source
+    /// modules are available in the linked module, and the reference map is
+    /// updated accordingly.
+    ///
+    /// NOTE: This method doesn't modify the `Function` in each module.
+    /// This means after this process, the reference in the function body should
+    /// be updated by referring to the reference map later, and also
+    /// function body should be moved into linked module as a final process.
     fn link_refs(&mut self) -> Result<(), LinkError> {
         let module_refs: Vec<_> = self.modules.keys().copied().collect();
         for module_ref in module_refs {
@@ -247,22 +291,15 @@ impl ModuleLinker {
         Ok(())
     }
 
+    /// Links a compound type reference in the source module to a linked module.
+    /// Returns a linked compound type reference in the linked module.
+    ///
+    /// This method updates the reference map internally.
     fn link_cmpd(
         &mut self,
         module_ref: ModuleRef,
         cmpd_ref: CompoundTypeRef,
     ) -> Result<CompoundTypeRef, LinkError> {
-        let link_type = |linker: &mut Self, ty: Type| {
-            if !ty.is_compound() {
-                return Ok(ty);
-            }
-
-            let Type::Compound(cmpd_ref) = ty else {
-                unreachable!()
-            };
-            linker.link_cmpd(module_ref, cmpd_ref).map(Type::Compound)
-        };
-
         if let Some(linked_ref) = self
             .module_ref_map
             .get(&module_ref)
@@ -273,6 +310,17 @@ impl ModuleLinker {
         {
             return Ok(linked_ref);
         }
+
+        let link_type = |linker: &mut Self, ty: Type| {
+            if !ty.is_compound() {
+                return Ok(ty);
+            }
+
+            let Type::Compound(cmpd_ref) = ty else {
+                unreachable!()
+            };
+            linker.link_cmpd(module_ref, cmpd_ref).map(Type::Compound)
+        };
 
         let cmpd = self.modules[&module_ref]
             .ctx
@@ -368,6 +416,8 @@ impl ModuleLinker {
         Ok(linked_cmpd_ref)
     }
 
+    /// Links a global variable reference in the source module to a linked
+    /// module.
     fn link_gv(
         &mut self,
         module_ref: ModuleRef,
@@ -398,7 +448,7 @@ impl ModuleLinker {
                 });
             }
 
-            // Validate the linkage and update the linked gv if needed.
+            // Validates the linkage and update the linked gv if needed.
             // The allowed combinations are:
             // (SourceLinkage, LinkedLinkage) = (External, Public) or (Public, External).
             //
@@ -416,7 +466,7 @@ impl ModuleLinker {
                 }
             }
 
-            // Update the initializer if needed.
+            // Updates the initializer if needed.
             // We assume that the verifier already verified that only global variable with
             // Public or External linkage can have an initializer, so we don't need to check
             // it here.
@@ -429,6 +479,7 @@ impl ModuleLinker {
         })
     }
 
+    /// Links a function reference in the source module to a linked module.
     fn link_func_ref(
         &mut self,
         module_ref: ModuleRef,
@@ -457,7 +508,7 @@ impl ModuleLinker {
         };
 
         let linked_func_linkage = self.builder.sig(linked_func_ref, |linked_sig| {
-            // Validate the signature.
+            // Validates the signature.
             if sig.args() != linked_sig.args() || sig.ret_ty() != linked_sig.ret_ty() {
                 return Err(LinkError::InconsistentFuncSignature {
                     name: sig.name().to_string(),
@@ -486,6 +537,26 @@ impl ModuleLinker {
     }
 
     fn update_funcs(&mut self) {
+        todo!()
+    }
+
+    fn update_func(&mut self, module_ref: ModuleRef, func: &mut Function) {
+        let ref_map = self.module_ref_map.get(&module_ref).unwrap();
+
+        // Updates module context to the linked module.
+        func.dfg.ctx = self.builder.ctx.clone();
+
+        // Updates values to the linked module.
+        func.dfg.values.values_mut().for_each(|value| {
+            ref_map.update_value(value);
+        });
+
+        func.arg_values.iter().for_each(|arg| {
+            let value = &mut func.dfg.values[*arg];
+            ref_map.update_value(value)
+        });
+
+        // TODO: Updates the instruction to the linked module.
         todo!()
     }
 
