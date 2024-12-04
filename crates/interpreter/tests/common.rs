@@ -76,7 +76,14 @@ impl TestCase {
             let text = &self.text;
             let func = machine.funcs.get(&self.func).unwrap();
             let func_name = func.sig.name();
-            let msg = format!("{text}\nexpected: {expected}\nevaluated: {evaluated}\n");
+            let msg = format!(
+                "Error in ModuleLinker:\n\
+                Function: {func_name}\n\
+                Description: {text}\n\
+                Issue: Inconsistent declarations.\n\
+                Expected: {expected}\n\
+                Evaluated: {evaluated}\n"
+            );
             Err(format_error(func_name, &msg))
         } else {
             Ok(())
@@ -89,7 +96,12 @@ impl TestCase {
                 let func_name = func.sig.name();
                 Err(format_error(
                     func_name,
-                    &format!("invalid `{comment}`, `#[(args_list) -> ret]` is expected"),
+                    &format!(
+                        "Parsing Error:\n\
+                        Function: {func_name}\n\
+                        Comment: `{comment}`\n\
+                        Expected Format: `#[(args_list) -> ret]`."
+                    ),
                 ))
             });
         };
@@ -141,10 +153,16 @@ fn parse_value(module: &ParsedModule, func_ref: FuncRef, input: &str) -> Result<
         }
 
         Err(err) => {
-            let err = err.to_string();
+            let error_message = err.to_string();
             return module.module.func_store.view(func_ref, |func| {
                 let func_name = func.sig.name();
-                Err(format_error(func_name, &err.to_string()))
+                Err(format_error(func_name, &format!(
+                    "Generic Error:\n\
+                    Function: {func_name}\n\
+                    Message: {error_message}\n\
+                    Please check the module for inconsistencies."
+                    ),
+                ))
             });
         }
     };
