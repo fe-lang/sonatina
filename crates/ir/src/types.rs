@@ -283,7 +283,7 @@ where
     }
 }
 
-/// An opaque reference to [`CompoundTypeData`].
+/// An opaque reference to [`CompoundType`].
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub struct CompoundTypeRef(u32);
 cranelift_entity::entity_impl!(CompoundTypeRef);

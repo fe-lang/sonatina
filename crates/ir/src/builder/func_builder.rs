@@ -308,7 +308,7 @@ mod tests {
         let func_ref = module.funcs()[0];
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func() -> unit {
+            "func public %test_func() {
     block0:
         v2.i8 = add 1.i8 2.i8;
         v3.i8 = sub v2 1.i8;
@@ -343,7 +343,7 @@ mod tests {
         let func_ref = module.funcs()[0];
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func(v0.i32, v1.i64) -> unit {
+            "func public %test_func(v0.i32, v1.i64) {
     block0:
         v2.i64 = sext v0 i64;
         v3.i64 = mul v2 v1;
@@ -422,7 +422,7 @@ mod tests {
         let func_ref = module.funcs()[0];
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func(v0.i64) -> unit {
+            "func public %test_func(v0.i64) {
     block0:
         br v0 block1 block2;
 

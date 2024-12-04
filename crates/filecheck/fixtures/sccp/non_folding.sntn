@@ -2,7 +2,7 @@
 
 target = "evm-ethereum-london"
 
-# sameln: func public %non_folding(v0.*i64) -> unit {
+# sameln: func public %non_folding(v0.*i64) {
 # nextln:    block1:
 # nextln:        v1.i64 = evm_sload v0;
 # nextln:        v2.i64 = add 1.i64 v0;

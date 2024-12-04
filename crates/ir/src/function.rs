@@ -106,7 +106,13 @@ where
         self.linkage.write(w, ctx)?;
         write!(w, " %{}(", self.name)?;
         self.args.write_with_delim(w, " ", ctx)?;
-        write!(w, ") -> ")?;
-        self.ret_ty.write(w, ctx)
+        write!(w, ")")?;
+
+        if !self.ret_ty.is_unit() {
+            write!(w, " -> ")?;
+            self.ret_ty.write(w, ctx)?;
+        }
+
+        Ok(())
     }
 }

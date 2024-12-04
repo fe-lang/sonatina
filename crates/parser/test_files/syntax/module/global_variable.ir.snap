@@ -12,7 +12,7 @@ global private [i8; 4] $ARRAY = [0, 1, 2, 3]
 global private @foo $FOO = {1, 2, 3}
 global private [@foo; 2] $FOO_ARRAY = [{1, 2, 3}, {3, 4, 5}]
 
-func public %main() -> unit {
+func public %main() {
     block0:
         v0.i256 = mload $PTR i256;
         return;
