@@ -33,7 +33,7 @@ function_body       = _{ "{" ~ (NEWLINE+ ~ block?)* ~ "}" }
 block               =  { block_ident ~ ":" ~ (NEWLINE+ ~ stmt)* }
 _stmts              = _{ (stmt ~ NEWLINE+)* }
 
-gv_declaration  =  { "global" ~ linkage ~ gv_const? ~ type_name ~ gv_identifier ~ ("=" ~ gv_initializer)? } 
+gv_declaration  =  { "global" ~ linkage ~ gv_const? ~ type_name ~ gv_identifier ~ ("=" ~ gv_initializer)?  ~ ";" } 
 gv_identifier   = ${ "$" ~ gv_name }
 gv_name         = @{ ident_start_char ~ ident_body_char* }
 gv_const        =  { "const" }

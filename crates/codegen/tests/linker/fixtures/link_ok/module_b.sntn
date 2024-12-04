@@ -7,8 +7,8 @@ type @bar = <{ i8, [i8; 31] }>;
 declare external %f_a(i8) -> i8;
 declare external %f_outer(i8) -> i8;
 
-global external const i256 $ZERO
-global external const i256 $ONE
+global external const i256 $ZERO;
+global external const i256 $ONE;
 
 func public %f_b(v0.i8, v1.i8) -> i8 {
     block0:

@@ -7,8 +7,8 @@ target = evm-ethereum-cancun
 type @foo = {i8, i16, *i64};
 type @bar = {i8, [i8; 31]};
 
-global public const i256 $ZERO = 0
-global external const i256 $ONE
+global public const i256 $ZERO = 0;
+global external const i256 $ONE;
 
 declare func external %f_outer(i8) -> i8;
 

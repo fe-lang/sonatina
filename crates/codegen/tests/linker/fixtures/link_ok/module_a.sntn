@@ -7,8 +7,8 @@ declare external %f_b(i8, i8) -> i8;
 declare external %f_outer(i8) -> i8;
 
 
-global public const i256 $ZERO = 0
-global external const i256 $ONE
+global public const i256 $ZERO = 0;
+global external const i256 $ONE;
 
 
 func public %f_a(v0.i8) -> i8 {

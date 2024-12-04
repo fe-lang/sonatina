@@ -5,21 +5,21 @@ input_file: test_files/errors/global_declaration.sntn
 error: parse error
  --> global_declaration.sntn:5:28
   |
-5 | global private i256 $IMM = [0]
+5 | global private i256 $IMM = [0];
   |                            ^^^ type error: expected `i256` here
   |error: parse error
  --> global_declaration.sntn:6:38
   |
-6 | global public const [i8; 1] $ARRAY = [1, 2]
+6 | global public const [i8; 1] $ARRAY = [1, 2];
   |                                      ^^^^^^ type error: expected `i8` here
   |error: parse error
  --> global_declaration.sntn:7:33
   |
-7 | global public const @foo $FOO = { 1, 2 }
+7 | global public const @foo $FOO = { 1, 2 };
   |                                 ^^^^^^^^ type error: expected `@foo` here
   |error: parse error
  --> global_declaration.sntn:8:38
   |
-8 | global public const @bar $BAR = { 1, {1, 2} }
+8 | global public const @bar $BAR = { 1, {1, 2} };
   |                                      ^^^^^^ type error: expected `@foo` here
   |

@@ -156,7 +156,8 @@ where
             write!(w, " = ")?;
             initializer.write(w, ctx)?;
         }
-        Ok(())
+
+        write!(w, ";")
     }
 }
 
@@ -235,7 +236,7 @@ mod test {
             ))
         });
 
-        assert_eq!(gv.dump_string(&ctx), "global public const i32 $foo = 1618");
+        assert_eq!(gv.dump_string(&ctx), "global public const i32 $foo = 1618;");
     }
 
     #[test]
@@ -259,7 +260,7 @@ mod test {
 
         assert_eq!(
             gv.dump_string(&ctx),
-            "global private const [i32; 3] $foo = [8, 4, 2]"
+            "global private const [i32; 3] $foo = [8, 4, 2];"
         );
     }
 }
