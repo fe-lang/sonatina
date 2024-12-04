@@ -1,3 +1,6 @@
+//! This module defines a module-level linking on sonatina-IR that links
+//! multiple sonatina modules into a single module.
+
 use std::mem;
 
 use cranelift_entity::entity_impl;
@@ -9,7 +12,7 @@ use sonatina_ir::{
     module::FuncRef,
     types::{CompoundType, CompoundTypeRef, StructData},
     visitor::VisitorMut,
-    Function, GlobalVariableRef, Linkage, Module, Signature, Type, Value,
+    GlobalVariableRef, Linkage, Module, Signature, Type, Value,
 };
 
 /// A struct represents a linked module, that is the result of the
@@ -51,6 +54,10 @@ pub enum LinkError {
 }
 
 impl LinkedModule {
+    pub fn module(&self) -> &Module {
+        &self.module
+    }
+
     /// Links multiple modules into a single module.
     /// Returns a linked module and a list of module references.
     /// The order of module references are the same as the input modules.
@@ -94,7 +101,7 @@ impl LinkedModule {
 /// An entity representing a module reference.
 /// This is used to identify a module in the linked module for mapping from
 /// the source module reference to the linked module reference.
-#[derive(Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub struct ModuleRef(pub u32);
 entity_impl!(ModuleRef);
 
@@ -198,6 +205,7 @@ struct ModuleLinker {
 
     module_ref_map: DashMap<ModuleRef, RefMap>,
 
+    /// Modules to be linked.
     modules: IndexMap<ModuleRef, Module>,
 }
 
@@ -234,7 +242,7 @@ impl ModuleLinker {
         }
     }
 
-    /// Registers module as a source module to be linked.
+    /// Registers a module as a source module to be linked.
     fn register_module(&mut self, module: Module) -> ModuleRef {
         let next_id = self.module_ref_map.len();
         let module_ref = ModuleRef(next_id as u32);
@@ -251,19 +259,48 @@ impl ModuleLinker {
         // Links all references in the source modules to the linked module.
         self.link_refs(&module_refs)?;
 
-        // Updates the references in the function body.
-        self.update_funcs(&module_refs);
-
         let modules = mem::take(&mut self.modules);
         // Move functions to the linked module.
         for (module_ref, module) in modules {
             let ref_map = self.module_ref_map.get(&module_ref).unwrap();
-
-            module.func_store.par_into_for_each(|func_ref, func| {
-                let linkage = func.dfg.ctx.func_sig(func_ref, |sig| sig.linkage());
-                if linkage.is_external() {
+            module.func_store.par_into_for_each(|func_ref, mut func| {
+                // If linkage is external, we don't need to move the function definition to the
+                // linked module.
+                if func
+                    .dfg
+                    .ctx
+                    .func_sig(func_ref, |sig| sig.linkage())
+                    .is_external()
+                {
                     return;
                 }
+
+                // Updates module context to the linked module.
+                func.dfg.ctx = self.builder.ctx.clone();
+
+                // Updates references in values to the linked module.
+                func.dfg.values.values_mut().for_each(|value| {
+                    ref_map.update_value(value);
+                });
+
+                // Updates the references in instructions to the linked module.
+                struct InstUpdater<'a> {
+                    ref_map: &'a Ref<'a, ModuleRef, RefMap>,
+                }
+                impl VisitorMut for InstUpdater<'_> {
+                    fn visit_func_ref(&mut self, item: &mut FuncRef) {
+                        *item = self.ref_map.lookup_func(*item);
+                    }
+
+                    fn visit_ty(&mut self, item: &mut Type) {
+                        *item = self.ref_map.lookup_type(*item);
+                    }
+                }
+                let mut visitor = InstUpdater { ref_map: &ref_map };
+                func.dfg
+                    .insts
+                    .values_mut()
+                    .for_each(|inst| inst.accept_mut(&mut visitor));
 
                 let linked_func_ref = ref_map.lookup_func(func_ref);
                 self.builder.func_store.update(linked_func_ref, func);
@@ -479,12 +516,13 @@ impl ModuleLinker {
 
             // Validates the linkage and update the linked gv if needed.
             // The allowed combinations are:
-            // (SourceLinkage, LinkedLinkage) = (External, Public) or (Public, External).
+            // (SourceLinkage, LinkedLinkage) = (External, Public), (Public, External) or
+            // (External, External).
             //
             // Also, in case of LinkedLinkage is External, we need to update it to
             // a Public.
             match (gv_data.linkage, linked_gv_data.linkage) {
-                (Linkage::External, Linkage::Public) => {}
+                (Linkage::External, Linkage::Public) | (Linkage::External, Linkage::External) => {}
                 (Linkage::Public, Linkage::External) => {
                     s.update_linkage(linked_gv_ref, Linkage::Public);
                 }
@@ -544,11 +582,11 @@ impl ModuleLinker {
                 });
             }
 
-            Ok(sig.linkage())
+            Ok(linked_sig.linkage())
         })?;
 
         match (sig.linkage(), linked_func_linkage) {
-            (Linkage::External, Linkage::Public) => {}
+            (Linkage::External, Linkage::Public) | (Linkage::External, Linkage::External) => {}
             (Linkage::Public, Linkage::External) => {
                 self.builder
                     .ctx
@@ -563,46 +601,5 @@ impl ModuleLinker {
 
         ref_map.func_mapping.insert(func_ref, linked_func_ref);
         Ok(linked_func_ref)
-    }
-
-    fn update_funcs(&self, module_refs: &[ModuleRef]) {
-        for module_ref in module_refs {
-            let module = self.modules.get(module_ref).unwrap();
-            module
-                .func_store
-                .par_for_each(|_, func| self.update_func(*module_ref, func));
-        }
-    }
-
-    fn update_func(&self, module_ref: ModuleRef, func: &mut Function) {
-        let ref_map = self.module_ref_map.get(&module_ref).unwrap();
-
-        // Updates module context to the linked module.
-        func.dfg.ctx = self.builder.ctx.clone();
-
-        // Updates values to the linked module.
-        func.dfg.values.values_mut().for_each(|value| {
-            ref_map.update_value(value);
-        });
-
-        // Updates the instructions to the linked module.
-        struct InstUpdater<'a> {
-            ref_map: Ref<'a, ModuleRef, RefMap>,
-        }
-        impl VisitorMut for InstUpdater<'_> {
-            fn visit_func_ref(&mut self, item: &mut FuncRef) {
-                *item = self.ref_map.lookup_func(*item);
-            }
-
-            fn visit_ty(&mut self, item: &mut Type) {
-                *item = self.ref_map.lookup_type(*item);
-            }
-        }
-
-        let mut visitor = InstUpdater { ref_map };
-        func.dfg
-            .insts
-            .values_mut()
-            .for_each(|value| value.accept_mut(&mut visitor))
     }
 }

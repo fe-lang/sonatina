@@ -1,0 +1,25 @@
+target = "evm-ethereum-cancun"
+
+type @foo = { i8, i16, *i64 };
+type @bar = <{ i8, [i8; 31] }>;
+
+declare external %f_b(i8, i8) -> i8;
+declare external %f_outer(i8) -> i8;
+
+
+global public const i256 $ZERO = 0
+global external const i256 $ONE
+
+
+func public %f_a(v0.i8) -> i8 {
+    block0:
+        return v0;
+}
+
+func private %types_a(v0.*i8, v1.[i8; 2], v2.[*i8; 2], v3.[[i8; 2]; 2], v4.@foo, v5.*@bar) -> i8 {
+    block0:
+        v6.i8 = mload v0 i8;
+        v7.i8 = call %f_b v6 1.i8;
+        call %f_outer;
+        return v6;
+}

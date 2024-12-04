@@ -1,0 +1,3 @@
+target = "evm-ethereum-cancun"
+
+declare external %f(i64) -> i64;
