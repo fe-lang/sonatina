@@ -69,8 +69,23 @@ pub struct Return {
     arg: Option<ValueId>,
 }
 
+/// A trait for instructions that can be used as a call.
 #[inst_prop]
-pub trait Branch {
+pub trait CallInfo {
+    fn callee(&self) -> FuncRef;
+
+    type Members = (Call,);
+}
+
+impl CallInfo for Call {
+    fn callee(&self) -> FuncRef {
+        self.callee
+    }
+}
+
+/// A trait for instructions that can be used as a jump or branching.
+#[inst_prop]
+pub trait BranchInfo {
     fn dests(&self) -> Vec<BlockId>;
     fn num_dests(&self) -> usize;
     fn remove_dest(&self, isb: &dyn InstSetBase, dest: BlockId) -> Box<dyn Inst>;
@@ -80,7 +95,7 @@ pub trait Branch {
     type Members = (Jump, Br, BrTable);
 }
 
-impl Branch for Jump {
+impl BranchInfo for Jump {
     fn dests(&self) -> Vec<BlockId> {
         vec![self.dest]
     }
@@ -107,7 +122,7 @@ impl Branch for Jump {
     }
 }
 
-impl Branch for Br {
+impl BranchInfo for Br {
     fn dests(&self) -> Vec<BlockId> {
         vec![self.nz_dest, self.z_dest]
     }
@@ -142,7 +157,7 @@ impl Branch for Br {
     }
 }
 
-impl Branch for BrTable {
+impl BranchInfo for BrTable {
     fn dests(&self) -> Vec<BlockId> {
         let mut dests = if let Some(default) = self.default {
             vec![default]
@@ -216,7 +231,10 @@ pub enum BranchKind<'i> {
 /// This function checks if all the destinations of the branch instruction
 /// are the same. If so, it converts the branch into a single jump
 /// instruction targeting that destination. Otherwise, it returns `None`.
-fn try_convert_branch_to_jump(isb: &dyn InstSetBase, branch: &dyn Branch) -> Option<Box<dyn Inst>> {
+fn try_convert_branch_to_jump(
+    isb: &dyn InstSetBase,
+    branch: &dyn BranchInfo,
+) -> Option<Box<dyn Inst>> {
     let first_dest = branch.dests()[0];
     let is_dest_unique = branch
         .dests()
