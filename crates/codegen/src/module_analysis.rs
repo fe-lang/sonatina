@@ -1,9 +1,7 @@
-#![allow(unused)]
-
 use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
 use dashmap::DashMap;
 use rustc_hash::FxHashSet;
-use sonatina_ir::{module::FuncRef, visitor::Visitor, Module};
+use sonatina_ir::{module::FuncRef, Module};
 
 #[derive(Debug, Clone, Default)]
 pub struct CallGraph {
@@ -15,16 +13,18 @@ impl CallGraph {
     pub fn build_graph(module: &Module) -> Self {
         let d_nodes = DashMap::new();
         module.func_store.par_for_each(|func_ref, func| {
-            let mut collector = CalleeCollector::default();
+            let mut callees = FxHashSet::default();
             for block in func.layout.iter_block() {
                 for inst_id in func.layout.iter_inst(block) {
-                    func.dfg.inst(inst_id).accept(&mut collector);
+                    if let Some(call) = func.dfg.call_info(inst_id) {
+                        callees.insert(call.callee());
+                    }
                 }
             }
 
-            let mut callees: Vec<_> = collector.callees.into_iter().collect();
+            let mut callees: Vec<_> = callees.into_iter().collect();
             callees.sort_unstable();
-            let node = Node { callee: callees };
+            let node = Node { callees };
 
             d_nodes.insert(func_ref, node);
         });
@@ -38,37 +38,33 @@ impl CallGraph {
 
     /// Get the callees of a function.
     pub fn callee_of(&self, func_ref: FuncRef) -> &[FuncRef] {
-        &self.nodes[func_ref].callee
+        &self.nodes[func_ref].callees
     }
 }
 
 #[derive(Debug, Clone, Default)]
 struct Node {
-    callee: Vec<FuncRef>,
+    callees: Vec<FuncRef>,
 }
 
-#[derive(Debug, Default)]
-struct CalleeCollector {
-    callees: FxHashSet<FuncRef>,
+/// Represents the strongly connected components of a call graph in a module.
+pub struct CallGraphSccs {
+    scc_map: SecondaryMap<FuncRef, SccRef>,
+    scc_store: PrimaryMap<SccRef, SccInfo>,
 }
 
-impl Visitor for CalleeCollector {
-    fn visit_func_ref(&mut self, item: FuncRef) {
-        self.callees.insert(item);
+impl CallGraphSccs {
+    pub fn scc_of(&self, func_ref: FuncRef) -> &SccInfo {
+        let scc_ref = self.scc_map[func_ref];
+        &self.scc_store[scc_ref]
     }
 }
 
-pub struct CallGraphSCCs {
-    scc_map: SecondaryMap<FuncRef, SccRef>,
-    scc_store: PrimaryMap<SccRef, SccData>,
-}
-
 #[derive(Debug, Clone)]
-pub struct SccData {
-    /// The entry function of the SCC in callgraph.
-    pub entry: FuncRef,
-
-    /// Whether the SCC is a cycle.
+pub struct SccInfo {
+    /// Whether the SCC is a true cycle.
+    /// NOTE: The SCC fomes a true cycle if it contains more than one function
+    /// or a function that calls itself.
     pub is_cycle: bool,
 
     /// The functions in the SCC.
@@ -78,21 +74,21 @@ pub struct SccData {
 #[derive(Debug)]
 pub struct SccBuilder {
     scc_map: SecondaryMap<FuncRef, SccRef>,
-    scc_store: PrimaryMap<SccRef, SccData>,
+    scc_store: PrimaryMap<SccRef, SccInfo>,
     stack: Vec<FuncRef>,
     nodes: SecondaryMap<FuncRef, NodeState>,
     next_index: usize,
 }
 
 impl SccBuilder {
-    pub fn compute_scc(mut self, call_graph: &CallGraph) -> CallGraphSCCs {
+    pub fn compute_scc(mut self, call_graph: &CallGraph) -> CallGraphSccs {
         for func_ref in call_graph.nodes.keys() {
             if !self.nodes[func_ref].visited {
                 self.strong_component(func_ref, call_graph);
             }
         }
 
-        CallGraphSCCs {
+        CallGraphSccs {
             scc_map: self.scc_map,
             scc_store: self.scc_store,
         }
@@ -138,15 +134,15 @@ impl SccBuilder {
                 }
             }
 
-            let scc_ref = self.scc_store.push(SccData {
+            let scc_ref = self.scc_store.push(SccInfo {
                 scc: FxHashSet::default(),
-                entry: func_ref,
                 is_cycle: scc.len() > 1 || is_trivial_cycle,
             });
 
             for &func_ref in &scc {
                 self.scc_map[func_ref] = scc_ref;
             }
+
             self.scc_store[scc_ref].scc = scc;
         }
     }
