@@ -1,5 +1,5 @@
 ---
-source: crates/codegen/tests/linker.rs
+source: crates/ir/tests/linker.rs
 input_file: tests/linker/fixtures/link_ok/module.snap
 ---
 target = evm-ethereum-cancun

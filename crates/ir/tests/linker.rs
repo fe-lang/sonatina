@@ -5,8 +5,7 @@ use std::{
 };
 
 use common::parse_module;
-use sonatina_codegen::module_linker::LinkedModule;
-use sonatina_ir::ir_writer::ModuleWriter;
+use sonatina_ir::{ir_writer::ModuleWriter, module_linker::LinkedModule};
 
 fn fixture_dir() -> PathBuf {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();

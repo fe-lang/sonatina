@@ -12,6 +12,7 @@ pub mod isa;
 pub mod layout;
 pub mod linkage;
 pub mod module;
+pub mod module_linker;
 pub mod types;
 pub mod value;
 pub mod visitor;

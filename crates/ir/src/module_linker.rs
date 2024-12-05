@@ -7,7 +7,8 @@ use cranelift_entity::entity_impl;
 use dashmap::{mapref::one::Ref, DashMap, ReadOnlyView};
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
-use sonatina_ir::{
+
+use crate::{
     builder::ModuleBuilder,
     module::FuncRef,
     types::{CompoundType, CompoundTypeRef, StructData},
