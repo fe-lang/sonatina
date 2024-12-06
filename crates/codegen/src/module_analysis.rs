@@ -1,6 +1,8 @@
+use core::fmt;
+
 use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
 use dashmap::{DashMap, ReadOnlyView};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use sonatina_ir::{module::FuncRef, Linkage, Module};
 
 pub fn analyze_module(module: &Module) -> ModuleInfo {
@@ -12,27 +14,38 @@ pub struct ModuleInfo {
     pub scc: CallGraphSccs,
     pub call_graph: CallGraph,
     pub func_info: ReadOnlyView<FuncRef, FuncInfo>,
-    pub access_pattern: ModuleAccessPattern,
+    pub access_pattern: DependencyFlow,
 }
 
-/// The access pattern of a module with regard to function calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModuleAccessPattern {
-    /// The module module calls a function from another module, but the module
-    /// doesn't expose any function to other modules.
+pub enum DependencyFlow {
+    /// The entity depends on external functions but is not depended on by
+    /// external functions.
     OutgoingOnly,
-    /// The module exposes at least one function to other modules, but the
-    /// module doesn't call any function from other modules.
+    /// The entity is depended on by external functions but does not depend on
+    /// any external functions.
     IncomingOnly,
-    /// `Bidirectional`: The module calls a function from another module, and
-    /// also exposes at least one function to other modules.
+    /// The entity both depends on external functions and is depended on by
+    /// external functions.
     Bidirectional,
-    /// `Closed`: The module doesn't call any function from other modules, and
-    /// also doesn't expose any function to other modules.
+    /// The entity neither depends on nor is depended on by external functions.
     Closed,
 }
 
-impl ModuleAccessPattern {
+impl fmt::Display for DependencyFlow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OutgoingOnly => write!(f, "OutgoingOnly"),
+            Self::IncomingOnly => write!(f, "IncomingOnly"),
+            Self::Bidirectional => write!(f, "Bidirectional"),
+            Self::Closed => write!(f, "Closed"),
+        }
+    }
+}
+
+impl DependencyFlow {
+    /// Joins two dependency flows.
+    /// `Closed` is the bottom, and `Bidirectional` is the top of this lattice.
     pub fn join(self, rhs: Self) -> Self {
         match (self, rhs) {
             (Self::OutgoingOnly, Self::OutgoingOnly) => Self::OutgoingOnly,
@@ -52,6 +65,20 @@ impl ModuleAccessPattern {
             Linkage::Private => Self::Closed,
         }
     }
+
+    fn remove_flow(self, flow: Self) -> Self {
+        match (self, flow) {
+            (Self::OutgoingOnly, Self::OutgoingOnly) => Self::Closed,
+            (Self::OutgoingOnly, Self::IncomingOnly) => Self::OutgoingOnly,
+            (Self::IncomingOnly, Self::IncomingOnly) => Self::Closed,
+            (Self::IncomingOnly, Self::OutgoingOnly) => Self::IncomingOnly,
+            (Self::Bidirectional, Self::OutgoingOnly) => Self::IncomingOnly,
+            (Self::Bidirectional, Self::IncomingOnly) => Self::OutgoingOnly,
+            (_, Self::Bidirectional) => Self::Closed,
+            (Self::Closed, _) => Self::Closed,
+            (other, Self::Closed) => other,
+        }
+    }
 }
 
 /// The module-granular information of a function.
@@ -62,6 +89,12 @@ pub struct FuncInfo {
     /// non-recursive if we can ensure that the function is not recursive
     /// regardless of how the module is linked to other modules later.
     pub is_non_recursive: bool,
+
+    /// Indicates the [`DependencyFlow`] of the function.
+    pub flow: DependencyFlow,
+
+    /// `true` if the function is a leaf function.
+    pub is_leaf: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -97,6 +130,10 @@ impl CallGraph {
         CallGraph { nodes }
     }
 
+    pub fn funcs(&self) -> impl Iterator<Item = FuncRef> {
+        self.nodes.keys()
+    }
+
     /// Get the callees of a function.
     pub fn callee_of(&self, func_ref: FuncRef) -> &[FuncRef] {
         &self.nodes[func_ref].callees
@@ -117,7 +154,15 @@ pub struct CallGraphSccs {
 
 impl CallGraphSccs {
     pub fn scc_of(&self, func_ref: FuncRef) -> &SccInfo {
-        let scc_ref = self.scc_map[func_ref];
+        let scc_ref = self.scc_ref(func_ref);
+        self.scc_info(scc_ref)
+    }
+
+    pub fn scc_ref(&self, func_ref: FuncRef) -> SccRef {
+        self.scc_map[func_ref]
+    }
+
+    pub fn scc_info(&self, scc_ref: SccRef) -> &SccInfo {
         &self.scc_store[scc_ref]
     }
 }
@@ -130,7 +175,7 @@ pub struct SccInfo {
     pub is_cycle: bool,
 
     /// The functions in the SCC.
-    pub scc: FxHashSet<FuncRef>,
+    pub components: FxHashSet<FuncRef>,
 }
 
 #[derive(Debug, Default)]
@@ -201,7 +246,7 @@ impl SccBuilder {
             }
 
             let scc_ref = self.scc_store.push(SccInfo {
-                scc: FxHashSet::default(),
+                components: FxHashSet::default(),
                 is_cycle: scc.len() > 1 || is_trivial_cycle,
             });
 
@@ -209,7 +254,7 @@ impl SccBuilder {
                 self.scc_map[func_ref] = scc_ref;
             }
 
-            self.scc_store[scc_ref].scc = scc;
+            self.scc_store[scc_ref].components = scc;
         }
     }
 }
@@ -220,7 +265,7 @@ struct Node {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-struct SccRef(u32);
+pub struct SccRef(u32);
 entity_impl!(SccRef);
 
 #[derive(Default, Debug, Clone)]
@@ -233,8 +278,8 @@ struct NodeState {
 
 struct ModuleAnalyzer<'a> {
     module: &'a Module,
-    access_pattern: ModuleAccessPattern,
-    scc: CallGraphSccs,
+    access_pattern: DependencyFlow,
+    sccs: CallGraphSccs,
     call_graph: CallGraph,
     func_info: DashMap<FuncRef, FuncInfo>,
 }
@@ -245,8 +290,8 @@ impl<'a> ModuleAnalyzer<'a> {
         let scc = SccBuilder::default().compute_scc(&call_graph);
         Self {
             module,
-            access_pattern: ModuleAccessPattern::Closed,
-            scc,
+            access_pattern: DependencyFlow::Closed,
+            sccs: scc,
             call_graph,
             func_info: DashMap::new(),
         }
@@ -257,7 +302,7 @@ impl<'a> ModuleAnalyzer<'a> {
         self.determine_func_info();
 
         ModuleInfo {
-            scc: self.scc,
+            scc: self.sccs,
             call_graph: self.call_graph,
             func_info: self.func_info.into_read_only(),
             access_pattern: self.access_pattern,
@@ -274,14 +319,14 @@ impl<'a> ModuleAnalyzer<'a> {
             }
 
             let access_pattern =
-                ModuleAccessPattern::from_linkage(self.module.ctx.func_linkage(func_ref));
+                DependencyFlow::from_linkage(self.module.ctx.func_linkage(func_ref));
             self.access_pattern = self.access_pattern.join(access_pattern);
             for &callee in &node.callees {
                 if !seen.insert(callee) {
                     continue;
                 };
                 let access_pattern =
-                    ModuleAccessPattern::from_linkage(self.module.ctx.func_linkage(callee));
+                    DependencyFlow::from_linkage(self.module.ctx.func_linkage(callee));
                 self.access_pattern = self.access_pattern.join(access_pattern);
             }
         }
@@ -289,77 +334,101 @@ impl<'a> ModuleAnalyzer<'a> {
 
     /// Determine the module-granular information of functions.
     fn determine_func_info(&self) {
-        // If the module access pattern is not `Bidirectional`, we can simply use the
-        // SCC information to determine whether a function is non-recursive.
-        if self.access_pattern != ModuleAccessPattern::Bidirectional {
-            for func_ref in self.call_graph.nodes.keys() {
-                let scc_info = self.scc.scc_of(func_ref);
-                let is_non_recursive = !scc_info.is_cycle
-                    || self.module.ctx.func_linkage(func_ref) != Linkage::External;
-                self.func_info
-                    .insert(func_ref, FuncInfo { is_non_recursive });
-            }
-        }
-
-        // Traverse the call graph from public functions.
-        // If there is the path from a public function to an external function,
-        // the all node in the path is marked as recursive.
-        // Otherwise, the node is marked as non-recursive if a node doesn't involve in a
-        // cycle.
-        let mut traversed: FxHashMap<FuncRef, bool> = FxHashMap::default();
-        for (func_ref, callees) in self.call_graph.nodes.iter() {
+        let mut visited: FxHashSet<SccRef> = FxHashSet::default();
+        // Traverse the condensation DAG of a call graph to analyze the dependency flow
+        // of functions and recursive calls.
+        // We start traversing from public functions.
+        for func_ref in self.call_graph.nodes.keys() {
             let sig = self.module.ctx.func_linkage(func_ref);
             if !sig.is_public() | self.func_info.contains_key(&func_ref) {
                 continue;
             }
 
-            let mut is_outgoing = false;
-            for &callee in callees.callees.iter() {
-                if !sig.is_public() | self.func_info.contains_key(&callee) {
-                    continue;
-                }
-                is_outgoing |= self.traverse_incoming_flow(&mut traversed, callee);
-            }
-
-            let is_non_recursive = !(self.scc.scc_of(func_ref).is_cycle || is_outgoing);
-            self.func_info
-                .insert(func_ref, FuncInfo { is_non_recursive });
+            let scc_ref = self.sccs.scc_ref(func_ref);
+            self.traverse(scc_ref, DependencyFlow::IncomingOnly, &mut visited);
         }
 
+        // Traverse the rest of the functions.
         for func_ref in self.call_graph.nodes.keys() {
             if self.func_info.contains_key(&func_ref) {
                 continue;
             }
 
-            let is_non_recursive = !self.scc.scc_of(func_ref).is_cycle;
-            self.func_info
-                .insert(func_ref, FuncInfo { is_non_recursive });
+            let scc_ref = self.sccs.scc_ref(func_ref);
+            self.traverse(scc_ref, DependencyFlow::Closed, &mut visited);
         }
     }
 
-    /// Traverse the incoming call flow of a function.
-    /// Returns `true` if the function has an outgoing call to another module.
-    fn traverse_incoming_flow(
+    /// Traverse the condensation DAG of a call graph to analyze the dependency
+    /// flow, the recursive calls, and the leaf functions.
+    fn traverse(
         &self,
-        traversed: &mut FxHashMap<FuncRef, bool>,
-        func_ref: FuncRef,
-    ) -> bool {
-        if let Some(&is_outgoing) = traversed.get(&func_ref) {
-            return is_outgoing;
+        scc_ref: SccRef,
+        initial_flow: DependencyFlow,
+        visited: &mut FxHashSet<SccRef>,
+    ) -> DependencyFlow {
+        assert!(matches!(
+            initial_flow,
+            DependencyFlow::IncomingOnly | DependencyFlow::Closed,
+        ));
+
+        if visited.contains(&scc_ref) {
+            // All functions in the same SCC has the same flow.
+            let func_ref = self
+                .sccs
+                .scc_info(scc_ref)
+                .components
+                .iter()
+                .next()
+                .unwrap();
+            return self.func_info.get(func_ref).unwrap().flow;
+        }
+        visited.insert(scc_ref);
+
+        let mut flow = initial_flow;
+        let mut is_external = false;
+        for func_ref in self.sccs.scc_info(scc_ref).components.iter() {
+            if self.module.ctx.func_linkage(*func_ref).is_external() {
+                assert!(self.sccs.scc_info(scc_ref).components.len() == 1);
+                is_external = true;
+                flow = DependencyFlow::OutgoingOnly;
+                break;
+            }
+            let mut child_flow = initial_flow;
+
+            // Traverses child SCCs.
+            for &callee in self.call_graph.callee_of(*func_ref) {
+                // Skip the callee in the same SCC.
+                if self.sccs.scc_ref(callee) == scc_ref {
+                    continue;
+                }
+
+                let scc = self.sccs.scc_ref(callee);
+                child_flow = child_flow.join(self.traverse(scc, initial_flow, visited));
+            }
+
+            flow = flow.join(child_flow);
         }
 
-        let is_outgoing = self.module.ctx.func_linkage(func_ref).is_external()
-            || self
-                .call_graph
-                .callee_of(func_ref)
-                .iter()
-                .any(|callee| self.traverse_incoming_flow(traversed, *callee));
+        if initial_flow == DependencyFlow::Closed {
+            flow = flow.remove_flow(DependencyFlow::IncomingOnly);
+        }
 
-        traversed.insert(func_ref, is_outgoing);
-        let is_non_recursive = !(is_outgoing || self.scc.scc_of(func_ref).is_cycle);
-        self.func_info
-            .insert(func_ref, FuncInfo { is_non_recursive });
+        let is_non_recursive = !(self.sccs.scc_info(scc_ref).is_cycle
+            || flow == DependencyFlow::Bidirectional
+            || is_external);
+        for &func_ref in self.sccs.scc_info(scc_ref).components.iter() {
+            let is_leaf = self.call_graph.is_leaf(func_ref);
+            self.func_info.insert(
+                func_ref,
+                FuncInfo {
+                    is_non_recursive,
+                    flow,
+                    is_leaf,
+                },
+            );
+        }
 
-        is_outgoing
+        flow
     }
 }
