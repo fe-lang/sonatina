@@ -5,7 +5,7 @@ use dot2::label;
 use super::function::DUMMY_BLOCK;
 use crate::{
     ir_writer::{FuncWriteCtx, IrWrite, ValueWithTy},
-    BlockId, ControlFlowGraph, Function,
+    BlockId, ControlFlowGraph,
 };
 
 #[derive(Clone, Copy)]
@@ -31,10 +31,11 @@ impl<'a> BlockNode<'a> {
 impl BlockNode<'_> {
     pub(super) fn label(self) -> label::Text<'static> {
         let Self { block, ctx, .. } = self;
-        let Function { sig, layout, .. } = &ctx.func;
         if block == DUMMY_BLOCK {
-            let sig = sig.dump_string(self.ctx);
-            return label::Text::LabelStr(sig.into());
+            return ctx.module_ctx().func_sig(ctx.func_ref, |sig| {
+                let sig = sig.dump_string(ctx);
+                label::Text::LabelStr(sig.into())
+            });
         }
 
         let mut label = r#"<table border="0" cellborder="1" cellspacing="0">"#.to_string();
@@ -49,7 +50,7 @@ impl BlockNode<'_> {
 
         // Write block body.
         write!(label, r#"<tr><td align="left" balign="left">"#).unwrap();
-        for inst in layout.iter_inst(self.block) {
+        for inst in ctx.func.layout.iter_inst(self.block) {
             let mut inst_string = String::new();
             if let Some(result) = self.ctx.func.dfg.inst_result(inst) {
                 let result_with_ty = ValueWithTy(result);

@@ -6,11 +6,11 @@ module "target = "evm-ethereum-cancun"
 
 type @foo = { i8, i16, *i64 };
 
-global private const i256 $ZERO = 0
-global public *i256 $PTR = 1
-global private [i8; 4] $ARRAY = [0, 1, 2, 3]
-global private @foo $FOO = {1, 2, 3}
-global private [@foo; 2] $FOO_ARRAY = [{1, 2, 3}, {3, 4, 5}]
+global private const i256 $ZERO = 0;
+global public *i256 $PTR = 1;
+global private [i8; 4] $ARRAY = [0, 1, 2, 3];
+global private @foo $FOO = {1, 2, 3};
+global private [@foo; 2] $FOO_ARRAY = [{1, 2, 3}, {3, 4, 5}];
 
 func public %main() -> unit {
     block0: 
@@ -31,7 +31,7 @@ func public %main() -> unit {
         ptr_type "*i64"
           type_name "i64"
             primitive_type "i64"
-  gv_declaration "global private const i256 $ZERO = 0"
+  gv_declaration "global private const i256 $ZERO = 0;"
     linkage "private"
     gv_const "const"
     type_name "i256"
@@ -41,7 +41,7 @@ func public %main() -> unit {
     gv_initializer "0"
       gv_value_imm "0"
         decimal "0"
-  gv_declaration "global public *i256 $PTR = 1"
+  gv_declaration "global public *i256 $PTR = 1;"
     linkage "public"
     type_name "*i256"
       ptr_type "*i256"
@@ -52,7 +52,7 @@ func public %main() -> unit {
     gv_initializer "1"
       gv_value_imm "1"
         decimal "1"
-  gv_declaration "global private [i8; 4] $ARRAY = [0, 1, 2, 3]"
+  gv_declaration "global private [i8; 4] $ARRAY = [0, 1, 2, 3];"
     linkage "private"
     type_name "[i8; 4]"
       array_type "[i8; 4]"
@@ -75,7 +75,7 @@ func public %main() -> unit {
         gv_initializer "3"
           gv_value_imm "3"
             decimal "3"
-  gv_declaration "global private @foo $FOO = {1, 2, 3}"
+  gv_declaration "global private @foo $FOO = {1, 2, 3};"
     linkage "private"
     type_name "@foo"
       struct_identifier "@foo"
@@ -93,7 +93,7 @@ func public %main() -> unit {
         gv_initializer "3"
           gv_value_imm "3"
             decimal "3"
-  gv_declaration "global private [@foo; 2] $FOO_ARRAY = [{1, 2, 3}, {3, 4, 5}]"
+  gv_declaration "global private [@foo; 2] $FOO_ARRAY = [{1, 2, 3}, {3, 4, 5}];"
     linkage "private"
     type_name "[@foo; 2]"
       array_type "[@foo; 2]"

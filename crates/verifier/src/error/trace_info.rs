@@ -4,8 +4,8 @@ use cranelift_entity::packed_option::PackedOption;
 use sonatina_ir::{
     ir_writer::{FuncWriteCtx, InstStatement, IrWrite, ValueWithTy},
     module::FuncRef,
-    types::CompoundType,
-    BlockId, Function, GlobalVariable, InstId, Type, ValueId,
+    types::CompoundTypeRef,
+    BlockId, Function, GlobalVariableRef, InstId, Type, ValueId,
 };
 
 /// Execution context.
@@ -16,9 +16,9 @@ pub struct TraceInfo {
     inst_id: PackedOption<InstId>,
     callee: PackedOption<FuncRef>,
     value: PackedOption<ValueId>,
-    gv: PackedOption<GlobalVariable>,
+    gv: PackedOption<GlobalVariableRef>,
     ty: Option<Type>,
-    cmpd_ty: PackedOption<CompoundType>,
+    cmpd_ty: PackedOption<CompoundTypeRef>,
 }
 
 impl TraceInfo {
@@ -42,7 +42,7 @@ impl TraceInfo {
         self.value.expand()
     }
 
-    pub fn gv(&self) -> Option<GlobalVariable> {
+    pub fn gv(&self) -> Option<GlobalVariableRef> {
         self.gv.expand()
     }
 
@@ -50,7 +50,7 @@ impl TraceInfo {
         self.ty
     }
 
-    pub fn cmpd_ty(&self) -> Option<CompoundType> {
+    pub fn cmpd_ty(&self) -> Option<CompoundTypeRef> {
         self.cmpd_ty.expand()
     }
 }
@@ -79,24 +79,23 @@ impl fmt::Display for DisplayTraceInfo<'_, '_> {
             ..
         } = self.trace_info;
 
-        let dfg = &self.ctx.func.dfg;
-
         "trace_info:".fmt(f)?;
 
         let mut line = 0;
 
+        let module_ctx = self.ctx.module_ctx();
         if let Some(cmpd_ty) = cmpd_ty.expand() {
-            let cmpd_ty = cmpd_ty.dump_string(&dfg.ctx);
+            let cmpd_ty = cmpd_ty.dump_string(module_ctx);
             write!(f, "\n{line}: {cmpd_ty}")?;
             line += 1;
         }
         if let Some(ty) = ty {
-            let ty = ty.dump_string(&dfg.ctx);
+            let ty = ty.dump_string(module_ctx);
             write!(f, "\n{line}: {ty}")?;
             line += 1;
         }
         if let Some(gv) = gv.expand() {
-            let gv = gv.dump_string(&dfg.ctx);
+            let gv = gv.dump_string(module_ctx);
             write!(f, "\n{line}: {gv}")?;
             line += 1;
         }
@@ -122,7 +121,7 @@ impl fmt::Display for DisplayTraceInfo<'_, '_> {
             line += 1;
         }
 
-        let sig = self.ctx.func.sig.dump_string(&self.ctx);
+        let sig = module_ctx.func_sig(self.ctx.func_ref, |sig| sig.dump_string(module_ctx));
         write!(f, "\n{line}: {sig}")
     }
 }
@@ -134,9 +133,9 @@ pub struct TraceInfoBuilder {
     inst_id: PackedOption<InstId>,
     callee: PackedOption<FuncRef>,
     value: PackedOption<ValueId>,
-    gv: PackedOption<GlobalVariable>,
+    gv: PackedOption<GlobalVariableRef>,
     ty: Option<Type>,
-    cmpd_ty: PackedOption<CompoundType>,
+    cmpd_ty: PackedOption<CompoundTypeRef>,
 }
 
 impl TraceInfoBuilder {
@@ -173,7 +172,7 @@ impl TraceInfoBuilder {
         self
     }
 
-    pub fn gv(mut self, gv: GlobalVariable) -> Self {
+    pub fn gv(mut self, gv: GlobalVariableRef) -> Self {
         self.gv = gv.into();
         self
     }
@@ -183,7 +182,7 @@ impl TraceInfoBuilder {
         self
     }
 
-    pub fn cmpd_ty(mut self, cmpd_ty: CompoundType) -> Self {
+    pub fn cmpd_ty(mut self, cmpd_ty: CompoundTypeRef) -> Self {
         self.cmpd_ty = cmpd_ty.into();
         self
     }

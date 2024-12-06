@@ -1,5 +1,5 @@
 use super::{Action, EvalValue, Interpret, State};
-use crate::{inst::data::*, types::CompoundTypeData, Immediate, Type, I256};
+use crate::{inst::data::*, types::CompoundType, Immediate, Type, I256};
 
 impl Interpret for Mload {
     fn interpret(&self, state: &mut dyn State) -> EvalValue {
@@ -62,19 +62,19 @@ impl Interpret for Gep {
                 .with_ty_store(|s| s.resolve_compound(cmpd).clone());
 
             match cmpd_data {
-                CompoundTypeData::Array { elem, .. } => {
+                CompoundType::Array { elem, .. } => {
                     let elem_size = state.dfg().ctx.size_of_unchecked(elem);
                     offset += elem_size * idx_value;
                     current_ty = elem;
                 }
 
-                CompoundTypeData::Ptr(ty) => {
+                CompoundType::Ptr(ty) => {
                     let size = state.dfg().ctx.size_of_unchecked(ty);
                     offset += size * idx_value;
                     current_ty = ty;
                 }
 
-                CompoundTypeData::Struct(s) => {
+                CompoundType::Struct(s) => {
                     let mut local_offset = 0;
                     for i in 0..idx_value {
                         let field_ty = s.fields[i];
@@ -86,7 +86,7 @@ impl Interpret for Gep {
                     current_ty = s.fields[idx_value];
                 }
 
-                CompoundTypeData::Func { .. } => {
+                CompoundType::Func { .. } => {
                     panic!(
                         "Invalid GEP: indexing into a function type with more indices remaining"
                     );
@@ -118,10 +118,10 @@ impl Interpret for InsertValue {
 
             EvalValue::Undef => {
                 let len = match ty.resolve_compound(&state.dfg().ctx).unwrap() {
-                    CompoundTypeData::Array { len, .. } => len,
-                    CompoundTypeData::Struct(s) => s.fields.len(),
-                    CompoundTypeData::Ptr(_) => unreachable!(),
-                    CompoundTypeData::Func { .. } => unreachable!(),
+                    CompoundType::Array { len, .. } => len,
+                    CompoundType::Struct(s) => s.fields.len(),
+                    CompoundType::Ptr(_) => unreachable!(),
+                    CompoundType::Func { .. } => unreachable!(),
                 };
                 vec![EvalValue::Undef; len]
             }

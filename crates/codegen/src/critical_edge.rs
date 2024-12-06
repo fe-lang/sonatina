@@ -172,7 +172,7 @@ mod tests {
 
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func() -> unit {
+            "func public %test_func() {
     block0:
         br 1.i32 block3 block1;
 
@@ -242,7 +242,7 @@ mod tests {
 
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func() -> unit {
+            "func public %test_func() {
     block0:
         br 1.i8 block5 block1;
 
@@ -310,7 +310,7 @@ mod tests {
         });
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func() -> unit {
+            "func public %test_func() {
     block0:
         jump block1;
 
@@ -380,7 +380,7 @@ mod tests {
 
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func() -> unit {
+            "func public %test_func() {
     block0:
         br 1.i1 block5 block6;
 

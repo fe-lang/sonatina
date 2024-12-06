@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use cranelift_entity::entity_impl;
 use dashmap::{DashMap, ReadOnlyView};
-use rayon::prelude::ParallelIterator;
+use rayon::{iter::IntoParallelIterator, prelude::ParallelIterator};
 use sonatina_triple::TargetTriple;
 
 use crate::{
@@ -10,7 +10,7 @@ use crate::{
     ir_writer::IrWrite,
     isa::{Endian, Isa, TypeLayout, TypeLayoutError},
     types::TypeStore,
-    Function, InstSetBase, Signature, Type,
+    Function, InstSetBase, Linkage, Signature, Type,
 };
 
 pub struct Module {
@@ -67,11 +67,21 @@ impl FuncStore {
 
     pub fn par_for_each<F>(&self, f: F)
     where
-        F: Fn(&mut Function) + Sync + Send,
+        F: Fn(FuncRef, &mut Function) + Sync + Send,
     {
         self.funcs
             .par_iter_mut()
-            .for_each(|mut entry| f(entry.value_mut()))
+            .for_each(|mut entry| f(*entry.key(), entry.value_mut()))
+    }
+
+    #[doc(hidden)]
+    pub fn par_into_for_each<F>(self, f: F)
+    where
+        F: Fn(FuncRef, Function) + Sync + Send,
+    {
+        self.funcs
+            .into_par_iter()
+            .for_each(|(func_ref, function)| f(func_ref, function))
     }
 
     pub fn funcs(&self) -> Vec<FuncRef> {
@@ -151,6 +161,18 @@ impl ModuleCtx {
         self.declared_funcs
             .view(&func_ref, |_, sig| f(sig))
             .unwrap()
+    }
+
+    /// Updated the function signature with the given linkage.
+    ///
+    /// # Panics
+    /// Panics if the function reference is not declared.
+    pub fn update_func_linkage(&self, func_ref: FuncRef, linkage: Linkage) {
+        self.declared_funcs
+            .get_mut(&func_ref)
+            .unwrap()
+            .value_mut()
+            .update_linkage(linkage);
     }
 
     pub fn endian(&self) -> Endian {

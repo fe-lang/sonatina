@@ -57,7 +57,29 @@ impl<'a> ModuleWriter<'a> {
             io::Result::Ok(())
         })?;
 
-        for func_ref in self.module.func_store.funcs() {
+        let (func_defs, func_decls): (Vec<_>, Vec<_>) = self
+            .module
+            .func_store
+            .funcs()
+            .into_iter()
+            .partition(|func_ref| {
+                self.module
+                    .ctx
+                    .func_sig(*func_ref, |sig| sig.linkage().has_definition())
+            });
+        // Write an external functions.
+        for &func_ref in &func_decls {
+            self.module.ctx.func_sig(func_ref, |sig| {
+                write!(w, "declare ")?;
+                sig.write(w, &self.module.ctx)?;
+                writeln!(w, ";")
+            })?;
+        }
+        if !func_decls.is_empty() && !func_defs.is_empty() {
+            writeln!(w)?;
+        }
+
+        for func_ref in func_defs {
             self.module.func_store.view(func_ref, |func| {
                 let mut writer = FuncWriter::with_debug_provider(func, func_ref, self.dbg);
                 writer.write(&mut *w)
@@ -133,10 +155,15 @@ impl<'a> FuncWriter<'a> {
     }
 
     pub fn write(&mut self, w: &mut impl io::Write) -> io::Result<()> {
-        let func = &self.ctx.func;
+        let func_ref = self.ctx.func_ref;
+        let m_ctx = self.ctx.module_ctx();
+
         write!(w, "func ")?;
-        func.sig.linkage().write(w, &self.ctx)?;
-        write!(w, " %{}(", func.sig.name())?;
+        m_ctx.func_sig(func_ref, |sig| {
+            sig.linkage().write(w, &self.ctx)?;
+            write!(w, " %{}(", sig.name())?;
+            io::Result::Ok(())
+        })?;
         let arg_values: SmallVec<[ValueWithTy; 8]> = self
             .ctx
             .func
@@ -145,11 +172,18 @@ impl<'a> FuncWriter<'a> {
             .map(|value| ValueWithTy(*value))
             .collect();
         arg_values.write_with_delim(w, ", ", &self.ctx)?;
+        write!(w, ")")?;
 
-        write!(w, ") -> ")?;
-        func.sig.ret_ty().write(w, &self.ctx)?;
+        m_ctx.func_sig(func_ref, |sig| {
+            if !sig.ret_ty().is_unit() {
+                write!(w, " -> ")?;
+                sig.ret_ty().write(w, &self.ctx)
+            } else {
+                Ok(())
+            }
+        })?;
+
         writeln!(w, " {{")?;
-
         self.level += 1;
 
         for block in self.ctx.func.layout.iter_block() {

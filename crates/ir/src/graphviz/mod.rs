@@ -82,19 +82,19 @@ mod test {
         });
         let text = String::from_utf8(text).unwrap();
 
-        let expected = "digraph test_func {
-    block3[label=<<table border=\"0\" cellborder=\"1\" cellspacing=\"0\"><tr><td bgcolor=\"gray\" align=\"center\" colspan=\"1\">block3</td></tr><tr><td align=\"left\" balign=\"left\">v3.i64 = phi (1.i64 block1) (2.i64 block2);<br/>v4.i64 = add v3 v0;<br/>return;<br/></td></tr></table>>][shape=\"none\"];
-    block2[label=<<table border=\"0\" cellborder=\"1\" cellspacing=\"0\"><tr><td bgcolor=\"gray\" align=\"center\" colspan=\"1\">block2</td></tr><tr><td align=\"left\" balign=\"left\">jump block3;<br/></td></tr></table>>][shape=\"none\"];
-    block1[label=<<table border=\"0\" cellborder=\"1\" cellspacing=\"0\"><tr><td bgcolor=\"gray\" align=\"center\" colspan=\"1\">block1</td></tr><tr><td align=\"left\" balign=\"left\">jump block3;<br/></td></tr></table>>][shape=\"none\"];
-    block0[label=<<table border=\"0\" cellborder=\"1\" cellspacing=\"0\"><tr><td bgcolor=\"gray\" align=\"center\" colspan=\"1\">block0</td></tr><tr><td align=\"left\" balign=\"left\">br v0 block1 block2;<br/></td></tr></table>>][shape=\"none\"];
-    dummy_block[label=\"func public %test_func(i64) -> unit\"][shape=\"none\"];
-    dummy_block -> block0[label=\"\"][style=\"invis\"];
-    block2 -> block3[label=\"2.i64\"];
-    block1 -> block3[label=\"1.i64\"];
-    block0 -> block1[label=\"\"];
-    block0 -> block2[label=\"\"];
+        let expected = r#"digraph test_func {
+    block3[label=<<table border="0" cellborder="1" cellspacing="0"><tr><td bgcolor="gray" align="center" colspan="1">block3</td></tr><tr><td align="left" balign="left">v3.i64 = phi (1.i64 block1) (2.i64 block2);<br/>v4.i64 = add v3 v0;<br/>return;<br/></td></tr></table>>][shape="none"];
+    block2[label=<<table border="0" cellborder="1" cellspacing="0"><tr><td bgcolor="gray" align="center" colspan="1">block2</td></tr><tr><td align="left" balign="left">jump block3;<br/></td></tr></table>>][shape="none"];
+    block1[label=<<table border="0" cellborder="1" cellspacing="0"><tr><td bgcolor="gray" align="center" colspan="1">block1</td></tr><tr><td align="left" balign="left">jump block3;<br/></td></tr></table>>][shape="none"];
+    block0[label=<<table border="0" cellborder="1" cellspacing="0"><tr><td bgcolor="gray" align="center" colspan="1">block0</td></tr><tr><td align="left" balign="left">br v0 block1 block2;<br/></td></tr></table>>][shape="none"];
+    dummy_block[label="func public %test_func(i64)"][shape="none"];
+    dummy_block -> block0[label=""][style="invis"];
+    block2 -> block3[label="2.i64"];
+    block1 -> block3[label="1.i64"];
+    block0 -> block1[label=""];
+    block0 -> block2[label=""];
 }
-";
+"#;
         assert_eq!(text, expected);
     }
 }

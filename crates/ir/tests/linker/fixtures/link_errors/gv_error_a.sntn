@@ -1,0 +1,3 @@
+target = "evm-ethereum-cancun"
+
+global public *i256 $PTR = 1;

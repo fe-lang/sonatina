@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use sonatina_triple::{Architecture, TargetTriple};
 
 use super::{Endian, Isa, TypeLayout, TypeLayoutError};
-use crate::{inst::evm::inst_set::EvmInstSet, module::ModuleCtx, types::CompoundTypeData, Type};
+use crate::{inst::evm::inst_set::EvmInstSet, module::ModuleCtx, types::CompoundType, Type};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Evm {
@@ -51,11 +51,11 @@ impl TypeLayout for EvmTypeLayout {
             Type::Compound(cmpd) => {
                 let cmpd_data = ctx.with_ty_store(|s| s.resolve_compound(cmpd).clone());
                 match cmpd_data {
-                    CompoundTypeData::Array { elem, len } => self.size_of(elem, ctx)? * len,
+                    CompoundType::Array { elem, len } => self.size_of(elem, ctx)? * len,
 
-                    CompoundTypeData::Ptr(_) => 32,
+                    CompoundType::Ptr(_) => 32,
 
-                    CompoundTypeData::Struct(s) => {
+                    CompoundType::Struct(s) => {
                         if s.packed {
                             panic!("packed data is not supported yet!");
                         }
@@ -67,7 +67,7 @@ impl TypeLayout for EvmTypeLayout {
                         size
                     }
 
-                    CompoundTypeData::Func { .. } => {
+                    CompoundType::Func { .. } => {
                         return Err(TypeLayoutError::UnrepresentableType(ty))
                     }
                 }

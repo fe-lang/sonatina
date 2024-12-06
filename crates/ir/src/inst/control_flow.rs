@@ -12,7 +12,6 @@ pub struct Jump {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(terminator)]
 pub struct Br {
-    #[inst(value)]
     cond: ValueId,
     nz_dest: BlockId,
     z_dest: BlockId,
@@ -21,17 +20,14 @@ pub struct Br {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(terminator)]
 pub struct BrTable {
-    #[inst(value)]
     scrutinee: ValueId,
 
     default: Option<BlockId>,
-    #[inst(value)]
     table: Vec<(ValueId, BlockId)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 pub struct Phi {
-    #[inst(value)]
     args: Vec<(ValueId, BlockId)>,
 }
 
@@ -63,7 +59,6 @@ impl Phi {
 pub struct Call {
     callee: FuncRef,
 
-    #[inst(value)]
     args: SmallVec<[ValueId; 8]>,
 }
 
@@ -71,7 +66,6 @@ pub struct Call {
 #[inst(side_effect(super::SideEffect::Write))]
 #[inst(terminator)]
 pub struct Return {
-    #[inst(value)]
     arg: Option<ValueId>,
 }
 

@@ -146,7 +146,10 @@ impl<'a> FileChecker<'a> {
             self.transformer.transform(func);
             (
                 FuncWriter::with_debug_provider(func, func_ref, &parsed_module.debug).dump_string(),
-                func.sig.name().to_string(),
+                parsed_module
+                    .module
+                    .ctx
+                    .func_sig(func_ref, |sig| sig.name().to_string()),
             )
         });
         let checker = self.build_checker(comments);

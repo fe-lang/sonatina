@@ -109,7 +109,7 @@ trace_info:
 1: 0.i8
 2: v2.i32 = add 28.i32 0.i8;
 3: block0
-4: func public %test_func() -> unit",
+4: func public %test_func()",
             err_msg
         );
     }

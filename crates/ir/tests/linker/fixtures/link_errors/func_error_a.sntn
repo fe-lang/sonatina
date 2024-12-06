@@ -1,0 +1,14 @@
+target = "evm-ethereum-cancun"
+
+func public %f(v0.i64) -> i64 {
+    block0:
+        jump block1;
+    block1:
+        v1.i64 = phi (v0 block0) (100.i64 block2);
+        v2.i1 = gt v1 10.i64;
+        br v2 block2 block3;
+    block2:
+        jump block1;
+    block3:
+        return v1;
+}

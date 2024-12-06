@@ -6,15 +6,13 @@ use super::{DataFlowGraph, Layout, Type, ValueId};
 use crate::{ir_writer::IrWrite, module::ModuleCtx, InstSetBase, Linkage};
 
 pub struct Function {
-    /// Signature of the function.
-    pub sig: Signature,
     pub arg_values: smallvec::SmallVec<[ValueId; 8]>,
     pub dfg: DataFlowGraph,
     pub layout: Layout,
 }
 
 impl Function {
-    pub fn new(ctx: &ModuleCtx, sig: Signature) -> Self {
+    pub fn new(ctx: &ModuleCtx, sig: &Signature) -> Self {
         let mut dfg = DataFlowGraph::new(ctx.clone());
         let arg_values = sig
             .args()
@@ -27,7 +25,6 @@ impl Function {
             .collect();
 
         Self {
-            sig,
             arg_values,
             dfg,
             layout: Layout::default(),
@@ -72,6 +69,10 @@ impl Signature {
         self.linkage
     }
 
+    pub fn update_linkage(&mut self, linkage: Linkage) {
+        self.linkage = linkage;
+    }
+
     pub fn args(&self) -> &[Type] {
         &self.args
     }
@@ -105,7 +106,13 @@ where
         self.linkage.write(w, ctx)?;
         write!(w, " %{}(", self.name)?;
         self.args.write_with_delim(w, " ", ctx)?;
-        write!(w, ") -> ")?;
-        self.ret_ty.write(w, ctx)
+        write!(w, ")")?;
+
+        if !self.ret_ty.is_unit() {
+            write!(w, " -> ")?;
+            self.ret_ty.write(w, ctx)?;
+        }
+
+        Ok(())
     }
 }

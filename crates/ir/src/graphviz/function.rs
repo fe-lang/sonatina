@@ -41,8 +41,10 @@ impl<'a> Labeller<'a> for FunctionGraph<'a> {
     type Subgraph = ();
 
     fn graph_id(&self) -> dot2::Result<Id<'a>> {
+        let func_ref = self.ctx.func_ref;
         let func = self.ctx.func;
-        let sig_name = func.sig.name().to_string();
+        let sig_name = func.ctx().func_sig(func_ref, |sig| sig.name().to_string());
+
         Id::new(sig_name)
     }
 

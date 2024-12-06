@@ -1,7 +1,7 @@
 target = "evm-ethereum-cancun"
 
-global private const i256 $ZERO = 0
-global public const *i256 $ZERO = 0
+global private const i256 $ZERO = 0;
+global public const *i256 $ZERO = 0;
 
 func private %foo(v0.i32) {
     block0:

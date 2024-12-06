@@ -11,7 +11,7 @@ use ir::{
     ir_writer::{DebugProvider, IrWrite},
     isa::evm::Evm,
     module::{FuncRef, Module, ModuleCtx},
-    Function, GlobalVariable, GlobalVariableData, Immediate, Signature, Type,
+    Function, GlobalVariableData, GlobalVariableRef, Immediate, Signature, Type,
 };
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smol_str::SmolStr;
@@ -281,7 +281,7 @@ impl BuildCtx {
                 fb.make_undef_value(ty)
             }
             ast::ValueKind::Global(name) => {
-                let Some(gv) = fb.module_builder.lookup_global(&name.string) else {
+                let Some(gv) = fb.module_builder.lookup_gv(&name.string) else {
                     self.errors.push(Error::Undefined(
                         UndefinedKind::Value(name.string.clone()),
                         val.span,
@@ -308,11 +308,14 @@ impl BuildCtx {
                 mb.declare_array_type(elem, *n)
             }
             ast::TypeKind::Unit => ir::Type::Unit,
-            ast::TypeKind::Struct(name) => mb.get_struct_type(name).unwrap_or_else(|| {
-                self.errors
-                    .push(Error::Undefined(UndefinedKind::Type(name.clone()), t.span));
-                ir::Type::Unit
-            }),
+            ast::TypeKind::Struct(name) => mb
+                .lookup_struct(name)
+                .map(Type::Compound)
+                .unwrap_or_else(|| {
+                    self.errors
+                        .push(Error::Undefined(UndefinedKind::Type(name.clone()), t.span));
+                    ir::Type::Unit
+                }),
 
             ast::TypeKind::Func { args, ret_ty } => {
                 let args: Vec<_> = args.iter().map(|t| self.type_(mb, t)).collect();
@@ -334,9 +337,13 @@ impl BuildCtx {
         }
     }
 
-    fn declare_gv(&mut self, mb: &ModuleBuilder, ast_gv: &ast::GlobalVariable) -> GlobalVariable {
+    fn declare_gv(
+        &mut self,
+        mb: &ModuleBuilder,
+        ast_gv: &ast::GlobalVariable,
+    ) -> GlobalVariableRef {
         let name = &ast_gv.name.string;
-        if let Some(gv) = mb.lookup_global(name) {
+        if let Some(gv) = mb.lookup_gv(name) {
             self.errors
                 .push(Error::DuplicatedDeclaration(name.clone(), ast_gv.name.span));
             return gv;
@@ -350,7 +357,7 @@ impl BuildCtx {
             .as_ref()
             .and_then(|init| self.gv_initializer(mb, init, ty));
         let data = GlobalVariableData::new(name.to_string(), ty, linkage, is_const, init);
-        mb.make_global(data)
+        mb.declare_gv(data)
     }
 
     fn gv_initializer(

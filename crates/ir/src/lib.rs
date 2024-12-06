@@ -12,8 +12,10 @@ pub mod isa;
 pub mod layout;
 pub mod linkage;
 pub mod module;
+pub mod module_linker;
 pub mod types;
 pub mod value;
+pub mod visitor;
 
 mod bigint;
 
@@ -22,9 +24,8 @@ pub use builder::Variable;
 pub use cfg::ControlFlowGraph;
 pub use dfg::{Block, BlockId, DataFlowGraph};
 pub use function::{Function, Signature};
-pub use global_variable::{GlobalVariable, GlobalVariableData};
+pub use global_variable::{GlobalVariableData, GlobalVariableRef};
 pub use graphviz::render_to;
-pub(crate) use inst::ValueVisitable;
 pub use inst::{
     inst_set::{InstSetBase, InstSetExt},
     HasInst, Inst, InstDowncast, InstDowncastMut, InstExt, InstId,

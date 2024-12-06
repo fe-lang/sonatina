@@ -5,8 +5,8 @@ use super::{
 use crate::{
     func_cursor::{CursorLocation, FuncCursor},
     module::{FuncRef, ModuleCtx},
-    BlockId, Function, GlobalVariable, Immediate, Inst, InstId, InstSetBase, Signature, Type,
-    Value, ValueId,
+    BlockId, Function, GlobalVariableRef, Immediate, Inst, InstId, InstSetBase, Type, Value,
+    ValueId,
 };
 
 pub struct FunctionBuilder<C> {
@@ -22,8 +22,9 @@ where
     C: FuncCursor,
 {
     pub fn new(module_builder: ModuleBuilder, func_ref: FuncRef, cursor: C) -> Self {
-        let sig = module_builder.funcs.view(func_ref, |func| func.sig.clone());
-        let func = Function::new(&module_builder.ctx, sig);
+        let func = module_builder
+            .ctx
+            .func_sig(func_ref, |sig| Function::new(&module_builder.ctx, sig));
 
         Self {
             module_builder,
@@ -32,10 +33,6 @@ where
             cursor,
             ssa_builder: SsaBuilder::new(),
         }
-    }
-
-    pub fn func_sig(&self) -> &Signature {
-        &self.func.sig
     }
 
     pub fn finish(self) {
@@ -55,7 +52,7 @@ where
             ..
         } = self;
 
-        module_builder.funcs.update(func_ref, func);
+        module_builder.func_store.update(func_ref, func);
     }
 
     pub fn append_parameter(&mut self, ty: Type) -> ValueId {
@@ -103,7 +100,7 @@ where
     }
 
     /// Return pointer value to the global variable.
-    pub fn make_global_value(&mut self, gv: GlobalVariable) -> ValueId {
+    pub fn make_global_value(&mut self, gv: GlobalVariableRef) -> ValueId {
         self.func.dfg.make_global_value(gv)
     }
 
@@ -311,7 +308,7 @@ mod tests {
         let func_ref = module.funcs()[0];
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func() -> unit {
+            "func public %test_func() {
     block0:
         v2.i8 = add 1.i8 2.i8;
         v3.i8 = sub v2 1.i8;
@@ -346,7 +343,7 @@ mod tests {
         let func_ref = module.funcs()[0];
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func(v0.i32, v1.i64) -> unit {
+            "func public %test_func(v0.i32, v1.i64) {
     block0:
         v2.i64 = sext v0 i64;
         v3.i64 = mul v2 v1;
@@ -425,7 +422,7 @@ mod tests {
         let func_ref = module.funcs()[0];
         assert_eq!(
             dump_func(&module, func_ref),
-            "func public %test_func(v0.i64) -> unit {
+            "func public %test_func(v0.i64) {
     block0:
         br v0 block1 block2;
 
