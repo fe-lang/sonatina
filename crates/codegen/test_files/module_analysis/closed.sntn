@@ -1,0 +1,38 @@
+target = "evm-ethereum-london"
+
+func private %f1() {
+    block0:
+        call %f2;
+        return;
+}
+
+func private %f2() {
+    block0:
+        call %f1;
+        return;
+}
+
+func private %f3() {
+    block0:
+        call %f3;
+        return;
+}
+
+func private %f4() {
+    block0:
+        call %f5;
+        call %f1;
+        return;
+}
+
+func private %f5() {
+    block0:
+        call %f6;
+        call %f2;
+        return;
+}
+
+func private %f6() {
+    block0:
+        return;
+}
