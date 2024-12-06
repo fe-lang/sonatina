@@ -12,7 +12,7 @@ use crate::{
 pub struct FunctionBuilder<C> {
     pub module_builder: ModuleBuilder,
     pub func: Function,
-    func_ref: FuncRef,
+    pub func_ref: FuncRef,
     pub cursor: C,
     ssa_builder: SsaBuilder,
 }
