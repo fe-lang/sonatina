@@ -7,7 +7,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use super::{Immediate, Type, Value, ValueId};
 use crate::{
     inst::{
-        control_flow::{self, Branch, Jump, Phi},
+        control_flow::{self, BranchInfo, CallInfo, Jump, Phi},
         InstId, SideEffect,
     },
     ir_writer::{FuncWriteCtx, IrWrite},
@@ -180,17 +180,17 @@ impl DataFlowGraph {
         self.inst_results[inst_id].expand()
     }
 
-    pub fn branch_info(&self, inst: InstId) -> Option<&dyn Branch> {
-        let inst = self.inst(inst);
+    pub fn branch_info(&self, inst_id: InstId) -> Option<&dyn BranchInfo> {
+        let inst = self.inst(inst_id);
         InstDowncast::downcast(self.ctx.inst_set, inst)
     }
 
-    pub fn is_terminator(&self, inst: InstId) -> bool {
-        self.inst(inst).is_terminator()
+    pub fn is_terminator(&self, inst_id: InstId) -> bool {
+        self.inst(inst_id).is_terminator()
     }
 
-    pub fn is_exit(&self, inst: InstId) -> bool {
-        self.is_terminator(inst) && self.branch_info(inst).is_none()
+    pub fn is_exit(&self, inst_id: InstId) -> bool {
+        self.is_terminator(inst_id) && self.branch_info(inst_id).is_none()
     }
 
     pub fn append_phi_arg(&mut self, inst_id: InstId, value: ValueId, block: BlockId) {
@@ -215,6 +215,11 @@ impl DataFlowGraph {
         let is = self.inst_set();
         let inst = self.inst_mut(inst_id);
         InstDowncastMut::downcast_mut(is, inst)
+    }
+
+    pub fn call_info(&self, inst_id: InstId) -> Option<&dyn CallInfo> {
+        let inst = self.inst(inst_id);
+        InstDowncast::downcast(self.ctx.inst_set, inst)
     }
 
     pub fn cast_jump(&self, inst_id: InstId) -> Option<&control_flow::Jump> {
@@ -249,47 +254,47 @@ impl DataFlowGraph {
         self.users[alias].append(&mut users);
     }
 
-    pub fn side_effect(&self, inst: InstId) -> SideEffect {
-        self.inst(inst).side_effect()
+    pub fn side_effect(&self, inst_id: InstId) -> SideEffect {
+        self.inst(inst_id).side_effect()
     }
 
-    pub fn is_branch(&self, inst: InstId) -> bool {
-        self.branch_info(inst).is_some()
+    pub fn is_branch(&self, inst_id: InstId) -> bool {
+        self.branch_info(inst_id).is_some()
     }
 
-    pub fn is_phi(&self, inst: InstId) -> bool {
-        self.cast_phi(inst).is_some()
+    pub fn is_phi(&self, inst_id: InstId) -> bool {
+        self.cast_phi(inst_id).is_some()
     }
 
-    pub fn rewrite_branch_dest(&mut self, inst: InstId, from: BlockId, to: BlockId) {
+    pub fn rewrite_branch_dest(&mut self, inst_id: InstId, from: BlockId, to: BlockId) {
         let inst_set = self.ctx.inst_set;
-        let Some(branch) = self.branch_info(inst) else {
+        let Some(branch) = self.branch_info(inst_id) else {
             return;
         };
 
         let new_inst = branch.rewrite_dest(inst_set, from, to);
-        self.remove_old_users(inst, new_inst.as_ref());
+        self.remove_old_users(inst_id, new_inst.as_ref());
 
-        self.insts[inst] = new_inst;
+        self.insts[inst_id] = new_inst;
     }
 
-    pub fn remove_branch_dest(&mut self, inst: InstId, dest: BlockId) {
+    pub fn remove_branch_dest(&mut self, inst_id: InstId, dest: BlockId) {
         let inst_set = self.ctx.inst_set;
-        let Some(branch) = self.branch_info(inst) else {
+        let Some(branch) = self.branch_info(inst_id) else {
             return;
         };
 
         let new_inst = branch.remove_dest(inst_set, dest);
-        self.remove_old_users(inst, new_inst.as_ref());
+        self.remove_old_users(inst_id, new_inst.as_ref());
 
-        self.insts[inst] = new_inst;
+        self.insts[inst_id] = new_inst;
     }
 
-    fn remove_old_users(&mut self, inst: InstId, new: &dyn Inst) {
+    fn remove_old_users(&mut self, inst_id: InstId, new: &dyn Inst) {
         let mut old_values = FxHashSet::default();
         let mut new_values = FxHashSet::default();
 
-        self.inst(inst).for_each_value(&mut |value| {
+        self.inst(inst_id).for_each_value(&mut |value| {
             old_values.insert(value);
         });
         new.for_each_value(&mut |value| {
@@ -300,7 +305,7 @@ impl DataFlowGraph {
 
         let removed_values = old_values.difference(&new_values);
         for &removed in removed_values {
-            self.users[removed].remove(&inst);
+            self.users[removed].remove(&inst_id);
         }
     }
 }

@@ -10,7 +10,7 @@ use sonatina_ir::{ir_writer::ModuleWriter, module_linker::LinkedModule};
 fn fixture_dir() -> PathBuf {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let manifest_dir = Path::new(&manifest_dir);
-    manifest_dir.join("tests/linker/fixtures")
+    manifest_dir.join("test_files/linker")
 }
 
 macro_rules! test_ok {

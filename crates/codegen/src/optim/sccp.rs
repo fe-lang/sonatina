@@ -10,7 +10,7 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashSet;
 use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::control_flow::{Branch, BranchKind},
+    inst::control_flow::{BranchInfo, BranchKind},
     interpret::{Action, EvalValue, Interpret, State},
     prelude::*,
     BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, InstId, Type, ValueId,
@@ -195,7 +195,7 @@ impl SccpSolver {
         self.set_lattice_cell(inst_result, cell);
     }
 
-    fn eval_branch(&mut self, inst: InstId, bi: &dyn Branch) {
+    fn eval_branch(&mut self, inst: InstId, bi: &dyn BranchInfo) {
         match bi.branch_kind() {
             BranchKind::Jump(jump) => {
                 self.flow_work.push(FlowEdge::new(inst, *jump.dest()));

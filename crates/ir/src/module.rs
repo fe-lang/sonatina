@@ -163,6 +163,10 @@ impl ModuleCtx {
             .unwrap()
     }
 
+    pub fn func_linkage(&self, func_ref: FuncRef) -> Linkage {
+        self.func_sig(func_ref, |sig| sig.linkage())
+    }
+
     /// Updated the function signature with the given linkage.
     ///
     /// # Panics

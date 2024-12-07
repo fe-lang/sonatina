@@ -1,0 +1,46 @@
+target = "evm-ethereum-london"
+
+declare external %fx();
+
+func public %f1() {
+    block0:
+        call %f2;
+        return;
+}
+
+func private %f2() {
+    block0:
+        call %f1;
+        call %fx;
+        return;
+}
+
+func private %f3() {
+    block0:
+        call %f3;
+        return;
+}
+
+func private %f4() {
+    block0:
+        call %f5;
+        return;
+}
+
+func public %f5() {
+    block0:
+        call %f6;
+        return;
+}
+
+func private %f6() {
+    block0:
+        call %fx;
+        return;
+}
+
+func private %f7() {
+    block0:
+        call %fx;
+        call %f2;
+}
