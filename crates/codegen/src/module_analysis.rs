@@ -3,7 +3,10 @@ use core::fmt;
 use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
 use dashmap::{DashMap, ReadOnlyView};
 use rustc_hash::FxHashSet;
-use sonatina_ir::{module::FuncRef, Linkage, Module};
+use sonatina_ir::{
+    module::{FuncRef, ModuleCtx},
+    Linkage, Module,
+};
 
 pub fn analyze_module(module: &Module) -> ModuleInfo {
     ModuleAnalyzer::new(module).analyze()
@@ -140,8 +143,9 @@ impl CallGraph {
     }
 
     /// Returns `true` if the function is a leaf function.
-    pub fn is_leaf(&self, func_ref: FuncRef) -> bool {
-        self.nodes[func_ref].callees.is_empty()
+    /// If the function is an external functions, it returns always `false`.
+    pub fn is_leaf(&self, ctx: &ModuleCtx, func_ref: FuncRef) -> bool {
+        !ctx.func_linkage(func_ref).is_external() && self.nodes[func_ref].callees.is_empty()
     }
 }
 
@@ -167,6 +171,8 @@ impl CallGraphSccs {
     }
 }
 
+/// Represents the information of a strongly connected component in a call graph
+/// of a module.
 #[derive(Debug, Clone)]
 pub struct SccInfo {
     /// Whether the SCC is a true cycle.
@@ -175,6 +181,8 @@ pub struct SccInfo {
     pub is_cycle: bool,
 
     /// The functions in the SCC.
+    /// NOTE: In case of the function is an external function, the SCC contains
+    /// only one function.
     pub components: FxHashSet<FuncRef>,
 }
 
@@ -301,6 +309,25 @@ impl<'a> ModuleAnalyzer<'a> {
         self.determine_access_pattern();
         self.determine_func_info();
 
+        // Rewrites external functions info to the most conservative one.
+        // In the course of traversing the SCCs, we have assumed that the external
+        // function flow is `OutgoingOnly` to ensure that the rest of the internal
+        // functions are not too conservative. But in reality, we can't know the actual
+        // information of the external functions, so we rewrite the flow of the external
+        // functions information to the most conservative one.
+        for func_ref in self.module.func_store.funcs() {
+            if self.module.ctx.func_linkage(func_ref).is_external() {
+                self.func_info.insert(
+                    func_ref,
+                    FuncInfo {
+                        is_non_recursive: false,
+                        flow: DependencyFlow::Bidirectional,
+                        is_leaf: false,
+                    },
+                );
+            }
+        }
+
         ModuleInfo {
             scc: self.sccs,
             call_graph: self.call_graph,
@@ -418,7 +445,7 @@ impl<'a> ModuleAnalyzer<'a> {
             || flow == DependencyFlow::Bidirectional
             || is_external);
         for &func_ref in self.sccs.scc_info(scc_ref).components.iter() {
-            let is_leaf = self.call_graph.is_leaf(func_ref);
+            let is_leaf = self.call_graph.is_leaf(&self.module.ctx, func_ref);
             self.func_info.insert(
                 func_ref,
                 FuncInfo {

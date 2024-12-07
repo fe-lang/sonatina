@@ -11,7 +11,7 @@ SCC: [`%f4`]
 SCC: [`%f5`]
 SCC: [`%f6`]
 
-`%fx` = FuncInfo { is_non_recursive: false, flow: OutgoingOnly, is_leaf: true }
+`%fx` = FuncInfo { is_non_recursive: false, flow: Bidirectional, is_leaf: false }
 `%f1` = FuncInfo { is_non_recursive: false, flow: OutgoingOnly, is_leaf: false }
 `%f2` = FuncInfo { is_non_recursive: false, flow: OutgoingOnly, is_leaf: false }
 `%f3` = FuncInfo { is_non_recursive: false, flow: Closed, is_leaf: false }
