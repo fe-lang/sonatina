@@ -87,11 +87,11 @@ impl DependencyFlow {
 /// The module-granular information of a function.
 #[derive(Debug, Clone, Copy)]
 pub struct FuncInfo {
-    /// `ture` if the funciton is `NOT` a part of recursive function call. We
+    /// `ture` if the funciton is a part of recursive function call. We
     /// take a conservative approach here, i.e., we only mark a function as
     /// non-recursive if we can ensure that the function is not recursive
     /// regardless of how the module is linked to other modules later.
-    pub is_non_recursive: bool,
+    pub is_recursive: bool,
 
     /// Indicates the [`DependencyFlow`] of the function.
     pub flow: DependencyFlow,
@@ -320,7 +320,7 @@ impl<'a> ModuleAnalyzer<'a> {
                 self.func_info.insert(
                     func_ref,
                     FuncInfo {
-                        is_non_recursive: false,
+                        is_recursive: true,
                         flow: DependencyFlow::Bidirectional,
                         is_leaf: false,
                     },
@@ -441,15 +441,15 @@ impl<'a> ModuleAnalyzer<'a> {
             flow = flow.remove_flow(DependencyFlow::IncomingOnly);
         }
 
-        let is_non_recursive = !(self.sccs.scc_info(scc_ref).is_cycle
+        let is_recursive = self.sccs.scc_info(scc_ref).is_cycle
             || flow == DependencyFlow::Bidirectional
-            || is_external);
+            || is_external;
         for &func_ref in self.sccs.scc_info(scc_ref).components.iter() {
             let is_leaf = self.call_graph.is_leaf(&self.module.ctx, func_ref);
             self.func_info.insert(
                 func_ref,
                 FuncInfo {
-                    is_non_recursive,
+                    is_recursive,
                     flow,
                     is_leaf,
                 },
