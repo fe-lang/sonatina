@@ -36,21 +36,47 @@ pub struct LinkedModule {
 #[derive(Debug, Clone)]
 pub enum LinkError {
     /// The input modules are empty.
-    EmptyModules,
+    EmptyModules {
+        expected: String,
+        received: String,
+    },
 
     /// The input modules have inconsistent target triples.
-    InconsistentTargetTriple,
+    InconsistentTargetTriple {
+        module_ref: String,
+        expected_triple: String,
+        actual_triple: String,
+    },
 
     InconsistentStructType {
         name: String,
+        reason: String,
     },
 
     InconsistentGlobalVariable {
         name: String,
+        expected_type: String,
+        actual_type: String,
+    },
+
+    InconsistentGlobalLinkage {
+        name: String,
+        expected_linkage: String,
+        actual_linkage: String,
     },
 
     InconsistentFuncSignature {
         name: String,
+        expected_args: String,
+        actual_args: String,
+        expected_ret_ty: String,
+        actual_ret_ty: String,
+    },
+
+    InconsistentFuncLinkage {
+        name: String,
+        expected_linkage: String,
+        actual_linkage: String,
     },
 }
 
@@ -65,7 +91,10 @@ impl LinkedModule {
     pub fn link(modules: Vec<Module>) -> Result<(Self, Vec<ModuleRef>), LinkError> {
         let mut modules = modules.into_iter();
         let Some(first_module) = modules.next() else {
-            return Err(LinkError::EmptyModules);
+            return Err(LinkError::EmptyModules {
+                expected: "At least one module".to_string(),
+                received: "empty vector".to_string(),
+            });
         };
 
         let (mut linker, first_module_ref) = ModuleLinker::from_module(first_module);
@@ -329,8 +358,13 @@ impl ModuleLinker {
         for module_ref in module_refs {
             // 1. Validate the target triple.
             if self.builder.triple() != self.modules[module_ref].ctx.triple {
-                return Err(LinkError::InconsistentTargetTriple);
+                return Err(LinkError::InconsistentTargetTriple {
+                    module_ref: format!("{:?}", module_ref),
+                    expected_triple: self.builder.triple().to_string(),
+                    actual_triple: self.modules[module_ref].ctx.triple.to_string(),
+                });
             }
+            
 
             // 2. Link compound type reference.
             let cmpd_refs: Vec<_> = self.modules[module_ref]
@@ -464,6 +498,10 @@ impl ModuleLinker {
                     if s_data != linked_s_data {
                         return Err(LinkError::InconsistentStructType {
                             name: s_data.name.clone(),
+                            reason: format!(
+                                "Mismatch in struct '{}'. Expected: {:?}, Found: {:?}",
+                                s_data.name, linked_s_data, s_data
+                            ),
                         });
                     }
                 } else {
@@ -512,6 +550,8 @@ impl ModuleLinker {
             if gv_data.ty != linked_gv_data.ty {
                 return Err(LinkError::InconsistentGlobalVariable {
                     name: gv_data.symbol.clone(),
+                    expected_type: format!("{:?}", linked_gv_data.ty),
+                    actual_type: format!("{:?}", gv_data.ty),
                 });
             }
 
@@ -528,8 +568,10 @@ impl ModuleLinker {
                     s.update_linkage(linked_gv_ref, Linkage::Public);
                 }
                 _ => {
-                    return Err(LinkError::InconsistentGlobalVariable {
+                    return Err(LinkError::InconsistentGlobalLinkage {
                         name: gv_data.symbol.clone(),
+                        expected_linkage: format!("{:?}", linked_gv_data.linkage),
+                        actual_linkage: format!("{:?}", gv_data.linkage),
                     });
                 }
             }
@@ -580,8 +622,13 @@ impl ModuleLinker {
             if sig.args() != linked_sig.args() || sig.ret_ty() != linked_sig.ret_ty() {
                 return Err(LinkError::InconsistentFuncSignature {
                     name: sig.name().to_string(),
+                    expected_args: format!("{:?}", linked_sig.args()),
+                    actual_args: format!("{:?}", sig.args()),
+                    expected_ret_ty: format!("{:?}", linked_sig.ret_ty()),
+                    actual_ret_ty: format!("{:?}", sig.ret_ty()),
                 });
             }
+            
 
             Ok(linked_sig.linkage())
         })?;
@@ -594,8 +641,10 @@ impl ModuleLinker {
                     .update_func_linkage(linked_func_ref, Linkage::Public);
             }
             _ => {
-                return Err(LinkError::InconsistentFuncSignature {
+                return Err(LinkError::InconsistentFuncLinkage {
                     name: sig.name().to_string(),
+                    expected_linkage: format!("{:?}", linked_func_linkage),
+                    actual_linkage: format!("{:?}", sig.linkage()),
                 });
             }
         }
