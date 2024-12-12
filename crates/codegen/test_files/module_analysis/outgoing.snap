@@ -1,0 +1,20 @@
+---
+source: crates/codegen/tests/module_analysis.rs
+input_file: test_files/module_analysis/outgoing.sntn
+---
+ModuleDependency: OutgoingOnly
+
+SCC: [`%fx`]
+SCC: [`%f1`, `%f2`]
+SCC: [`%f3`]
+SCC: [`%f4`]
+SCC: [`%f5`]
+SCC: [`%f6`]
+
+`%fx` = FuncInfo { is_recursive: true, flow: Bidirectional, is_leaf: false }
+`%f1` = FuncInfo { is_recursive: true, flow: OutgoingOnly, is_leaf: false }
+`%f2` = FuncInfo { is_recursive: true, flow: OutgoingOnly, is_leaf: false }
+`%f3` = FuncInfo { is_recursive: true, flow: Closed, is_leaf: false }
+`%f4` = FuncInfo { is_recursive: false, flow: OutgoingOnly, is_leaf: false }
+`%f5` = FuncInfo { is_recursive: false, flow: OutgoingOnly, is_leaf: false }
+`%f6` = FuncInfo { is_recursive: false, flow: OutgoingOnly, is_leaf: false }
