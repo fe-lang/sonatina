@@ -1,11 +1,10 @@
 ---
 source: crates/parser/tests/errors.rs
 input_file: test_files/errors/bad_target.sntn
-snapshot_kind: text
 ---
 error: parse error
 --> bad_target.sntn:0:11
  |
-0 | target = "ewasm-ethereum-foo"
+0 |target = "ewasm-ethereum-foo"
  |           ^^^^^^^^^^^^^^^^^^ given architecture is not supported
  |
