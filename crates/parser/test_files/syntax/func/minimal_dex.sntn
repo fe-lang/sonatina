@@ -1,0 +1,191 @@
+func public %main() {
+  block0:
+    v0.i256 = evm_contract_size %constructor;
+    v1.i256 = evm_contract_size %entrypoint;
+    v2.i256 = add v0 v1;
+    v3.i256 = get_function_ptr %entrypoint;
+    evm_codecopy 0.i256 v2 v2;
+}
+
+func private %constructor() {
+  block0:
+    evm_sstore $ABUTTON 628667909239287451661015376509548196714548376546.i256;
+    evm_sstore $BBUTTON 685366776837966076677698750584726113278029506952.i256;
+    evm_sstore $MONEY_MOUTHFACE 1889567281.i256;
+    evm_sstore $MONEYWITHWINGS 2835717307.i256;
+    evm_sstore $ATMSIGN 599290589.i256;
+}
+
+func public %entrypoint() {
+  block0:
+    v0.i256 = evm_call_data_load 0.i256;
+    v1.i256 = shr v0 224.i256;
+    br_table v1 block1 (0xB4315E3B.i32 block2) (0xF176A237.i32 block3);
+  block2:
+    v2.i256 = evm_call_data_load 1.i8;
+    v3.i256 = evm_call_data_load 2.i8;
+    v4.i1 = call %aButtonBButton v2 v3;
+    call %returnUint v4;
+  block3:
+    v5.i256 = evm_call_data_load 1.i8;
+    v6.i256 = evm_call_data_load 2.i8;
+    v7.i1 = call %bButtonAButton v5 v6;
+    call %returnUint v7;
+  block1:
+    evm_revert 0.i256 0.i256;
+}
+
+func private %aButtonBButton(v0.i256, v1.i256) -> i1 {
+  block0:
+    v2.i128 = evm_sload $ABUTTON;
+    v3.i256 = evm_address;
+    v4.i256 = evm_malloc 32.i256;
+    mstore v4 v3;
+    v5.i256 = evm_call v1000000 v2 v0 v4 32.i256 0.i256 0.i256;
+    br v5 block1 block2;
+  block2:
+    evm_revert 0.i256 0.i256;
+  block1:
+    v6.i128 = evm_sload $BBUTTON;
+    v7.i256 = evm_address;
+    v8.i256 = evm_malloc 32.i256;
+    mstore v8 v7;
+    v9.i256 = evm_call v1000000 v6 v0 v8 32.i256 0.i256 0.i256;
+    br v9 block3 block4;
+  block4:
+    evm_revert 0.i256 0.i256;
+  block3:
+    v10.i256 = mul 0.i256 0.i256;
+    v11.i128 = evm_sload $ABUTTON;
+    v12.i128 = evm_caller;
+    v13.i256 = evm_malloc 32.i256;
+    mstore v13 v12;
+    v14.i256 = evm_address;
+    v15.i256 = evm_malloc 32.i256;
+    mstore v15 v14;
+    v16.i256 = evm_malloc 32.i256;
+    mstore v16 v0;
+    v17.i256 = evm_call v1000000 v11 v0 v13 84.i256 0.i256 0.i256;
+    br v17 block5 block6;
+  block6:
+    evm_revert 0.i256 0.i256;
+  block5:
+    v18.i128 = evm_sload $BBUTTON;
+    v19.i128 = evm_caller;
+    v20.i256 = evm_malloc 32.i256;
+    mstore v20 v19;
+    v21.i256 = evm_malloc 32.i256;
+    mstore v21 v1;
+    v22.i256 = evm_call v1000000 v18 v0 v20 52.i256 0.i256 0.i256;
+    br v22 block7 block8;
+  block8:
+    evm_revert 0.i256 0.i256;
+  block7:
+    v23.i128 = evm_sload $ABUTTON;
+    v24.i256 = evm_address;
+    v25.i256 = evm_malloc 32.i256;
+    mstore v25 v24;
+    v26.i256 = evm_call v1000000 v23 v0 v25 32.i256 0.i256 0.i256;
+    br v26 block9 block10;
+  block10:
+    evm_revert 0.i256 0.i256;
+  block9:
+    v27.i128 = evm_sload $BBUTTON;
+    v28.i256 = evm_address;
+    v29.i256 = evm_malloc 32.i256;
+    mstore v29 v28;
+    v30.i256 = evm_call v1000000 v27 v0 v29 32.i256 0.i256 0.i256;
+    br v30 block11 block12;
+  block12:
+    evm_revert 0.i256 0.i256;
+  block11:
+    v31.i256 = mul 0.i256 0.i256;
+    v32.i256 = lt v31 v10;
+    br v32 block13 block14;
+  block13:
+    evm_revert 0.i256 0.i256;
+    jump block14;
+  block14:
+    return 1.i1;
+}
+
+func private %bButtonAButton(v0.i256, v1.i256) -> i1 {
+  block0:
+    v2.i128 = evm_sload $ABUTTON;
+    v3.i256 = evm_address;
+    v4.i256 = evm_malloc 32.i256;
+    mstore v4 v3;
+    v5.i256 = evm_call v1000000 v2 v0 v4 32.i256 0.i256 0.i256;
+    br v5 block1 block2;
+  block2:
+    evm_revert 0.i256 0.i256;
+  block1:
+    v6.i128 = evm_sload $BBUTTON;
+    v7.i256 = evm_address;
+    v8.i256 = evm_malloc 32.i256;
+    mstore v8 v7;
+    v9.i256 = evm_call v1000000 v6 v0 v8 32.i256 0.i256 0.i256;
+    br v9 block3 block4;
+  block4:
+    evm_revert 0.i256 0.i256;
+  block3:
+    v10.i256 = mul 0.i256 0.i256;
+    v11.i128 = evm_sload $BBUTTON;
+    v12.i128 = evm_caller;
+    v13.i256 = evm_malloc 32.i256;
+    mstore v13 v12;
+    v14.i256 = evm_address;
+    v15.i256 = evm_malloc 32.i256;
+    mstore v15 v14;
+    v16.i256 = evm_malloc 32.i256;
+    mstore v16 v0;
+    v17.i256 = evm_call v1000000 v11 v0 v13 84.i256 0.i256 0.i256;
+    br v17 block5 block6;
+  block6:
+    evm_revert 0.i256 0.i256;
+  block5:
+    v18.i128 = evm_sload $ABUTTON;
+    v19.i128 = evm_caller;
+    v20.i256 = evm_malloc 32.i256;
+    mstore v20 v19;
+    v21.i256 = evm_malloc 32.i256;
+    mstore v21 v1;
+    v22.i256 = evm_call v1000000 v18 v0 v20 52.i256 0.i256 0.i256;
+    br v22 block7 block8;
+  block8:
+    evm_revert 0.i256 0.i256;
+  block7:
+    v23.i128 = evm_sload $ABUTTON;
+    v24.i256 = evm_address;
+    v25.i256 = evm_malloc 32.i256;
+    mstore v25 v24;
+    v26.i256 = evm_call v1000000 v23 v0 v25 32.i256 0.i256 0.i256;
+    br v26 block9 block10;
+  block10:
+    evm_revert 0.i256 0.i256;
+  block9:
+    v27.i128 = evm_sload $BBUTTON;
+    v28.i256 = evm_address;
+    v29.i256 = evm_malloc 32.i256;
+    mstore v29 v28;
+    v30.i256 = evm_call v1000000 v27 v0 v29 32.i256 0.i256 0.i256;
+    br v30 block11 block12;
+  block12:
+    evm_revert 0.i256 0.i256;
+  block11:
+    v31.i256 = mul 0.i256 0.i256;
+    v32.i256 = lt v31 v10;
+    br v32 block13 block14;
+  block13:
+    evm_revert 0.i256 0.i256;
+    jump block14;
+  block14:
+    return 1.i1;
+}
+
+func private %returnUint(v0.i256) {
+block0:
+  v1.i256 = evm_malloc 32.i256;
+  evm_mstore v1 v0;
+  evm_return v1 32.i256;
+}

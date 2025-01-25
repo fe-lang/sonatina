@@ -1,0 +1,207 @@
+func public %main() {
+  block0:
+    v0.i256 = evm_contract_size %constructor;
+    v1.i256 = evm_contract_size %entrypoint;
+    v2.i256 = add v0 v1;
+    v3.i256 = get_function_ptr %entrypoint;
+    evm_codecopy 0.i256 v2 v2;
+}
+
+func private %constructor() {
+  block0:
+    v0.i128 = evm_caller;
+    v2.i256 = evm_malloc 64.i256;
+    v3.i256 = add v2 32.i256;
+    evm_mstore v2 v0;
+    evm_mstore v3 $MONEYBAG;
+    v1.i256 = evm_keccak256 v2 64.i256;
+    evm_sstore v1 1000000000000000000000.i256;
+    v4.i256 = evm_malloc 32.i256;
+    evm_mstore v4 0xDDF252AD1BE2C89B69C2B068FC378DAA952BA7F163C4A11628F55A4DF523B3EF.i256;
+    v5.i128 = evm_caller;
+    evm_log4 v4 32.i256 v0 v5 v1000000000000000000000;
+}
+
+func public %entrypoint() {
+  block0:
+    v6.i256 = evm_call_data_load 0.i256;
+    v7.i256 = shr v0 224.i256;
+    br_table v1 block1 (0x18160DDD.i32 block2) (0x60C6A31B.i32 block3) (0xA9059CBB.i32 block4) (0xDD62ED3E.i32 block5) (0x095EA7B3.i32 block6) (0x23B872DD.i32 block7) (0x06FDDE03.i32 block8) (0x95D89B41.i32 block9) (0x313CE567.i32 block10);
+  block2:
+    v8.i256 = call %totalSupply;
+    call %returnUint v8;
+  block3:
+    v9.i256 = evm_call_data_load 1.i8;
+    v10.i256 = call %coinMoney_MouthFace v9;
+    call %returnUint v10;
+  block4:
+    v11.i256 = evm_call_data_load 1.i8;
+    v12.i256 = evm_call_data_load 2.i8;
+    v13.i1 = call %transfer v11 v12;
+    call %returnUint v13;
+  block5:
+    v14.i256 = evm_call_data_load 1.i8;
+    v15.i256 = evm_call_data_load 2.i8;
+    v16.i256 = call %allowance v14 v15;
+    call %returnUint v16;
+  block6:
+    v17.i256 = evm_call_data_load 1.i8;
+    v18.i256 = evm_call_data_load 2.i8;
+    v19.i1 = call %approve v17 v18;
+    call %returnUint v19;
+  block7:
+    v20.i256 = evm_call_data_load 1.i8;
+    v21.i256 = evm_call_data_load 2.i8;
+    v22.i256 = evm_call_data_load 3.i8;
+    v23.i1 = call %transferFrom v20 v21 v22;
+    call %returnUint v23;
+  block8:
+    v24.i256 = call %name;
+    call %returnUint v24;
+  block9:
+    v25.i256 = call %symbol;
+    call %returnUint v25;
+  block10:
+    v26.u8 = call %decimals;
+    call %returnUint v26;
+  block1:
+    evm_revert 0.i256 0.i256;
+}
+
+func private %totalSupply() -> i256 {
+  block0:
+    return 1000000000000000000000.i256;
+}
+
+func private %coinMoney_MouthFace(v0.i128) -> i256 {
+  block0:
+    v2.i256 = evm_malloc 64.i256;
+    v3.i256 = add v2 32.i256;
+    evm_mstore v2 v0;
+    evm_mstore v3 $MONEYBAG;
+    v1.i256 = evm_keccak256 v2 64.i256;
+    return v1;
+}
+
+func private %transfer(v0.i128, v1.i256) -> i1 {
+  block0:
+    v2.i128 = evm_caller;
+    v4.i256 = evm_malloc 64.i256;
+    v5.i256 = add v4 32.i256;
+    evm_mstore v4 v2;
+    evm_mstore v5 $MONEYBAG;
+    v3.i256 = evm_keccak256 v4 64.i256;
+    v6.i256 = sub v3 v1;
+    v7.i128 = evm_caller;
+    v9.i256 = evm_malloc 64.i256;
+    v10.i256 = add v9 32.i256;
+    evm_mstore v9 v7;
+    evm_mstore v10 $MONEYBAG;
+    v8.i256 = evm_keccak256 v9 64.i256;
+    evm_sstore v8 v6;
+    v12.i256 = evm_malloc 64.i256;
+    v13.i256 = add v12 32.i256;
+    evm_mstore v12 v0;
+    evm_mstore v13 $MONEYBAG;
+    v11.i256 = evm_keccak256 v12 64.i256;
+    v14.i256 = add v11 v1;
+    v16.i256 = evm_malloc 64.i256;
+    v17.i256 = add v16 32.i256;
+    evm_mstore v16 v0;
+    evm_mstore v17 $MONEYBAG;
+    v15.i256 = evm_keccak256 v16 64.i256;
+    evm_sstore v15 v14;
+    v18.i256 = evm_malloc 32.i256;
+    evm_mstore v18 0xDDF252AD1BE2C89B69C2B068FC378DAA952BA7F163C4A11628F55A4DF523B3EF.i256;
+    v19.i128 = evm_caller;
+    evm_log4 v18 32.i256 v19 v0 v1;
+    return 1.i1;
+}
+
+func private %allowance(v0.i128, v1.i128) -> i256 {
+  block0:
+    v3.i256 = evm_malloc 64.i256;
+    v4.i256 = add v3 32.i256;
+    evm_mstore v3 v0;
+    evm_mstore v4 $PASSPORTCONTROL;
+    v2.i256 = evm_keccak256 v3 64.i256;
+    return v2;
+}
+
+func private %approve(v0.i128, v1.i256) -> i1 {
+  block0:
+    v2.i128 = evm_caller;
+    v4.i256 = evm_malloc 64.i256;
+    v5.i256 = add v4 32.i256;
+    evm_mstore v4 v2;
+    evm_mstore v5 $PASSPORTCONTROL;
+    v3.i256 = evm_keccak256 v4 64.i256;
+    evm_sstore v3 v1;
+    return 1.i1;
+}
+
+func private %transferFrom(v0.i128, v1.i128, v2.i256) -> i1 {
+  block0:
+    v4.i256 = evm_malloc 64.i256;
+    v5.i256 = add v4 32.i256;
+    evm_mstore v4 v0;
+    evm_mstore v5 $PASSPORTCONTROL;
+    v3.i256 = evm_keccak256 v4 64.i256;
+    v6.i256 = sub v3 v2;
+    v8.i256 = evm_malloc 64.i256;
+    v9.i256 = add v8 32.i256;
+    evm_mstore v8 v0;
+    evm_mstore v9 $PASSPORTCONTROL;
+    v7.i256 = evm_keccak256 v8 64.i256;
+    evm_sstore v7 v6;
+    v11.i256 = evm_malloc 64.i256;
+    v12.i256 = add v11 32.i256;
+    evm_mstore v11 v0;
+    evm_mstore v12 $MONEYBAG;
+    v10.i256 = evm_keccak256 v11 64.i256;
+    v13.i256 = sub v10 v2;
+    v15.i256 = evm_malloc 64.i256;
+    v16.i256 = add v15 32.i256;
+    evm_mstore v15 v0;
+    evm_mstore v16 $MONEYBAG;
+    v14.i256 = evm_keccak256 v15 64.i256;
+    evm_sstore v14 v13;
+    v18.i256 = evm_malloc 64.i256;
+    v19.i256 = add v18 32.i256;
+    evm_mstore v18 v1;
+    evm_mstore v19 $MONEYBAG;
+    v17.i256 = evm_keccak256 v18 64.i256;
+    v20.i256 = add v17 v2;
+    v22.i256 = evm_malloc 64.i256;
+    v23.i256 = add v22 32.i256;
+    evm_mstore v22 v1;
+    evm_mstore v23 $MONEYBAG;
+    v21.i256 = evm_keccak256 v22 64.i256;
+    evm_sstore v21 v20;
+    v24.i256 = evm_malloc 32.i256;
+    evm_mstore v24 0xDDF252AD1BE2C89B69C2B068FC378DAA952BA7F163C4A11628F55A4DF523B3EF.i256;
+    evm_log4 v24 32.i256 v0 v1 v2;
+    return 1.i1;
+}
+
+func private %name() -> i256 {
+  block0:
+    return 83932674756329773736879470.i256;
+}
+
+func private %symbol() -> i256 {
+  block0:
+    return 297649785417.i256;
+}
+
+func private %decimals() -> u8 {
+  block0:
+    return 18.u8;
+}
+
+func private %returnUint(v0.i256) {
+block0:
+  v1.i256 = evm_malloc 32.i256;
+  evm_mstore v1 v0;
+  evm_return v1 32.i256;
+}

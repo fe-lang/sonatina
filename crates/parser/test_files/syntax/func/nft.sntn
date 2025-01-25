@@ -1,0 +1,391 @@
+func public %main() {
+  block0:
+    v0.i256 = evm_contract_size %constructor;
+    v1.i256 = evm_contract_size %entrypoint;
+    v2.i256 = add v0 v1;
+    v3.i256 = get_function_ptr %entrypoint;
+    evm_codecopy 0.i256 v2 v2;
+}
+
+func private %constructor() {
+  block0:
+    v0.i128 = evm_caller;
+    evm_sstore $GEAR v0;
+}
+
+func public %entrypoint() {
+  block0:
+    v1.i256 = evm_call_data_load 0.i256;
+    v2.i256 = shr v0 224.i256;
+    br_table v1 block1 (0x1249C58B.i32 block2) (0x5C035DEC.i32 block3) (0x21A43EA3.i32 block4) (0x095EA7B3.i32 block5) (0xA22CB465.i32 block6) (0x23B872DD.i32 block7) (0x081812FC.i32 block8) (0xE985E9C5.i32 block9) (0xC87B56DD.i32 block10) (0x6352211E.i32 block11) (0x70A08231.i32 block12) (0x06FDDE03.i32 block13) (0x95D89B41.i32 block14);
+  block2:
+    v3.i1 = call %mint;
+    call %returnUint v3;
+  block3:
+    v4.i256 = evm_call_data_load 1.i8;
+    v5.i256 = evm_call_data_load 2.i8;
+    v6.i1 = call %wrappedGiftWhiteHeavyCheckMark v4 v5;
+    call %returnUint v6;
+  block4:
+    v7.i256 = evm_call_data_load 1.i8;
+    v8.i256 = evm_call_data_load 2.i8;
+    v9.i1 = call %wrappedGiftMoneyWithWings v7 v8;
+    call %returnUint v9;
+  block5:
+    v10.i256 = evm_call_data_load 1.i8;
+    v11.i256 = evm_call_data_load 2.i8;
+    v12.i1 = call %approve v10 v11;
+    call %returnUint v12;
+  block6:
+    v13.i256 = evm_call_data_load 1.i8;
+    v14.i256 = evm_call_data_load 2.i8;
+    v15.i1 = call %setApprovalForAll v13 v14;
+    call %returnUint v15;
+  block7:
+    v16.i256 = evm_call_data_load 1.i8;
+    v17.i256 = evm_call_data_load 2.i8;
+    v18.i256 = evm_call_data_load 3.i8;
+    v19.i1 = call %transferFrom v16 v17 v18;
+    call %returnUint v19;
+  block8:
+    v20.i256 = evm_call_data_load 1.i8;
+    v21.i128 = call %getApproved v20;
+    call %returnAddress v21;
+  block9:
+    v22.i256 = evm_call_data_load 1.i8;
+    v23.i256 = evm_call_data_load 2.i8;
+    v24.i1 = call %isApprovedForAll v22 v23;
+    call %returnUint v24;
+  block10:
+    v25.i256 = evm_call_data_load 1.i8;
+    v26.i256 = call %tokenURI v25;
+    call %returnUint v26;
+  block11:
+    v27.i256 = evm_call_data_load 1.i8;
+    v28.i128 = call %ownerOf v27;
+    call %returnAddress v28;
+  block12:
+    v29.i256 = evm_call_data_load 1.i8;
+    v30.i256 = call %balanceOf v29;
+    call %returnUint v30;
+  block13:
+    v31.i256 = call %name;
+    call %returnUint v31;
+  block14:
+    v32.i256 = call %symbol;
+    call %returnUint v32;
+  block1:
+    evm_revert 0.i256 0.i256;
+}
+
+func private %mint() -> i1 {
+  block0:
+    v0.i128 = evm_caller;
+    v2.i256 = evm_malloc 64.i256;
+    v3.i256 = add v2 32.i256;
+    evm_mstore v2 v0;
+    evm_mstore v3 $WRAPPEDGIFT;
+    v1.i256 = evm_keccak256 v2 64.i256;
+    v4.i256 = gt v1 0.i256;
+    br v4 block1 block2;
+  block1:
+    v5.i128 = evm_caller;
+    v7.i256 = evm_malloc 64.i256;
+    v8.i256 = add v7 32.i256;
+    evm_mstore v7 v5;
+    evm_mstore v8 $WRAPPEDGIFT;
+    v6.i256 = evm_keccak256 v7 64.i256;
+    v9.i256 = sub v6 1.i256;
+    v10.i128 = evm_caller;
+    v12.i256 = evm_malloc 64.i256;
+    v13.i256 = add v12 32.i256;
+    evm_mstore v12 v10;
+    evm_mstore v13 $WRAPPEDGIFT;
+    v11.i256 = evm_keccak256 v12 64.i256;
+    evm_sstore v11 v9;
+    jump block2;
+  block2:
+    v14.i256 = evm_callvalue;
+    v15.i256 = eq v14 1000000000000000.i256;
+    v16.i256 = add v4 v15;
+    v17.i256 = eq v16 0.i256;
+    br v17 block3 block4;
+  block3:
+    evm_revert 0.i256 0.i256;
+    jump block4;
+  block4:
+    v18.i128 = evm_caller;
+    v19.i256 = evm_sload $GLOBEWITHMERIDIANS;
+    v21.i256 = evm_malloc 64.i256;
+    v22.i256 = add v21 32.i256;
+    evm_mstore v21 v19;
+    evm_mstore v22 $CROWN;
+    v20.i256 = evm_keccak256 v21 64.i256;
+    evm_sstore v20 v18;
+    v23.i256 = evm_sload $GLOBEWITHMERIDIANS;
+    v24.i256 = add v23 1.i256;
+    evm_sstore $GLOBEWITHMERIDIANS v24;
+    v25.i128 = evm_caller;
+    v27.i256 = evm_malloc 64.i256;
+    v28.i256 = add v27 32.i256;
+    evm_mstore v27 v25;
+    evm_mstore v28 $ABACUS;
+    v26.i256 = evm_keccak256 v27 64.i256;
+    v29.i256 = add v26 1.i256;
+    v30.i128 = evm_caller;
+    v32.i256 = evm_malloc 64.i256;
+    v33.i256 = add v32 32.i256;
+    evm_mstore v32 v30;
+    evm_mstore v33 $ABACUS;
+    v31.i256 = evm_keccak256 v32 64.i256;
+    evm_sstore v31 v29;
+    v34.i256 = evm_malloc 32.i256;
+    evm_mstore v34 0xDDF252AD1BE2C89B69C2B068FC378DAA952BA7F163C4A11628F55A4DF523B3EF.i256;
+    v35.i128 = evm_caller;
+    v36.i256 = evm_sload $GLOBEWITHMERIDIANS;
+    v37.i256 = evm_sload $GLOBEWITHMERIDIANS;
+    evm_log5 v34 32.i256 v0 v35 v36 v37;
+    return 1.i1;
+}
+
+func private %wrappedGiftWhiteHeavyCheckMark(v0.i128, v1.i256) -> i1 {
+  block0:
+    v2.i128 = evm_sload $GEAR;
+    v3.i128 = evm_caller;
+    v4.i128 = eq v2 v3;
+    v5.i128 = eq v4 0.i256;
+    br v5 block1 block2;
+  block1:
+    evm_revert 0.i256 0.i256;
+    jump block2;
+  block2:
+    v7.i256 = evm_malloc 64.i256;
+    v8.i256 = add v7 32.i256;
+    evm_mstore v7 v0;
+    evm_mstore v8 $WRAPPEDGIFT;
+    v6.i256 = evm_keccak256 v7 64.i256;
+    evm_sstore v6 v1;
+    return 1.i1;
+}
+
+func private %wrappedGiftMoneyWithWings(v0.i256, v1.i256) -> i1 {
+  block0:
+    v2.i128 = evm_sload $GEAR;
+    v3.i128 = evm_caller;
+    v4.i128 = eq v2 v3;
+    v5.i128 = eq v4 0.i256;
+    br v5 block1 block2;
+  block1:
+    evm_revert 0.i256 0.i256;
+    jump block2;
+  block2:
+    v6.i128 = evm_caller;
+    v7.i256 = evm_call v1 v6 v0 0.i256 0.i256 0.i256 0.i256;
+    br v7 block3 block4;
+  block4:
+    evm_revert 0.i256 0.i256;
+  block3:
+    return 1.i1;
+}
+
+func private %approve(v0.i128, v1.i256) -> i1 {
+  block0:
+    v3.i256 = evm_malloc 64.i256;
+    v4.i256 = add v3 32.i256;
+    evm_mstore v3 v1;
+    evm_mstore v4 $CROWN;
+    v2.i256 = evm_keccak256 v3 64.i256;
+    v5.i128 = evm_caller;
+    v6.i256 = eq v2 v5;
+    v7.i256 = eq v6 0.i256;
+    br v7 block1 block2;
+  block1:
+    evm_revert 0.i256 0.i256;
+    jump block2;
+  block2:
+    v9.i256 = evm_malloc 64.i256;
+    v10.i256 = add v9 32.i256;
+    evm_mstore v9 v1;
+    evm_mstore v10 $PASSPORTCONTROL;
+    v8.i256 = evm_keccak256 v9 64.i256;
+    evm_sstore v8 v0;
+    v11.i256 = evm_malloc 32.i256;
+    evm_mstore v11 0x8C5BE1E5EBEC7D5BD14F71427D1E84F3DD0314C0F7B2291E5B200AC8C7C3B925.i256;
+    v12.i128 = evm_caller;
+    evm_log5 v11 32.i256 v12 v0 v1 v1;
+    return 1.i1;
+}
+
+func private %setApprovalForAll(v0.i128, v1.i1) -> i1 {
+  block0:
+    v2.i128 = evm_caller;
+    v4.i256 = evm_malloc 64.i256;
+    v5.i256 = add v4 32.i256;
+    evm_mstore v4 v2;
+    evm_mstore v5 $JOYSTICK;
+    v3.i256 = evm_keccak256 v4 64.i256;
+    evm_sstore v3 v1;
+    v6.i256 = evm_malloc 32.i256;
+    evm_mstore v6 0x17307EAB39AB6107E8899845AD3D59BD9653F200F220920489CA2B5937696C31.i256;
+    v7.i128 = evm_caller;
+    evm_log4 v6 32.i256 v7 v0 v1;
+    return 1.i1;
+}
+
+func private %transferFrom(v0.i128, v1.i128, v2.i256) -> i1 {
+  block0:
+    v4.i256 = evm_malloc 64.i256;
+    v5.i256 = add v4 32.i256;
+    evm_mstore v4 v2;
+    evm_mstore v5 $CROWN;
+    v3.i256 = evm_keccak256 v4 64.i256;
+    v6.i128 = evm_caller;
+    v7.i256 = eq v3 v6;
+    v9.i256 = evm_malloc 64.i256;
+    v10.i256 = add v9 32.i256;
+    evm_mstore v9 v2;
+    evm_mstore v10 $PASSPORTCONTROL;
+    v8.i256 = evm_keccak256 v9 64.i256;
+    v11.i128 = evm_caller;
+    v12.i256 = eq v8 v11;
+    v13.i256 = add v7 v12;
+    v15.i256 = evm_malloc 64.i256;
+    v16.i256 = add v15 32.i256;
+    evm_mstore v15 v0;
+    evm_mstore v16 $JOYSTICK;
+    v14.i256 = evm_keccak256 v15 64.i256;
+    v17.i128 = evm_caller;
+    v18.i256 = eq v14 v17;
+    v19.i256 = add v13 v18;
+    v20.i256 = eq v19 0.i256;
+    br v20 block1 block2;
+  block1:
+    evm_revert 0.i256 0.i256;
+    jump block2;
+  block2:
+    v22.i256 = evm_malloc 64.i256;
+    v23.i256 = add v22 32.i256;
+    evm_mstore v22 v2;
+    evm_mstore v23 $CROWN;
+    v21.i256 = evm_keccak256 v22 64.i256;
+    evm_sstore v21 v1;
+    v25.i256 = evm_malloc 64.i256;
+    v26.i256 = add v25 32.i256;
+    evm_mstore v25 v2;
+    evm_mstore v26 $PASSPORTCONTROL;
+    v24.i256 = evm_keccak256 v25 64.i256;
+    evm_sstore v24 0.i256;
+    v28.i256 = evm_malloc 64.i256;
+    v29.i256 = add v28 32.i256;
+    evm_mstore v28 v0;
+    evm_mstore v29 $ABACUS;
+    v27.i256 = evm_keccak256 v28 64.i256;
+    v30.i256 = sub v27 1.i256;
+    v32.i256 = evm_malloc 64.i256;
+    v33.i256 = add v32 32.i256;
+    evm_mstore v32 v0;
+    evm_mstore v33 $ABACUS;
+    v31.i256 = evm_keccak256 v32 64.i256;
+    evm_sstore v31 v30;
+    v35.i256 = evm_malloc 64.i256;
+    v36.i256 = add v35 32.i256;
+    evm_mstore v35 v1;
+    evm_mstore v36 $ABACUS;
+    v34.i256 = evm_keccak256 v35 64.i256;
+    v37.i256 = add v34 1.i256;
+    v39.i256 = evm_malloc 64.i256;
+    v40.i256 = add v39 32.i256;
+    evm_mstore v39 v1;
+    evm_mstore v40 $ABACUS;
+    v38.i256 = evm_keccak256 v39 64.i256;
+    evm_sstore v38 v37;
+    v41.i256 = evm_malloc 32.i256;
+    evm_mstore v41 0xDDF252AD1BE2C89B69C2B068FC378DAA952BA7F163C4A11628F55A4DF523B3EF.i256;
+    evm_log5 v41 32.i256 v0 v1 v2 v2;
+    return 1.i1;
+}
+
+func private %getApproved(v0.i256) -> i128 {
+  block0:
+    v2.i256 = evm_malloc 64.i256;
+    v3.i256 = add v2 32.i256;
+    evm_mstore v2 v0;
+    evm_mstore v3 $PASSPORTCONTROL;
+    v1.i256 = evm_keccak256 v2 64.i256;
+    return v1;
+}
+
+func private %isApprovedForAll(v0.i128, v1.i128) -> i1 {
+  block0:
+    v3.i256 = evm_malloc 64.i256;
+    v4.i256 = add v3 32.i256;
+    evm_mstore v3 v0;
+    evm_mstore v4 $JOYSTICK;
+    v2.i256 = evm_keccak256 v3 64.i256;
+    return v2;
+}
+
+func private %tokenURI(v0.i256) -> i256 {
+  block0:
+    v1.i256 = mul 2816098579549735819167642334222623087267773311865828308853352799888687.i256 65536.i256;
+    jump block2;
+  block1:
+    v2.i256 = div v0 10.i256;
+    v3.i256 = mul v2 10.i256;
+    v4.i256 = sub v0 v3;
+    v5.i256 = add v4 48.i256;
+    v6.i256 = mul v5 1.i256;
+    v7.i256 = add 0.i256 v6;
+    v8.i256 = mul 1.i256 256.i256;
+    v9.i256 = div v0 10.i256;
+    jump block2;
+  block2:
+    v10.i256 = phi (v9 block1) (v0 block0);
+    v11.i256 = phi (v7 block1) (0.i256 block0);
+    v12.i256 = phi (v8 block1) (1.i256 block0);
+    v13.i256 = phi (v4 block1) (0.i256 block0);
+    v14.i256 = phi (v3 block1) (0.i256 block0);
+    v15.i256 = phi (v5 block1) (0.i256 block0);
+    v16.i256 = phi (v6 block1) (0.i256 block0);
+    br v10 block1 block3;
+  block3:
+    v17.i256 = add v11 v1;
+    return v17;
+}
+
+func private %ownerOf(v0.i256) -> i128 {
+  block0:
+    v2.i256 = evm_malloc 64.i256;
+    v3.i256 = add v2 32.i256;
+    evm_mstore v2 v0;
+    evm_mstore v3 $CROWN;
+    v1.i256 = evm_keccak256 v2 64.i256;
+    return v1;
+}
+
+func private %balanceOf(v0.i128) -> i256 {
+  block0:
+    v2.i256 = evm_malloc 64.i256;
+    v3.i256 = add v2 32.i256;
+    evm_mstore v2 v0;
+    evm_mstore v3 $ABACUS;
+    v1.i256 = evm_keccak256 v2 64.i256;
+    return v1;
+}
+
+func private %name() -> i256 {
+  block0:
+    return 1280710979558254200404.i256;
+}
+
+func private %symbol() -> i256 {
+  block0:
+    return 1162757716.i256;
+}
+
+func private %returnUint(v0.i256) {
+block0:
+  v1.i256 = evm_malloc 32.i256;
+  evm_mstore v1 v0;
+  evm_return v1 32.i256;
+}
