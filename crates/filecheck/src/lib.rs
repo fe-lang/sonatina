@@ -49,7 +49,7 @@ impl FileCheckRunner {
             .filter_map(|e| match e {
                 Ok(ent) => {
                     if ent.file_type().is_file()
-                        && ent.path().extension().map_or(false, |ext| ext == "sntn")
+                        && ent.path().extension().is_some_and(|ext| ext == "sntn")
                     {
                         Some(ent)
                     } else {
