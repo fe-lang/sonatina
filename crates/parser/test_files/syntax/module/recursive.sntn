@@ -1,0 +1,6 @@
+target = "evm-ethereum-london"
+
+#! this is a module
+#! with recursive type
+
+type @Node = { *@Node };

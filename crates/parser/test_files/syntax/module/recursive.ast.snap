@@ -1,0 +1,43 @@
+---
+source: crates/parser/tests/syntax.rs
+input_file: test_files/syntax/module/recursive.sntn
+---
+Module {
+    target: Some(
+        TargetTriple {
+            architecture: Evm,
+            vendor: Ethereum,
+            operating_system: Evm(
+                London,
+            ),
+        },
+    ),
+    declared_functions: [],
+    declared_gvs: [],
+    struct_types: [
+        Struct {
+            name: StructName(
+                "Node",
+            ),
+            fields: [
+                Type {
+                    kind: Ptr(
+                        Type {
+                            kind: Struct(
+                                "Node",
+                            ),
+                            ..
+                        },
+                    ),
+                    ..
+                },
+            ],
+            packed: false,
+        },
+    ],
+    functions: [],
+    comments: [
+        "#! this is a module",
+        "#! with recursive type",
+    ],
+}

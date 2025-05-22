@@ -89,7 +89,7 @@ impl Error {
             Error::Undefined(kind, _) => match kind {
                 UndefinedKind::Block(id) => format!("undefined block: `block{}`", id.0),
                 UndefinedKind::Func(name) => format!("undefined function: `%{name}`"),
-                UndefinedKind::Type(name) => format!("undefined type: `%{name}`"),
+                UndefinedKind::Type(name) => format!("undefined type: `@{name}`"),
                 UndefinedKind::Value(name) => format!("undefined value: `{name}`"),
                 UndefinedKind::Inst(name) => format!("unknown inst: `{name}`"),
             },

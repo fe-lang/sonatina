@@ -42,12 +42,15 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
     let mut ctx = BuildCtx::default();
 
     for st in ast.struct_types {
+        let name = &st.name.0;
+        builder.declare_struct_type(name, &[], false);
+
         let fields = st
             .fields
             .iter()
             .map(|t| ctx.type_(&builder, t))
             .collect::<Vec<_>>();
-        builder.declare_struct_type(&st.name.0, &fields, false);
+        builder.update_struct_fields(name, &fields);
     }
 
     for gv in ast.declared_gvs {
@@ -451,7 +454,7 @@ mod tests {
     use super::*;
     #[test]
     fn foo() {
-        let s = "     
+        let s = "
 target = \"evm-ethereum-london\"
 
 # sameln: func public %simple(v0.i8) -> i8 {

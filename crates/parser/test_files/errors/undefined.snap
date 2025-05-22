@@ -1,13 +1,12 @@
 ---
 source: crates/parser/tests/errors.rs
 input_file: test_files/errors/undefined.sntn
-snapshot_kind: text
 ---
 error: parse error
  --> undefined.sntn:2:25
   |
 2 | type @foo = { i8, i16, *@s1 };
-  |                         ^^^ undefined type: `%s1`
+  |                         ^^^ undefined type: `@s1`
   |error: parse error
  --> undefined.sntn:6:22
   |

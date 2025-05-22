@@ -41,9 +41,19 @@ fn test_module_ast(fixture: Fixture<&str>) {
     glob: "*.sntn"
 )]
 fn test_module_ir(fixture: Fixture<&str>) {
-    let module = parse_module(fixture.content()).unwrap();
-    let mut w = ModuleWriter::with_debug_provider(&module.module, &module.debug);
-    snap_test!(w.dump_string(), fixture.path(), Some("ir"));
+    match parse_module(fixture.content()) {
+        Ok(module) => {
+            let mut w = ModuleWriter::with_debug_provider(&module.module, &module.debug);
+            snap_test!(w.dump_string(), fixture.path(), Some("ir"));
+        }
+        Err(errs) => {
+            for err in errs {
+                let error_message = err.print_to_string(fixture.path(), fixture.content(), true);
+                eprintln!("{}", error_message);
+            }
+            panic!("Failed to parse module");
+        }
+    }
 }
 
 fn test_rule(rule: Rule, fixture: Fixture<&str>) {

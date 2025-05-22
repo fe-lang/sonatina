@@ -1,0 +1,24 @@
+---
+source: crates/parser/tests/syntax.rs
+input_file: test_files/syntax/module/recursive.sntn
+---
+module "target = "evm-ethereum-london"
+
+#! this is a module
+#! with recursive type
+
+type @Node = { *@Node };
+"
+  target_triple "evm-ethereum-london"
+  COMMENT "#! this is a module"
+  COMMENT "#! with recursive type"
+  struct_declaration "type @Node = { *@Node };"
+    struct_identifier "@Node"
+      struct_name "Node"
+    normal_field_list "{ *@Node }"
+      type_name "*@Node"
+        ptr_type "*@Node"
+          type_name "@Node"
+            struct_identifier "@Node"
+              struct_name "Node"
+  EOI ""
