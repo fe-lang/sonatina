@@ -191,7 +191,7 @@ where
         W: io::Write,
     {
         match self {
-            Self::Immediate(data) => write!(w, "{}", data),
+            Self::Immediate(data) => write!(w, "{data}"),
             Self::Array(data) => {
                 write!(w, "[")?;
                 for (i, v) in data.iter().enumerate() {
