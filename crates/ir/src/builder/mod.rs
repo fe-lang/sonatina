@@ -39,7 +39,7 @@ pub mod test_util {
         ret_ty: Type,
     ) -> (Evm, FunctionBuilder<InstInserter>) {
         let sig = Signature::new("test_func", Linkage::Public, args, ret_ty);
-        let func_ref = mb.declare_function(sig);
+        let func_ref = mb.declare_function(sig).unwrap();
         (test_isa(), mb.func_builder(func_ref))
     }
 
