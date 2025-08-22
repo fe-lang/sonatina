@@ -681,7 +681,7 @@ dependencies = [
 name = "sonatina-triple"
 version = "0.0.3-alpha"
 dependencies = [
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
