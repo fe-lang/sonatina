@@ -48,7 +48,7 @@ impl ControlFlowGraph {
         self.entry.expand()
     }
 
-    pub fn post_order(&self) -> CfgPostOrder {
+    pub fn post_order(&self) -> CfgPostOrder<'_> {
         CfgPostOrder::new(self)
     }
 
