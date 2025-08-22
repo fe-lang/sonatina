@@ -90,7 +90,7 @@ pub trait BranchInfo {
     fn num_dests(&self) -> usize;
     fn remove_dest(&self, isb: &dyn InstSetBase, dest: BlockId) -> Box<dyn Inst>;
     fn rewrite_dest(&self, isb: &dyn InstSetBase, from: BlockId, to: BlockId) -> Box<dyn Inst>;
-    fn branch_kind(&self) -> BranchKind;
+    fn branch_kind(&self) -> BranchKind<'_>;
 
     type Members = (Jump, Br, BrTable);
 }
@@ -117,7 +117,7 @@ impl BranchInfo for Jump {
         Box::new(jump)
     }
 
-    fn branch_kind(&self) -> BranchKind {
+    fn branch_kind(&self) -> BranchKind<'_> {
         BranchKind::Jump(self)
     }
 }
@@ -152,7 +152,7 @@ impl BranchInfo for Br {
         try_convert_branch_to_jump(isb, &br).unwrap_or_else(|| Box::new(br))
     }
 
-    fn branch_kind(&self) -> BranchKind {
+    fn branch_kind(&self) -> BranchKind<'_> {
         BranchKind::Br(self)
     }
 }
@@ -215,7 +215,7 @@ impl BranchInfo for BrTable {
         try_convert_branch_to_jump(isb, &brt).unwrap_or_else(|| Box::new(brt))
     }
 
-    fn branch_kind(&self) -> BranchKind {
+    fn branch_kind(&self) -> BranchKind<'_> {
         BranchKind::BrTable(self)
     }
 }
