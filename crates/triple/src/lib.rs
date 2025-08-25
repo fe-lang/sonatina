@@ -138,7 +138,7 @@ impl OperatingSystem {
 impl Display for OperatingSystem {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Evm(evm_version) => write!(f, "{}", evm_version),
+            Self::Evm(evm_version) => write!(f, "{evm_version}"),
         }
     }
 }

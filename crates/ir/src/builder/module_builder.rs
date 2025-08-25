@@ -22,6 +22,11 @@ pub struct ModuleBuilder {
     declared_funcs: Arc<DashMap<String, FuncRef>>,
 }
 
+#[derive(Debug, Clone)]
+pub enum BuilderError {
+    ConflictingFunctionDeclaration,
+}
+
 impl ModuleBuilder {
     pub fn new(ctx: ModuleCtx) -> Self {
         Self {
@@ -56,17 +61,21 @@ impl ModuleBuilder {
         self.ctx.triple
     }
 
-    // TODO: Return result to check duplicated func declaration.
-    pub fn declare_function(&self, sig: Signature) -> FuncRef {
+    pub fn declare_function(&self, sig: Signature) -> Result<FuncRef, BuilderError> {
         if let Some(func_ref) = self.declared_funcs.get(sig.name()) {
-            *func_ref
-        } else {
-            let func = Function::new(&self.ctx, &sig);
-            let func_ref = self.func_store.insert(func);
-            self.declared_funcs.insert(sig.name().to_string(), func_ref);
-            self.ctx.declared_funcs.insert(func_ref, sig);
-            func_ref
+            return self.ctx.func_sig(*func_ref, |func_sig| {
+                if func_sig.args() == sig.args() && func_sig.ret_ty() == sig.ret_ty() {
+                    Ok(*func_ref)
+                } else {
+                    Err(BuilderError::ConflictingFunctionDeclaration)
+                }
+            });
         }
+        let func = Function::new(&self.ctx, &sig);
+        let func_ref = self.func_store.insert(func);
+        self.declared_funcs.insert(sig.name().to_string(), func_ref);
+        self.ctx.declared_funcs.insert(func_ref, sig);
+        Ok(func_ref)
     }
 
     pub fn declare_gv(&self, global: GlobalVariableData) -> GlobalVariableRef {
@@ -146,5 +155,40 @@ impl ModuleBuilder {
 
     pub fn inst_set(&self) -> &'static dyn InstSetBase {
         self.ctx.inst_set
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{builder::test_util::test_module_builder, types::Type, Linkage}; //, Signature};
+
+    #[test]
+    fn test_declare_function_success() {
+        let builder = test_module_builder();
+        let sig = Signature::new("foo", Linkage::Public, &[], Type::Unit);
+
+        let result = builder.declare_function(sig.clone());
+        assert!(result.is_ok());
+
+        // Declaring again with same sig should succeed
+        let result2 = builder.declare_function(sig);
+        assert!(result2.is_ok());
+    }
+
+    #[test]
+    fn test_declare_function_conflict() {
+        let builder = test_module_builder();
+
+        let sig1 = Signature::new("foo", Linkage::Public, &[Type::I32], Type::I32);
+        let sig2 = Signature::new("foo", Linkage::Public, &[Type::I64], Type::I64);
+
+        builder.declare_function(sig1).unwrap();
+        let result = builder.declare_function(sig2);
+
+        match result {
+            Err(BuilderError::ConflictingFunctionDeclaration) => (),
+            _ => panic!("Expected conflicting function declaration error"),
+        }
     }
 }

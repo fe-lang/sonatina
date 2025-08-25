@@ -49,7 +49,7 @@ fn test_module_ir(fixture: Fixture<&str>) {
         Err(errs) => {
             for err in errs {
                 let error_message = err.print_to_string(fixture.path(), fixture.content(), true);
-                eprintln!("{}", error_message);
+                eprintln!("{error_message}");
             }
             panic!("Failed to parse module");
         }

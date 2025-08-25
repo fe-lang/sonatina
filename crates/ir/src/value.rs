@@ -25,7 +25,7 @@ impl IrWrite<FuncWriteCtx<'_>> for ValueId {
         } else {
             match ctx.func.dfg.value(*self) {
                 Value::Immediate { imm, ty } => {
-                    write!(w, "{}.", imm)?;
+                    write!(w, "{imm}.")?;
                     ty.write(w, ctx)
                 }
 
@@ -395,12 +395,12 @@ where
                     write!(w, "0")
                 }
             }
-            Self::I8(v) => write!(w, "{}", v),
-            Self::I16(v) => write!(w, "{}", v),
-            Self::I32(v) => write!(w, "{}", v),
-            Self::I64(v) => write!(w, "{}", v),
-            Self::I128(v) => write!(w, "{}", v),
-            Self::I256(v) => write!(w, "{}", v),
+            Self::I8(v) => write!(w, "{v}"),
+            Self::I16(v) => write!(w, "{v}"),
+            Self::I32(v) => write!(w, "{v}"),
+            Self::I64(v) => write!(w, "{v}"),
+            Self::I128(v) => write!(w, "{v}"),
+            Self::I256(v) => write!(w, "{v}"),
         }
     }
 }
@@ -415,12 +415,12 @@ impl fmt::Display for Immediate {
                     write!(f, "0")
                 }
             }
-            Self::I8(v) => write!(f, "{}", v),
-            Self::I16(v) => write!(f, "{}", v),
-            Self::I32(v) => write!(f, "{}", v),
-            Self::I64(v) => write!(f, "{}", v),
-            Self::I128(v) => write!(f, "{}", v),
-            Self::I256(v) => write!(f, "{}", v),
+            Self::I8(v) => write!(f, "{v}"),
+            Self::I16(v) => write!(f, "{v}"),
+            Self::I32(v) => write!(f, "{v}"),
+            Self::I64(v) => write!(f, "{v}"),
+            Self::I128(v) => write!(f, "{v}"),
+            Self::I256(v) => write!(f, "{v}"),
         }
     }
 }

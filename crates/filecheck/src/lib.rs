@@ -70,7 +70,7 @@ impl FileCheckRunner {
         let is_success = failed_num == 0;
 
         let mut stdout = StandardStream::stdout(ColorChoice::Always);
-        writeln!(stdout, "\nrunning {} tests", tests_num).unwrap();
+        writeln!(stdout, "\nrunning {tests_num} tests").unwrap();
         for res in &self.results {
             res.print_result(&mut stdout).unwrap();
         }
@@ -157,7 +157,7 @@ impl<'a> FileChecker<'a> {
         let result = match checker.explain(&func_ir, &()) {
             Ok((true, _)) => Ok(()),
             Ok((false, err)) => Err(err),
-            Err(err) => Err(format!("{}", err)),
+            Err(err) => Err(format!("{err}")),
         };
 
         let mut test_path = self.file_path.to_owned();
@@ -185,7 +185,7 @@ impl<'a> FileChecker<'a> {
         let mut builder = filecheck::CheckerBuilder::new();
         for d in directives {
             if !builder.directive(d).unwrap() && d.contains("nextln") {
-                panic!("not a directive: `{}`", d);
+                panic!("not a directive: `{d}`");
             }
         }
         builder.finish()
@@ -222,7 +222,7 @@ impl FileCheckResult {
                 stdout.set_color(ColorSpec::new().set_fg(Color::Red.into()))?;
                 writeln!(stdout, " FAILED")?;
                 stdout.reset()?;
-                writeln!(stdout, "{}", err)?;
+                writeln!(stdout, "{err}")?;
             }
         }
         Ok(())
