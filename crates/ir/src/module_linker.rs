@@ -570,7 +570,8 @@ impl ModuleLinker {
         let Some(linked_func_ref) = self.builder.lookup_func(sig.name()) else {
             // If the function is not defined in the linked module, declare it and
             // make the mapping.
-            let linked_func_ref = self.builder.declare_function(sig);
+            // Safe unwrap: no existing function with this name, so declare_function won’t conflict.
+            let linked_func_ref = self.builder.declare_function(sig).unwrap();
             ref_map.func_mapping.insert(func_ref, linked_func_ref);
             return Ok(linked_func_ref);
         };
@@ -602,5 +603,133 @@ impl ModuleLinker {
 
         ref_map.func_mapping.insert(func_ref, linked_func_ref);
         Ok(linked_func_ref)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{builder::test_util::test_module_builder, types::Type, Linkage};
+
+    #[test]
+    fn test_linker_conflicting_function_signature_should_fail() {
+        let mod1 = {
+            let builder = test_module_builder();
+            let sig = Signature::new("foo", Linkage::Public, &[Type::I32], Type::I32);
+            builder.declare_function(sig).unwrap();
+            builder.build()
+        };
+
+        let mod2 = {
+            let builder = test_module_builder();
+            let sig = Signature::new("foo", Linkage::Public, &[Type::I64], Type::I64);
+            builder.declare_function(sig).unwrap();
+            builder.build()
+        };
+
+        let result = LinkedModule::link(vec![mod1, mod2]);
+
+        match result {
+            Err(LinkError::InconsistentFuncSignature { name }) => {
+                assert_eq!(name, "foo");
+            }
+            _ => panic!("Expected InconsistentFuncSignature error for function 'foo'"),
+        }
+    }
+
+    #[test]
+    fn test_linker_duplicate_public_functions_should_fail() {
+        let sig = Signature::new("foo", Linkage::Public, &[Type::I32], Type::I32);
+
+        let mod1 = {
+            let builder = test_module_builder();
+            builder.declare_function(sig.clone()).unwrap();
+            builder.build()
+        };
+
+        let mod2 = {
+            let builder = test_module_builder();
+            builder.declare_function(sig).unwrap();
+            builder.build()
+        };
+
+        let result = LinkedModule::link(vec![mod1, mod2]);
+
+        assert!(
+            matches!(result, Err(LinkError::InconsistentFuncSignature { name }) if name == "foo"),
+            "Expected InconsistentFuncSignature error on duplicate Public function 'foo'"
+        );
+    }
+
+    #[test]
+    fn test_linker_duplicate_private_should_fail() {
+        let sig = Signature::new("foo", Linkage::Private, &[Type::I32], Type::I32);
+
+        let mod1 = {
+            let builder = test_module_builder();
+            builder.declare_function(sig.clone()).unwrap();
+            builder.build()
+        };
+
+        let mod2 = {
+            let builder = test_module_builder();
+            builder.declare_function(sig).unwrap();
+            builder.build()
+        };
+
+        let result = LinkedModule::link(vec![mod1, mod2]);
+
+        assert!(
+            matches!(result, Err(LinkError::InconsistentFuncSignature { name }) if name == "foo"),
+            "Expected InconsistentFuncSignature error on duplicate Private function 'foo'"
+        );
+    }
+
+    #[test]
+    fn test_linker_public_and_external_should_succeed() {
+        let sig_public = Signature::new("foo", Linkage::Public, &[Type::I32], Type::I32);
+        let sig_external = Signature::new("foo", Linkage::External, &[Type::I32], Type::I32);
+
+        let mod1 = {
+            let builder = test_module_builder();
+            builder.declare_function(sig_public).unwrap();
+            builder.build()
+        };
+
+        let mod2 = {
+            let builder = test_module_builder();
+            builder.declare_function(sig_external).unwrap();
+            builder.build()
+        };
+
+        let result = LinkedModule::link(vec![mod1, mod2]);
+        assert!(
+            result.is_ok(),
+            "Expected successful link for Public + External"
+        );
+    }
+
+    #[test]
+    fn test_linker_different_names_should_succeed() {
+        let sig1 = Signature::new("foo_mod1", Linkage::Private, &[Type::I32], Type::I32);
+        let sig2 = Signature::new("foo_mod2", Linkage::Private, &[Type::I32], Type::I32);
+
+        let mod1 = {
+            let builder = test_module_builder();
+            builder.declare_function(sig1).unwrap();
+            builder.build()
+        };
+
+        let mod2 = {
+            let builder = test_module_builder();
+            builder.declare_function(sig2).unwrap();
+            builder.build()
+        };
+
+        let result = LinkedModule::link(vec![mod1, mod2]);
+        assert!(
+            result.is_ok(),
+            "Expected successful link for different function names"
+        );
     }
 }

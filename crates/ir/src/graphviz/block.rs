@@ -43,8 +43,7 @@ impl BlockNode<'_> {
         // Write block header.
         write!(
             &mut label,
-            r#"<tr><td bgcolor="gray" align="center" colspan="1">{}</td></tr>"#,
-            block
+            r#"<tr><td bgcolor="gray" align="center" colspan="1">{block}</td></tr>"#,
         )
         .unwrap();
 

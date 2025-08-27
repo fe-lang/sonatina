@@ -141,7 +141,7 @@ impl Error {
             Renderer::plain()
         };
         let disp = rend.render(snippet);
-        write!(w, "{}", disp)
+        write!(w, "{disp}")
     }
 
     pub fn print_to_string(&self, path: &str, content: &str, colors: bool) -> String {
