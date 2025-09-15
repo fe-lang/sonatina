@@ -1,0 +1,37 @@
+; Sonatina IR Type Definitions for egglog
+; Maps to sonatina-ir/src/types.rs
+
+(datatype Type
+    (I1)
+    (I8)
+    (I16)
+    (I32)
+    (I64)
+    (I128)
+    (I256)
+    (Unit)
+    ; Compound types
+    (Ptr Type)
+    (Array Type i64)  ; elem type, length
+    (CompoundRef i64) ; opaque ref for structs/functions
+)
+
+; Helper to check if type is integral
+(function is-integral (Type) bool)
+(rule ((= t (I1)))   ((set (is-integral t) true)))
+(rule ((= t (I8)))   ((set (is-integral t) true)))
+(rule ((= t (I16)))  ((set (is-integral t) true)))
+(rule ((= t (I32)))  ((set (is-integral t) true)))
+(rule ((= t (I64)))  ((set (is-integral t) true)))
+(rule ((= t (I128))) ((set (is-integral t) true)))
+(rule ((= t (I256))) ((set (is-integral t) true)))
+
+; Bit width of integral types
+(function bit-width (Type) i64)
+(rule ((= t (I1)))   ((set (bit-width t) 1)))
+(rule ((= t (I8)))   ((set (bit-width t) 8)))
+(rule ((= t (I16)))  ((set (bit-width t) 16)))
+(rule ((= t (I32)))  ((set (bit-width t) 32)))
+(rule ((= t (I64)))  ((set (bit-width t) 64)))
+(rule ((= t (I128))) ((set (bit-width t) 128)))
+(rule ((= t (I256))) ((set (bit-width t) 256)))
