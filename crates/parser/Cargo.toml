@@ -15,7 +15,7 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 ir = { package = "sonatina-ir", path = "../ir", version = "0.0.3-alpha" }
 sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
 cranelift-entity = "0.123"
-pest = "2.7.10"
+pest = "2.8.2"
 pest_derive = "2.8.1"
 smol_str = "0.3.1"
 hex = "0.4.3"
