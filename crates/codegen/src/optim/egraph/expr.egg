@@ -1,0 +1,91 @@
+; Sonatina IR Pure Expression Definitions for egglog
+; Pure operations that can float freely in the egraph
+; Maps to sonatina-ir/src/inst/{arith,cmp,logic,cast}.rs
+
+(include "types.egg")
+
+(datatype Expr
+    ; --- Values ---
+    (Const i64 Type)    ; immediate value
+    (Arg i64 Type)      ; function argument (index, type)
+    (Global i64 Type)   ; global variable ref
+    (Undef Type)        ; undefined value
+
+    ; --- Arithmetic (arith.rs) ---
+    (Neg Expr)
+    (Add Expr Expr)
+    (Sub Expr Expr)
+    (Mul Expr Expr)
+    (Udiv Expr Expr)
+    (Sdiv Expr Expr)
+    (Umod Expr Expr)
+    (Smod Expr Expr)
+    (Shl Expr Expr)     ; bits, value
+    (Shr Expr Expr)
+    (Sar Expr Expr)
+
+    ; --- Logic (logic.rs) ---
+    (Not Expr)
+    (And Expr Expr)
+    (Or Expr Expr)
+    (Xor Expr Expr)
+
+    ; --- Comparisons (cmp.rs) ---
+    (Lt Expr Expr)      ; unsigned
+    (Gt Expr Expr)
+    (Le Expr Expr)
+    (Ge Expr Expr)
+    (Slt Expr Expr)     ; signed
+    (Sgt Expr Expr)
+    (Sle Expr Expr)
+    (Sge Expr Expr)
+    (Eq Expr Expr)
+    (Ne Expr Expr)
+    (IsZero Expr)
+
+    ; --- Casts (cast.rs) ---
+    (Sext Expr Type)
+    (Zext Expr Type)
+    (Trunc Expr Type)
+    (Bitcast Expr Type)
+    (IntToPtr Expr Type)
+    (PtrToInt Expr Type)
+
+    ; --- Aggregates (data.rs - pure parts) ---
+    (ExtractValue Expr i64)
+    (InsertValue Expr i64 Expr)
+)
+
+; Type inference for expressions
+(function expr-type (Expr) Type)
+
+; Values carry their type
+(rule ((= e (Const v ty))) ((set (expr-type e) ty)))
+(rule ((= e (Arg i ty)))   ((set (expr-type e) ty)))
+(rule ((= e (Global i ty)))((set (expr-type e) ty)))
+(rule ((= e (Undef ty)))   ((set (expr-type e) ty)))
+
+; Unary ops preserve type
+(rule ((= e (Neg x)) (= ty (expr-type x))) ((set (expr-type e) ty)))
+(rule ((= e (Not x)) (= ty (expr-type x))) ((set (expr-type e) ty)))
+
+; Comparisons return i1
+(rule ((= e (Lt _ _)))   ((set (expr-type e) (I1))))
+(rule ((= e (Gt _ _)))   ((set (expr-type e) (I1))))
+(rule ((= e (Le _ _)))   ((set (expr-type e) (I1))))
+(rule ((= e (Ge _ _)))   ((set (expr-type e) (I1))))
+(rule ((= e (Slt _ _)))  ((set (expr-type e) (I1))))
+(rule ((= e (Sgt _ _)))  ((set (expr-type e) (I1))))
+(rule ((= e (Sle _ _)))  ((set (expr-type e) (I1))))
+(rule ((= e (Sge _ _)))  ((set (expr-type e) (I1))))
+(rule ((= e (Eq _ _)))   ((set (expr-type e) (I1))))
+(rule ((= e (Ne _ _)))   ((set (expr-type e) (I1))))
+(rule ((= e (IsZero _))) ((set (expr-type e) (I1))))
+
+; Casts use target type
+(rule ((= e (Sext _ ty)))    ((set (expr-type e) ty)))
+(rule ((= e (Zext _ ty)))    ((set (expr-type e) ty)))
+(rule ((= e (Trunc _ ty)))   ((set (expr-type e) ty)))
+(rule ((= e (Bitcast _ ty))) ((set (expr-type e) ty)))
+(rule ((= e (IntToPtr _ ty)))((set (expr-type e) ty)))
+(rule ((= e (PtrToInt _ ty)))((set (expr-type e) ty)))
