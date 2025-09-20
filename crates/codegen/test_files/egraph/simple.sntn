@@ -1,0 +1,9 @@
+target = "evm-ethereum-london"
+
+func public %simple(v0.i32, v1.i32) -> i32 {
+    block0:
+        v2.i32 = add v0 v1;
+        v3.i32 = mul v2 v0;
+        v4.i32 = sub v3 v1;
+        return v4;
+}
