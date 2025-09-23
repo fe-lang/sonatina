@@ -1,3 +1,7 @@
+mod elaborate;
+
+pub use elaborate::{EggTerm, Elaborator};
+
 use std::fmt::Write;
 
 use sonatina_ir::{
