@@ -1,6 +1,6 @@
 use std::io;
 
-use annotate_snippets::{Level, Renderer, Snippet};
+use annotate_snippets::{AnnotationKind, Level, Renderer, Snippet};
 use smol_str::SmolStr;
 use sonatina_triple::{InvalidTriple, TargetTriple};
 
@@ -128,20 +128,24 @@ impl Error {
                 format!("type error: expected `{expected}` here")
             }
         };
-        let snippet = Level::Error.title("parse error").snippet(
+        let snippet = Level::ERROR.primary_title("parse error").element(
             Snippet::source(content)
                 .line_start(0)
-                .origin(path)
+                .path(path)
                 .fold(true)
-                .annotation(Level::Error.span(self.span().as_range()).label(&label)),
+                .annotation(
+                    AnnotationKind::Primary
+                        .span(self.span().as_range())
+                        .label(&label),
+                ),
         );
         let rend = if colors {
             Renderer::styled()
         } else {
             Renderer::plain()
         };
-        let disp = rend.render(snippet);
-        write!(w, "{disp}")
+        let disp = rend.render(&[snippet]);
+        writeln!(w, "{disp}")
     }
 
     pub fn print_to_string(&self, path: &str, content: &str, colors: bool) -> String {

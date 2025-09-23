@@ -1,7 +1,6 @@
 ---
 source: crates/parser/tests/errors.rs
 input_file: test_files/errors/parse_error.sntn
-snapshot_kind: text
 ---
 error: parse error
  --> parse_error.sntn:3:5
@@ -13,4 +12,3 @@ error: parse error
   |     ^---
   |
   = expected COMMENT or block_ident
-  |
