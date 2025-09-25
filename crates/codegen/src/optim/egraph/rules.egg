@@ -1,0 +1,57 @@
+; Simple algebraic optimization rules for sonatina IR
+
+(include "expr.egg")
+
+; --- Addition ---
+; x + 0 = x
+(rewrite (Add x (Const 0 ty)) x)
+(rewrite (Add (Const 0 ty) x) x)
+
+; --- Subtraction ---
+; x - 0 = x
+(rewrite (Sub x (Const 0 ty)) x)
+; x - x = 0
+(rule ((= e (Sub x x)) (= ty (expr-type x)))
+      ((union e (Const 0 ty))))
+
+; --- Multiplication ---
+; x * 0 = 0
+(rewrite (Mul x (Const 0 ty)) (Const 0 ty))
+(rewrite (Mul (Const 0 ty) x) (Const 0 ty))
+; x * 1 = x
+(rewrite (Mul x (Const 1 ty)) x)
+(rewrite (Mul (Const 1 ty) x) x)
+
+; --- Bitwise AND ---
+; x & 0 = 0
+(rewrite (And x (Const 0 ty)) (Const 0 ty))
+(rewrite (And (Const 0 ty) x) (Const 0 ty))
+; x & x = x
+(rewrite (And x x) x)
+
+; --- Bitwise OR ---
+; x | 0 = x
+(rewrite (Or x (Const 0 ty)) x)
+(rewrite (Or (Const 0 ty) x) x)
+; x | x = x
+(rewrite (Or x x) x)
+
+; --- Bitwise XOR ---
+; x ^ 0 = x
+(rewrite (Xor x (Const 0 ty)) x)
+(rewrite (Xor (Const 0 ty) x) x)
+; x ^ x = 0
+(rule ((= e (Xor x x)) (= ty (expr-type x)))
+      ((union e (Const 0 ty))))
+
+; --- Double negation ---
+; ~~x = x
+(rewrite (Not (Not x)) x)
+; --x = x
+(rewrite (Neg (Neg x)) x)
+
+; --- Comparison with self ---
+; x == x = true
+(rewrite (Eq x x) (Const 1 (I1)))
+; x != x = false
+(rewrite (Ne x x) (Const 0 (I1)))
