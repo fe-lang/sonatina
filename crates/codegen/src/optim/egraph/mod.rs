@@ -4,10 +4,21 @@ pub use elaborate::{EggTerm, Elaborator};
 
 use std::fmt::Write;
 
+use egglog::EGraph;
 use sonatina_ir::{
     inst::{arith::*, cmp::*, logic::*},
-    Function, InstDowncast, InstId, Type, ValueId,
+    Function, InstDowncast, InstId, Type, Value, ValueId,
 };
+
+const RULES: &str = include_str!("rules.egg");
+
+/// Run egglog optimization on the given program.
+pub fn run_egglog(program: &str) -> egglog::EGraph {
+    let full_program = format!("{}\n{}", RULES, program);
+    let mut egraph = EGraph::default();
+    egraph.parse_and_run_program(None, &full_program).unwrap();
+    egraph
+}
 
 pub fn func_to_egglog(func: &Function) -> String {
     let mut out = String::new();
@@ -36,8 +47,8 @@ fn inst_to_egglog(func: &Function, inst_id: InstId) -> Option<String> {
                     "(let {} ({} {} {}))",
                     value_name(result),
                     $op,
-                    value_name(*i.lhs()),
-                    value_name(*i.rhs())
+                    value_to_egglog(func, *i.lhs()),
+                    value_to_egglog(func, *i.rhs())
                 ));
             }
         };
@@ -51,7 +62,7 @@ fn inst_to_egglog(func: &Function, inst_id: InstId) -> Option<String> {
                     "(let {} ({} {}))",
                     value_name(result),
                     $op,
-                    value_name(*i.arg())
+                    value_to_egglog(func, *i.arg())
                 ));
             }
         };
@@ -73,8 +84,8 @@ fn inst_to_egglog(func: &Function, inst_id: InstId) -> Option<String> {
         return Some(format!(
             "(let {} (Shl {} {}))",
             value_name(result),
-            value_name(*i.bits()),
-            value_name(*i.value())
+            value_to_egglog(func, *i.bits()),
+            value_to_egglog(func, *i.value())
         ));
     }
     if let Some(i) = <&Shr>::downcast(is, inst) {
@@ -82,8 +93,8 @@ fn inst_to_egglog(func: &Function, inst_id: InstId) -> Option<String> {
         return Some(format!(
             "(let {} (Shr {} {}))",
             value_name(result),
-            value_name(*i.bits()),
-            value_name(*i.value())
+            value_to_egglog(func, *i.bits()),
+            value_to_egglog(func, *i.value())
         ));
     }
     if let Some(i) = <&Sar>::downcast(is, inst) {
@@ -91,8 +102,8 @@ fn inst_to_egglog(func: &Function, inst_id: InstId) -> Option<String> {
         return Some(format!(
             "(let {} (Sar {} {}))",
             value_name(result),
-            value_name(*i.bits()),
-            value_name(*i.value())
+            value_to_egglog(func, *i.bits()),
+            value_to_egglog(func, *i.value())
         ));
     }
 
@@ -119,7 +130,7 @@ fn inst_to_egglog(func: &Function, inst_id: InstId) -> Option<String> {
         return Some(format!(
             "(let {} (IsZero {}))",
             value_name(result),
-            value_name(*i.lhs())
+            value_to_egglog(func, *i.lhs())
         ));
     }
 
@@ -130,7 +141,15 @@ fn value_name(v: ValueId) -> String {
     format!("v{}", v.as_u32())
 }
 
-#[allow(dead_code)]
+fn value_to_egglog(func: &Function, v: ValueId) -> String {
+    match func.dfg.value(v) {
+        Value::Immediate { imm, ty } => {
+            format!("(Const {} {})", imm.as_i256().trunc_to_i64(), type_to_egglog(*ty))
+        }
+        _ => value_name(v),
+    }
+}
+
 fn type_to_egglog(ty: Type) -> &'static str {
     match ty {
         Type::I1 => "(I1)",
