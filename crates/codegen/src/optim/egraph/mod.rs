@@ -1,6 +1,8 @@
 mod elaborate;
+mod pass;
 
 pub use elaborate::{EggTerm, Elaborator};
+pub use pass::run_egraph_pass;
 
 use std::fmt::Write;
 
