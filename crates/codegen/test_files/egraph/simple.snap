@@ -2,6 +2,8 @@
 source: crates/codegen/tests/egraph.rs
 input_file: test_files/egraph/simple.sntn
 ---
+(let v0 (Arg 0 (I32)))
+(let v1 (Arg 1 (I32)))
 ; block0
 (let v2 (Add v0 v1))
 (let v3 (Mul v2 v0))

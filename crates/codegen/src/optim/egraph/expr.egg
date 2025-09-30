@@ -1,8 +1,7 @@
 ; Sonatina IR Pure Expression Definitions for egglog
 ; Pure operations that can float freely in the egraph
 ; Maps to sonatina-ir/src/inst/{arith,cmp,logic,cast}.rs
-
-(include "types.egg")
+; NOTE: Requires types.egg to be loaded first
 
 (datatype Expr
     ; --- Values ---
@@ -57,7 +56,7 @@
 )
 
 ; Type inference for expressions
-(function expr-type (Expr) Type)
+(function expr-type (Expr) Type :merge old)
 
 ; Values carry their type
 (rule ((= e (Const v ty))) ((set (expr-type e) ty)))

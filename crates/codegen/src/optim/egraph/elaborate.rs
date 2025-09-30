@@ -70,15 +70,11 @@ impl<'a> Elaborator<'a> {
     /// Elaborate a term into IR, returning the resulting ValueId.
     pub fn elaborate(&mut self, term: &EggTerm, ty: Type) -> ValueId {
         match term {
-            EggTerm::Var(name) => {
-                *self.var_map.get(name).expect("undefined variable")
-            }
-            EggTerm::Const(val, ty) => {
-                self.func.dfg.make_imm_value(sonatina_ir::Immediate::from_i256(
-                    (*val).into(),
-                    *ty,
-                ))
-            }
+            EggTerm::Var(name) => *self.var_map.get(name).expect("undefined variable"),
+            EggTerm::Const(val, ty) => self
+                .func
+                .dfg
+                .make_imm_value(sonatina_ir::Immediate::from_i256((*val).into(), *ty)),
             EggTerm::Add(lhs, rhs) => self.elaborate_binary::<Add>(lhs, rhs, ty),
             EggTerm::Sub(lhs, rhs) => self.elaborate_binary::<Sub>(lhs, rhs, ty),
             EggTerm::Mul(lhs, rhs) => self.elaborate_binary::<Mul>(lhs, rhs, ty),

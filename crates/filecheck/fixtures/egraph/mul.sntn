@@ -1,0 +1,37 @@
+target = "evm-ethereum-london"
+
+# Test: x * 0 = 0
+# sameln: func public %mul_zero(v0.i32) -> i32 {
+# check:         return 0.i32;
+func public %mul_zero(v0.i32) -> i32 {
+    block0:
+        v1.i32 = mul v0 0.i32;
+        return v1;
+}
+
+# Test: 0 * x = 0
+# sameln: func public %zero_mul(v0.i32) -> i32 {
+# check:         return 0.i32;
+func public %zero_mul(v0.i32) -> i32 {
+    block0:
+        v1.i32 = mul 0.i32 v0;
+        return v1;
+}
+
+# Test: x * 1 = x
+# sameln: func public %mul_one(v0.i32) -> i32 {
+# check:         return v0;
+func public %mul_one(v0.i32) -> i32 {
+    block0:
+        v1.i32 = mul v0 1.i32;
+        return v1;
+}
+
+# Test: 1 * x = x
+# sameln: func public %one_mul(v0.i32) -> i32 {
+# check:         return v0;
+func public %one_mul(v0.i32) -> i32 {
+    block0:
+        v1.i32 = mul 1.i32 v0;
+        return v1;
+}

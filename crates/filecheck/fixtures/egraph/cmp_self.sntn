@@ -1,0 +1,19 @@
+target = "evm-ethereum-london"
+
+# Test: x == x = true
+# sameln: func public %eq_self(v0.i32) -> i1 {
+# check:         return 1.i1;
+func public %eq_self(v0.i32) -> i1 {
+    block0:
+        v1.i1 = eq v0 v0;
+        return v1;
+}
+
+# Test: x != x = false
+# sameln: func public %ne_self(v0.i32) -> i1 {
+# check:         return 0.i1;
+func public %ne_self(v0.i32) -> i1 {
+    block0:
+        v1.i1 = ne v0 v0;
+        return v1;
+}

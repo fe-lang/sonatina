@@ -1,6 +1,5 @@
 ; Simple algebraic optimization rules for sonatina IR
-
-(include "expr.egg")
+; NOTE: Requires types.egg and expr.egg to be loaded first
 
 ; --- Addition ---
 ; x + 0 = x

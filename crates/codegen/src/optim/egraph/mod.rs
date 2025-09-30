@@ -12,11 +12,13 @@ use sonatina_ir::{
     Function, InstDowncast, InstId, Type, Value, ValueId,
 };
 
+const TYPES: &str = include_str!("types.egg");
+const EXPRS: &str = include_str!("expr.egg");
 const RULES: &str = include_str!("rules.egg");
 
 /// Run egglog optimization on the given program.
 pub fn run_egglog(program: &str) -> egglog::EGraph {
-    let full_program = format!("{}\n{}", RULES, program);
+    let full_program = format!("{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, program);
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(None, &full_program).unwrap();
     egraph
@@ -24,6 +26,19 @@ pub fn run_egglog(program: &str) -> egglog::EGraph {
 
 pub fn func_to_egglog(func: &Function) -> String {
     let mut out = String::new();
+
+    // Define function arguments
+    for (idx, &arg_val) in func.arg_values.iter().enumerate() {
+        let ty = func.dfg.value_ty(arg_val);
+        writeln!(
+            &mut out,
+            "(let {} (Arg {} {}))",
+            value_name(arg_val),
+            idx,
+            type_to_egglog(ty)
+        )
+        .unwrap();
+    }
 
     for block in func.layout.iter_block() {
         writeln!(&mut out, "; block{}", block.as_u32()).unwrap();
@@ -146,7 +161,11 @@ fn value_name(v: ValueId) -> String {
 fn value_to_egglog(func: &Function, v: ValueId) -> String {
     match func.dfg.value(v) {
         Value::Immediate { imm, ty } => {
-            format!("(Const {} {})", imm.as_i256().trunc_to_i64(), type_to_egglog(*ty))
+            format!(
+                "(Const {} {})",
+                imm.as_i256().trunc_to_i64(),
+                type_to_egglog(*ty)
+            )
         }
         _ => value_name(v),
     }
@@ -161,7 +180,7 @@ fn type_to_egglog(ty: Type) -> &'static str {
         Type::I64 => "(I64)",
         Type::I128 => "(I128)",
         Type::I256 => "(I256)",
-        Type::Unit => "(Unit)",
+        Type::Unit => "(UnitTy)",
         Type::Compound(_) => "(CompoundRef 0)",
     }
 }

@@ -9,7 +9,7 @@
     (I64)
     (I128)
     (I256)
-    (Unit)
+    (UnitTy)
     ; Compound types
     (Ptr Type)
     (Array Type i64)  ; elem type, length
@@ -17,7 +17,7 @@
 )
 
 ; Helper to check if type is integral
-(function is-integral (Type) bool)
+(function is-integral (Type) bool :merge (or old new))
 (rule ((= t (I1)))   ((set (is-integral t) true)))
 (rule ((= t (I8)))   ((set (is-integral t) true)))
 (rule ((= t (I16)))  ((set (is-integral t) true)))
@@ -27,7 +27,7 @@
 (rule ((= t (I256))) ((set (is-integral t) true)))
 
 ; Bit width of integral types
-(function bit-width (Type) i64)
+(function bit-width (Type) i64 :merge old)
 (rule ((= t (I1)))   ((set (bit-width t) 1)))
 (rule ((= t (I8)))   ((set (bit-width t) 8)))
 (rule ((= t (I16)))  ((set (bit-width t) 16)))
