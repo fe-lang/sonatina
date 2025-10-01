@@ -15,7 +15,7 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 
 [dependencies]
 byteorder = "1.5.0"
-cranelift-entity = "0.123"
+cranelift-entity = "0.124"
 sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
 dashmap = "6.1"
 dyn-clone = "1.0"
