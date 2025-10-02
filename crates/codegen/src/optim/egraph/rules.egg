@@ -68,3 +68,11 @@
 (rewrite (Sgt x x) (Const 0 (I1)))
 ; x >= x = true (signed)
 (rewrite (Sge x x) (Const 1 (I1)))
+
+; --- Shifts ---
+; x << 0 = x
+(rewrite (Shl (Const 0 ty) x) x)
+; x >> 0 = x (logical)
+(rewrite (Shr (Const 0 ty) x) x)
+; x >> 0 = x (arithmetic)
+(rewrite (Sar (Const 0 ty) x) x)
