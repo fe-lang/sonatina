@@ -1,0 +1,23 @@
+target = "evm-ethereum-london"
+
+# Test: Phi nodes should be preserved, but values used after phi can be optimized
+# v4 = v3 + 0 should be simplified to v3
+# sameln: func public %phi_test(v0.i32, v1.i32, v2.i1) -> i32 {
+# check: block3:
+# check:         v3.i32 = phi (v0 block1) (v1 block2);
+# check:         return v3;
+func public %phi_test(v0.i32, v1.i32, v2.i1) -> i32 {
+    block0:
+        br v2 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v3.i32 = phi (v0 block1) (v1 block2);
+        v4.i32 = add v3 0.i32;
+        return v4;
+}

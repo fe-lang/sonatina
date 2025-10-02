@@ -9,6 +9,9 @@
     (Arg i64 Type)      ; function argument (index, type)
     (Global i64 Type)   ; global variable ref
     (Undef Type)        ; undefined value
+    ; Opaque result from side-effecting instruction (phi, load, call, etc.)
+    ; The i64 is a unique ID (e.g., ValueId) to distinguish different results
+    (SideEffectResult i64 Type)
 
     ; --- Arithmetic (arith.rs) ---
     (Neg Expr)
@@ -63,6 +66,7 @@
 (rule ((= e (Arg i ty)))   ((set (expr-type e) ty)))
 (rule ((= e (Global i ty)))((set (expr-type e) ty)))
 (rule ((= e (Undef ty)))   ((set (expr-type e) ty)))
+(rule ((= e (SideEffectResult i ty))) ((set (expr-type e) ty)))
 
 ; Unary ops preserve type
 (rule ((= e (Neg x)) (= ty (expr-type x))) ((set (expr-type e) ty)))

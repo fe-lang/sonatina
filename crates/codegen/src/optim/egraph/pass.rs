@@ -104,6 +104,19 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
                 }
             }
         }
+        // Check if result is a side-effect result like "(SideEffectResult N (Type))"
+        else if let Some(side_effect_id) = parse_side_effect_result(result) {
+            // Find the value with this ID
+            if let Some(&side_effect_val) = value_map
+                .values()
+                .find(|&&v| v.as_u32() == side_effect_id as u32)
+            {
+                if side_effect_val != original_val {
+                    func.dfg.change_to_alias(original_val, side_effect_val);
+                    changed = true;
+                }
+            }
+        }
     }
 
     changed
@@ -153,6 +166,20 @@ fn parse_arg_result(s: &str) -> Option<usize> {
     parts[0].parse().ok()
 }
 
+fn parse_side_effect_result(s: &str) -> Option<usize> {
+    // Parse "(SideEffectResult N (Type))" format, return the value ID
+    let s = s.trim();
+    if !s.starts_with("(SideEffectResult ") {
+        return None;
+    }
+    let inner = s.strip_prefix("(SideEffectResult ")?.strip_suffix(')')?;
+    let parts: Vec<_> = inner.splitn(2, ' ').collect();
+    if parts.is_empty() {
+        return None;
+    }
+    parts[0].parse().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +204,13 @@ mod tests {
         assert_eq!(parse_arg_result("(Arg 2 (I64))"), Some(2));
         assert_eq!(parse_arg_result("v0"), None);
         assert_eq!(parse_arg_result("(Const 0 (I32))"), None);
+    }
+
+    #[test]
+    fn test_parse_side_effect() {
+        assert_eq!(parse_side_effect_result("(SideEffectResult 3 (I32))"), Some(3));
+        assert_eq!(parse_side_effect_result("(SideEffectResult 42 (I64))"), Some(42));
+        assert_eq!(parse_side_effect_result("v0"), None);
+        assert_eq!(parse_side_effect_result("(Const 0 (I32))"), None);
     }
 }

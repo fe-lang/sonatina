@@ -8,7 +8,7 @@ use std::fmt::Write;
 
 use egglog::EGraph;
 use sonatina_ir::{
-    inst::{arith::*, cmp::*, logic::*},
+    inst::{arith::*, cmp::*, control_flow::Phi, logic::*},
     Function, InstDowncast, InstId, Type, Value, ValueId,
 };
 
@@ -148,6 +148,19 @@ fn inst_to_egglog(func: &Function, inst_id: InstId) -> Option<String> {
             "(let {} (IsZero {}))",
             value_name(result),
             value_to_egglog(func, *i.lhs())
+        ));
+    }
+
+    // Phi instructions produce opaque values in the egraph
+    // The phi result can be used by other expressions, but the phi itself is not optimized
+    if <&Phi>::downcast(is, inst).is_some() {
+        let result = result?;
+        let ty = func.dfg.value_ty(result);
+        return Some(format!(
+            "(let {} (SideEffectResult {} {}))",
+            value_name(result),
+            result.as_u32(),
+            type_to_egglog(ty)
         ));
     }
 
