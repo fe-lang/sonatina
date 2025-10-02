@@ -54,3 +54,11 @@
 (rewrite (Eq x x) (Const 1 (I1)))
 ; x != x = false
 (rewrite (Ne x x) (Const 0 (I1)))
+; x < x = false (unsigned)
+(rewrite (Lt x x) (Const 0 (I1)))
+; x <= x = true (unsigned)
+(rewrite (Le x x) (Const 1 (I1)))
+; x > x = false (unsigned)
+(rewrite (Gt x x) (Const 0 (I1)))
+; x >= x = true (unsigned)
+(rewrite (Ge x x) (Const 1 (I1)))

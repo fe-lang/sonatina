@@ -1,0 +1,11 @@
+target = "evm-ethereum-london"
+
+# Test: x < x should be simplified to false (0)
+# The lt instruction remains but the return uses the constant directly
+# sameln: func public %lt_self(v0.i32) -> i1 {
+# check:         return 0.i1;
+func public %lt_self(v0.i32) -> i1 {
+    block0:
+        v1.i1 = lt v0 v0;
+        return v1;
+}
