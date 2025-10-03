@@ -1,0 +1,10 @@
+target = "evm-ethereum-london"
+
+# Test: is_zero(0) should be simplified to true (1)
+# sameln: func public %is_zero_const() -> i1 {
+# check:         return 1.i1;
+func public %is_zero_const() -> i1 {
+    block0:
+        v0.i1 = is_zero 0.i32;
+        return v0;
+}

@@ -82,3 +82,7 @@
 (rewrite (Udiv x (Const 1 ty)) x)
 ; x / 1 = x (signed)
 (rewrite (Sdiv x (Const 1 ty)) x)
+
+; --- IsZero ---
+; is_zero(0) = true
+(rewrite (IsZero (Const 0 ty)) (Const 1 (I1)))
