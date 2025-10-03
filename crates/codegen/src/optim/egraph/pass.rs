@@ -208,8 +208,14 @@ mod tests {
 
     #[test]
     fn test_parse_side_effect() {
-        assert_eq!(parse_side_effect_result("(SideEffectResult 3 (I32))"), Some(3));
-        assert_eq!(parse_side_effect_result("(SideEffectResult 42 (I64))"), Some(42));
+        assert_eq!(
+            parse_side_effect_result("(SideEffectResult 3 (I32))"),
+            Some(3)
+        );
+        assert_eq!(
+            parse_side_effect_result("(SideEffectResult 42 (I64))"),
+            Some(42)
+        );
         assert_eq!(parse_side_effect_result("v0"), None);
         assert_eq!(parse_side_effect_result("(Const 0 (I32))"), None);
     }

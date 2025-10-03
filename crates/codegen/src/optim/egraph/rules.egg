@@ -92,3 +92,9 @@
 (rewrite (Add x (Neg y)) (Sub x y))
 ; x - (-y) = x + y
 (rewrite (Sub x (Neg y)) (Add x y))
+
+; --- De Morgan's Laws ---
+; ~(x & y) = (~x) | (~y)
+(rewrite (Not (And x y)) (Or (Not x) (Not y)))
+; ~(x | y) = (~x) & (~y)
+(rewrite (Not (Or x y)) (And (Not x) (Not y)))
