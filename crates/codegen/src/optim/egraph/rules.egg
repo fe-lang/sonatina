@@ -98,3 +98,11 @@
 (rewrite (Not (And x y)) (Or (Not x) (Not y)))
 ; ~(x | y) = (~x) & (~y)
 (rewrite (Not (Or x y)) (And (Not x) (Not y)))
+
+; --- Strength Reduction ---
+; x * 2 = x << 1
+(rewrite (Mul x (Const 2 ty)) (Shl (Const 1 ty) x))
+(rewrite (Mul (Const 2 ty) x) (Shl (Const 1 ty) x))
+; x * 4 = x << 2
+(rewrite (Mul x (Const 4 ty)) (Shl (Const 2 ty) x))
+(rewrite (Mul (Const 4 ty) x) (Shl (Const 2 ty) x))
