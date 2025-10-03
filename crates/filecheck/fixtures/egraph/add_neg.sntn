@@ -1,0 +1,11 @@
+target = "evm-ethereum-london"
+
+# Test: x + (-x) should be simplified to 0 (via x + (-x) -> x - x -> 0)
+# sameln: func public %add_neg(v0.i32) -> i32 {
+# check:         return 0.i32;
+func public %add_neg(v0.i32) -> i32 {
+    block0:
+        v1.i32 = neg v0;
+        v2.i32 = add v0 v1;
+        return v2;
+}

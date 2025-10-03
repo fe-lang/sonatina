@@ -86,3 +86,9 @@
 ; --- IsZero ---
 ; is_zero(0) = true
 (rewrite (IsZero (Const 0 ty)) (Const 1 (I1)))
+
+; --- Negation + Arithmetic ---
+; x + (-y) = x - y
+(rewrite (Add x (Neg y)) (Sub x y))
+; x - (-y) = x + y
+(rewrite (Sub x (Neg y)) (Add x y))
