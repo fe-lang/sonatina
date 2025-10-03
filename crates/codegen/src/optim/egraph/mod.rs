@@ -8,7 +8,7 @@ use std::fmt::Write;
 
 use egglog::EGraph;
 use sonatina_ir::{
-    inst::{arith::*, cmp::*, control_flow::Phi, logic::*},
+    inst::{arith::*, cmp::*, control_flow::Phi, evm::*, logic::*},
     Function, InstDowncast, InstId, Type, Value, ValueId,
 };
 
@@ -94,6 +94,12 @@ fn inst_to_egglog(func: &Function, inst_id: InstId) -> Option<String> {
     try_binary!(Umod, "Umod");
     try_binary!(Smod, "Smod");
     try_unary!(Neg, "Neg");
+
+    // EVM-specific arithmetic (map to generic egraph nodes)
+    try_binary!(EvmUdiv, "Udiv");
+    try_binary!(EvmSdiv, "Sdiv");
+    try_binary!(EvmUmod, "Umod");
+    try_binary!(EvmSmod, "Smod");
 
     // Shifts have different field names (bits, value)
     if let Some(i) = <&Shl>::downcast(is, inst) {

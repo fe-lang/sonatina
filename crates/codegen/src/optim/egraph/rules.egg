@@ -76,3 +76,9 @@
 (rewrite (Shr (Const 0 ty) x) x)
 ; x >> 0 = x (arithmetic)
 (rewrite (Sar (Const 0 ty) x) x)
+
+; --- Division ---
+; x / 1 = x (unsigned)
+(rewrite (Udiv x (Const 1 ty)) x)
+; x / 1 = x (signed)
+(rewrite (Sdiv x (Const 1 ty)) x)
