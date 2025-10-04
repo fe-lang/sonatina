@@ -1,6 +1,15 @@
 ; Simple algebraic optimization rules for sonatina IR
 ; NOTE: Requires types.egg and expr.egg to be loaded first
 
+; --- Commutativity (enables GVN for equivalent expressions) ---
+(rewrite (Add x y) (Add y x))
+(rewrite (Mul x y) (Mul y x))
+(rewrite (And x y) (And y x))
+(rewrite (Or x y) (Or y x))
+(rewrite (Xor x y) (Xor y x))
+(rewrite (Eq x y) (Eq y x))
+(rewrite (Ne x y) (Ne y x))
+
 ; --- Addition ---
 ; x + 0 = x
 (rewrite (Add x (Const 0 ty)) x)
