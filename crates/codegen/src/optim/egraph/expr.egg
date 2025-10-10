@@ -13,6 +13,14 @@
     ; The i64 is a unique ID (e.g., ValueId) to distinguish different results
     (SideEffectResult i64 Type)
 
+    ; --- Memory Addresses (data.rs) ---
+    ; Alloca result - represents a unique stack allocation
+    ; The i64 is the alloca instruction's unique ID (ValueId)
+    (AllocaResult i64 Type)
+    ; GEP (GetElementPointer) - computes address from base + indices
+    (GepBase Expr)                  ; Base pointer for GEP chain
+    (GepOffset Expr Expr i64)       ; (base_gep, index_expr, field_idx)
+
     ; --- Arithmetic (arith.rs) ---
     (Neg Expr)
     (Add Expr Expr)
@@ -92,3 +100,20 @@
 (rule ((= e (Bitcast _ ty))) ((set (expr-type e) ty)))
 (rule ((= e (IntToPtr _ ty)))((set (expr-type e) ty)))
 (rule ((= e (PtrToInt _ ty)))((set (expr-type e) ty)))
+
+; Memory address types
+(rule ((= e (AllocaResult _ ty))) ((set (expr-type e) ty)))
+(rule ((= e (GepBase base)) (= ty (expr-type base))) ((set (expr-type e) ty)))
+(rule ((= e (GepOffset base _ _)) (= ty (expr-type base))) ((set (expr-type e) ty)))
+
+; === Memory State (for Memory SSA) ===
+; Represents the state of memory at a program point
+(datatype MemState
+    (InitMem)                              ; Initial memory state at function entry
+    (AfterStore MemState Expr Expr Type)   ; mem state after store(prev, addr, val, ty)
+    (MemPhi i64 MemState MemState)         ; Memory phi at merge point (block_id, left, right)
+)
+
+; Load as a function: (memory_state, address, type) -> value
+; Two loads with same (memstate, addr, type) automatically unify
+(function Load (MemState Expr Type) Expr :merge old)
