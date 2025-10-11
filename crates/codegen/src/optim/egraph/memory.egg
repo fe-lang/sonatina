@@ -1,0 +1,54 @@
+; Memory optimization rules for sonatina IR
+; NOTE: Requires types.egg and expr.egg to be loaded first
+
+; === Must-Not-Alias Analysis ===
+; Function to determine if two addresses definitely don't alias
+(function must-not-alias (Expr Expr) bool :merge (or old new) :default false)
+
+; Different allocas cannot alias
+(rule ((= a1 (AllocaResult id1 ty1))
+       (= a2 (AllocaResult id2 ty2))
+       (!= id1 id2))
+      ((set (must-not-alias a1 a2) true)
+       (set (must-not-alias a2 a1) true)))
+
+; Alloca cannot alias with global
+(rule ((= a (AllocaResult _ _))
+       (= g (Global _ _)))
+      ((set (must-not-alias a g) true)
+       (set (must-not-alias g a) true)))
+
+; Different globals cannot alias
+(rule ((= g1 (Global id1 _))
+       (= g2 (Global id2 _))
+       (!= id1 id2))
+      ((set (must-not-alias g1 g2) true)
+       (set (must-not-alias g2 g1) true)))
+
+; GEP from non-aliasing bases don't alias
+(rule ((= gep1 (GepBase base1))
+       (= gep2 (GepBase base2))
+       (must-not-alias base1 base2))
+      ((set (must-not-alias gep1 gep2) true)
+       (set (must-not-alias gep2 gep1) true)))
+
+(rule ((= gep1 (GepOffset base1 _ _))
+       (= gep2 (GepOffset base2 _ _))
+       (must-not-alias base1 base2))
+      ((set (must-not-alias gep1 gep2) true)
+       (set (must-not-alias gep2 gep1) true)))
+
+; === Store-to-Load Forwarding ===
+
+; Load after store to same address returns stored value
+(rule ((= mem (AfterStore prev addr val ty))
+       (= result (Load mem addr ty)))
+      ((union result val)))
+
+; === Load Pass-Through ===
+
+; Load after store to different address can use previous memory state
+(rule ((= mem (AfterStore prev store_addr val store_ty))
+       (= result (Load mem load_addr load_ty))
+       (must-not-alias store_addr load_addr))
+      ((union result (Load prev load_addr load_ty))))
