@@ -8,7 +8,7 @@ use std::fmt::Write;
 
 use egglog::EGraph;
 use sonatina_ir::{
-    inst::{arith::*, cmp::*, control_flow::Phi, evm::*, logic::*},
+    inst::{arith::*, cmp::*, control_flow::Phi, data::*, evm::*, logic::*},
     Function, InstDowncast, InstId, Type, Value, ValueId,
 };
 
@@ -168,6 +168,40 @@ fn inst_to_egglog(func: &Function, inst_id: InstId) -> Option<String> {
             result.as_u32(),
             type_to_egglog(ty)
         ));
+    }
+
+    // Alloca - creates a unique stack allocation
+    if <&Alloca>::downcast(is, inst).is_some() {
+        let result = result?;
+        let ty = func.dfg.value_ty(result);
+        return Some(format!(
+            "(let {} (AllocaResult {} {}))",
+            value_name(result),
+            result.as_u32(),
+            type_to_egglog(ty)
+        ));
+    }
+
+    // Gep - get element pointer (address computation)
+    if let Some(gep) = <&Gep>::downcast(is, inst) {
+        let result = result?;
+        let values = gep.values();
+        if values.is_empty() {
+            return None;
+        }
+
+        // Build nested GEP expression: GepBase -> GepOffset -> GepOffset -> ...
+        let mut gep_expr = format!("(GepBase {})", value_to_egglog(func, values[0]));
+        for (i, &idx) in values[1..].iter().enumerate() {
+            gep_expr = format!(
+                "(GepOffset {} {} {})",
+                gep_expr,
+                value_to_egglog(func, idx),
+                i
+            );
+        }
+
+        return Some(format!("(let {} {})", value_name(result), gep_expr));
     }
 
     None
