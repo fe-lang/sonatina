@@ -1,0 +1,22 @@
+target = "evm-ethereum-london"
+
+type @val = { i32 };
+
+# Test: Store-load forwarding with different allocas
+# v5 (load from first alloca) should be 10.i32 via pass-through
+# v6 (load from second alloca) should be 20.i32 via direct forwarding
+# sameln: func public %different_alloca() -> i32 {
+# check:         v7.i32 = add 10.i32 20.i32;
+func public %different_alloca() -> i32 {
+    block0:
+        v1.*@val = alloca @val;
+        v2.*i32 = gep v1 0.i8;
+        v3.*@val = alloca @val;
+        v4.*i32 = gep v3 0.i8;
+        mstore v2 10.i32 i32;
+        mstore v4 20.i32 i32;
+        v5.i32 = mload v2 i32;
+        v6.i32 = mload v4 i32;
+        v7.i32 = add v5 v6;
+        return v7;
+}

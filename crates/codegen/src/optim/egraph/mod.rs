@@ -48,7 +48,9 @@ pub fn func_to_egglog(func: &Function) -> String {
     for block in func.layout.iter_block() {
         writeln!(&mut out, "; block{}", block.as_u32()).unwrap();
         for inst_id in func.layout.iter_inst(block) {
-            if let Some((s, new_mem)) = inst_to_egglog_with_mem(func, inst_id, &current_mem, &mut mem_state_counter) {
+            if let Some((s, new_mem)) =
+                inst_to_egglog_with_mem(func, inst_id, &current_mem, &mut mem_state_counter)
+            {
                 writeln!(&mut out, "{}", s).unwrap();
                 if let Some(m) = new_mem {
                     current_mem = m;

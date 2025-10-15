@@ -57,7 +57,10 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
 
     // Run egglog
     let mut egraph = EGraph::default();
-    let full_with_rules = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, full_program);
+    let full_with_rules = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        TYPES, EXPRS, RULES, MEMORY, full_program
+    );
 
     let results = match egraph.parse_and_run_program(None, &full_with_rules) {
         Ok(r) => r,
@@ -260,7 +263,9 @@ mod tests {
     fn test_egglog_parses() {
         let full = format!("{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY);
         let mut egraph = EGraph::default();
-        egraph.parse_and_run_program(None, &full).expect("egglog should parse successfully");
+        egraph
+            .parse_and_run_program(None, &full)
+            .expect("egglog should parse successfully");
     }
 
     #[test]
@@ -283,11 +288,57 @@ mod tests {
 "#;
         let full = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, program);
         let mut egraph = EGraph::default();
-        let results = egraph.parse_and_run_program(None, &full).expect("egglog should run");
+        let results = egraph
+            .parse_and_run_program(None, &full)
+            .expect("egglog should run");
         // v2 should be unified with (Const 42 (I32))
         assert_eq!(results.len(), 1);
         let result = &results[0];
         eprintln!("Result: {}", result);
         assert!(result.contains("Const 42") || result == "(Const 42 (I32))");
+    }
+
+    #[test]
+    fn test_load_pass_through_egglog() {
+        // Test load pass-through: load from addr1 after store to addr2 (different alloca)
+        // should read from the previous memory state
+        // v1 = alloca1, v3 = alloca2 (different allocas, must-not-alias)
+        // mem1 = store 10 to v1
+        // mem2 = store 20 to v3
+        // v5 = load from v1 at mem2 -> should be 10 (pass through mem2's store)
+        let program = r#"
+(let v1 (AllocaResult 1 (I32)))
+(let v3 (AllocaResult 3 (I32)))
+; Store 10 to v1, creating memory state 1
+(set (store-prev 1) 0)
+(set (store-addr 1) v1)
+(set (store-val 1) (Const 10 (I32)))
+(set (store-ty 1) (I32))
+; Store 20 to v3, creating memory state 2
+(set (store-prev 2) 1)
+(set (store-addr 2) v3)
+(set (store-val 2) (Const 20 (I32)))
+(set (store-ty 2) (I32))
+; Load from v1 at memory state 2
+(let v5 (LoadResult 5 2 (I32)))
+(set (load-addr 5) v1)
+
+(run 10)
+(extract v5)
+"#;
+        let full = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, program);
+        let mut egraph = EGraph::default();
+        let results = egraph
+            .parse_and_run_program(None, &full)
+            .expect("egglog should run");
+        assert_eq!(results.len(), 1);
+        let result = &results[0];
+        eprintln!("Load pass-through result: {}", result);
+        // v5 should be unified with (Const 10 (I32)) via pass-through
+        assert!(
+            result.contains("Const 10") || result == "(Const 10 (I32))",
+            "Expected Const 10, got: {}",
+            result
+        );
     }
 }

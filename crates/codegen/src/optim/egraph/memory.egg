@@ -56,16 +56,17 @@
 ; === Load Pass-Through ===
 
 ; Load from a memory state after a store to a different address
-; can be unified with a load from the previous memory state
+; Check if the previous store was to the same address as the load
 (rule ((= result (LoadResult load_id mem_id ty))
        (= load_addr (load-addr load_id))
        (= store_addr (store-addr mem_id))
        (must-not-alias store_addr load_addr)
        (= prev_mem_id (store-prev mem_id))
-       (= prev_result (LoadResult prev_load_id prev_mem_id ty))
-       (= prev_load_addr (load-addr prev_load_id))
-       (= prev_load_addr load_addr))
-      ((union result prev_result)))
+       (= prev_store_addr (store-addr prev_mem_id))
+       (= prev_store_addr load_addr)
+       (= ty (store-ty prev_mem_id))
+       (= val (store-val prev_mem_id)))
+      ((union result val)))
 
 ; === Redundant Load Elimination ===
 
