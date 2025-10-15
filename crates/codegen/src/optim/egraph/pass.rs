@@ -10,6 +10,7 @@ use super::func_to_egglog;
 const TYPES: &str = include_str!("types.egg");
 const EXPRS: &str = include_str!("expr.egg");
 const RULES: &str = include_str!("rules.egg");
+const MEMORY: &str = include_str!("memory.egg");
 
 /// Run e-graph optimization pass on a function.
 /// Returns true if the function was modified.
@@ -56,7 +57,7 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
 
     // Run egglog
     let mut egraph = EGraph::default();
-    let full_with_rules = format!("{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, full_program);
+    let full_with_rules = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, full_program);
 
     let results = match egraph.parse_and_run_program(None, &full_with_rules) {
         Ok(r) => r,
@@ -113,6 +114,19 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
             {
                 if side_effect_val != original_val {
                     func.dfg.change_to_alias(original_val, side_effect_val);
+                    changed = true;
+                }
+            }
+        }
+        // Check if result is an alloca result like "(AllocaResult N (Type))"
+        else if let Some(alloca_id) = parse_alloca_result(result) {
+            // Find the value with this ID (the alloca instruction result)
+            if let Some(&alloca_val) = value_map
+                .values()
+                .find(|&&v| v.as_u32() == alloca_id as u32)
+            {
+                if alloca_val != original_val {
+                    func.dfg.change_to_alias(original_val, alloca_val);
                     changed = true;
                 }
             }
@@ -180,6 +194,20 @@ fn parse_side_effect_result(s: &str) -> Option<usize> {
     parts[0].parse().ok()
 }
 
+fn parse_alloca_result(s: &str) -> Option<usize> {
+    // Parse "(AllocaResult N (Type))" format, return the value ID
+    let s = s.trim();
+    if !s.starts_with("(AllocaResult ") {
+        return None;
+    }
+    let inner = s.strip_prefix("(AllocaResult ")?.strip_suffix(')')?;
+    let parts: Vec<_> = inner.splitn(2, ' ').collect();
+    if parts.is_empty() {
+        return None;
+    }
+    parts[0].parse().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +246,48 @@ mod tests {
         );
         assert_eq!(parse_side_effect_result("v0"), None);
         assert_eq!(parse_side_effect_result("(Const 0 (I32))"), None);
+    }
+
+    #[test]
+    fn test_parse_alloca() {
+        assert_eq!(parse_alloca_result("(AllocaResult 1 (I32))"), Some(1));
+        assert_eq!(parse_alloca_result("(AllocaResult 99 (I64))"), Some(99));
+        assert_eq!(parse_alloca_result("v0"), None);
+        assert_eq!(parse_alloca_result("(Const 0 (I32))"), None);
+    }
+
+    #[test]
+    fn test_egglog_parses() {
+        let full = format!("{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY);
+        let mut egraph = EGraph::default();
+        egraph.parse_and_run_program(None, &full).expect("egglog should parse successfully");
+    }
+
+    #[test]
+    fn test_store_load_forward_egglog() {
+        // Test the egglog rules directly to verify store-to-load forwarding works
+        // Memory state 0 = InitMem, Memory state 1 = after store
+        let program = r#"
+(let v1 (AllocaResult 1 (I32)))
+; Store 42 to v1, creating memory state 1
+(set (store-prev 1) 0)
+(set (store-addr 1) v1)
+(set (store-val 1) (Const 42 (I32)))
+(set (store-ty 1) (I32))
+; Load from memory state 1 at address v1
+(let v2 (LoadResult 2 1 (I32)))
+(set (load-addr 2) v1)
+
+(run 10)
+(extract v2)
+"#;
+        let full = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, program);
+        let mut egraph = EGraph::default();
+        let results = egraph.parse_and_run_program(None, &full).expect("egglog should run");
+        // v2 should be unified with (Const 42 (I32))
+        assert_eq!(results.len(), 1);
+        let result = &results[0];
+        eprintln!("Result: {}", result);
+        assert!(result.contains("Const 42") || result == "(Const 42 (I32))");
     }
 }

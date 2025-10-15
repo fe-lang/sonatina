@@ -9,7 +9,7 @@
     (Arg i64 Type)      ; function argument (index, type)
     (Global i64 Type)   ; global variable ref
     (Undef Type)        ; undefined value
-    ; Opaque result from side-effecting instruction (phi, load, call, etc.)
+    ; Opaque result from side-effecting instruction (phi, call, etc.)
     ; The i64 is a unique ID (e.g., ValueId) to distinguish different results
     (SideEffectResult i64 Type)
 
@@ -20,6 +20,12 @@
     ; GEP (GetElementPointer) - computes address from base + indices
     (GepBase Expr)                  ; Base pointer for GEP chain
     (GepOffset Expr Expr i64)       ; (base_gep, index_expr, field_idx)
+
+    ; --- Memory Loads ---
+    ; LoadResult represents the result of a memory load operation
+    ; Parameters: (unique_id, mem_state_id, type)
+    ; The mem_state_id refers to which memory state this load reads from
+    (LoadResult i64 i64 Type)
 
     ; --- Arithmetic (arith.rs) ---
     (Neg Expr)
@@ -66,6 +72,25 @@
     (InsertValue Expr i64 Expr)
 )
 
+; === Memory State Tracking ===
+; Memory states are tracked by integer IDs
+; mem_state_id 0 = InitMem (initial memory state)
+; mem_state_id N (N > 0) = AfterStore with that ID
+
+; Store metadata functions
+; store-prev: mem_state_id -> prev_mem_state_id
+; store-addr: mem_state_id -> address expression
+; store-val: mem_state_id -> stored value expression
+; store-ty: mem_state_id -> stored type
+(function store-prev (i64) i64 :merge old)
+(function store-addr (i64) Expr :merge old)
+(function store-val (i64) Expr :merge old)
+(function store-ty (i64) Type :merge old)
+
+; Load metadata functions
+; load-addr: load_id -> address expression
+(function load-addr (i64) Expr :merge old)
+
 ; Type inference for expressions
 (function expr-type (Expr) Type :merge old)
 
@@ -75,6 +100,7 @@
 (rule ((= e (Global i ty)))((set (expr-type e) ty)))
 (rule ((= e (Undef ty)))   ((set (expr-type e) ty)))
 (rule ((= e (SideEffectResult i ty))) ((set (expr-type e) ty)))
+(rule ((= e (LoadResult _ _ ty))) ((set (expr-type e) ty)))
 
 ; Unary ops preserve type
 (rule ((= e (Neg x)) (= ty (expr-type x))) ((set (expr-type e) ty)))
@@ -105,15 +131,3 @@
 (rule ((= e (AllocaResult _ ty))) ((set (expr-type e) ty)))
 (rule ((= e (GepBase base)) (= ty (expr-type base))) ((set (expr-type e) ty)))
 (rule ((= e (GepOffset base _ _)) (= ty (expr-type base))) ((set (expr-type e) ty)))
-
-; === Memory State (for Memory SSA) ===
-; Represents the state of memory at a program point
-(datatype MemState
-    (InitMem)                              ; Initial memory state at function entry
-    (AfterStore MemState Expr Expr Type)   ; mem state after store(prev, addr, val, ty)
-    (MemPhi i64 MemState MemState)         ; Memory phi at merge point (block_id, left, right)
-)
-
-; Load as a function: (memory_state, address, type) -> value
-; Two loads with same (memstate, addr, type) automatically unify
-(function Load (MemState Expr Type) Expr :merge old)

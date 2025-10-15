@@ -15,10 +15,11 @@ use sonatina_ir::{
 const TYPES: &str = include_str!("types.egg");
 const EXPRS: &str = include_str!("expr.egg");
 const RULES: &str = include_str!("rules.egg");
+const MEMORY: &str = include_str!("memory.egg");
 
 /// Run egglog optimization on the given program.
 pub fn run_egglog(program: &str) -> egglog::EGraph {
-    let full_program = format!("{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, program);
+    let full_program = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, program);
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(None, &full_program).unwrap();
     egraph
@@ -26,6 +27,10 @@ pub fn run_egglog(program: &str) -> egglog::EGraph {
 
 pub fn func_to_egglog(func: &Function) -> String {
     let mut out = String::new();
+    let mut mem_state_counter = 0;
+
+    // Memory state 0 = initial memory (no explicit definition needed)
+    let mut current_mem = "mem0".to_string();
 
     // Define function arguments
     for (idx, &arg_val) in func.arg_values.iter().enumerate() {
@@ -43,8 +48,11 @@ pub fn func_to_egglog(func: &Function) -> String {
     for block in func.layout.iter_block() {
         writeln!(&mut out, "; block{}", block.as_u32()).unwrap();
         for inst_id in func.layout.iter_inst(block) {
-            if let Some(s) = inst_to_egglog(func, inst_id) {
+            if let Some((s, new_mem)) = inst_to_egglog_with_mem(func, inst_id, &current_mem, &mut mem_state_counter) {
                 writeln!(&mut out, "{}", s).unwrap();
+                if let Some(m) = new_mem {
+                    current_mem = m;
+                }
             }
         }
     }
@@ -205,6 +213,70 @@ fn inst_to_egglog(func: &Function, inst_id: InstId) -> Option<String> {
     }
 
     None
+}
+
+/// Convert instruction to egglog with memory state tracking.
+/// Returns (egglog_string, new_memory_state_name) if instruction can be converted.
+fn inst_to_egglog_with_mem(
+    func: &Function,
+    inst_id: InstId,
+    current_mem: &str,
+    mem_counter: &mut u32,
+) -> Option<(String, Option<String>)> {
+    let inst = func.dfg.inst(inst_id);
+    let is = func.inst_set();
+    let result = func.dfg.inst_result(inst_id);
+
+    // Mload - load from memory, creates a LoadResult with unique ID
+    // Also sets the load-addr function for this load
+    if let Some(load) = <&Mload>::downcast(is, inst) {
+        let result = result?;
+        let ty = func.dfg.value_ty(result);
+        let addr = value_to_egglog(func, *load.addr());
+        let load_id = result.as_u32();
+        // Parse current_mem to get mem_id (e.g., "mem0" -> 0, "mem1" -> 1)
+        let mem_id: u32 = current_mem
+            .strip_prefix("mem")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let egglog = format!(
+            "(let {} (LoadResult {} {} {}))\n(set (load-addr {}) {})",
+            value_name(result),
+            load_id,
+            mem_id,
+            type_to_egglog(ty),
+            load_id,
+            addr
+        );
+        return Some((egglog, None));
+    }
+
+    // Mstore - store to memory, creates new memory state
+    // Sets store-prev, store-addr, store-val, store-ty functions
+    if let Some(store) = <&Mstore>::downcast(is, inst) {
+        *mem_counter += 1;
+        let new_mem_id = *mem_counter;
+        let new_mem = format!("mem{}", new_mem_id);
+        let addr = value_to_egglog(func, *store.addr());
+        let value = value_to_egglog(func, *store.value());
+        let ty = func.dfg.value_ty(*store.value());
+        // Parse current_mem to get prev_mem_id
+        let prev_mem_id: u32 = current_mem
+            .strip_prefix("mem")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let egglog = format!(
+            "(set (store-prev {}) {})\n(set (store-addr {}) {})\n(set (store-val {}) {})\n(set (store-ty {}) {})",
+            new_mem_id, prev_mem_id,
+            new_mem_id, addr,
+            new_mem_id, value,
+            new_mem_id, type_to_egglog(ty)
+        );
+        return Some((egglog, Some(new_mem)));
+    }
+
+    // Fall back to non-memory instruction conversion
+    inst_to_egglog(func, inst_id).map(|s| (s, None))
 }
 
 fn value_name(v: ValueId) -> String {
