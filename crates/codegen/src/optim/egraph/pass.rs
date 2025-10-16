@@ -341,4 +341,60 @@ mod tests {
             result
         );
     }
+
+    #[test]
+    fn test_no_false_elimination_egglog() {
+        // Test that loads from different memory states are NOT incorrectly unified
+        // when there's an intervening store to the same address
+        // v1 = alloca
+        // mem1 = store 10 to v1
+        // v4 = load from v1 at mem1 -> 10
+        // mem2 = store 20 to v1 (same address!)
+        // v6 = load from v1 at mem2 -> should be 20, NOT 10
+        let program = r#"
+(let v1 (AllocaResult 1 (I32)))
+; Store 10 to v1, creating memory state 1
+(set (store-prev 1) 0)
+(set (store-addr 1) v1)
+(set (store-val 1) (Const 10 (I32)))
+(set (store-ty 1) (I32))
+; Load from v1 at memory state 1 -> should be 10
+(let v4 (LoadResult 4 1 (I32)))
+(set (load-addr 4) v1)
+; Store 20 to v1, creating memory state 2
+(set (store-prev 2) 1)
+(set (store-addr 2) v1)
+(set (store-val 2) (Const 20 (I32)))
+(set (store-ty 2) (I32))
+; Load from v1 at memory state 2 -> should be 20
+(let v6 (LoadResult 6 2 (I32)))
+(set (load-addr 6) v1)
+
+(run 10)
+(extract v4)
+(extract v6)
+"#;
+        let full = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, program);
+        let mut egraph = EGraph::default();
+        let results = egraph
+            .parse_and_run_program(None, &full)
+            .expect("egglog should run");
+        assert_eq!(results.len(), 2);
+        let v4_result = &results[0];
+        let v6_result = &results[1];
+        eprintln!("v4 result: {}", v4_result);
+        eprintln!("v6 result: {}", v6_result);
+        // v4 should be 10
+        assert!(
+            v4_result.contains("Const 10"),
+            "v4 should be 10, got: {}",
+            v4_result
+        );
+        // v6 should be 20, NOT 10
+        assert!(
+            v6_result.contains("Const 20"),
+            "v6 should be 20, got: {}",
+            v6_result
+        );
+    }
 }

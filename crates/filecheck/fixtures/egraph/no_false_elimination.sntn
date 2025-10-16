@@ -1,0 +1,19 @@
+target = "evm-ethereum-london"
+
+type @val = { i32 };
+
+# Test: Loads should NOT be eliminated when there's an intervening store to the same address
+# v4 loads 10, then we store 20, then v6 loads again - v6 should be 20, not 10
+# sameln: func public %no_false_elimination() -> i32 {
+# check:         v7.i32 = add 10.i32 20.i32;
+func public %no_false_elimination() -> i32 {
+    block0:
+        v1.*@val = alloca @val;
+        v2.*i32 = gep v1 0.i8;
+        mstore v2 10.i32 i32;
+        v4.i32 = mload v2 i32;
+        mstore v2 20.i32 i32;
+        v6.i32 = mload v2 i32;
+        v7.i32 = add v4 v6;
+        return v7;
+}
