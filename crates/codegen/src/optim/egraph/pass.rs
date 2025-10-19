@@ -397,4 +397,65 @@ mod tests {
             v6_result
         );
     }
+
+    #[test]
+    fn test_dead_store_detection_egglog() {
+        // Test that consecutive stores to the same address marks first as dead
+        // v1 = alloca
+        // mem1 = store 10 to v1 -> should be marked dead
+        // mem2 = store 20 to v1
+        let program = r#"
+(let v1 (AllocaResult 1 (I32)))
+; Store 10 to v1, creating memory state 1
+(set (store-prev 1) 0)
+(set (store-addr 1) v1)
+(set (store-val 1) (Const 10 (I32)))
+(set (store-ty 1) (I32))
+; Store 20 to v1, creating memory state 2 (overwrites mem1)
+(set (store-prev 2) 1)
+(set (store-addr 2) v1)
+(set (store-val 2) (Const 20 (I32)))
+(set (store-ty 2) (I32))
+
+(run 10)
+(check (dead-store 1))
+"#;
+        let full = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, program);
+        let mut egraph = EGraph::default();
+        // If (check ...) fails, parse_and_run_program returns an error
+        egraph
+            .parse_and_run_program(None, &full)
+            .expect("dead-store 1 should be detected");
+    }
+
+    #[test]
+    fn test_no_dead_store_different_addr_egglog() {
+        // Test that stores to different addresses are NOT marked as dead
+        // v1, v3 = different allocas
+        // mem1 = store 10 to v1 -> should NOT be dead
+        // mem2 = store 20 to v3 -> different address
+        let program = r#"
+(let v1 (AllocaResult 1 (I32)))
+(let v3 (AllocaResult 3 (I32)))
+; Store 10 to v1, creating memory state 1
+(set (store-prev 1) 0)
+(set (store-addr 1) v1)
+(set (store-val 1) (Const 10 (I32)))
+(set (store-ty 1) (I32))
+; Store 20 to v3, creating memory state 2 (different address)
+(set (store-prev 2) 1)
+(set (store-addr 2) v3)
+(set (store-val 2) (Const 20 (I32)))
+(set (store-ty 2) (I32))
+
+(run 10)
+(fail (check (dead-store 1)))
+"#;
+        let full = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, program);
+        let mut egraph = EGraph::default();
+        // (fail (check ...)) succeeds if the check fails
+        egraph
+            .parse_and_run_program(None, &full)
+            .expect("dead-store 1 should NOT be detected for different addresses");
+    }
 }

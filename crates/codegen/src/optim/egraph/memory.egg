@@ -78,3 +78,16 @@
        (= addr2 (load-addr id2))
        (= addr1 addr2))
       ((union r1 r2)))
+
+; === Dead Store Elimination ===
+
+; Relation to mark stores as dead (can be eliminated)
+(relation dead-store (i64))
+
+; A store is dead if the immediately following store is to the same address
+; (and no load can observe the first store's value)
+(rule ((= prev_mem_id (store-prev mem_id))
+       (= store_addr (store-addr mem_id))
+       (= prev_store_addr (store-addr prev_mem_id))
+       (= store_addr prev_store_addr))
+      ((dead-store prev_mem_id)))
