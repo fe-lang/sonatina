@@ -3,7 +3,7 @@
 use egglog::EGraph;
 use rustc_hash::FxHashMap;
 
-use sonatina_ir::{Function, Type, ValueId};
+use sonatina_ir::{inst::data::Mstore, Function, InstDowncast, InstId, Type, ValueId};
 
 use super::func_to_egglog;
 
@@ -15,9 +15,12 @@ const MEMORY: &str = include_str!("memory.egg");
 /// Run e-graph optimization pass on a function.
 /// Returns true if the function was modified.
 pub fn run_egraph_pass(func: &mut Function) -> bool {
-    // Build value map
+    // Build value map and store map
     let mut value_map: FxHashMap<String, ValueId> = FxHashMap::default();
     let mut type_map: FxHashMap<String, Type> = FxHashMap::default();
+    // Map from memory state ID to inst_id for mstore instructions
+    let mut store_map: FxHashMap<u32, InstId> = FxHashMap::default();
+    let mut mem_counter: u32 = 0;
 
     for &arg_val in &func.arg_values {
         let name = format!("v{}", arg_val.as_u32());
@@ -25,12 +28,19 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
         type_map.insert(name, func.dfg.value_ty(arg_val));
     }
 
+    let is = func.inst_set();
     for block in func.layout.iter_block() {
         for inst_id in func.layout.iter_inst(block) {
             if let Some(result) = func.dfg.inst_result(inst_id) {
                 let name = format!("v{}", result.as_u32());
                 value_map.insert(name.clone(), result);
                 type_map.insert(name, func.dfg.value_ty(result));
+            }
+            // Track mstore instructions
+            let inst = func.dfg.inst(inst_id);
+            if <&Mstore>::downcast(is, inst).is_some() {
+                mem_counter += 1;
+                store_map.insert(mem_counter, inst_id);
             }
         }
     }
@@ -133,6 +143,24 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
                     changed = true;
                 }
             }
+        }
+    }
+
+    // Check for dead stores and remove them
+    for (&mem_id, &inst_id) in &store_map {
+        // Query if this store is dead
+        let check_dead = format!(
+            "{}\n{}\n{}\n{}\n{}\n(run 10)\n(check (dead-store {}))",
+            TYPES, EXPRS, RULES, MEMORY, program, mem_id
+        );
+        let mut check_egraph = EGraph::default();
+        if check_egraph
+            .parse_and_run_program(None, &check_dead)
+            .is_ok()
+        {
+            // Store is dead, remove it
+            func.layout.remove_inst(inst_id);
+            changed = true;
         }
     }
 
