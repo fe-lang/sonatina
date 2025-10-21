@@ -1,0 +1,28 @@
+target = "evm-ethereum-london"
+
+type @val = { i32 };
+
+# Test: Cross-block stores with different values should NOT be forwarded
+# Block1 stores 10, block2 stores 20 - load after merge cannot be optimized
+# sameln: func public %cross_block_different_val(v0.i1) -> i32 {
+# check:     block3:
+# check:         v5.i32 = mload v2 i32;
+# check:         return v5;
+func public %cross_block_different_val(v0.i1) -> i32 {
+    block0:
+        v1.*@val = alloca @val;
+        v2.*i32 = gep v1 0.i8;
+        br v0 block1 block2;
+
+    block1:
+        mstore v2 10.i32 i32;
+        jump block3;
+
+    block2:
+        mstore v2 20.i32 i32;
+        jump block3;
+
+    block3:
+        v5.i32 = mload v2 i32;
+        return v5;
+}

@@ -91,6 +91,20 @@
 ; load-addr: load_id -> address expression
 (function load-addr (i64) Expr :merge old)
 
+; === Memory Phi (merge points) ===
+; At control flow merge points, memory state needs to be merged
+; A MemPhi represents a memory state that could be any of its predecessor states
+
+; Relation to mark a memory state as being a MemPhi
+(relation is-memphi (i64))
+
+; memphi-pred: (memphi_id, pred_idx) -> predecessor memory state id
+; This tracks which memory states flow into a MemPhi
+(function memphi-pred (i64 i64) i64 :merge old)
+
+; memphi-num-preds: memphi_id -> number of predecessors
+(function memphi-num-preds (i64) i64 :merge old)
+
 ; Type inference for expressions
 (function expr-type (Expr) Type :merge old)
 

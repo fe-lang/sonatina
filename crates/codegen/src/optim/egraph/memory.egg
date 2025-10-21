@@ -91,3 +91,43 @@
        (= prev_store_addr (store-addr prev_mem_id))
        (= store_addr prev_store_addr))
       ((dead-store prev_mem_id)))
+
+; === MemPhi Rules ===
+
+; Load through MemPhi: if both predecessors (2-pred case) forward the same value
+; This handles the common if-then-else pattern where both branches store the same value
+(rule ((= result (LoadResult load_id memphi_id ty))
+       (is-memphi memphi_id)
+       (= 2 (memphi-num-preds memphi_id))
+       (= load_addr (load-addr load_id))
+       ; Get predecessor memory states
+       (= pred0_mem (memphi-pred memphi_id 0))
+       (= pred1_mem (memphi-pred memphi_id 1))
+       ; Both predecessors have stores to the same address
+       (= store_addr0 (store-addr pred0_mem))
+       (= store_addr1 (store-addr pred1_mem))
+       (= store_addr0 load_addr)
+       (= store_addr1 load_addr)
+       ; Both store the same type
+       (= ty (store-ty pred0_mem))
+       (= ty (store-ty pred1_mem))
+       ; Both store the same value
+       (= val (store-val pred0_mem))
+       (= val (store-val pred1_mem)))
+      ((union result val)))
+
+; Load through MemPhi: if both predecessors have the same memory state
+; (no stores on either branch)
+(rule ((= result (LoadResult load_id memphi_id ty))
+       (is-memphi memphi_id)
+       (= 2 (memphi-num-preds memphi_id))
+       (= load_addr (load-addr load_id))
+       ; Get predecessor memory states
+       (= pred_mem (memphi-pred memphi_id 0))
+       (= pred_mem (memphi-pred memphi_id 1))
+       ; Look up store at the common predecessor
+       (= store_addr (store-addr pred_mem))
+       (= store_addr load_addr)
+       (= ty (store-ty pred_mem))
+       (= val (store-val pred_mem)))
+      ((union result val)))
