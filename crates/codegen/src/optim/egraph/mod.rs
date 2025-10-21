@@ -52,7 +52,12 @@ pub fn func_to_egglog(func: &Function) -> String {
     }
 
     // Process blocks in RPO (reverse post-order) for proper dataflow
-    let rpo: Vec<BlockId> = cfg.post_order().collect::<Vec<_>>().into_iter().rev().collect();
+    let rpo: Vec<BlockId> = cfg
+        .post_order()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
 
     for block in rpo {
         writeln!(&mut out, "; block{}", block.as_u32()).unwrap();
@@ -72,7 +77,13 @@ pub fn func_to_egglog(func: &Function) -> String {
 
             // Mark as MemPhi and record predecessors
             writeln!(&mut out, "(is-memphi {})", memphi_id).unwrap();
-            writeln!(&mut out, "(set (memphi-num-preds {}) {})", memphi_id, preds.len()).unwrap();
+            writeln!(
+                &mut out,
+                "(set (memphi-num-preds {}) {})",
+                memphi_id,
+                preds.len()
+            )
+            .unwrap();
 
             for (pred_idx, &pred_block) in preds.iter().enumerate() {
                 let pred_mem = block_exit_mem[pred_block];

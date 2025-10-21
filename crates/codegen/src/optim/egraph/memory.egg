@@ -38,6 +38,22 @@
       ((must-not-alias gep1 gep2)
        (must-not-alias gep2 gep1)))
 
+; GEP with same base but different constant indices don't alias
+; e.g., gep v1 0 vs gep v1 1 (different array elements or struct fields)
+(rule ((= gep1 (GepOffset base (Const c1 ty) field))
+       (= gep2 (GepOffset base (Const c2 ty) field))
+       (!= c1 c2))
+      ((must-not-alias gep1 gep2)
+       (must-not-alias gep2 gep1)))
+
+; GEP with same base but different field indices don't alias
+; This handles nested struct access where the field index differs
+(rule ((= gep1 (GepOffset base idx1 field1))
+       (= gep2 (GepOffset base idx2 field2))
+       (!= field1 field2))
+      ((must-not-alias gep1 gep2)
+       (must-not-alias gep2 gep1)))
+
 ; === Store-to-Load Forwarding ===
 
 ; Load from a memory state after a store to the same address returns the stored value
