@@ -1,0 +1,55 @@
+target = "evm-ethereum-london"
+
+# Test: x & 0 = 0
+# sameln: func public %and_zero(v0.i32) -> i32 {
+# check:         return 0.i32;
+func public %and_zero(v0.i32) -> i32 {
+    block0:
+        v1.i32 = and v0 0.i32;
+        return v1;
+}
+
+# Test: x & x = x
+# sameln: func public %and_self(v0.i32) -> i32 {
+# check:         return v0;
+func public %and_self(v0.i32) -> i32 {
+    block0:
+        v1.i32 = and v0 v0;
+        return v1;
+}
+
+# Test: x | 0 = x
+# sameln: func public %or_zero(v0.i32) -> i32 {
+# check:         return v0;
+func public %or_zero(v0.i32) -> i32 {
+    block0:
+        v1.i32 = or v0 0.i32;
+        return v1;
+}
+
+# Test: x | x = x
+# sameln: func public %or_self(v0.i32) -> i32 {
+# check:         return v0;
+func public %or_self(v0.i32) -> i32 {
+    block0:
+        v1.i32 = or v0 v0;
+        return v1;
+}
+
+# Test: x ^ 0 = x
+# sameln: func public %xor_zero(v0.i32) -> i32 {
+# check:         return v0;
+func public %xor_zero(v0.i32) -> i32 {
+    block0:
+        v1.i32 = xor v0 0.i32;
+        return v1;
+}
+
+# Test: x ^ x = 0
+# sameln: func public %xor_self(v0.i32) -> i32 {
+# check:         return 0.i32;
+func public %xor_self(v0.i32) -> i32 {
+    block0:
+        v1.i32 = xor v0 v0;
+        return v1;
+}

@@ -1,5 +1,6 @@
 use sonatina_filecheck::{
-    adce::AdceTransform, licm::LicmTransformer, sccp::SccpTransform, FileCheckRunner,
+    adce::AdceTransform, egraph::EgraphTransform, licm::LicmTransformer, sccp::SccpTransform,
+    FileCheckRunner,
 };
 
 fn main() {
@@ -17,6 +18,9 @@ fn main() {
     // runner.run();
 
     runner.attach_transformer(LicmTransformer::default());
+    runner.run();
+
+    runner.attach_transformer(EgraphTransform::default());
     runner.run();
 
     runner.print_results();

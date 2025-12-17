@@ -1,0 +1,18 @@
+target = "evm-ethereum-london"
+
+# Test: Optimization should work across multiple blocks
+# The value v2 = v0 + 0 should be simplified to v0 even in a different block
+# sameln: func public %multi_block(v0.i32, v1.i1) -> i32 {
+# check:         return v0;
+func public %multi_block(v0.i32, v1.i1) -> i32 {
+    block0:
+        br v1 block1 block2;
+
+    block1:
+        v2.i32 = add v0 0.i32;
+        return v2;
+
+    block2:
+        v3.i32 = mul v0 1.i32;
+        return v3;
+}

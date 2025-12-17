@@ -1,0 +1,10 @@
+target = "evm-ethereum-london"
+
+# Test: x >= x should be simplified to true (1)
+# sameln: func public %ge_self(v0.i32) -> i1 {
+# check:         return 1.i1;
+func public %ge_self(v0.i32) -> i1 {
+    block0:
+        v1.i1 = ge v0 v0;
+        return v1;
+}

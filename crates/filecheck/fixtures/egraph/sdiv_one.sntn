@@ -1,0 +1,10 @@
+target = "evm-ethereum-london"
+
+# Test: x / 1 (signed) should be simplified to x
+# sameln: func public %sdiv_one(v0.i8) -> i8 {
+# check:         return v0;
+func public %sdiv_one(v0.i8) -> i8 {
+    block0:
+        v1.i8 = evm_sdiv v0 1.i8;
+        return v1;
+}

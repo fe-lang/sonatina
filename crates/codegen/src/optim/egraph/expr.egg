@@ -1,0 +1,147 @@
+; Sonatina IR Pure Expression Definitions for egglog
+; Pure operations that can float freely in the egraph
+; Maps to sonatina-ir/src/inst/{arith,cmp,logic,cast}.rs
+; NOTE: Requires types.egg to be loaded first
+
+(datatype Expr
+    ; --- Values ---
+    (Const i64 Type)    ; immediate value
+    (Arg i64 Type)      ; function argument (index, type)
+    (Global i64 Type)   ; global variable ref
+    (Undef Type)        ; undefined value
+    ; Opaque result from side-effecting instruction (phi, call, etc.)
+    ; The i64 is a unique ID (e.g., ValueId) to distinguish different results
+    (SideEffectResult i64 Type)
+
+    ; --- Memory Addresses (data.rs) ---
+    ; Alloca result - represents a unique stack allocation
+    ; The i64 is the alloca instruction's unique ID (ValueId)
+    (AllocaResult i64 Type)
+    ; GEP (GetElementPointer) - computes address from base + indices
+    (GepBase Expr)                  ; Base pointer for GEP chain
+    (GepOffset Expr Expr i64)       ; (base_gep, index_expr, field_idx)
+
+    ; --- Memory Loads ---
+    ; LoadResult represents the result of a memory load operation
+    ; Parameters: (unique_id, mem_state_id, type)
+    ; The mem_state_id refers to which memory state this load reads from
+    (LoadResult i64 i64 Type)
+
+    ; --- Arithmetic (arith.rs) ---
+    (Neg Expr)
+    (Add Expr Expr)
+    (Sub Expr Expr)
+    (Mul Expr Expr)
+    (Udiv Expr Expr)
+    (Sdiv Expr Expr)
+    (Umod Expr Expr)
+    (Smod Expr Expr)
+    (Shl Expr Expr)     ; bits, value
+    (Shr Expr Expr)
+    (Sar Expr Expr)
+
+    ; --- Logic (logic.rs) ---
+    (Not Expr)
+    (And Expr Expr)
+    (Or Expr Expr)
+    (Xor Expr Expr)
+
+    ; --- Comparisons (cmp.rs) ---
+    (Lt Expr Expr)      ; unsigned
+    (Gt Expr Expr)
+    (Le Expr Expr)
+    (Ge Expr Expr)
+    (Slt Expr Expr)     ; signed
+    (Sgt Expr Expr)
+    (Sle Expr Expr)
+    (Sge Expr Expr)
+    (Eq Expr Expr)
+    (Ne Expr Expr)
+    (IsZero Expr)
+
+    ; --- Casts (cast.rs) ---
+    (Sext Expr Type)
+    (Zext Expr Type)
+    (Trunc Expr Type)
+    (Bitcast Expr Type)
+    (IntToPtr Expr Type)
+    (PtrToInt Expr Type)
+
+    ; --- Aggregates (data.rs - pure parts) ---
+    (ExtractValue Expr i64)
+    (InsertValue Expr i64 Expr)
+)
+
+; === Memory State Tracking ===
+; Memory states are tracked by integer IDs
+; mem_state_id 0 = InitMem (initial memory state)
+; mem_state_id N (N > 0) = AfterStore with that ID
+
+; Store metadata functions
+; store-prev: mem_state_id -> prev_mem_state_id
+; store-addr: mem_state_id -> address expression
+; store-val: mem_state_id -> stored value expression
+; store-ty: mem_state_id -> stored type
+(function store-prev (i64) i64 :merge old)
+(function store-addr (i64) Expr :merge old)
+(function store-val (i64) Expr :merge old)
+(function store-ty (i64) Type :merge old)
+
+; Load metadata functions
+; load-addr: load_id -> address expression
+(function load-addr (i64) Expr :merge old)
+
+; === Memory Phi (merge points) ===
+; At control flow merge points, memory state needs to be merged
+; A MemPhi represents a memory state that could be any of its predecessor states
+
+; Relation to mark a memory state as being a MemPhi
+(relation is-memphi (i64))
+
+; memphi-pred: (memphi_id, pred_idx) -> predecessor memory state id
+; This tracks which memory states flow into a MemPhi
+(function memphi-pred (i64 i64) i64 :merge old)
+
+; memphi-num-preds: memphi_id -> number of predecessors
+(function memphi-num-preds (i64) i64 :merge old)
+
+; Type inference for expressions
+(function expr-type (Expr) Type :merge old)
+
+; Values carry their type
+(rule ((= e (Const v ty))) ((set (expr-type e) ty)))
+(rule ((= e (Arg i ty)))   ((set (expr-type e) ty)))
+(rule ((= e (Global i ty)))((set (expr-type e) ty)))
+(rule ((= e (Undef ty)))   ((set (expr-type e) ty)))
+(rule ((= e (SideEffectResult i ty))) ((set (expr-type e) ty)))
+(rule ((= e (LoadResult _ _ ty))) ((set (expr-type e) ty)))
+
+; Unary ops preserve type
+(rule ((= e (Neg x)) (= ty (expr-type x))) ((set (expr-type e) ty)))
+(rule ((= e (Not x)) (= ty (expr-type x))) ((set (expr-type e) ty)))
+
+; Comparisons return i1
+(rule ((= e (Lt _ _)))   ((set (expr-type e) (I1))))
+(rule ((= e (Gt _ _)))   ((set (expr-type e) (I1))))
+(rule ((= e (Le _ _)))   ((set (expr-type e) (I1))))
+(rule ((= e (Ge _ _)))   ((set (expr-type e) (I1))))
+(rule ((= e (Slt _ _)))  ((set (expr-type e) (I1))))
+(rule ((= e (Sgt _ _)))  ((set (expr-type e) (I1))))
+(rule ((= e (Sle _ _)))  ((set (expr-type e) (I1))))
+(rule ((= e (Sge _ _)))  ((set (expr-type e) (I1))))
+(rule ((= e (Eq _ _)))   ((set (expr-type e) (I1))))
+(rule ((= e (Ne _ _)))   ((set (expr-type e) (I1))))
+(rule ((= e (IsZero _))) ((set (expr-type e) (I1))))
+
+; Casts use target type
+(rule ((= e (Sext _ ty)))    ((set (expr-type e) ty)))
+(rule ((= e (Zext _ ty)))    ((set (expr-type e) ty)))
+(rule ((= e (Trunc _ ty)))   ((set (expr-type e) ty)))
+(rule ((= e (Bitcast _ ty))) ((set (expr-type e) ty)))
+(rule ((= e (IntToPtr _ ty)))((set (expr-type e) ty)))
+(rule ((= e (PtrToInt _ ty)))((set (expr-type e) ty)))
+
+; Memory address types
+(rule ((= e (AllocaResult _ ty))) ((set (expr-type e) ty)))
+(rule ((= e (GepBase base)) (= ty (expr-type base))) ((set (expr-type e) ty)))
+(rule ((= e (GepOffset base _ _)) (= ty (expr-type base))) ((set (expr-type e) ty)))

@@ -1,0 +1,14 @@
+target = "evm-ethereum-london"
+
+# Test: GVN via commutativity for multiplication
+# (x * 1) and (1 * x) both simplify to x
+# sameln: func public %gvn_mul(v0.i32) -> i32 {
+# check:         v3.i32 = mul v0 v0;
+# check:         return v3;
+func public %gvn_mul(v0.i32) -> i32 {
+    block0:
+        v1.i32 = mul 1.i32 v0;
+        v2.i32 = mul v0 1.i32;
+        v3.i32 = mul v1 v2;
+        return v3;
+}

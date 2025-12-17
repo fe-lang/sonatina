@@ -1,0 +1,26 @@
+target = "evm-ethereum-london"
+
+type @val = { i32 };
+
+# Test: Cross-block store-to-load forwarding through MemPhi
+# Both branches store 42 to the same address, so load after merge should be 42
+# sameln: func public %cross_block_store(v0.i1) -> i32 {
+# check:         return 42.i32;
+func public %cross_block_store(v0.i1) -> i32 {
+    block0:
+        v1.*@val = alloca @val;
+        v2.*i32 = gep v1 0.i8;
+        br v0 block1 block2;
+
+    block1:
+        mstore v2 42.i32 i32;
+        jump block3;
+
+    block2:
+        mstore v2 42.i32 i32;
+        jump block3;
+
+    block3:
+        v5.i32 = mload v2 i32;
+        return v5;
+}

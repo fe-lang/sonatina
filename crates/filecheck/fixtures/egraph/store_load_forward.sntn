@@ -1,0 +1,17 @@
+target = "evm-ethereum-london"
+
+type @val = { i32 };
+
+# Test: Store-to-load forwarding
+# A load after a store to the same address should return the stored value
+# v4 should be replaced with 42.i32
+# sameln: func public %store_load_forward() -> i32 {
+# check:         return 42.i32;
+func public %store_load_forward() -> i32 {
+    block0:
+        v1.*@val = alloca @val;
+        v2.*i32 = gep v1 0.i8;
+        mstore v2 42.i32 i32;
+        v4.i32 = mload v2 i32;
+        return v4;
+}

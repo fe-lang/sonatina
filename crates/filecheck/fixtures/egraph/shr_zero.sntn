@@ -1,0 +1,10 @@
+target = "evm-ethereum-london"
+
+# Test: x >> 0 (logical) should be simplified to x
+# sameln: func public %shr_zero(v0.i32) -> i32 {
+# check:         return v0;
+func public %shr_zero(v0.i32) -> i32 {
+    block0:
+        v1.i32 = shr 0.i32 v0;
+        return v1;
+}

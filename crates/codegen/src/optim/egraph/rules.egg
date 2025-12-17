@@ -1,0 +1,117 @@
+; Simple algebraic optimization rules for sonatina IR
+; NOTE: Requires types.egg and expr.egg to be loaded first
+
+; --- Commutativity (enables GVN for equivalent expressions) ---
+(rewrite (Add x y) (Add y x))
+(rewrite (Mul x y) (Mul y x))
+(rewrite (And x y) (And y x))
+(rewrite (Or x y) (Or y x))
+(rewrite (Xor x y) (Xor y x))
+(rewrite (Eq x y) (Eq y x))
+(rewrite (Ne x y) (Ne y x))
+
+; --- Addition ---
+; x + 0 = x
+(rewrite (Add x (Const 0 ty)) x)
+(rewrite (Add (Const 0 ty) x) x)
+
+; --- Subtraction ---
+; x - 0 = x
+(rewrite (Sub x (Const 0 ty)) x)
+; x - x = 0
+(rule ((= e (Sub x x)) (= ty (expr-type x)))
+      ((union e (Const 0 ty))))
+
+; --- Multiplication ---
+; x * 0 = 0
+(rewrite (Mul x (Const 0 ty)) (Const 0 ty))
+(rewrite (Mul (Const 0 ty) x) (Const 0 ty))
+; x * 1 = x
+(rewrite (Mul x (Const 1 ty)) x)
+(rewrite (Mul (Const 1 ty) x) x)
+
+; --- Bitwise AND ---
+; x & 0 = 0
+(rewrite (And x (Const 0 ty)) (Const 0 ty))
+(rewrite (And (Const 0 ty) x) (Const 0 ty))
+; x & x = x
+(rewrite (And x x) x)
+
+; --- Bitwise OR ---
+; x | 0 = x
+(rewrite (Or x (Const 0 ty)) x)
+(rewrite (Or (Const 0 ty) x) x)
+; x | x = x
+(rewrite (Or x x) x)
+
+; --- Bitwise XOR ---
+; x ^ 0 = x
+(rewrite (Xor x (Const 0 ty)) x)
+(rewrite (Xor (Const 0 ty) x) x)
+; x ^ x = 0
+(rule ((= e (Xor x x)) (= ty (expr-type x)))
+      ((union e (Const 0 ty))))
+
+; --- Double negation ---
+; ~~x = x
+(rewrite (Not (Not x)) x)
+; --x = x
+(rewrite (Neg (Neg x)) x)
+
+; --- Comparison with self ---
+; x == x = true
+(rewrite (Eq x x) (Const 1 (I1)))
+; x != x = false
+(rewrite (Ne x x) (Const 0 (I1)))
+; x < x = false (unsigned)
+(rewrite (Lt x x) (Const 0 (I1)))
+; x <= x = true (unsigned)
+(rewrite (Le x x) (Const 1 (I1)))
+; x > x = false (unsigned)
+(rewrite (Gt x x) (Const 0 (I1)))
+; x >= x = true (unsigned)
+(rewrite (Ge x x) (Const 1 (I1)))
+; x < x = false (signed)
+(rewrite (Slt x x) (Const 0 (I1)))
+; x > x = false (signed)
+(rewrite (Sgt x x) (Const 0 (I1)))
+; x >= x = true (signed)
+(rewrite (Sge x x) (Const 1 (I1)))
+
+; --- Shifts ---
+; x << 0 = x
+(rewrite (Shl (Const 0 ty) x) x)
+; x >> 0 = x (logical)
+(rewrite (Shr (Const 0 ty) x) x)
+; x >> 0 = x (arithmetic)
+(rewrite (Sar (Const 0 ty) x) x)
+
+; --- Division ---
+; x / 1 = x (unsigned)
+(rewrite (Udiv x (Const 1 ty)) x)
+; x / 1 = x (signed)
+(rewrite (Sdiv x (Const 1 ty)) x)
+
+; --- IsZero ---
+; is_zero(0) = true
+(rewrite (IsZero (Const 0 ty)) (Const 1 (I1)))
+
+; --- Negation + Arithmetic ---
+; x + (-y) = x - y
+(rewrite (Add x (Neg y)) (Sub x y))
+; x - (-y) = x + y
+(rewrite (Sub x (Neg y)) (Add x y))
+
+; --- De Morgan's Laws ---
+; ~(x & y) = (~x) | (~y)
+(rewrite (Not (And x y)) (Or (Not x) (Not y)))
+; ~(x | y) = (~x) & (~y)
+(rewrite (Not (Or x y)) (And (Not x) (Not y)))
+
+; --- Strength Reduction ---
+; x * 2 = x << 1
+(rewrite (Mul x (Const 2 ty)) (Shl (Const 1 ty) x))
+(rewrite (Mul (Const 2 ty) x) (Shl (Const 1 ty) x))
+; x * 4 = x << 2
+(rewrite (Mul x (Const 4 ty)) (Shl (Const 2 ty) x))
+(rewrite (Mul (Const 4 ty) x) (Shl (Const 2 ty) x))

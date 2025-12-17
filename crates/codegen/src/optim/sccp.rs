@@ -395,10 +395,11 @@ impl FlowEdge {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 enum LatticeCell {
     Top,
     Const(Immediate),
+    #[default]
     Bot,
 }
 
@@ -447,12 +448,6 @@ impl LatticeCell {
             }
             (Self::Bot, other) | (other, Self::Bot) => other,
         }
-    }
-}
-
-impl Default for LatticeCell {
-    fn default() -> Self {
-        Self::Bot
     }
 }
 

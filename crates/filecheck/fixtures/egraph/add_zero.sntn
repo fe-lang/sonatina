@@ -1,0 +1,19 @@
+target = "evm-ethereum-london"
+
+# Test: x + 0 = x (instruction remains but value is aliased)
+# sameln: func public %add_zero(v0.i32) -> i32 {
+# check:         return v0;
+func public %add_zero(v0.i32) -> i32 {
+    block0:
+        v1.i32 = add v0 0.i32;
+        return v1;
+}
+
+# Test: 0 + x = x
+# sameln: func public %zero_add(v0.i32) -> i32 {
+# check:         return v0;
+func public %zero_add(v0.i32) -> i32 {
+    block0:
+        v1.i32 = add 0.i32 v0;
+        return v1;
+}

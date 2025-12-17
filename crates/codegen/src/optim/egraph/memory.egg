@@ -1,0 +1,149 @@
+; Memory optimization rules for sonatina IR
+; NOTE: Requires types.egg and expr.egg to be loaded first
+
+; === Must-Not-Alias Analysis ===
+; Relation to determine if two addresses definitely don't alias
+(relation must-not-alias (Expr Expr))
+
+; Different allocas cannot alias
+(rule ((= a1 (AllocaResult id1 ty1))
+       (= a2 (AllocaResult id2 ty2))
+       (!= id1 id2))
+      ((must-not-alias a1 a2)
+       (must-not-alias a2 a1)))
+
+; Alloca cannot alias with global
+(rule ((= a (AllocaResult _ _))
+       (= g (Global _ _)))
+      ((must-not-alias a g)
+       (must-not-alias g a)))
+
+; Different globals cannot alias
+(rule ((= g1 (Global id1 _))
+       (= g2 (Global id2 _))
+       (!= id1 id2))
+      ((must-not-alias g1 g2)
+       (must-not-alias g2 g1)))
+
+; GEP from non-aliasing bases don't alias
+(rule ((= gep1 (GepBase base1))
+       (= gep2 (GepBase base2))
+       (must-not-alias base1 base2))
+      ((must-not-alias gep1 gep2)
+       (must-not-alias gep2 gep1)))
+
+(rule ((= gep1 (GepOffset base1 _ _))
+       (= gep2 (GepOffset base2 _ _))
+       (must-not-alias base1 base2))
+      ((must-not-alias gep1 gep2)
+       (must-not-alias gep2 gep1)))
+
+; GEP with same base but different constant indices don't alias
+; e.g., gep v1 0 vs gep v1 1 (different array elements or struct fields)
+(rule ((= gep1 (GepOffset base (Const c1 ty) field))
+       (= gep2 (GepOffset base (Const c2 ty) field))
+       (!= c1 c2))
+      ((must-not-alias gep1 gep2)
+       (must-not-alias gep2 gep1)))
+
+; GEP with same base but different field indices don't alias
+; This handles nested struct access where the field index differs
+(rule ((= gep1 (GepOffset base idx1 field1))
+       (= gep2 (GepOffset base idx2 field2))
+       (!= field1 field2))
+      ((must-not-alias gep1 gep2)
+       (must-not-alias gep2 gep1)))
+
+; === Store-to-Load Forwarding ===
+
+; Load from a memory state after a store to the same address returns the stored value
+; LoadResult(load_id, mem_id, ty) where:
+;   - load-addr(load_id) == store-addr(mem_id)
+;   - ty == store-ty(mem_id)
+; Result: union LoadResult with store-val(mem_id)
+(rule ((= result (LoadResult load_id mem_id ty))
+       (= load_addr (load-addr load_id))
+       (= store_addr (store-addr mem_id))
+       (= load_addr store_addr)
+       (= ty (store-ty mem_id))
+       (= val (store-val mem_id)))
+      ((union result val)))
+
+; === Load Pass-Through ===
+
+; Load from a memory state after a store to a different address
+; Check if the previous store was to the same address as the load
+(rule ((= result (LoadResult load_id mem_id ty))
+       (= load_addr (load-addr load_id))
+       (= store_addr (store-addr mem_id))
+       (must-not-alias store_addr load_addr)
+       (= prev_mem_id (store-prev mem_id))
+       (= prev_store_addr (store-addr prev_mem_id))
+       (= prev_store_addr load_addr)
+       (= ty (store-ty prev_mem_id))
+       (= val (store-val prev_mem_id)))
+      ((union result val)))
+
+; === Redundant Load Elimination ===
+
+; Two loads from the same memory state at the same address should unify
+(rule ((= r1 (LoadResult id1 mem_id ty))
+       (= r2 (LoadResult id2 mem_id ty))
+       (!= id1 id2)
+       (= addr1 (load-addr id1))
+       (= addr2 (load-addr id2))
+       (= addr1 addr2))
+      ((union r1 r2)))
+
+; === Dead Store Elimination ===
+
+; Relation to mark stores as dead (can be eliminated)
+(relation dead-store (i64))
+
+; A store is dead if the immediately following store is to the same address
+; (and no load can observe the first store's value)
+(rule ((= prev_mem_id (store-prev mem_id))
+       (= store_addr (store-addr mem_id))
+       (= prev_store_addr (store-addr prev_mem_id))
+       (= store_addr prev_store_addr))
+      ((dead-store prev_mem_id)))
+
+; === MemPhi Rules ===
+
+; Load through MemPhi: if both predecessors (2-pred case) forward the same value
+; This handles the common if-then-else pattern where both branches store the same value
+(rule ((= result (LoadResult load_id memphi_id ty))
+       (is-memphi memphi_id)
+       (= 2 (memphi-num-preds memphi_id))
+       (= load_addr (load-addr load_id))
+       ; Get predecessor memory states
+       (= pred0_mem (memphi-pred memphi_id 0))
+       (= pred1_mem (memphi-pred memphi_id 1))
+       ; Both predecessors have stores to the same address
+       (= store_addr0 (store-addr pred0_mem))
+       (= store_addr1 (store-addr pred1_mem))
+       (= store_addr0 load_addr)
+       (= store_addr1 load_addr)
+       ; Both store the same type
+       (= ty (store-ty pred0_mem))
+       (= ty (store-ty pred1_mem))
+       ; Both store the same value
+       (= val (store-val pred0_mem))
+       (= val (store-val pred1_mem)))
+      ((union result val)))
+
+; Load through MemPhi: if both predecessors have the same memory state
+; (no stores on either branch)
+(rule ((= result (LoadResult load_id memphi_id ty))
+       (is-memphi memphi_id)
+       (= 2 (memphi-num-preds memphi_id))
+       (= load_addr (load-addr load_id))
+       ; Get predecessor memory states
+       (= pred_mem (memphi-pred memphi_id 0))
+       (= pred_mem (memphi-pred memphi_id 1))
+       ; Look up store at the common predecessor
+       (= store_addr (store-addr pred_mem))
+       (= store_addr load_addr)
+       (= ty (store-ty pred_mem))
+       (= val (store-val pred_mem)))
+      ((union result val)))

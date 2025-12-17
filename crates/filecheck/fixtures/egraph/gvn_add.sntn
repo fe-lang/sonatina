@@ -1,0 +1,14 @@
+target = "evm-ethereum-london"
+
+# Test: GVN via commutativity - (0 + x) and (x + 0) both simplify to x
+# Both v1 and v2 become equivalent to v0, so v3 = v0 + v0
+# sameln: func public %gvn_add(v0.i32) -> i32 {
+# check:         v3.i32 = add v0 v0;
+# check:         return v3;
+func public %gvn_add(v0.i32) -> i32 {
+    block0:
+        v1.i32 = add 0.i32 v0;
+        v2.i32 = add v0 0.i32;
+        v3.i32 = add v1 v2;
+        return v3;
+}

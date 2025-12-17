@@ -1,0 +1,12 @@
+target = "evm-ethereum-london"
+
+# Test: ~(x & x) should simplify to ~x via De Morgan: ~(x & x) -> (~x) | (~x) -> ~x
+# sameln: func public %demorgan_and(v0.i32) -> i32 {
+# check:         v2.i32 = not v0;
+# check:         return v2;
+func public %demorgan_and(v0.i32) -> i32 {
+    block0:
+        v1.i32 = and v0 v0;
+        v2.i32 = not v1;
+        return v2;
+}

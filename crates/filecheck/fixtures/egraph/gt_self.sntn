@@ -1,0 +1,10 @@
+target = "evm-ethereum-london"
+
+# Test: x > x should be simplified to false (0)
+# sameln: func public %gt_self(v0.i32) -> i1 {
+# check:         return 0.i1;
+func public %gt_self(v0.i32) -> i1 {
+    block0:
+        v1.i1 = gt v0 v0;
+        return v1;
+}
