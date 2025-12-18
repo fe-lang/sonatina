@@ -23,7 +23,7 @@ sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
 sonatina-macros = { path = "../macros", version = "0.0.3-alpha" }
 dashmap = { version = "6.1", features = ["rayon"] }
 egglog = "0.5"
-indexmap = { version = "2.11" }
+indexmap = { version = "2.12" }
 
 [dev-dependencies]
 sonatina-parser = { path = "../parser", version = "0.0.3-alpha" }
