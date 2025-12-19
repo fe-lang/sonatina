@@ -30,5 +30,5 @@ smallvec = "1.15.1"
 
 [dev-dependencies]
 dir-test = "0.4"
-insta = { version = "1.43" }
+insta = { version = "1.45" }
 indenter = "0.3.4"
