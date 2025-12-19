@@ -27,5 +27,5 @@ indexmap = { version = "2.12" }
 
 [dev-dependencies]
 sonatina-parser = { path = "../parser", version = "0.0.3-alpha" }
-insta = "1.43"
+insta = "1.45"
 dir-test = "0.4"
