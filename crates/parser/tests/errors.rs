@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use dir_test::{dir_test, Fixture};
+use dir_test::{Fixture, dir_test};
 use sonatina_parser::parse_module;
 mod common;
 

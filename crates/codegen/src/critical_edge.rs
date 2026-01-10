@@ -1,7 +1,7 @@
 use sonatina_ir::{
+    BlockId, ControlFlowGraph, Function, InstId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::control_flow::Jump,
-    BlockId, ControlFlowGraph, Function, InstId,
 };
 
 #[derive(Debug)]
@@ -125,13 +125,13 @@ impl CriticalEdge {
 #[cfg(test)]
 mod tests {
     use sonatina_ir::{
+        Type,
         builder::test_util::*,
         inst::{
             arith::Add,
             control_flow::{Br, BrTable, Phi, Return},
         },
         isa::Isa,
-        Type,
     };
 
     use super::*;

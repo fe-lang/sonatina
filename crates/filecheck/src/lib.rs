@@ -12,8 +12,8 @@ use std::{
     time,
 };
 
-use sonatina_ir::{ir_writer::FuncWriter, module::FuncRef, Function};
-use sonatina_parser::{parse_module, ParsedModule};
+use sonatina_ir::{Function, ir_writer::FuncWriter, module::FuncRef};
+use sonatina_parser::{ParsedModule, parse_module};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use walkdir::WalkDir;
 

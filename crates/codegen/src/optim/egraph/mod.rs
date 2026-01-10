@@ -9,9 +9,9 @@ use std::fmt::Write;
 use cranelift_entity::SecondaryMap;
 use egglog::EGraph;
 use sonatina_ir::{
+    BlockId, Function, InstDowncast, InstId, Type, Value, ValueId,
     cfg::ControlFlowGraph,
     inst::{arith::*, cmp::*, control_flow::Phi, data::*, evm::*, logic::*},
-    BlockId, Function, InstDowncast, InstId, Type, Value, ValueId,
 };
 
 const TYPES: &str = include_str!("types.egg");
@@ -330,10 +330,14 @@ fn inst_to_egglog_with_mem(
             .unwrap_or(0);
         let egglog = format!(
             "(set (store-prev {}) {})\n(set (store-addr {}) {})\n(set (store-val {}) {})\n(set (store-ty {}) {})",
-            new_mem_id, prev_mem_id,
-            new_mem_id, addr,
-            new_mem_id, value,
-            new_mem_id, type_to_egglog(ty)
+            new_mem_id,
+            prev_mem_id,
+            new_mem_id,
+            addr,
+            new_mem_id,
+            value,
+            new_mem_id,
+            type_to_egglog(ty)
         );
         return Some((egglog, Some(new_mem)));
     }

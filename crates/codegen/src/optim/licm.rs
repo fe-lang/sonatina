@@ -1,8 +1,8 @@
 // TODO: Add control flow hoisting.
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    func_cursor::{CursorLocation, FuncCursor, InstInserter},
     BlockId, ControlFlowGraph, Function, InstId, ValueId,
+    func_cursor::{CursorLocation, FuncCursor, InstInserter},
 };
 
 use crate::loop_analysis::{Loop, LoopTree};

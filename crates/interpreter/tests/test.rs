@@ -1,7 +1,7 @@
 mod common;
 
 use common::parse_test_cases;
-use dir_test::{dir_test, Fixture};
+use dir_test::{Fixture, dir_test};
 use sonatina_interpreter::Machine;
 use sonatina_parser::ParsedModule;
 

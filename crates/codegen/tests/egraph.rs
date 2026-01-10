@@ -1,6 +1,6 @@
 mod common;
 
-use dir_test::{dir_test, Fixture};
+use dir_test::{Fixture, dir_test};
 use sonatina_codegen::optim::egraph::func_to_egglog;
 use sonatina_parser::ParsedModule;
 

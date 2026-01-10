@@ -4,7 +4,7 @@ use sonatina_codegen::optim::egraph::run_egraph_pass;
 
 use sonatina_ir::Function;
 
-use super::{FuncTransform, FIXTURE_ROOT};
+use super::{FIXTURE_ROOT, FuncTransform};
 
 #[derive(Default)]
 pub struct EgraphTransform {}

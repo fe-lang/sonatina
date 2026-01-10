@@ -1,8 +1,8 @@
-use ir::{builder::FunctionBuilder, func_cursor::InstInserter, Inst};
+use ir::{Inst, builder::FunctionBuilder, func_cursor::InstInserter};
 
 use crate::{
-    ast::{self},
     BuildCtx, Error, UndefinedKind,
+    ast::{self},
 };
 
 mod arith;

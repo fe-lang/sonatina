@@ -11,3 +11,6 @@ members = [
     "crates/interpreter",
     "crates/verifier",
 ]
+
+[workspace.package]
+edition = "2024"

@@ -4,8 +4,8 @@ use smallvec::{Array, SmallVec};
 
 use super::{BlockId, Function};
 use crate::{
-    module::{FuncRef, ModuleCtx},
     DataFlowGraph, InstId, Module, Value, ValueId,
+    module::{FuncRef, ModuleCtx},
 };
 
 pub struct ModuleWriter<'a> {

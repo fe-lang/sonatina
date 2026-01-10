@@ -1,5 +1,5 @@
 use super::{Action, EvalValue, Interpret, State};
-use crate::{inst::cmp::*, Immediate};
+use crate::{Immediate, inst::cmp::*};
 
 impl Interpret for Lt {
     fn interpret(&self, state: &mut dyn State) -> EvalValue {

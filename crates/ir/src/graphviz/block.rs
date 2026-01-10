@@ -4,8 +4,8 @@ use dot2::label;
 
 use super::function::DUMMY_BLOCK;
 use crate::{
-    ir_writer::{FuncWriteCtx, IrWrite, ValueWithTy},
     BlockId, ControlFlowGraph,
+    ir_writer::{FuncWriteCtx, IrWrite, ValueWithTy},
 };
 
 #[derive(Clone, Copy)]

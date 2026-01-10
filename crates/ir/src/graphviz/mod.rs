@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::{ir_writer::FuncWriteCtx, module::FuncRef, ControlFlowGraph, Function};
+use crate::{ControlFlowGraph, Function, ir_writer::FuncWriteCtx, module::FuncRef};
 
 mod block;
 mod function;
@@ -26,13 +26,13 @@ pub fn render_to<W: io::Write>(
 mod test {
     use super::*;
     use crate::{
+        Type,
         builder::test_util::{test_func_builder, test_module_builder},
         inst::{
             arith::Add,
             control_flow::{Br, Jump, Phi, Return},
         },
         isa::Isa,
-        Type,
     };
 
     #[test]

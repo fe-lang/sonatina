@@ -1,11 +1,11 @@
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
+    BlockId, DataFlowGraph, Function, I256, Immediate, InstId, Module, Type, Value, ValueId,
     interpret::{Action, EvalValue, Interpret, State},
     isa::Endian,
     module::{FuncRef, ModuleCtx, RoFuncStore},
     prelude::*,
     types::CompoundType,
-    BlockId, DataFlowGraph, Function, Immediate, InstId, Module, Type, Value, ValueId, I256,
 };
 
 pub struct Machine {

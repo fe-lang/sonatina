@@ -3,11 +3,11 @@ use std::io::Write;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use sonatina_interpreter::Machine;
-use sonatina_ir::{interpret::EvalValue, module::FuncRef, Immediate};
+use sonatina_ir::{Immediate, interpret::EvalValue, module::FuncRef};
 use sonatina_parser::{
+    ParsedModule, PestParser,
     ast::{Value, ValueKind},
     syntax::{FromSyntax, Node, Parser, Rule},
-    ParsedModule, PestParser,
 };
 
 pub fn parse_module(file_path: &str) -> ParsedModule {

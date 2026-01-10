@@ -3,7 +3,7 @@ use std::io;
 use smallvec::SmallVec;
 
 use super::{DataFlowGraph, Layout, Type, ValueId};
-use crate::{ir_writer::IrWrite, module::ModuleCtx, InstSetBase, Linkage};
+use crate::{InstSetBase, Linkage, ir_writer::IrWrite, module::ModuleCtx};
 
 pub struct Function {
     pub arg_values: smallvec::SmallVec<[ValueId; 8]>,

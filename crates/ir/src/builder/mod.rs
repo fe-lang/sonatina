@@ -11,11 +11,11 @@ pub mod test_util {
 
     use super::*;
     use crate::{
+        Linkage, Module, Signature, Type,
         func_cursor::InstInserter,
         ir_writer::FuncWriter,
         isa::evm::Evm,
         module::{FuncRef, ModuleCtx},
-        Linkage, Module, Signature, Type,
     };
 
     pub fn test_isa() -> Evm {

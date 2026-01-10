@@ -2,7 +2,7 @@ use std::fmt;
 
 use macros::inst_prop;
 
-use crate::{inst, module::FuncRef, BlockId, DataFlowGraph, Immediate, Type, ValueId};
+use crate::{BlockId, DataFlowGraph, Immediate, Type, ValueId, inst, module::FuncRef};
 
 mod arith;
 mod cast;

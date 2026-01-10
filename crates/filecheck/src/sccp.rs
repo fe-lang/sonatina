@@ -4,7 +4,7 @@ use sonatina_codegen::optim::sccp::SccpSolver;
 
 use sonatina_ir::{ControlFlowGraph, Function};
 
-use super::{FuncTransform, FIXTURE_ROOT};
+use super::{FIXTURE_ROOT, FuncTransform};
 
 #[derive(Default)]
 pub struct SccpTransform {

@@ -1,6 +1,6 @@
 use sonatina_triple::TargetTriple;
 
-use crate::{module::ModuleCtx, InstSetBase, Type};
+use crate::{InstSetBase, Type, module::ModuleCtx};
 
 pub mod evm;
 

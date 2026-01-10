@@ -3,7 +3,7 @@
 use egglog::EGraph;
 use rustc_hash::FxHashMap;
 
-use sonatina_ir::{inst::data::Mstore, Function, InstDowncast, InstId, Type, ValueId};
+use sonatina_ir::{Function, InstDowncast, InstId, Type, ValueId, inst::data::Mstore};
 
 use super::func_to_egglog;
 
@@ -101,11 +101,11 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
         }
         // Check if result is just another variable like "v0"
         else if let Some(alias_name) = parse_var_result(result) {
-            if let Some(&alias_val) = value_map.get(&alias_name) {
-                if alias_val != original_val {
-                    func.dfg.change_to_alias(original_val, alias_val);
-                    changed = true;
-                }
+            if let Some(&alias_val) = value_map.get(&alias_name)
+                && alias_val != original_val
+            {
+                func.dfg.change_to_alias(original_val, alias_val);
+                changed = true;
             }
         }
         // Check if result is a function argument like "(Arg 0 (I32))"
@@ -124,11 +124,10 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
             if let Some(&side_effect_val) = value_map
                 .values()
                 .find(|&&v| v.as_u32() == side_effect_id as u32)
+                && side_effect_val != original_val
             {
-                if side_effect_val != original_val {
-                    func.dfg.change_to_alias(original_val, side_effect_val);
-                    changed = true;
-                }
+                func.dfg.change_to_alias(original_val, side_effect_val);
+                changed = true;
             }
         }
         // Check if result is an alloca result like "(AllocaResult N (Type))"
@@ -137,11 +136,10 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
             if let Some(&alloca_val) = value_map
                 .values()
                 .find(|&&v| v.as_u32() == alloca_id as u32)
+                && alloca_val != original_val
             {
-                if alloca_val != original_val {
-                    func.dfg.change_to_alias(original_val, alloca_val);
-                    changed = true;
-                }
+                func.dfg.change_to_alias(original_val, alloca_val);
+                changed = true;
             }
         }
     }

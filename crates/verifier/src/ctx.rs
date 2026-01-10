@@ -2,7 +2,7 @@
 
 use sonatina_ir::{ControlFlowGraph, Function};
 
-use crate::{error::ErrorData, ErrorStack};
+use crate::{ErrorStack, error::ErrorData};
 
 pub struct VerificationCtx<'a> {
     pub func: &'a Function,

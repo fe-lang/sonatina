@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
+use cranelift_entity::{SecondaryMap, packed_option::PackedOption};
 
 use crate::{BlockId, Function};
 

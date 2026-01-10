@@ -27,8 +27,8 @@ pub use function::{Function, Signature};
 pub use global_variable::{GlobalVariableData, GlobalVariableRef};
 pub use graphviz::render_to;
 pub use inst::{
-    inst_set::{InstSetBase, InstSetExt},
     HasInst, Inst, InstDowncast, InstDowncastMut, InstExt, InstId,
+    inst_set::{InstSetBase, InstSetExt},
 };
 pub use layout::Layout;
 pub use linkage::Linkage;
@@ -39,8 +39,8 @@ pub use value::{Immediate, Value, ValueId};
 pub mod prelude {
     pub use crate::{
         inst::{
-            inst_set::{InstSetBase, InstSetExt},
             HasInst, Inst, InstDowncast, InstDowncastMut, InstExt,
+            inst_set::{InstSetBase, InstSetExt},
         },
         isa::Isa,
     };

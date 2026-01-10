@@ -1,7 +1,7 @@
-use ir::{builder::FunctionBuilder, inst::data::*, HasInst};
+use ir::{HasInst, builder::FunctionBuilder, inst::data::*};
 use smallvec::SmallVec;
 
-use crate::{ast, error::ArityBound, BuildCtx, Error};
+use crate::{BuildCtx, Error, ast, error::ArityBound};
 
 super::impl_inst_build! {Mload, (addr: ValueId, ty: Type)}
 super::impl_inst_build! {Mstore, (addr: ValueId, value: ValueId, ty: Type)}

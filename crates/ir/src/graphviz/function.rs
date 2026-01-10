@@ -1,13 +1,13 @@
 use std::iter;
 
-use dot2::{label::Text, GraphWalk, Id, Labeller, Style};
+use dot2::{GraphWalk, Id, Labeller, Style, label::Text};
 
 use super::block::BlockNode;
 use crate::{
+    BlockId, ControlFlowGraph,
     inst::control_flow::Phi,
     ir_writer::{FuncWriteCtx, IrWrite},
     prelude::*,
-    BlockId, ControlFlowGraph,
 };
 
 pub(super) const DUMMY_BLOCK: BlockId = BlockId(u32::MAX);

@@ -9,11 +9,11 @@ use std::collections::BTreeSet;
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashSet;
 use sonatina_ir::{
+    BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, InstId, Type, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::control_flow::{BranchInfo, BranchKind},
     interpret::{Action, EvalValue, Interpret, State},
     prelude::*,
-    BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, InstId, Type, ValueId,
 };
 
 #[derive(Debug)]
@@ -124,9 +124,10 @@ impl SccpSolver {
     }
 
     fn eval_phi(&mut self, func: &Function, inst: InstId) {
-        debug_assert!(self
-            .reachable_blocks
-            .contains(&func.layout.inst_block(inst)));
+        debug_assert!(
+            self.reachable_blocks
+                .contains(&func.layout.inst_block(inst))
+        );
 
         func.dfg.inst(inst).for_each_value(&mut |value| {
             if let Some(imm) = func.dfg.value_imm(value) {

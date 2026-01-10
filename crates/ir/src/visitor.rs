@@ -5,7 +5,7 @@
 //! visited in order to cover the whole sonatina-IR.
 use smallvec::{Array, SmallVec};
 
-use crate::{module::FuncRef, BlockId, Type, ValueId};
+use crate::{BlockId, Type, ValueId, module::FuncRef};
 
 pub trait Visitable {
     fn accept(&self, visitor: &mut dyn Visitor);

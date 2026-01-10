@@ -3,8 +3,8 @@
 use rustc_hash::FxHashMap;
 
 use sonatina_ir::{
-    inst::{arith::*, cmp::*, logic::*},
     BlockId, Function, Type, Value, ValueId,
+    inst::{arith::*, cmp::*, logic::*},
 };
 
 /// Represents an egglog term that can be elaborated back to IR.

@@ -1,13 +1,12 @@
 use std::fmt::{self, Write};
 
-use dir_test::{dir_test, Fixture};
+use dir_test::{Fixture, dir_test};
 use indenter::indented;
 use ir::ir_writer::ModuleWriter;
-use pest::{iterators::Pairs, Parser as _};
+use pest::{Parser as _, iterators::Pairs};
 use sonatina_parser::{
-    ast, parse_module,
+    Error, ast, parse_module,
     syntax::{Parser, Rule},
-    Error,
 };
 mod common;
 

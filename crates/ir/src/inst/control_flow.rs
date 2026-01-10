@@ -1,7 +1,7 @@
-use macros::{inst_prop, Inst};
+use macros::{Inst, inst_prop};
 use smallvec::SmallVec;
 
-use crate::{module::FuncRef, BlockId, Inst, InstSetBase, ValueId};
+use crate::{BlockId, Inst, InstSetBase, ValueId, module::FuncRef};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(terminator)]
@@ -171,11 +171,7 @@ impl BranchInfo for BrTable {
 
     fn num_dests(&self) -> usize {
         let num = self.table.len();
-        if self.default.is_some() {
-            num + 1
-        } else {
-            num
-        }
+        if self.default.is_some() { num + 1 } else { num }
     }
 
     fn remove_dest(&self, isb: &dyn InstSetBase, dest: BlockId) -> Box<dyn Inst> {

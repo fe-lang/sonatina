@@ -12,11 +12,7 @@ impl Interpret for EvmUdiv {
             lhs,
             rhs,
             |lhs, rhs| {
-                if rhs.is_zero() {
-                    rhs
-                } else {
-                    lhs.udiv(rhs)
-                }
+                if rhs.is_zero() { rhs } else { lhs.udiv(rhs) }
             },
         )
     }
@@ -33,11 +29,7 @@ impl Interpret for EvmSdiv {
             lhs,
             rhs,
             |lhs, rhs| {
-                if rhs.is_zero() {
-                    rhs
-                } else {
-                    lhs.sdiv(rhs)
-                }
+                if rhs.is_zero() { rhs } else { lhs.sdiv(rhs) }
             },
         )
     }
@@ -54,11 +46,7 @@ impl Interpret for EvmUmod {
             lhs,
             rhs,
             |lhs, rhs| {
-                if rhs.is_zero() {
-                    rhs
-                } else {
-                    lhs.urem(rhs)
-                }
+                if rhs.is_zero() { rhs } else { lhs.urem(rhs) }
             },
         )
     }
@@ -75,11 +63,7 @@ impl Interpret for EvmSmod {
             lhs,
             rhs,
             |lhs, rhs| {
-                if rhs.is_zero() {
-                    rhs
-                } else {
-                    lhs.srem(rhs)
-                }
+                if rhs.is_zero() { rhs } else { lhs.srem(rhs) }
             },
         )
     }

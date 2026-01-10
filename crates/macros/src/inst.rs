@@ -75,22 +75,19 @@ impl InstStruct {
         for attr in &item_struct.attrs {
             if attr.path().is_ident("inst") {
                 let meta = attr.parse_args::<syn::Meta>()?;
-                if let syn::Meta::List(ml) = &meta {
-                    if ml.path.is_ident("side_effect") {
-                        if !matches!(ml.delimiter, syn::MacroDelimiter::Paren(..)) {
-                            return Err(syn::Error::new_spanned(
-                                ml,
-                                "`side_effect(...) is requried",
-                            ));
-                        }
+                if let syn::Meta::List(ml) = &meta
+                    && ml.path.is_ident("side_effect")
+                {
+                    if !matches!(ml.delimiter, syn::MacroDelimiter::Paren(..)) {
+                        return Err(syn::Error::new_spanned(ml, "`side_effect(...) is requried"));
+                    }
 
-                        side_effect = Some(syn::parse2(ml.tokens.clone())?);
-                    }
+                    side_effect = Some(syn::parse2(ml.tokens.clone())?);
                 }
-                if let syn::Meta::Path(path) = &meta {
-                    if path.is_ident("terminator") {
-                        is_terminator = true;
-                    }
+                if let syn::Meta::Path(path) = &meta
+                    && path.is_ident("terminator")
+                {
+                    is_terminator = true;
                 }
             }
         }

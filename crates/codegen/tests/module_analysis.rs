@@ -2,9 +2,9 @@ mod common;
 
 use std::fmt::Write;
 
-use dir_test::{dir_test, Fixture};
+use dir_test::{Fixture, dir_test};
 use indexmap::IndexSet;
-use sonatina_codegen::module_analysis::{analyze_module, ModuleInfo, SccRef};
+use sonatina_codegen::module_analysis::{ModuleInfo, SccRef, analyze_module};
 use sonatina_ir::module::ModuleCtx;
 use sonatina_parser::ParsedModule;
 

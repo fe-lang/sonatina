@@ -1,5 +1,5 @@
 use cranelift_entity::PrimaryMap;
-use sonatina_ir::{module::FuncRef, Function};
+use sonatina_ir::{Function, module::FuncRef};
 
 use crate::error::{Error, ErrorData, ErrorRef};
 

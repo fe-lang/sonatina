@@ -1,4 +1,4 @@
-use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, SecondaryMap};
+use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use sonatina_ir::{BlockId, ControlFlowGraph};
@@ -50,7 +50,7 @@ impl LoopTree {
     /// Returns all loops.
     /// The result iterator guarantees outer loops are returned before its inner
     /// loops.
-    pub fn loops(&self) -> impl DoubleEndedIterator<Item = Loop> {
+    pub fn loops(&self) -> impl DoubleEndedIterator<Item = Loop> + use<> {
         self.loops.keys()
     }
 
@@ -249,6 +249,7 @@ enum BlockState {
 #[cfg(test)]
 mod tests {
     use sonatina_ir::{
+        Function, Type,
         builder::test_util::*,
         inst::{
             arith::Add,
@@ -256,7 +257,6 @@ mod tests {
             control_flow::{Br, Jump, Phi, Return},
         },
         prelude::*,
-        Function, Type,
     };
 
     use super::*;

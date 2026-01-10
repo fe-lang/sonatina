@@ -1,11 +1,11 @@
 use core::fmt;
 
-use cranelift_entity::{entity_impl, PrimaryMap, SecondaryMap};
+use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl};
 use dashmap::{DashMap, ReadOnlyView};
 use rustc_hash::FxHashSet;
 use sonatina_ir::{
-    module::{FuncRef, ModuleCtx},
     Linkage, Module,
+    module::{FuncRef, ModuleCtx},
 };
 
 pub fn analyze_module(module: &Module) -> ModuleInfo {
