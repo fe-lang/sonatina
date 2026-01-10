@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use sonatina_codegen::{domtree::DomTree, loop_analysis::LoopTree, optim::licm::LicmSolver};
 use sonatina_ir::{ControlFlowGraph, Function};
 
-use super::{FuncTransform, FIXTURE_ROOT};
+use super::{FIXTURE_ROOT, FuncTransform};
 
 #[derive(Default)]
 pub struct LicmTransformer {

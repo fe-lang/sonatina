@@ -1,6 +1,6 @@
 use macros::define_inst_set_base;
 
-use super::{arith, cast, cmp, control_flow, data, evm, logic, Inst};
+use super::{Inst, arith, cast, cmp, control_flow, data, evm, logic};
 
 define_inst_set_base! {
     /// This trait is used to determine whether a certain instruction set includes a specific inst in runtime.
@@ -221,16 +221,20 @@ mod tests {
         assert!(
             <&Sub as InstDowncast>::downcast(&inst_set, insts.get(1).unwrap().as_ref()).is_some()
         );
-        assert!(<&mut Add as InstDowncastMut>::downcast_mut(
-            &inst_set,
-            insts.get_mut(0).unwrap().as_mut()
-        )
-        .is_some());
-        assert!(<&mut Sub as InstDowncastMut>::downcast_mut(
-            &inst_set,
-            insts.get_mut(1).unwrap().as_mut()
-        )
-        .is_some());
+        assert!(
+            <&mut Add as InstDowncastMut>::downcast_mut(
+                &inst_set,
+                insts.get_mut(0).unwrap().as_mut()
+            )
+            .is_some()
+        );
+        assert!(
+            <&mut Sub as InstDowncastMut>::downcast_mut(
+                &inst_set,
+                insts.get_mut(1).unwrap().as_mut()
+            )
+            .is_some()
+        );
     }
 
     #[test]

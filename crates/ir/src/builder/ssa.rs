@@ -1,13 +1,13 @@
 //! SSA construction algorithm here is based on [`Simple and Efficient
 //! Construction of Static Single Assignment Form`](https://link.springer.com/chapter/10.1007/978-3-642-37051-9_6).
 
-use cranelift_entity::{packed_option::PackedOption, PrimaryMap, SecondaryMap, SparseSet};
+use cranelift_entity::{PrimaryMap, SecondaryMap, SparseSet, packed_option::PackedOption};
 use rustc_hash::FxHashMap;
 
 use crate::{
+    BlockId, Function, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::control_flow,
-    BlockId, Function, InstId, Type, Value, ValueId,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

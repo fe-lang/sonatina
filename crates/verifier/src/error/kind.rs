@@ -1,9 +1,9 @@
 use std::fmt;
 
 use sonatina_ir::{
+    BlockId, Function, InstId, Type, ValueId,
     ir_writer::{FuncWriteCtx, IrWrite, ValueWithTy},
     module::FuncRef,
-    BlockId, Function, InstId, Type, ValueId,
 };
 
 #[derive(Debug, Clone, Copy)]

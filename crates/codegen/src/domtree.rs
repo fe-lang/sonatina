@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use cranelift_entity::{packed_option::PackedOption, SecondaryMap};
+use cranelift_entity::{SecondaryMap, packed_option::PackedOption};
 use sonatina_ir::{BlockId, ControlFlowGraph};
 
 #[derive(Default, Debug)]
@@ -203,10 +203,10 @@ mod tests {
     #![allow(clippy::many_single_char_names)]
 
     use sonatina_ir::{
+        Function, Type,
         builder::test_util::*,
         inst::control_flow::{Br, BrTable, Jump, Return},
         prelude::*,
-        Function, Type,
     };
 
     use super::*;

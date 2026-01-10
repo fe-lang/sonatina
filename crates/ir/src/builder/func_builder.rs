@@ -1,12 +1,12 @@
 use super::{
-    ssa::{SsaBuilder, Variable},
     ModuleBuilder,
+    ssa::{SsaBuilder, Variable},
 };
 use crate::{
-    func_cursor::{CursorLocation, FuncCursor},
-    module::{FuncRef, ModuleCtx},
     BlockId, Function, GlobalVariableRef, Immediate, Inst, InstId, InstSetBase, Type, Value,
     ValueId,
+    func_cursor::{CursorLocation, FuncCursor},
+    module::{FuncRef, ModuleCtx},
 };
 
 pub struct FunctionBuilder<C> {

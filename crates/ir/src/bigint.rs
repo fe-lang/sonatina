@@ -267,11 +267,7 @@ impl From<U256> for I256 {
 
 impl From<bool> for I256 {
     fn from(val: bool) -> Self {
-        if val {
-            Self::all_one()
-        } else {
-            Self::zero()
-        }
+        if val { Self::all_one() } else { Self::zero() }
     }
 }
 

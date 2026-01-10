@@ -5,10 +5,10 @@ use sonatina_triple::TargetTriple;
 
 use super::FunctionBuilder;
 use crate::{
+    Function, GlobalVariableData, GlobalVariableRef, InstSetBase, Module, Signature, Type,
     func_cursor::{CursorLocation, FuncCursor},
     module::{FuncRef, FuncStore, ModuleCtx},
     types::{CompoundType, CompoundTypeRef},
-    Function, GlobalVariableData, GlobalVariableRef, InstSetBase, Module, Signature, Type,
 };
 
 #[derive(Clone)]
@@ -161,7 +161,7 @@ impl ModuleBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{builder::test_util::test_module_builder, types::Type, Linkage}; //, Signature};
+    use crate::{Linkage, builder::test_util::test_module_builder, types::Type}; //, Signature};
 
     #[test]
     fn test_declare_function_success() {

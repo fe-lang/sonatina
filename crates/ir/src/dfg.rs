@@ -1,18 +1,18 @@
 //! This module contains Sonatine IR data flow graph.
 use std::{collections::BTreeSet, io};
 
-use cranelift_entity::{entity_impl, packed_option::PackedOption, PrimaryMap, SecondaryMap};
+use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{Immediate, Type, Value, ValueId};
 use crate::{
+    GlobalVariableRef, Inst, InstDowncast, InstDowncastMut, InstSetBase,
     inst::{
-        control_flow::{self, BranchInfo, CallInfo, Jump, Phi},
         InstId, SideEffect,
+        control_flow::{self, BranchInfo, CallInfo, Jump, Phi},
     },
     ir_writer::{FuncWriteCtx, IrWrite},
     module::ModuleCtx,
-    GlobalVariableRef, Inst, InstDowncast, InstDowncastMut, InstSetBase,
 };
 
 pub struct DataFlowGraph {

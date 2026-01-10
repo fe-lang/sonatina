@@ -2,10 +2,10 @@ use std::fmt;
 
 use cranelift_entity::packed_option::PackedOption;
 use sonatina_ir::{
+    BlockId, Function, GlobalVariableRef, InstId, Type, ValueId,
     ir_writer::{FuncWriteCtx, InstStatement, IrWrite, ValueWithTy},
     module::FuncRef,
     types::CompoundTypeRef,
-    BlockId, Function, GlobalVariableRef, InstId, Type, ValueId,
 };
 
 /// Execution context.

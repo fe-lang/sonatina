@@ -5,16 +5,16 @@ use std::str::FromStr;
 use derive_more::Debug as Dbg;
 use either::Either;
 use hex::FromHex;
-pub use ir::{Immediate, Linkage};
 use ir::{I256, U256};
+pub use ir::{Immediate, Linkage};
 use pest::Parser as _;
 use smol_str::SmolStr;
 pub use sonatina_triple::{InvalidTriple, TargetTriple};
 
-use super::{syntax::Node, Error};
+use super::{Error, syntax::Node};
 use crate::{
-    syntax::{FromSyntax, Parser, Rule},
     Span,
+    syntax::{FromSyntax, Parser, Rule},
 };
 
 pub fn parse(input: &str) -> Result<Module, Vec<Error>> {

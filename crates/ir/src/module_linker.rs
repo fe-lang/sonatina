@@ -4,16 +4,16 @@
 use std::mem;
 
 use cranelift_entity::entity_impl;
-use dashmap::{mapref::one::Ref, DashMap, ReadOnlyView};
+use dashmap::{DashMap, ReadOnlyView, mapref::one::Ref};
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 use crate::{
+    GlobalVariableRef, Linkage, Module, Signature, Type, Value,
     builder::ModuleBuilder,
     module::FuncRef,
     types::{CompoundType, CompoundTypeRef, StructData},
     visitor::VisitorMut,
-    GlobalVariableRef, Linkage, Module, Signature, Type, Value,
 };
 
 /// A struct represents a linked module, that is the result of the
@@ -609,7 +609,7 @@ impl ModuleLinker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{builder::test_util::test_module_builder, types::Type, Linkage};
+    use crate::{Linkage, builder::test_util::test_module_builder, types::Type};
 
     #[test]
     fn test_linker_conflicting_function_signature_should_fail() {

@@ -7,7 +7,7 @@ use std::fmt;
 use cranelift_entity::entity_impl;
 use kind::DisplayErrorKind;
 pub use kind::ErrorKind;
-use sonatina_ir::{module::FuncRef, Function};
+use sonatina_ir::{Function, module::FuncRef};
 use trace_info::DisplayTraceInfo;
 pub use trace_info::{TraceInfo, TraceInfoBuilder};
 
@@ -58,10 +58,10 @@ impl fmt::Display for Error<'_> {
 #[cfg(test)]
 mod test {
     use sonatina_ir::{
+        Type,
         builder::test_util::{test_func_builder, test_module_builder},
         inst::{arith::Add, control_flow::Return},
         isa::Isa,
-        Type,
     };
     use trace_info::TraceInfoBuilder;
 

@@ -1,5 +1,5 @@
 use super::{Action, EvalValue, Interpret, State};
-use crate::{inst::data::*, types::CompoundType, Immediate, Type, I256};
+use crate::{I256, Immediate, Type, inst::data::*, types::CompoundType};
 
 impl Interpret for Mload {
     fn interpret(&self, state: &mut dyn State) -> EvalValue {
@@ -51,7 +51,9 @@ impl Interpret for Gep {
                 | Type::I128
                 | Type::I256
                 | Type::Unit => {
-                    panic!("Invalid GEP: indexing into a scalar type or unit with more indices remaining");
+                    panic!(
+                        "Invalid GEP: indexing into a scalar type or unit with more indices remaining"
+                    );
                 }
                 Type::Compound(cmpd) => cmpd,
             };

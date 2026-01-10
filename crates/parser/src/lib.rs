@@ -4,14 +4,13 @@ use ast::{StmtKind, ValueDeclaration};
 use cranelift_entity::SecondaryMap;
 use inst::InstBuild;
 use ir::{
-    self,
+    self, Function, GlobalVariableData, GlobalVariableRef, Immediate, Signature, Type,
     builder::{FunctionBuilder, ModuleBuilder},
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     global_variable::GvInitializer,
     ir_writer::{DebugProvider, IrWrite},
     isa::evm::Evm,
     module::{FuncRef, Module, ModuleCtx},
-    Function, GlobalVariableData, GlobalVariableRef, Immediate, Signature, Type,
 };
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smol_str::SmolStr;

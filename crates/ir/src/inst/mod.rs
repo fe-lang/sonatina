@@ -17,9 +17,9 @@ use dyn_clone::DynClone;
 use macros::inst_prop;
 
 use crate::{
+    InstSetBase,
     ir_writer::{FuncWriteCtx, IrWrite},
     visitor::{Visitable, VisitableMut},
-    InstSetBase,
 };
 
 /// An opaque reference to dynamic [`Inst`].

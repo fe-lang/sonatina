@@ -358,11 +358,11 @@ impl InstNode {
 mod tests {
     use super::{super::dfg::DataFlowGraph, *};
     use crate::{
+        HasInst,
         builder::test_util::test_isa,
-        inst::{self, arith::Add, InstId},
+        inst::{self, InstId, arith::Add},
         isa::Isa,
         module::ModuleCtx,
-        HasInst,
     };
 
     impl DataFlowGraph {

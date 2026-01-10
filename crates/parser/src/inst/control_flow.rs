@@ -1,7 +1,7 @@
-use ir::{builder::FunctionBuilder, inst::control_flow::*, HasInst};
+use ir::{HasInst, builder::FunctionBuilder, inst::control_flow::*};
 use smallvec::SmallVec;
 
-use crate::{ast, error::ArityBound, BuildCtx, Error};
+use crate::{BuildCtx, Error, ast, error::ArityBound};
 
 super::impl_inst_build! {Jump, (dest: BlockId)}
 super::impl_inst_build! {Br, (cond: ValueId, nz_dest: BlockId, z_dest: BlockId)}

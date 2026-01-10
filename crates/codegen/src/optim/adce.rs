@@ -4,9 +4,9 @@ use std::collections::BTreeSet;
 
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
+    BlockId, Function, InstId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::SideEffect,
-    BlockId, Function, InstId,
 };
 
 use crate::post_domtree::{PDFSet, PDTIdom, PostDomTree};

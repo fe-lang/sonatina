@@ -4,7 +4,7 @@ use annotate_snippets::{AnnotationKind, Level, Renderer, Snippet};
 use smol_str::SmolStr;
 use sonatina_triple::{InvalidTriple, TargetTriple};
 
-use crate::{syntax::Rule, Span};
+use crate::{Span, syntax::Rule};
 
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]

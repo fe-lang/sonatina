@@ -4,10 +4,10 @@ use std::{io, ops};
 
 use super::Type;
 use crate::{
+    GlobalVariableRef, I256,
     inst::InstId,
     ir_writer::{FuncWriteCtx, IrWrite},
     module::ModuleCtx,
-    GlobalVariableRef, I256,
 };
 
 /// An opaque reference to [`Value`].

@@ -145,13 +145,13 @@ mod tests {
     #![allow(clippy::many_single_char_names)]
 
     use sonatina_ir::{
+        Type,
         builder::test_util::*,
         inst::{
             arith::Add,
             control_flow::{Br, Jump, Phi, Return},
         },
         prelude::*,
-        Type,
     };
 
     use super::*;

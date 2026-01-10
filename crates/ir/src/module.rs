@@ -6,11 +6,11 @@ use rayon::{iter::IntoParallelIterator, prelude::ParallelIterator};
 use sonatina_triple::TargetTriple;
 
 use crate::{
+    Function, InstSetBase, Linkage, Signature, Type,
     global_variable::GlobalVariableStore,
     ir_writer::IrWrite,
     isa::{Endian, Isa, TypeLayout, TypeLayoutError},
     types::TypeStore,
-    Function, InstSetBase, Linkage, Signature, Type,
 };
 
 pub struct Module {

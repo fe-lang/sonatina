@@ -3,7 +3,7 @@ use std::io;
 use cranelift_entity::PrimaryMap;
 use rustc_hash::FxHashMap;
 
-use crate::{ir_writer::IrWrite, module::ModuleCtx, Immediate, Linkage, Type};
+use crate::{Immediate, Linkage, Type, ir_writer::IrWrite, module::ModuleCtx};
 
 #[derive(Debug, Default)]
 pub struct GlobalVariableStore {
