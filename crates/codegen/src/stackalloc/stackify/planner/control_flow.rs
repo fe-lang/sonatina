@@ -6,9 +6,9 @@ use std::collections::BTreeMap;
 
 use super::{
     super::{
-        sym_stack::StackItem,
-        templates::{phi_args_for_edge, BlockTemplate},
         DUP_MAX, SWAP_MAX,
+        sym_stack::StackItem,
+        templates::{BlockTemplate, phi_args_for_edge},
     },
     Planner,
 };
@@ -38,14 +38,11 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         let phi_count = phi_results[succ].len();
         let mut preserve_phi_srcs: BitSet<ValueId> = BitSet::default();
         for &src in phi_srcs.iter() {
-            if self.ctx.func.dfg.value_is_imm(src) {
-                continue;
-            }
-            if let Some(pos) = self.stack.find_reachable_value(src, SWAP_MAX) {
-                // Conservatively ensure the source stays reachable after pushing the phi prefix.
-                if pos + phi_count <= SWAP_MAX {
-                    preserve_phi_srcs.insert(src);
-                }
+            if !self.ctx.func.dfg.value_is_imm(src)
+                && let Some(pos) = self.stack.find_reachable_value(src, SWAP_MAX)
+                && pos + phi_count <= SWAP_MAX
+            {
+                preserve_phi_srcs.insert(src);
             }
         }
         self.normalize_to_transfer_with_preserve(tmpl.transfer.as_slice(), &preserve_phi_srcs);
@@ -54,10 +51,9 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         let transfer_set: BitSet<ValueId> = tmpl.transfer.as_slice().into();
         let mut remaining_src_uses: BTreeMap<ValueId, u32> = BTreeMap::new();
         for &src in phi_srcs.iter() {
-            if self.ctx.func.dfg.value_is_imm(src) {
-                continue;
+            if !self.ctx.func.dfg.value_is_imm(src) {
+                *remaining_src_uses.entry(src).or_insert(0) += 1;
             }
-            *remaining_src_uses.entry(src).or_insert(0) += 1;
         }
 
         for (&phi_res, &src) in phi_results[succ].iter().zip(phi_srcs.iter()).rev() {

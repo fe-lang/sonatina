@@ -6,9 +6,9 @@ use crate::bitset::BitSet;
 
 use super::{
     super::Action,
+    StackifyAlloc,
     sym_stack::{StackItem, SymStack},
     templates::BlockTemplate,
-    StackifyAlloc,
 };
 
 /// Optional observer hooks for tracing stackify planning.

@@ -1,5 +1,5 @@
 use cranelift_entity::SecondaryMap;
-use sonatina_ir::{cfg::ControlFlowGraph, BlockId, Function, InstId, ValueId};
+use sonatina_ir::{BlockId, Function, InstId, ValueId, cfg::ControlFlowGraph};
 use std::collections::BTreeMap;
 
 use crate::{
@@ -78,10 +78,10 @@ impl Allocator for StackifyAlloc {
     }
 
     fn read(&self, inst: InstId, vals: &[ValueId]) -> Actions {
-        if let [val] = vals {
-            if let Some(act) = self.brtable_actions.get(&(inst, *val)) {
-                return act.clone();
-            }
+        if let [val] = vals
+            && let Some(act) = self.brtable_actions.get(&(inst, *val))
+        {
+            return act.clone();
         }
         self.pre_actions[inst].clone()
     }

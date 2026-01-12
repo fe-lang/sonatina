@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 
 use crate::bitset::BitSet;
 use cranelift_entity::SecondaryMap;
-use sonatina_ir::{cfg::ControlFlowGraph, BlockId, Function, ValueId};
+use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
 
 #[derive(Default)]
 pub struct Liveness {
@@ -174,7 +174,7 @@ fn for_each_def(func: &Function, block: BlockId, mut f: impl FnMut(ValueId, bool
 #[cfg(test)]
 mod tests {
     use super::Liveness;
-    use sonatina_ir::{cfg::ControlFlowGraph, BlockId};
+    use sonatina_ir::{BlockId, cfg::ControlFlowGraph};
     use sonatina_parser::parse_module;
 
     const SRC: &str = r#"

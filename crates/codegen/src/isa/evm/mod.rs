@@ -11,11 +11,11 @@ use crate::{
     },
     stackalloc::{Action, Allocator},
 };
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    inst::evm::inst_set::EvmInstKind,
-    isa::{evm::Evm, Isa},
     BlockId, Function, Immediate, InstId, InstSetExt, Type, U256,
+    inst::evm::inst_set::EvmInstKind,
+    isa::{Isa, evm::Evm},
 };
 
 // TODO: proper memory allocation scheme
@@ -229,12 +229,12 @@ impl LowerBackend for EvmBackend {
                     ctx.push(OpCode::JUMPI);
                 }
 
-                if let Some(dest) = default {
-                    if !ctx.is_next_block(dest) {
-                        let p = ctx.push(OpCode::PUSH1);
-                        ctx.add_label_reference(p, Label::Block(dest));
-                        ctx.push(OpCode::JUMP);
-                    }
+                if let Some(dest) = default
+                    && !ctx.is_next_block(dest)
+                {
+                    let p = ctx.push(OpCode::PUSH1);
+                    ctx.add_label_reference(p, Label::Block(dest));
+                    ctx.push(OpCode::JUMP);
                 }
             }
 

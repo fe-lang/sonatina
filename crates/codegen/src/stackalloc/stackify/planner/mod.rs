@@ -10,10 +10,10 @@ use crate::{
 use sonatina_ir::ValueId;
 
 use super::{
+    StackifyContext,
     slots::{FreeSlots, SlotState},
     spill::{SpillDiscovery, SpillSet},
     sym_stack::SymStack,
-    StackifyContext,
 };
 
 pub(super) struct MemPlan<'a> {

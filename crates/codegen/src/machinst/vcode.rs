@@ -1,13 +1,13 @@
 use cranelift_entity::{
+    EntityList, EntityRef, ListPool, PrimaryMap, SecondaryMap, SparseMap, SparseMapValue,
     entity_impl,
     packed_option::{PackedOption, ReservedValue},
-    EntityList, EntityRef, ListPool, PrimaryMap, SecondaryMap, SparseMap, SparseMapValue,
 };
 use smallvec::SmallVec;
 use sonatina_ir::{
+    BlockId, InstId, U256,
     ir_writer::{FuncWriteCtx, FunctionSignature, InstStatement, IrWrite},
     module::FuncRef,
-    BlockId, InstId, U256,
 };
 use std::{fmt, io};
 
@@ -111,12 +111,12 @@ where
                     }?;
                 }
 
-                if let Some(ir) = self.inst_ir[insn].expand() {
-                    if cur_ir != Some(ir) {
-                        cur_ir = Some(ir);
-                        write!(w, "  // ")?;
-                        InstStatement(ir).write(w, ctx)?;
-                    }
+                if let Some(ir) = self.inst_ir[insn].expand()
+                    && cur_ir != Some(ir)
+                {
+                    cur_ir = Some(ir);
+                    write!(w, "  // ")?;
+                    InstStatement(ir).write(w, ctx)?;
                 }
                 writeln!(w)?;
             }

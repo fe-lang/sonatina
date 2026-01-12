@@ -1,11 +1,12 @@
 use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
-use sonatina_ir::{inst::control_flow::BranchKind, BlockId, Function, Immediate, InstId, ValueId};
+use sonatina_ir::{BlockId, Function, Immediate, InstId, ValueId, inst::control_flow::BranchKind};
 use std::collections::BTreeMap;
 
 use crate::{bitset::BitSet, stackalloc::Actions};
 
 use super::{
+    DUP_MAX, SWAP_MAX,
     alloc::StackifyAlloc,
     builder::StackifyContext,
     planner::{self, Planner},
@@ -14,7 +15,6 @@ use super::{
     sym_stack::{StackItem, SymStack},
     templates::BlockTemplate,
     trace::StackifyObserver,
-    DUP_MAX, SWAP_MAX,
 };
 
 pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
@@ -198,10 +198,11 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         }
 
         // If the block had no lowered instructions, inject prologue into the terminator.
-        if !state.prologue.is_empty() && !state.injected_prologue {
-            if let Some(term) = self.ctx.func.layout.last_inst_of(block) {
-                self.alloc.pre_actions[term].extend_from_slice(&state.prologue);
-            }
+        if !state.prologue.is_empty()
+            && !state.injected_prologue
+            && let Some(term) = self.ctx.func.layout.last_inst_of(block)
+        {
+            self.alloc.pre_actions[term].extend_from_slice(&state.prologue);
         }
     }
 
@@ -472,10 +473,9 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
 
         // Update remaining uses.
         for &v in args.iter() {
-            if self.ctx.func.dfg.value_is_imm(v) {
-                continue;
-            }
-            if let Some(n) = state.remaining_uses.get_mut(&v) {
+            if !self.ctx.func.dfg.value_is_imm(v)
+                && let Some(n) = state.remaining_uses.get_mut(&v)
+            {
                 let before = *n;
                 *n = n.saturating_sub(1);
                 if before != 0 && *n == 0 {
@@ -641,10 +641,9 @@ fn improve_reachability_before_operands(
 
     let mut protected_args: BitSet<ValueId> = BitSet::default();
     for &arg in args.iter() {
-        if func.dfg.value_is_imm(arg) {
-            continue;
+        if !func.dfg.value_is_imm(arg) {
+            protected_args.insert(arg);
         }
-        protected_args.insert(arg);
     }
 
     // If at least one operand is on the stack but unreachable by `DUP16`, attempt a more
@@ -653,15 +652,11 @@ fn improve_reachability_before_operands(
     // operand at depth 18-20).
     let mut needs_aggressive = false;
     for &arg in args.iter() {
-        if func.dfg.value_is_imm(arg) {
-            continue;
-        }
-        if stack.find_reachable_value(arg, DUP_MAX).is_some() {
-            continue;
-        }
-        if stack
-            .find_reachable_value(arg, AGGRESSIVE_REACHABILITY_DEPTH)
-            .is_some()
+        if !func.dfg.value_is_imm(arg)
+            && stack.find_reachable_value(arg, DUP_MAX).is_none()
+            && stack
+                .find_reachable_value(arg, AGGRESSIVE_REACHABILITY_DEPTH)
+                .is_some()
         {
             needs_aggressive = true;
             break;
@@ -679,33 +674,23 @@ fn improve_reachability_before_operands(
         let mut progressed = false;
 
         for &arg in args.iter() {
-            if func.dfg.value_is_imm(arg) {
-                continue;
+            if !func.dfg.value_is_imm(arg)
+                && stack.find_reachable_value(arg, DUP_MAX).is_none()
+                && let Some(pos) = stack.find_reachable_value(arg, AGGRESSIVE_REACHABILITY_DEPTH)
+                && let Some(victim) = choose_reachability_victim(
+                    func,
+                    stack,
+                    pos,
+                    &protected_args,
+                    live_future,
+                    live_out,
+                )
+            {
+                stack.stable_delete_at_depth(victim + 1, actions);
+                deletions += 1;
+                progressed = true;
+                break;
             }
-
-            if stack.find_reachable_value(arg, DUP_MAX).is_some() {
-                continue;
-            }
-
-            let Some(pos) = stack.find_reachable_value(arg, AGGRESSIVE_REACHABILITY_DEPTH) else {
-                continue;
-            };
-
-            let Some(victim) = choose_reachability_victim(
-                func,
-                stack,
-                pos,
-                &protected_args,
-                live_future,
-                live_out,
-            ) else {
-                continue;
-            };
-
-            stack.stable_delete_at_depth(victim + 1, actions);
-            deletions += 1;
-            progressed = true;
-            break;
         }
 
         if !progressed {
@@ -729,20 +714,22 @@ fn choose_reachability_victim(
     // chains. This includes immediates: if they're dead, removing them cannot introduce new
     // rematerialization cost.
     for (i, item) in stack.iter().take(above).enumerate() {
-        let StackItem::Value(v) = item else {
-            continue;
-        };
-        if !protected_args.contains(*v) && !live_future.contains(*v) && !live_out.contains(*v) {
+        if let StackItem::Value(v) = item
+            && !protected_args.contains(*v)
+            && !live_future.contains(*v)
+            && !live_out.contains(*v)
+        {
             return Some(i);
         }
     }
 
     // 2) Then evict "cheap" immediates (they are always rematerializable).
     for (i, item) in stack.iter().take(above).enumerate() {
-        let StackItem::Value(v) = item else {
-            continue;
-        };
-        if !protected_args.contains(*v) && func.dfg.value_is_imm(*v) && is_evictable_imm(func, *v) {
+        if let StackItem::Value(v) = item
+            && !protected_args.contains(*v)
+            && func.dfg.value_is_imm(*v)
+            && is_evictable_imm(func, *v)
+        {
             return Some(i);
         }
     }
@@ -757,16 +744,11 @@ fn choose_reachability_victim(
     }
 
     for (i, item) in stack.iter().take(above).enumerate() {
-        let StackItem::Value(v) = item else {
-            continue;
-        };
-        if protected_args.contains(*v) {
-            continue;
-        }
-        let Some(&first) = first_index.get(v) else {
-            continue;
-        };
-        if first != i {
+        if let StackItem::Value(v) = item
+            && !protected_args.contains(*v)
+            && let Some(&first) = first_index.get(v)
+            && first != i
+        {
             return Some(i);
         }
     }

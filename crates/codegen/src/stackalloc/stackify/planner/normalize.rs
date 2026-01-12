@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use super::{
     super::{
-        sym_stack::{StackItem, SymStack},
         DUP_MAX, SWAP_MAX,
+        sym_stack::{StackItem, SymStack},
     },
     Planner,
 };
@@ -143,11 +143,11 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         // needlessly breaking the order and forcing a permutation later.
         let stable_deletes = matches_transfer_subsequence(self.stack, target);
         loop {
-            if let Some(StackItem::Value(v)) = self.stack.top() {
-                if !wanted.contains(*v) {
-                    self.stack.pop(&mut *self.actions);
-                    continue;
-                }
+            if let Some(StackItem::Value(v)) = self.stack.top()
+                && !wanted.contains(*v)
+            {
+                self.stack.pop(&mut *self.actions);
+                continue;
             }
 
             let Some(pos) = find_deepest_reachable_unwanted(self.stack, &wanted, SWAP_MAX) else {

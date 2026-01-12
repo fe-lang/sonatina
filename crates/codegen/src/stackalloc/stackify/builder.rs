@@ -1,6 +1,6 @@
 use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
-use sonatina_ir::{cfg::ControlFlowGraph, BlockId, Function, ValueId};
+use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
 use std::collections::BTreeMap;
 
 use crate::{bitset::BitSet, domtree::DomTree, liveness::Liveness};
@@ -12,8 +12,8 @@ use super::{
     spill::SpillSet,
     sym_stack::SymStack,
     templates::{
-        compute_def_info, compute_dom_depth, compute_phi_out_sources, compute_phi_results,
-        compute_templates, function_has_internal_return, DefInfo,
+        DefInfo, compute_def_info, compute_dom_depth, compute_phi_out_sources, compute_phi_results,
+        compute_templates, function_has_internal_return,
     },
     trace::{NullObserver, StackifyObserver},
 };
