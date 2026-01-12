@@ -35,8 +35,8 @@ input_file: test_files/evm/diamond.sntn
       pre: [PUSH(0)]
       mstore [0, v5]
     - stack=[]
-      pre: [PUSH(4), PUSH(0)]
-      evm_return [0, 4]
+      pre: [PUSH(32), PUSH(0)]
+      evm_return [0, 32]
 
 // func public %entry()
 entry:
@@ -65,12 +65,8 @@ entry:
   block3:
     JUMPDEST
     PUSH0  // mstore 0.i32 v5 i32;
-    SWAP1
-    PUSH1 0xe0 (224)
-    SHL
-    SWAP1
     MSTORE
-    PUSH1 0x4 (4)  // evm_return 0.i8 4.i8;
+    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
     PUSH0
     RETURN
 
@@ -105,18 +101,14 @@ entry:
   block3:
    24    JUMPDEST
    25    PUSH0  // mstore 0.i32 v5 i32;
-   26    SWAP1
-   27    PUSH1 0xe0 (224)
-   29    SHL
-   30    SWAP1
-   31    MSTORE
-   32    PUSH1 0x4 (4)  // evm_return 0.i8 4.i8;
-   34    PUSH0
-   35    RETURN
+   26    MSTORE
+   27    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+   29    PUSH0
+   30    RETURN
 
-0x5b5f3560e01c5f8111156014575b6001016018565b6002015b5f9060e01b905260045ff3
+0x5b5f3560e01c5f8111156014575b6001016018565b6002015b5f5260205ff3
 
-Success { reason: Return, gas_used: 21136, gas_refunded: 0, logs: [], output: Call(0x0000000c) }
+Success { reason: Return, gas_used: 21124, gas_refunded: 0, logs: [], output: Call(0x000000000000000000000000000000000000000000000000000000000000000c) }
 
     pc  opcode            input (stack grows to the right)
      0  5b  JUMPDEST      []
@@ -137,11 +129,7 @@ Success { reason: Return, gas_used: 21136, gas_refunded: 0, logs: [], output: Ca
     19  56  JUMP          [0xc, 0x18]
     24  5b  JUMPDEST      [0xc]
     25  5f  PUSH0         [0xc]
-    26  90  SWAP1         [0xc, 0x0]
-    27  60  PUSH1         0xe0  [0x0, 0xc]
-    29  1b  SHL           [0x0, 0xc, 0xe0]
-    30  90  SWAP1         [0x0, 0xc00000000000000000000000000000000000000000000000000000000]
-    31  52  MSTORE        [0xc00000000000000000000000000000000000000000000000000000000, 0x0]
-    32  60  PUSH1         0x04  []
-    34  5f  PUSH0         [0x4]
-    35  f3  RETURN        [0x4, 0x0]
+    26  52  MSTORE        [0xc, 0x0]
+    27  60  PUSH1         0x20  []
+    29  5f  PUSH0         [0x20]
+    30  f3  RETURN        [0x20, 0x0]

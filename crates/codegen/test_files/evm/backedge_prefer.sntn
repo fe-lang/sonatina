@@ -5,7 +5,7 @@ func public %entry() {
         v0.i32 = call %prefer_backedge_layout 11.i32 22.i32;
 
         mstore 0.i32 v0 i32;
-        evm_return 0.i8 4.i8;
+        evm_return 0.i8 32.i8;
 }
 
 func private %prefer_backedge_layout(v0.i32, v1.i32) -> i32 {

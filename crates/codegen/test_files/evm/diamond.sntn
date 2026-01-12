@@ -19,6 +19,5 @@ func public %entry() {
         v5.i32 = phi (v3 block1) (v4 block2);
 
         mstore 0.i32 v5 i32;
-        evm_return 0.i8 4.i8;
+        evm_return 0.i8 32.i8;
 }
-

@@ -1,7 +1,7 @@
 use super::vcode::{Label, VCode, VCodeInst};
 use crate::stackalloc::Allocator;
 use smallvec::SmallVec;
-use sonatina_ir::{module::ModuleCtx, BlockId, Function, Immediate, Inst, InstId, ValueId};
+use sonatina_ir::{module::ModuleCtx, BlockId, Function, Immediate, Inst, InstId, Type, ValueId};
 
 pub trait LowerBackend {
     type MInst;
@@ -116,6 +116,10 @@ impl<'a, Op: Default> Lower<'a, Op> {
 
     pub fn value_imm(&self, value: ValueId) -> Option<Immediate> {
         self.function.dfg.value_imm(value)
+    }
+
+    pub fn value_ty(&self, value: ValueId) -> Type {
+        self.function.dfg.value_ty(value)
     }
 
     pub fn insn_result(&self, inst: InstId) -> Option<ValueId> {

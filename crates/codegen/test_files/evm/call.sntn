@@ -9,7 +9,7 @@ func public %entry() {
         v4.i64 = call %main v1 v3;
 
         mstore 0.i32 v4 i64;
-        evm_return 0.i8 8.i8;
+        evm_return 0.i8 32.i8;
 }
 
 func private %square(v0.i64) -> i64 {

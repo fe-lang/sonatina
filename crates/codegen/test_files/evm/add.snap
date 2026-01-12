@@ -24,8 +24,8 @@ input_file: test_files/evm/add.sntn
       pre: [PUSH(0)]
       mstore [0, v4]
     - stack=[]
-      pre: [PUSH(4), PUSH(0)]
-      evm_return [0, 4]
+      pre: [PUSH(32), PUSH(0)]
+      evm_return [0, 32]
 
 // func public %add(v0.i32, v1.i32) -> i32
   block0 P=[v0, v1] T=[]
@@ -54,12 +54,8 @@ entry:
     JUMP
     JUMPDEST
     PUSH0  // mstore 0.i32 v4 i32;
-    SWAP1
-    PUSH1 0xe0 (224)
-    SHL
-    SWAP1
     MSTORE
-    PUSH1 0x4 (4)  // evm_return 0.i8 4.i8;
+    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
     PUSH0
     RETURN
 
@@ -91,29 +87,25 @@ entry:
    13    SHR
    14    PUSH1 20  // v4.i32 = call %add v1 v3;
    16    SWAP2
-   17    PUSH1 32 (FuncRef(1))
+   17    PUSH1 27 (FuncRef(1))
    19    JUMP
    20    JUMPDEST
    21    PUSH0  // mstore 0.i32 v4 i32;
-   22    SWAP1
-   23    PUSH1 0xe0 (224)
-   25    SHL
-   26    SWAP1
-   27    MSTORE
-   28    PUSH1 0x4 (4)  // evm_return 0.i8 4.i8;
-   30    PUSH0
-   31    RETURN
+   22    MSTORE
+   23    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+   25    PUSH0
+   26    RETURN
 // func public %add(v0.i32, v1.i32) -> i32
 add:
   block0:
-   32    JUMPDEST
-   33    ADD  // v2.i32 = add v0 v1;
-   34    SWAP1  // return v2;
-   35    JUMP
+   27    JUMPDEST
+   28    ADD  // v2.i32 = add v0 v1;
+   29    SWAP1  // return v2;
+   30    JUMP
 
-0x5b5f358060e01c9060201b60e01c6014916020565b5f9060e01b905260045ff35b019056
+0x5b5f358060e01c9060201b60e01c601491601b565b5f5260205ff35b019056
 
-Success { reason: Return, gas_used: 21144, gas_refunded: 0, logs: [], output: Call(0x00000021) }
+Success { reason: Return, gas_used: 21132, gas_refunded: 0, logs: [], output: Call(0x0000000000000000000000000000000000000000000000000000000000000021) }
 
     pc  opcode            input (stack grows to the right)
      0  5b  JUMPDEST      []
@@ -129,19 +121,15 @@ Success { reason: Return, gas_used: 21144, gas_refunded: 0, logs: [], output: Ca
     13  1c  SHR           [0xb, 0x1600000000000000000000000000000000000000000000000000000000, 0xe0]
     14  60  PUSH1         0x14  [0xb, 0x16]
     16  91  SWAP2         [0xb, 0x16, 0x14]
-    17  60  PUSH1         0x20  [0x14, 0x16, 0xb]
-    19  56  JUMP          [0x14, 0x16, 0xb, 0x20]
-    32  5b  JUMPDEST      [0x14, 0x16, 0xb]
-    33  01  ADD           [0x14, 0x16, 0xb]
-    34  90  SWAP1         [0x14, 0x21]
-    35  56  JUMP          [0x21, 0x14]
+    17  60  PUSH1         0x1b  [0x14, 0x16, 0xb]
+    19  56  JUMP          [0x14, 0x16, 0xb, 0x1b]
+    27  5b  JUMPDEST      [0x14, 0x16, 0xb]
+    28  01  ADD           [0x14, 0x16, 0xb]
+    29  90  SWAP1         [0x14, 0x21]
+    30  56  JUMP          [0x21, 0x14]
     20  5b  JUMPDEST      [0x21]
     21  5f  PUSH0         [0x21]
-    22  90  SWAP1         [0x21, 0x0]
-    23  60  PUSH1         0xe0  [0x0, 0x21]
-    25  1b  SHL           [0x0, 0x21, 0xe0]
-    26  90  SWAP1         [0x0, 0x2100000000000000000000000000000000000000000000000000000000]
-    27  52  MSTORE        [0x2100000000000000000000000000000000000000000000000000000000, 0x0]
-    28  60  PUSH1         0x04  []
-    30  5f  PUSH0         [0x4]
-    31  f3  RETURN        [0x4, 0x0]
+    22  52  MSTORE        [0x21, 0x0]
+    23  60  PUSH1         0x20  []
+    25  5f  PUSH0         [0x20]
+    26  f3  RETURN        [0x20, 0x0]

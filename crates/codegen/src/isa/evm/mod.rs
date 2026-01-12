@@ -15,7 +15,7 @@ use smallvec::{smallvec, SmallVec};
 use sonatina_ir::{
     inst::evm::inst_set::EvmInstKind,
     isa::{evm::Evm, Isa},
-    BlockId, Function, Immediate, InstId, InstSetExt, U256,
+    BlockId, Function, Immediate, InstId, InstSetExt, Type, U256,
 };
 
 // TODO: proper memory allocation scheme
@@ -79,12 +79,72 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::Shl(_) => basic_op(ctx, &[OpCode::SHL]),
             EvmInstKind::Shr(_) => basic_op(ctx, &[OpCode::SHR]),
             EvmInstKind::Sar(_) => basic_op(ctx, &[OpCode::SAR]),
-            EvmInstKind::Sext(_) => todo!(),
+            EvmInstKind::Sext(_sext) => {
+                let from = args[0];
+                let src_ty = ctx.value_ty(from);
+                let src_bits = scalar_bit_width(src_ty, ctx.module).unwrap_or(256);
+
+                perform_actions(ctx, &alloc.read(insn, &args));
+
+                // `i1` is treated as a boolean; sext is equivalent to zext.
+                if src_bits == 1 {
+                    push_bytes(ctx, &[1]);
+                    ctx.push(OpCode::AND);
+                } else if (8..256).contains(&src_bits) {
+                    let src_bytes = (src_bits / 8) as u8;
+                    debug_assert!(src_bytes > 0 && src_bytes <= 32);
+                    // `SIGNEXTEND` takes (byte_index, value) with `byte_index` at top of stack.
+                    push_bytes(ctx, &[src_bytes - 1]);
+                    ctx.push(OpCode::SIGNEXTEND);
+                }
+
+                perform_actions(ctx, &alloc.write(insn, result));
+            }
             EvmInstKind::Zext(_) => todo!(),
-            EvmInstKind::Trunc(_) => todo!(),
-            EvmInstKind::Bitcast(_) => todo!(),
-            EvmInstKind::IntToPtr(_) => todo!(),
-            EvmInstKind::PtrToInt(_) => todo!(),
+
+            EvmInstKind::Trunc(trunc) => {
+                let dst_ty = *trunc.ty();
+                let dst_bits = scalar_bit_width(dst_ty, ctx.module).unwrap_or(256);
+
+                perform_actions(ctx, &alloc.read(insn, &args));
+                if let Some(mask) = low_bits_mask(dst_bits) {
+                    let bytes = u256_to_be(&mask);
+                    push_bytes(ctx, &bytes);
+                    ctx.push(OpCode::AND);
+                }
+                perform_actions(ctx, &alloc.write(insn, result));
+            }
+            EvmInstKind::Bitcast(_) => {
+                // No-op.
+                perform_actions(ctx, &alloc.read(insn, &args));
+                perform_actions(ctx, &alloc.write(insn, result));
+            }
+            EvmInstKind::IntToPtr(_) => {
+                // Pointers are represented as 256-bit integers on the EVM.
+                let from = args[0];
+                let src_ty = ctx.value_ty(from);
+                let src_bits = scalar_bit_width(src_ty, ctx.module).unwrap_or(256);
+
+                perform_actions(ctx, &alloc.read(insn, &args));
+                if let Some(mask) = low_bits_mask(src_bits) {
+                    let bytes = u256_to_be(&mask);
+                    push_bytes(ctx, &bytes);
+                    ctx.push(OpCode::AND);
+                }
+                perform_actions(ctx, &alloc.write(insn, result));
+            }
+            EvmInstKind::PtrToInt(ptr_to_int) => {
+                let dst_ty = *ptr_to_int.ty();
+                let dst_bits = scalar_bit_width(dst_ty, ctx.module).unwrap_or(256);
+
+                perform_actions(ctx, &alloc.read(insn, &args));
+                if let Some(mask) = low_bits_mask(dst_bits) {
+                    let bytes = u256_to_be(&mask);
+                    push_bytes(ctx, &bytes);
+                    ctx.push(OpCode::AND);
+                }
+                perform_actions(ctx, &alloc.write(insn, result));
+            }
             EvmInstKind::Lt(_) => basic_op(ctx, &[OpCode::LT]),
             EvmInstKind::Gt(_) => basic_op(ctx, &[OpCode::GT]),
             EvmInstKind::Slt(_) => basic_op(ctx, &[OpCode::SLT]),
@@ -236,16 +296,10 @@ impl LowerBackend for EvmBackend {
                     // Pop the args, and don't do an mstore.
                     ctx.push(OpCode::POP);
                     ctx.push(OpCode::POP);
-                } else if ty_size < 32 {
-                    // Value to write to mem is in stack slot 1.
-                    ctx.push(OpCode::SWAP1);
-                    // NOTE: This assumes that the useful bytes are on the right.
-                    ctx.push_with_imm(OpCode::PUSH1, &[((32 - ty_size) * 8) as u8]);
-                    ctx.push(OpCode::SHL);
-                    ctx.push(OpCode::SWAP1);
+                } else {
+                    debug_assert_eq!(ty_size, 32, "word-slot model: expected 32-byte store");
+                    ctx.push(OpCode::MSTORE);
                 }
-
-                ctx.push(OpCode::MSTORE);
             }
             EvmInstKind::EvmMcopy(_) => basic_op(ctx, &[OpCode::MCOPY]),
             EvmInstKind::Gep(_) => todo!(),
@@ -299,20 +353,25 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::EvmLog2(_) => basic_op(ctx, &[OpCode::LOG2]),
             EvmInstKind::EvmLog3(_) => basic_op(ctx, &[OpCode::LOG3]),
             EvmInstKind::EvmLog4(_) => basic_op(ctx, &[OpCode::LOG4]),
-            EvmInstKind::EvmCreate(_) => todo!(),
-            EvmInstKind::EvmCall(_) => todo!(),
-            EvmInstKind::EvmCallCode(_) => todo!(),
+            EvmInstKind::EvmCreate(_) => basic_op(ctx, &[OpCode::CREATE]),
+            EvmInstKind::EvmCall(_) => basic_op(ctx, &[OpCode::CALL]),
+            EvmInstKind::EvmCallCode(_) => basic_op(ctx, &[OpCode::CALLCODE]),
             EvmInstKind::EvmReturn(_) => basic_op(ctx, &[OpCode::RETURN]),
-            EvmInstKind::EvmDelegateCall(_) => todo!(),
-            EvmInstKind::EvmCreate2(_) => todo!(),
-            EvmInstKind::EvmStaticCall(_) => todo!(),
-            EvmInstKind::EvmRevert(_) => todo!(),
-            EvmInstKind::EvmSelfDestruct(_) => todo!(),
+            EvmInstKind::EvmDelegateCall(_) => basic_op(ctx, &[OpCode::DELEGATECALL]),
+            EvmInstKind::EvmCreate2(_) => basic_op(ctx, &[OpCode::CREATE2]),
+            EvmInstKind::EvmStaticCall(_) => basic_op(ctx, &[OpCode::STATICCALL]),
+            EvmInstKind::EvmRevert(_) => basic_op(ctx, &[OpCode::REVERT]),
+            EvmInstKind::EvmSelfDestruct(_) => basic_op(ctx, &[OpCode::SELFDESTRUCT]),
 
             EvmInstKind::EvmMalloc(_) => todo!(),
             EvmInstKind::InsertValue(_) => todo!(),
             EvmInstKind::ExtractValue(_) => todo!(),
-            EvmInstKind::GetFunctionPtr(_) => todo!(),
+            EvmInstKind::GetFunctionPtr(get_fn) => {
+                let func = *get_fn.func();
+                perform_actions(ctx, &alloc.read(insn, &args));
+                ctx.push_jump_target(OpCode::PUSH1, Label::Function(func));
+                perform_actions(ctx, &alloc.write(insn, result));
+            }
             EvmInstKind::EvmContractSize(_) => todo!(),
             EvmInstKind::EvmInvalid(_) => basic_op(ctx, &[OpCode::INVALID]),
         }
@@ -494,6 +553,32 @@ fn u256_to_be(num: &U256) -> SmallVec<[u8; 8]> {
     } else {
         let b = num.to_big_endian();
         b.into_iter().skip_while(|b| *b == 0).collect()
+    }
+}
+
+fn scalar_bit_width(ty: Type, module: &sonatina_ir::module::ModuleCtx) -> Option<u16> {
+    let bits = match ty {
+        Type::I1 => 1,
+        Type::I8 => 8,
+        Type::I16 => 16,
+        Type::I32 => 32,
+        Type::I64 => 64,
+        Type::I128 => 128,
+        Type::I256 => 256,
+        Type::Unit => 0,
+        Type::Compound(_) if ty.is_pointer(module) => 256,
+        Type::Compound(_) => return None,
+    };
+    Some(bits)
+}
+
+fn low_bits_mask(bits: u16) -> Option<U256> {
+    if bits >= 256 {
+        None
+    } else if bits == 0 {
+        Some(U256::zero())
+    } else {
+        Some((U256::one() << (bits as usize)) - U256::one())
     }
 }
 

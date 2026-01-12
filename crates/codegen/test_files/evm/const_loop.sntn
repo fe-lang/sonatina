@@ -5,7 +5,7 @@ func public %entry() {
         v0.i8 = call %const_loop;
 
         mstore 0.i32 v0 i8;
-        evm_return 0.i8 1.i8;
+        evm_return 0.i8 32.i8;
 }
 
 func public %const_loop() -> i8 {

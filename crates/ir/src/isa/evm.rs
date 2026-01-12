@@ -40,13 +40,9 @@ impl TypeLayout for EvmTypeLayout {
     fn size_of(&self, ty: crate::Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
         let size = match ty {
             Type::Unit => 0,
-            Type::I1 => 1,
-            Type::I8 => 1,
-            Type::I16 => 2,
-            Type::I32 => 4,
-            Type::I64 => 8,
-            Type::I128 => 16,
-            Type::I256 => 32,
+            // EVM memory is word-addressed by the MLOAD/MSTORE family. For now we model all
+            // scalar/pointer values as occupying one full 32-byte slot.
+            Type::I1 | Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 | Type::I256 => 32,
 
             Type::Compound(cmpd) => {
                 let cmpd_data = ctx.with_ty_store(|s| s.resolve_compound(cmpd).clone());
@@ -81,8 +77,13 @@ impl TypeLayout for EvmTypeLayout {
         Type::I256
     }
 
-    fn align_of(&self, _ty: Type, _ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
-        Ok(1)
+    fn align_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
+        let size = self.size_of(ty, ctx)?;
+        if size == 0 {
+            Ok(1)
+        } else {
+            Ok(32)
+        }
     }
 
     fn endian(&self) -> Endian {

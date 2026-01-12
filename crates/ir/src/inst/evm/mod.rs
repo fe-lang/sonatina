@@ -167,9 +167,7 @@ pub struct EvmBlockHash {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Read))]
-pub struct EvmCoinBase {
-    block_num: ValueId,
-}
+pub struct EvmCoinBase {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Read))]
