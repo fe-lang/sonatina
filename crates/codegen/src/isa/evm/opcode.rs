@@ -28,7 +28,8 @@ pub enum OpCode {
     SHL = 0x1B,
     SHR = 0x1C,
     SAR = 0x1D,
-    // 1E-1F unused
+    CLZ = 0x1E,
+    // 1F unused
     KECCAK256 = 0x20,
     // 21-2F unused
     ADDRESS = 0x30,

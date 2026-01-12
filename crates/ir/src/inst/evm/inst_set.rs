@@ -54,6 +54,7 @@ pub struct EvmInstSet(
     evm::EvmMulMod,
     evm::EvmExp,
     evm::EvmByte,
+    evm::EvmClz,
     evm::EvmKeccak256,
     evm::EvmAddress,
     evm::EvmBalance,

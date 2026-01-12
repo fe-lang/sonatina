@@ -10,6 +10,7 @@ super::impl_inst_build! {EvmAddMod, (lhs: ValueId, rhs: ValueId, modulus: ValueI
 super::impl_inst_build! {EvmMulMod, (lhs: ValueId, rhs: ValueId, modulus: ValueId)}
 super::impl_inst_build! {EvmExp, (base: ValueId, exponent: ValueId)}
 super::impl_inst_build! {EvmByte, (pos: ValueId, value: ValueId)}
+super::impl_inst_build! {EvmClz, (word: ValueId)}
 super::impl_inst_build! {EvmKeccak256, (addr: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmAddress, ()}
 super::impl_inst_build! {EvmBalance, (contract_addr: ValueId)}
