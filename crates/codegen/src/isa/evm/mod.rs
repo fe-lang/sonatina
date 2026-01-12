@@ -100,7 +100,19 @@ impl LowerBackend for EvmBackend {
 
                 perform_actions(ctx, &alloc.write(insn, result));
             }
-            EvmInstKind::Zext(_) => todo!(),
+            EvmInstKind::Zext(_) => {
+                let from = args[0];
+                let src_ty = ctx.value_ty(from);
+                let src_bits = scalar_bit_width(src_ty, ctx.module).unwrap_or(256);
+
+                perform_actions(ctx, &alloc.read(insn, &args));
+                if let Some(mask) = low_bits_mask(src_bits) {
+                    let bytes = u256_to_be(&mask);
+                    push_bytes(ctx, &bytes);
+                    ctx.push(OpCode::AND);
+                }
+                perform_actions(ctx, &alloc.write(insn, result));
+            }
 
             EvmInstKind::Trunc(trunc) => {
                 let dst_ty = *trunc.ty();
@@ -315,6 +327,7 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::EvmMulMod(_) => basic_op(ctx, &[OpCode::MULMOD]),
             EvmInstKind::EvmExp(_) => basic_op(ctx, &[OpCode::EXP]),
             EvmInstKind::EvmByte(_) => basic_op(ctx, &[OpCode::BYTE]),
+            EvmInstKind::EvmClz(_) => basic_op(ctx, &[OpCode::CLZ]),
             EvmInstKind::EvmKeccak256(_) => basic_op(ctx, &[OpCode::KECCAK256]),
             EvmInstKind::EvmAddress(_) => basic_op(ctx, &[OpCode::ADDRESS]),
             EvmInstKind::EvmBalance(_) => basic_op(ctx, &[OpCode::BALANCE]),

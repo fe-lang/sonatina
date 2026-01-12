@@ -70,6 +70,7 @@ define_inst_set_base! {
         evm::EvmMulMod,
         evm::EvmExp,
         evm::EvmByte,
+        evm::EvmClz,
         evm::EvmKeccak256,
         evm::EvmAddress,
         evm::EvmBalance,

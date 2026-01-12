@@ -64,6 +64,11 @@ pub struct EvmByte {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct EvmClz {
+    word: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct EvmKeccak256 {
     addr: ValueId,
     len: ValueId,
