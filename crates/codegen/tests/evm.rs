@@ -1,33 +1,32 @@
-use dir_test::{dir_test, Fixture};
+use dir_test::{Fixture, dir_test};
 
 use hex::ToHex;
 use revm::{
-    inspector_handle_register,
+    Context, EvmContext, Handler, inspector_handle_register,
     interpreter::Interpreter,
     primitives::{
         AccountInfo, Address, Bytecode, Bytes, CancunSpec, Env, ExecutionResult, TransactTo, U256,
     },
-    Context, EvmContext, Handler,
 };
 
 use sonatina_codegen::{
     critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
-    isa::evm::{opcode::OpCode, EvmBackend},
+    isa::evm::{EvmBackend, opcode::OpCode},
     liveness::Liveness,
     machinst::{assemble::ObjectLayout, lower::Lower, vcode::VCode},
     stackalloc::StackifyAlloc,
 };
 use sonatina_ir::{
+    BlockId, Function,
     cfg::ControlFlowGraph,
     ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite},
     isa::evm::Evm,
     module::ModuleCtx,
-    BlockId, Function,
 };
-use sonatina_parser::{parse_module, ParsedModule};
+use sonatina_parser::{ParsedModule, parse_module};
 use sonatina_triple::{Architecture, OperatingSystem, Vendor};
-use std::io::{stderr, Write};
+use std::io::{Write, stderr};
 
 fn fmt_stackify_trace(trace: &str) -> String {
     let mut out = String::new();

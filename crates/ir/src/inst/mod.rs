@@ -19,10 +19,9 @@ use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 
 use crate::{
-    InstSetBase,
+    InstSetBase, ValueId,
     ir_writer::{FuncWriteCtx, IrWrite},
     visitor::{Visitable, VisitableMut},
-ValueId,
 };
 
 /// An opaque reference to dynamic [`Inst`].

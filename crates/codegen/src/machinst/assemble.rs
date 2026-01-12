@@ -3,9 +3,9 @@ use std::{io, ops::IndexMut};
 use cranelift_entity::SecondaryMap;
 use indexmap::IndexMap;
 use sonatina_ir::{
+    BlockId, Module, U256,
     ir_writer::{DebugProvider, FuncWriteCtx, FunctionSignature, InstStatement, IrWrite},
     module::FuncRef,
-    BlockId, Module, U256,
 };
 
 use super::{
@@ -220,12 +220,12 @@ where
                     };
                 }
 
-                if let Some(ir) = self.vcode.inst_ir[insn].expand() {
-                    if cur_ir != Some(ir) {
-                        cur_ir = Some(ir);
-                        write!(w, "  // ")?;
-                        InstStatement(ir).write(w, ctx)?;
-                    }
+                if let Some(ir) = self.vcode.inst_ir[insn].expand()
+                    && cur_ir != Some(ir)
+                {
+                    cur_ir = Some(ir);
+                    write!(w, "  // ")?;
+                    InstStatement(ir).write(w, ctx)?;
                 }
                 writeln!(w)?;
             }

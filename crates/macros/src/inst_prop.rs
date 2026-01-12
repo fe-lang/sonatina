@@ -35,11 +35,9 @@ impl InstProp {
             "`type Members = (ty_1, ty_2, .., ty_n)` or `type Members = All` is required";
 
         for it in item_trait.items.iter() {
-            if let syn::TraitItem::Type(assoc_ty) = it {
-                if assoc_ty.ident != "Members" {
-                    continue;
-                }
-
+            if let syn::TraitItem::Type(assoc_ty) = it
+                && assoc_ty.ident == "Members"
+            {
                 let Some((_, members)) = &assoc_ty.default else {
                     return Err(syn::Error::new_spanned(assoc_ty, MISSING_MEMBERS));
                 };

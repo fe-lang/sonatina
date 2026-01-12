@@ -25,7 +25,6 @@ dashmap = { version = "6.1", features = ["rayon"] }
 egglog = "0.5"
 bit-set = "0.8.0"
 indexmap = { version = "2.12" }
-if_chain = "1.0.2"
 
 [dev-dependencies]
 hex = "0.4.3"

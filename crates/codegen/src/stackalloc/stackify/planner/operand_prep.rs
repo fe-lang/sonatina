@@ -7,7 +7,7 @@ use sonatina_ir::{Function, InstId, ValueId};
 use std::collections::{BinaryHeap, HashMap};
 
 use super::{
-    super::{sym_stack::StackItem, CONSUME_LAST_USE_MAX_SWAPS, DUP_MAX, SWAP_MAX},
+    super::{CONSUME_LAST_USE_MAX_SWAPS, DUP_MAX, SWAP_MAX, sym_stack::StackItem},
     MemPlan, Planner,
 };
 
@@ -33,8 +33,8 @@ struct BinaryOperandPrepPlan {
 impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     fn inst_is_commutative(&self, inst: InstId) -> bool {
         use sonatina_ir::{
-            inst::{arith, cmp, logic},
             InstDowncast,
+            inst::{arith, cmp, logic},
         };
 
         let isb = self.ctx.func.inst_set();
@@ -157,15 +157,14 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         // Only optimize when both operands can be produced without touching memory: either an
         // immediate, or already present within `SWAP16` reach.
         for v in target {
-            if self.ctx.func.dfg.value_is_imm(v) {
-                continue;
-            }
-            let reachable = initial
-                .iter()
-                .take(SWAP_MAX)
-                .any(|i| matches!(i, StackItem::Value(x) if *x == v));
-            if !reachable {
-                return None;
+            if !self.ctx.func.dfg.value_is_imm(v) {
+                let reachable = initial
+                    .iter()
+                    .take(SWAP_MAX)
+                    .any(|i| matches!(i, StackItem::Value(x) if *x == v));
+                if !reachable {
+                    return None;
+                }
             }
         }
 
@@ -257,10 +256,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             let Some(&cur_best) = best.get(&item.state) else {
                 continue;
             };
-            if item.metric != cur_best {
-                continue;
-            }
-            if item.metric.actions > MAX_ACTIONS {
+            if item.metric != cur_best || item.metric.actions > MAX_ACTIONS {
                 continue;
             }
 
@@ -313,70 +309,66 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             }
 
             for &v in target.iter() {
-                if !preserve_needed(self.ctx.func, consume_last_use, v) {
-                    continue;
-                }
                 let max_dup = DUP_MAX.min(item.state.len());
-                let Some(pos) = (0..max_dup).find(|&i| item.state[i] == StackItem::Value(v)) else {
-                    continue;
-                };
+                if preserve_needed(self.ctx.func, consume_last_use, v)
+                    && let Some(pos) = (0..max_dup).find(|&i| item.state[i] == StackItem::Value(v))
+                {
+                    let mut next_state = item.state.clone();
+                    next_state.insert(0, StackItem::Value(v));
 
-                let mut next_state = item.state.clone();
-                next_state.insert(0, StackItem::Value(v));
-
-                let next_metric = OperandPrepMetric {
-                    actions: item.metric.actions + 1,
-                    ..item.metric
-                };
-                let update = best
-                    .get(&next_state)
-                    .map(|m| next_metric < *m)
-                    .unwrap_or(true);
-                if update {
-                    best.insert(next_state.clone(), next_metric);
-                    prev.insert(
-                        next_state.clone(),
-                        (item.state.clone(), Action::StackDup(pos as u8)),
-                    );
-                    heap.push(HeapItem {
-                        metric: next_metric,
-                        id: next_id,
-                        state: next_state,
-                    });
-                    next_id += 1;
+                    let next_metric = OperandPrepMetric {
+                        actions: item.metric.actions + 1,
+                        ..item.metric
+                    };
+                    let update = best
+                        .get(&next_state)
+                        .map(|m| next_metric < *m)
+                        .unwrap_or(true);
+                    if update {
+                        best.insert(next_state.clone(), next_metric);
+                        prev.insert(
+                            next_state.clone(),
+                            (item.state.clone(), Action::StackDup(pos as u8)),
+                        );
+                        heap.push(HeapItem {
+                            metric: next_metric,
+                            id: next_id,
+                            state: next_state,
+                        });
+                        next_id += 1;
+                    }
                 }
             }
 
             for &v in target.iter() {
-                if !self.ctx.func.dfg.value_is_imm(v) {
-                    continue;
-                }
-                let imm = self
-                    .ctx
-                    .func
-                    .dfg
-                    .value_imm(v)
-                    .expect("imm value missing payload");
-                let mut next_state = item.state.clone();
-                next_state.insert(0, StackItem::Value(v));
+                if self.ctx.func.dfg.value_is_imm(v) {
+                    let imm = self
+                        .ctx
+                        .func
+                        .dfg
+                        .value_imm(v)
+                        .expect("imm value missing payload");
+                    let mut next_state = item.state.clone();
+                    next_state.insert(0, StackItem::Value(v));
 
-                let next_metric = OperandPrepMetric {
-                    actions: item.metric.actions + 1,
-                    ..item.metric
-                };
-                let update = best
-                    .get(&next_state)
-                    .map(|m| next_metric < *m)
-                    .unwrap_or(true);
-                if update {
-                    best.insert(next_state.clone(), next_metric);
-                    prev.insert(next_state.clone(), (item.state.clone(), Action::Push(imm)));
-                    heap.push(HeapItem {
-                        metric: next_metric,
-                        id: next_id,
-                        state: next_state,
-                    });
-                    next_id += 1;
+                    let next_metric = OperandPrepMetric {
+                        actions: item.metric.actions + 1,
+                        ..item.metric
+                    };
+                    let update = best
+                        .get(&next_state)
+                        .map(|m| next_metric < *m)
+                        .unwrap_or(true);
+                    if update {
+                        best.insert(next_state.clone(), next_metric);
+                        prev.insert(next_state.clone(), (item.state.clone(), Action::Push(imm)));
+                        heap.push(HeapItem {
+                            metric: next_metric,
+                            id: next_id,
+                            state: next_state,
+                        });
+                        next_id += 1;
+                    }
                 }
             }
         }
@@ -465,15 +457,15 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             //
             // This is equivalent to a stable delete, except the pop is performed by the
             // instruction consuming its operands.
-            if consume_last_use.contains(v) && !consumed_from_stack.contains(v) {
-                if let Some(pos) = self.stack.find_reachable_value_from(v, prepared, SWAP_MAX) {
-                    if pos <= CONSUME_LAST_USE_MAX_SWAPS {
-                        self.stack.stable_rotate_to_top(pos, self.actions);
-                        consumed_from_stack.insert(v);
-                        prepared += 1;
-                        continue;
-                    }
-                }
+            if consume_last_use.contains(v)
+                && !consumed_from_stack.contains(v)
+                && let Some(pos) = self.stack.find_reachable_value_from(v, prepared, SWAP_MAX)
+                && pos <= CONSUME_LAST_USE_MAX_SWAPS
+            {
+                self.stack.stable_rotate_to_top(pos, self.actions);
+                consumed_from_stack.insert(v);
+                prepared += 1;
+                continue;
             }
 
             if let Some(pos) = self.stack.find_reachable_value(v, DUP_MAX) {

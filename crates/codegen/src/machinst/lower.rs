@@ -1,7 +1,7 @@
 use super::vcode::{Label, VCode, VCodeInst};
 use crate::stackalloc::Allocator;
 use smallvec::SmallVec;
-use sonatina_ir::{module::ModuleCtx, BlockId, Function, Immediate, Inst, InstId, Type, ValueId};
+use sonatina_ir::{BlockId, Function, Immediate, Inst, InstId, Type, ValueId, module::ModuleCtx};
 
 pub trait LowerBackend {
     type MInst;

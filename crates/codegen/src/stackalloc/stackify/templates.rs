@@ -1,11 +1,11 @@
 use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
-use sonatina_ir::{cfg::ControlFlowGraph, BlockId, Function, ValueId};
+use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
 use std::collections::VecDeque;
 
 use crate::{bitset::BitSet, domtree::DomTree, liveness::Liveness};
 
-use super::{spill::SpillSet, StackifyContext};
+use super::{StackifyContext, spill::SpillSet};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct DefInfo {
@@ -148,16 +148,11 @@ pub(super) fn compute_templates(
         let carry_out = &carry_out_sets[block];
         let mut defs: Vec<ValueId> = Vec::new();
         for inst in ctx.func.layout.iter_inst(block) {
-            if ctx.func.dfg.is_phi(inst) {
-                continue;
-            }
-            let Some(res) = ctx.func.dfg.inst_result(inst) else {
-                continue;
-            };
-            if spill.contains(res) {
-                continue;
-            }
-            if carry_out.contains(res) {
+            if !ctx.func.dfg.is_phi(inst)
+                && let Some(res) = ctx.func.dfg.inst_result(inst)
+                && !spill.contains(res)
+                && carry_out.contains(res)
+            {
                 defs.push(res);
             }
         }
@@ -371,10 +366,9 @@ pub(super) fn compute_phi_out_sources(
         let mut set: BitSet<ValueId> = BitSet::default();
         for succ in cfg.succs_of(block) {
             for v in phi_args_for_edge(func, block, *succ) {
-                if func.dfg.value_is_imm(v) {
-                    continue;
+                if !func.dfg.value_is_imm(v) {
+                    set.insert(v);
                 }
-                set.insert(v);
             }
         }
         sets[block] = set;

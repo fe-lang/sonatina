@@ -79,11 +79,7 @@ impl TypeLayout for EvmTypeLayout {
 
     fn align_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
         let size = self.size_of(ty, ctx)?;
-        if size == 0 {
-            Ok(1)
-        } else {
-            Ok(32)
-        }
+        if size == 0 { Ok(1) } else { Ok(32) }
     }
 
     fn endian(&self) -> Endian {

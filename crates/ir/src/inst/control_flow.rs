@@ -1,5 +1,5 @@
 use macros::{Inst, inst_prop};
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 
 use crate::{BlockId, Inst, InstSetBase, ValueId, module::FuncRef};
 
