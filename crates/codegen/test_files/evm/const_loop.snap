@@ -12,8 +12,8 @@ input_file: test_files/evm/const_loop.sntn
       pre: [PUSH(0)]
       mstore [0, v0]
     - stack=[]
-      pre: [PUSH(1), PUSH(0)]
-      evm_return [0, 1]
+      pre: [PUSH(32), PUSH(0)]
+      evm_return [0, 32]
 
 // func public %const_loop() -> i8
   block1 P=[] T=[]
@@ -47,12 +47,8 @@ entry:
     JUMP
     JUMPDEST
     PUSH0  // mstore 0.i32 v0 i8;
-    SWAP1
-    PUSH1 0xf8 (248)
-    SHL
-    SWAP1
     MSTORE
-    PUSH1 0x1 (1)  // evm_return 0.i8 1.i8;
+    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
     PUSH0
     RETURN
 
@@ -90,74 +86,66 @@ entry:
   block0:
     0    JUMPDEST
     1    PUSH1 6  // v0.i8 = call %const_loop;
-    3    PUSH1 18 (FuncRef(1))
+    3    PUSH1 13 (FuncRef(1))
     5    JUMP
     6    JUMPDEST
     7    PUSH0  // mstore 0.i32 v0 i8;
-    8    SWAP1
-    9    PUSH1 0xf8 (248)
-   11    SHL
-   12    SWAP1
-   13    MSTORE
-   14    PUSH1 0x1 (1)  // evm_return 0.i8 1.i8;
-   16    PUSH0
-   17    RETURN
+    8    MSTORE
+    9    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+   11    PUSH0
+   12    RETURN
 // func public %const_loop() -> i8
 const_loop:
   block1:
-   18    JUMPDEST
-   19    PUSH1 0x1 (1)  // jump block2;
+   13    JUMPDEST
+   14    PUSH1 0x1 (1)  // jump block2;
   block2:
-   21    JUMPDEST
-   22    PUSH1 0xa (10)  // v2.i8 = add v1 10.i8;
-   24    DUP2
-   25    ADD
-   26    SWAP1  // v3.i1 = gt v2 v1;
-   27    DUP2
-   28    GT
-   29    ISZERO  // br v3 block3 block4;
-   30    PUSH1 36 (block4)
-   32    JUMPI
+   16    JUMPDEST
+   17    PUSH1 0xa (10)  // v2.i8 = add v1 10.i8;
+   19    DUP2
+   20    ADD
+   21    SWAP1  // v3.i1 = gt v2 v1;
+   22    DUP2
+   23    GT
+   24    ISZERO  // br v3 block3 block4;
+   25    PUSH1 31 (block4)
+   27    JUMPI
   block3:
-   33    JUMPDEST
-   34    SWAP1  // return v2;
-   35    JUMP
+   28    JUMPDEST
+   29    SWAP1  // return v2;
+   30    JUMP
   block4:
-   36    JUMPDEST
-   37    PUSH1 21 (block2)  // jump block2;
-   39    JUMP
+   31    JUMPDEST
+   32    PUSH1 16 (block2)  // jump block2;
+   34    JUMP
 
-0x5b60066012565b5f9060f81b905260015ff35b60015b600a8101908111156024575b90565b601556
+0x5b6006600d565b5f5260205ff35b60015b600a810190811115601f575b90565b601056
 
-Success { reason: Return, gas_used: 21148, gas_refunded: 0, logs: [], output: Call(0x0b) }
+Success { reason: Return, gas_used: 21136, gas_refunded: 0, logs: [], output: Call(0x000000000000000000000000000000000000000000000000000000000000000b) }
 
     pc  opcode            input (stack grows to the right)
      0  5b  JUMPDEST      []
      1  60  PUSH1         0x06  []
-     3  60  PUSH1         0x12  [0x6]
-     5  56  JUMP          [0x6, 0x12]
-    18  5b  JUMPDEST      [0x6]
-    19  60  PUSH1         0x01  [0x6]
-    21  5b  JUMPDEST      [0x6, 0x1]
-    22  60  PUSH1         0x0a  [0x6, 0x1]
-    24  81  DUP2          [0x6, 0x1, 0xa]
-    25  01  ADD           [0x6, 0x1, 0xa, 0x1]
-    26  90  SWAP1         [0x6, 0x1, 0xb]
-    27  81  DUP2          [0x6, 0xb, 0x1]
-    28  11  GT            [0x6, 0xb, 0x1, 0xb]
-    29  15  ISZERO        [0x6, 0xb, 0x1]
-    30  60  PUSH1         0x24  [0x6, 0xb, 0x0]
-    32  57  JUMPI         [0x6, 0xb, 0x0, 0x24]
-    33  5b  JUMPDEST      [0x6, 0xb]
-    34  90  SWAP1         [0x6, 0xb]
-    35  56  JUMP          [0xb, 0x6]
+     3  60  PUSH1         0x0d  [0x6]
+     5  56  JUMP          [0x6, 0xd]
+    13  5b  JUMPDEST      [0x6]
+    14  60  PUSH1         0x01  [0x6]
+    16  5b  JUMPDEST      [0x6, 0x1]
+    17  60  PUSH1         0x0a  [0x6, 0x1]
+    19  81  DUP2          [0x6, 0x1, 0xa]
+    20  01  ADD           [0x6, 0x1, 0xa, 0x1]
+    21  90  SWAP1         [0x6, 0x1, 0xb]
+    22  81  DUP2          [0x6, 0xb, 0x1]
+    23  11  GT            [0x6, 0xb, 0x1, 0xb]
+    24  15  ISZERO        [0x6, 0xb, 0x1]
+    25  60  PUSH1         0x1f  [0x6, 0xb, 0x0]
+    27  57  JUMPI         [0x6, 0xb, 0x0, 0x1f]
+    28  5b  JUMPDEST      [0x6, 0xb]
+    29  90  SWAP1         [0x6, 0xb]
+    30  56  JUMP          [0xb, 0x6]
      6  5b  JUMPDEST      [0xb]
      7  5f  PUSH0         [0xb]
-     8  90  SWAP1         [0xb, 0x0]
-     9  60  PUSH1         0xf8  [0x0, 0xb]
-    11  1b  SHL           [0x0, 0xb, 0xf8]
-    12  90  SWAP1         [0x0, 0xb00000000000000000000000000000000000000000000000000000000000000]
-    13  52  MSTORE        [0xb00000000000000000000000000000000000000000000000000000000000000, 0x0]
-    14  60  PUSH1         0x01  []
-    16  5f  PUSH0         [0x1]
-    17  f3  RETURN        [0x1, 0x0]
+     8  52  MSTORE        [0xb, 0x0]
+     9  60  PUSH1         0x20  []
+    11  5f  PUSH0         [0x20]
+    12  f3  RETURN        [0x20, 0x0]

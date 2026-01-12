@@ -24,8 +24,8 @@ input_file: test_files/evm/call.sntn
       pre: [PUSH(0)]
       mstore [0, v4]
     - stack=[]
-      pre: [PUSH(8), PUSH(0)]
-      evm_return [0, 8]
+      pre: [PUSH(32), PUSH(0)]
+      evm_return [0, 32]
 
 // func private %square(v0.i64) -> i64
   block0 P=[v0] T=[]
@@ -92,12 +92,8 @@ entry:
     JUMP
     JUMPDEST
     PUSH0  // mstore 0.i32 v4 i64;
-    SWAP1
-    PUSH1 0xc0 (192)
-    SHL
-    SWAP1
     MSTORE
-    PUSH1 0x8 (8)  // evm_return 0.i8 8.i8;
+    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
     PUSH0
     RETURN
 
@@ -186,84 +182,80 @@ entry:
    13    SHR
    14    PUSH1 20  // v4.i64 = call %main v1 v3;
    16    SWAP2
-   17    PUSH1 45 (FuncRef(3))
+   17    PUSH1 40 (FuncRef(3))
    19    JUMP
    20    JUMPDEST
    21    PUSH0  // mstore 0.i32 v4 i64;
-   22    SWAP1
-   23    PUSH1 0xc0 (192)
-   25    SHL
-   26    SWAP1
-   27    MSTORE
-   28    PUSH1 0x8 (8)  // evm_return 0.i8 8.i8;
-   30    PUSH0
-   31    RETURN
+   22    MSTORE
+   23    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+   25    PUSH0
+   26    RETURN
 // func private %square(v0.i64) -> i64
 square:
   block0:
-   32    JUMPDEST
-   33    DUP1  // v1.i64 = mul v0 v0;
-   34    MUL
-   35    SWAP1  // return v1;
-   36    JUMP
+   27    JUMPDEST
+   28    DUP1  // v1.i64 = mul v0 v0;
+   29    MUL
+   30    SWAP1  // return v1;
+   31    JUMP
 // func private %invert(v0.i64) -> i64
 invert:
   block0:
-   37    JUMPDEST
-   38    PUSH1 0xff (255)  // v1.i64 = mul v0 -1.i64;
-   40    PUSH0
-   41    SIGNEXTEND
-   42    MUL
-   43    SWAP1  // return v1;
-   44    JUMP
+   32    JUMPDEST
+   33    PUSH1 0xff (255)  // v1.i64 = mul v0 -1.i64;
+   35    PUSH0
+   36    SIGNEXTEND
+   37    MUL
+   38    SWAP1  // return v1;
+   39    JUMP
 // func public %main(v0.i8, v1.i64) -> i64
 main:
   block0:
-   45    JUMPDEST
-   46    PUSH0  // br_table v0 block3 (0.i8 block1) (1.i8 block2);
-   47    DUP2
-   48    EQ
-   49    PUSH1 62 (block1)
-   51    JUMPI
-   52    PUSH1 0x1 (1)
-   54    DUP2
-   55    EQ
-   56    PUSH1 74 (block2)
-   58    JUMPI
-   59    PUSH1 86 (block3)
-   61    JUMP
+   40    JUMPDEST
+   41    PUSH0  // br_table v0 block3 (0.i8 block1) (1.i8 block2);
+   42    DUP2
+   43    EQ
+   44    PUSH1 57 (block1)
+   46    JUMPI
+   47    PUSH1 0x1 (1)
+   49    DUP2
+   50    EQ
+   51    PUSH1 69 (block2)
+   53    JUMPI
+   54    PUSH1 81 (block3)
+   56    JUMP
   block1:
-   62    JUMPDEST
-   63    POP  // v2.i64 = call %square v1;
-   64    PUSH1 70
-   66    SWAP1
-   67    PUSH1 32 (FuncRef(1))
-   69    JUMP
-   70    JUMPDEST
-   71    PUSH1 89 (block4)  // jump block4;
-   73    JUMP
+   57    JUMPDEST
+   58    POP  // v2.i64 = call %square v1;
+   59    PUSH1 65
+   61    SWAP1
+   62    PUSH1 27 (FuncRef(1))
+   64    JUMP
+   65    JUMPDEST
+   66    PUSH1 84 (block4)  // jump block4;
+   68    JUMP
   block2:
-   74    JUMPDEST
-   75    POP  // v3.i64 = call %invert v1;
-   76    PUSH1 82
-   78    SWAP1
-   79    PUSH1 37 (FuncRef(2))
-   81    JUMP
-   82    JUMPDEST
-   83    PUSH1 89 (block4)  // jump block4;
-   85    JUMP
+   69    JUMPDEST
+   70    POP  // v3.i64 = call %invert v1;
+   71    PUSH1 77
+   73    SWAP1
+   74    PUSH1 32 (FuncRef(2))
+   76    JUMP
+   77    JUMPDEST
+   78    PUSH1 84 (block4)  // jump block4;
+   80    JUMP
   block3:
-   86    JUMPDEST
-   87    SWAP1  // jump block4;
-   88    POP
+   81    JUMPDEST
+   82    SWAP1  // jump block4;
+   83    POP
   block4:
-   89    JUMPDEST
-   90    SWAP1  // return v4;
-   91    JUMP
+   84    JUMPDEST
+   85    SWAP1  // return v4;
+   86    JUMP
 
-0x5b5f358060f81c9060201b60e01c601491602d565b5f9060c01b905260085ff35b800290565b60ff5f0b0290565b5f8114603e5760018114604a576056565b506046906020565b6059565b506052906025565b6059565b90505b9056
+0x5b5f358060f81c9060201b60e01c6014916028565b5f5260205ff35b800290565b60ff5f0b0290565b5f8114603957600181146045576051565b50604190601b565b6054565b50604d906020565b6054565b90505b9056
 
-Success { reason: Return, gas_used: 21215, gas_refunded: 0, logs: [], output: Call(0x00000000000001e4) }
+Success { reason: Return, gas_used: 21203, gas_refunded: 0, logs: [], output: Call(0x00000000000000000000000000000000000000000000000000000000000001e4) }
 
     pc  opcode            input (stack grows to the right)
      0  5b  JUMPDEST      []
@@ -279,38 +271,34 @@ Success { reason: Return, gas_used: 21215, gas_refunded: 0, logs: [], output: Ca
     13  1c  SHR           [0x0, 0x1600000000000000000000000000000000000000000000000000000000, 0xe0]
     14  60  PUSH1         0x14  [0x0, 0x16]
     16  91  SWAP2         [0x0, 0x16, 0x14]
-    17  60  PUSH1         0x2d  [0x14, 0x16, 0x0]
-    19  56  JUMP          [0x14, 0x16, 0x0, 0x2d]
-    45  5b  JUMPDEST      [0x14, 0x16, 0x0]
-    46  5f  PUSH0         [0x14, 0x16, 0x0]
-    47  81  DUP2          [0x14, 0x16, 0x0, 0x0]
-    48  14  EQ            [0x14, 0x16, 0x0, 0x0, 0x0]
-    49  60  PUSH1         0x3e  [0x14, 0x16, 0x0, 0x1]
-    51  57  JUMPI         [0x14, 0x16, 0x0, 0x1, 0x3e]
-    62  5b  JUMPDEST      [0x14, 0x16, 0x0]
-    63  50  POP           [0x14, 0x16, 0x0]
-    64  60  PUSH1         0x46  [0x14, 0x16]
-    66  90  SWAP1         [0x14, 0x16, 0x46]
-    67  60  PUSH1         0x20  [0x14, 0x46, 0x16]
-    69  56  JUMP          [0x14, 0x46, 0x16, 0x20]
-    32  5b  JUMPDEST      [0x14, 0x46, 0x16]
-    33  80  DUP1          [0x14, 0x46, 0x16]
-    34  02  MUL           [0x14, 0x46, 0x16, 0x16]
-    35  90  SWAP1         [0x14, 0x46, 0x1e4]
-    36  56  JUMP          [0x14, 0x1e4, 0x46]
-    70  5b  JUMPDEST      [0x14, 0x1e4]
-    71  60  PUSH1         0x59  [0x14, 0x1e4]
-    73  56  JUMP          [0x14, 0x1e4, 0x59]
-    89  5b  JUMPDEST      [0x14, 0x1e4]
-    90  90  SWAP1         [0x14, 0x1e4]
-    91  56  JUMP          [0x1e4, 0x14]
+    17  60  PUSH1         0x28  [0x14, 0x16, 0x0]
+    19  56  JUMP          [0x14, 0x16, 0x0, 0x28]
+    40  5b  JUMPDEST      [0x14, 0x16, 0x0]
+    41  5f  PUSH0         [0x14, 0x16, 0x0]
+    42  81  DUP2          [0x14, 0x16, 0x0, 0x0]
+    43  14  EQ            [0x14, 0x16, 0x0, 0x0, 0x0]
+    44  60  PUSH1         0x39  [0x14, 0x16, 0x0, 0x1]
+    46  57  JUMPI         [0x14, 0x16, 0x0, 0x1, 0x39]
+    57  5b  JUMPDEST      [0x14, 0x16, 0x0]
+    58  50  POP           [0x14, 0x16, 0x0]
+    59  60  PUSH1         0x41  [0x14, 0x16]
+    61  90  SWAP1         [0x14, 0x16, 0x41]
+    62  60  PUSH1         0x1b  [0x14, 0x41, 0x16]
+    64  56  JUMP          [0x14, 0x41, 0x16, 0x1b]
+    27  5b  JUMPDEST      [0x14, 0x41, 0x16]
+    28  80  DUP1          [0x14, 0x41, 0x16]
+    29  02  MUL           [0x14, 0x41, 0x16, 0x16]
+    30  90  SWAP1         [0x14, 0x41, 0x1e4]
+    31  56  JUMP          [0x14, 0x1e4, 0x41]
+    65  5b  JUMPDEST      [0x14, 0x1e4]
+    66  60  PUSH1         0x54  [0x14, 0x1e4]
+    68  56  JUMP          [0x14, 0x1e4, 0x54]
+    84  5b  JUMPDEST      [0x14, 0x1e4]
+    85  90  SWAP1         [0x14, 0x1e4]
+    86  56  JUMP          [0x1e4, 0x14]
     20  5b  JUMPDEST      [0x1e4]
     21  5f  PUSH0         [0x1e4]
-    22  90  SWAP1         [0x1e4, 0x0]
-    23  60  PUSH1         0xc0  [0x0, 0x1e4]
-    25  1b  SHL           [0x0, 0x1e4, 0xc0]
-    26  90  SWAP1         [0x0, 0x1e4000000000000000000000000000000000000000000000000]
-    27  52  MSTORE        [0x1e4000000000000000000000000000000000000000000000000, 0x0]
-    28  60  PUSH1         0x08  []
-    30  5f  PUSH0         [0x8]
-    31  f3  RETURN        [0x8, 0x0]
+    22  52  MSTORE        [0x1e4, 0x0]
+    23  60  PUSH1         0x20  []
+    25  5f  PUSH0         [0x20]
+    26  f3  RETURN        [0x20, 0x0]

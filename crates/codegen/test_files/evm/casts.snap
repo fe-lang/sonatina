@@ -1,0 +1,181 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(v).unwrap()"
+input_file: test_files/evm/casts.sntn
+---
+// func public %entry()
+  block0 P=[] T=[]
+    - stack=[]
+      pre: [PUSH_CONT]
+      call [] -> v0
+    - stack=[v0], last_use=[v0]
+      pre: [PUSH(0)]
+      mstore [0, v0]
+    - stack=[]
+      pre: [PUSH(32), PUSH(0)]
+      evm_return [0, 32]
+
+// func public %main() -> i256
+  block0 P=[] T=[]
+    - stack=[<RET>]
+      pre: [PUSH(-1)]
+      sext [-1] -> v0
+    - stack=[v0, <RET>]
+      pre: [PUSH(true)]
+      zext [true] -> v1
+    - stack=[v1, v0, <RET>], last_use=[v0]
+      pre: [SWAP1]
+      trunc [v0] -> v2
+    - stack=[v2, v1, <RET>], last_use=[v2]
+      zext [v2] -> v3
+    - stack=[v3, v1, <RET>]
+      pre: [PUSH(42)]
+      int_to_ptr [42] -> v4
+    - stack=[v4, v3, v1, <RET>], last_use=[v4]
+      ptr_to_int [v4] -> v5
+    - stack=[v5, v3, v1, <RET>], last_use=[v5]
+      zext [v5] -> v6
+    - stack=[v6, v3, v1, <RET>], last_use=[v3, v6]
+      add [v6, v3] -> v7
+    - stack=[v7, v1, <RET>], last_use=[v7]
+      bitcast [v7] -> v8
+    - stack=[v8, v1, <RET>], last_use=[v1, v8]
+      add [v8, v1] -> v9
+    - stack=[v9, <RET>]
+      return [v9]
+
+// func public %entry()
+entry:
+  block0:
+    JUMPDEST
+    PUSH1 `pc + (3)`  // v0.i256 = call %main;
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH0  // mstore 0.i32 v0 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH0
+    RETURN
+
+// func public %main() -> i256
+main:
+  block0:
+    JUMPDEST
+    PUSH1 0xff (255)  // v0.i256 = sext -1.i8 i256;
+    PUSH0
+    SIGNEXTEND
+    PUSH0
+    SIGNEXTEND
+    PUSH1 0x1 (1)  // v1.i256 = zext 1.i1 i256;
+    PUSH0
+    SIGNEXTEND
+    PUSH1 0x1 (1)
+    AND
+    SWAP1  // v2.i128 = trunc v0 i128;
+    PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
+    AND
+    PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)  // v3.i256 = zext v2 i256;
+    AND
+    PUSH1 0x2a (42)  // v4.*i8 = int_to_ptr 42.i64 *i8;
+    PUSH8 0xffffffffffffffff (18446744073709551615)
+    AND
+    PUSH8 0xffffffffffffffff (18446744073709551615)  // v5.i64 = ptr_to_int v4 i64;
+    AND
+    PUSH8 0xffffffffffffffff (18446744073709551615)  // v6.i256 = zext v5 i256;
+    AND
+    ADD  // v7.i256 = add v3 v6;
+    ADD  // v9.i256 = add v8 v1;
+    SWAP1  // return v9;
+    JUMP
+
+
+
+---------------
+
+// func public %entry()
+entry:
+  block0:
+    0    JUMPDEST
+    1    PUSH1 6  // v0.i256 = call %main;
+    3    PUSH1 13 (FuncRef(1))
+    5    JUMP
+    6    JUMPDEST
+    7    PUSH0  // mstore 0.i32 v0 i256;
+    8    MSTORE
+    9    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+   11    PUSH0
+   12    RETURN
+// func public %main() -> i256
+main:
+  block0:
+   13    JUMPDEST
+   14    PUSH1 0xff (255)  // v0.i256 = sext -1.i8 i256;
+   16    PUSH0
+   17    SIGNEXTEND
+   18    PUSH0
+   19    SIGNEXTEND
+   20    PUSH1 0x1 (1)  // v1.i256 = zext 1.i1 i256;
+   22    PUSH0
+   23    SIGNEXTEND
+   24    PUSH1 0x1 (1)
+   26    AND
+   27    SWAP1  // v2.i128 = trunc v0 i128;
+   28    PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
+   45    AND
+   46    PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)  // v3.i256 = zext v2 i256;
+   63    AND
+   64    PUSH1 0x2a (42)  // v4.*i8 = int_to_ptr 42.i64 *i8;
+   66    PUSH8 0xffffffffffffffff (18446744073709551615)
+   75    AND
+   76    PUSH8 0xffffffffffffffff (18446744073709551615)  // v5.i64 = ptr_to_int v4 i64;
+   85    AND
+   86    PUSH8 0xffffffffffffffff (18446744073709551615)  // v6.i256 = zext v5 i256;
+   95    AND
+   96    ADD  // v7.i256 = add v3 v6;
+   97    ADD  // v9.i256 = add v8 v1;
+   98    SWAP1  // return v9;
+   99    JUMP
+
+0x5b6006600d565b5f5260205ff35b60ff5f0b5f0b60015f0b600116906fffffffffffffffffffffffffffffffff166fffffffffffffffffffffffffffffffff16602a67ffffffffffffffff1667ffffffffffffffff1667ffffffffffffffff1601019056
+
+Success { reason: Return, gas_used: 21172, gas_refunded: 0, logs: [], output: Call(0x000000000000000000000000000000010000000000000000000000000000002a) }
+
+    pc  opcode            input (stack grows to the right)
+     0  5b  JUMPDEST      []
+     1  60  PUSH1         0x06  []
+     3  60  PUSH1         0x0d  [0x6]
+     5  56  JUMP          [0x6, 0xd]
+    13  5b  JUMPDEST      [0x6]
+    14  60  PUSH1         0xff  [0x6]
+    16  5f  PUSH0         [0x6, 0xff]
+    17  0b  SIGNEXTEND    [0x6, 0xff, 0x0]
+    18  5f  PUSH0         [0x6, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff]
+    19  0b  SIGNEXTEND    [0x6, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff, 0x0]
+    20  60  PUSH1         0x01  [0x6, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff]
+    22  5f  PUSH0         [0x6, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff, 0x1]
+    23  0b  SIGNEXTEND    [0x6, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff, 0x1, 0x0]
+    24  60  PUSH1         0x01  [0x6, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff, 0x1]
+    26  16  AND           [0x6, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff, 0x1, 0x1]
+    27  90  SWAP1         [0x6, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff, 0x1]
+    28  6f  PUSH16        0xffffffffffffffffffffffffffffffff  [0x6, 0x1, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff]
+    45  16  AND           [0x6, 0x1, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff, 0xffffffffffffffffffffffffffffffff]
+    46  6f  PUSH16        0xffffffffffffffffffffffffffffffff  [0x6, 0x1, 0xffffffffffffffffffffffffffffffff]
+    63  16  AND           [0x6, 0x1, 0xffffffffffffffffffffffffffffffff, 0xffffffffffffffffffffffffffffffff]
+    64  60  PUSH1         0x2a  [0x6, 0x1, 0xffffffffffffffffffffffffffffffff]
+    66  67  PUSH8         0xffffffffffffffff  [0x6, 0x1, 0xffffffffffffffffffffffffffffffff, 0x2a]
+    75  16  AND           [0x6, 0x1, 0xffffffffffffffffffffffffffffffff, 0x2a, 0xffffffffffffffff]
+    76  67  PUSH8         0xffffffffffffffff  [0x6, 0x1, 0xffffffffffffffffffffffffffffffff, 0x2a]
+    85  16  AND           [0x6, 0x1, 0xffffffffffffffffffffffffffffffff, 0x2a, 0xffffffffffffffff]
+    86  67  PUSH8         0xffffffffffffffff  [0x6, 0x1, 0xffffffffffffffffffffffffffffffff, 0x2a]
+    95  16  AND           [0x6, 0x1, 0xffffffffffffffffffffffffffffffff, 0x2a, 0xffffffffffffffff]
+    96  01  ADD           [0x6, 0x1, 0xffffffffffffffffffffffffffffffff, 0x2a]
+    97  01  ADD           [0x6, 0x1, 0x100000000000000000000000000000029]
+    98  90  SWAP1         [0x6, 0x10000000000000000000000000000002a]
+    99  56  JUMP          [0x10000000000000000000000000000002a, 0x6]
+     6  5b  JUMPDEST      [0x10000000000000000000000000000002a]
+     7  5f  PUSH0         [0x10000000000000000000000000000002a]
+     8  52  MSTORE        [0x10000000000000000000000000000002a, 0x0]
+     9  60  PUSH1         0x20  []
+    11  5f  PUSH0         [0x20]
+    12  f3  RETURN        [0x20, 0x0]

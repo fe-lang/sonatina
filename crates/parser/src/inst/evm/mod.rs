@@ -28,7 +28,7 @@ super::impl_inst_build! {EvmReturnDataSize, ()}
 super::impl_inst_build! {EvmReturnDataCopy, (dst_addr: ValueId, data_offset: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmExtCodeHash, (ext_addr: ValueId)}
 super::impl_inst_build! {EvmBlockHash, (block_num: ValueId)}
-super::impl_inst_build! {EvmCoinBase, (block_num: ValueId)}
+super::impl_inst_build! {EvmCoinBase, ()}
 super::impl_inst_build! {EvmTimestamp, ()}
 super::impl_inst_build! {EvmNumber, ()}
 super::impl_inst_build! {EvmPrevRandao, ()}
