@@ -5,7 +5,7 @@ use std::str::FromStr;
 use derive_more::Debug as Dbg;
 use either::Either;
 use hex::FromHex;
-use ir::{I256, U256};
+use ir::{I256, Object, ObjectName, U256};
 pub use ir::{Immediate, Linkage};
 use pest::Parser as _;
 use smol_str::SmolStr;
@@ -43,7 +43,15 @@ pub struct Module {
     pub declared_gvs: Vec<GlobalVariable>,
     pub struct_types: Vec<Struct>,
     pub functions: Vec<Func>,
+    pub objects: Vec<ObjectDefinition>,
     pub comments: Vec<String>,
+}
+
+#[derive(Dbg)]
+pub struct ObjectDefinition {
+    pub object: Object,
+    #[debug(skip)]
+    pub span: Span,
 }
 
 impl FromSyntax<Error> for Module {
@@ -62,6 +70,7 @@ impl FromSyntax<Error> for Module {
         let mut declared_functions = vec![];
         let mut declared_gvs = vec![];
         let mut functions = vec![];
+        let mut objects = vec![];
 
         loop {
             let comments = node.map_while(|p| {
@@ -84,7 +93,13 @@ impl FromSyntax<Error> for Module {
                         func.comments = comments;
                         functions.push(func);
                     }
-                    None => break,
+                    None => {
+                        if let Some(obj) = node.single_opt(Rule::object_definition) {
+                            objects.push(obj);
+                        } else {
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -95,8 +110,26 @@ impl FromSyntax<Error> for Module {
             declared_gvs,
             struct_types,
             functions,
+            objects,
             comments: module_comments,
         }
+    }
+}
+
+impl FromSyntax<Error> for ObjectDefinition {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        let obj_ident = node.get(Rule::object_identifier);
+        let span = {
+            let s = obj_ident.as_span();
+            Span::from_range(s.start()..s.end())
+        };
+
+        let mut ident_node = Node::new(obj_ident);
+        let name = ObjectName::from_syntax(&mut ident_node);
+
+        let sections = node.multi(Rule::object_section);
+        let object = Object { name, sections };
+        ObjectDefinition { object, span }
     }
 }
 

@@ -3,7 +3,7 @@ mod module_builder;
 mod ssa;
 
 pub use func_builder::FunctionBuilder;
-pub use module_builder::ModuleBuilder;
+pub use module_builder::{BuilderError, ModuleBuilder};
 pub use ssa::Variable;
 
 pub mod test_util {

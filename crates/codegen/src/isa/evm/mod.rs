@@ -385,8 +385,10 @@ impl LowerBackend for EvmBackend {
                 ctx.push_jump_target(OpCode::PUSH1, Label::Function(func));
                 perform_actions(ctx, &alloc.write(insn, result));
             }
-            EvmInstKind::EvmContractSize(_) => todo!(),
             EvmInstKind::EvmInvalid(_) => basic_op(ctx, &[OpCode::INVALID]),
+
+            EvmInstKind::SymAddr(_) => todo!(),
+            EvmInstKind::SymSize(_) => todo!(),
         }
     }
 

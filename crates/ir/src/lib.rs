@@ -13,6 +13,7 @@ pub mod layout;
 pub mod linkage;
 pub mod module;
 pub mod module_linker;
+pub mod object;
 pub mod types;
 pub mod value;
 pub mod visitor;
@@ -33,6 +34,10 @@ pub use inst::{
 pub use layout::Layout;
 pub use linkage::Linkage;
 pub use module::Module;
+pub use object::{
+    DataName, Directive, Embed, EmbedSymbol, FuncName, Object, ObjectName, Section, SectionName,
+    SectionRef,
+};
 pub use types::Type;
 pub use value::{Immediate, Value, ValueId};
 

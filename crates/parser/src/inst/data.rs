@@ -7,9 +7,79 @@ super::impl_inst_build! {Mload, (addr: ValueId, ty: Type)}
 super::impl_inst_build! {Mstore, (addr: ValueId, value: ValueId, ty: Type)}
 super::impl_inst_build_common! {Gep, ArityBound::AtLeast(2), build_gep}
 super::impl_inst_build! {GetFunctionPtr, (func: FuncRef)}
+super::impl_inst_build_common! {SymAddr, ArityBound::Exact(1), build_sym_addr}
+super::impl_inst_build_common! {SymSize, ArityBound::Exact(1), build_sym_size}
 super::impl_inst_build! {Alloca, (ty: Type)}
 super::impl_inst_build! {InsertValue, (dest: ValueId, idx: ValueId, value: ValueId)}
 super::impl_inst_build! {ExtractValue, (dest: ValueId, idx: ValueId)}
+
+fn build_sym_addr(
+    ctx: &mut BuildCtx,
+    fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
+    args: &[ast::InstArg],
+    has_inst: &dyn HasInst<SymAddr>,
+) -> Result<SymAddr, Box<Error>> {
+    let sym = build_symbol_ref(ctx, fb, args)?;
+    Ok(SymAddr::new(has_inst, sym))
+}
+
+fn build_sym_size(
+    ctx: &mut BuildCtx,
+    fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
+    args: &[ast::InstArg],
+    has_inst: &dyn HasInst<SymSize>,
+) -> Result<SymSize, Box<Error>> {
+    let sym = build_symbol_ref(ctx, fb, args)?;
+    Ok(SymSize::new(has_inst, sym))
+}
+
+fn build_symbol_ref(
+    ctx: &mut BuildCtx,
+    fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
+    args: &[ast::InstArg],
+) -> Result<SymbolRef, Box<Error>> {
+    let arg = &args[0];
+
+    match &arg.kind {
+        ast::InstArgKind::FuncRef(func) => {
+            Ok(SymbolRef::Func(ctx.func_ref(&mut fb.module_builder, func)))
+        }
+
+        ast::InstArgKind::Value(value) => match &value.kind {
+            ast::ValueKind::Global(name) => {
+                let Some(gv) = fb.module_builder.lookup_gv(&name.string) else {
+                    ctx.errors.push(Error::Undefined(
+                        crate::UndefinedKind::Value(name.string.clone()),
+                        value.span,
+                    ));
+                    return Ok(SymbolRef::Global(ir::GlobalVariableRef::from_u32(0)));
+                };
+                Ok(SymbolRef::Global(gv))
+            }
+
+            _ => Err(Box::new(Error::InstArgKindMismatch {
+                expected: "function name or global value".into(),
+                actual: Some("value".into()),
+                span: arg.span,
+            })),
+        },
+
+        other => Err(Box::new(Error::InstArgKindMismatch {
+            expected: "function name or global value".into(),
+            actual: Some(
+                match other {
+                    ast::InstArgKind::Value(_) => "value",
+                    ast::InstArgKind::Ty(_) => "type",
+                    ast::InstArgKind::Block(_) => "block",
+                    ast::InstArgKind::ValueBlockMap(_) => "(value, block)",
+                    ast::InstArgKind::FuncRef(_) => "function name",
+                }
+                .into(),
+            ),
+            span: arg.span,
+        })),
+    }
+}
 
 fn build_gep(
     ctx: &mut BuildCtx,

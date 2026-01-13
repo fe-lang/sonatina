@@ -2342,6 +2342,7 @@ dependencies = [
  "rayon",
  "rustc-hash 2.1.1",
  "smallvec",
+ "smol_str",
  "sonatina-macros",
  "sonatina-parser",
  "sonatina-triple",
@@ -2355,10 +2356,6 @@ dependencies = [
  "quote",
  "syn 2.0.106",
 ]
-
-[[package]]
-name = "sonatina-object"
-version = "0.0.3-alpha"
 
 [[package]]
 name = "sonatina-parser"

@@ -18,11 +18,13 @@ use smol_str::SmolStr;
 pub mod ast;
 pub mod syntax;
 pub use error::{Error, UndefinedKind};
+pub use objects::parse_object_file;
 use sonatina_triple::{Architecture, TargetTriple};
 pub use syntax::Span;
 
 mod error;
 mod inst;
+mod objects;
 
 type Bimap<K, V> = bimap::BiHashMap<K, V, BuildHasherDefault<FxHasher>>;
 pub use pest::Parser as PestParser;
@@ -36,7 +38,7 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
     let ast = ast::parse(input)?;
 
     let module_ctx = module_ctx_from_triple(ast.target.unwrap());
-    let builder = ModuleBuilder::new(module_ctx);
+    let mut builder = ModuleBuilder::new(module_ctx);
 
     let mut ctx = BuildCtx::default();
 
@@ -114,20 +116,28 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
         func_comments[id] = func.comments;
     }
 
-    if ctx.errors.is_empty() {
-        let module = builder.build();
-        Ok(ParsedModule {
-            module,
-            debug: DebugInfo {
-                func_order,
-                module_comments: ast.comments,
-                func_comments,
-                value_names: ctx.value_names,
-            },
-        })
-    } else {
-        Err(ctx.errors)
+    for obj_def in ast.objects {
+        let name = obj_def.object.name.0.clone();
+        if builder.declare_object(obj_def.object).is_err() {
+            ctx.errors
+                .push(Error::DuplicatedDeclaration(name, obj_def.span));
+        }
     }
+
+    if !ctx.errors.is_empty() {
+        return Err(ctx.errors);
+    }
+
+    let module = builder.build();
+    Ok(ParsedModule {
+        module,
+        debug: DebugInfo {
+            func_order,
+            module_comments: ast.comments,
+            func_comments,
+            value_names: ctx.value_names,
+        },
+    })
 }
 
 pub struct DebugInfo {
@@ -610,5 +620,80 @@ func public %simple(v0.i8) -> i8 {
 ";
 
         assert!(parse_module(s).is_ok());
+    }
+
+    #[test]
+    fn test_sym_addr_sym_size_parse_and_write() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+global public i8 $foo = 0;
+
+func public %main() {
+    block0:
+        v0.i256 = sym_addr %main;
+        v1.i256 = sym_size %main;
+        v2.i256 = sym_addr $foo;
+        v3.i256 = sym_size $foo;
+        return;
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let mut w = ir::ir_writer::ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
+        let printed = w.dump_string();
+        assert!(printed.contains("sym_addr %main"));
+        assert!(printed.contains("sym_size %main"));
+        assert!(printed.contains("sym_addr $foo"));
+        assert!(printed.contains("sym_size $foo"));
+    }
+
+    #[test]
+    fn test_parse_module_includes_objects() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %factory() {
+    block0:
+        return;
+}
+
+object @Factory {
+  section runtime { entry %factory; }
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        assert_eq!(parsed.module.objects.len(), 1);
+        assert!(parsed.module.objects.contains_key("Factory"));
+    }
+
+    #[test]
+    fn test_parse_module_duplicate_objects_should_fail() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %factory() {
+    block0:
+        return;
+}
+
+object @Factory {
+  section runtime { entry %factory; }
+}
+
+object @Factory {
+  section runtime { entry %factory; }
+}
+"#;
+
+        let errors = match parse_module(s) {
+            Ok(_) => panic!("Expected duplicate object definition error"),
+            Err(errors) => errors,
+        };
+        assert!(errors.iter().any(|e| matches!(
+            e,
+            Error::DuplicatedDeclaration(name, _) if name.as_str() == "Factory"
+        )));
     }
 }

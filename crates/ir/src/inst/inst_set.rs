@@ -49,6 +49,8 @@ define_inst_set_base! {
         data::Mstore,
         data::Gep,
         data::GetFunctionPtr,
+        data::SymAddr,
+        data::SymSize,
         data::Alloca,
         data::InsertValue,
         data::ExtractValue,
@@ -121,7 +123,7 @@ define_inst_set_base! {
         evm::EvmRevert,
         evm::EvmSelfDestruct,
         evm::EvmMalloc,
-        evm::EvmContractSize,
+
     }
 }
 
