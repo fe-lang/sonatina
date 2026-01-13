@@ -1,5 +1,3 @@
-use crate::bitset::BitSet;
-use smallvec::SmallVec;
 use sonatina_ir::ValueId;
 use std::collections::BTreeMap;
 
@@ -12,6 +10,112 @@ use super::{
 };
 
 impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
+    pub(super) fn normalize_to_exact(&mut self, desired: &[ValueId]) {
+        // Contract: rewrite the current symbolic stack (above the function return barrier, if any)
+        // so that it matches `desired` exactly (top-first).
+        if matches_exact(self.stack, desired) {
+            return;
+        }
+        if self.try_normalize_to_exact(desired) {
+            return;
+        }
+        self.flush_rebuild(desired);
+    }
+
+    fn delete_to_match_multiset(&mut self, req: &BTreeMap<ValueId, usize>) -> bool {
+        let limit = self.stack.len_above_func_ret();
+        let mut keep: Vec<bool> = vec![false; limit];
+
+        // Choose the deepest occurrences to keep. This tends to keep values that are already
+        // "out of reach" (e.g. deep transfer values) while discarding dead prefixes, which helps
+        // avoid long swap+pop chains when cleaning up edge stacks.
+        let mut remaining: BTreeMap<ValueId, usize> = req.clone();
+        for depth in (0..limit).rev() {
+            let Some(StackItem::Value(v)) = self.stack.item_at(depth) else {
+                return false;
+            };
+            let need = remaining.get(v).copied().unwrap_or(0);
+            if need == 0 {
+                continue;
+            }
+            keep[depth] = true;
+            if need == 1 {
+                remaining.remove(v);
+            } else {
+                remaining.insert(*v, need - 1);
+            }
+        }
+
+        self.delete_unkept_values(&mut keep);
+        true
+    }
+
+    fn delete_unkept_values(&mut self, keep: &mut Vec<bool>) {
+        // Delete all values marked as "not kept" using only SWAPs + POPs.
+        //
+        // Key optimization: if we have a kept prefix followed by a long contiguous run of
+        // deletable values (and more kept values below), we can sink the kept prefix below the
+        // run with O(k) swaps and then pop the entire run without per-item swaps.
+        while keep.iter().any(|k| !*k) {
+            if !keep[0] {
+                self.stack.pop(self.actions);
+                keep.remove(0);
+                continue;
+            }
+
+            let keep_prefix_len = keep.iter().take_while(|k| **k).count();
+            debug_assert!(keep_prefix_len > 0);
+
+            let mut run_len: usize = 0;
+            for k in keep.iter().skip(keep_prefix_len) {
+                if *k {
+                    break;
+                }
+                run_len += 1;
+            }
+
+            let can_bulk_delete = run_len != 0
+                && keep_prefix_len + run_len < keep.len()
+                && run_len > keep_prefix_len.saturating_mul(2).saturating_sub(1);
+            if can_bulk_delete {
+                let mut prefix = keep_prefix_len;
+                let mut run = run_len;
+                while prefix != 0 {
+                    // Swap the top kept value with the bottom of the deletable run,
+                    // making a deletable value immediately available to pop.
+                    let sink_depth = prefix + run - 1;
+                    self.stack.swap(sink_depth, self.actions);
+                    keep.swap(0, sink_depth);
+
+                    debug_assert!(!keep[0], "bulk delete expected deletable value on top");
+                    self.stack.pop(self.actions);
+                    keep.remove(0);
+
+                    run = run.saturating_sub(1);
+                    prefix = prefix.saturating_sub(1);
+                }
+
+                for _ in 0..run {
+                    debug_assert!(!keep[0], "bulk delete expected deletable prefix");
+                    self.stack.pop(self.actions);
+                    keep.remove(0);
+                }
+                continue;
+            }
+
+            // Fallback: swap the first deletable value to the top and pop it.
+            let pos = keep
+                .iter()
+                .position(|k| !*k)
+                .expect("keep mask had deletable values");
+            debug_assert!(pos != 0);
+            self.stack.swap(pos, self.actions);
+            keep.swap(0, pos);
+            self.stack.pop(self.actions);
+            keep.remove(0);
+        }
+    }
+
     fn try_normalize_to_exact(&mut self, desired: &[ValueId]) -> bool {
         if desired.len() > SWAP_MAX {
             return false;
@@ -28,37 +132,8 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         }
 
         // 1) Remove any extra values (including duplicates) so the stack multiset matches `req`.
-        loop {
-            limit = self.stack.len_above_func_ret();
-            debug_assert!(limit <= SWAP_MAX);
-
-            let mut cur: BTreeMap<ValueId, usize> = BTreeMap::new();
-            for item in self.stack.iter().take(limit) {
-                let StackItem::Value(v) = item else {
-                    continue;
-                };
-                *cur.entry(*v).or_insert(0) += 1;
-            }
-
-            let mut victim: Option<usize> = None;
-            for (i, item) in self.stack.iter().take(limit).enumerate() {
-                let StackItem::Value(v) = item else {
-                    continue;
-                };
-                let have = cur.get(v).copied().unwrap_or(0);
-                let need = req.get(v).copied().unwrap_or(0);
-                if have > need || need == 0 {
-                    victim = Some(i);
-                    break;
-                }
-            }
-
-            // If we found no removable element, our multiset already matches.
-            let Some(victim) = victim else {
-                break;
-            };
-            self.stack
-                .unstable_delete_at_pos(victim, &mut *self.actions);
+        if !self.delete_to_match_multiset(&req) {
+            return false;
         }
 
         // 2) Materialize any missing required multiplicities (DUP, PUSH, or MLOAD).
@@ -123,89 +198,8 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         true
     }
 
-    pub(super) fn normalize_to_transfer_with_preserve(
-        &mut self,
-        target: &[ValueId],
-        preserve: &BitSet<ValueId>,
-    ) {
-        // Contract: rewrite the current symbolic stack (above the function return barrier, if any)
-        // so that `target` is present in-order (top-first), allowing `preserve` values to remain.
-        //
-        // - stable-delete reachable unwanted values within `SWAP16` reach
-        // - if any unwanted remain (too deep), flush & rebuild from memory homes (dropping preserves)
-        // - if the target order mismatches, flush & rebuild (dropping preserves)
-        let mut wanted: BitSet<ValueId> = target.iter().copied().collect();
-        wanted.union_with(preserve);
-
-        // Step 1: delete reachable unwanted values.
-        //
-        // If `target` already appears as a subsequence, keep stable deletion to avoid
-        // needlessly breaking the order and forcing a permutation later.
-        let stable_deletes = matches_transfer_subsequence(self.stack, target);
-        loop {
-            if let Some(StackItem::Value(v)) = self.stack.top()
-                && !wanted.contains(*v)
-            {
-                self.stack.pop(&mut *self.actions);
-                continue;
-            }
-
-            let Some(pos) = find_deepest_reachable_unwanted(self.stack, &wanted, SWAP_MAX) else {
-                break;
-            };
-            if stable_deletes {
-                self.stack
-                    .stable_delete_at_depth(pos + 1, &mut *self.actions);
-            } else {
-                self.stack.unstable_delete_at_pos(pos, &mut *self.actions);
-            }
-        }
-
-        // Step 2: if any unwanted values remain above the function return barrier, flush & rebuild.
-        if exists_unwanted(self.stack, &wanted) {
-            self.flush_rebuild(target);
-            return;
-        }
-
-        // Step 3: if the target order mismatches, try SWAP/DUP/POP normalization within reach
-        // before falling back to flush & rebuild (which may unnecessarily grow `spill_set`).
-        if preserve.is_empty() {
-            if !matches_transfer_exact(self.stack, target) && !self.try_normalize_to_exact(target) {
-                self.flush_rebuild(target);
-            }
-            return;
-        }
-
-        if matches_transfer_subsequence(self.stack, target) {
-            return;
-        }
-
-        // Prefer leaving `target` as a suffix (so the preserved values are closer to the top and
-        // can be forwarded into phi results), but only if it fits within `SWAP16` reach.
-        let target_set: BitSet<ValueId> = target.iter().copied().collect();
-        let mut preserve_prefix: SmallVec<[ValueId; 4]> = SmallVec::new();
-        let mut seen: BitSet<ValueId> = BitSet::default();
-        let limit = self.stack.len_above_func_ret();
-        for item in self.stack.iter().take(limit) {
-            let StackItem::Value(v) = item else {
-                continue;
-            };
-            if preserve.contains(*v) && !target_set.contains(*v) && seen.insert(*v) {
-                preserve_prefix.push(*v);
-            }
-        }
-
-        let mut desired: SmallVec<[ValueId; 12]> = SmallVec::new();
-        desired.extend(preserve_prefix.iter().copied());
-        desired.extend(target.iter().copied());
-
-        if !self.try_normalize_to_exact(desired.as_slice()) {
-            self.flush_rebuild(target);
-        }
-    }
-
-    fn flush_rebuild(&mut self, target: &[ValueId]) {
-        let base_len = self.stack.common_suffix_len(target);
+    fn flush_rebuild(&mut self, desired: &[ValueId]) {
+        let base_len = self.stack.common_suffix_len(desired);
 
         // Pop everything above the common base suffix.
         while self.stack.len_above_func_ret() > base_len {
@@ -213,7 +207,10 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         }
 
         // Rebuild the remaining prefix bottom-to-top (push reverse so final is top-first).
-        for &v in target[..target.len().saturating_sub(base_len)].iter().rev() {
+        for &v in desired[..desired.len().saturating_sub(base_len)]
+            .iter()
+            .rev()
+        {
             if self.ctx.func.dfg.value_is_imm(v) {
                 let imm = self
                     .ctx
@@ -252,56 +249,12 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     }
 }
 
-fn matches_transfer_exact(stack: &SymStack, target: &[ValueId]) -> bool {
+fn matches_exact(stack: &SymStack, desired: &[ValueId]) -> bool {
     let limit = stack.len_above_func_ret();
-    limit == target.len()
+    limit == desired.len()
         && stack
             .iter()
             .take(limit)
-            .zip(target.iter().copied())
+            .zip(desired.iter().copied())
             .all(|(item, v)| item == &StackItem::Value(v))
-}
-
-fn matches_transfer_subsequence(stack: &SymStack, target: &[ValueId]) -> bool {
-    let limit = stack.len_above_func_ret();
-    let mut want_idx: usize = 0;
-    for item in stack.iter().take(limit) {
-        if want_idx >= target.len() {
-            break;
-        }
-        if item == &StackItem::Value(target[want_idx]) {
-            want_idx += 1;
-        }
-    }
-    want_idx == target.len()
-}
-
-fn find_deepest_reachable_unwanted(
-    stack: &SymStack,
-    wanted: &BitSet<ValueId>,
-    max_depth: usize,
-) -> Option<usize> {
-    let limit = stack.len_above_func_ret().min(max_depth);
-    stack
-        .iter()
-        .take(limit)
-        .enumerate()
-        .filter_map(|(i, item)| match item {
-            StackItem::Value(v) if !wanted.contains(*v) => Some(i),
-            _ => None,
-        })
-        .last()
-}
-
-fn exists_unwanted(stack: &SymStack, wanted: &BitSet<ValueId>) -> bool {
-    let limit = stack.len_above_func_ret();
-    for item in stack.iter().take(limit) {
-        let StackItem::Value(v) = item else {
-            continue;
-        };
-        if !wanted.contains(*v) {
-            return true;
-        }
-    }
-    false
 }
