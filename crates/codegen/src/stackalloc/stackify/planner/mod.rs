@@ -10,7 +10,7 @@ use crate::{
 use sonatina_ir::ValueId;
 
 use super::{
-    StackifyContext,
+    DUP_MAX, StackifyContext,
     slots::{FreeSlots, SlotState},
     spill::{SpillDiscovery, SpillSet},
     sym_stack::SymStack,
@@ -73,14 +73,14 @@ impl<'a> MemPlan<'a> {
         Action::MemLoadFrameSlot(slot)
     }
 
-    fn emit_store_if_spilled(&mut self, v: ValueId, actions: &mut Actions) {
+    fn emit_store_if_spilled_at_depth(&mut self, v: ValueId, depth: u8, actions: &mut Actions) {
         let Some(spilled) = self.spill.spilled(v) else {
             return;
         };
         let slot = self
             .slots
             .ensure_slot(spilled, self.liveness, &mut *self.free_slots);
-        actions.push(Action::StackDup(0));
+        actions.push(Action::StackDup(depth));
         actions.push(Action::MemStoreFrameSlot(slot));
     }
 }
@@ -113,7 +113,16 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     }
 
     pub(super) fn emit_store_if_spilled(&mut self, v: ValueId) {
-        self.mem.emit_store_if_spilled(v, self.actions);
+        self.mem.emit_store_if_spilled_at_depth(v, 0, self.actions);
+    }
+
+    pub(super) fn emit_store_if_spilled_at_depth(&mut self, v: ValueId, depth: usize) {
+        if !self.mem.spill_set().contains(v) {
+            return;
+        }
+        debug_assert!(depth < DUP_MAX, "DUP out of range");
+        self.mem
+            .emit_store_if_spilled_at_depth(v, depth as u8, self.actions);
     }
 
     fn push_value_from_spill_slot_or_mark(&mut self, load_from: ValueId, stack_as: ValueId) {

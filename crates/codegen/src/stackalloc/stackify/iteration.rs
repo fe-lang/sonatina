@@ -163,9 +163,8 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     &live_out,
                 );
                 let templates = self.templates;
-                let phi_results = &self.ctx.phi_results;
                 self.with_planner(&mut inh, &mut prologue, &mut free_slots, |planner| {
-                    planner.plan_edge_fixup(templates, phi_results, pred, block);
+                    planner.plan_edge_fixup(templates, pred, block);
                 });
                 self.observer.on_block_prologue(&prologue);
             }
@@ -296,14 +295,13 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     // (including any phi results).
                     let dest = *jump.dest();
                     let templates = self.templates;
-                    let phi_results = &self.ctx.phi_results;
                     let src = state.block;
                     self.with_pre_actions_planner(
                         &mut state.stack,
                         inst,
                         &mut state.free_slots,
                         |p| {
-                            p.plan_edge_fixup(templates, phi_results, src, dest);
+                            p.plan_edge_fixup(templates, src, dest);
                         },
                     );
 

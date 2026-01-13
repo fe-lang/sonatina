@@ -1,12 +1,9 @@
-use crate::bitset::BitSet;
 use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
 use sonatina_ir::{BlockId, InstId, ValueId};
-use std::collections::BTreeMap;
 
 use super::{
     super::{
-        DUP_MAX, SWAP_MAX,
         sym_stack::StackItem,
         templates::{BlockTemplate, phi_args_for_edge},
     },
@@ -17,81 +14,56 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     pub(in super::super) fn plan_edge_fixup(
         &mut self,
         templates: &SecondaryMap<BlockId, BlockTemplate>,
-        phi_results: &SecondaryMap<BlockId, SmallVec<[ValueId; 4]>>,
         pred: BlockId,
         succ: BlockId,
     ) {
-        // Edge fixup:
-        // 1) normalize carried transfer to successor's chosen `T(S)`
-        // 2) push phi arguments so successor sees `P(S)` on entry
         let tmpl = &templates[succ];
+        let phi_results = &self.ctx.phi_results[succ];
 
         let phi_srcs = phi_args_for_edge(self.ctx.func, pred, succ);
         debug_assert_eq!(
             phi_srcs.len(),
-            phi_results[succ].len(),
+            phi_results.len(),
             "phi source/result arity mismatch for edge {pred:?}->{succ:?}"
         );
 
-        // 1) Normalize carried transfer to the successor's transfer list, while
-        // preserving reachable phi sources so we can forward them without forcing `spill_set`.
-        let phi_count = phi_results[succ].len();
-        let mut preserve_phi_srcs: BitSet<ValueId> = BitSet::default();
-        for &src in phi_srcs.iter() {
-            if !self.ctx.func.dfg.value_is_imm(src)
-                && let Some(pos) = self.stack.find_reachable_value(src, SWAP_MAX)
-                && pos + phi_count <= SWAP_MAX
-            {
-                preserve_phi_srcs.insert(src);
-            }
-        }
-        self.normalize_to_transfer_with_preserve(tmpl.transfer.as_slice(), &preserve_phi_srcs);
+        // Normalize the predecessor stack directly to the successor entry template:
+        //
+        //   StackIn(succ) = P(succ) ++ T(succ)
+        //
+        // Where `P(succ)` includes:
+        // - function args (entry block only)
+        // - phi results (replaced here by per-edge phi sources, then renamed in-place)
+        let phi_count = phi_results.len();
+        debug_assert!(
+            phi_count <= tmpl.params.len(),
+            "template params missing phi results for block {succ:?}"
+        );
+        let args_prefix_len = tmpl.params.len() - phi_count;
+        debug_assert_eq!(
+            &tmpl.params.as_slice()[args_prefix_len..],
+            phi_results.as_slice(),
+            "template phi prefix mismatch for block {succ:?}"
+        );
 
-        // 2) Push phi parameters so successor sees its parameter prefix on entry.
-        let transfer_set: BitSet<ValueId> = tmpl.transfer.as_slice().into();
-        let mut remaining_src_uses: BTreeMap<ValueId, u32> = BTreeMap::new();
-        for &src in phi_srcs.iter() {
-            if !self.ctx.func.dfg.value_is_imm(src) {
-                *remaining_src_uses.entry(src).or_insert(0) += 1;
-            }
-        }
+        let mut desired: SmallVec<[ValueId; 16]> = SmallVec::new();
+        desired.extend(tmpl.params.iter().take(args_prefix_len).copied());
+        desired.extend(phi_srcs.iter().copied());
+        desired.extend(tmpl.transfer.iter().copied());
 
-        for (&phi_res, &src) in phi_results[succ].iter().zip(phi_srcs.iter()).rev() {
-            if self.ctx.func.dfg.value_is_imm(src) {
-                let imm = self
-                    .ctx
-                    .func
-                    .dfg
-                    .value_imm(src)
-                    .expect("imm value missing payload");
-                self.stack.push_imm(phi_res, imm, self.actions);
-            } else {
-                let rem = remaining_src_uses
-                    .get_mut(&src)
-                    .expect("phi source missing from use-count map");
-                *rem = rem.saturating_sub(1);
-                let is_last_use_on_edge = *rem == 0;
+        self.normalize_to_exact(desired.as_slice());
 
-                if is_last_use_on_edge && !transfer_set.contains(src) {
-                    // Prefer consuming the existing stack copy (by stable-rotating it to the top)
-                    // instead of duplicating/loading it. This avoids leaving an extra dead copy
-                    // of `src` below the phi prefix.
-                    if let Some(pos) = self.stack.find_reachable_value(src, SWAP_MAX) {
-                        self.stack.stable_rotate_to_top(pos, self.actions);
-                        self.stack.rename_top_value(phi_res);
-                    } else {
-                        self.push_value_from_spill_slot_or_mark(src, phi_res);
-                    }
-                } else if let Some(pos) = self.stack.find_reachable_value(src, DUP_MAX) {
-                    self.stack.dup(pos, self.actions);
-                    self.stack.rename_top_value(phi_res);
-                } else {
-                    self.push_value_from_spill_slot_or_mark(src, phi_res);
-                }
-            }
-
-            // If the phi result is in `spill_set`, store it immediately while it is on top.
-            self.emit_store_if_spilled(phi_res);
+        // Rename phi-source placeholders to phi results, then emit spill stores without
+        // disturbing the final entry layout.
+        for (idx, (&phi_res, &src)) in phi_results.iter().zip(phi_srcs.iter()).enumerate() {
+            let depth = args_prefix_len + idx;
+            debug_assert_eq!(
+                self.stack.item_at(depth),
+                Some(&StackItem::Value(src)),
+                "edge normalization failed to place phi source at depth {depth} for {pred:?}->{succ:?}"
+            );
+            self.stack.rename_value_at_depth(depth, phi_res);
+            self.emit_store_if_spilled_at_depth(phi_res, depth);
         }
     }
 

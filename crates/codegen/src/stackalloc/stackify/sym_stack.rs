@@ -121,6 +121,14 @@ impl SymStack {
         *top = v;
     }
 
+    pub(super) fn rename_value_at_depth(&mut self, depth: usize, v: ValueId) {
+        debug_assert!(depth < self.len_above_func_ret());
+        let Some(StackItem::Value(slot)) = self.items.get_mut(depth) else {
+            panic!("expected StackItem::Value at depth {depth}")
+        };
+        *slot = v;
+    }
+
     /// Duplicate `stack[pos]` to the top (`DUP{pos+1}`).
     pub(super) fn dup(&mut self, pos: usize, actions: &mut Actions) {
         debug_assert!(pos < super::DUP_MAX, "DUP out of range");
@@ -139,17 +147,6 @@ impl SymStack {
         for k in 1..depth {
             self.swap(k, actions);
         }
-        self.pop(actions);
-    }
-
-    /// Delete `stack[pos]` (0-indexed) without preserving relative order.
-    ///
-    /// This uses at most 1 `SWAP*` + `POP` (and just `POP` when `pos == 0`).
-    pub(super) fn unstable_delete_at_pos(&mut self, pos: usize, actions: &mut Actions) {
-        debug_assert!(pos < super::SWAP_MAX);
-        debug_assert!(pos < self.len_above_func_ret());
-
-        self.swap(pos, actions);
         self.pop(actions);
     }
 
