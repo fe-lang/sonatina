@@ -1,7 +1,7 @@
 use macros::Inst;
 pub mod inst_set;
 
-use crate::{module::FuncRef, value::ValueId};
+use crate::value::ValueId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 pub struct EvmUdiv {
@@ -396,11 +396,4 @@ pub struct EvmSelfDestruct {
 #[inst(side_effect(crate::inst::SideEffect::Write))]
 pub struct EvmMalloc {
     size: ValueId,
-}
-
-/// An instruction that takes the main function of a contract
-/// as an argument and returns the size of the contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-pub struct EvmContractSize {
-    contract: FuncRef,
 }
