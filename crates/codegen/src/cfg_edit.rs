@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, InstId, ValueId,
+    BlockId, ControlFlowGraph, Function, Inst, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::control_flow::Jump,
 };
@@ -44,6 +44,38 @@ impl<'f> CfgEditor<'f> {
 
     pub fn recompute_cfg(&mut self) {
         self.cfg.compute(self.func);
+    }
+
+    pub fn truncate_block_from_inst(&mut self, first_inst: InstId) -> BlockId {
+        assert!(self.func.layout.is_inst_inserted(first_inst));
+        let block = self.func.layout.inst_block(first_inst);
+
+        let mut current = Some(first_inst);
+        while let Some(inst_id) = current {
+            current = self.func.layout.next_inst_of(inst_id);
+            InstInserter::at_location(CursorLocation::At(inst_id)).remove_inst(self.func);
+        }
+
+        block
+    }
+
+    pub fn append_inst_with_result(
+        &mut self,
+        block: BlockId,
+        inst: Box<dyn Inst>,
+        result_ty: Option<Type>,
+    ) -> (InstId, Option<ValueId>) {
+        assert!(self.func.layout.is_block_inserted(block));
+        let inst_id = self.func.dfg.make_inst_dyn(inst);
+        self.func.layout.append_inst(inst_id, block);
+
+        let result = result_ty.map(|ty| {
+            let value = self.func.dfg.make_value(Value::Inst { inst: inst_id, ty });
+            self.func.dfg.attach_result(inst_id, value);
+            value
+        });
+
+        (inst_id, result)
     }
 
     pub fn trim_after_terminator(&mut self) -> bool {
@@ -718,6 +750,50 @@ mod tests {
             let term = editor.func().layout.last_inst_of(b0).unwrap();
             let jump = editor.func().dfg.cast_jump(term).unwrap();
             assert_eq!(*jump.dest(), b2);
+        });
+    }
+
+    #[test]
+    fn truncate_block_from_inst_and_append_inst_with_result_rebuild_tail() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I32], Type::I32);
+        let is = evm.inst_set();
+
+        let b0 = builder.append_block();
+        let arg0 = builder.args()[0];
+        builder.switch_to_block(b0);
+        let one = builder.make_imm_value(1i32);
+        let v0 = builder.insert_inst_with(|| Add::new(is, arg0, one), Type::I32);
+        builder.insert_inst_no_result_with(|| Return::new(is, Some(v0)));
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let block = editor.func().layout.entry_block().unwrap();
+            let first_inst = editor.func().layout.first_inst_of(block).unwrap();
+            let arg0 = editor.func().arg_values[0];
+            let two = editor.func_mut().dfg.make_imm_value(2i32);
+
+            let truncated = editor.truncate_block_from_inst(first_inst);
+            assert_eq!(truncated, block);
+            assert!(editor.func().layout.first_inst_of(block).is_none());
+
+            let (_, add_res) = editor.append_inst_with_result(
+                block,
+                Box::new(Add::new(is, arg0, two)),
+                Some(Type::I32),
+            );
+            let add_res = add_res.unwrap();
+
+            editor.append_inst_with_result(block, Box::new(Return::new(is, Some(add_res))), None);
+            editor.recompute_cfg();
+
+            let term = editor.func().layout.last_inst_of(block).unwrap();
+            assert!(editor.func().dfg.is_return(term));
+            assert!(editor.func().layout.next_inst_of(term).is_none());
         });
     }
 

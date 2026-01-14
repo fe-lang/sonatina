@@ -1,0 +1,21 @@
+---
+source: crates/codegen/tests/inliner.rs
+assertion_line: 29
+input_file: test_files/inliner/inline_evm_revert_chain.sntn
+---
+func private %abort_chain(v0.i32) {
+    block0:
+        v1.i32 = add v0 1.i32;
+        v2.i32 = mul v1 2.i32;
+        v3.i32 = add v2 v1;
+        evm_revert v2 v3;
+}
+
+
+func public %caller(v0.i32) {
+    block0:
+        v3.i32 = add v0 1.i32;
+        v4.i32 = mul v3 2.i32;
+        v5.i32 = add v4 v3;
+        evm_revert v4 v5;
+}

@@ -1,0 +1,15 @@
+target = "evm-ethereum-london"
+
+func private %const_after_work(v0.i32) -> i32 {
+    block0:
+        v1.i32 = add v0 1.i32;
+        v2.i32 = mul v1 3.i32;
+        return 9.i32;
+}
+
+func public %caller(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %const_after_work v0;
+        v2.i32 = sub v1 1.i32;
+        return v2;
+}

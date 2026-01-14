@@ -1,0 +1,22 @@
+target = "evm-ethereum-london"
+
+func private %large(v0.i32) -> i32 {
+    block0:
+        v1.i32 = add v0 1.i32;
+        v2.i32 = add v1 2.i32;
+        v3.i32 = add v2 3.i32;
+        v4.i32 = add v3 4.i32;
+        v5.i32 = add v4 5.i32;
+        v6.i32 = add v5 6.i32;
+        v7.i32 = add v6 7.i32;
+        v8.i32 = add v7 8.i32;
+        v9.i32 = add v8 9.i32;
+        return v9;
+}
+
+func public %caller(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %large v0;
+        return v1;
+}
+

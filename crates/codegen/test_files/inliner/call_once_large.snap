@@ -1,0 +1,32 @@
+---
+source: crates/codegen/tests/inliner.rs
+input_file: test_files/inliner/call_once_large.sntn
+---
+func private %large(v0.i32) -> i32 {
+    block0:
+        v1.i32 = add v0 1.i32;
+        v2.i32 = add v1 2.i32;
+        v3.i32 = add v2 3.i32;
+        v4.i32 = add v3 4.i32;
+        v5.i32 = add v4 5.i32;
+        v6.i32 = add v5 6.i32;
+        v7.i32 = add v6 7.i32;
+        v8.i32 = add v7 8.i32;
+        v9.i32 = add v8 9.i32;
+        return v9;
+}
+
+
+func public %caller(v0.i32) -> i32 {
+    block0:
+        v11.i32 = add v0 1.i32;
+        v12.i32 = add v11 2.i32;
+        v13.i32 = add v12 3.i32;
+        v14.i32 = add v13 4.i32;
+        v15.i32 = add v14 5.i32;
+        v16.i32 = add v15 6.i32;
+        v17.i32 = add v16 7.i32;
+        v18.i32 = add v17 8.i32;
+        v19.i32 = add v18 9.i32;
+        return v19;
+}
