@@ -126,6 +126,31 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             return false;
         }
 
+        // If the desired stack begins with one or more immediates, delay pushing them until after
+        // the existing (non-immediate) stack prefix is normalized. This avoids permuting around
+        // freshly-pushed constants (e.g. a loop-entry phi source `0`).
+        let imm_prefix_len = desired
+            .iter()
+            .take_while(|v| self.ctx.func.dfg.value_is_imm(**v))
+            .count();
+        if imm_prefix_len != 0 {
+            let tail = &desired[imm_prefix_len..];
+            if !self.try_normalize_to_exact(tail) {
+                return false;
+            }
+
+            for &v in desired[..imm_prefix_len].iter().rev() {
+                let imm = self
+                    .ctx
+                    .func
+                    .dfg
+                    .value_imm(v)
+                    .expect("imm value missing payload");
+                self.stack.push_imm(v, imm, self.actions);
+            }
+            return true;
+        }
+
         let mut req: BTreeMap<ValueId, usize> = BTreeMap::new();
         for &v in desired.iter() {
             *req.entry(v).or_insert(0) += 1;
