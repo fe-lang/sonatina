@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 152
 expression: "String::from_utf8(v).unwrap()"
 input_file: test_files/evm/commutative_order.sntn
 ---
@@ -21,12 +22,12 @@ input_file: test_files/evm/commutative_order.sntn
       pre: [SWAP15, PUSH(1)]
       add [1, v15] -> v16
     - stack=[v16, v1, v2x, v3x, v4x, v5x, v6x, v7x, v8x, v9x, v10x, v11x, v12x, v13x, v14x, v0, <RET>]
-      exit(block1): [SWAP14, POP, SWAP12, POP, POP, POP, POP, POP, POP, POP, POP, POP, POP, POP, POP, SWAP2, SWAP1]
+      exit(block1): [SWAP14, POP, SWAP12, POP, POP, POP, POP, POP, POP, POP, POP, POP, POP, POP, POP, SWAP1]
       jump -> block1
-  block1 P=[] T=[v16, v0, v1]
-    - stack=[v16, v0, v1, <RET>], last_use=[v0, v1]
+  block1 P=[] T=[v16, v1, v0]
+    - stack=[v16, v1, v0, <RET>], last_use=[v0, v1]
       pre: [SWAP2]
-      add [v1, v0] -> v17
+      add [v0, v1] -> v17
     - stack=[v17x, v16, <RET>]
       cleanup: [POP]
       return [v16]
@@ -83,7 +84,6 @@ comm_add16:
     POP
     POP
     POP
-    SWAP2
     SWAP1
   block1:
     JUMPDEST
@@ -148,19 +148,18 @@ comm_add16:
    61    POP
    62    POP
    63    POP
-   64    SWAP2
-   65    SWAP1
+   64    SWAP1
   block1:
-   66    JUMPDEST
-   67    SWAP2  // v17.i32 = add v0 v1;
-   68    ADD
-   69    POP  // return v16;
-   70    SWAP1
-   71    JUMP
+   65    JUMPDEST
+   66    SWAP2  // v17.i32 = add v0 v1;
+   67    ADD
+   68    POP  // return v16;
+   69    SWAP1
+   70    JUMP
 
-0x5b6025600f600e600d600c600b600a6009600860076006600560046003600260015f602c565b5f5260205ff35b9e6001019d509b50505050505050505050505091905b9101509056
+0x5b6025600f600e600d600c600b600a6009600860076006600560046003600260015f602c565b5f5260205ff35b9e6001019d509b505050505050505050505050905b9101509056
 
-Success { reason: Return, gas_used: 21200, gas_refunded: 0, logs: [], output: Call(0x0000000000000000000000000000000000000000000000000000000000000010) }
+Success { reason: Return, gas_used: 21197, gas_refunded: 0, logs: [], output: Call(0x0000000000000000000000000000000000000000000000000000000000000010) }
 
     pc  opcode            input (stack grows to the right)
      0  5b  JUMPDEST      []
@@ -202,14 +201,13 @@ Success { reason: Return, gas_used: 21200, gas_refunded: 0, logs: [], output: Ca
     61  50  POP           [0x25, 0x0, …, 0xc, 0xb, 0xa] (len=7)
     62  50  POP           [0x25, 0x0, 0x10, 0x1, 0xc, 0xb]
     63  50  POP           [0x25, 0x0, 0x10, 0x1, 0xc]
-    64  91  SWAP2         [0x25, 0x0, 0x10, 0x1]
-    65  90  SWAP1         [0x25, 0x1, 0x10, 0x0]
-    66  5b  JUMPDEST      [0x25, 0x1, 0x0, 0x10]
-    67  91  SWAP2         [0x25, 0x1, 0x0, 0x10]
-    68  01  ADD           [0x25, 0x10, 0x0, 0x1]
-    69  50  POP           [0x25, 0x10, 0x1]
-    70  90  SWAP1         [0x25, 0x10]
-    71  56  JUMP          [0x10, 0x25]
+    64  90  SWAP1         [0x25, 0x0, 0x10, 0x1]
+    65  5b  JUMPDEST      [0x25, 0x0, 0x1, 0x10]
+    66  91  SWAP2         [0x25, 0x0, 0x1, 0x10]
+    67  01  ADD           [0x25, 0x10, 0x1, 0x0]
+    68  50  POP           [0x25, 0x10, 0x1]
+    69  90  SWAP1         [0x25, 0x10]
+    70  56  JUMP          [0x10, 0x25]
     37  5b  JUMPDEST      [0x10]
     38  5f  PUSH0         [0x10]
     39  52  MSTORE        [0x10, 0x0]

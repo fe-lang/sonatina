@@ -3,8 +3,8 @@
 //! - Each block `B` has a unique entry template `StackIn(B) = P(B) ++ T(B)`.
 //!   - `P(B)` is a parameter prefix (phi results; plus function args for the entry block).
 //!   - `T(B)` is a transfer region: live-in, non-phi values in a chosen order.
-//!     - Along single-predecessor chains, `T(B)` inherits the predecessor's outgoing layout.
-//!     - When incoming layouts disagree at a join, pick a predecessor layout (prefer loop backedges).
+//!     - `T(B)` is derived from simulated predecessor stacks (`cand(pred→B)`), not heuristics.
+//!     - Layouts are solved in reachable-CFG SCC topo order; cyclic SCCs use a fixed point.
 //! - For merge blocks, all incoming edges are normalized to the same `StackIn(B)` (often a no-op).
 //! - When a value cannot be duplicated from within `DUP16` reach, it is added to `spill_set`,
 //!   assigned a frame slot, and reloaded from memory; `spill_set` is discovered via a
@@ -18,6 +18,7 @@
 
 mod alloc;
 mod builder;
+mod flow_templates;
 mod iteration;
 mod planner;
 mod slots;

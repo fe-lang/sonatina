@@ -3,17 +3,18 @@ use smallvec::SmallVec;
 use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
 use std::collections::BTreeMap;
 
-use crate::{bitset::BitSet, domtree::DomTree, liveness::Liveness};
+use crate::{bitset::BitSet, cfg_scc::CfgSccAnalysis, domtree::DomTree, liveness::Liveness};
 
 use super::{
     alloc::StackifyAlloc,
+    flow_templates::solve_templates_from_flow,
     iteration::IterationPlanner,
     slots::{FreeSlots, SlotState},
     spill::SpillSet,
     sym_stack::SymStack,
     templates::{
         DefInfo, compute_def_info, compute_dom_depth, compute_phi_out_sources, compute_phi_results,
-        compute_templates, function_has_internal_return,
+        function_has_internal_return,
     },
     trace::{NullObserver, StackifyObserver},
 };
@@ -31,6 +32,7 @@ pub(super) struct StackifyContext<'a> {
     pub(super) dom: &'a DomTree,
     pub(super) liveness: &'a Liveness,
     pub(super) entry: BlockId,
+    pub(super) scc: CfgSccAnalysis,
     pub(super) dom_depth: SecondaryMap<BlockId, u32>,
     pub(super) def_info: SecondaryMap<ValueId, Option<DefInfo>>,
     pub(super) phi_results: SecondaryMap<BlockId, SmallVec<[ValueId; 4]>>,
@@ -67,12 +69,16 @@ impl<'a> StackifyBuilder<'a> {
             None => return StackifyAlloc::default(),
         };
 
+        let mut scc = CfgSccAnalysis::new();
+        scc.compute(self.cfg);
+
         let ctx = StackifyContext {
             func: self.func,
             cfg: self.cfg,
             dom: self.dom,
             liveness: self.liveness,
             entry,
+            scc,
             dom_depth: compute_dom_depth(self.dom, entry),
             def_info: compute_def_info(self.func, entry),
             phi_results: compute_phi_results(self.func),
@@ -124,7 +130,11 @@ impl<'a> StackifyBuilder<'a> {
             }
         }
 
-        let templates = compute_templates(ctx, spill);
+        // Template solving may encounter temporary unreachable values while iterating toward a
+        // fixed point, but those requests are not necessarily required under the final chosen
+        // templates. Treat spill discovery as the responsibility of the final planning pass.
+        let mut solver_spill_requests: BitSet<ValueId> = BitSet::default();
+        let templates = solve_templates_from_flow(ctx, spill, &mut solver_spill_requests);
 
         let mut alloc = StackifyAlloc {
             pre_actions: SecondaryMap::new(),
