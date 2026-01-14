@@ -1,4 +1,5 @@
 mod bitset;
+pub mod cfg_scc;
 pub mod critical_edge;
 pub mod domtree;
 pub mod isa;
