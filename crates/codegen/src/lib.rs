@@ -7,6 +7,7 @@ pub mod liveness;
 pub mod loop_analysis;
 pub mod machinst;
 pub mod module_analysis;
+pub mod object;
 pub mod optim;
 pub mod post_domtree;
 pub mod stackalloc;

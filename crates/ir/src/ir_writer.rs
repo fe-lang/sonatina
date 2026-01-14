@@ -87,6 +87,21 @@ impl<'a> ModuleWriter<'a> {
             writeln!(w)?;
         }
 
+        if !self.module.objects.is_empty() {
+            let mut objects: Vec<_> = self.module.objects.values().collect();
+            objects.sort_by(|a, b| a.name.0.as_str().cmp(b.name.0.as_str()));
+
+            writeln!(w)?;
+            for (i, object) in objects.iter().enumerate() {
+                object.write(w, &self.module.ctx)?;
+                if i + 1 != objects.len() {
+                    writeln!(w)?;
+                    writeln!(w)?;
+                }
+            }
+            writeln!(w)?;
+        }
+
         Ok(())
     }
 

@@ -6,6 +6,7 @@ use cranelift_entity::{
 use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, InstId, U256,
+    inst::data::SymbolRef,
     ir_writer::{FuncWriteCtx, FunctionSignature, InstStatement, IrWrite},
     module::FuncRef,
 };
@@ -29,6 +30,24 @@ pub enum Label {
 pub struct VCodeInst(pub u32);
 entity_impl!(VCodeInst);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SymFixupKind {
+    Addr,
+    Size,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymFixup {
+    pub kind: SymFixupKind,
+    pub sym: SymbolRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VCodeFixup {
+    Label(LabelId),
+    Sym(SymFixup),
+}
+
 pub struct VCode<Op> {
     pub insts: PrimaryMap<VCodeInst, Op>,
     pub inst_ir: SecondaryMap<VCodeInst, PackedOption<InstId>>,
@@ -36,10 +55,9 @@ pub struct VCode<Op> {
     /// Immediate bytes for PUSH* ops
     pub inst_imm_bytes: SparseMap<VCodeInst, (VCodeInst, SmallVec<[u8; 8]>)>,
 
+    pub fixups: SparseMap<VCodeInst, (VCodeInst, VCodeFixup)>,
+
     pub labels: PrimaryMap<LabelId, Label>,
-    /// Instructions that contain label offsets that will need to updated
-    /// when the bytecode is emitted
-    pub label_uses: SparseMap<VCodeInst, (VCodeInst, LabelId)>,
 
     pub blocks: SecondaryMap<BlockId, EntityList<VCodeInst>>,
 
@@ -96,7 +114,9 @@ where
                     be[32 - bytes.len()..].copy_from_slice(bytes);
                     let imm = U256::from_big_endian(&be);
                     write!(w, " 0x{imm:x} ({imm})")?;
-                } else if let Some((_, label)) = self.label_uses.get(insn) {
+                } else if let Some((_, fixup)) = self.fixups.get(insn)
+                    && let VCodeFixup::Label(label) = fixup
+                {
                     match self.labels[*label] {
                         Label::Block(BlockId(n)) => write!(w, " block{n}"),
                         Label::Insn(insn) => {
@@ -131,8 +151,8 @@ impl<Op> Default for VCode<Op> {
             insts: Default::default(),
             inst_ir: Default::default(),
             inst_imm_bytes: SparseMap::new(), // no `Default` impl
+            fixups: SparseMap::new(),
             labels: PrimaryMap::default(),
-            label_uses: SparseMap::new(),
             blocks: Default::default(),
             insts_pool: Default::default(),
         }

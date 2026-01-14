@@ -5,16 +5,18 @@ use revm::{
     Context, EvmContext, Handler, inspector_handle_register,
     interpreter::Interpreter,
     primitives::{
-        AccountInfo, Address, Bytecode, Bytes, CancunSpec, Env, ExecutionResult, TransactTo, U256,
+        AccountInfo, Address, Bytecode, Bytes, CancunSpec, Env, ExecutionResult, Output,
+        TransactTo, U256,
     },
 };
 
 use sonatina_codegen::{
     critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
-    isa::evm::{EvmBackend, opcode::OpCode},
+    isa::evm::{EvmBackend, PushWidthPolicy, opcode::OpCode},
     liveness::Liveness,
-    machinst::{assemble::ObjectLayout, lower::Lower, vcode::VCode},
+    machinst::{lower::Lower, vcode::VCode},
+    object::{CompileOptions, compile_object},
     stackalloc::StackifyAlloc,
 };
 use sonatina_ir::{
@@ -95,64 +97,75 @@ fn test_evm(fixture: Fixture<&str>) {
 
     let mut stackify_out = Vec::new();
     let mut lowered_out = Vec::new();
-    let funcs = parsed
-        .debug
-        .func_order
-        .iter()
-        .map(|fref| {
-            let (vcode, block_order) = parsed.module.func_store.modify(*fref, |function| {
-                let (vcode, block_order, stackify) =
-                    vcode_for_fn(function, &parsed.module.ctx, &backend);
-                let ctx = FuncWriteCtx::with_debug_provider(function, *fref, &parsed.debug);
+    for fref in parsed.debug.func_order.iter() {
+        parsed.module.func_store.modify(*fref, |function| {
+            let (vcode, _block_order, stackify) =
+                vcode_for_fn(function, &parsed.module.ctx, &backend);
+            let ctx = FuncWriteCtx::with_debug_provider(function, *fref, &parsed.debug);
 
-                // Snapshot format:
-                // - all stackify traces first
-                // - then lowered functions/blocks
-                // - then the runtime EVM trace at the bottom
-                write!(&mut stackify_out, "// ").unwrap();
-                FunctionSignature.write(&mut stackify_out, &ctx).unwrap();
-                writeln!(&mut stackify_out).unwrap();
-                write!(&mut stackify_out, "{}", fmt_stackify_trace(&stackify)).unwrap();
-                writeln!(&mut stackify_out).unwrap();
+            // Snapshot format:
+            // - all stackify traces first
+            // - then lowered functions/blocks
+            // - then the runtime EVM trace at the bottom
+            write!(&mut stackify_out, "// ").unwrap();
+            FunctionSignature.write(&mut stackify_out, &ctx).unwrap();
+            writeln!(&mut stackify_out).unwrap();
+            write!(&mut stackify_out, "{}", fmt_stackify_trace(&stackify)).unwrap();
+            writeln!(&mut stackify_out).unwrap();
 
-                vcode.write(&mut lowered_out, &ctx).unwrap();
-                writeln!(&mut lowered_out).unwrap();
-                (vcode, block_order)
-            });
-
-            (*fref, vcode, block_order)
-        })
-        .collect();
+            vcode.write(&mut lowered_out, &ctx).unwrap();
+            writeln!(&mut lowered_out).unwrap();
+        });
+    }
 
     let mut v = Vec::new();
     v.append(&mut stackify_out);
     v.append(&mut lowered_out);
 
     write!(&mut v, "\n\n---------------\n\n").unwrap();
+    let opts = CompileOptions {
+        fixup_policy: PushWidthPolicy::MinimalRelax,
+        emit_symtab: false,
+    };
 
-    let mut layout = ObjectLayout::new(funcs, 0);
-    let mut i = 0;
-    while layout.resize(&backend, 0) {
-        i += 1;
-        println!("resize iteration {i}");
+    let artifact = compile_object(&parsed.module, &backend, "Contract", &opts).unwrap();
+    for (name, section) in &artifact.sections {
+        writeln!(&mut v, "// section {}", name.0.as_str()).unwrap();
+        let hex = section.bytes.encode_hex::<String>();
+        writeln!(&mut v, "0x{hex}\n").unwrap();
     }
-    layout.print(&mut v, &parsed.module, &parsed.debug).unwrap();
 
-    let mut bytecode = Vec::new();
-    layout.emit(&backend, &mut bytecode);
-    let hex = bytecode.encode_hex::<String>();
+    let init = artifact
+        .sections
+        .iter()
+        .find(|(name, _)| name.0.as_str() == "init")
+        .map(|(_, s)| s.bytes.clone());
+    let runtime = artifact
+        .sections
+        .iter()
+        .find(|(name, _)| name.0.as_str() == "runtime")
+        .map(|(_, s)| s.bytes.clone())
+        .unwrap();
 
-    writeln!(&mut v, "\n0x{hex}").unwrap();
+    let calldata = [0, 0, 0, 11, 0, 0, 0, 22];
+    if let Some(init) = init {
+        let (create_res, create_trace, db, deployed) = deploy_on_evm(&init);
+        writeln!(&mut v, "\n{create_res:?}").unwrap();
+        writeln!(&mut v, "\n{create_trace}").unwrap();
 
-    let (res, trace) = run_on_evm(&bytecode);
-
-    writeln!(&mut v, "\n{res:?}").unwrap();
-    writeln!(&mut v, "\n{trace}").unwrap();
+        let (call_res, call_trace) = call_on_evm(db, deployed, &calldata);
+        writeln!(&mut v, "\n{call_res:?}").unwrap();
+        writeln!(&mut v, "\n{call_trace}").unwrap();
+    } else {
+        let (res, trace) = run_on_evm(&runtime, &calldata);
+        writeln!(&mut v, "\n{res:?}").unwrap();
+        writeln!(&mut v, "\n{trace}").unwrap();
+    }
 
     snap_test!(String::from_utf8(v).unwrap(), fixture.path());
 }
 
-fn run_on_evm(bytecode: &[u8]) -> (ExecutionResult, String) {
+fn run_on_evm(bytecode: &[u8], calldata: &[u8]) -> (ExecutionResult, String) {
     let mut db = revm::InMemoryDB::default();
     let revm_bytecode = Bytecode::new_raw(Bytes::copy_from_slice(bytecode));
     let test_address = Address::repeat_byte(0x12);
@@ -169,11 +182,43 @@ fn run_on_evm(bytecode: &[u8]) -> (ExecutionResult, String) {
     let mut env = Env::default();
     env.tx.clear();
     env.tx.transact_to = TransactTo::Call(test_address);
-    env.tx.data = Bytes::copy_from_slice(&[0, 0, 0, 11, 0, 0, 0, 22]);
+    env.tx.data = Bytes::copy_from_slice(calldata);
 
+    let (res, trace, _db) = run_revm_tx(db, env);
+    (res, trace)
+}
+
+fn deploy_on_evm(init_code: &[u8]) -> (ExecutionResult, String, revm::InMemoryDB, Address) {
+    let db = revm::InMemoryDB::default();
+    let mut env = Env::default();
+    env.tx.clear();
+    env.tx.transact_to = TransactTo::Create;
+    env.tx.data = Bytes::copy_from_slice(init_code);
+
+    let (res, trace, db) = run_revm_tx(db, env);
+    let deployed = match &res {
+        ExecutionResult::Success {
+            output: Output::Create(_, Some(addr)),
+            ..
+        } => *addr,
+        _ => panic!("unexpected deployment result: {res:?}"),
+    };
+    (res, trace, db, deployed)
+}
+
+fn call_on_evm(db: revm::InMemoryDB, addr: Address, calldata: &[u8]) -> (ExecutionResult, String) {
+    let mut env = Env::default();
+    env.tx.clear();
+    env.tx.transact_to = TransactTo::Call(addr);
+    env.tx.data = Bytes::copy_from_slice(calldata);
+
+    let (res, trace, _db) = run_revm_tx(db, env);
+    (res, trace)
+}
+
+fn run_revm_tx(mut db: revm::InMemoryDB, env: Env) -> (ExecutionResult, String, revm::InMemoryDB) {
     let context = Context::new(
         EvmContext::new_with_env(db, Box::new(env)),
-        // TracingInspector::new(TracingInspectorConfig::all());
         TestInspector::new(vec![]),
     );
 
@@ -184,12 +229,11 @@ fn run_on_evm(bytecode: &[u8]) -> (ExecutionResult, String) {
         .build();
 
     let res = evm.transact_commit();
+    let trace = String::from_utf8(evm.context.external.w).unwrap();
+    db = std::mem::take(&mut evm.context.evm.inner.db);
 
-    // let mut w = TraceWriter::new(&mut v).use_colors(ColorChoice::Never);
-    // w.write_arena(evm.context.external.traces()).unwrap();
-
-    match res.clone() {
-        Ok(r) => (r, String::from_utf8(evm.context.external.w).unwrap()),
+    match res {
+        Ok(r) => (r, trace, db),
         Err(e) => panic!("evm failure: {e}"),
     }
 }

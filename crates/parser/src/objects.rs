@@ -1,13 +1,37 @@
-use ir::object::{
-    DataName, Directive, Embed, EmbedSymbol, FuncName, Object, ObjectName, Section, SectionName,
-    SectionRef,
-};
+use ir::object::{Embed, EmbedSymbol, ObjectName, SectionName, SectionRef};
 use pest::Parser as _;
+use smol_str::SmolStr;
 
 use crate::{
     Error,
     syntax::{FromSyntax, Node, Parser, Rule},
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Object {
+    pub name: ObjectName,
+    pub sections: Vec<Section>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Section {
+    pub name: SectionName,
+    pub directives: Vec<Directive>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Directive {
+    Entry(FuncName),
+    Include(FuncName),
+    Data(DataName),
+    Embed(Embed),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FuncName(pub SmolStr);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DataName(pub SmolStr);
 
 pub fn parse_object_file(input: &str) -> Result<Vec<Object>, Vec<Error>> {
     match Parser::parse(Rule::object_file, input) {
@@ -119,6 +143,7 @@ impl FromSyntax<Error> for SectionRef {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ir::object::{Embed, EmbedSymbol, ObjectName, SectionName, SectionRef};
 
     #[test]
     fn parse_object_file_smoke() {

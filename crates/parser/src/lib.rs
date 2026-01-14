@@ -24,7 +24,7 @@ pub use syntax::Span;
 
 mod error;
 mod inst;
-mod objects;
+pub mod objects;
 
 type Bimap<K, V> = bimap::BiHashMap<K, V, BuildHasherDefault<FxHasher>>;
 pub use pest::Parser as PestParser;
@@ -118,7 +118,10 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
 
     for obj_def in ast.objects {
         let name = obj_def.object.name.0.clone();
-        if builder.declare_object(obj_def.object).is_err() {
+
+        if let Some(object) = ctx.lower_object(&builder, obj_def.object, obj_def.span)
+            && builder.declare_object(object).is_err()
+        {
             ctx.errors
                 .push(Error::DuplicatedDeclaration(name, obj_def.span));
         }
@@ -460,6 +463,75 @@ impl BuildCtx {
             }
         }
     }
+
+    fn lower_object(
+        &mut self,
+        mb: &ModuleBuilder,
+        object: crate::objects::Object,
+        span: Span,
+    ) -> Option<ir::Object> {
+        let mut has_error = false;
+
+        let mut sections = Vec::with_capacity(object.sections.len());
+        for section in object.sections {
+            let mut directives = Vec::with_capacity(section.directives.len());
+            for directive in section.directives {
+                let lowered = match directive {
+                    crate::objects::Directive::Entry(name) => {
+                        match mb.lookup_func(name.0.as_str()) {
+                            Some(func) => ir::object::Directive::Entry(func),
+                            None => {
+                                self.errors.push(Error::Undefined(
+                                    UndefinedKind::Func(name.0.clone()),
+                                    span,
+                                ));
+                                has_error = true;
+                                ir::object::Directive::Entry(FuncRef::from_u32(0))
+                            }
+                        }
+                    }
+                    crate::objects::Directive::Include(name) => {
+                        match mb.lookup_func(name.0.as_str()) {
+                            Some(func) => ir::object::Directive::Include(func),
+                            None => {
+                                self.errors.push(Error::Undefined(
+                                    UndefinedKind::Func(name.0.clone()),
+                                    span,
+                                ));
+                                has_error = true;
+                                ir::object::Directive::Include(FuncRef::from_u32(0))
+                            }
+                        }
+                    }
+                    crate::objects::Directive::Data(name) => match mb.lookup_gv(name.0.as_str()) {
+                        Some(gv) => ir::object::Directive::Data(gv),
+                        None => {
+                            self.errors
+                                .push(Error::Undefined(UndefinedKind::Value(name.0.clone()), span));
+                            has_error = true;
+                            ir::object::Directive::Data(GlobalVariableRef::from_u32(0))
+                        }
+                    },
+                    crate::objects::Directive::Embed(embed) => ir::object::Directive::Embed(embed),
+                };
+                directives.push(lowered);
+            }
+
+            sections.push(ir::object::Section {
+                name: section.name,
+                directives,
+            });
+        }
+
+        if has_error {
+            return None;
+        }
+
+        Some(ir::object::Object {
+            name: object.name,
+            sections,
+        })
+    }
 }
 
 // TODO: Temporary stopgap solution.
@@ -635,6 +707,8 @@ func public %main() {
         v1.i256 = sym_size %main;
         v2.i256 = sym_addr $foo;
         v3.i256 = sym_size $foo;
+        v4.i256 = sym_addr &runtime;
+        v5.i256 = sym_size &runtime;
         return;
 }
 "#;
@@ -646,6 +720,8 @@ func public %main() {
         assert!(printed.contains("sym_size %main"));
         assert!(printed.contains("sym_addr $foo"));
         assert!(printed.contains("sym_size $foo"));
+        assert!(printed.contains("sym_addr &runtime"));
+        assert!(printed.contains("sym_size &runtime"));
     }
 
     #[test]
@@ -666,6 +742,9 @@ object @Factory {
         let parsed = parse_module(s).unwrap();
         assert_eq!(parsed.module.objects.len(), 1);
         assert!(parsed.module.objects.contains_key("Factory"));
+        let mut w = ir::ir_writer::ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
+        let printed = w.dump_string();
+        assert!(printed.contains("object @Factory"));
     }
 
     #[test]

@@ -1,10 +1,50 @@
-use super::vcode::{Label, VCode, VCodeInst};
+use super::vcode::{Label, SymFixup, VCode, VCodeFixup, VCodeInst};
 use crate::stackalloc::Allocator;
 use smallvec::SmallVec;
-use sonatina_ir::{BlockId, Function, Immediate, Inst, InstId, Type, ValueId, module::ModuleCtx};
+use sonatina_ir::{
+    BlockId, Function, Immediate, Inst, InstId, Module, Type, ValueId,
+    module::{FuncRef, ModuleCtx},
+    object::{EmbedSymbol, ObjectName, SectionName},
+};
+
+pub struct LoweredFunction<Op> {
+    pub vcode: VCode<Op>,
+    pub block_order: Vec<BlockId>,
+}
+
+pub struct SectionLoweringCtx<'a> {
+    pub object: &'a ObjectName,
+    pub section: &'a SectionName,
+    pub embed_symbols: &'a [EmbedSymbol],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FixupUpdate {
+    Unchanged,
+    ContentChanged,
+    LayoutChanged,
+}
 
 pub trait LowerBackend {
     type MInst;
+    type Error: std::fmt::Display;
+    type FixupPolicy: Clone;
+
+    fn lower_function(
+        &self,
+        module: &Module,
+        func: FuncRef,
+        section_ctx: &SectionLoweringCtx<'_>,
+    ) -> Result<LoweredFunction<Self::MInst>, Self::Error>;
+
+    fn apply_sym_fixup(
+        &self,
+        vcode: &mut VCode<Self::MInst>,
+        inst: VCodeInst,
+        fixup: &SymFixup,
+        value: u32,
+        policy: &Self::FixupPolicy,
+    ) -> Result<FixupUpdate, Self::Error>;
 
     fn lower(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, inst: InstId);
     // -> Option<InstOutput> == SmallVec<[ValueRegs<Reg>; 2]>
@@ -107,7 +147,18 @@ impl<'a, Op: Default> Lower<'a, Op> {
 
     pub fn add_label_reference(&mut self, inst: VCodeInst, dest: Label) {
         let label = self.vcode.labels.push(dest);
-        self.vcode.label_uses.insert((inst, label));
+        self.vcode.fixups.insert((inst, VCodeFixup::Label(label)));
+    }
+
+    pub fn add_sym_fixup(&mut self, inst: VCodeInst, fixup: SymFixup) {
+        self.vcode.fixups.insert((inst, VCodeFixup::Sym(fixup)));
+    }
+
+    pub fn push_sym_fixup(&mut self, op: Op, fixup: SymFixup) -> VCodeInst {
+        let inst = self.push(op);
+        self.add_immediate(inst, &[]);
+        self.add_sym_fixup(inst, fixup);
+        inst
     }
 
     pub fn insn_data(&self, inst: InstId) -> &dyn Inst {
