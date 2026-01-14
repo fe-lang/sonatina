@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 152
 expression: "String::from_utf8(v).unwrap()"
 input_file: test_files/evm/backedge_prefer.sntn
 ---

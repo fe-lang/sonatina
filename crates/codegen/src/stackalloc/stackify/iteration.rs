@@ -515,7 +515,10 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
     }
 }
 
-fn count_block_uses(func: &Function, block: BlockId) -> (BTreeMap<ValueId, u32>, BitSet<ValueId>) {
+pub(super) fn count_block_uses(
+    func: &Function,
+    block: BlockId,
+) -> (BTreeMap<ValueId, u32>, BitSet<ValueId>) {
     let mut counts: BTreeMap<ValueId, u32> = BTreeMap::new();
     for inst in func.layout.iter_inst(block) {
         if func.dfg.is_phi(inst) {
@@ -546,7 +549,7 @@ fn pop_dead_tops(
     }
 }
 
-fn clean_dead_stack_prefix(
+pub(super) fn clean_dead_stack_prefix(
     stack: &mut SymStack,
     live_future: &BitSet<ValueId>,
     live_out: &BitSet<ValueId>,
@@ -595,7 +598,7 @@ fn clean_dead_stack_prefix(
     }
 }
 
-fn operand_order_for_evm(func: &Function, inst: InstId) -> SmallVec<[ValueId; 8]> {
+pub(super) fn operand_order_for_evm(func: &Function, inst: InstId) -> SmallVec<[ValueId; 8]> {
     // This IR mostly already stores operands in the order expected by the EVM backend
     // (e.g. `mstore addr value`, `gt lhs rhs`, `shl bits value`).
     //
@@ -603,7 +606,7 @@ fn operand_order_for_evm(func: &Function, inst: InstId) -> SmallVec<[ValueId; 8]
     func.dfg.inst(inst).collect_values().into_iter().collect()
 }
 
-fn last_use_values_in_inst(
+pub(super) fn last_use_values_in_inst(
     func: &Function,
     args: &[ValueId],
     remaining_uses: &BTreeMap<ValueId, u32>,
@@ -627,7 +630,7 @@ fn last_use_values_in_inst(
     last_use
 }
 
-fn improve_reachability_before_operands(
+pub(super) fn improve_reachability_before_operands(
     func: &Function,
     args: &[ValueId],
     stack: &mut SymStack,
