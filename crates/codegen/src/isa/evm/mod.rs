@@ -7,7 +7,7 @@ use rustc_hash::FxHashSet;
 use crate::{
     machinst::{
         lower::{Lower, LowerBackend},
-        vcode::Label,
+        vcode::{Label, SymFixup, SymFixupKind},
     },
     stackalloc::{Action, Allocator},
 };
@@ -387,8 +387,30 @@ impl LowerBackend for EvmBackend {
             }
             EvmInstKind::EvmInvalid(_) => basic_op(ctx, &[OpCode::INVALID]),
 
-            EvmInstKind::SymAddr(_) => todo!(),
-            EvmInstKind::SymSize(_) => todo!(),
+            EvmInstKind::SymAddr(sym_addr) => {
+                let sym = sym_addr.sym().clone();
+                perform_actions(ctx, &alloc.read(insn, &args));
+                ctx.push_sym_fixup(
+                    OpCode::PUSH0,
+                    SymFixup {
+                        kind: SymFixupKind::Addr,
+                        sym,
+                    },
+                );
+                perform_actions(ctx, &alloc.write(insn, result));
+            }
+            EvmInstKind::SymSize(sym_size) => {
+                let sym = sym_size.sym().clone();
+                perform_actions(ctx, &alloc.read(insn, &args));
+                ctx.push_sym_fixup(
+                    OpCode::PUSH0,
+                    SymFixup {
+                        kind: SymFixupKind::Size,
+                        sym,
+                    },
+                );
+                perform_actions(ctx, &alloc.write(insn, result));
+            }
         }
     }
 

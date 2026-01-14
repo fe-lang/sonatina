@@ -81,42 +81,9 @@ entry:
 
 ---------------
 
-// func public %entry()
-entry:
-  block0:
-    0    JUMPDEST
-    1    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
-    2    CALLDATALOAD
-    3    PUSH1 0xe0 (224)  // v1.i32 = shr 224.i32 v0;
-    5    SHR
-    6    PUSH0  // v2.i1 = gt v1 0.i32;
-    7    DUP2
-    8    GT
-    9    ISZERO  // br v2 block1 block2;
-   10    PUSH1 21 (block2)
-   12    JUMPI
-  block1:
-   13    JUMPDEST
-   14    PUSH1 0x1 (1)  // v3.i32 = add v1 1.i32;
-   16    ADD
-   17    DUP1  // jump block3;
-   18    PUSH1 26 (block3)
-   20    JUMP
-  block2:
-   21    JUMPDEST
-   22    PUSH1 0x2 (2)  // v4.i32 = add v1 2.i32;
-   24    ADD
-   25    DUP1  // jump block3;
-  block3:
-   26    JUMPDEST
-   27    ADD  // v7.i32 = add v5 v6;
-   28    PUSH0  // mstore 0.i32 v7 i32;
-   29    MSTORE
-   30    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
-   32    PUSH0
-   33    RETURN
-
+// section runtime
 0x5b5f3560e01c5f8111156015575b60010180601a565b600201805b015f5260205ff3
+
 
 Success { reason: Return, gas_used: 21130, gas_refunded: 0, logs: [], output: Call(0x0000000000000000000000000000000000000000000000000000000000000018) }
 

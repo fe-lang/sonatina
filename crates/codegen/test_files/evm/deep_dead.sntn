@@ -46,3 +46,8 @@ func public %entry() {
         evm_return 0.i8 32.i8;
 }
 
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

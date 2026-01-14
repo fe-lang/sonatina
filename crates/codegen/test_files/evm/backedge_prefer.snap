@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 152
 expression: "String::from_utf8(v).unwrap()"
 input_file: test_files/evm/backedge_prefer.sntn
 ---
@@ -102,57 +101,9 @@ prefer_backedge_layout:
 
 ---------------
 
-// func public %entry()
-entry:
-  block0:
-    0    JUMPDEST
-    1    PUSH1 10  // v0.i32 = call %prefer_backedge_layout 11.i32 22.i32;
-    3    PUSH1 0x16 (22)
-    5    PUSH1 0xb (11)
-    7    PUSH1 17 (FuncRef(1))
-    9    JUMP
-   10    JUMPDEST
-   11    PUSH0  // mstore 0.i32 v0 i32;
-   12    MSTORE
-   13    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
-   15    PUSH0
-   16    RETURN
-// func private %prefer_backedge_layout(v0.i32, v1.i32) -> i32
-prefer_backedge_layout:
-  block0:
-   17    JUMPDEST
-   18    SWAP1  // jump block1;
-   19    PUSH0
-  block1:
-   20    JUMPDEST
-   21    PUSH1 0x3 (3)  // v3.i1 = lt v2 3.i32;
-   23    DUP2
-   24    LT
-   25    ISZERO  // br v3 block2 block4;
-   26    PUSH1 41 (block4)
-   28    JUMPI
-  block2:
-   29    JUMPDEST
-   30    DUP2  // v4.i32 = add v0 v1;
-   31    DUP4
-   32    ADD
-   33    POP  // v5.i32 = add v2 1.i32;
-   34    PUSH1 0x1 (1)
-   36    ADD
-  block3:
-   37    JUMPDEST
-   38    PUSH1 20 (block1)  // jump block1;
-   40    JUMP
-  block4:
-   41    JUMPDEST
-   42    SWAP1  // return v2;
-   43    POP
-   44    SWAP1
-   45    POP
-   46    SWAP1
-   47    JUMP
-
+// section runtime
 0x5b600a6016600b6011565b5f5260205ff35b905f5b60038110156029575b818301506001015b6014565b905090509056
+
 
 Success { reason: Return, gas_used: 21313, gas_refunded: 0, logs: [], output: Call(0x0000000000000000000000000000000000000000000000000000000000000003) }
 

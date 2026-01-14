@@ -10,7 +10,7 @@ use sonatina_ir::{
 
 use super::{
     lower::LowerBackend,
-    vcode::{Label, LabelId, VCode, VCodeInst},
+    vcode::{Label, LabelId, VCode, VCodeFixup, VCodeInst},
 };
 
 pub struct ObjectLayout<Op> {
@@ -58,6 +58,20 @@ impl<Op> ObjectLayout<Op> {
         for layout in self.functions.values() {
             layout.emit(backend, buf);
         }
+    }
+
+    pub(crate) fn func_offset(&self, func: FuncRef) -> u32 {
+        self.func_offsets[func]
+    }
+
+    pub(crate) fn func_size(&self, func: FuncRef) -> Option<u32> {
+        self.functions.get(&func).map(|layout| layout.size)
+    }
+
+    pub(crate) fn func_vcode_mut(&mut self, func: FuncRef) -> Option<&mut VCode<Op>> {
+        self.functions
+            .get_mut(&func)
+            .map(|layout| &mut layout.vcode)
     }
 }
 
@@ -121,7 +135,9 @@ impl<Op> FuncLayout<Op> {
                 did_change |= update(self.insn_offsets.index_mut(*insn), offset);
                 offset += std::mem::size_of::<Op>() as u32;
 
-                if let Some((_, label)) = self.vcode.label_uses.get(*insn) {
+                if let Some((_, fixup)) = self.vcode.fixups.get(*insn)
+                    && let VCodeFixup::Label(label) = fixup
+                {
                     let address = match self.vcode.labels[*label] {
                         Label::Block(b) => self.block_offsets[b],
                         Label::Function(f) => fn_offsets[f],
@@ -148,7 +164,9 @@ impl<Op> FuncLayout<Op> {
         for block in self.block_order.iter().copied() {
             for insn in self.vcode.block_insns(block) {
                 backend.emit_opcode(&self.vcode.insts[insn], buf);
-                if let Some((_, label)) = self.vcode.label_uses.get(insn) {
+                if let Some((_, fixup)) = self.vcode.fixups.get(insn)
+                    && let VCodeFixup::Label(label) = fixup
+                {
                     let address = self.label_targets[*label];
                     backend.emit_label(address, buf); // xxx emit_address_bytes
                 }
@@ -211,7 +229,9 @@ where
                     be[32 - bytes.len()..].copy_from_slice(bytes);
                     let imm = U256::from_big_endian(&be);
                     write!(w, " 0x{imm:x} ({imm})")?;
-                } else if let Some((_, label)) = self.vcode.label_uses.get(insn) {
+                } else if let Some((_, fixup)) = self.vcode.fixups.get(insn)
+                    && let VCodeFixup::Label(label) = fixup
+                {
                     write!(w, " {}", self.label_targets[*label])?;
                     match self.vcode.labels[*label] {
                         Label::Block(BlockId(n)) => write!(w, " (block{n})")?,

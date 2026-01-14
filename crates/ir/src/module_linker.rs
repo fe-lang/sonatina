@@ -268,7 +268,22 @@ impl ModuleLinker {
         // Move functions to the linked module.
         for (module_ref, module) in modules {
             let ref_map = self.module_ref_map.get(&module_ref).unwrap();
-            for (_, object) in module.objects {
+            for (_, mut object) in module.objects {
+                for section in &mut object.sections {
+                    for directive in &mut section.directives {
+                        match directive {
+                            crate::object::Directive::Entry(func)
+                            | crate::object::Directive::Include(func) => {
+                                *func = ref_map.lookup_func(*func);
+                            }
+                            crate::object::Directive::Data(gv) => {
+                                *gv = ref_map.lookup_gv(*gv);
+                            }
+                            crate::object::Directive::Embed(_) => {}
+                        }
+                    }
+                }
+
                 self.builder
                     .declare_object(object)
                     .map_err(|err| match err {

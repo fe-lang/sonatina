@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 152
 expression: "String::from_utf8(v).unwrap()"
 input_file: test_files/evm/commutative_order.sntn
 ---
@@ -97,67 +96,9 @@ comm_add16:
 
 ---------------
 
-// func public %entry()
-entry:
-  block0:
-    0    JUMPDEST
-    1    PUSH1 37  // v0.i32 = call %comm_add16 0.i32 1.i32 2.i32 3.i32 4.i32 5.i32 6.i32 7.i32 8.i32 9.i32 10.i32 11.i32 12.i32 13.i32 14.i32 15.i32;
-    3    PUSH1 0xf (15)
-    5    PUSH1 0xe (14)
-    7    PUSH1 0xd (13)
-    9    PUSH1 0xc (12)
-   11    PUSH1 0xb (11)
-   13    PUSH1 0xa (10)
-   15    PUSH1 0x9 (9)
-   17    PUSH1 0x8 (8)
-   19    PUSH1 0x7 (7)
-   21    PUSH1 0x6 (6)
-   23    PUSH1 0x5 (5)
-   25    PUSH1 0x4 (4)
-   27    PUSH1 0x3 (3)
-   29    PUSH1 0x2 (2)
-   31    PUSH1 0x1 (1)
-   33    PUSH0
-   34    PUSH1 44 (FuncRef(1))
-   36    JUMP
-   37    JUMPDEST
-   38    PUSH0  // mstore 0.i32 v0 i32;
-   39    MSTORE
-   40    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
-   42    PUSH0
-   43    RETURN
-// func private %comm_add16(v0.i32, v1.i32, v2.i32, v3.i32, v4.i32, v5.i32, v6.i32, v7.i32, v8.i32, v9.i32, v10.i32, v11.i32, v12.i32, v13.i32, v14.i32, v15.i32) -> i32
-comm_add16:
-  block0:
-   44    JUMPDEST
-   45    SWAP15  // v16.i32 = add v15 1.i32;
-   46    PUSH1 0x1 (1)
-   48    ADD
-   49    SWAP14  // jump block1;
-   50    POP
-   51    SWAP12
-   52    POP
-   53    POP
-   54    POP
-   55    POP
-   56    POP
-   57    POP
-   58    POP
-   59    POP
-   60    POP
-   61    POP
-   62    POP
-   63    POP
-   64    SWAP1
-  block1:
-   65    JUMPDEST
-   66    SWAP2  // v17.i32 = add v0 v1;
-   67    ADD
-   68    POP  // return v16;
-   69    SWAP1
-   70    JUMP
-
+// section runtime
 0x5b6025600f600e600d600c600b600a6009600860076006600560046003600260015f602c565b5f5260205ff35b9e6001019d509b505050505050505050505050905b9101509056
+
 
 Success { reason: Return, gas_used: 21197, gas_refunded: 0, logs: [], output: Call(0x0000000000000000000000000000000000000000000000000000000000000010) }
 

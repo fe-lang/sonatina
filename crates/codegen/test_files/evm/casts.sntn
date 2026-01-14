@@ -24,3 +24,8 @@ func public %main() -> i256 {
         return v9;
 }
 
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

@@ -81,45 +81,9 @@ const_loop:
 
 ---------------
 
-// func public %entry()
-entry:
-  block0:
-    0    JUMPDEST
-    1    PUSH1 6  // v0.i8 = call %const_loop;
-    3    PUSH1 13 (FuncRef(1))
-    5    JUMP
-    6    JUMPDEST
-    7    PUSH0  // mstore 0.i32 v0 i8;
-    8    MSTORE
-    9    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
-   11    PUSH0
-   12    RETURN
-// func public %const_loop() -> i8
-const_loop:
-  block1:
-   13    JUMPDEST
-   14    PUSH1 0x1 (1)  // jump block2;
-  block2:
-   16    JUMPDEST
-   17    PUSH1 0xa (10)  // v2.i8 = add v1 10.i8;
-   19    DUP2
-   20    ADD
-   21    SWAP1  // v3.i1 = gt v2 v1;
-   22    DUP2
-   23    GT
-   24    ISZERO  // br v3 block3 block4;
-   25    PUSH1 31 (block4)
-   27    JUMPI
-  block3:
-   28    JUMPDEST
-   29    SWAP1  // return v2;
-   30    JUMP
-  block4:
-   31    JUMPDEST
-   32    PUSH1 16 (block2)  // jump block2;
-   34    JUMP
-
+// section runtime
 0x5b6006600d565b5f5260205ff35b60015b600a810190811115601f575b90565b601056
+
 
 Success { reason: Return, gas_used: 21136, gas_refunded: 0, logs: [], output: Call(0x000000000000000000000000000000000000000000000000000000000000000b) }
 

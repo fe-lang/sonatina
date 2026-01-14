@@ -1,4 +1,4 @@
-use super::vcode::{Label, VCode, VCodeInst};
+use super::vcode::{Label, SymFixup, VCode, VCodeFixup, VCodeInst};
 use crate::stackalloc::Allocator;
 use smallvec::SmallVec;
 use sonatina_ir::{BlockId, Function, Immediate, Inst, InstId, Type, ValueId, module::ModuleCtx};
@@ -107,7 +107,18 @@ impl<'a, Op: Default> Lower<'a, Op> {
 
     pub fn add_label_reference(&mut self, inst: VCodeInst, dest: Label) {
         let label = self.vcode.labels.push(dest);
-        self.vcode.label_uses.insert((inst, label));
+        self.vcode.fixups.insert((inst, VCodeFixup::Label(label)));
+    }
+
+    pub fn add_sym_fixup(&mut self, inst: VCodeInst, fixup: SymFixup) {
+        self.vcode.fixups.insert((inst, VCodeFixup::Sym(fixup)));
+    }
+
+    pub fn push_sym_fixup(&mut self, op: Op, fixup: SymFixup) -> VCodeInst {
+        let inst = self.push(op);
+        self.add_immediate(inst, &[]);
+        self.add_sym_fixup(inst, fixup);
+        inst
     }
 
     pub fn insn_data(&self, inst: InstId) -> &dyn Inst {

@@ -43,3 +43,9 @@ func public %main(v0.i8, v1.i64) -> i64 {
         v4.i64 = phi (v2 block1) (v3 block2) (v0 block3);
         return v4;
 }
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

@@ -21,3 +21,9 @@ func public %const_loop() -> i8 {
     block3:
         return v2;
 }
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
