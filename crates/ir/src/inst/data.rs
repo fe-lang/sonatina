@@ -4,16 +4,17 @@ use macros::Inst;
 use smallvec::SmallVec;
 
 use crate::{
-    GlobalVariableRef, Type, ValueId,
+    EmbedSymbol, GlobalVariableRef, Type, ValueId,
     ir_writer::IrWrite,
     module::{FuncRef, ModuleCtx},
     visitor::{Visitable, VisitableMut},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SymbolRef {
     Func(FuncRef),
     Global(GlobalVariableRef),
+    Embed(EmbedSymbol),
 }
 
 impl<Ctx> IrWrite<Ctx> for SymbolRef
@@ -29,6 +30,7 @@ where
             Self::Global(gv) => ctx
                 .as_ref()
                 .with_gv_store(|s| write!(w, "${}", s.gv_data(*gv).symbol)),
+            Self::Embed(sym) => write!(w, "&{}", sym.0.as_str()),
         }
     }
 }
@@ -38,6 +40,7 @@ impl Visitable for SymbolRef {
         match self {
             Self::Func(f) => f.accept(visitor),
             Self::Global(gv) => gv.accept(visitor),
+            Self::Embed(_) => {}
         }
     }
 }
@@ -47,6 +50,7 @@ impl VisitableMut for SymbolRef {
         match self {
             Self::Func(f) => f.accept_mut(visitor),
             Self::Global(gv) => gv.accept_mut(visitor),
+            Self::Embed(_) => {}
         }
     }
 }

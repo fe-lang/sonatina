@@ -45,6 +45,8 @@ fn build_symbol_ref(
             Ok(SymbolRef::Func(ctx.func_ref(&mut fb.module_builder, func)))
         }
 
+        ast::InstArgKind::EmbedSymbol(sym) => Ok(SymbolRef::Embed(sym.clone())),
+
         ast::InstArgKind::Value(value) => match &value.kind {
             ast::ValueKind::Global(name) => {
                 let Some(gv) = fb.module_builder.lookup_gv(&name.string) else {
@@ -58,14 +60,14 @@ fn build_symbol_ref(
             }
 
             _ => Err(Box::new(Error::InstArgKindMismatch {
-                expected: "function name or global value".into(),
+                expected: "function name, embed symbol, or global value".into(),
                 actual: Some("value".into()),
                 span: arg.span,
             })),
         },
 
         other => Err(Box::new(Error::InstArgKindMismatch {
-            expected: "function name or global value".into(),
+            expected: "function name, embed symbol, or global value".into(),
             actual: Some(
                 match other {
                     ast::InstArgKind::Value(_) => "value",
@@ -73,6 +75,7 @@ fn build_symbol_ref(
                     ast::InstArgKind::Block(_) => "block",
                     ast::InstArgKind::ValueBlockMap(_) => "(value, block)",
                     ast::InstArgKind::FuncRef(_) => "function name",
+                    ast::InstArgKind::EmbedSymbol(_) => "embed symbol",
                 }
                 .into(),
             ),

@@ -5,7 +5,7 @@ use std::str::FromStr;
 use derive_more::Debug as Dbg;
 use either::Either;
 use hex::FromHex;
-use ir::{I256, Object, ObjectName, U256};
+use ir::{EmbedSymbol, I256, ObjectName, U256};
 pub use ir::{Immediate, Linkage};
 use pest::Parser as _;
 use smol_str::SmolStr;
@@ -14,6 +14,7 @@ pub use sonatina_triple::{InvalidTriple, TargetTriple};
 use super::{Error, syntax::Node};
 use crate::{
     Span,
+    objects::Object,
     syntax::{FromSyntax, Parser, Rule},
 };
 
@@ -567,6 +568,8 @@ impl FromSyntax<Error> for InstArg {
             InstArgKind::ValueBlockMap(vb_map)
         } else if let Some(func) = node.single_opt(Rule::function_identifier) {
             InstArgKind::FuncRef(func)
+        } else if let Some(sym) = node.single_opt(Rule::embed_symbol) {
+            InstArgKind::EmbedSymbol(sym)
         } else {
             unreachable!()
         };
@@ -585,6 +588,7 @@ pub enum InstArgKind {
     Block(BlockId),
     ValueBlockMap((Value, BlockId)),
     FuncRef(FunctionName),
+    EmbedSymbol(EmbedSymbol),
 }
 
 impl InstArgKind {
@@ -595,6 +599,7 @@ impl InstArgKind {
             Self::Block(_) => "block",
             Self::ValueBlockMap(_) => "(value, block)",
             Self::FuncRef(_) => "function name",
+            Self::EmbedSymbol(_) => "embed symbol",
         }
         .into()
     }

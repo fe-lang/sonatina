@@ -23,3 +23,9 @@ func public %entry() {
         mstore 0.i32 v7 i32;
         evm_return 0.i8 32.i8;
 }
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

@@ -5,17 +5,22 @@ use opcode::OpCode;
 use rustc_hash::FxHashSet;
 
 use crate::{
+    critical_edge::CriticalEdgeSplitter,
+    domtree::DomTree,
+    liveness::Liveness,
     machinst::{
-        lower::{Lower, LowerBackend},
-        vcode::Label,
+        lower::{FixupUpdate, Lower, LowerBackend, LoweredFunction, SectionLoweringCtx},
+        vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeInst},
     },
-    stackalloc::{Action, Allocator},
+    stackalloc::{Action, Allocator, StackifyAlloc},
 };
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, Function, Immediate, InstId, InstSetExt, Type, U256,
+    BlockId, Function, Immediate, InstId, InstSetExt, Module, Type, U256,
+    cfg::ControlFlowGraph,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
+    module::{FuncRef, ModuleCtx},
 };
 
 // TODO: proper memory allocation scheme
@@ -23,6 +28,13 @@ const STACK_POINTER_OFFSET: u8 = 0x40;
 const FRAME_POINTER_OFFSET: u8 = 0x60;
 const INITIAL_STACK_POINTER: u16 = 0x80;
 const FRAME_HEADER_BYTES: u32 = 32;
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum PushWidthPolicy {
+    #[default]
+    Push4,
+    MinimalRelax,
+}
 
 pub struct EvmBackend {
     isa: Evm,
@@ -35,6 +47,54 @@ impl EvmBackend {
 
 impl LowerBackend for EvmBackend {
     type MInst = OpCode;
+    type Error = String;
+    type FixupPolicy = PushWidthPolicy;
+
+    fn lower_function(
+        &self,
+        module: &Module,
+        func: FuncRef,
+        section_ctx: &SectionLoweringCtx<'_>,
+    ) -> Result<LoweredFunction<Self::MInst>, Self::Error> {
+        let _ = section_ctx;
+        let (vcode, block_order) = module.func_store.modify(func, |function| {
+            lower_function_to_vcode(function, &module.ctx, self)
+        })?;
+        Ok(LoweredFunction { vcode, block_order })
+    }
+
+    fn apply_sym_fixup(
+        &self,
+        vcode: &mut VCode<Self::MInst>,
+        inst: VCodeInst,
+        fixup: &SymFixup,
+        value: u32,
+        policy: &Self::FixupPolicy,
+    ) -> Result<FixupUpdate, Self::Error> {
+        let _ = fixup;
+        let (_, bytes) = vcode
+            .inst_imm_bytes
+            .get_mut(inst)
+            .ok_or_else(|| "missing fixup immediate bytes".to_string())?;
+
+        let new_bytes = u32_to_evm_push_bytes(value, *policy);
+
+        if bytes.as_slice() == new_bytes.as_slice() {
+            return Ok(FixupUpdate::Unchanged);
+        }
+
+        let layout_changed = bytes.len() != new_bytes.len();
+        bytes.clear();
+        bytes.extend_from_slice(&new_bytes);
+
+        self.update_opcode_with_immediate_bytes(&mut vcode.insts[inst], bytes);
+
+        Ok(if layout_changed {
+            FixupUpdate::LayoutChanged
+        } else {
+            FixupUpdate::ContentChanged
+        })
+    }
 
     fn enter_function(
         &self,
@@ -387,8 +447,30 @@ impl LowerBackend for EvmBackend {
             }
             EvmInstKind::EvmInvalid(_) => basic_op(ctx, &[OpCode::INVALID]),
 
-            EvmInstKind::SymAddr(_) => todo!(),
-            EvmInstKind::SymSize(_) => todo!(),
+            EvmInstKind::SymAddr(sym_addr) => {
+                let sym = sym_addr.sym().clone();
+                perform_actions(ctx, &alloc.read(insn, &args));
+                ctx.push_sym_fixup(
+                    OpCode::PUSH0,
+                    SymFixup {
+                        kind: SymFixupKind::Addr,
+                        sym,
+                    },
+                );
+                perform_actions(ctx, &alloc.write(insn, result));
+            }
+            EvmInstKind::SymSize(sym_size) => {
+                let sym = sym_size.sym().clone();
+                perform_actions(ctx, &alloc.read(insn, &args));
+                ctx.push_sym_fixup(
+                    OpCode::PUSH0,
+                    SymFixup {
+                        kind: SymFixupKind::Size,
+                        sym,
+                    },
+                );
+                perform_actions(ctx, &alloc.write(insn, result));
+            }
         }
     }
 
@@ -397,10 +479,11 @@ impl LowerBackend for EvmBackend {
         opcode: &mut OpCode,
         bytes: &mut SmallVec<[u8; 8]>,
     ) {
-        // `bytes` is big-endian; shrink leading zeros (keep at least 1 byte).
-        while bytes.len() > 1 && bytes.first() == Some(&0) {
-            bytes.remove(0);
-        }
+        debug_assert!(
+            bytes.len() <= 32,
+            "PUSH immediate too wide: {} bytes",
+            bytes.len()
+        );
         *opcode = push_op(bytes.len());
     }
 
@@ -759,5 +842,50 @@ fn push_op(bytes: usize) -> OpCode {
         31 => OpCode::PUSH31,
         32 => OpCode::PUSH32,
         _ => unreachable!(),
+    }
+}
+
+fn lower_function_to_vcode(
+    function: &mut Function,
+    module: &ModuleCtx,
+    backend: &EvmBackend,
+) -> Result<(VCode<OpCode>, Vec<BlockId>), String> {
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(function);
+
+    let mut splitter = CriticalEdgeSplitter::new();
+    splitter.run(function, &mut cfg);
+
+    let mut liveness = Liveness::new();
+    liveness.compute(function, &cfg);
+
+    let mut dom = DomTree::new();
+    dom.compute(&cfg);
+
+    let mut alloc = StackifyAlloc::for_function(function, &cfg, &dom, &liveness, 16);
+
+    let lower = Lower::new(module, function);
+    let vcode = lower
+        .lower(backend, &mut alloc)
+        .map_err(|e| format!("{e:?}"))?;
+    let block_order = dom.rpo().to_owned();
+
+    Ok((vcode, block_order))
+}
+
+fn u32_to_evm_push_bytes(value: u32, policy: PushWidthPolicy) -> SmallVec<[u8; 4]> {
+    match policy {
+        PushWidthPolicy::Push4 => SmallVec::from_slice(&value.to_be_bytes()),
+        PushWidthPolicy::MinimalRelax => {
+            if value == 0 {
+                SmallVec::new()
+            } else {
+                value
+                    .to_be_bytes()
+                    .into_iter()
+                    .skip_while(|b| *b == 0)
+                    .collect()
+            }
+        }
     }
 }

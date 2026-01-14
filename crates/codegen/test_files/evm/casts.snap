@@ -93,51 +93,9 @@ main:
 
 ---------------
 
-// func public %entry()
-entry:
-  block0:
-    0    JUMPDEST
-    1    PUSH1 6  // v0.i256 = call %main;
-    3    PUSH1 13 (FuncRef(1))
-    5    JUMP
-    6    JUMPDEST
-    7    PUSH0  // mstore 0.i32 v0 i256;
-    8    MSTORE
-    9    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
-   11    PUSH0
-   12    RETURN
-// func public %main() -> i256
-main:
-  block0:
-   13    JUMPDEST
-   14    PUSH1 0xff (255)  // v0.i256 = sext -1.i8 i256;
-   16    PUSH0
-   17    SIGNEXTEND
-   18    PUSH0
-   19    SIGNEXTEND
-   20    PUSH1 0x1 (1)  // v1.i256 = zext 1.i1 i256;
-   22    PUSH0
-   23    SIGNEXTEND
-   24    PUSH1 0x1 (1)
-   26    AND
-   27    SWAP1  // v2.i128 = trunc v0 i128;
-   28    PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
-   45    AND
-   46    PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)  // v3.i256 = zext v2 i256;
-   63    AND
-   64    PUSH1 0x2a (42)  // v4.*i8 = int_to_ptr 42.i64 *i8;
-   66    PUSH8 0xffffffffffffffff (18446744073709551615)
-   75    AND
-   76    PUSH8 0xffffffffffffffff (18446744073709551615)  // v5.i64 = ptr_to_int v4 i64;
-   85    AND
-   86    PUSH8 0xffffffffffffffff (18446744073709551615)  // v6.i256 = zext v5 i256;
-   95    AND
-   96    ADD  // v7.i256 = add v3 v6;
-   97    ADD  // v9.i256 = add v8 v1;
-   98    SWAP1  // return v9;
-   99    JUMP
-
+// section runtime
 0x5b6006600d565b5f5260205ff35b60ff5f0b5f0b60015f0b600116906fffffffffffffffffffffffffffffffff166fffffffffffffffffffffffffffffffff16602a67ffffffffffffffff1667ffffffffffffffff1667ffffffffffffffff1601019056
+
 
 Success { reason: Return, gas_used: 21172, gas_refunded: 0, logs: [], output: Call(0x000000000000000000000000000000010000000000000000000000000000002a) }
 

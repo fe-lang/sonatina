@@ -35,8 +35,7 @@ pub use layout::Layout;
 pub use linkage::Linkage;
 pub use module::Module;
 pub use object::{
-    DataName, Directive, Embed, EmbedSymbol, FuncName, Object, ObjectName, Section, SectionName,
-    SectionRef,
+    Directive, Embed, EmbedSymbol, Object, ObjectName, Section, SectionName, SectionRef,
 };
 pub use types::Type;
 pub use value::{Immediate, Value, ValueId};
