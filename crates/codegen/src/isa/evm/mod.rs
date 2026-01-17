@@ -22,6 +22,7 @@ use sonatina_ir::{
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
 };
+use sonatina_triple::{EvmVersion, OperatingSystem};
 
 // TODO: proper memory allocation scheme
 const STACK_POINTER_OFFSET: u8 = 0x40;
@@ -41,6 +42,14 @@ pub struct EvmBackend {
 }
 impl EvmBackend {
     pub fn new(isa: Evm) -> Self {
+        let triple = isa.triple();
+        assert!(
+            matches!(
+                triple.operating_system,
+                OperatingSystem::Evm(EvmVersion::Osaka)
+            ),
+            "EvmBackend requires evm-ethereum-osaka (got {triple})"
+        );
         Self { isa }
     }
 }

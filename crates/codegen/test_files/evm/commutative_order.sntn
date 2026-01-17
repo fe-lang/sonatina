@@ -1,4 +1,4 @@
-target = "evm-ethereum-london"
+target = "evm-ethereum-osaka"
 
 func public %entry() {
     block0:

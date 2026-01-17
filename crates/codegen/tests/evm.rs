@@ -5,8 +5,8 @@ use revm::{
     Context, EvmContext, Handler, inspector_handle_register,
     interpreter::Interpreter,
     primitives::{
-        AccountInfo, Address, Bytecode, Bytes, CancunSpec, Env, ExecutionResult, Output,
-        TransactTo, U256,
+        AccountInfo, Address, Bytecode, Bytes, Env, ExecutionResult, OsakaSpec, Output, TransactTo,
+        U256,
     },
 };
 
@@ -92,7 +92,7 @@ fn test_evm(fixture: Fixture<&str>) {
     let backend = EvmBackend::new(Evm::new(sonatina_triple::TargetTriple {
         architecture: Architecture::Evm,
         vendor: Vendor::Ethereum,
-        operating_system: OperatingSystem::Evm(sonatina_triple::EvmVersion::Cancun),
+        operating_system: OperatingSystem::Evm(sonatina_triple::EvmVersion::Osaka),
     }));
 
     let mut stackify_out = Vec::new();
@@ -222,7 +222,7 @@ fn run_revm_tx(mut db: revm::InMemoryDB, env: Env) -> (ExecutionResult, String, 
         TestInspector::new(vec![]),
     );
 
-    let mut evm = revm::Evm::new(context, Handler::mainnet::<CancunSpec>());
+    let mut evm = revm::Evm::new(context, Handler::mainnet::<OsakaSpec>());
     evm = evm
         .modify()
         .append_handler_register(inspector_handle_register)
