@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
+use rustc_hash::FxHashMap;
 use sonatina_triple::TargetTriple;
 
 use super::FunctionBuilder;
 use crate::{
-    Function, GlobalVariableData, GlobalVariableRef, InstSetBase, Module, Signature, Type,
+    Function, GlobalVariableData, GlobalVariableRef, InstSetBase, Module, Object, Signature, Type,
     func_cursor::{CursorLocation, FuncCursor},
     module::{FuncRef, FuncStore, ModuleCtx},
     types::{CompoundType, CompoundTypeRef},
@@ -18,6 +19,8 @@ pub struct ModuleBuilder {
 
     pub ctx: ModuleCtx,
 
+    pub objects: FxHashMap<String, Object>,
+
     /// Map function name -> FuncRef to avoid duplicated declaration.
     declared_funcs: Arc<DashMap<String, FuncRef>>,
 }
@@ -25,13 +28,30 @@ pub struct ModuleBuilder {
 #[derive(Debug, Clone)]
 pub enum BuilderError {
     ConflictingFunctionDeclaration,
+    DuplicateObjectDefinition { name: String },
 }
+
+impl std::fmt::Display for BuilderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ConflictingFunctionDeclaration => {
+                write!(f, "conflicting function declaration")
+            }
+            Self::DuplicateObjectDefinition { name } => {
+                write!(f, "duplicate object definition: {name}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for BuilderError {}
 
 impl ModuleBuilder {
     pub fn new(ctx: ModuleCtx) -> Self {
         Self {
             func_store: Arc::new(FuncStore::new()),
             ctx,
+            objects: FxHashMap::default(),
             declared_funcs: Arc::new(DashMap::default()),
         }
     }
@@ -44,6 +64,7 @@ impl ModuleBuilder {
     pub fn from_module(module: Module) -> Self {
         let store = module.func_store;
         let ctx = module.ctx;
+        let objects = module.objects;
         let declared_funcs = DashMap::new();
         for func_ref in store.funcs() {
             let name = ctx.func_sig(func_ref, |sig| sig.name().to_string());
@@ -53,6 +74,7 @@ impl ModuleBuilder {
         Self {
             func_store: Arc::new(store),
             ctx,
+            objects,
             declared_funcs: Arc::new(declared_funcs),
         }
     }
@@ -80,6 +102,19 @@ impl ModuleBuilder {
 
     pub fn declare_gv(&self, global: GlobalVariableData) -> GlobalVariableRef {
         self.ctx.with_gv_store_mut(|s| s.make_gv(global))
+    }
+
+    pub fn declare_object(&mut self, object: Object) -> Result<(), BuilderError> {
+        let name = object.name.0.to_string();
+        if self.objects.contains_key(&name) {
+            return Err(BuilderError::DuplicateObjectDefinition { name });
+        }
+        self.objects.insert(name, object);
+        Ok(())
+    }
+
+    pub fn lookup_object(&self, name: &str) -> Option<&Object> {
+        self.objects.get(name)
     }
 
     pub fn declare_struct_type(&self, name: &str, fields: &[Type], packed: bool) -> Type {
@@ -150,6 +185,7 @@ impl ModuleBuilder {
         Module {
             func_store: Arc::into_inner(self.func_store).unwrap(),
             ctx: self.ctx,
+            objects: self.objects,
         }
     }
 
@@ -161,7 +197,7 @@ impl ModuleBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Linkage, builder::test_util::test_module_builder, types::Type}; //, Signature};
+    use crate::{Linkage, ObjectName, builder::test_util::test_module_builder, types::Type}; //, Signature};
 
     #[test]
     fn test_declare_function_success() {
@@ -190,5 +226,41 @@ mod tests {
             Err(BuilderError::ConflictingFunctionDeclaration) => (),
             _ => panic!("Expected conflicting function declaration error"),
         }
+    }
+
+    #[test]
+    fn test_declare_object_success() {
+        let mut builder = test_module_builder();
+
+        let object = Object {
+            name: ObjectName("Factory".into()),
+            sections: vec![],
+        };
+
+        let result = builder.declare_object(object);
+        assert!(result.is_ok());
+        assert!(builder.lookup_object("Factory").is_some());
+    }
+
+    #[test]
+    fn test_declare_object_duplicate_should_fail() {
+        let mut builder = test_module_builder();
+
+        let object1 = Object {
+            name: ObjectName("Factory".into()),
+            sections: vec![],
+        };
+        let object2 = Object {
+            name: ObjectName("Factory".into()),
+            sections: vec![],
+        };
+
+        builder.declare_object(object1).unwrap();
+        let result = builder.declare_object(object2);
+
+        assert!(
+            matches!(result, Err(BuilderError::DuplicateObjectDefinition { name }) if name == "Factory"),
+            "Expected DuplicateObjectDefinition error for object 'Factory'"
+        );
     }
 }

@@ -1046,6 +1046,7 @@ Module {
             comments: [],
         },
     ],
+    objects: [],
     comments: [
         "#! this is a module",
         "#! with two functions",

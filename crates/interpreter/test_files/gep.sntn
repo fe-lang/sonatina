@@ -3,8 +3,8 @@ target = "evm-ethereum-london"
 type @s1 = {i32, i64, i1};
 type @nested = {i32, [i16; 3], [i8; 2]};
 
-#[(0.i256) -> 12.i256]
-#[(8.i256) -> 20.i256]
+#[(0.i256) -> 64.i256]
+#[(8.i256) -> 72.i256]
 func private %gep_basic(v0.i256) -> i256 {
     block0:
         v1.*@s1 = int_to_ptr v0 *@s1;
@@ -24,7 +24,7 @@ func private %gep_ptr_ty(v0.i256) -> i256 {
 }
 
 
-#[(0.i256) -> 11.i256]
+#[(0.i256) -> 160.i256]
 func private %gep_aggregate(v0.i256) -> i256 {
     block0:
         v1.*@nested = int_to_ptr v0 *@nested;

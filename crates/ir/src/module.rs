@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use cranelift_entity::entity_impl;
 use dashmap::{DashMap, ReadOnlyView};
 use rayon::{iter::IntoParallelIterator, prelude::ParallelIterator};
+use rustc_hash::FxHashMap;
 use sonatina_triple::TargetTriple;
 
 use crate::{
@@ -10,12 +11,14 @@ use crate::{
     global_variable::GlobalVariableStore,
     ir_writer::IrWrite,
     isa::{Endian, Isa, TypeLayout, TypeLayoutError},
+    object::Object,
     types::TypeStore,
 };
 
 pub struct Module {
     pub func_store: FuncStore,
     pub ctx: ModuleCtx,
+    pub objects: FxHashMap<String, Object>,
 }
 
 impl Module {
@@ -24,6 +27,7 @@ impl Module {
         Self {
             func_store: FuncStore::new(),
             ctx: ModuleCtx::new(isa),
+            objects: FxHashMap::default(),
         }
     }
 

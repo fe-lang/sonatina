@@ -10,7 +10,7 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     GlobalVariableRef, Linkage, Module, Signature, Type, Value,
-    builder::ModuleBuilder,
+    builder::{BuilderError, ModuleBuilder},
     module::FuncRef,
     types::{CompoundType, CompoundTypeRef, StructData},
     visitor::VisitorMut,
@@ -50,6 +50,10 @@ pub enum LinkError {
     },
 
     InconsistentFuncSignature {
+        name: String,
+    },
+
+    DuplicateObjectDefinition {
         name: String,
     },
 }
@@ -264,6 +268,33 @@ impl ModuleLinker {
         // Move functions to the linked module.
         for (module_ref, module) in modules {
             let ref_map = self.module_ref_map.get(&module_ref).unwrap();
+            for (_, mut object) in module.objects {
+                for section in &mut object.sections {
+                    for directive in &mut section.directives {
+                        match directive {
+                            crate::object::Directive::Entry(func)
+                            | crate::object::Directive::Include(func) => {
+                                *func = ref_map.lookup_func(*func);
+                            }
+                            crate::object::Directive::Data(gv) => {
+                                *gv = ref_map.lookup_gv(*gv);
+                            }
+                            crate::object::Directive::Embed(_) => {}
+                        }
+                    }
+                }
+
+                self.builder
+                    .declare_object(object)
+                    .map_err(|err| match err {
+                        BuilderError::DuplicateObjectDefinition { name } => {
+                            LinkError::DuplicateObjectDefinition { name }
+                        }
+                        BuilderError::ConflictingFunctionDeclaration => unreachable!(
+                            "unexpected function declaration error while linking objects"
+                        ),
+                    })?;
+            }
             module.func_store.par_into_for_each(|func_ref, mut func| {
                 // If linkage is external, we don't need to move the function definition to the
                 // linked module.
@@ -291,6 +322,10 @@ impl ModuleLinker {
                 impl VisitorMut for InstUpdater<'_> {
                     fn visit_func_ref(&mut self, item: &mut FuncRef) {
                         *item = self.ref_map.lookup_func(*item);
+                    }
+
+                    fn visit_gv_ref(&mut self, item: &mut GlobalVariableRef) {
+                        *item = self.ref_map.lookup_gv(*item);
                     }
 
                     fn visit_ty(&mut self, item: &mut Type) {
@@ -609,7 +644,9 @@ impl ModuleLinker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Linkage, builder::test_util::test_module_builder, types::Type};
+    use crate::{
+        Linkage, Object, ObjectName, builder::test_util::test_module_builder, types::Type,
+    };
 
     #[test]
     fn test_linker_conflicting_function_signature_should_fail() {
@@ -730,6 +767,37 @@ mod tests {
         assert!(
             result.is_ok(),
             "Expected successful link for different function names"
+        );
+    }
+
+    #[test]
+    fn test_linker_duplicate_objects_should_fail() {
+        let mod1 = {
+            let mut builder = test_module_builder();
+            builder
+                .declare_object(Object {
+                    name: ObjectName("Factory".into()),
+                    sections: vec![],
+                })
+                .unwrap();
+            builder.build()
+        };
+
+        let mod2 = {
+            let mut builder = test_module_builder();
+            builder
+                .declare_object(Object {
+                    name: ObjectName("Factory".into()),
+                    sections: vec![],
+                })
+                .unwrap();
+            builder.build()
+        };
+
+        let result = LinkedModule::link(vec![mod1, mod2]);
+        assert!(
+            matches!(result, Err(LinkError::DuplicateObjectDefinition { name }) if name == "Factory"),
+            "Expected DuplicateObjectDefinition error for object 'Factory'"
         );
     }
 }

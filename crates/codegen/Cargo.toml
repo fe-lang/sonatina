@@ -23,9 +23,13 @@ sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
 sonatina-macros = { path = "../macros", version = "0.0.3-alpha" }
 dashmap = { version = "6.1", features = ["rayon"] }
 egglog = "0.5"
+bit-set = "0.8.0"
 indexmap = { version = "2.12" }
 
 [dev-dependencies]
-sonatina-parser = { path = "../parser", version = "0.0.3-alpha" }
+hex = "0.4.3"
 insta = "1.43"
 dir-test = "0.4"
+derive_more = { version = "1", default-features = false, features = ["full"] }
+revm = { version = "18.0.0", default-features = false, features = ["std"] }
+sonatina-parser = { path = "../parser", version = "0.0.3-alpha" }

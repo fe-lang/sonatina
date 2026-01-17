@@ -1,0 +1,521 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(v).unwrap()"
+input_file: test_files/evm/slot_reuse.sntn
+---
+// func public %entry()
+spill_set: 0=[v2, v19]
+  block0 P=[] T=[]
+    - stack=[]
+      pre: [PUSH(0)]
+      evm_calldata_load [0] -> v0
+    - stack=[v0], last_use=[v0]
+      pre: [PUSH(224)]
+      shr [224, v0] -> v1
+    - stack=[v1]
+      pre: [DUP1]
+      not [v1] -> v2
+      post: [DUP1, MSTORE_SLOT(0)]
+    - stack=[v2, v1], last_use=[v1]
+      pre: [SWAP1]
+      not [v1] -> v3
+    - stack=[v3, v2]
+      pre: [DUP1]
+      not [v3] -> v4
+    - stack=[v4, v3, v2]
+      pre: [DUP1]
+      not [v4] -> v5
+    - stack=[v5, v4, v3, v2]
+      pre: [DUP1]
+      not [v5] -> v6
+    - stack=[v6, v5, v4, v3, v2]
+      pre: [DUP1]
+      not [v6] -> v7
+    - stack=[v7, v6, v5, v4, v3, v2]
+      pre: [DUP1]
+      not [v7] -> v8
+    - stack=[v8, v7, v6, v5, v4, v3, v2]
+      pre: [DUP1]
+      not [v8] -> v9
+    - stack=[v9, v8, v7, v6, v5, v4, v3, v2]
+      pre: [DUP1]
+      not [v9] -> v10
+    - stack=[v10, v9, v8, v7, v6, v5, v4, v3, v2]
+      pre: [DUP1]
+      not [v10] -> v11
+    - stack=[v11, v10, v9, v8, v7, v6, v5, v4, v3, v2]
+      pre: [DUP1]
+      not [v11] -> v12
+    - stack=[v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2]
+      pre: [DUP1]
+      not [v12] -> v13
+    - stack=[v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2]
+      pre: [DUP1]
+      not [v13] -> v14
+    - stack=[v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2]
+      pre: [DUP1]
+      not [v14] -> v15
+    - stack=[v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2]
+      pre: [DUP1]
+      not [v15] -> v16
+    - stack=[v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2]
+      pre: [DUP1]
+      not [v16] -> v17
+    - stack=[v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2]
+      pre: [DUP1]
+      not [v17] -> v18
+    - stack=[v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2], last_use=[v2]
+      pre: [MLOAD_SLOT(0)]
+      not [v2] -> v19
+      post: [DUP1, MSTORE_SLOT(0)]
+    - stack=[v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x]
+      pre: [DUP2]
+      not [v18] -> v20
+    - stack=[v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x]
+      pre: [DUP1]
+      not [v20] -> v21
+    - stack=[v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x]
+      pre: [DUP1]
+      not [v21] -> v22
+    - stack=[v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x]
+      pre: [DUP1]
+      not [v22] -> v23
+    - stack=[v23, v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x]
+      pre: [DUP1]
+      not [v23] -> v24
+    - stack=[v24, v23, v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x]
+      pre: [DUP1]
+      not [v24] -> v25
+    - stack=[v25, v24, v23, v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x]
+      pre: [DUP1]
+      not [v25] -> v26
+    - stack=[v26, v25, v24, v23, v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x]
+      pre: [DUP1]
+      not [v26] -> v27
+    - stack=[v27, v26, v25, v24, v23, v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x]
+      pre: [DUP1]
+      not [v27] -> v28
+    - stack=[v28, v27, v26, v25, v24, v23, v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x]
+      pre: [DUP1]
+      not [v28] -> v29
+    - stack=[v29, v28, v27, v26, v25, v24, v23, v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x]
+      pre: [DUP1]
+      not [v29] -> v30
+    - stack=[v30, v29, v28, v27, v26, v25, v24, v23, v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x]
+      pre: [DUP1]
+      not [v30] -> v31
+    - stack=[v31, v30, v29, v28, v27, v26, v25, v24, v23, v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x]
+      pre: [DUP1]
+      not [v31] -> v32
+    - stack=[v32, v31, v30, v29, v28, v27, v26, v25, v24, v23, v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x]
+      pre: [DUP1]
+      not [v32] -> v33
+    - stack=[v33, v32, v31, v30, v29, v28, v27, v26, v25, v24, v23, v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x]
+      pre: [DUP1]
+      not [v33] -> v34
+    - stack=[v34, v33, v32, v31, v30, v29, v28, v27, v26, v25, v24, v23, v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x]
+      pre: [DUP1]
+      not [v34] -> v35
+    - stack=[v35, v34, v33, v32, v31, v30, v29, v28, v27, v26, v25, v24, v23, v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v19]
+      pre: [MLOAD_SLOT(0)]
+      not [v19] -> v36
+    - stack=[v36, v35, v34, v33, v32, v31, v30, v29, v28, v27, v26, v25, v24, v23, v22, v21, v20, v19x, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v35, v36]
+      add [v36, v35] -> v37
+    - stack=[v37, v34, v33, v32, v31, v30, v29, v28, v27, v26, v25, v24, v23, v22, v21, v20, v19x, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v34, v37]
+      add [v37, v34] -> v38
+    - stack=[v38, v33, v32, v31, v30, v29, v28, v27, v26, v25, v24, v23, v22, v21, v20, v19x, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v33, v38]
+      add [v38, v33] -> v39
+    - stack=[v39, v32, v31, v30, v29, v28, v27, v26, v25, v24, v23, v22, v21, v20, v19x, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v32, v39]
+      add [v39, v32] -> v40
+    - stack=[v40, v31, v30, v29, v28, v27, v26, v25, v24, v23, v22, v21, v20, v19x, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v31, v40]
+      add [v40, v31] -> v41
+    - stack=[v41, v30, v29, v28, v27, v26, v25, v24, v23, v22, v21, v20, v19x, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v30, v41]
+      add [v41, v30] -> v42
+    - stack=[v42, v29, v28, v27, v26, v25, v24, v23, v22, v21, v20, v19x, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v29, v42]
+      add [v42, v29] -> v43
+    - stack=[v43, v28, v27, v26, v25, v24, v23, v22, v21, v20, v19x, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v28, v43]
+      add [v43, v28] -> v44
+    - stack=[v44, v27, v26, v25, v24, v23, v22, v21, v20, v19x, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v27, v44]
+      add [v44, v27] -> v45
+    - stack=[v45, v26, v25, v24, v23, v22, v21, v20, v19x, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v26, v45]
+      add [v45, v26] -> v46
+    - stack=[v46, v25, v24, v23, v22, v21, v20, v19x, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v25, v46]
+      add [v46, v25] -> v47
+    - stack=[v47, v24, v23, v22, v21, v20, v19x, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v24, v47]
+      add [v47, v24] -> v48
+    - stack=[v48, v23, v22, v21, v20, v19x, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v23, v48]
+      add [v48, v23] -> v49
+    - stack=[v49, v22, v21, v20, v19x, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v22, v49]
+      add [v49, v22] -> v50
+    - stack=[v50, v21, v20, v19x, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v21, v50]
+      add [v50, v21] -> v51
+    - stack=[v51, v20, v19x, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v20, v51]
+      add [v51, v20] -> v52
+    - stack=[v52, v19x, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v18, v52]
+      cleanup: [SWAP1, POP]
+      add [v52, v18] -> v53
+    - stack=[v53, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v17, v53]
+      add [v53, v17] -> v54
+    - stack=[v54, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v16, v54]
+      add [v54, v16] -> v55
+    - stack=[v55, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v15, v55]
+      add [v55, v15] -> v56
+    - stack=[v56, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v14, v56]
+      add [v56, v14] -> v57
+    - stack=[v57, v13, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v13, v57]
+      add [v57, v13] -> v58
+    - stack=[v58, v12, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v12, v58]
+      add [v58, v12] -> v59
+    - stack=[v59, v11, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v11, v59]
+      add [v59, v11] -> v60
+    - stack=[v60, v10, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v10, v60]
+      add [v60, v10] -> v61
+    - stack=[v61, v9, v8, v7, v6, v5, v4, v3, v2x], last_use=[v9, v61]
+      add [v61, v9] -> v62
+    - stack=[v62, v8, v7, v6, v5, v4, v3, v2x], last_use=[v8, v62]
+      add [v62, v8] -> v63
+    - stack=[v63, v7, v6, v5, v4, v3, v2x], last_use=[v7, v63]
+      add [v63, v7] -> v64
+    - stack=[v64, v6, v5, v4, v3, v2x], last_use=[v6, v64]
+      add [v64, v6] -> v65
+    - stack=[v65, v5, v4, v3, v2x], last_use=[v5, v65]
+      add [v65, v5] -> v66
+    - stack=[v66, v4, v3, v2x], last_use=[v4, v66]
+      add [v66, v4] -> v67
+    - stack=[v67, v3, v2x], last_use=[v3, v67]
+      add [v67, v3] -> v68
+    - stack=[v68, v2x], last_use=[v68]
+      cleanup: [SWAP1, POP]
+      pre: [PUSH(0)]
+      mstore [0, v68]
+    - stack=[]
+      pre: [PUSH(32), PUSH(0)]
+      evm_return [0, 32]
+
+// func public %entry()
+entry:
+  block0:
+    JUMPDEST
+    PUSH1 0x40 (64)
+    MLOAD
+    DUP1
+    ISZERO
+    ISZERO
+    PUSH1 `pc + (7)`
+    JUMPI
+    POP
+    PUSH1 0x80 (128)
+    DUP1
+    PUSH1 0x40 (64)
+    MSTORE
+    JUMPDEST
+    PUSH1 0x60 (96)
+    MLOAD
+    DUP2
+    MSTORE
+    DUP1
+    PUSH1 0x20 (32)
+    ADD
+    DUP1
+    PUSH1 0x60 (96)
+    MSTORE
+    PUSH1 0x20 (32)
+    ADD
+    PUSH1 0x40 (64)
+    MSTORE
+    POP
+    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
+    CALLDATALOAD
+    PUSH1 0xe0 (224)  // v1.i256 = shr 224.i32 v0;
+    SHR
+    DUP1  // v2.i256 = not v1;
+    NOT
+    DUP1
+    PUSH1 0x60 (96)
+    MLOAD
+    MSTORE
+    SWAP1  // v3.i256 = not v1;
+    NOT
+    DUP1  // v4.i256 = not v3;
+    NOT
+    DUP1  // v5.i256 = not v4;
+    NOT
+    DUP1  // v6.i256 = not v5;
+    NOT
+    DUP1  // v7.i256 = not v6;
+    NOT
+    DUP1  // v8.i256 = not v7;
+    NOT
+    DUP1  // v9.i256 = not v8;
+    NOT
+    DUP1  // v10.i256 = not v9;
+    NOT
+    DUP1  // v11.i256 = not v10;
+    NOT
+    DUP1  // v12.i256 = not v11;
+    NOT
+    DUP1  // v13.i256 = not v12;
+    NOT
+    DUP1  // v14.i256 = not v13;
+    NOT
+    DUP1  // v15.i256 = not v14;
+    NOT
+    DUP1  // v16.i256 = not v15;
+    NOT
+    DUP1  // v17.i256 = not v16;
+    NOT
+    DUP1  // v18.i256 = not v17;
+    NOT
+    PUSH1 0x60 (96)  // v19.i256 = not v2;
+    MLOAD
+    MLOAD
+    NOT
+    DUP1
+    PUSH1 0x60 (96)
+    MLOAD
+    MSTORE
+    DUP2  // v20.i256 = not v18;
+    NOT
+    DUP1  // v21.i256 = not v20;
+    NOT
+    DUP1  // v22.i256 = not v21;
+    NOT
+    DUP1  // v23.i256 = not v22;
+    NOT
+    DUP1  // v24.i256 = not v23;
+    NOT
+    DUP1  // v25.i256 = not v24;
+    NOT
+    DUP1  // v26.i256 = not v25;
+    NOT
+    DUP1  // v27.i256 = not v26;
+    NOT
+    DUP1  // v28.i256 = not v27;
+    NOT
+    DUP1  // v29.i256 = not v28;
+    NOT
+    DUP1  // v30.i256 = not v29;
+    NOT
+    DUP1  // v31.i256 = not v30;
+    NOT
+    DUP1  // v32.i256 = not v31;
+    NOT
+    DUP1  // v33.i256 = not v32;
+    NOT
+    DUP1  // v34.i256 = not v33;
+    NOT
+    DUP1  // v35.i256 = not v34;
+    NOT
+    PUSH1 0x60 (96)  // v36.i256 = not v19;
+    MLOAD
+    MLOAD
+    NOT
+    ADD  // v37.i256 = add v36 v35;
+    ADD  // v38.i256 = add v37 v34;
+    ADD  // v39.i256 = add v38 v33;
+    ADD  // v40.i256 = add v39 v32;
+    ADD  // v41.i256 = add v40 v31;
+    ADD  // v42.i256 = add v41 v30;
+    ADD  // v43.i256 = add v42 v29;
+    ADD  // v44.i256 = add v43 v28;
+    ADD  // v45.i256 = add v44 v27;
+    ADD  // v46.i256 = add v45 v26;
+    ADD  // v47.i256 = add v46 v25;
+    ADD  // v48.i256 = add v47 v24;
+    ADD  // v49.i256 = add v48 v23;
+    ADD  // v50.i256 = add v49 v22;
+    ADD  // v51.i256 = add v50 v21;
+    ADD  // v52.i256 = add v51 v20;
+    SWAP1  // v53.i256 = add v52 v18;
+    POP
+    ADD
+    ADD  // v54.i256 = add v53 v17;
+    ADD  // v55.i256 = add v54 v16;
+    ADD  // v56.i256 = add v55 v15;
+    ADD  // v57.i256 = add v56 v14;
+    ADD  // v58.i256 = add v57 v13;
+    ADD  // v59.i256 = add v58 v12;
+    ADD  // v60.i256 = add v59 v11;
+    ADD  // v61.i256 = add v60 v10;
+    ADD  // v62.i256 = add v61 v9;
+    ADD  // v63.i256 = add v62 v8;
+    ADD  // v64.i256 = add v63 v7;
+    ADD  // v65.i256 = add v64 v6;
+    ADD  // v66.i256 = add v65 v5;
+    ADD  // v67.i256 = add v66 v4;
+    ADD  // v68.i256 = add v67 v3;
+    SWAP1  // mstore 0.i32 v68 i256;
+    POP
+    PUSH0
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH0
+    RETURN
+
+
+
+---------------
+
+// section runtime
+0x5b604051801515601157506080806040525b60605181528060200180606052602001604052505f3560e01c80198060605152901980198019801980198019801980198019801980198019801980198019801960605151198060605152811980198019801980198019801980198019801980198019801980198019801960605151190101010101010101010101010101010190500101010101010101010101010101010190505f5260205ff3
+
+
+Success { reason: Return, gas_used: 21535, gas_refunded: 0, logs: [], output: Call(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe4) }
+
+    pc  opcode            input (stack grows to the right)
+     0  5b  JUMPDEST      []
+     1  60  PUSH1         0x40  []
+     3  51  MLOAD         [0x40]
+     4  80  DUP1          [0x0]
+     5  15  ISZERO        [0x0, 0x0]
+     6  15  ISZERO        [0x0, 0x1]
+     7  60  PUSH1         0x11  [0x0, 0x0]
+     9  57  JUMPI         [0x0, 0x0, 0x11]
+    10  50  POP           [0x0]
+    11  60  PUSH1         0x80  []
+    13  80  DUP1          [0x80]
+    14  60  PUSH1         0x40  [0x80, 0x80]
+    16  52  MSTORE        [0x80, 0x80, 0x40]
+    17  5b  JUMPDEST      [0x80]
+    18  60  PUSH1         0x60  [0x80]
+    20  51  MLOAD         [0x80, 0x60]
+    21  81  DUP2          [0x80, 0x0]
+    22  52  MSTORE        [0x80, 0x0, 0x80]
+    23  80  DUP1          [0x80]
+    24  60  PUSH1         0x20  [0x80, 0x80]
+    26  01  ADD           [0x80, 0x80, 0x20]
+    27  80  DUP1          [0x80, 0xa0]
+    28  60  PUSH1         0x60  [0x80, 0xa0, 0xa0]
+    30  52  MSTORE        [0x80, 0xa0, 0xa0, 0x60]
+    31  60  PUSH1         0x20  [0x80, 0xa0]
+    33  01  ADD           [0x80, 0xa0, 0x20]
+    34  60  PUSH1         0x40  [0x80, 0xc0]
+    36  52  MSTORE        [0x80, 0xc0, 0x40]
+    37  50  POP           [0x80]
+    38  5f  PUSH0         []
+    39  35  CALLDATALOAD  [0x0]
+    40  60  PUSH1         0xe0  [0xb00000016000000000000000000000000000000000000000000000000]
+    42  1c  SHR           [0xb00000016000000000000000000000000000000000000000000000000, 0xe0]
+    43  80  DUP1          [0xb]
+    44  19  NOT           [0xb, 0xb]
+    45  80  DUP1          [0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4]
+    46  60  PUSH1         0x60  [0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4]
+    48  51  MLOAD         [0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0x60]
+    49  52  MSTORE        [0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xa0]
+    50  90  SWAP1         [0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4]
+    51  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb]
+    52  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4]
+    53  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4]
+    54  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb]
+    55  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xb]
+    56  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4]
+    57  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4]
+    58  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb]
+    59  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xb]
+    60  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4]
+    61  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=7)
+    62  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb] (len=7)
+    63  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xb] (len=8)
+    64  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=8)
+    65  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=9)
+    66  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb] (len=9)
+    67  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xb] (len=10)
+    68  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=10)
+    69  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=11)
+    70  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb] (len=11)
+    71  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xb] (len=12)
+    72  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=12)
+    73  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=13)
+    74  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb] (len=13)
+    75  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xb] (len=14)
+    76  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=14)
+    77  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=15)
+    78  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb] (len=15)
+    79  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xb] (len=16)
+    80  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=16)
+    81  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=17)
+    82  60  PUSH1         0x60  [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb] (len=17)
+    84  51  MLOAD         [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0x60] (len=18)
+    85  51  MLOAD         [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xa0] (len=18)
+    86  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=18)
+    87  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xb] (len=18)
+    88  60  PUSH1         0x60  [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xb, 0xb] (len=19)
+    90  51  MLOAD         [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xb, 0x60] (len=20)
+    91  52  MSTORE        [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xb, 0xa0] (len=20)
+    92  81  DUP2          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xb] (len=18)
+    93  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xb, 0xb] (len=19)
+    94  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=19)
+    95  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=20)
+    96  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb] (len=20)
+    97  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xb] (len=21)
+    98  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=21)
+    99  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=22)
+   100  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb] (len=22)
+   101  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xb] (len=23)
+   102  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=23)
+   103  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=24)
+   104  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb] (len=24)
+   105  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xb] (len=25)
+   106  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=25)
+   107  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=26)
+   108  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb] (len=26)
+   109  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xb] (len=27)
+   110  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=27)
+   111  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=28)
+   112  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb] (len=28)
+   113  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xb] (len=29)
+   114  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=29)
+   115  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=30)
+   116  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb] (len=30)
+   117  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xb] (len=31)
+   118  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=31)
+   119  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=32)
+   120  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb] (len=32)
+   121  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xb] (len=33)
+   122  80  DUP1          [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=33)
+   123  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=34)
+   124  60  PUSH1         0x60  [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb] (len=34)
+   126  51  MLOAD         [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0x60] (len=35)
+   127  51  MLOAD         [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xa0] (len=35)
+   128  19  NOT           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xb] (len=35)
+   129  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=35)
+   130  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff] (len=34)
+   131  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff3] (len=33)
+   132  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe] (len=32)
+   133  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff2] (len=31)
+   134  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd] (len=30)
+   135  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff1] (len=29)
+   136  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc] (len=28)
+   137  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0] (len=27)
+   138  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffb] (len=26)
+   139  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffef] (len=25)
+   140  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffa] (len=24)
+   141  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffee] (len=23)
+   142  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff9] (len=22)
+   143  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed] (len=21)
+   144  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff8] (len=20)
+   145  90  SWAP1         [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xb, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffec] (len=19)
+   146  50  POP           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffec, 0xb] (len=19)
+   147  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffec] (len=18)
+   148  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7] (len=17)
+   149  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeb] (len=16)
+   150  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff6] (len=15)
+   151  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffea] (len=14)
+   152  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff5] (len=13)
+   153  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe9] (len=12)
+   154  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4] (len=11)
+   155  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe8] (len=10)
+   156  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff3] (len=9)
+   157  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe7] (len=8)
+   158  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, …, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff2] (len=7)
+   159  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe6]
+   160  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff1]
+   161  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xb, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe5]
+   162  01  ADD           [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0]
+   163  90  SWAP1         [0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe4]
+   164  50  POP           [0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe4, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff4]
+   165  5f  PUSH0         [0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe4]
+   166  52  MSTORE        [0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe4, 0x0]
+   167  60  PUSH1         0x20  []
+   169  5f  PUSH0         [0x20]
+   170  f3  RETURN        [0x20, 0x0]

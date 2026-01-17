@@ -18,11 +18,13 @@ use smol_str::SmolStr;
 pub mod ast;
 pub mod syntax;
 pub use error::{Error, UndefinedKind};
+pub use objects::parse_object_file;
 use sonatina_triple::{Architecture, TargetTriple};
 pub use syntax::Span;
 
 mod error;
 mod inst;
+pub mod objects;
 
 type Bimap<K, V> = bimap::BiHashMap<K, V, BuildHasherDefault<FxHasher>>;
 pub use pest::Parser as PestParser;
@@ -36,7 +38,7 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
     let ast = ast::parse(input)?;
 
     let module_ctx = module_ctx_from_triple(ast.target.unwrap());
-    let builder = ModuleBuilder::new(module_ctx);
+    let mut builder = ModuleBuilder::new(module_ctx);
 
     let mut ctx = BuildCtx::default();
 
@@ -78,28 +80,32 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
         builder.declare_function(sig).unwrap();
     }
 
-    for func in ast.functions.iter() {
-        if !ctx.check_duplicated_func(&builder, &func.signature.name) {
-            continue;
-        }
+    let func_order = ast
+        .functions
+        .iter()
+        .flat_map(|func| {
+            if !ctx.check_duplicated_func(&builder, &func.signature.name) {
+                return None;
+            }
 
-        let sig = &func.signature;
-        let args = sig
-            .params
-            .iter()
-            .map(|decl| ctx.type_(&builder, &decl.1))
-            .collect::<Vec<_>>();
+            let sig = &func.signature;
+            let args = sig
+                .params
+                .iter()
+                .map(|decl| ctx.type_(&builder, &decl.1))
+                .collect::<Vec<_>>();
 
-        let ret_ty = sig
-            .ret_type
-            .as_ref()
-            .map(|t| ctx.type_(&builder, t))
-            .unwrap_or(ir::Type::Unit);
-        let sig = Signature::new(&sig.name.name, sig.linkage, &args, ret_ty);
+            let ret_ty = sig
+                .ret_type
+                .as_ref()
+                .map(|t| ctx.type_(&builder, t))
+                .unwrap_or(ir::Type::Unit);
+            let sig = Signature::new(&sig.name.name, sig.linkage, &args, ret_ty);
 
-        // Safe to unwrap: function name checked for duplicate above
-        builder.declare_function(sig).unwrap();
-    }
+            // Safe to unwrap: function name checked for duplicate above
+            Some(builder.declare_function(sig).unwrap())
+        })
+        .collect();
 
     let mut func_comments = SecondaryMap::default();
 
@@ -110,25 +116,44 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
         func_comments[id] = func.comments;
     }
 
-    if ctx.errors.is_empty() {
-        let module = builder.build();
-        Ok(ParsedModule {
-            module,
-            debug: DebugInfo {
-                module_comments: ast.comments,
-                func_comments,
-                value_names: ctx.value_names,
-            },
-        })
-    } else {
-        Err(ctx.errors)
+    for obj_def in ast.objects {
+        let name = obj_def.object.name.0.clone();
+
+        if let Some(object) = ctx.lower_object(&builder, obj_def.object, obj_def.span)
+            && builder.declare_object(object).is_err()
+        {
+            ctx.errors
+                .push(Error::DuplicatedDeclaration(name, obj_def.span));
+        }
     }
+
+    if !ctx.errors.is_empty() {
+        return Err(ctx.errors);
+    }
+
+    let module = builder.build();
+    Ok(ParsedModule {
+        module,
+        debug: DebugInfo {
+            func_order,
+            module_comments: ast.comments,
+            func_comments,
+            value_names: ctx.value_names,
+        },
+    })
 }
 
 pub struct DebugInfo {
+    pub func_order: Vec<FuncRef>,
     pub module_comments: Vec<String>,
     pub func_comments: SecondaryMap<FuncRef, Vec<String>>,
     pub value_names: FxHashMap<FuncRef, Bimap<ir::ValueId, SmolStr>>,
+}
+
+impl DebugInfo {
+    pub fn value(&self, func: FuncRef, name: &str) -> Option<ir::ValueId> {
+        self.value_names.get(&func)?.get_by_right(name).copied()
+    }
 }
 
 impl DebugProvider for DebugInfo {
@@ -438,6 +463,75 @@ impl BuildCtx {
             }
         }
     }
+
+    fn lower_object(
+        &mut self,
+        mb: &ModuleBuilder,
+        object: crate::objects::Object,
+        span: Span,
+    ) -> Option<ir::Object> {
+        let mut has_error = false;
+
+        let mut sections = Vec::with_capacity(object.sections.len());
+        for section in object.sections {
+            let mut directives = Vec::with_capacity(section.directives.len());
+            for directive in section.directives {
+                let lowered = match directive {
+                    crate::objects::Directive::Entry(name) => {
+                        match mb.lookup_func(name.0.as_str()) {
+                            Some(func) => ir::object::Directive::Entry(func),
+                            None => {
+                                self.errors.push(Error::Undefined(
+                                    UndefinedKind::Func(name.0.clone()),
+                                    span,
+                                ));
+                                has_error = true;
+                                ir::object::Directive::Entry(FuncRef::from_u32(0))
+                            }
+                        }
+                    }
+                    crate::objects::Directive::Include(name) => {
+                        match mb.lookup_func(name.0.as_str()) {
+                            Some(func) => ir::object::Directive::Include(func),
+                            None => {
+                                self.errors.push(Error::Undefined(
+                                    UndefinedKind::Func(name.0.clone()),
+                                    span,
+                                ));
+                                has_error = true;
+                                ir::object::Directive::Include(FuncRef::from_u32(0))
+                            }
+                        }
+                    }
+                    crate::objects::Directive::Data(name) => match mb.lookup_gv(name.0.as_str()) {
+                        Some(gv) => ir::object::Directive::Data(gv),
+                        None => {
+                            self.errors
+                                .push(Error::Undefined(UndefinedKind::Value(name.0.clone()), span));
+                            has_error = true;
+                            ir::object::Directive::Data(GlobalVariableRef::from_u32(0))
+                        }
+                    },
+                    crate::objects::Directive::Embed(embed) => ir::object::Directive::Embed(embed),
+                };
+                directives.push(lowered);
+            }
+
+            sections.push(ir::object::Section {
+                name: section.name,
+                directives,
+            });
+        }
+
+        if has_error {
+            return None;
+        }
+
+        Some(ir::object::Object {
+            name: object.name,
+            sections,
+        })
+    }
 }
 
 // TODO: Temporary stopgap solution.
@@ -598,5 +692,87 @@ func public %simple(v0.i8) -> i8 {
 ";
 
         assert!(parse_module(s).is_ok());
+    }
+
+    #[test]
+    fn test_sym_addr_sym_size_parse_and_write() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+global public i8 $foo = 0;
+
+func public %main() {
+    block0:
+        v0.i256 = sym_addr %main;
+        v1.i256 = sym_size %main;
+        v2.i256 = sym_addr $foo;
+        v3.i256 = sym_size $foo;
+        v4.i256 = sym_addr &runtime;
+        v5.i256 = sym_size &runtime;
+        return;
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let mut w = ir::ir_writer::ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
+        let printed = w.dump_string();
+        assert!(printed.contains("sym_addr %main"));
+        assert!(printed.contains("sym_size %main"));
+        assert!(printed.contains("sym_addr $foo"));
+        assert!(printed.contains("sym_size $foo"));
+        assert!(printed.contains("sym_addr &runtime"));
+        assert!(printed.contains("sym_size &runtime"));
+    }
+
+    #[test]
+    fn test_parse_module_includes_objects() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %factory() {
+    block0:
+        return;
+}
+
+object @Factory {
+  section runtime { entry %factory; }
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        assert_eq!(parsed.module.objects.len(), 1);
+        assert!(parsed.module.objects.contains_key("Factory"));
+        let mut w = ir::ir_writer::ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
+        let printed = w.dump_string();
+        assert!(printed.contains("object @Factory"));
+    }
+
+    #[test]
+    fn test_parse_module_duplicate_objects_should_fail() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %factory() {
+    block0:
+        return;
+}
+
+object @Factory {
+  section runtime { entry %factory; }
+}
+
+object @Factory {
+  section runtime { entry %factory; }
+}
+"#;
+
+        let errors = match parse_module(s) {
+            Ok(_) => panic!("Expected duplicate object definition error"),
+            Err(errors) => errors,
+        };
+        assert!(errors.iter().any(|e| matches!(
+            e,
+            Error::DuplicatedDeclaration(name, _) if name.as_str() == "Factory"
+        )));
     }
 }

@@ -92,5 +92,6 @@ Module {
             comments: [],
         },
     ],
+    objects: [],
     comments: [],
 }
