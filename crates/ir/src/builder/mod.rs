@@ -1,9 +1,11 @@
 mod func_builder;
 mod module_builder;
+mod object_builder;
 mod ssa;
 
 pub use func_builder::FunctionBuilder;
 pub use module_builder::{BuilderError, ModuleBuilder};
+pub use object_builder::{DeclareObjectError, ObjectBuilder, ObjectBuilderError, SectionBuilder};
 pub use ssa::Variable;
 
 pub mod test_util {

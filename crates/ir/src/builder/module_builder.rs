@@ -31,6 +31,21 @@ pub enum BuilderError {
     DuplicateObjectDefinition { name: String },
 }
 
+impl std::fmt::Display for BuilderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ConflictingFunctionDeclaration => {
+                write!(f, "conflicting function declaration")
+            }
+            Self::DuplicateObjectDefinition { name } => {
+                write!(f, "duplicate object definition: {name}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for BuilderError {}
+
 impl ModuleBuilder {
     pub fn new(ctx: ModuleCtx) -> Self {
         Self {
