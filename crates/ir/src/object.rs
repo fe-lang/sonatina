@@ -52,6 +52,42 @@ pub struct SectionName(pub SmolStr);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EmbedSymbol(pub SmolStr);
 
+impl From<&str> for ObjectName {
+    fn from(value: &str) -> Self {
+        Self(value.into())
+    }
+}
+
+impl From<String> for ObjectName {
+    fn from(value: String) -> Self {
+        Self(value.into())
+    }
+}
+
+impl From<&str> for SectionName {
+    fn from(value: &str) -> Self {
+        Self(value.into())
+    }
+}
+
+impl From<String> for SectionName {
+    fn from(value: String) -> Self {
+        Self(value.into())
+    }
+}
+
+impl From<&str> for EmbedSymbol {
+    fn from(value: &str) -> Self {
+        Self(value.into())
+    }
+}
+
+impl From<String> for EmbedSymbol {
+    fn from(value: String) -> Self {
+        Self(value.into())
+    }
+}
+
 impl<Ctx> IrWrite<Ctx> for ObjectName {
     fn write<W: Write>(&self, w: &mut W, _ctx: &Ctx) -> io::Result<()> {
         write!(w, "@{}", self.0.as_str())
