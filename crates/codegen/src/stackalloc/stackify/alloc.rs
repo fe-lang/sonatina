@@ -15,8 +15,8 @@ pub struct StackifyAlloc {
     pub(super) pre_actions: SecondaryMap<InstId, Actions>,
     pub(super) post_actions: SecondaryMap<InstId, Actions>,
 
-    /// br_table lowering uses per-case action sequences (keyed by the case value).
-    pub(super) brtable_actions: BTreeMap<(InstId, ValueId), Actions>,
+    /// br_table lowering uses per-case action sequences keyed by (scrutinee, case_val).
+    pub(super) brtable_actions: BTreeMap<(InstId, ValueId, ValueId), Actions>,
 
     /// Value -> frame slot index (32-byte slots).
     ///
@@ -78,8 +78,8 @@ impl Allocator for StackifyAlloc {
     }
 
     fn read(&self, inst: InstId, vals: &[ValueId]) -> Actions {
-        if let [val] = vals
-            && let Some(act) = self.brtable_actions.get(&(inst, *val))
+        if let [scrutinee, case_val] = vals
+            && let Some(act) = self.brtable_actions.get(&(inst, *scrutinee, *case_val))
         {
             return act.clone();
         }
