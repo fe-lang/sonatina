@@ -1,0 +1,32 @@
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i8 = shr 248.i32 v0;
+        v2.i32 = shr 224.i32 v0;
+        v3.i32 = call %dispatch v1 v2;
+
+        mstore 0.i32 v3 i32;
+        evm_return 0.i8 32.i8;
+}
+
+func private %dispatch(v0.i8, v1.i32) -> i32 {
+    block0:
+        br_table v1 block3 (0.i32 block1) (11.i32 block2);
+
+    block1:
+        return 100.i32;
+
+    block2:
+        return 200.i32;
+
+    block3:
+        return 300.i32;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

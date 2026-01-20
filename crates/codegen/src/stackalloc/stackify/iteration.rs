@@ -408,7 +408,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                         );
                         self.alloc
                             .brtable_actions
-                            .insert((inst, case_val), case_actions);
+                            .insert((inst, scrutinee, case_val), case_actions);
 
                         // Destination blocks inherit the base stack state (the compare chain
                         // restores it on all non-taken paths).

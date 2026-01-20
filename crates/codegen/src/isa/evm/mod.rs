@@ -1,5 +1,3 @@
-#![allow(unused_variables, dead_code)] // XXX
-
 pub mod opcode;
 use opcode::OpCode;
 use rustc_hash::FxHashSet;
@@ -119,7 +117,7 @@ impl LowerBackend for EvmBackend {
         &self,
         ctx: &mut Lower<Self::MInst>,
         _alloc: &mut dyn Allocator,
-        block: BlockId,
+        _block: BlockId,
     ) {
         // Every block start is a jumpdest unless
         //  - all incoming edges are fallthroughs (TODO)
@@ -277,8 +275,8 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::Phi(_) => {}
 
             EvmInstKind::BrTable(br) => {
-                let table = br.table();
-                let lhs = *br.scrutinee();
+                let table = br.table().clone();
+                let scrutinee = *br.scrutinee();
                 let default = *br.default();
 
                 // TODO: sanitize br_table ops
@@ -289,20 +287,18 @@ impl LowerBackend for EvmBackend {
                     "br_table has duplicate scrutinee values"
                 );
 
-                for (arg, dest) in table.clone().iter() {
-                    perform_actions(ctx, &alloc.read(insn, &[*arg]));
+                for (case_val, dest) in table.iter() {
+                    perform_actions(ctx, &alloc.read(insn, &[scrutinee, *case_val]));
                     ctx.push(OpCode::EQ);
 
-                    let p = ctx.push(OpCode::PUSH1);
-                    ctx.add_label_reference(p, Label::Block(*dest));
+                    ctx.push_jump_target(OpCode::PUSH1, Label::Block(*dest));
                     ctx.push(OpCode::JUMPI);
                 }
 
                 if let Some(dest) = default
                     && !ctx.is_next_block(dest)
                 {
-                    let p = ctx.push(OpCode::PUSH1);
-                    ctx.add_label_reference(p, Label::Block(dest));
+                    ctx.push_jump_target(OpCode::PUSH1, Label::Block(dest));
                     ctx.push(OpCode::JUMP);
                 }
             }
@@ -632,17 +628,6 @@ fn shrink_bytes(bytes: &[u8]) -> SmallVec<[u8; 8]> {
     bytes
 }
 
-fn imm_to_be_bytes(imm: &Immediate) -> SmallVec<[u8; 4]> {
-    match imm {
-        Immediate::I1(v) => smallvec![*v as u8],
-        Immediate::I8(v) => smallvec![*v as u8],
-        Immediate::I16(v) => todo!(),
-        Immediate::I32(v) => todo!(),
-        Immediate::I64(v) => todo!(),
-        Immediate::I128(v) => todo!(),
-        Immediate::I256(v) => todo!(),
-    }
-}
 fn u32_to_be(num: u32) -> SmallVec<[u8; 4]> {
     if num == 0 {
         smallvec![0]
