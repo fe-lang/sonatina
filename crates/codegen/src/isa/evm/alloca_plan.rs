@@ -132,7 +132,7 @@ pub(crate) fn compute_stack_alloca_layout(
     }
 
     let mut last_use: FxHashMap<InstId, u32> = FxHashMap::default();
-    for (&inst, _) in &allocas {
+    for &inst in allocas.keys() {
         let pos = inst_pos.get(&inst).copied().unwrap_or_default();
         last_use.insert(inst, pos);
     }
