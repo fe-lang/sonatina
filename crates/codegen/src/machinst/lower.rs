@@ -30,6 +30,14 @@ pub trait LowerBackend {
     type Error: std::fmt::Display;
     type FixupPolicy: Clone;
 
+    fn prepare_section(
+        &self,
+        _module: &Module,
+        _funcs: &[FuncRef],
+        _section_ctx: &SectionLoweringCtx<'_>,
+    ) {
+    }
+
     fn lower_function(
         &self,
         module: &Module,
