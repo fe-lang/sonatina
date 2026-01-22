@@ -30,6 +30,8 @@ pub fn link_section<B: LowerBackend>(
 ) -> Result<SectionArtifact, LinkSectionError<B::Error>> {
     const MAX_ITERS: usize = 64;
 
+    backend.prepare_section(module, funcs, section_ctx);
+
     let mut sym_fixups: Vec<(FuncRef, VCodeInst, SymFixup)> = Vec::new();
     let mut layout_funcs = Vec::with_capacity(funcs.len());
 
