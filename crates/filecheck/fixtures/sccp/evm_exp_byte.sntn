@@ -1,0 +1,58 @@
+#! SCCP folds EVM `exp`/`byte` when operands are constant.
+
+target = "evm-ethereum-london"
+
+# sameln: func public %exp_fold() -> i32 {
+# nextln:     block0:
+# nextln:         return 8.i32;
+func public %exp_fold() -> i32 {
+    block0:
+        v0.i32 = evm_exp 2.i32 3.i32;
+        return v0;
+}
+
+# sameln: func public %exp_zero_exponent() -> i32 {
+# nextln:     block0:
+# nextln:         return 1.i32;
+func public %exp_zero_exponent() -> i32 {
+    block0:
+        v0.i32 = evm_exp 2.i32 0.i32;
+        return v0;
+}
+
+# sameln: func public %byte_i32_msb() -> i32 {
+# nextln:     block0:
+# nextln:         return 17.i32;
+func public %byte_i32_msb() -> i32 {
+    block0:
+        v0.i32 = evm_byte 28.i32 0x11223344.i32;
+        return v0;
+}
+
+# sameln: func public %byte_i32_lsb() -> i32 {
+# nextln:     block0:
+# nextln:         return 68.i32;
+func public %byte_i32_lsb() -> i32 {
+    block0:
+        v0.i32 = evm_byte 31.i32 0x11223344.i32;
+        return v0;
+}
+
+# sameln: func public %byte_i32_oob() -> i32 {
+# nextln:     block0:
+# nextln:         return 0.i32;
+func public %byte_i32_oob() -> i32 {
+    block0:
+        v0.i32 = evm_byte 27.i32 0x11223344.i32;
+        return v0;
+}
+
+# sameln: func public %byte_pos_ge_32() -> i32 {
+# nextln:     block0:
+# nextln:         return 0.i32;
+func public %byte_pos_ge_32() -> i32 {
+    block0:
+        v0.i32 = evm_byte 32.i32 0x11223344.i32;
+        return v0;
+}
+

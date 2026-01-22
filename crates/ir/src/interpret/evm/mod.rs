@@ -67,6 +67,38 @@ fn evm_mulmod(lhs: U256, rhs: U256, modulus: U256) -> U256 {
     result
 }
 
+fn evm_exp(base: U256, exponent: U256, mask: U256) -> U256 {
+    let mut result = U256::one() & mask;
+    let mut base = base & mask;
+    let mut exponent = exponent;
+
+    while exponent > U256::zero() {
+        if exponent & U256::one() == U256::one() {
+            result = result.overflowing_mul(base).0 & mask;
+        }
+
+        exponent >>= 1;
+        base = base.overflowing_mul(base).0 & mask;
+    }
+
+    result
+}
+
+fn evm_byte(pos: U256, value: U256, value_bytes: usize) -> U256 {
+    if pos >= U256::from(32u8) {
+        return U256::zero();
+    }
+
+    let pos = pos.as_usize();
+    if pos < 32 - value_bytes {
+        return U256::zero();
+    }
+
+    let idx = pos - (32 - value_bytes);
+    let shift_bytes = value_bytes - 1 - idx;
+    (value >> (shift_bytes * 8)) & U256::from(0xffu16)
+}
+
 impl Interpret for EvmUdiv {
     fn interpret(&self, state: &mut dyn State) -> EvalValue {
         state.set_action(Action::Continue);
@@ -177,6 +209,47 @@ impl Interpret for EvmMulMod {
 
         let ty = lhs.ty();
         let result = evm_mulmod(imm_to_u256(lhs), imm_to_u256(rhs), imm_to_u256(modulus));
+        EvalValue::Imm(u256_to_imm(result, ty))
+    }
+}
+
+impl Interpret for EvmExp {
+    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+        state.set_action(Action::Continue);
+
+        let base = state.lookup_val(*self.base());
+        let exponent = state.lookup_val(*self.exponent());
+
+        let (EvalValue::Imm(base), EvalValue::Imm(exponent)) = (base, exponent) else {
+            return EvalValue::Undef;
+        };
+
+        debug_assert_eq!(base.ty(), exponent.ty());
+
+        let ty = base.ty();
+        let mask = mask_for_ty(ty);
+        let result = evm_exp(imm_to_u256(base), imm_to_u256(exponent), mask);
+        EvalValue::Imm(u256_to_imm(result, ty))
+    }
+}
+
+impl Interpret for EvmByte {
+    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+        state.set_action(Action::Continue);
+
+        let pos = state.lookup_val(*self.pos());
+        let value = state.lookup_val(*self.value());
+
+        let (EvalValue::Imm(pos), EvalValue::Imm(value)) = (pos, value) else {
+            return EvalValue::Undef;
+        };
+
+        debug_assert_eq!(pos.ty(), value.ty());
+
+        let ty = value.ty();
+        let value_bytes = bits_for_ty(ty).div_ceil(8) as usize;
+
+        let result = evm_byte(imm_to_u256(pos), imm_to_u256(value), value_bytes);
         EvalValue::Imm(u256_to_imm(result, ty))
     }
 }
