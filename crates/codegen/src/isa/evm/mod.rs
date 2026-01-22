@@ -1,4 +1,5 @@
 mod alloca_plan;
+mod heap_plan;
 mod memory_plan;
 pub mod opcode;
 mod ptr_escape;
@@ -176,7 +177,15 @@ impl LowerBackend for EvmBackend {
             block_orders.insert(func, prepared.block_order);
         }
 
-        let plan = compute_program_memory_plan(module, funcs, &local_mem, &alloca_plan);
+        let mut plan = compute_program_memory_plan(module, funcs, &local_mem, &alloca_plan);
+        let malloc_bounds = heap_plan::compute_malloc_future_static_words(
+            module, funcs, &plan, &local_mem, &self.isa,
+        );
+        for (func, bounds) in malloc_bounds {
+            if let Some(mem_plan) = plan.funcs.get_mut(&func) {
+                mem_plan.malloc_future_static_words = bounds;
+            }
+        }
 
         *self.section_state.borrow_mut() = Some(PreparedSection {
             plan,
@@ -210,6 +219,7 @@ impl LowerBackend for EvmBackend {
                 alloca: prepared.alloca_plan,
                 alloca_words: prepared.local_mem.alloca_words,
                 persistent_alloca_words: prepared.local_mem.persistent_alloca_words,
+                malloc_future_static_words: FxHashMap::default(),
             },
         };
         self.lower_prepared_function(module, func, lowering)
@@ -726,7 +736,66 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::EvmRevert(_) => basic_op(ctx, &[OpCode::REVERT]),
             EvmInstKind::EvmSelfDestruct(_) => basic_op(ctx, &[OpCode::SELFDESTRUCT]),
 
-            EvmInstKind::EvmMalloc(_) => todo!(),
+            EvmInstKind::EvmMalloc(_) => {
+                let mem_plan = self.current_mem_plan.borrow();
+                let mem_plan = mem_plan
+                    .as_ref()
+                    .expect("missing memory plan during lowering");
+
+                let dyn_base_words = self
+                    .dyn_base()
+                    .checked_sub(STATIC_BASE)
+                    .expect("dyn base below static base")
+                    / WORD_BYTES;
+                let future_words = mem_plan
+                    .malloc_future_static_words
+                    .get(&insn)
+                    .copied()
+                    .unwrap_or(dyn_base_words);
+
+                let min_base_bytes = STATIC_BASE
+                    .checked_add(
+                        WORD_BYTES
+                            .checked_mul(future_words)
+                            .expect("malloc static bound bytes overflow"),
+                    )
+                    .expect("malloc static bound bytes overflow");
+
+                perform_actions(ctx, &alloc.read(insn, &args));
+
+                // Align to 32 bytes:
+                // aligned = ((size + 31) / 32) * 32
+                push_bytes(ctx, &[0x1f]);
+                ctx.push(OpCode::ADD);
+                push_bytes(ctx, &[0x20]);
+                ctx.push(OpCode::DIV);
+                push_bytes(ctx, &[0x20]);
+                ctx.push(OpCode::MUL);
+
+                // heap_end = mload(0x40)
+                push_bytes(ctx, &[0x40]);
+                ctx.push(OpCode::MLOAD);
+
+                // sp = mload(DYN_SP_SLOT)
+                push_bytes(ctx, &[DYN_SP_SLOT]);
+                ctx.push(OpCode::MLOAD);
+
+                // max(heap_end, sp)
+                emit_max_top_two(ctx);
+
+                // max(max(heap_end, sp), min_base)
+                push_bytes(ctx, &u32_to_be(min_base_bytes));
+                emit_max_top_two(ctx);
+
+                // new_end = base + aligned_size; mstore(0x40, new_end); return base
+                ctx.push(OpCode::DUP1);
+                ctx.push(OpCode::SWAP2);
+                ctx.push(OpCode::ADD);
+                push_bytes(ctx, &[0x40]);
+                ctx.push(OpCode::MSTORE);
+
+                perform_actions(ctx, &alloc.write(insn, result));
+            }
             EvmInstKind::InsertValue(_) => todo!(),
             EvmInstKind::ExtractValue(_) => todo!(),
             EvmInstKind::GetFunctionPtr(get_fn) => {
@@ -1139,6 +1208,31 @@ fn low_bits_mask(bits: u16) -> Option<U256> {
     }
 }
 
+fn emit_max_top_two(ctx: &mut Lower<OpCode>) {
+    // Stack: [..., b, a] (a is top).
+    // Result: [..., max(a, b)]
+    ctx.push(OpCode::DUP2);
+    ctx.push(OpCode::DUP2);
+    ctx.push(OpCode::GT);
+
+    let keep_a_push = ctx.push(OpCode::PUSH1);
+    ctx.push(OpCode::JUMPI);
+
+    // keep b (a <= b): drop a.
+    ctx.push(OpCode::POP);
+    let end_push = ctx.push(OpCode::PUSH1);
+    ctx.push(OpCode::JUMP);
+
+    // keep a (a > b): drop b.
+    let keep_a = ctx.push(OpCode::JUMPDEST);
+    ctx.add_label_reference(keep_a_push, Label::Insn(keep_a));
+    ctx.push(OpCode::SWAP1);
+    ctx.push(OpCode::POP);
+
+    let end = ctx.push(OpCode::JUMPDEST);
+    ctx.add_label_reference(end_push, Label::Insn(end));
+}
+
 fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
     if frame_slots == 0 {
         return;
@@ -1168,6 +1262,11 @@ fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
 
     let skip_init = ctx.push(OpCode::JUMPDEST);
     ctx.add_label_reference(skip_init_push, Label::Insn(skip_init));
+
+    // Clamp dynamic stack pointer above any heap allocations.
+    push_bytes(ctx, &[0x40]);
+    ctx.push(OpCode::MLOAD);
+    emit_max_top_two(ctx);
 
     // Save old fp at frame_base (sp): mstore(sp, mload(DYN_FP_SLOT))
     push_bytes(ctx, &[DYN_FP_SLOT]);
