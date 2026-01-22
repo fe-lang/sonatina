@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 
 use crate::bitset::BitSet;
 use cranelift_entity::SecondaryMap;
-use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
+use sonatina_ir::{BlockId, Function, InstId, ValueId, cfg::ControlFlowGraph};
 
 #[derive(Default)]
 pub struct Liveness {
@@ -130,6 +130,64 @@ impl Liveness {
     }
 }
 
+#[derive(Default)]
+pub struct InstLiveness {
+    /// `inst` => values live after `inst` executes.
+    live_out: SecondaryMap<InstId, BitSet<ValueId>>,
+}
+
+impl InstLiveness {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn compute(&mut self, func: &Function, cfg: &ControlFlowGraph, liveness: &Liveness) {
+        self.live_out.clear();
+
+        for block in cfg.post_order() {
+            let mut live = liveness.block_live_outs(block).clone();
+
+            let insts: Vec<_> = func.layout.iter_inst(block).collect();
+            for inst in insts.into_iter().rev() {
+                self.live_out[inst] = live.clone();
+
+                if let Some(def) = func.dfg.inst_result(inst) {
+                    live.remove(def);
+                }
+
+                if func.dfg.is_phi(inst) {
+                    continue;
+                }
+
+                func.dfg.inst(inst).for_each_value(&mut |v| {
+                    if !func.dfg.value_is_imm(v) {
+                        live.insert(v);
+                    }
+                });
+            }
+        }
+    }
+
+    pub fn live_out(&self, inst: InstId) -> &BitSet<ValueId> {
+        &self.live_out[inst]
+    }
+
+    pub fn call_live_values(&self, func: &Function) -> BitSet<ValueId> {
+        let mut call_live_values = BitSet::default();
+        for block in func.layout.iter_block() {
+            for inst in func.layout.iter_inst(block) {
+                if func.dfg.call_info(inst).is_some() {
+                    call_live_values.union_with(self.live_out(inst));
+                    if let Some(def) = func.dfg.inst_result(inst) {
+                        call_live_values.remove(def);
+                    }
+                }
+            }
+        }
+        call_live_values
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum ValDef {
     FnArg,
@@ -173,7 +231,7 @@ fn for_each_def(func: &Function, block: BlockId, mut f: impl FnMut(ValueId, bool
 
 #[cfg(test)]
 mod tests {
-    use super::Liveness;
+    use super::{InstLiveness, Liveness};
     use sonatina_ir::{BlockId, cfg::ControlFlowGraph};
     use sonatina_parser::parse_module;
 
@@ -262,5 +320,67 @@ func public %complex_loop(v0.i8, v20.i8) -> i8 {
             &[v(0), v(3)].as_slice().into()
         );
         assert_eq!(live.block_live_outs(BlockId(6)), &[v(0)].as_slice().into());
+    }
+
+    #[test]
+    fn call_live_values_excludes_call_results() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func private %callee(v0.i256) -> i256 {
+block0:
+    return v0;
+}
+
+func public %caller(v0.i256) -> i256 {
+block0:
+    v1.i256 = add v0 1.i256;
+    v2.i256 = call %callee v1;
+    v3.i256 = add v2 v1;
+    return v3;
+}
+"#;
+
+        let parsed = parse_module(SRC).unwrap();
+        let caller = parsed
+            .debug
+            .func_order
+            .iter()
+            .copied()
+            .find(|&f| parsed.module.ctx.func_sig(f, |sig| sig.name() == "caller"))
+            .expect("missing caller");
+
+        let (inst_live, call_inst) = parsed.module.func_store.view(caller, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+
+            let mut live = Liveness::default();
+            live.compute(function, &cfg);
+
+            let mut inst_live = InstLiveness::default();
+            inst_live.compute(function, &cfg, &live);
+
+            let call_inst = function
+                .layout
+                .iter_block()
+                .flat_map(|b| function.layout.iter_inst(b))
+                .find(|&inst| function.dfg.call_info(inst).is_some())
+                .expect("missing call inst");
+
+            (inst_live, call_inst)
+        });
+
+        let v1 = parsed.debug.value(caller, "v1").unwrap();
+        let v2 = parsed.debug.value(caller, "v2").unwrap();
+
+        assert!(inst_live.live_out(call_inst).contains(v1));
+        assert!(inst_live.live_out(call_inst).contains(v2));
+
+        let call_live = parsed
+            .module
+            .func_store
+            .view(caller, |function| inst_live.call_live_values(function));
+        assert!(call_live.contains(v1));
+        assert!(!call_live.contains(v2));
     }
 }
