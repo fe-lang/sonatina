@@ -1,8 +1,6 @@
-use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
-use smallvec::SmallVec;
 use sonatina_ir::{
-    Function, InstId, InstSetExt, Module, ValueId,
+    InstSetExt, Module,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
     module::FuncRef,
@@ -10,6 +8,8 @@ use sonatina_ir::{
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef};
+
+use super::provenance::compute_value_provenance;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PtrEscapeSummary {
@@ -36,58 +36,6 @@ impl PtrEscapeSummary {
                 .ctx
                 .func_sig(func, |sig| sig.ret_ty().is_pointer(&module.ctx)),
         }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum PtrBase {
-    Arg(u32),
-    Alloca(InstId),
-}
-
-impl PtrBase {
-    fn key(self) -> (u8, u32) {
-        match self {
-            PtrBase::Arg(i) => (0, i),
-            PtrBase::Alloca(inst) => (1, inst.as_u32()),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct Provenance {
-    bases: SmallVec<[PtrBase; 4]>,
-}
-
-impl Provenance {
-    fn union_with(&mut self, other: &Self) {
-        if other.bases.is_empty() {
-            return;
-        }
-
-        for base in other.bases.iter().copied() {
-            if !self.bases.contains(&base) {
-                self.bases.push(base);
-            }
-        }
-
-        self.bases.sort_unstable_by_key(|b| b.key());
-        self.bases.dedup();
-    }
-
-    fn has_any_arg(&self) -> bool {
-        self.bases.iter().any(|b| matches!(b, PtrBase::Arg(_)))
-    }
-
-    fn arg_indices(&self) -> impl Iterator<Item = u32> + '_ {
-        self.bases.iter().filter_map(|b| match b {
-            PtrBase::Arg(i) => Some(*i),
-            PtrBase::Alloca(_) => None,
-        })
-    }
-
-    fn is_local_addr(&self) -> bool {
-        !self.bases.is_empty() && self.bases.iter().all(|b| matches!(b, PtrBase::Alloca(_)))
     }
 }
 
@@ -216,7 +164,13 @@ fn compute_summary_for_func(
             arg_is_ptr.push(function.dfg.value_ty(arg).is_pointer(&module.ctx));
         }
 
-        let prov = compute_value_provenance(module, function, isa, summaries);
+        let prov = compute_value_provenance(function, &module.ctx, isa, |callee| {
+            summaries
+                .get(&callee)
+                .cloned()
+                .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown(module, callee))
+                .arg_may_be_returned
+        });
 
         for block in function.layout.iter_block() {
             for inst in function.layout.iter_inst(block) {
@@ -291,115 +245,6 @@ fn compute_summary_for_func(
 
         summary
     })
-}
-
-fn compute_value_provenance(
-    module: &Module,
-    function: &Function,
-    isa: &Evm,
-    summaries: &FxHashMap<FuncRef, PtrEscapeSummary>,
-) -> SecondaryMap<ValueId, Provenance> {
-    let mut prov: SecondaryMap<ValueId, Provenance> = SecondaryMap::new();
-    for value in function.dfg.values.keys() {
-        let _ = &mut prov[value];
-    }
-
-    for (idx, &arg) in function.arg_values.iter().enumerate() {
-        if function.dfg.value_ty(arg).is_pointer(&module.ctx) {
-            prov[arg].bases.push(PtrBase::Arg(idx as u32));
-        }
-    }
-
-    for block in function.layout.iter_block() {
-        for inst in function.layout.iter_inst(block) {
-            let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
-            if let EvmInstKind::Alloca(_) = data
-                && let Some(def) = function.dfg.inst_result(inst)
-            {
-                prov[def].bases.push(PtrBase::Alloca(inst));
-            }
-        }
-    }
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-
-        for block in function.layout.iter_block() {
-            for inst in function.layout.iter_inst(block) {
-                let Some(def) = function.dfg.inst_result(inst) else {
-                    continue;
-                };
-
-                let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
-                let mut next = Provenance::default();
-
-                match data {
-                    EvmInstKind::Alloca(_) => {
-                        next.bases.push(PtrBase::Alloca(inst));
-                    }
-                    EvmInstKind::Phi(phi) => {
-                        for (val, _) in phi.args().iter() {
-                            next.union_with(&prov[*val]);
-                        }
-                    }
-                    EvmInstKind::Gep(gep) => {
-                        let Some(&base) = gep.values().first() else {
-                            continue;
-                        };
-                        next.union_with(&prov[base]);
-                    }
-                    EvmInstKind::Bitcast(bc) => next.union_with(&prov[*bc.from()]),
-                    EvmInstKind::IntToPtr(i2p) => next.union_with(&prov[*i2p.from()]),
-                    EvmInstKind::PtrToInt(p2i) => next.union_with(&prov[*p2i.from()]),
-                    EvmInstKind::InsertValue(iv) => {
-                        next.union_with(&prov[*iv.dest()]);
-                        next.union_with(&prov[*iv.value()]);
-                    }
-                    EvmInstKind::ExtractValue(ev) => next.union_with(&prov[*ev.dest()]),
-                    EvmInstKind::Call(call) => {
-                        let callee = *call.callee();
-                        let callee_sum = summaries.get(&callee).cloned().unwrap_or_else(|| {
-                            PtrEscapeSummary::conservative_unknown(module, callee)
-                        });
-                        for (idx, &arg) in call.args().iter().enumerate() {
-                            if idx < callee_sum.arg_may_be_returned.len()
-                                && callee_sum.arg_may_be_returned[idx]
-                            {
-                                next.union_with(&prov[arg]);
-                            }
-                        }
-                    }
-                    EvmInstKind::Add(_)
-                    | EvmInstKind::Sub(_)
-                    | EvmInstKind::Mul(_)
-                    | EvmInstKind::And(_)
-                    | EvmInstKind::Or(_)
-                    | EvmInstKind::Xor(_)
-                    | EvmInstKind::Shl(_)
-                    | EvmInstKind::Shr(_)
-                    | EvmInstKind::Sar(_)
-                    | EvmInstKind::Not(_)
-                    | EvmInstKind::Sext(_)
-                    | EvmInstKind::Zext(_)
-                    | EvmInstKind::Trunc(_) => {
-                        function.dfg.inst(inst).for_each_value(&mut |v| {
-                            next.union_with(&prov[v]);
-                        });
-                    }
-                    _ => {}
-                }
-
-                let cur = &mut prov[def];
-                if *cur != next {
-                    *cur = next;
-                    changed = true;
-                }
-            }
-        }
-    }
-
-    prov
 }
 
 #[cfg(test)]
