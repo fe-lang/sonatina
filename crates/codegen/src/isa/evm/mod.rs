@@ -1,6 +1,9 @@
+mod memory_plan;
 pub mod opcode;
+
 use opcode::OpCode;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::cell::RefCell;
 
 use crate::{
     critical_edge::CriticalEdgeSplitter,
@@ -10,7 +13,7 @@ use crate::{
         lower::{FixupUpdate, Lower, LowerBackend, LoweredFunction, SectionLoweringCtx},
         vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeInst},
     },
-    stackalloc::{Action, Allocator, StackifyAlloc},
+    stackalloc::{Action, Actions, Allocator, StackifyAlloc},
 };
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
@@ -19,14 +22,14 @@ use sonatina_ir::{
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
+    types::CompoundType,
 };
 use sonatina_triple::{EvmVersion, OperatingSystem};
 
-// TODO: proper memory allocation scheme
-const STACK_POINTER_OFFSET: u8 = 0x40;
-const FRAME_POINTER_OFFSET: u8 = 0x60;
-const INITIAL_STACK_POINTER: u16 = 0x80;
-const FRAME_HEADER_BYTES: u32 = 32;
+use memory_plan::{
+    DYN_FP_SLOT, DYN_SP_SLOT, FuncLocalMemInfo, FuncMemPlan, MemScheme, ProgramMemoryPlan,
+    STATIC_BASE, WORD_BYTES, compute_program_memory_plan,
+};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum PushWidthPolicy {
@@ -35,8 +38,29 @@ pub enum PushWidthPolicy {
     MinimalRelax,
 }
 
+struct PreparedSection {
+    plan: ProgramMemoryPlan,
+    allocs: FxHashMap<FuncRef, StackifyAlloc>,
+    block_orders: FxHashMap<FuncRef, Vec<BlockId>>,
+}
+
+struct PreparedFunction {
+    alloc: StackifyAlloc,
+    block_order: Vec<BlockId>,
+    local_mem: FuncLocalMemInfo,
+    alloca_offsets: FxHashMap<InstId, u32>,
+}
+
+struct PreparedLowering {
+    alloc: StackifyAlloc,
+    block_order: Vec<BlockId>,
+    mem_plan: FuncMemPlan,
+}
+
 pub struct EvmBackend {
     isa: Evm,
+    section_state: RefCell<Option<PreparedSection>>,
+    current_mem_plan: RefCell<Option<FuncMemPlan>>,
 }
 impl EvmBackend {
     pub fn new(isa: Evm) -> Self {
@@ -48,7 +72,72 @@ impl EvmBackend {
             ),
             "EvmBackend requires evm-ethereum-osaka (got {triple})"
         );
-        Self { isa }
+        Self {
+            isa,
+            section_state: RefCell::new(None),
+            current_mem_plan: RefCell::new(None),
+        }
+    }
+
+    fn take_prepared_function(&self, func: FuncRef) -> Option<PreparedLowering> {
+        let mut state = self.section_state.borrow_mut();
+        let section = state.as_mut()?;
+
+        let alloc = section.allocs.remove(&func)?;
+        let block_order = section.block_orders.remove(&func)?;
+        let mem_plan = section.plan.funcs.get(&func).cloned()?;
+
+        Some(PreparedLowering {
+            alloc,
+            block_order,
+            mem_plan,
+        })
+    }
+
+    fn dyn_base(&self) -> u32 {
+        self.section_state
+            .borrow()
+            .as_ref()
+            .map(|s| s.plan.dyn_base)
+            .unwrap_or(STATIC_BASE)
+    }
+
+    fn lower_prepared_function(
+        &self,
+        module: &Module,
+        func: FuncRef,
+        prepared: PreparedLowering,
+    ) -> Result<LoweredFunction<OpCode>, String> {
+        let mem_plan = prepared.mem_plan;
+
+        let vcode = module.func_store.view(func, |function| {
+            let _plan_guard = CurrentMemPlanGuard::new(&self.current_mem_plan, mem_plan.clone());
+            let mut alloc = PlannedAlloc::new(prepared.alloc, mem_plan);
+            let lower = Lower::new(&module.ctx, function);
+            lower.lower(self, &mut alloc).map_err(|e| format!("{e:?}"))
+        })?;
+
+        Ok(LoweredFunction {
+            vcode,
+            block_order: prepared.block_order,
+        })
+    }
+}
+
+struct CurrentMemPlanGuard<'a> {
+    slot: &'a RefCell<Option<FuncMemPlan>>,
+}
+
+impl<'a> CurrentMemPlanGuard<'a> {
+    fn new(slot: &'a RefCell<Option<FuncMemPlan>>, plan: FuncMemPlan) -> Self {
+        *slot.borrow_mut() = Some(plan);
+        Self { slot }
+    }
+}
+
+impl Drop for CurrentMemPlanGuard<'_> {
+    fn drop(&mut self) {
+        *self.slot.borrow_mut() = None;
     }
 }
 
@@ -57,6 +146,39 @@ impl LowerBackend for EvmBackend {
     type Error = String;
     type FixupPolicy = PushWidthPolicy;
 
+    fn prepare_section(
+        &self,
+        module: &Module,
+        funcs: &[FuncRef],
+        section_ctx: &SectionLoweringCtx<'_>,
+    ) {
+        let _ = section_ctx;
+
+        let mut allocs: FxHashMap<FuncRef, StackifyAlloc> = FxHashMap::default();
+        let mut block_orders: FxHashMap<FuncRef, Vec<BlockId>> = FxHashMap::default();
+        let mut local_mem: FxHashMap<FuncRef, FuncLocalMemInfo> = FxHashMap::default();
+        let mut alloca_offsets: FxHashMap<FuncRef, FxHashMap<InstId, u32>> = FxHashMap::default();
+
+        for &func in funcs {
+            let prepared = module.func_store.modify(func, |function| {
+                prepare_function(function, &module.ctx, self)
+            });
+
+            local_mem.insert(func, prepared.local_mem);
+            alloca_offsets.insert(func, prepared.alloca_offsets);
+            allocs.insert(func, prepared.alloc);
+            block_orders.insert(func, prepared.block_order);
+        }
+
+        let plan = compute_program_memory_plan(module, funcs, &local_mem, &alloca_offsets);
+
+        *self.section_state.borrow_mut() = Some(PreparedSection {
+            plan,
+            allocs,
+            block_orders,
+        });
+    }
+
     fn lower_function(
         &self,
         module: &Module,
@@ -64,10 +186,24 @@ impl LowerBackend for EvmBackend {
         section_ctx: &SectionLoweringCtx<'_>,
     ) -> Result<LoweredFunction<Self::MInst>, Self::Error> {
         let _ = section_ctx;
-        let (vcode, block_order) = module.func_store.modify(func, |function| {
-            lower_function_to_vcode(function, &module.ctx, self)
-        })?;
-        Ok(LoweredFunction { vcode, block_order })
+
+        if let Some(prepared) = self.take_prepared_function(func) {
+            return self.lower_prepared_function(module, func, prepared);
+        }
+
+        let prepared = module.func_store.modify(func, |function| {
+            prepare_function(function, &module.ctx, self)
+        });
+        let lowering = PreparedLowering {
+            alloc: prepared.alloc,
+            block_order: prepared.block_order,
+            mem_plan: FuncMemPlan {
+                scheme: MemScheme::DynamicFrame,
+                alloca: prepared.alloca_offsets,
+                alloca_words: prepared.local_mem.alloca_words,
+            },
+        };
+        self.lower_prepared_function(module, func, lowering)
     }
 
     fn apply_sym_fixup(
@@ -109,7 +245,7 @@ impl LowerBackend for EvmBackend {
         alloc: &mut dyn Allocator,
         function: &Function,
     ) {
-        enter_frame(ctx, alloc.frame_size_slots());
+        enter_frame(ctx, alloc.frame_size_slots(), self.dyn_base());
         perform_actions(ctx, &alloc.enter_function(function));
     }
 
@@ -379,8 +515,130 @@ impl LowerBackend for EvmBackend {
                 }
             }
             EvmInstKind::EvmMcopy(_) => basic_op(ctx, &[OpCode::MCOPY]),
-            EvmInstKind::Gep(_) => todo!(),
-            EvmInstKind::Alloca(_) => todo!(),
+            EvmInstKind::Gep(_) => {
+                perform_actions(ctx, &alloc.read(insn, &args));
+                if args.is_empty() {
+                    panic!("gep without operands");
+                }
+
+                let mut current_ty = ctx.value_ty(args[0]);
+                if !current_ty.is_pointer(ctx.module) {
+                    panic!("gep base must be a pointer (got {current_ty:?})");
+                }
+
+                let mut steps: Vec<GepStep> = Vec::new();
+                for &idx_val in args.iter().skip(1) {
+                    let Some(cmpd) = current_ty.resolve_compound(ctx.module) else {
+                        panic!("invalid gep: indexing into scalar {current_ty:?}");
+                    };
+
+                    let idx_imm_u32 = ctx.value_imm(idx_val).and_then(immediate_u32);
+
+                    match cmpd {
+                        CompoundType::Ptr(elem_ty) => {
+                            let elem_size = u32::try_from(ctx.module.size_of_unchecked(elem_ty))
+                                .expect("gep element too large");
+                            steps.push(gep_step(elem_size, idx_imm_u32));
+                            current_ty = elem_ty;
+                        }
+                        CompoundType::Array { elem, .. } => {
+                            let elem_size = u32::try_from(ctx.module.size_of_unchecked(elem))
+                                .expect("gep element too large");
+                            steps.push(gep_step(elem_size, idx_imm_u32));
+                            current_ty = elem;
+                        }
+                        CompoundType::Struct(s) => {
+                            let Some(idx) = idx_imm_u32.map(|idx| idx as usize) else {
+                                panic!("struct gep indices must be immediate constants");
+                            };
+                            let (field_offset, field_ty) =
+                                struct_field_offset_bytes(&s.fields, s.packed, idx, ctx.module);
+                            steps.push(GepStep::AddConst(field_offset));
+                            current_ty = field_ty;
+                        }
+                        CompoundType::Func { .. } => {
+                            panic!("invalid gep: indexing into function type");
+                        }
+                    }
+                }
+
+                for step in steps {
+                    match step {
+                        GepStep::AddConst(offset_bytes) => {
+                            ctx.push(OpCode::SWAP1);
+                            ctx.push(OpCode::POP);
+                            if offset_bytes != 0 {
+                                push_bytes(ctx, &u32_to_be(offset_bytes));
+                                ctx.push(OpCode::ADD);
+                            }
+                        }
+                        GepStep::AddScaled(scale_bytes) => {
+                            ctx.push(OpCode::SWAP1);
+                            push_bytes(ctx, &u32_to_be(scale_bytes));
+                            ctx.push(OpCode::MUL);
+                            ctx.push(OpCode::ADD);
+                        }
+                    }
+                }
+
+                perform_actions(ctx, &alloc.write(insn, result));
+            }
+            EvmInstKind::Alloca(_) => {
+                let mem_plan = self.current_mem_plan.borrow();
+                let mem_plan = mem_plan
+                    .as_ref()
+                    .expect("missing memory plan during lowering");
+
+                let alloca_offset = *mem_plan.alloca.get(&insn).expect("missing alloca offset");
+
+                perform_actions(ctx, &alloc.read(insn, &args));
+
+                match &mem_plan.scheme {
+                    MemScheme::StaticTree(plan) => {
+                        let persistent_spills = plan
+                            .persistent_words
+                            .checked_sub(mem_plan.alloca_words)
+                            .expect("persistent spill words underflow");
+
+                        let addr_words = plan
+                            .base_words
+                            .checked_add(persistent_spills)
+                            .and_then(|w| w.checked_add(alloca_offset))
+                            .expect("alloca address words overflow");
+
+                        let addr_bytes = STATIC_BASE
+                            .checked_add(
+                                WORD_BYTES
+                                    .checked_mul(addr_words)
+                                    .expect("alloca address bytes overflow"),
+                            )
+                            .expect("alloca address bytes overflow");
+
+                        push_bytes(ctx, &u32_to_be(addr_bytes));
+                    }
+                    MemScheme::DynamicFrame => {
+                        let frame_slots = alloc.frame_size_slots();
+                        let spill_slots = frame_slots
+                            .checked_sub(mem_plan.alloca_words)
+                            .expect("alloca words exceed dynamic frame size");
+                        let addr_words = spill_slots
+                            .checked_add(alloca_offset)
+                            .expect("alloca address words overflow");
+                        let addr_bytes = addr_words
+                            .checked_mul(WORD_BYTES)
+                            .expect("alloca address bytes overflow");
+
+                        push_bytes(ctx, &[DYN_FP_SLOT]);
+                        ctx.push(OpCode::MLOAD);
+                        if addr_bytes != 0 {
+                            push_bytes(ctx, &u32_to_be(addr_bytes));
+                            ctx.push(OpCode::ADD);
+                        }
+                    }
+                }
+
+                perform_actions(ctx, &alloc.write(insn, result));
+            }
 
             EvmInstKind::EvmStop(_) => basic_op(ctx, &[OpCode::STOP]),
 
@@ -519,6 +777,186 @@ impl LowerBackend for EvmBackend {
     }
 }
 
+struct PlannedAlloc {
+    inner: StackifyAlloc,
+    mem_plan: FuncMemPlan,
+}
+
+impl PlannedAlloc {
+    fn new(inner: StackifyAlloc, mem_plan: FuncMemPlan) -> Self {
+        Self { inner, mem_plan }
+    }
+
+    fn rewrite_actions(&self, mut actions: Actions) -> Actions {
+        let MemScheme::StaticTree(plan) = &self.mem_plan.scheme else {
+            return actions;
+        };
+
+        let base_words = plan.base_words;
+        let alloca_words = self.mem_plan.alloca_words;
+        let persistent_spills = plan
+            .persistent_words
+            .checked_sub(alloca_words)
+            .expect("persistent spill words underflow");
+
+        for action in actions.iter_mut() {
+            match action {
+                Action::MemLoadFrameSlot(slot) => {
+                    *action = Action::MemLoadAbs(self.static_spill_addr(
+                        base_words,
+                        *slot,
+                        persistent_spills,
+                        alloca_words,
+                    ));
+                }
+                Action::MemStoreFrameSlot(slot) => {
+                    *action = Action::MemStoreAbs(self.static_spill_addr(
+                        base_words,
+                        *slot,
+                        persistent_spills,
+                        alloca_words,
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        actions
+    }
+
+    fn static_spill_addr(
+        &self,
+        base_words: u32,
+        spill_slot: u32,
+        persistent_spills: u32,
+        alloca_words: u32,
+    ) -> u32 {
+        let spill_words = if spill_slot >= persistent_spills {
+            spill_slot
+                .checked_add(alloca_words)
+                .expect("spill slot words overflow")
+        } else {
+            spill_slot
+        };
+
+        let addr_words = base_words
+            .checked_add(spill_words)
+            .expect("spill addr words overflow");
+
+        STATIC_BASE
+            .checked_add(
+                WORD_BYTES
+                    .checked_mul(addr_words)
+                    .expect("spill addr bytes overflow"),
+            )
+            .expect("spill addr bytes overflow")
+    }
+}
+
+impl Allocator for PlannedAlloc {
+    fn enter_function(&self, function: &Function) -> Actions {
+        self.rewrite_actions(self.inner.enter_function(function))
+    }
+
+    fn frame_size_slots(&self) -> u32 {
+        match self.mem_plan.scheme {
+            MemScheme::StaticTree(_) => 0,
+            MemScheme::DynamicFrame => self
+                .inner
+                .frame_size_slots()
+                .checked_add(self.mem_plan.alloca_words)
+                .expect("frame size overflow"),
+        }
+    }
+
+    fn read(&self, inst: InstId, vals: &[sonatina_ir::ValueId]) -> Actions {
+        self.rewrite_actions(self.inner.read(inst, vals))
+    }
+
+    fn write(&self, inst: InstId, val: Option<sonatina_ir::ValueId>) -> Actions {
+        self.rewrite_actions(self.inner.write(inst, val))
+    }
+
+    fn traverse_edge(&self, from: BlockId, to: BlockId) -> Actions {
+        self.rewrite_actions(self.inner.traverse_edge(from, to))
+    }
+}
+
+enum GepStep {
+    AddConst(u32),
+    AddScaled(u32),
+}
+
+fn gep_step(elem_size_bytes: u32, idx: Option<u32>) -> GepStep {
+    let Some(idx) = idx else {
+        return if elem_size_bytes == 0 {
+            GepStep::AddConst(0)
+        } else {
+            GepStep::AddScaled(elem_size_bytes)
+        };
+    };
+
+    GepStep::AddConst(
+        elem_size_bytes
+            .checked_mul(idx)
+            .expect("gep offset overflow"),
+    )
+}
+
+fn immediate_u32(imm: Immediate) -> Option<u32> {
+    if imm.is_negative() {
+        return None;
+    }
+
+    let u256 = imm.as_i256().to_u256();
+    if u256 > U256::from(u32::MAX) {
+        return None;
+    }
+
+    Some(u256.low_u32())
+}
+
+fn struct_field_offset_bytes(
+    fields: &[Type],
+    packed: bool,
+    idx: usize,
+    module: &ModuleCtx,
+) -> (u32, Type) {
+    let &field_ty = fields.get(idx).expect("struct gep index out of bounds");
+
+    let mut offset: u32 = 0;
+    for &ty in fields.iter().take(idx) {
+        if !packed {
+            let align =
+                u32::try_from(module.align_of_unchecked(ty)).expect("struct field align too large");
+            offset = align_to(offset, align);
+        }
+
+        let size =
+            u32::try_from(module.size_of_unchecked(ty)).expect("struct field size too large");
+        offset = offset
+            .checked_add(size)
+            .expect("struct field offset overflow");
+    }
+
+    if !packed {
+        let align = u32::try_from(module.align_of_unchecked(field_ty))
+            .expect("struct field align too large");
+        offset = align_to(offset, align);
+    }
+
+    (offset, field_ty)
+}
+
+fn align_to(offset: u32, align: u32) -> u32 {
+    if align <= 1 {
+        return offset;
+    }
+    debug_assert!(align.is_power_of_two(), "alignment must be power of two");
+
+    offset.checked_add(align - 1).expect("align overflow") & !(align - 1)
+}
+
 fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
     for action in actions {
         match action {
@@ -562,10 +1000,10 @@ fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
                 ctx.push(OpCode::MLOAD);
             }
             Action::MemLoadFrameSlot(offset) => {
-                push_bytes(ctx, &[FRAME_POINTER_OFFSET]);
+                push_bytes(ctx, &[DYN_FP_SLOT]);
                 ctx.push(OpCode::MLOAD);
                 let byte_offset = offset
-                    .checked_mul(FRAME_HEADER_BYTES)
+                    .checked_mul(WORD_BYTES)
                     .expect("frame slot offset overflow");
                 if byte_offset != 0 {
                     let bytes = u32_to_be(byte_offset);
@@ -580,10 +1018,10 @@ fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
                 ctx.push(OpCode::MSTORE);
             }
             Action::MemStoreFrameSlot(offset) => {
-                push_bytes(ctx, &[FRAME_POINTER_OFFSET]);
+                push_bytes(ctx, &[DYN_FP_SLOT]);
                 ctx.push(OpCode::MLOAD);
                 let byte_offset = offset
-                    .checked_mul(FRAME_HEADER_BYTES)
+                    .checked_mul(WORD_BYTES)
                     .expect("frame slot offset overflow");
                 if byte_offset != 0 {
                     let bytes = u32_to_be(byte_offset);
@@ -674,17 +1112,17 @@ fn low_bits_mask(bits: u16) -> Option<U256> {
     }
 }
 
-fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32) {
+fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
     if frame_slots == 0 {
         return;
     }
 
     let frame_bytes = frame_slots
-        .checked_mul(FRAME_HEADER_BYTES)
+        .checked_mul(WORD_BYTES)
         .expect("frame size overflow");
 
-    // sp = mload(STACK_POINTER_OFFSET); if sp == 0, initialize it.
-    push_bytes(ctx, &[STACK_POINTER_OFFSET]);
+    // sp = mload(DYN_SP_SLOT); if sp == 0, initialize it.
+    push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MLOAD);
 
     // if sp != 0, skip init.
@@ -694,36 +1132,36 @@ fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32) {
     let skip_init_push = ctx.push(OpCode::PUSH1);
     ctx.push(OpCode::JUMPI);
 
-    // init: pop 0 sp; sp = INITIAL_STACK_POINTER; mstore(STACK_POINTER_OFFSET, sp)
+    // init: pop 0 sp; sp = dyn_base; mstore(DYN_SP_SLOT, sp)
     ctx.push(OpCode::POP);
-    push_bytes(ctx, &u32_to_be(INITIAL_STACK_POINTER as u32));
+    push_bytes(ctx, &u32_to_be(dyn_base));
     ctx.push(OpCode::DUP1);
-    push_bytes(ctx, &[STACK_POINTER_OFFSET]);
+    push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MSTORE);
 
     let skip_init = ctx.push(OpCode::JUMPDEST);
     ctx.add_label_reference(skip_init_push, Label::Insn(skip_init));
 
-    // Save old fp at frame_base (sp): mstore(sp, mload(FRAME_POINTER_OFFSET))
-    push_bytes(ctx, &[FRAME_POINTER_OFFSET]);
+    // Save old fp at frame_base (sp): mstore(sp, mload(DYN_FP_SLOT))
+    push_bytes(ctx, &[DYN_FP_SLOT]);
     ctx.push(OpCode::MLOAD);
     ctx.push(OpCode::DUP2);
     ctx.push(OpCode::MSTORE);
 
-    // new_fp = sp + FRAME_HEADER_BYTES; mstore(FRAME_POINTER_OFFSET, new_fp)
+    // new_fp = sp + WORD_BYTES; mstore(DYN_FP_SLOT, new_fp)
     ctx.push(OpCode::DUP1);
-    push_bytes(ctx, &u32_to_be(FRAME_HEADER_BYTES));
+    push_bytes(ctx, &u32_to_be(WORD_BYTES));
     ctx.push(OpCode::ADD);
     ctx.push(OpCode::DUP1);
-    push_bytes(ctx, &[FRAME_POINTER_OFFSET]);
+    push_bytes(ctx, &[DYN_FP_SLOT]);
     ctx.push(OpCode::MSTORE);
 
-    // new_sp = new_fp + frame_bytes; mstore(STACK_POINTER_OFFSET, new_sp)
+    // new_sp = new_fp + frame_bytes; mstore(DYN_SP_SLOT, new_sp)
     if frame_bytes != 0 {
         push_bytes(ctx, &u32_to_be(frame_bytes));
         ctx.push(OpCode::ADD);
     }
-    push_bytes(ctx, &[STACK_POINTER_OFFSET]);
+    push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MSTORE);
 
     // Discard frame_base (sp).
@@ -735,11 +1173,11 @@ fn leave_frame(ctx: &mut Lower<OpCode>, frame_slots: u32) {
         return;
     }
 
-    // frame_base = fp - FRAME_HEADER_BYTES
+    // frame_base = fp - WORD_BYTES
     //
     // NOTE: `SUB` computes `a - b` with `a` on top of stack.
-    push_bytes(ctx, &u32_to_be(FRAME_HEADER_BYTES));
-    push_bytes(ctx, &[FRAME_POINTER_OFFSET]);
+    push_bytes(ctx, &u32_to_be(WORD_BYTES));
+    push_bytes(ctx, &[DYN_FP_SLOT]);
     ctx.push(OpCode::MLOAD);
     ctx.push(OpCode::SUB);
 
@@ -747,12 +1185,12 @@ fn leave_frame(ctx: &mut Lower<OpCode>, frame_slots: u32) {
     ctx.push(OpCode::DUP1);
     ctx.push(OpCode::MLOAD);
 
-    // mstore(FRAME_POINTER_OFFSET, old_fp)
-    push_bytes(ctx, &[FRAME_POINTER_OFFSET]);
+    // mstore(DYN_FP_SLOT, old_fp)
+    push_bytes(ctx, &[DYN_FP_SLOT]);
     ctx.push(OpCode::MSTORE);
 
-    // mstore(STACK_POINTER_OFFSET, frame_base)
-    push_bytes(ctx, &[STACK_POINTER_OFFSET]);
+    // mstore(DYN_SP_SLOT, frame_base)
+    push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MSTORE);
 }
 
@@ -839,11 +1277,11 @@ fn push_op(bytes: usize) -> OpCode {
     }
 }
 
-fn lower_function_to_vcode(
+fn prepare_function(
     function: &mut Function,
     module: &ModuleCtx,
     backend: &EvmBackend,
-) -> Result<(VCode<OpCode>, Vec<BlockId>), String> {
+) -> PreparedFunction {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
 
@@ -856,15 +1294,58 @@ fn lower_function_to_vcode(
     let mut dom = DomTree::new();
     dom.compute(&cfg);
 
-    let mut alloc = StackifyAlloc::for_function(function, &cfg, &dom, &liveness, 16);
-
-    let lower = Lower::new(module, function);
-    let vcode = lower
-        .lower(backend, &mut alloc)
-        .map_err(|e| format!("{e:?}"))?;
+    let alloc = StackifyAlloc::for_function(function, &cfg, &dom, &liveness, 16);
     let block_order = dom.rpo().to_owned();
 
-    Ok((vcode, block_order))
+    let (alloca_offsets, alloca_words) = compute_alloca_layout(function, module, backend);
+
+    let local_mem = FuncLocalMemInfo {
+        persistent_words: alloc
+            .persistent_frame_slots
+            .checked_add(alloca_words)
+            .expect("persistent words overflow"),
+        transient_words: alloc.transient_frame_slots,
+        alloca_words,
+    };
+
+    PreparedFunction {
+        alloc,
+        block_order,
+        local_mem,
+        alloca_offsets,
+    }
+}
+
+fn compute_alloca_layout(
+    function: &Function,
+    module: &ModuleCtx,
+    backend: &EvmBackend,
+) -> (FxHashMap<InstId, u32>, u32) {
+    let mut offsets: FxHashMap<InstId, u32> = FxHashMap::default();
+    let mut next_offset_words: u32 = 0;
+
+    for block in function.layout.iter_block() {
+        for inst in function.layout.iter_inst(block) {
+            let data = backend.isa.inst_set().resolve_inst(function.dfg.inst(inst));
+            let EvmInstKind::Alloca(alloca) = data else {
+                continue;
+            };
+
+            let size_bytes: u32 = backend
+                .isa
+                .type_layout()
+                .size_of(*alloca.ty(), module)
+                .expect("alloca has invalid type") as u32;
+            let size_words = size_bytes.div_ceil(WORD_BYTES);
+
+            offsets.insert(inst, next_offset_words);
+            next_offset_words = next_offset_words
+                .checked_add(size_words)
+                .expect("alloca layout overflow");
+        }
+    }
+
+    (offsets, next_offset_words)
 }
 
 fn u32_to_evm_push_bytes(value: u32, policy: PushWidthPolicy) -> SmallVec<[u8; 4]> {
