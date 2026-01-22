@@ -11,20 +11,19 @@ use revm::{
 };
 
 use sonatina_codegen::{
-    critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
-    isa::evm::{EvmBackend, PushWidthPolicy, opcode::OpCode},
+    isa::evm::{EvmBackend, PushWidthPolicy},
     liveness::Liveness,
-    machinst::{lower::Lower, vcode::VCode},
+    machinst::lower::{LowerBackend, SectionLoweringCtx},
     object::{CompileOptions, compile_object},
     stackalloc::StackifyAlloc,
 };
 use sonatina_ir::{
-    BlockId, Function,
+    Function,
     cfg::ControlFlowGraph,
     ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite},
     isa::evm::Evm,
-    module::ModuleCtx,
+    object::{EmbedSymbol, ObjectName, SectionName},
 };
 use sonatina_parser::{ParsedModule, parse_module};
 use sonatina_triple::{Architecture, OperatingSystem, Vendor};
@@ -95,12 +94,26 @@ fn test_evm(fixture: Fixture<&str>) {
         operating_system: OperatingSystem::Evm(sonatina_triple::EvmVersion::Osaka),
     }));
 
+    let object_name = ObjectName::from("Contract");
+    let section_name = SectionName::from("snapshot");
+    let embed_symbols: Vec<EmbedSymbol> = Vec::new();
+    let section_ctx = SectionLoweringCtx {
+        object: &object_name,
+        section: &section_name,
+        embed_symbols: &embed_symbols,
+    };
+
+    backend.prepare_section(&parsed.module, &parsed.debug.func_order, &section_ctx);
+
     let mut stackify_out = Vec::new();
     let mut lowered_out = Vec::new();
     for fref in parsed.debug.func_order.iter() {
-        parsed.module.func_store.modify(*fref, |function| {
-            let (vcode, _block_order, stackify) =
-                vcode_for_fn(function, &parsed.module.ctx, &backend);
+        let lowered = backend
+            .lower_function(&parsed.module, *fref, &section_ctx)
+            .unwrap();
+
+        parsed.module.func_store.view(*fref, |function| {
+            let stackify = stackify_trace_for_fn(function);
             let ctx = FuncWriteCtx::with_debug_provider(function, *fref, &parsed.debug);
 
             // Snapshot format:
@@ -113,7 +126,7 @@ fn test_evm(fixture: Fixture<&str>) {
             write!(&mut stackify_out, "{}", fmt_stackify_trace(&stackify)).unwrap();
             writeln!(&mut stackify_out).unwrap();
 
-            vcode.write(&mut lowered_out, &ctx).unwrap();
+            lowered.vcode.write(&mut lowered_out, &ctx).unwrap();
             writeln!(&mut lowered_out).unwrap();
         });
     }
@@ -289,28 +302,17 @@ impl<W: Write, DB: revm::Database> revm::Inspector<DB> for TestInspector<W> {
     }
 }
 
-fn vcode_for_fn(
-    function: &mut Function,
-    module: &ModuleCtx,
-    backend: &EvmBackend,
-) -> (VCode<OpCode>, Vec<BlockId>, String) {
+fn stackify_trace_for_fn(function: &Function) -> String {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
-    let mut splitter = CriticalEdgeSplitter::new();
-    splitter.run(function, &mut cfg);
 
     let mut liveness = Liveness::new();
     liveness.compute(function, &cfg);
     let mut dom = DomTree::new();
     dom.compute(&cfg);
-    let (mut alloc, stackify) =
+    let (_alloc, stackify) =
         StackifyAlloc::for_function_with_trace(function, &cfg, &dom, &liveness, 16);
-    let lower = Lower::new(module, function);
-
-    match lower.lower(backend, &mut alloc) {
-        Ok(vcode) => (vcode, dom.rpo().to_owned(), stackify),
-        Err(err) => panic!("{:?}", err),
-    }
+    stackify
 }
 
 fn fmt_evm_stack(stack: &[U256]) -> String {
