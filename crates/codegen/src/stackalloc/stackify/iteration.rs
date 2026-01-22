@@ -6,9 +6,8 @@ use std::collections::BTreeMap;
 use crate::{bitset::BitSet, stackalloc::Actions};
 
 use super::{
-    DUP_MAX, SWAP_MAX,
     alloc::StackifyAlloc,
-    builder::StackifyContext,
+    builder::{StackifyContext, StackifyReachability},
     planner::{self, Planner},
     slots::{FreeSlotPools, SpillSlotPools},
     spill::SpillSet,
@@ -255,6 +254,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         // pop dead values that were on top of the caller's stack segment.
         let before_cleanup_len = self.alloc.pre_actions[inst].len();
         clean_dead_stack_prefix(
+            self.ctx.reach,
             &mut state.stack,
             &state.live_future,
             &state.live_out,
@@ -270,6 +270,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             improve_reachability_before_operands(
                 self.ctx.func,
                 &args,
+                self.ctx.reach,
                 &mut state.stack,
                 &state.live_future,
                 &state.live_out,
@@ -332,6 +333,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     improve_reachability_before_operands(
                         self.ctx.func,
                         &[cond],
+                        self.ctx.reach,
                         &mut state.stack,
                         &state.live_future,
                         &state.live_out,
@@ -379,6 +381,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     improve_reachability_before_operands(
                         self.ctx.func,
                         &[scrutinee],
+                        self.ctx.reach,
                         &mut state.stack,
                         &state.live_future,
                         &state.live_out,
@@ -561,6 +564,7 @@ fn pop_dead_tops(
 }
 
 pub(super) fn clean_dead_stack_prefix(
+    reach: StackifyReachability,
     stack: &mut SymStack,
     live_future: &BitSet<ValueId>,
     live_out: &BitSet<ValueId>,
@@ -597,7 +601,7 @@ pub(super) fn clean_dead_stack_prefix(
         // SWAP16 reach), then pop that chunk off. Repeat until the chain is gone.
         let mut remaining = dead_run;
         while remaining > 0 {
-            let swap_depth = remaining.min(SWAP_MAX - 1);
+            let swap_depth = remaining.min(reach.swap_max.saturating_sub(1));
             stack.swap(swap_depth, actions);
             stack.pop_n(swap_depth, actions);
             remaining -= swap_depth;
@@ -644,6 +648,7 @@ pub(super) fn last_use_values_in_inst(
 pub(super) fn improve_reachability_before_operands(
     func: &Function,
     args: &[ValueId],
+    reach: StackifyReachability,
     stack: &mut SymStack,
     live_future: &BitSet<ValueId>,
     live_out: &BitSet<ValueId>,
@@ -665,7 +670,7 @@ pub(super) fn improve_reachability_before_operands(
     let mut needs_aggressive = false;
     for &arg in args.iter() {
         if !func.dfg.value_is_imm(arg)
-            && stack.find_reachable_value(arg, DUP_MAX).is_none()
+            && stack.find_reachable_value(arg, reach.dup_max).is_none()
             && stack
                 .find_reachable_value(arg, AGGRESSIVE_REACHABILITY_DEPTH)
                 .is_some()
@@ -687,13 +692,14 @@ pub(super) fn improve_reachability_before_operands(
 
         for &arg in args.iter() {
             if !func.dfg.value_is_imm(arg)
-                && stack.find_reachable_value(arg, DUP_MAX).is_none()
+                && stack.find_reachable_value(arg, reach.dup_max).is_none()
                 && let Some(pos) = stack.find_reachable_value(arg, AGGRESSIVE_REACHABILITY_DEPTH)
                 && let Some(victim) = choose_reachability_victim(
                     func,
                     stack,
                     pos,
                     &protected_args,
+                    reach,
                     live_future,
                     live_out,
                 )
@@ -716,10 +722,11 @@ fn choose_reachability_victim(
     stack: &SymStack,
     above: usize,
     protected_args: &BitSet<ValueId>,
+    reach: StackifyReachability,
     live_future: &BitSet<ValueId>,
     live_out: &BitSet<ValueId>,
 ) -> Option<usize> {
-    let limit = stack.len_above_func_ret().min(SWAP_MAX);
+    let limit = stack.len_above_func_ret().min(reach.swap_max);
     let above = above.min(limit);
 
     // 1) Prefer deleting dead values, starting from the shallowest depth to minimize `SWAP*`

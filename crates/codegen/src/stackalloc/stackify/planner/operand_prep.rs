@@ -7,7 +7,7 @@ use sonatina_ir::{Function, InstId, ValueId};
 use std::collections::{BinaryHeap, HashMap};
 
 use super::{
-    super::{CONSUME_LAST_USE_MAX_SWAPS, DUP_MAX, SWAP_MAX, sym_stack::StackItem},
+    super::{CONSUME_LAST_USE_MAX_SWAPS, sym_stack::StackItem},
     MemPlan, Planner,
 };
 
@@ -160,7 +160,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             if !self.ctx.func.dfg.value_is_imm(v) {
                 let reachable = initial
                     .iter()
-                    .take(SWAP_MAX)
+                    .take(self.ctx.reach.swap_max)
                     .any(|i| matches!(i, StackItem::Value(x) if *x == v));
                 if !reachable {
                     return None;
@@ -278,7 +278,12 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             }
 
             // Neighbors: SWAP*, then DUP* for non-last-use operands, then PUSH for immediates.
-            let max_swap = 16usize.min(item.state.len().saturating_sub(1));
+            let max_swap = self
+                .ctx
+                .reach
+                .swap_max
+                .saturating_sub(1)
+                .min(item.state.len().saturating_sub(1));
             for k in 1..=max_swap {
                 let mut next_state = item.state.clone();
                 next_state.swap(0, k);
@@ -309,7 +314,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             }
 
             for &v in target.iter() {
-                let max_dup = DUP_MAX.min(item.state.len());
+                let max_dup = self.ctx.reach.dup_max.min(item.state.len());
                 if preserve_needed(self.ctx.func, consume_last_use, v)
                     && let Some(pos) = (0..max_dup).find(|&i| item.state[i] == StackItem::Value(v))
                 {
@@ -460,7 +465,9 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             // instruction consuming its operands.
             if consume_last_use.contains(v)
                 && !consumed_from_stack.contains(v)
-                && let Some(pos) = self.stack.find_reachable_value_from(v, prepared, SWAP_MAX)
+                && let Some(pos) =
+                    self.stack
+                        .find_reachable_value_from(v, prepared, self.ctx.reach.swap_max)
                 && pos <= CONSUME_LAST_USE_MAX_SWAPS
             {
                 self.stack.stable_rotate_to_top(pos, self.actions);
@@ -469,7 +476,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 continue;
             }
 
-            if let Some(pos) = self.stack.find_reachable_value(v, DUP_MAX) {
+            if let Some(pos) = self.stack.find_reachable_value(v, self.ctx.reach.dup_max) {
                 self.stack.dup(pos, self.actions);
                 prepared += 1;
             } else {

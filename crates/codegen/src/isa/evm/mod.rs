@@ -78,6 +78,7 @@ struct PreparedLowering {
 
 pub struct EvmBackend {
     isa: Evm,
+    stackify_reach_depth: u8,
     section_state: RefCell<Option<PreparedSection>>,
     current_mem_plan: RefCell<Option<FuncMemPlan>>,
 }
@@ -93,9 +94,23 @@ impl EvmBackend {
         );
         Self {
             isa,
+            stackify_reach_depth: 16,
             section_state: RefCell::new(None),
             current_mem_plan: RefCell::new(None),
         }
+    }
+
+    pub fn with_stackify_reach_depth(mut self, reach_depth: u8) -> Self {
+        assert!(
+            (1..=16).contains(&reach_depth),
+            "stackify reach_depth must be in 1..=16"
+        );
+        self.stackify_reach_depth = reach_depth;
+        self
+    }
+
+    pub fn stackify_reach_depth(&self) -> u8 {
+        self.stackify_reach_depth
     }
 
     fn take_prepared_function(&self, func: FuncRef) -> Option<PreparedLowering> {
@@ -1507,7 +1522,13 @@ fn prepare_function(
     let mut dom = DomTree::new();
     dom.compute(&cfg);
 
-    let alloc = StackifyAlloc::for_function(function, &cfg, &dom, &liveness, 16);
+    let alloc = StackifyAlloc::for_function(
+        function,
+        &cfg,
+        &dom,
+        &liveness,
+        backend.stackify_reach_depth,
+    );
     let block_order = dom.rpo().to_owned();
     let persistent_frame_slots = alloc.persistent_frame_slots;
     let transient_frame_slots = alloc.transient_frame_slots;

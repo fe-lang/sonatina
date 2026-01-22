@@ -87,12 +87,14 @@ fn parse_sona(content: &str) -> ParsedModule {
 )]
 fn test_evm(fixture: Fixture<&str>) {
     let parsed = parse_sona(fixture.content());
+    let stackify_reach_depth = stackify_reach_depth_for_fixture(fixture.path());
 
     let backend = EvmBackend::new(Evm::new(sonatina_triple::TargetTriple {
         architecture: Architecture::Evm,
         vendor: Vendor::Ethereum,
         operating_system: OperatingSystem::Evm(sonatina_triple::EvmVersion::Osaka),
-    }));
+    }))
+    .with_stackify_reach_depth(stackify_reach_depth);
 
     let object_name = ObjectName::from("Contract");
     let section_name = SectionName::from("snapshot");
@@ -113,7 +115,7 @@ fn test_evm(fixture: Fixture<&str>) {
             .unwrap();
 
         parsed.module.func_store.view(*fref, |function| {
-            let stackify = stackify_trace_for_fn(function);
+            let stackify = stackify_trace_for_fn(function, stackify_reach_depth);
             let ctx = FuncWriteCtx::with_debug_provider(function, *fref, &parsed.debug);
 
             // Snapshot format:
@@ -302,7 +304,7 @@ impl<W: Write, DB: revm::Database> revm::Inspector<DB> for TestInspector<W> {
     }
 }
 
-fn stackify_trace_for_fn(function: &Function) -> String {
+fn stackify_trace_for_fn(function: &Function, stackify_reach_depth: u8) -> String {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
 
@@ -310,9 +312,37 @@ fn stackify_trace_for_fn(function: &Function) -> String {
     liveness.compute(function, &cfg);
     let mut dom = DomTree::new();
     dom.compute(&cfg);
-    let (_alloc, stackify) =
-        StackifyAlloc::for_function_with_trace(function, &cfg, &dom, &liveness, 16);
+    let (_alloc, stackify) = StackifyAlloc::for_function_with_trace(
+        function,
+        &cfg,
+        &dom,
+        &liveness,
+        stackify_reach_depth,
+    );
     stackify
+}
+
+fn stackify_reach_depth_for_fixture(path: &str) -> u8 {
+    let Some(stem) = std::path::Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+    else {
+        return 16;
+    };
+
+    let Some(pos) = stem.find("reach") else {
+        return 16;
+    };
+
+    let digits: String = stem[pos + "reach".len()..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    if digits.is_empty() {
+        return 16;
+    }
+
+    digits.parse().unwrap_or(16)
 }
 
 fn fmt_evm_stack(stack: &[U256]) -> String {

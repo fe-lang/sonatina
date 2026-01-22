@@ -34,9 +34,9 @@ impl StackifyAlloc {
         cfg: &ControlFlowGraph,
         dom: &DomTree,
         liveness: &Liveness,
-        _stack_size: u8,
+        reach_depth: u8,
     ) -> Self {
-        let builder = StackifyBuilder::new(func, cfg, dom, liveness);
+        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth);
         builder.compute()
     }
 
@@ -47,9 +47,9 @@ impl StackifyAlloc {
         cfg: &ControlFlowGraph,
         dom: &DomTree,
         liveness: &Liveness,
-        _stack_size: u8,
+        reach_depth: u8,
     ) -> (Self, String) {
-        let builder = StackifyBuilder::new(func, cfg, dom, liveness);
+        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth);
         let mut trace = StackifyTrace::default();
         let alloc = builder.compute_with_observer(&mut trace);
         let trace = trace.render(func, &alloc);

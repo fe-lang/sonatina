@@ -226,12 +226,13 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                 &empty_last_use
             };
 
-            clean_dead_stack_prefix(&mut stack, &live_future, &live_out, &mut actions);
+            clean_dead_stack_prefix(ctx.reach, &mut stack, &live_future, &live_out, &mut actions);
 
             if is_normal {
                 improve_reachability_before_operands(
                     ctx.func,
                     &args,
+                    ctx.reach,
                     &mut stack,
                     &live_future,
                     &live_out,
@@ -258,6 +259,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                         improve_reachability_before_operands(
                             ctx.func,
                             &[cond],
+                            ctx.reach,
                             &mut stack,
                             &live_future,
                             &live_out,
@@ -294,6 +296,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                         improve_reachability_before_operands(
                             ctx.func,
                             &[scrutinee],
+                            ctx.reach,
                             &mut stack,
                             &live_future,
                             &live_out,
