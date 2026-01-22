@@ -38,3 +38,81 @@ const SWAP_MAX: usize = 17; // SWAP16 swaps stack[0] and stack[16]
 /// This is a purely local heuristic: we rotate a last-use value up (preserving the current
 /// operand prefix order) so the instruction consumes it, avoiding a `DUP*` + later cleanup.
 const CONSUME_LAST_USE_MAX_SWAPS: usize = 3;
+
+#[cfg(test)]
+mod tests {
+    use super::StackifyAlloc;
+    use crate::{
+        critical_edge::CriticalEdgeSplitter,
+        domtree::DomTree,
+        liveness::{InstLiveness, Liveness},
+        stackalloc::SpillSlotRef,
+    };
+    use sonatina_ir::cfg::ControlFlowGraph;
+    use sonatina_parser::parse_module;
+
+    #[test]
+    fn spill_slots_split_by_call_liveness() {
+        const SRC: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/test_files/evm/spill.sntn"
+        ));
+
+        let parsed = parse_module(SRC).unwrap();
+        let spill_func = parsed
+            .debug
+            .func_order
+            .iter()
+            .copied()
+            .find(|&f| parsed.module.ctx.func_sig(f, |sig| sig.name() == "spill"))
+            .expect("missing spill func");
+
+        parsed.module.func_store.modify(spill_func, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+
+            let mut splitter = CriticalEdgeSplitter::new();
+            splitter.run(function, &mut cfg);
+
+            let mut liveness = Liveness::new();
+            liveness.compute(function, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let alloc = StackifyAlloc::for_function(function, &cfg, &dom, &liveness, 16);
+
+            let mut inst_live = InstLiveness::new();
+            inst_live.compute(function, &cfg, &liveness);
+            let call_live = inst_live.call_live_values(function);
+            assert!(
+                !call_live.is_empty(),
+                "expected some values live-out at calls"
+            );
+
+            let mut saw_persistent = false;
+            let mut saw_any = false;
+
+            for (v, slot) in alloc.slot_of_value.iter() {
+                let Some(slot) = *slot else {
+                    continue;
+                };
+                saw_any = true;
+                let expect_persistent = call_live.contains(v);
+                match (expect_persistent, slot) {
+                    (true, SpillSlotRef::Persistent(_)) => saw_persistent = true,
+                    (false, SpillSlotRef::Transient(_)) => {}
+                    (true, SpillSlotRef::Transient(_)) => {
+                        panic!("expected spilled value {v:?} to be persistent");
+                    }
+                    (false, SpillSlotRef::Persistent(_)) => {
+                        panic!("expected spilled value {v:?} to be transient");
+                    }
+                }
+            }
+
+            assert!(saw_any, "expected at least one spilled value");
+            assert!(saw_persistent, "expected at least one persistent spill");
+        });
+    }
+}

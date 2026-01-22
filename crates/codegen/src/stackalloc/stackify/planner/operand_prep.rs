@@ -404,6 +404,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             let mem = MemPlan::new(
                 self.mem.spill_set(),
                 &mut sim_spill_requests,
+                &self.ctx.call_live_values,
                 &mut sim_free_slots,
                 &mut sim_slots,
                 self.mem.liveness(),

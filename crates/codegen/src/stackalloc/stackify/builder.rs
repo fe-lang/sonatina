@@ -3,13 +3,19 @@ use smallvec::SmallVec;
 use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
 use std::collections::BTreeMap;
 
-use crate::{bitset::BitSet, cfg_scc::CfgSccAnalysis, domtree::DomTree, liveness::Liveness};
+use crate::{
+    bitset::BitSet,
+    cfg_scc::CfgSccAnalysis,
+    domtree::DomTree,
+    liveness::{InstLiveness, Liveness},
+    stackalloc::SpillSlotRef,
+};
 
 use super::{
     alloc::StackifyAlloc,
     flow_templates::solve_templates_from_flow,
     iteration::IterationPlanner,
-    slots::{FreeSlots, SlotState},
+    slots::{FreeSlotPools, SpillSlotPools, TRANSIENT_SLOT_TAG},
     spill::SpillSet,
     sym_stack::SymStack,
     templates::{
@@ -31,6 +37,7 @@ pub(super) struct StackifyContext<'a> {
     pub(super) cfg: &'a ControlFlowGraph,
     pub(super) dom: &'a DomTree,
     pub(super) liveness: &'a Liveness,
+    pub(super) call_live_values: BitSet<ValueId>,
     pub(super) entry: BlockId,
     pub(super) scc: CfgSccAnalysis,
     pub(super) dom_depth: SecondaryMap<BlockId, u32>,
@@ -72,11 +79,16 @@ impl<'a> StackifyBuilder<'a> {
         let mut scc = CfgSccAnalysis::new();
         scc.compute(self.cfg);
 
+        let mut inst_liveness = InstLiveness::default();
+        inst_liveness.compute(self.func, self.cfg, self.liveness);
+        let call_live_values = inst_liveness.call_live_values(self.func);
+
         let ctx = StackifyContext {
             func: self.func,
             cfg: self.cfg,
             dom: self.dom,
             liveness: self.liveness,
+            call_live_values,
             entry,
             scc,
             dom_depth: compute_dom_depth(self.dom, entry),
@@ -96,7 +108,7 @@ impl<'a> StackifyBuilder<'a> {
         // remove it from transfer regions (`T(B)` excludes `spill_set`), so future iterations
         // can rely on loads being correct.
         let mut spill_set: BitSet<ValueId> = BitSet::default();
-        let mut slots: SlotState = SlotState::default();
+        let mut slots: SpillSlotPools = SpillSlotPools::default();
 
         loop {
             let checkpoint = observer.checkpoint();
@@ -105,8 +117,18 @@ impl<'a> StackifyBuilder<'a> {
                 Self::plan_iteration(&ctx, observer, SpillSet::new(&spill_set), &mut slots);
 
             if spill_requests.is_subset(&spill_set) {
-                alloc.frame_size_slots = slots.frame_size_slots();
-                alloc.slot_of = slots.take_slot_map();
+                let persistent_frame_slots = slots.persistent.frame_size_slots();
+                let transient_frame_slots = slots.transient.frame_size_slots();
+
+                lower_encoded_frame_slots(&mut alloc, persistent_frame_slots);
+
+                alloc.persistent_frame_slots = persistent_frame_slots;
+                alloc.transient_frame_slots = transient_frame_slots;
+
+                alloc.slot_of_value = merge_slot_maps(
+                    slots.persistent.take_slot_map(),
+                    slots.transient.take_slot_map(),
+                );
                 return alloc;
             }
 
@@ -119,14 +141,26 @@ impl<'a> StackifyBuilder<'a> {
         ctx: &StackifyContext<'_>,
         observer: &mut O,
         spill: SpillSet<'_>,
-        slots: &mut SlotState,
+        slots: &mut SpillSlotPools,
     ) -> (StackifyAlloc, BitSet<ValueId>) {
         // Function arguments that are in `spill_set` must have a stable slot from function entry.
         // We allocate these up-front (fresh; no reuse possible before entry).
-        let mut arg_free_slots: FreeSlots = FreeSlots::default();
+        let mut arg_free_slots: FreeSlotPools = FreeSlotPools::default();
         for &arg in ctx.func.arg_values.iter() {
             if let Some(spilled) = spill.spilled(arg) {
-                let _ = slots.ensure_slot(spilled, ctx.liveness, &mut arg_free_slots);
+                if ctx.call_live_values.contains(arg) {
+                    let _ = slots.persistent.ensure_slot(
+                        spilled,
+                        ctx.liveness,
+                        &mut arg_free_slots.persistent,
+                    );
+                } else {
+                    let _ = slots.transient.ensure_slot(
+                        spilled,
+                        ctx.liveness,
+                        &mut arg_free_slots.transient,
+                    );
+                }
             }
         }
 
@@ -140,8 +174,9 @@ impl<'a> StackifyBuilder<'a> {
             pre_actions: SecondaryMap::new(),
             post_actions: SecondaryMap::new(),
             brtable_actions: BTreeMap::new(),
-            slot_of: SecondaryMap::new(),
-            frame_size_slots: 0,
+            slot_of_value: SecondaryMap::new(),
+            persistent_frame_slots: 0,
+            transient_frame_slots: 0,
         };
 
         let mut spill_requests: BitSet<ValueId> = BitSet::default();
@@ -170,5 +205,56 @@ impl<'a> StackifyBuilder<'a> {
         planner.plan_blocks();
 
         (alloc, spill_requests)
+    }
+}
+
+fn merge_slot_maps(
+    persistent: SecondaryMap<ValueId, Option<u32>>,
+    transient: SecondaryMap<ValueId, Option<u32>>,
+) -> SecondaryMap<ValueId, Option<SpillSlotRef>> {
+    let mut out: SecondaryMap<ValueId, Option<SpillSlotRef>> = SecondaryMap::new();
+
+    for (v, slot) in persistent.iter() {
+        if let Some(slot) = *slot {
+            debug_assert!(out[v].is_none(), "spill slot already assigned");
+            out[v] = Some(SpillSlotRef::Persistent(slot));
+        }
+    }
+    for (v, slot) in transient.iter() {
+        if let Some(slot) = *slot {
+            debug_assert!(out[v].is_none(), "spill slot already assigned");
+            out[v] = Some(SpillSlotRef::Transient(slot));
+        }
+    }
+
+    out
+}
+
+fn lower_encoded_frame_slots(alloc: &mut StackifyAlloc, persistent_frame_slots: u32) {
+    fn lower_actions(actions: &mut crate::stackalloc::Actions, persistent_frame_slots: u32) {
+        for action in actions.iter_mut() {
+            match action {
+                crate::stackalloc::Action::MemLoadFrameSlot(slot)
+                | crate::stackalloc::Action::MemStoreFrameSlot(slot) => {
+                    if *slot & TRANSIENT_SLOT_TAG != 0 {
+                        let local = *slot & !TRANSIENT_SLOT_TAG;
+                        *slot = persistent_frame_slots
+                            .checked_add(local)
+                            .expect("frame slot offset overflow");
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    for (_, actions) in alloc.pre_actions.iter_mut() {
+        lower_actions(actions, persistent_frame_slots);
+    }
+    for (_, actions) in alloc.post_actions.iter_mut() {
+        lower_actions(actions, persistent_frame_slots);
+    }
+    for actions in alloc.brtable_actions.values_mut() {
+        lower_actions(actions, persistent_frame_slots);
     }
 }

@@ -6,14 +6,16 @@ use crate::{bitset::BitSet, liveness::Liveness};
 
 use super::spill::SpilledValueId;
 
+pub(super) const TRANSIENT_SLOT_TAG: u32 = 1 << 31;
+
 #[derive(Default, Clone)]
-pub(super) struct SlotState {
+pub(super) struct SlotPool {
     slot_of: SecondaryMap<ValueId, Option<u32>>,
     next_slot: u32,
     slot_live_blocks: Vec<BitSet<BlockId>>,
 }
 
-impl SlotState {
+impl SlotPool {
     pub(super) fn frame_size_slots(&self) -> u32 {
         self.next_slot
     }
@@ -95,6 +97,18 @@ impl SlotState {
             free_slots.release(slot);
         }
     }
+}
+
+#[derive(Default, Clone)]
+pub(super) struct FreeSlotPools {
+    pub(super) persistent: FreeSlots,
+    pub(super) transient: FreeSlots,
+}
+
+#[derive(Default, Clone)]
+pub(super) struct SpillSlotPools {
+    pub(super) persistent: SlotPool,
+    pub(super) transient: SlotPool,
 }
 
 /// Per-block free list for frame slots.

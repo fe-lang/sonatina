@@ -39,3 +39,9 @@ pub enum Action {
     MemStoreAbs(u32),
     MemStoreFrameSlot(u32),
 }
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SpillSlotRef {
+    Persistent(u32),
+    Transient(u32),
+}
