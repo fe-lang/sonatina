@@ -2,10 +2,7 @@ use sonatina_ir::ValueId;
 use std::collections::BTreeMap;
 
 use super::{
-    super::{
-        DUP_MAX, SWAP_MAX,
-        sym_stack::{StackItem, SymStack},
-    },
+    super::sym_stack::{StackItem, SymStack},
     Planner,
 };
 
@@ -117,12 +114,12 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     }
 
     fn try_normalize_to_exact(&mut self, desired: &[ValueId]) -> bool {
-        if desired.len() > SWAP_MAX {
+        if desired.len() > self.ctx.reach.swap_max {
             return false;
         }
 
         let mut limit = self.stack.len_above_func_ret();
-        if limit > SWAP_MAX {
+        if limit > self.ctx.reach.swap_max {
             return false;
         }
 
@@ -163,7 +160,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
 
         // 2) Materialize any missing required multiplicities (DUP, PUSH, or MLOAD).
         limit = self.stack.len_above_func_ret();
-        if limit > SWAP_MAX {
+        if limit > self.ctx.reach.swap_max {
             return false;
         }
 
@@ -189,7 +186,8 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                         .value_imm(v)
                         .expect("imm value missing payload");
                     self.stack.push_imm(v, imm, self.actions);
-                } else if let Some(pos) = self.stack.find_reachable_value(v, DUP_MAX) {
+                } else if let Some(pos) = self.stack.find_reachable_value(v, self.ctx.reach.dup_max)
+                {
                     self.stack.dup(pos, &mut *self.actions);
                 } else {
                     self.push_value_from_spill_slot_or_mark(v, v);
@@ -266,7 +264,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 break;
             }
             let between = barrier_pos.saturating_sub(1);
-            let swap_depth = between.min(DUP_MAX);
+            let swap_depth = between.min(self.ctx.reach.dup_max);
             debug_assert!(swap_depth >= 1);
             self.stack.swap(swap_depth, self.actions);
             self.stack.pop_n(swap_depth, self.actions);

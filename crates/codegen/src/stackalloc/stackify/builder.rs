@@ -25,11 +25,33 @@ use super::{
     trace::{NullObserver, StackifyObserver},
 };
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct StackifyReachability {
+    pub(super) dup_max: usize,
+    pub(super) swap_max: usize,
+}
+
+impl StackifyReachability {
+    pub(super) fn new(reach_depth: u8) -> Self {
+        assert!(
+            (1..=super::DUP_MAX as u8).contains(&reach_depth),
+            "stackify reach_depth must be in 1..={}",
+            super::DUP_MAX
+        );
+
+        let dup_max = reach_depth as usize;
+        let swap_max = (dup_max + 1).min(super::SWAP_MAX);
+
+        Self { dup_max, swap_max }
+    }
+}
+
 pub(super) struct StackifyBuilder<'a> {
     func: &'a Function,
     cfg: &'a ControlFlowGraph,
     dom: &'a DomTree,
     liveness: &'a Liveness,
+    reach: StackifyReachability,
 }
 
 pub(super) struct StackifyContext<'a> {
@@ -45,6 +67,7 @@ pub(super) struct StackifyContext<'a> {
     pub(super) phi_results: SecondaryMap<BlockId, SmallVec<[ValueId; 4]>>,
     pub(super) phi_out_sources: SecondaryMap<BlockId, BitSet<ValueId>>,
     pub(super) has_internal_return: bool,
+    pub(super) reach: StackifyReachability,
 }
 
 impl<'a> StackifyBuilder<'a> {
@@ -53,12 +76,14 @@ impl<'a> StackifyBuilder<'a> {
         cfg: &'a ControlFlowGraph,
         dom: &'a DomTree,
         liveness: &'a Liveness,
+        reach_depth: u8,
     ) -> Self {
         Self {
             func,
             cfg,
             dom,
             liveness,
+            reach: StackifyReachability::new(reach_depth),
         }
     }
 
@@ -97,6 +122,7 @@ impl<'a> StackifyBuilder<'a> {
             phi_out_sources: compute_phi_out_sources(self.func, self.cfg),
             // Internal-return functions expect a caller-provided return address below their args.
             has_internal_return: function_has_internal_return(self.func),
+            reach: self.reach,
         };
 
         // `spill_set` is discovered via a monotone fixed point:
