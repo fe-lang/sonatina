@@ -25,13 +25,15 @@ use sonatina_ir::{
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
+    object::Directive,
     types::CompoundType,
 };
 use sonatina_triple::{EvmVersion, OperatingSystem};
 
 use memory_plan::{
-    AllocaClass, DYN_FP_SLOT, DYN_SP_SLOT, FuncLocalMemInfo, FuncMemPlan, MemScheme,
-    ProgramMemoryPlan, STATIC_BASE, StackObjectPlan, WORD_BYTES, compute_program_memory_plan,
+    AllocaClass, DYN_FP_SLOT, DYN_SP_SLOT, EntryMemInitPlan, FREE_PTR_SLOT, FuncLocalMemInfo,
+    FuncMemPlan, MemScheme, ProgramMemoryPlan, STATIC_BASE, StackObjectPlan, WORD_BYTES, ZERO_SLOT,
+    compute_program_memory_plan,
 };
 use ptr_escape::{PtrEscapeSummary, compute_ptr_escape_summaries};
 
@@ -46,6 +48,19 @@ struct PreparedSection {
     plan: ProgramMemoryPlan,
     allocs: FxHashMap<FuncRef, StackifyAlloc>,
     block_orders: FxHashMap<FuncRef, Vec<BlockId>>,
+}
+
+fn section_entry_func(module: &Module, section_ctx: &SectionLoweringCtx<'_>) -> Option<FuncRef> {
+    let object = module.objects.get(section_ctx.object.0.as_str())?;
+    let section = object
+        .sections
+        .iter()
+        .find(|s| s.name == *section_ctx.section)?;
+
+    section.directives.iter().find_map(|d| match d {
+        Directive::Entry(func) => Some(*func),
+        _ => None,
+    })
 }
 
 struct PreparedFunction {
@@ -156,8 +171,6 @@ impl LowerBackend for EvmBackend {
         funcs: &[FuncRef],
         section_ctx: &SectionLoweringCtx<'_>,
     ) {
-        let _ = section_ctx;
-
         let mut allocs: FxHashMap<FuncRef, StackifyAlloc> = FxHashMap::default();
         let mut block_orders: FxHashMap<FuncRef, Vec<BlockId>> = FxHashMap::default();
         let mut local_mem: FxHashMap<FuncRef, FuncLocalMemInfo> = FxHashMap::default();
@@ -185,6 +198,45 @@ impl LowerBackend for EvmBackend {
             if let Some(mem_plan) = plan.funcs.get_mut(&func) {
                 mem_plan.malloc_future_static_words = bounds;
             }
+        }
+
+        let section_entry = section_entry_func(module, section_ctx);
+        let uses_malloc = funcs.iter().any(|&func| {
+            module.func_store.view(func, |function| {
+                for block in function.layout.iter_block() {
+                    for inst in function.layout.iter_inst(block) {
+                        if matches!(
+                            self.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                            EvmInstKind::EvmMalloc(_)
+                        ) {
+                            return true;
+                        }
+                    }
+                }
+                false
+            })
+        });
+
+        let uses_dynamic_frame = funcs.iter().any(|&func| {
+            let Some(mem_plan) = plan.funcs.get(&func) else {
+                return false;
+            };
+            if !matches!(mem_plan.scheme, MemScheme::DynamicFrame) {
+                return false;
+            }
+
+            let spill_slots = allocs.get(&func).map(|a| a.frame_size_slots()).unwrap_or(0);
+            spill_slots != 0 || mem_plan.alloca_words != 0
+        });
+
+        if let Some(entry) = section_entry
+            && (uses_malloc || uses_dynamic_frame)
+            && let Some(mem_plan) = plan.funcs.get_mut(&entry)
+        {
+            mem_plan.entry_mem_init = Some(EntryMemInitPlan {
+                heap_base: plan.dyn_base,
+                init_dynamic_frame: uses_dynamic_frame,
+            });
         }
 
         *self.section_state.borrow_mut() = Some(PreparedSection {
@@ -220,6 +272,7 @@ impl LowerBackend for EvmBackend {
                 alloca_words: prepared.local_mem.alloca_words,
                 persistent_alloca_words: prepared.local_mem.persistent_alloca_words,
                 malloc_future_static_words: FxHashMap::default(),
+                entry_mem_init: None,
             },
         };
         self.lower_prepared_function(module, func, lowering)
@@ -264,6 +317,14 @@ impl LowerBackend for EvmBackend {
         alloc: &mut dyn Allocator,
         function: &Function,
     ) {
+        if let Some(init) = self
+            .current_mem_plan
+            .borrow()
+            .as_ref()
+            .and_then(|p| p.entry_mem_init)
+        {
+            emit_entry_mem_init(ctx, init);
+        }
         enter_frame(ctx, alloc.frame_size_slots(), self.dyn_base());
         perform_actions(ctx, &alloc.enter_function(function));
     }
@@ -773,7 +834,7 @@ impl LowerBackend for EvmBackend {
                 ctx.push(OpCode::MUL);
 
                 // heap_end = mload(0x40)
-                push_bytes(ctx, &[0x40]);
+                push_bytes(ctx, &[FREE_PTR_SLOT]);
                 ctx.push(OpCode::MLOAD);
 
                 // sp = mload(DYN_SP_SLOT)
@@ -791,7 +852,7 @@ impl LowerBackend for EvmBackend {
                 ctx.push(OpCode::DUP1);
                 ctx.push(OpCode::SWAP2);
                 ctx.push(OpCode::ADD);
-                push_bytes(ctx, &[0x40]);
+                push_bytes(ctx, &[FREE_PTR_SLOT]);
                 ctx.push(OpCode::MSTORE);
 
                 perform_actions(ctx, &alloc.write(insn, result));
@@ -1233,6 +1294,30 @@ fn emit_max_top_two(ctx: &mut Lower<OpCode>) {
     ctx.add_label_reference(end_push, Label::Insn(end));
 }
 
+fn emit_entry_mem_init(ctx: &mut Lower<OpCode>, init: EntryMemInitPlan) {
+    // mstore(ZERO_SLOT, 0)
+    ctx.push(OpCode::PUSH0);
+    push_bytes(ctx, &[ZERO_SLOT]);
+    ctx.push(OpCode::MSTORE);
+
+    // mstore(FREE_PTR_SLOT, HEAP_BASE_GLOBAL)
+    push_bytes(ctx, &u32_to_be(init.heap_base));
+    push_bytes(ctx, &[FREE_PTR_SLOT]);
+    ctx.push(OpCode::MSTORE);
+
+    if init.init_dynamic_frame {
+        // mstore(DYN_SP_SLOT, HEAP_BASE_GLOBAL)
+        push_bytes(ctx, &u32_to_be(init.heap_base));
+        push_bytes(ctx, &[DYN_SP_SLOT]);
+        ctx.push(OpCode::MSTORE);
+
+        // mstore(DYN_FP_SLOT, 0)
+        ctx.push(OpCode::PUSH0);
+        push_bytes(ctx, &[DYN_FP_SLOT]);
+        ctx.push(OpCode::MSTORE);
+    }
+}
+
 fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
     if frame_slots == 0 {
         return;
@@ -1264,7 +1349,7 @@ fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
     ctx.add_label_reference(skip_init_push, Label::Insn(skip_init));
 
     // Clamp dynamic stack pointer above any heap allocations.
-    push_bytes(ctx, &[0x40]);
+    push_bytes(ctx, &[FREE_PTR_SLOT]);
     ctx.push(OpCode::MLOAD);
     emit_max_top_two(ctx);
 
