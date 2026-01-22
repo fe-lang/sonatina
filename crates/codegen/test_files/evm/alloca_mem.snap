@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 178
 expression: "String::from_utf8(v).unwrap()"
 input_file: test_files/evm/alloca_mem.sntn
 ---
@@ -89,12 +88,12 @@ main:
     DUP2  // mstore v0 v2 i256;
     MSTORE
     MLOAD  // v3.i256 = mload v0 i256;
-    PUSH1 0xe0 (224)  // v4.*i256 = alloca i256;
+    PUSH1 0xc0 (192)  // v4.*i256 = alloca i256;
     PUSH1 0x1 (1)  // mstore v4 1.i256 i256;
     DUP2
     MSTORE
     MLOAD  // v5.i256 = mload v4 i256;
-    PUSH1 0xe0 (224)  // v6.*i256 = alloca i256;
+    PUSH1 0xc0 (192)  // v6.*i256 = alloca i256;
     PUSH1 0x2 (2)  // mstore v6 2.i256 i256;
     DUP2
     MSTORE
@@ -124,10 +123,10 @@ entry:
 ---------------
 
 // section runtime
-0x5b6006600d565b5f5260205ff35b60c0600b8152805150601c6033565b81525160e0600181525160e0600281525191010190565b60079056
+0x5b6006600d565b5f5260205ff35b60c0600b8152805150601c6033565b81525160c0600181525160c0600281525191010190565b60079056
 
 
-Success { reason: Return, gas_used: 21216, gas_refunded: 0, logs: [], output: Call(0x000000000000000000000000000000000000000000000000000000000000000a) }
+Success { reason: Return, gas_used: 21213, gas_refunded: 0, logs: [], output: Call(0x000000000000000000000000000000000000000000000000000000000000000a) }
 
     pc  opcode            input (stack grows to the right)
      0  5b  JUMPDEST      []
@@ -153,16 +152,16 @@ Success { reason: Return, gas_used: 21216, gas_refunded: 0, logs: [], output: Ca
     29  81  DUP2          [0x6, 0xc0, 0x7]
     30  52  MSTORE        [0x6, 0xc0, 0x7, 0xc0]
     31  51  MLOAD         [0x6, 0xc0]
-    32  60  PUSH1         0xe0  [0x6, 0x7]
-    34  60  PUSH1         0x01  [0x6, 0x7, 0xe0]
-    36  81  DUP2          [0x6, 0x7, 0xe0, 0x1]
-    37  52  MSTORE        [0x6, 0x7, 0xe0, 0x1, 0xe0]
-    38  51  MLOAD         [0x6, 0x7, 0xe0]
-    39  60  PUSH1         0xe0  [0x6, 0x7, 0x1]
-    41  60  PUSH1         0x02  [0x6, 0x7, 0x1, 0xe0]
-    43  81  DUP2          [0x6, 0x7, 0x1, 0xe0, 0x2]
-    44  52  MSTORE        [0x6, 0x7, 0x1, 0xe0, 0x2, 0xe0]
-    45  51  MLOAD         [0x6, 0x7, 0x1, 0xe0]
+    32  60  PUSH1         0xc0  [0x6, 0x7]
+    34  60  PUSH1         0x01  [0x6, 0x7, 0xc0]
+    36  81  DUP2          [0x6, 0x7, 0xc0, 0x1]
+    37  52  MSTORE        [0x6, 0x7, 0xc0, 0x1, 0xc0]
+    38  51  MLOAD         [0x6, 0x7, 0xc0]
+    39  60  PUSH1         0xc0  [0x6, 0x7, 0x1]
+    41  60  PUSH1         0x02  [0x6, 0x7, 0x1, 0xc0]
+    43  81  DUP2          [0x6, 0x7, 0x1, 0xc0, 0x2]
+    44  52  MSTORE        [0x6, 0x7, 0x1, 0xc0, 0x2, 0xc0]
+    45  51  MLOAD         [0x6, 0x7, 0x1, 0xc0]
     46  91  SWAP2         [0x6, 0x7, 0x1, 0x2]
     47  01  ADD           [0x6, 0x2, 0x1, 0x7]
     48  01  ADD           [0x6, 0x2, 0x8]
