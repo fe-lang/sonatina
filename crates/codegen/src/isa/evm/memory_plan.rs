@@ -20,8 +20,21 @@ pub struct ProgramMemoryPlan {
 #[derive(Clone, Debug)]
 pub struct FuncMemPlan {
     pub scheme: MemScheme,
-    pub alloca: FxHashMap<InstId, u32>,
+    pub alloca: FxHashMap<InstId, StackObjectPlan>,
     pub alloca_words: u32,
+    pub persistent_alloca_words: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AllocaClass {
+    Persistent,
+    Transient,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StackObjectPlan {
+    pub class: AllocaClass,
+    pub offset_words: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -41,13 +54,14 @@ pub struct FuncLocalMemInfo {
     pub persistent_words: u32,
     pub transient_words: u32,
     pub alloca_words: u32,
+    pub persistent_alloca_words: u32,
 }
 
 pub fn compute_program_memory_plan(
     module: &Module,
     funcs: &[FuncRef],
     local_mem: &FxHashMap<FuncRef, FuncLocalMemInfo>,
-    alloca_offsets: &FxHashMap<FuncRef, FxHashMap<InstId, u32>>,
+    alloca_offsets: &FxHashMap<FuncRef, FxHashMap<InstId, StackObjectPlan>>,
 ) -> ProgramMemoryPlan {
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
     let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
@@ -110,6 +124,7 @@ pub fn compute_program_memory_plan(
                 scheme,
                 alloca,
                 alloca_words: mem.alloca_words,
+                persistent_alloca_words: mem.persistent_alloca_words,
             },
         );
     }
@@ -327,7 +342,8 @@ mod tests {
         let funcs: Vec<FuncRef> = parsed.module.funcs();
 
         let mut local_mem: FxHashMap<FuncRef, FuncLocalMemInfo> = FxHashMap::default();
-        let mut alloca_offsets: FxHashMap<FuncRef, FxHashMap<InstId, u32>> = FxHashMap::default();
+        let mut alloca_offsets: FxHashMap<FuncRef, FxHashMap<InstId, StackObjectPlan>> =
+            FxHashMap::default();
         for f in &funcs {
             local_mem.insert(
                 *f,
@@ -335,6 +351,7 @@ mod tests {
                     persistent_words: 1,
                     transient_words: 0,
                     alloca_words: 0,
+                    persistent_alloca_words: 0,
                 },
             );
             alloca_offsets.insert(*f, FxHashMap::default());

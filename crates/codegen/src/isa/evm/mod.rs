@@ -1,3 +1,4 @@
+mod alloca_plan;
 mod memory_plan;
 pub mod opcode;
 mod ptr_escape;
@@ -9,7 +10,7 @@ use std::cell::RefCell;
 use crate::{
     critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
-    liveness::Liveness,
+    liveness::{InstLiveness, Liveness},
     machinst::{
         lower::{FixupUpdate, Lower, LowerBackend, LoweredFunction, SectionLoweringCtx},
         vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeInst},
@@ -28,8 +29,8 @@ use sonatina_ir::{
 use sonatina_triple::{EvmVersion, OperatingSystem};
 
 use memory_plan::{
-    DYN_FP_SLOT, DYN_SP_SLOT, FuncLocalMemInfo, FuncMemPlan, MemScheme, ProgramMemoryPlan,
-    STATIC_BASE, WORD_BYTES, compute_program_memory_plan,
+    AllocaClass, DYN_FP_SLOT, DYN_SP_SLOT, FuncLocalMemInfo, FuncMemPlan, MemScheme,
+    ProgramMemoryPlan, STATIC_BASE, StackObjectPlan, WORD_BYTES, compute_program_memory_plan,
 };
 use ptr_escape::{PtrEscapeSummary, compute_ptr_escape_summaries};
 
@@ -42,7 +43,6 @@ pub enum PushWidthPolicy {
 
 struct PreparedSection {
     plan: ProgramMemoryPlan,
-    ptr_escape: FxHashMap<FuncRef, PtrEscapeSummary>,
     allocs: FxHashMap<FuncRef, StackifyAlloc>,
     block_orders: FxHashMap<FuncRef, Vec<BlockId>>,
 }
@@ -51,7 +51,7 @@ struct PreparedFunction {
     alloc: StackifyAlloc,
     block_order: Vec<BlockId>,
     local_mem: FuncLocalMemInfo,
-    alloca_offsets: FxHashMap<InstId, u32>,
+    alloca_plan: FxHashMap<InstId, StackObjectPlan>,
 }
 
 struct PreparedLowering {
@@ -160,26 +160,26 @@ impl LowerBackend for EvmBackend {
         let mut allocs: FxHashMap<FuncRef, StackifyAlloc> = FxHashMap::default();
         let mut block_orders: FxHashMap<FuncRef, Vec<BlockId>> = FxHashMap::default();
         let mut local_mem: FxHashMap<FuncRef, FuncLocalMemInfo> = FxHashMap::default();
-        let mut alloca_offsets: FxHashMap<FuncRef, FxHashMap<InstId, u32>> = FxHashMap::default();
+        let mut alloca_plan: FxHashMap<FuncRef, FxHashMap<InstId, StackObjectPlan>> =
+            FxHashMap::default();
+
+        let ptr_escape = compute_ptr_escape_summaries(module, funcs, &self.isa);
 
         for &func in funcs {
             let prepared = module.func_store.modify(func, |function| {
-                prepare_function(function, &module.ctx, self)
+                prepare_function(func, function, &module.ctx, self, &ptr_escape)
             });
 
             local_mem.insert(func, prepared.local_mem);
-            alloca_offsets.insert(func, prepared.alloca_offsets);
+            alloca_plan.insert(func, prepared.alloca_plan);
             allocs.insert(func, prepared.alloc);
             block_orders.insert(func, prepared.block_order);
         }
 
-        let ptr_escape = compute_ptr_escape_summaries(module, funcs, &self.isa);
-
-        let plan = compute_program_memory_plan(module, funcs, &local_mem, &alloca_offsets);
+        let plan = compute_program_memory_plan(module, funcs, &local_mem, &alloca_plan);
 
         *self.section_state.borrow_mut() = Some(PreparedSection {
             plan,
-            ptr_escape,
             allocs,
             block_orders,
         });
@@ -197,16 +197,19 @@ impl LowerBackend for EvmBackend {
             return self.lower_prepared_function(module, func, prepared);
         }
 
+        let ptr_escape =
+            compute_ptr_escape_summaries(module, std::slice::from_ref(&func), &self.isa);
         let prepared = module.func_store.modify(func, |function| {
-            prepare_function(function, &module.ctx, self)
+            prepare_function(func, function, &module.ctx, self, &ptr_escape)
         });
         let lowering = PreparedLowering {
             alloc: prepared.alloc,
             block_order: prepared.block_order,
             mem_plan: FuncMemPlan {
                 scheme: MemScheme::DynamicFrame,
-                alloca: prepared.alloca_offsets,
+                alloca: prepared.alloca_plan,
                 alloca_words: prepared.local_mem.alloca_words,
+                persistent_alloca_words: prepared.local_mem.persistent_alloca_words,
             },
         };
         self.lower_prepared_function(module, func, lowering)
@@ -595,7 +598,10 @@ impl LowerBackend for EvmBackend {
                     .as_ref()
                     .expect("missing memory plan during lowering");
 
-                let alloca_offset = *mem_plan.alloca.get(&insn).expect("missing alloca offset");
+                let StackObjectPlan {
+                    class,
+                    offset_words: alloca_offset,
+                } = *mem_plan.alloca.get(&insn).expect("missing alloca plan");
 
                 perform_actions(ctx, &alloc.read(insn, &args));
 
@@ -603,14 +609,21 @@ impl LowerBackend for EvmBackend {
                     MemScheme::StaticTree(plan) => {
                         let persistent_spills = plan
                             .persistent_words
-                            .checked_sub(mem_plan.alloca_words)
+                            .checked_sub(mem_plan.persistent_alloca_words)
                             .expect("persistent spill words underflow");
 
-                        let addr_words = plan
-                            .base_words
-                            .checked_add(persistent_spills)
-                            .and_then(|w| w.checked_add(alloca_offset))
-                            .expect("alloca address words overflow");
+                        let addr_words = match class {
+                            AllocaClass::Persistent => plan
+                                .base_words
+                                .checked_add(persistent_spills)
+                                .and_then(|w| w.checked_add(alloca_offset))
+                                .expect("alloca address words overflow"),
+                            AllocaClass::Transient => plan
+                                .base_words
+                                .checked_add(plan.persistent_words)
+                                .and_then(|w| w.checked_add(alloca_offset))
+                                .expect("alloca address words overflow"),
+                        };
 
                         let addr_bytes = STATIC_BASE
                             .checked_add(
@@ -627,8 +640,16 @@ impl LowerBackend for EvmBackend {
                         let spill_slots = frame_slots
                             .checked_sub(mem_plan.alloca_words)
                             .expect("alloca words exceed dynamic frame size");
+                        let offset_words = match class {
+                            AllocaClass::Persistent => alloca_offset,
+                            AllocaClass::Transient => mem_plan
+                                .persistent_alloca_words
+                                .checked_add(alloca_offset)
+                                .expect("dynamic alloca offset overflow"),
+                        };
+
                         let addr_words = spill_slots
-                            .checked_add(alloca_offset)
+                            .checked_add(offset_words)
                             .expect("alloca address words overflow");
                         let addr_bytes = addr_words
                             .checked_mul(WORD_BYTES)
@@ -802,7 +823,7 @@ impl PlannedAlloc {
         let alloca_words = self.mem_plan.alloca_words;
         let persistent_spills = plan
             .persistent_words
-            .checked_sub(alloca_words)
+            .checked_sub(self.mem_plan.persistent_alloca_words)
             .expect("persistent spill words underflow");
 
         for action in actions.iter_mut() {
@@ -1284,9 +1305,11 @@ fn push_op(bytes: usize) -> OpCode {
 }
 
 fn prepare_function(
+    func_ref: FuncRef,
     function: &mut Function,
     module: &ModuleCtx,
     backend: &EvmBackend,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
 ) -> PreparedFunction {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
@@ -1302,56 +1325,46 @@ fn prepare_function(
 
     let alloc = StackifyAlloc::for_function(function, &cfg, &dom, &liveness, 16);
     let block_order = dom.rpo().to_owned();
+    let persistent_frame_slots = alloc.persistent_frame_slots;
+    let transient_frame_slots = alloc.transient_frame_slots;
 
-    let (alloca_offsets, alloca_words) = compute_alloca_layout(function, module, backend);
+    let mut inst_liveness = InstLiveness::new();
+    inst_liveness.compute(function, &cfg, &liveness);
+    let call_live_values = inst_liveness.call_live_values(function);
+
+    let alloca_layout = alloca_plan::compute_stack_alloca_layout(
+        func_ref,
+        function,
+        module,
+        &backend.isa,
+        ptr_escape,
+        &call_live_values,
+        &block_order,
+    );
+
+    let persistent_alloca_words = alloca_layout.persistent_words;
+    let transient_alloca_words = alloca_layout.transient_words;
+    let alloca_words = persistent_alloca_words
+        .checked_add(transient_alloca_words)
+        .expect("alloca words overflow");
 
     let local_mem = FuncLocalMemInfo {
-        persistent_words: alloc
-            .persistent_frame_slots
-            .checked_add(alloca_words)
+        persistent_words: persistent_frame_slots
+            .checked_add(persistent_alloca_words)
             .expect("persistent words overflow"),
-        transient_words: alloc.transient_frame_slots,
+        transient_words: transient_frame_slots
+            .checked_add(transient_alloca_words)
+            .expect("transient words overflow"),
         alloca_words,
+        persistent_alloca_words,
     };
 
     PreparedFunction {
         alloc,
         block_order,
         local_mem,
-        alloca_offsets,
+        alloca_plan: alloca_layout.plan,
     }
-}
-
-fn compute_alloca_layout(
-    function: &Function,
-    module: &ModuleCtx,
-    backend: &EvmBackend,
-) -> (FxHashMap<InstId, u32>, u32) {
-    let mut offsets: FxHashMap<InstId, u32> = FxHashMap::default();
-    let mut next_offset_words: u32 = 0;
-
-    for block in function.layout.iter_block() {
-        for inst in function.layout.iter_inst(block) {
-            let data = backend.isa.inst_set().resolve_inst(function.dfg.inst(inst));
-            let EvmInstKind::Alloca(alloca) = data else {
-                continue;
-            };
-
-            let size_bytes: u32 = backend
-                .isa
-                .type_layout()
-                .size_of(*alloca.ty(), module)
-                .expect("alloca has invalid type") as u32;
-            let size_words = size_bytes.div_ceil(WORD_BYTES);
-
-            offsets.insert(inst, next_offset_words);
-            next_offset_words = next_offset_words
-                .checked_add(size_words)
-                .expect("alloca layout overflow");
-        }
-    }
-
-    (offsets, next_offset_words)
 }
 
 fn u32_to_evm_push_bytes(value: u32, policy: PushWidthPolicy) -> SmallVec<[u8; 4]> {
