@@ -454,7 +454,7 @@ block0:
         );
 
         let g = &summaries["g"];
-        assert_eq!(g.returns_any_ptr, true);
+        assert!(g.returns_any_ptr);
         assert_eq!(g.arg_may_be_returned, vec![true]);
         assert_eq!(g.arg_may_escape, vec![false]);
     }
@@ -506,7 +506,7 @@ block0:
         );
 
         let f = &summaries["f"];
-        assert_eq!(f.returns_any_ptr, true);
+        assert!(f.returns_any_ptr);
         assert_eq!(f.arg_may_be_returned, vec![true]);
         assert_eq!(f.arg_may_escape, vec![false]);
     }
