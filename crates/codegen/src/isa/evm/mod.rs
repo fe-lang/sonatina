@@ -1,5 +1,6 @@
 mod memory_plan;
 pub mod opcode;
+mod ptr_escape;
 
 use opcode::OpCode;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -30,6 +31,7 @@ use memory_plan::{
     DYN_FP_SLOT, DYN_SP_SLOT, FuncLocalMemInfo, FuncMemPlan, MemScheme, ProgramMemoryPlan,
     STATIC_BASE, WORD_BYTES, compute_program_memory_plan,
 };
+use ptr_escape::{PtrEscapeSummary, compute_ptr_escape_summaries};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum PushWidthPolicy {
@@ -40,6 +42,7 @@ pub enum PushWidthPolicy {
 
 struct PreparedSection {
     plan: ProgramMemoryPlan,
+    ptr_escape: FxHashMap<FuncRef, PtrEscapeSummary>,
     allocs: FxHashMap<FuncRef, StackifyAlloc>,
     block_orders: FxHashMap<FuncRef, Vec<BlockId>>,
 }
@@ -170,10 +173,13 @@ impl LowerBackend for EvmBackend {
             block_orders.insert(func, prepared.block_order);
         }
 
+        let ptr_escape = compute_ptr_escape_summaries(module, funcs, &self.isa);
+
         let plan = compute_program_memory_plan(module, funcs, &local_mem, &alloca_offsets);
 
         *self.section_state.borrow_mut() = Some(PreparedSection {
             plan,
+            ptr_escape,
             allocs,
             block_orders,
         });
