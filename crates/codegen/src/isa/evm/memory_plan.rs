@@ -23,6 +23,7 @@ pub struct FuncMemPlan {
     pub alloca: FxHashMap<InstId, StackObjectPlan>,
     pub alloca_words: u32,
     pub persistent_alloca_words: u32,
+    pub malloc_future_static_words: FxHashMap<InstId, u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,6 +126,7 @@ pub fn compute_program_memory_plan(
                 alloca,
                 alloca_words: mem.alloca_words,
                 persistent_alloca_words: mem.persistent_alloca_words,
+                malloc_future_static_words: FxHashMap::default(),
             },
         );
     }
