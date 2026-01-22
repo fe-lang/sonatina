@@ -44,4 +44,5 @@ pub enum Action {
 pub enum SpillSlotRef {
     Persistent(u32),
     Transient(u32),
+    Scratch(u32),
 }

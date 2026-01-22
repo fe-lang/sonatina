@@ -28,21 +28,16 @@ impl SlotPool {
         std::mem::take(&mut self.slot_of)
     }
 
-    /// Return the frame slot for `v`, allocating one if needed.
-    ///
-    /// Allocation is deterministic: we reuse the lowest-numbered currently-free slot, falling back
-    /// to `next_slot` growth. In addition to within-block reuse, we also allow cross-block reuse
-    /// when liveness indicates two values' live block sets are disjoint (see
-    /// `Liveness::val_live_blocks`).
-    pub(super) fn ensure_slot(
+    pub(super) fn try_ensure_slot(
         &mut self,
         v: SpilledValueId,
         liveness: &Liveness,
         free_slots: &mut FreeSlots,
-    ) -> u32 {
+        max_slots: Option<u32>,
+    ) -> Option<u32> {
         let v = v.value();
         if let Some(slot) = self.slot_of[v] {
-            return slot;
+            return Some(slot);
         }
 
         // Prefer reusing a slot that has been freed within this block (exact last-use tracking).
@@ -66,6 +61,11 @@ impl SlotPool {
             if let Some(slot) = found {
                 slot
             } else {
+                let can_grow = max_slots.is_none_or(|max| self.next_slot < max);
+                if !can_grow {
+                    return None;
+                }
+
                 let slot = self.next_slot;
                 self.next_slot = self
                     .next_slot
@@ -85,7 +85,23 @@ impl SlotPool {
             "slot_live_blocks missing slot"
         );
         self.slot_live_blocks[idx].union_with(&liveness.val_live_blocks[v]);
-        slot
+        Some(slot)
+    }
+
+    /// Return the frame slot for `v`, allocating one if needed.
+    ///
+    /// Allocation is deterministic: we reuse the lowest-numbered currently-free slot, falling back
+    /// to `next_slot` growth. In addition to within-block reuse, we also allow cross-block reuse
+    /// when liveness indicates two values' live block sets are disjoint (see
+    /// `Liveness::val_live_blocks`).
+    pub(super) fn ensure_slot(
+        &mut self,
+        v: SpilledValueId,
+        liveness: &Liveness,
+        free_slots: &mut FreeSlots,
+    ) -> u32 {
+        self.try_ensure_slot(v, liveness, free_slots, None)
+            .expect("frame slot allocation failed")
     }
 
     pub(super) fn slot_of_value(&self, v: ValueId) -> Option<u32> {
@@ -103,12 +119,14 @@ impl SlotPool {
 pub(super) struct FreeSlotPools {
     pub(super) persistent: FreeSlots,
     pub(super) transient: FreeSlots,
+    pub(super) scratch: FreeSlots,
 }
 
 #[derive(Default, Clone)]
 pub(super) struct SpillSlotPools {
     pub(super) persistent: SlotPool,
     pub(super) transient: SlotPool,
+    pub(super) scratch: SlotPool,
 }
 
 /// Per-block free list for frame slots.

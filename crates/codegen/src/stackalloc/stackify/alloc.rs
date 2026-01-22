@@ -3,6 +3,7 @@ use sonatina_ir::{BlockId, Function, InstId, ValueId, cfg::ControlFlowGraph};
 use std::collections::BTreeMap;
 
 use crate::{
+    bitset::BitSet,
     domtree::DomTree,
     liveness::Liveness,
     stackalloc::{Action, Actions, Allocator, SpillSlotRef},
@@ -40,6 +41,34 @@ impl StackifyAlloc {
         builder.compute()
     }
 
+    pub fn for_function_with_call_live_values(
+        func: &Function,
+        cfg: &ControlFlowGraph,
+        dom: &DomTree,
+        liveness: &Liveness,
+        reach_depth: u8,
+        call_live_values: BitSet<ValueId>,
+    ) -> Self {
+        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
+            .with_call_live_values(call_live_values);
+        builder.compute()
+    }
+
+    pub fn for_function_with_call_live_values_and_scratch_spills(
+        func: &Function,
+        cfg: &ControlFlowGraph,
+        dom: &DomTree,
+        liveness: &Liveness,
+        reach_depth: u8,
+        call_live_values: BitSet<ValueId>,
+        scratch_spill_slots: u32,
+    ) -> Self {
+        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
+            .with_call_live_values(call_live_values)
+            .with_scratch_spills(scratch_spill_slots);
+        builder.compute()
+    }
+
     /// Compute stack allocation for a single function and return a human-oriented trace of the
     /// planning decisions made during the final fixed-point iteration.
     pub fn for_function_with_trace(
@@ -50,6 +79,40 @@ impl StackifyAlloc {
         reach_depth: u8,
     ) -> (Self, String) {
         let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth);
+        let mut trace = StackifyTrace::default();
+        let alloc = builder.compute_with_observer(&mut trace);
+        let trace = trace.render(func, &alloc);
+        (alloc, trace)
+    }
+
+    pub fn for_function_with_trace_and_call_live_values(
+        func: &Function,
+        cfg: &ControlFlowGraph,
+        dom: &DomTree,
+        liveness: &Liveness,
+        reach_depth: u8,
+        call_live_values: BitSet<ValueId>,
+    ) -> (Self, String) {
+        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
+            .with_call_live_values(call_live_values);
+        let mut trace = StackifyTrace::default();
+        let alloc = builder.compute_with_observer(&mut trace);
+        let trace = trace.render(func, &alloc);
+        (alloc, trace)
+    }
+
+    pub fn for_function_with_trace_call_live_values_and_scratch_spills(
+        func: &Function,
+        cfg: &ControlFlowGraph,
+        dom: &DomTree,
+        liveness: &Liveness,
+        reach_depth: u8,
+        call_live_values: BitSet<ValueId>,
+        scratch_spill_slots: u32,
+    ) -> (Self, String) {
+        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
+            .with_call_live_values(call_live_values)
+            .with_scratch_spills(scratch_spill_slots);
         let mut trace = StackifyTrace::default();
         let alloc = builder.compute_with_observer(&mut trace);
         let trace = trace.render(func, &alloc);
@@ -68,12 +131,14 @@ impl Allocator for StackifyAlloc {
                 idx < super::DUP_MAX,
                 "function arg depth exceeds DUP16 reach"
             );
-            let slot = match slot {
-                SpillSlotRef::Persistent(slot) => slot,
-                SpillSlotRef::Transient(slot) => self.persistent_frame_slots + slot,
-            };
             act.push(Action::StackDup(idx as u8));
-            act.push(Action::MemStoreFrameSlot(slot));
+            match slot {
+                SpillSlotRef::Persistent(slot) => act.push(Action::MemStoreFrameSlot(slot)),
+                SpillSlotRef::Transient(slot) => act.push(Action::MemStoreFrameSlot(
+                    self.persistent_frame_slots + slot,
+                )),
+                SpillSlotRef::Scratch(slot) => act.push(Action::MemStoreAbs(slot * 32)),
+            }
         }
         act
     }

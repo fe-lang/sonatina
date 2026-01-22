@@ -52,6 +52,8 @@ pub(super) struct StackifyBuilder<'a> {
     dom: &'a DomTree,
     liveness: &'a Liveness,
     reach: StackifyReachability,
+    call_live_values_override: Option<BitSet<ValueId>>,
+    scratch_spill_slots: u32,
 }
 
 pub(super) struct StackifyContext<'a> {
@@ -60,6 +62,7 @@ pub(super) struct StackifyContext<'a> {
     pub(super) dom: &'a DomTree,
     pub(super) liveness: &'a Liveness,
     pub(super) call_live_values: BitSet<ValueId>,
+    pub(super) scratch_spill_slots: u32,
     pub(super) entry: BlockId,
     pub(super) scc: CfgSccAnalysis,
     pub(super) dom_depth: SecondaryMap<BlockId, u32>,
@@ -84,7 +87,19 @@ impl<'a> StackifyBuilder<'a> {
             dom,
             liveness,
             reach: StackifyReachability::new(reach_depth),
+            call_live_values_override: None,
+            scratch_spill_slots: 0,
         }
+    }
+
+    pub(super) fn with_call_live_values(mut self, call_live_values: BitSet<ValueId>) -> Self {
+        self.call_live_values_override = Some(call_live_values);
+        self
+    }
+
+    pub(super) fn with_scratch_spills(mut self, scratch_spill_slots: u32) -> Self {
+        self.scratch_spill_slots = scratch_spill_slots;
+        self
     }
 
     pub(super) fn compute(self) -> StackifyAlloc {
@@ -104,9 +119,13 @@ impl<'a> StackifyBuilder<'a> {
         let mut scc = CfgSccAnalysis::new();
         scc.compute(self.cfg);
 
-        let mut inst_liveness = InstLiveness::default();
-        inst_liveness.compute(self.func, self.cfg, self.liveness);
-        let call_live_values = inst_liveness.call_live_values(self.func);
+        let call_live_values = if let Some(call_live_values) = self.call_live_values_override {
+            call_live_values
+        } else {
+            let mut inst_liveness = InstLiveness::default();
+            inst_liveness.compute(self.func, self.cfg, self.liveness);
+            inst_liveness.call_live_values(self.func)
+        };
 
         let ctx = StackifyContext {
             func: self.func,
@@ -114,6 +133,7 @@ impl<'a> StackifyBuilder<'a> {
             dom: self.dom,
             liveness: self.liveness,
             call_live_values,
+            scratch_spill_slots: self.scratch_spill_slots,
             entry,
             scc,
             dom_depth: compute_dom_depth(self.dom, entry),
@@ -154,6 +174,7 @@ impl<'a> StackifyBuilder<'a> {
                 alloc.slot_of_value = merge_slot_maps(
                     slots.persistent.take_slot_map(),
                     slots.transient.take_slot_map(),
+                    slots.scratch.take_slot_map(),
                 );
                 return alloc;
             }
@@ -180,13 +201,28 @@ impl<'a> StackifyBuilder<'a> {
                         ctx.liveness,
                         &mut arg_free_slots.persistent,
                     );
-                } else {
-                    let _ = slots.transient.ensure_slot(
-                        spilled,
-                        ctx.liveness,
-                        &mut arg_free_slots.transient,
-                    );
+                    continue;
                 }
+
+                if ctx.scratch_spill_slots != 0
+                    && slots
+                        .scratch
+                        .try_ensure_slot(
+                            spilled,
+                            ctx.liveness,
+                            &mut arg_free_slots.scratch,
+                            Some(ctx.scratch_spill_slots),
+                        )
+                        .is_some()
+                {
+                    continue;
+                }
+
+                let _ = slots.transient.ensure_slot(
+                    spilled,
+                    ctx.liveness,
+                    &mut arg_free_slots.transient,
+                );
             }
         }
 
@@ -237,6 +273,7 @@ impl<'a> StackifyBuilder<'a> {
 fn merge_slot_maps(
     persistent: SecondaryMap<ValueId, Option<u32>>,
     transient: SecondaryMap<ValueId, Option<u32>>,
+    scratch: SecondaryMap<ValueId, Option<u32>>,
 ) -> SecondaryMap<ValueId, Option<SpillSlotRef>> {
     let mut out: SecondaryMap<ValueId, Option<SpillSlotRef>> = SecondaryMap::new();
 
@@ -250,6 +287,12 @@ fn merge_slot_maps(
         if let Some(slot) = *slot {
             debug_assert!(out[v].is_none(), "spill slot already assigned");
             out[v] = Some(SpillSlotRef::Transient(slot));
+        }
+    }
+    for (v, slot) in scratch.iter() {
+        if let Some(slot) = *slot {
+            debug_assert!(out[v].is_none(), "spill slot already assigned");
+            out[v] = Some(SpillSlotRef::Scratch(slot));
         }
     }
 

@@ -410,6 +410,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 self.mem.spill_set(),
                 &mut sim_spill_requests,
                 &self.ctx.call_live_values,
+                self.ctx.scratch_spill_slots,
                 &mut sim_free_slots,
                 &mut sim_slots,
                 self.mem.liveness(),
@@ -420,7 +421,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
 
         let mem_loads = sim_actions
             .iter()
-            .filter(|a| matches!(a, Action::MemLoadFrameSlot(_)))
+            .filter(|a| matches!(a, Action::MemLoadFrameSlot(_) | Action::MemLoadAbs(_)))
             .count();
         let swaps = sim_actions
             .iter()
