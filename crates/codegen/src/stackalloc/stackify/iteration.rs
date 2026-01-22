@@ -10,7 +10,7 @@ use super::{
     alloc::StackifyAlloc,
     builder::StackifyContext,
     planner::{self, Planner},
-    slots::{FreeSlots, SlotState},
+    slots::{FreeSlotPools, SpillSlotPools},
     spill::SpillSet,
     sym_stack::{StackItem, SymStack},
     templates::BlockTemplate,
@@ -20,7 +20,7 @@ use super::{
 pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
     ctx: &'a StackifyContext<'ctx>,
     spill: SpillSet<'a>,
-    slots: &'a mut SlotState,
+    slots: &'a mut SpillSlotPools,
     templates: &'a SecondaryMap<BlockId, BlockTemplate>,
     alloc: &'a mut StackifyAlloc,
     spill_requests: &'a mut BitSet<ValueId>,
@@ -30,7 +30,7 @@ pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
 
 struct BlockPlanState {
     block: BlockId,
-    free_slots: FreeSlots,
+    free_slots: FreeSlotPools,
     prologue: Actions,
     injected_prologue: bool,
     remaining_uses: BTreeMap<ValueId, u32>,
@@ -49,7 +49,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
     pub(super) fn new(
         ctx: &'a StackifyContext<'ctx>,
         spill: SpillSet<'a>,
-        slots: &'a mut SlotState,
+        slots: &'a mut SpillSlotPools,
         templates: &'a SecondaryMap<BlockId, BlockTemplate>,
         alloc: &'a mut StackifyAlloc,
         spill_requests: &'a mut BitSet<ValueId>,
@@ -72,12 +72,13 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         &mut self,
         stack: &mut SymStack,
         actions: &mut Actions,
-        free_slots: &mut FreeSlots,
+        free_slots: &mut FreeSlotPools,
         f: impl FnOnce(&mut Planner) -> R,
     ) -> R {
         let mem = planner::MemPlan::new(
             self.spill,
             &mut *self.spill_requests,
+            &self.ctx.call_live_values,
             free_slots,
             &mut *self.slots,
             self.ctx.liveness,
@@ -90,13 +91,14 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         &mut self,
         stack: &mut SymStack,
         inst: InstId,
-        free_slots: &mut FreeSlots,
+        free_slots: &mut FreeSlotPools,
         f: impl FnOnce(&mut Planner) -> R,
     ) -> R {
         let actions = &mut self.alloc.pre_actions[inst];
         let mem = planner::MemPlan::new(
             self.spill,
             &mut *self.spill_requests,
+            &self.ctx.call_live_values,
             free_slots,
             &mut *self.slots,
             self.ctx.liveness,
@@ -109,13 +111,14 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         &mut self,
         stack: &mut SymStack,
         inst: InstId,
-        free_slots: &mut FreeSlots,
+        free_slots: &mut FreeSlotPools,
         f: impl FnOnce(&mut Planner) -> R,
     ) -> R {
         let actions = &mut self.alloc.post_actions[inst];
         let mem = planner::MemPlan::new(
             self.spill,
             &mut *self.spill_requests,
+            &self.ctx.call_live_values,
             free_slots,
             &mut *self.slots,
             self.ctx.liveness,
@@ -137,7 +140,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
     }
 
     fn plan_block(&mut self, block: BlockId) {
-        let mut free_slots: FreeSlots = FreeSlots::default();
+        let mut free_slots: FreeSlotPools = FreeSlotPools::default();
         let mut prologue: Actions = Actions::new();
         let injected_prologue = false;
 
@@ -479,7 +482,15 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                 if before != 0 && *n == 0 {
                     state.live_future.remove(v);
                     if !state.live_out.contains(v) {
-                        self.slots.release_if_assigned(v, &mut state.free_slots);
+                        if self.ctx.call_live_values.contains(v) {
+                            self.slots
+                                .persistent
+                                .release_if_assigned(v, &mut state.free_slots.persistent);
+                        } else {
+                            self.slots
+                                .transient
+                                .release_if_assigned(v, &mut state.free_slots.transient);
+                        }
                     }
                 }
             }

@@ -11,14 +11,15 @@ use sonatina_ir::ValueId;
 
 use super::{
     DUP_MAX, StackifyContext,
-    slots::{FreeSlots, SlotState},
+    slots::{FreeSlotPools, SpillSlotPools, TRANSIENT_SLOT_TAG},
     spill::{SpillDiscovery, SpillSet},
     sym_stack::SymStack,
 };
 
 pub(super) struct MemPlan<'a> {
-    free_slots: &'a mut FreeSlots,
-    slots: &'a mut SlotState,
+    call_live_values: &'a BitSet<ValueId>,
+    free_slots: &'a mut FreeSlotPools,
+    slots: &'a mut SpillSlotPools,
     liveness: &'a Liveness,
     spill: SpillDiscovery<'a>,
 }
@@ -27,11 +28,13 @@ impl<'a> MemPlan<'a> {
     pub(super) fn new(
         spill: SpillSet<'a>,
         spill_requests: &'a mut BitSet<ValueId>,
-        free_slots: &'a mut FreeSlots,
-        slots: &'a mut SlotState,
+        call_live_values: &'a BitSet<ValueId>,
+        free_slots: &'a mut FreeSlotPools,
+        slots: &'a mut SpillSlotPools,
         liveness: &'a Liveness,
     ) -> Self {
         Self {
+            call_live_values,
             free_slots,
             slots,
             liveness,
@@ -47,11 +50,11 @@ impl<'a> MemPlan<'a> {
         self.spill.spill_requests()
     }
 
-    pub(super) fn free_slots(&self) -> &FreeSlots {
+    pub(super) fn free_slots(&self) -> &FreeSlotPools {
         &*self.free_slots
     }
 
-    pub(super) fn slot_state(&self) -> &SlotState {
+    pub(super) fn slot_state(&self) -> &SpillSlotPools {
         &*self.slots
     }
 
@@ -67,9 +70,24 @@ impl<'a> MemPlan<'a> {
             return Action::MemLoadFrameSlot(0);
         };
 
-        let slot = self
-            .slots
-            .ensure_slot(spilled, self.liveness, &mut *self.free_slots);
+        let persistent = self.call_live_values.contains(v);
+
+        let slot = if persistent {
+            self.slots.persistent.ensure_slot(
+                spilled,
+                self.liveness,
+                &mut self.free_slots.persistent,
+            )
+        } else {
+            self.slots
+                .transient
+                .ensure_slot(spilled, self.liveness, &mut self.free_slots.transient)
+        };
+        let slot = if persistent {
+            slot
+        } else {
+            TRANSIENT_SLOT_TAG | slot
+        };
         Action::MemLoadFrameSlot(slot)
     }
 
@@ -77,9 +95,24 @@ impl<'a> MemPlan<'a> {
         let Some(spilled) = self.spill.spilled(v) else {
             return;
         };
-        let slot = self
-            .slots
-            .ensure_slot(spilled, self.liveness, &mut *self.free_slots);
+
+        let persistent = self.call_live_values.contains(v);
+        let slot = if persistent {
+            self.slots.persistent.ensure_slot(
+                spilled,
+                self.liveness,
+                &mut self.free_slots.persistent,
+            )
+        } else {
+            self.slots
+                .transient
+                .ensure_slot(spilled, self.liveness, &mut self.free_slots.transient)
+        };
+        let slot = if persistent {
+            slot
+        } else {
+            TRANSIENT_SLOT_TAG | slot
+        };
         actions.push(Action::StackDup(depth));
         actions.push(Action::MemStoreFrameSlot(slot));
     }

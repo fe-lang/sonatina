@@ -17,7 +17,7 @@ use super::{
         last_use_values_in_inst, operand_order_for_evm,
     },
     planner::{self, Planner},
-    slots::{FreeSlots, SlotState},
+    slots::{FreeSlotPools, SpillSlotPools},
     spill::SpillSet,
     sym_stack::{StackItem, SymStack},
     templates::{BlockTemplate, canonical_transfer_order, live_in_non_params},
@@ -35,7 +35,7 @@ struct LayoutState {
 struct FlowTemplateSolver<'a, 'ctx> {
     ctx: &'a StackifyContext<'ctx>,
     spill: SpillSet<'a>,
-    slots: &'a mut SlotState,
+    slots: &'a mut SpillSlotPools,
     spill_requests: &'a mut BitSet<ValueId>,
     params_map: &'a SecondaryMap<BlockId, SmallVec<[ValueId; 4]>>,
     carry_in: &'a SecondaryMap<BlockId, BitSet<ValueId>>,
@@ -78,7 +78,7 @@ pub(super) fn solve_templates_from_flow(
 
     let mut edge_cand: EdgeCandMap = EdgeCandMap::new();
 
-    let mut scratch_slots = SlotState::default();
+    let mut scratch_slots = SpillSlotPools::default();
 
     let mut solver = FlowTemplateSolver {
         ctx,
@@ -190,7 +190,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
         let carry_in = self.carry_in;
         let edge_cand = &mut *self.edge_cand;
 
-        let mut free_slots: FreeSlots = FreeSlots::default();
+        let mut free_slots: FreeSlotPools = FreeSlotPools::default();
         let mut actions: Actions = Actions::new();
 
         let (mut remaining_uses, mut live_future) = count_block_uses(ctx.func, block);
@@ -267,6 +267,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                         let mem = planner::MemPlan::new(
                             spill,
                             spill_requests,
+                            &ctx.call_live_values,
                             &mut free_slots,
                             slots,
                             ctx.liveness,
@@ -319,6 +320,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                 let mem = planner::MemPlan::new(
                     spill,
                     spill_requests,
+                    &ctx.call_live_values,
                     &mut free_slots,
                     slots,
                     ctx.liveness,
@@ -330,8 +332,14 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
             }
 
             // Normal instruction.
-            let mem =
-                planner::MemPlan::new(spill, spill_requests, &mut free_slots, slots, ctx.liveness);
+            let mem = planner::MemPlan::new(
+                spill,
+                spill_requests,
+                &ctx.call_live_values,
+                &mut free_slots,
+                slots,
+                ctx.liveness,
+            );
 
             with_planner(ctx, mem, &mut stack, &mut actions, |planner| {
                 planner.prepare_operands_for_inst(inst, &mut args, last_use)
@@ -348,7 +356,15 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                     if before != 0 && *n == 0 {
                         live_future.remove(v);
                         if !live_out.contains(v) {
-                            slots.release_if_assigned(v, &mut free_slots);
+                            if ctx.call_live_values.contains(v) {
+                                slots
+                                    .persistent
+                                    .release_if_assigned(v, &mut free_slots.persistent);
+                            } else {
+                                slots
+                                    .transient
+                                    .release_if_assigned(v, &mut free_slots.transient);
+                            }
                         }
                     }
                 }
@@ -366,6 +382,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                     let mem = planner::MemPlan::new(
                         spill,
                         spill_requests,
+                        &ctx.call_live_values,
                         &mut free_slots,
                         slots,
                         ctx.liveness,

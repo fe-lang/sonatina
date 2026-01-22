@@ -2,11 +2,12 @@ use std::{collections::BTreeMap, fmt::Write};
 
 use sonatina_ir::{BlockId, Function, InstId, ValueId};
 
-use crate::bitset::BitSet;
+use crate::{bitset::BitSet, stackalloc::SpillSlotRef};
 
 use super::{
     super::Action,
     StackifyAlloc,
+    slots::TRANSIENT_SLOT_TAG,
     sym_stack::{StackItem, SymStack},
     templates::BlockTemplate,
 };
@@ -91,6 +92,12 @@ impl StackifyObserver for NullObserver {
 #[derive(Default)]
 pub(super) struct StackifyTrace {
     out: String,
+    action_chunks: Vec<ActionChunk>,
+}
+
+struct ActionChunk {
+    placeholder: String,
+    actions: crate::stackalloc::Actions,
 }
 
 impl StackifyTrace {
@@ -104,8 +111,12 @@ impl StackifyTrace {
 
         // Print spill-set slots in slot order.
         let mut spill_set_by_slot: BTreeMap<u32, Vec<ValueId>> = BTreeMap::new();
-        for (v, slot) in alloc.slot_of.iter() {
+        for (v, slot) in alloc.slot_of_value.iter() {
             if let Some(slot) = *slot {
+                let slot = match slot {
+                    SpillSlotRef::Persistent(slot) => slot,
+                    SpillSlotRef::Transient(slot) => alloc.persistent_frame_slots + slot,
+                };
                 spill_set_by_slot.entry(slot).or_default().push(v);
             }
         }
@@ -126,20 +137,39 @@ impl StackifyTrace {
         }
 
         let _ = writeln!(&mut out, "trace:");
-        out.push_str(&self.out);
+        let mut trace = self.out;
+        for chunk in self.action_chunks {
+            let formatted = fmt_actions(&chunk.actions, alloc.persistent_frame_slots);
+            trace = trace.replace(&chunk.placeholder, &formatted);
+        }
+        out.push_str(&trace);
         out
+    }
+
+    fn push_actions_placeholder(&mut self, actions: &[Action]) -> String {
+        let idx = self.action_chunks.len();
+        let placeholder = format!("@@ACTIONS:{idx}@@");
+        let mut stored = crate::stackalloc::Actions::new();
+        stored.extend_from_slice(actions);
+        self.action_chunks.push(ActionChunk {
+            placeholder: placeholder.clone(),
+            actions: stored,
+        });
+        placeholder
     }
 }
 
 impl StackifyObserver for StackifyTrace {
-    type Checkpoint = usize;
+    type Checkpoint = (usize, usize);
 
     fn checkpoint(&mut self) -> Self::Checkpoint {
-        self.out.len()
+        (self.out.len(), self.action_chunks.len())
     }
 
     fn rollback(&mut self, checkpoint: Self::Checkpoint) {
-        self.out.truncate(checkpoint);
+        let (out_len, chunk_len) = checkpoint;
+        self.out.truncate(out_len);
+        self.action_chunks.truncate(chunk_len);
     }
 
     fn on_block_header(&mut self, func: &Function, block: BlockId, template: &BlockTemplate) {
@@ -171,7 +201,8 @@ impl StackifyObserver for StackifyTrace {
         if actions.is_empty() {
             return;
         }
-        let _ = writeln!(&mut self.out, "    prologue: {}", fmt_actions(actions));
+        let placeholder = self.push_actions_placeholder(actions);
+        let _ = writeln!(&mut self.out, "    prologue: {placeholder}");
     }
 
     fn on_inst_start(
@@ -200,16 +231,13 @@ impl StackifyObserver for StackifyTrace {
         if actions.is_empty() {
             return;
         }
+        let placeholder = self.push_actions_placeholder(actions);
         match (label, dest) {
             ("exit", Some(dest)) => {
-                let _ = writeln!(
-                    &mut self.out,
-                    "      exit({dest:?}): {}",
-                    fmt_actions(actions)
-                );
+                let _ = writeln!(&mut self.out, "      exit({dest:?}): {placeholder}");
             }
             _ => {
-                let _ = writeln!(&mut self.out, "      {label}: {}", fmt_actions(actions));
+                let _ = writeln!(&mut self.out, "      {label}: {placeholder}");
             }
         }
     }
@@ -323,7 +351,17 @@ fn fmt_stack(
     s
 }
 
-fn fmt_actions(actions: &[Action]) -> String {
+fn fmt_actions(actions: &[Action], persistent_frame_slots: u32) -> String {
+    fn decode_slot(slot: u32, persistent_frame_slots: u32) -> u32 {
+        if slot & TRANSIENT_SLOT_TAG != 0 {
+            persistent_frame_slots
+                .checked_add(slot & !TRANSIENT_SLOT_TAG)
+                .expect("frame slot overflow")
+        } else {
+            slot
+        }
+    }
+
     let mut s = String::new();
     s.push('[');
     for (i, a) in actions.iter().enumerate() {
@@ -346,12 +384,14 @@ fn fmt_actions(actions: &[Action]) -> String {
                 let _ = write!(&mut s, "MLOAD_ABS({addr})");
             }
             Action::MemLoadFrameSlot(slot) => {
+                let slot = decode_slot(slot, persistent_frame_slots);
                 let _ = write!(&mut s, "MLOAD_SLOT({slot})");
             }
             Action::MemStoreAbs(addr) => {
                 let _ = write!(&mut s, "MSTORE_ABS({addr})");
             }
             Action::MemStoreFrameSlot(slot) => {
+                let slot = decode_slot(slot, persistent_frame_slots);
                 let _ = write!(&mut s, "MSTORE_SLOT({slot})");
             }
         }

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use crate::{
     domtree::DomTree,
     liveness::Liveness,
-    stackalloc::{Action, Actions, Allocator},
+    stackalloc::{Action, Actions, Allocator, SpillSlotRef},
 };
 
 use super::{builder::StackifyBuilder, trace::StackifyTrace};
@@ -22,8 +22,9 @@ pub struct StackifyAlloc {
     ///
     /// Slots are allocated deterministically and may be shared by multiple values as long as
     /// their lifetimes do not overlap (currently: within-block reuse based on last-use tracking).
-    pub(super) slot_of: SecondaryMap<ValueId, Option<u32>>,
-    pub(super) frame_size_slots: u32,
+    pub(super) slot_of_value: SecondaryMap<ValueId, Option<SpillSlotRef>>,
+    pub(super) persistent_frame_slots: u32,
+    pub(super) transient_frame_slots: u32,
 }
 
 impl StackifyAlloc {
@@ -60,13 +61,17 @@ impl Allocator for StackifyAlloc {
     fn enter_function(&self, function: &Function) -> Actions {
         let mut act = Actions::new();
         for (idx, &arg) in function.arg_values.iter().enumerate() {
-            let Some(slot) = self.slot_of[arg] else {
+            let Some(slot) = self.slot_of_value[arg] else {
                 continue;
             };
             debug_assert!(
                 idx < super::DUP_MAX,
                 "function arg depth exceeds DUP16 reach"
             );
+            let slot = match slot {
+                SpillSlotRef::Persistent(slot) => slot,
+                SpillSlotRef::Transient(slot) => self.persistent_frame_slots + slot,
+            };
             act.push(Action::StackDup(idx as u8));
             act.push(Action::MemStoreFrameSlot(slot));
         }
@@ -74,7 +79,7 @@ impl Allocator for StackifyAlloc {
     }
 
     fn frame_size_slots(&self) -> u32 {
-        self.frame_size_slots
+        self.persistent_frame_slots + self.transient_frame_slots
     }
 
     fn read(&self, inst: InstId, vals: &[ValueId]) -> Actions {
