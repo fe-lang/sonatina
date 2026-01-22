@@ -101,8 +101,8 @@ mod tests {
                 let expect_persistent = call_live.contains(v);
                 match (expect_persistent, slot) {
                     (true, SpillSlotRef::Persistent(_)) => saw_persistent = true,
-                    (false, SpillSlotRef::Transient(_)) => {}
-                    (true, SpillSlotRef::Transient(_)) => {
+                    (false, SpillSlotRef::Transient(_) | SpillSlotRef::Scratch(_)) => {}
+                    (true, SpillSlotRef::Transient(_) | SpillSlotRef::Scratch(_)) => {
                         panic!("expected spilled value {v:?} to be persistent");
                     }
                     (false, SpillSlotRef::Persistent(_)) => {

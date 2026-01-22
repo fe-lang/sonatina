@@ -18,6 +18,7 @@ use super::{
 
 pub(super) struct MemPlan<'a> {
     call_live_values: &'a BitSet<ValueId>,
+    scratch_spill_slots: u32,
     free_slots: &'a mut FreeSlotPools,
     slots: &'a mut SpillSlotPools,
     liveness: &'a Liveness,
@@ -29,12 +30,14 @@ impl<'a> MemPlan<'a> {
         spill: SpillSet<'a>,
         spill_requests: &'a mut BitSet<ValueId>,
         call_live_values: &'a BitSet<ValueId>,
+        scratch_spill_slots: u32,
         free_slots: &'a mut FreeSlotPools,
         slots: &'a mut SpillSlotPools,
         liveness: &'a Liveness,
     ) -> Self {
         Self {
             call_live_values,
+            scratch_spill_slots,
             free_slots,
             slots,
             liveness,
@@ -72,23 +75,32 @@ impl<'a> MemPlan<'a> {
 
         let persistent = self.call_live_values.contains(v);
 
-        let slot = if persistent {
-            self.slots.persistent.ensure_slot(
+        if persistent {
+            let slot = self.slots.persistent.ensure_slot(
                 spilled,
                 self.liveness,
                 &mut self.free_slots.persistent,
+            );
+            return Action::MemLoadFrameSlot(slot);
+        }
+
+        if self.scratch_spill_slots != 0
+            && let Some(slot) = self.slots.scratch.try_ensure_slot(
+                spilled,
+                self.liveness,
+                &mut self.free_slots.scratch,
+                Some(self.scratch_spill_slots),
             )
-        } else {
-            self.slots
-                .transient
-                .ensure_slot(spilled, self.liveness, &mut self.free_slots.transient)
-        };
-        let slot = if persistent {
-            slot
-        } else {
-            TRANSIENT_SLOT_TAG | slot
-        };
-        Action::MemLoadFrameSlot(slot)
+        {
+            return Action::MemLoadAbs(slot * 32);
+        }
+
+        let slot = self.slots.transient.ensure_slot(
+            spilled,
+            self.liveness,
+            &mut self.free_slots.transient,
+        );
+        Action::MemLoadFrameSlot(TRANSIENT_SLOT_TAG | slot)
     }
 
     fn emit_store_if_spilled_at_depth(&mut self, v: ValueId, depth: u8, actions: &mut Actions) {
@@ -97,24 +109,36 @@ impl<'a> MemPlan<'a> {
         };
 
         let persistent = self.call_live_values.contains(v);
-        let slot = if persistent {
-            self.slots.persistent.ensure_slot(
+        actions.push(Action::StackDup(depth));
+
+        if persistent {
+            let slot = self.slots.persistent.ensure_slot(
                 spilled,
                 self.liveness,
                 &mut self.free_slots.persistent,
+            );
+            actions.push(Action::MemStoreFrameSlot(slot));
+            return;
+        }
+
+        if self.scratch_spill_slots != 0
+            && let Some(slot) = self.slots.scratch.try_ensure_slot(
+                spilled,
+                self.liveness,
+                &mut self.free_slots.scratch,
+                Some(self.scratch_spill_slots),
             )
-        } else {
-            self.slots
-                .transient
-                .ensure_slot(spilled, self.liveness, &mut self.free_slots.transient)
-        };
-        let slot = if persistent {
-            slot
-        } else {
-            TRANSIENT_SLOT_TAG | slot
-        };
-        actions.push(Action::StackDup(depth));
-        actions.push(Action::MemStoreFrameSlot(slot));
+        {
+            actions.push(Action::MemStoreAbs(slot * 32));
+            return;
+        }
+
+        let slot = self.slots.transient.ensure_slot(
+            spilled,
+            self.liveness,
+            &mut self.free_slots.transient,
+        );
+        actions.push(Action::MemStoreFrameSlot(TRANSIENT_SLOT_TAG | slot));
     }
 }
 

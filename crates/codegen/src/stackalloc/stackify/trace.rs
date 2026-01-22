@@ -110,27 +110,33 @@ impl StackifyTrace {
         let _ = writeln!(&mut out, "STACKIFY");
 
         // Print spill-set slots in slot order.
-        let mut spill_set_by_slot: BTreeMap<u32, Vec<ValueId>> = BTreeMap::new();
+        let mut spill_set_by_slot: BTreeMap<(u8, u32), Vec<ValueId>> = BTreeMap::new();
         for (v, slot) in alloc.slot_of_value.iter() {
             if let Some(slot) = *slot {
                 let slot = match slot {
-                    SpillSlotRef::Persistent(slot) => slot,
-                    SpillSlotRef::Transient(slot) => alloc.persistent_frame_slots + slot,
+                    SpillSlotRef::Scratch(slot) => (0, slot),
+                    SpillSlotRef::Persistent(slot) => (1, slot),
+                    SpillSlotRef::Transient(slot) => (2, alloc.persistent_frame_slots + slot),
                 };
                 spill_set_by_slot.entry(slot).or_default().push(v);
             }
         }
         if !spill_set_by_slot.is_empty() {
             let _ = write!(&mut out, "spill_set: ");
-            for (i, (slot, mut values)) in spill_set_by_slot.into_iter().enumerate() {
+            for (i, ((kind, slot), mut values)) in spill_set_by_slot.into_iter().enumerate() {
                 values.sort_by_key(|v| v.as_u32());
                 if i != 0 {
                     let _ = write!(&mut out, ", ");
                 }
-                if values.len() == 1 {
-                    let _ = write!(&mut out, "{slot}={}", fmt_value(func, values[0]));
+                let slot_label = if kind == 0 {
+                    format!("s{slot}")
                 } else {
-                    let _ = write!(&mut out, "{slot}={}", fmt_values(func, &values));
+                    slot.to_string()
+                };
+                if values.len() == 1 {
+                    let _ = write!(&mut out, "{slot_label}={}", fmt_value(func, values[0]));
+                } else {
+                    let _ = write!(&mut out, "{slot_label}={}", fmt_values(func, &values));
                 }
             }
             let _ = writeln!(&mut out);
