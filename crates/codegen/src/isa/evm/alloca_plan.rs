@@ -1,7 +1,6 @@
 use crate::bitset::BitSet;
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
-use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, Function, InstId, InstSetExt, ValueId,
     inst::evm::inst_set::EvmInstKind,
@@ -12,56 +11,9 @@ use std::{cmp::Reverse, collections::BinaryHeap};
 
 use super::{
     memory_plan::{AllocaClass, StackObjectPlan, WORD_BYTES},
+    provenance::{Provenance, compute_value_provenance},
     ptr_escape::PtrEscapeSummary,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum PtrBase {
-    Arg(u32),
-    Alloca(InstId),
-}
-
-impl PtrBase {
-    fn key(self) -> (u8, u32) {
-        match self {
-            PtrBase::Arg(i) => (0, i),
-            PtrBase::Alloca(inst) => (1, inst.as_u32()),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct Provenance {
-    bases: SmallVec<[PtrBase; 4]>,
-}
-
-impl Provenance {
-    fn union_with(&mut self, other: &Self) {
-        if other.bases.is_empty() {
-            return;
-        }
-
-        for base in other.bases.iter().copied() {
-            if !self.bases.contains(&base) {
-                self.bases.push(base);
-            }
-        }
-
-        self.bases.sort_unstable_by_key(|b| b.key());
-        self.bases.dedup();
-    }
-
-    fn is_local_addr(&self) -> bool {
-        !self.bases.is_empty() && self.bases.iter().all(|b| matches!(b, PtrBase::Alloca(_)))
-    }
-
-    fn alloca_insts(&self) -> impl Iterator<Item = InstId> + '_ {
-        self.bases.iter().filter_map(|b| match b {
-            PtrBase::Alloca(inst) => Some(*inst),
-            PtrBase::Arg(_) => None,
-        })
-    }
-}
 
 #[derive(Clone, Copy, Debug)]
 struct AllocaObject {
@@ -94,6 +46,7 @@ pub(crate) fn compute_stack_alloca_layout(
     block_order: &[BlockId],
 ) -> StackAllocaLayout {
     let (inst_order, inst_pos) = compute_inst_order(function, block_order);
+    let block_end_pos = compute_block_end_pos(function, &inst_pos);
 
     let mut allocas: FxHashMap<InstId, u32> = FxHashMap::default();
     for &inst in &inst_order {
@@ -114,14 +67,33 @@ pub(crate) fn compute_stack_alloca_layout(
         return StackAllocaLayout::default();
     }
 
-    let prov = compute_value_provenance(function, module, isa, ptr_escape);
+    let prov = compute_value_provenance(function, module, isa, |callee| {
+        ptr_escape
+            .get(&callee)
+            .cloned()
+            .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee))
+            .arg_may_be_returned
+    });
 
-    let escaping = compute_escaping_allocas(function, module, isa, ptr_escape, &prov);
-    if !escaping.is_empty() {
+    let escaping_sites = compute_escaping_allocas(function, module, isa, ptr_escape, &prov);
+    if !escaping_sites.is_empty() {
         let name = module.func_sig(func_ref, |sig| sig.name().to_string());
-        let mut ids: Vec<u32> = escaping.iter().map(|i| i.as_u32()).collect();
-        ids.sort_unstable();
-        panic!("alloca escapes in {name}: {ids:?}");
+        let mut allocas: Vec<(InstId, Vec<AllocaEscapeSite>)> =
+            escaping_sites.into_iter().collect();
+        allocas.sort_unstable_by_key(|(inst, _)| inst.as_u32());
+
+        let mut msg = String::new();
+        msg.push_str(&format!("alloca escapes in {name}:\n"));
+        for (alloca_inst, mut sites) in allocas {
+            sites.sort_unstable_by_key(|s| (s.escape_inst().as_u32(), s.derived_value().as_u32()));
+            msg.push_str(&format!("  alloca inst {}:\n", alloca_inst.as_u32()));
+            for site in sites {
+                msg.push_str("    - ");
+                msg.push_str(&site.render(module));
+                msg.push('\n');
+            }
+        }
+        panic!("{msg}");
     }
 
     let mut persistent: FxHashSet<InstId> = FxHashSet::default();
@@ -139,6 +111,18 @@ pub(crate) fn compute_stack_alloca_layout(
 
     for &inst in &inst_order {
         let pos = inst_pos.get(&inst).copied().unwrap_or_default();
+        let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
+        if let EvmInstKind::Phi(phi) = data {
+            for (val, pred) in phi.args().iter() {
+                let use_pos = block_end_pos.get(pred).copied().unwrap_or_default();
+                for base in prov[*val].alloca_insts() {
+                    let entry = last_use.get_mut(&base).expect("missing alloca last-use");
+                    *entry = (*entry).max(use_pos);
+                }
+            }
+            continue;
+        }
+
         function.dfg.inst(inst).for_each_value(&mut |v| {
             for base in prov[v].alloca_insts() {
                 let entry = last_use.get_mut(&base).expect("missing alloca last-use");
@@ -231,6 +215,21 @@ fn compute_inst_order(
     (order, pos)
 }
 
+fn compute_block_end_pos(
+    function: &Function,
+    inst_pos: &FxHashMap<InstId, u32>,
+) -> FxHashMap<BlockId, u32> {
+    let mut out: FxHashMap<BlockId, u32> = FxHashMap::default();
+    for block in function.layout.iter_block() {
+        let mut end: Option<u32> = None;
+        for inst in function.layout.iter_inst(block) {
+            end = Some(inst_pos.get(&inst).copied().unwrap_or_default());
+        }
+        out.insert(block, end.unwrap_or(0));
+    }
+    out
+}
+
 fn conservative_unknown_ptr_summary(module: &ModuleCtx, func_ref: FuncRef) -> PtrEscapeSummary {
     let arg_count = module.func_sig(func_ref, |sig| sig.args().len());
     PtrEscapeSummary {
@@ -246,8 +245,8 @@ fn compute_escaping_allocas(
     isa: &Evm,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
     prov: &SecondaryMap<ValueId, Provenance>,
-) -> FxHashSet<InstId> {
-    let mut escaping: FxHashSet<InstId> = FxHashSet::default();
+) -> FxHashMap<InstId, Vec<AllocaEscapeSite>> {
+    let mut escaping: FxHashMap<InstId, Vec<AllocaEscapeSite>> = FxHashMap::default();
 
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
@@ -258,7 +257,13 @@ fn compute_escaping_allocas(
                         continue;
                     };
                     for base in prov[ret_val].alloca_insts() {
-                        escaping.insert(base);
+                        escaping
+                            .entry(base)
+                            .or_default()
+                            .push(AllocaEscapeSite::Return {
+                                inst,
+                                value: ret_val,
+                            });
                     }
                 }
                 EvmInstKind::Mstore(mstore) => {
@@ -269,7 +274,14 @@ fn compute_escaping_allocas(
 
                     let val = *mstore.value();
                     for base in prov[val].alloca_insts() {
-                        escaping.insert(base);
+                        escaping
+                            .entry(base)
+                            .or_default()
+                            .push(AllocaEscapeSite::NonLocalStore {
+                                inst,
+                                addr,
+                                value: val,
+                            });
                     }
                 }
                 EvmInstKind::Call(call) => {
@@ -281,7 +293,15 @@ fn compute_escaping_allocas(
                     for (idx, &arg) in call.args().iter().enumerate() {
                         if idx < callee_sum.arg_may_escape.len() && callee_sum.arg_may_escape[idx] {
                             for base in prov[arg].alloca_insts() {
-                                escaping.insert(base);
+                                escaping
+                                    .entry(base)
+                                    .or_default()
+                                    .push(AllocaEscapeSite::CallArg {
+                                        inst,
+                                        callee,
+                                        arg_index: idx,
+                                        value: arg,
+                                    });
                             }
                         }
                     }
@@ -294,113 +314,68 @@ fn compute_escaping_allocas(
     escaping
 }
 
-fn compute_value_provenance(
-    function: &Function,
-    module: &ModuleCtx,
-    isa: &Evm,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
-) -> SecondaryMap<ValueId, Provenance> {
-    let mut prov: SecondaryMap<ValueId, Provenance> = SecondaryMap::new();
-    for value in function.dfg.values.keys() {
-        let _ = &mut prov[value];
-    }
+#[derive(Clone, Debug)]
+enum AllocaEscapeSite {
+    Return {
+        inst: InstId,
+        value: ValueId,
+    },
+    NonLocalStore {
+        inst: InstId,
+        addr: ValueId,
+        value: ValueId,
+    },
+    CallArg {
+        inst: InstId,
+        callee: FuncRef,
+        arg_index: usize,
+        value: ValueId,
+    },
+}
 
-    for (idx, &arg) in function.arg_values.iter().enumerate() {
-        if function.dfg.value_ty(arg).is_pointer(module) {
-            prov[arg].bases.push(PtrBase::Arg(idx as u32));
+impl AllocaEscapeSite {
+    fn escape_inst(&self) -> InstId {
+        match self {
+            AllocaEscapeSite::Return { inst, .. }
+            | AllocaEscapeSite::NonLocalStore { inst, .. }
+            | AllocaEscapeSite::CallArg { inst, .. } => *inst,
         }
     }
 
-    for block in function.layout.iter_block() {
-        for inst in function.layout.iter_inst(block) {
-            let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
-            if let EvmInstKind::Alloca(_) = data
-                && let Some(def) = function.dfg.inst_result(inst)
-            {
-                prov[def].bases.push(PtrBase::Alloca(inst));
+    fn derived_value(&self) -> ValueId {
+        match self {
+            AllocaEscapeSite::Return { value, .. }
+            | AllocaEscapeSite::NonLocalStore { value, .. }
+            | AllocaEscapeSite::CallArg { value, .. } => *value,
+        }
+    }
+
+    fn render(&self, module: &ModuleCtx) -> String {
+        match self {
+            AllocaEscapeSite::Return { inst, value } => {
+                format!("return of v{} at inst {}", value.as_u32(), inst.as_u32())
+            }
+            AllocaEscapeSite::NonLocalStore { inst, addr, value } => format!(
+                "non-local store of v{} to addr v{} at inst {}",
+                value.as_u32(),
+                addr.as_u32(),
+                inst.as_u32()
+            ),
+            AllocaEscapeSite::CallArg {
+                inst,
+                callee,
+                arg_index,
+                value,
+            } => {
+                let callee_name = module.func_sig(*callee, |sig| sig.name().to_string());
+                format!(
+                    "call arg {arg_index} v{} to %{callee_name} at inst {}",
+                    value.as_u32(),
+                    inst.as_u32()
+                )
             }
         }
     }
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-
-        for block in function.layout.iter_block() {
-            for inst in function.layout.iter_inst(block) {
-                let Some(def) = function.dfg.inst_result(inst) else {
-                    continue;
-                };
-
-                let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
-                let mut next = Provenance::default();
-
-                match data {
-                    EvmInstKind::Alloca(_) => next.bases.push(PtrBase::Alloca(inst)),
-                    EvmInstKind::Phi(phi) => {
-                        for (val, _) in phi.args().iter() {
-                            next.union_with(&prov[*val]);
-                        }
-                    }
-                    EvmInstKind::Gep(gep) => {
-                        let Some(&base) = gep.values().first() else {
-                            continue;
-                        };
-                        next.union_with(&prov[base]);
-                    }
-                    EvmInstKind::Bitcast(bc) => next.union_with(&prov[*bc.from()]),
-                    EvmInstKind::IntToPtr(i2p) => next.union_with(&prov[*i2p.from()]),
-                    EvmInstKind::PtrToInt(p2i) => next.union_with(&prov[*p2i.from()]),
-                    EvmInstKind::InsertValue(iv) => {
-                        next.union_with(&prov[*iv.dest()]);
-                        next.union_with(&prov[*iv.value()]);
-                    }
-                    EvmInstKind::ExtractValue(ev) => next.union_with(&prov[*ev.dest()]),
-                    EvmInstKind::Call(call) => {
-                        let callee = *call.callee();
-                        let callee_sum = ptr_escape
-                            .get(&callee)
-                            .cloned()
-                            .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee));
-
-                        for (idx, &arg) in call.args().iter().enumerate() {
-                            if idx < callee_sum.arg_may_be_returned.len()
-                                && callee_sum.arg_may_be_returned[idx]
-                            {
-                                next.union_with(&prov[arg]);
-                            }
-                        }
-                    }
-                    EvmInstKind::Add(_)
-                    | EvmInstKind::Sub(_)
-                    | EvmInstKind::Mul(_)
-                    | EvmInstKind::And(_)
-                    | EvmInstKind::Or(_)
-                    | EvmInstKind::Xor(_)
-                    | EvmInstKind::Shl(_)
-                    | EvmInstKind::Shr(_)
-                    | EvmInstKind::Sar(_)
-                    | EvmInstKind::Not(_)
-                    | EvmInstKind::Sext(_)
-                    | EvmInstKind::Zext(_)
-                    | EvmInstKind::Trunc(_) => {
-                        function.dfg.inst(inst).for_each_value(&mut |v| {
-                            next.union_with(&prov[v]);
-                        });
-                    }
-                    _ => {}
-                }
-
-                let cur = &mut prov[def];
-                if *cur != next {
-                    *cur = next;
-                    changed = true;
-                }
-            }
-        }
-    }
-
-    prov
 }
 
 fn color_allocas(objects: &mut [AllocaObject]) -> (FxHashMap<InstId, u32>, u32) {
@@ -468,4 +443,168 @@ fn color_allocas(objects: &mut [AllocaObject]) -> (FxHashMap<InstId, u32>, u32) 
     }
 
     (offsets, pool_words)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{domtree::DomTree, liveness::Liveness};
+    use sonatina_ir::cfg::ControlFlowGraph;
+    use sonatina_parser::parse_module;
+    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
+    #[test]
+    fn phi_uses_are_accounted_on_predecessor_edges() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    jump block1;
+
+block1:
+    v2.*i256 = phi (v0 block0) (v2 block3);
+    v3.i32 = phi (0.i32 block0) (v6 block3);
+    v4.i1 = lt v3 1.i32;
+    br v4 block2 block4;
+
+block2:
+    v5.*i256 = alloca i256;
+    mstore v5 1.i256 i256;
+    v6.i32 = add v3 1.i32;
+    jump block3;
+
+block3:
+    jump block1;
+
+block4:
+    return 0.i256;
+}
+"#,
+        )
+        .unwrap();
+
+        let f = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&f| parsed.module.ctx.func_sig(f, |sig| sig.name() == "f"))
+            .expect("missing function f");
+
+        let isa = Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        });
+
+        parsed.module.func_store.view(f, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+
+            let mut liveness = Liveness::new();
+            liveness.compute(function, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let block_order = dom.rpo().to_owned();
+
+            let layout = compute_stack_alloca_layout(
+                f,
+                function,
+                &parsed.module.ctx,
+                &isa,
+                &FxHashMap::default(),
+                &BitSet::default(),
+                &block_order,
+            );
+
+            assert_eq!(layout.persistent_words, 0);
+            assert_eq!(layout.transient_words, 2);
+
+            let mut allocas: Vec<InstId> = Vec::new();
+            for block in function.layout.iter_block() {
+                for inst in function.layout.iter_inst(block) {
+                    if matches!(
+                        isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                        EvmInstKind::Alloca(_)
+                    ) {
+                        allocas.push(inst);
+                    }
+                }
+            }
+            allocas.sort_unstable_by_key(|inst| inst.as_u32());
+            assert_eq!(allocas.len(), 2);
+
+            let off0 = layout
+                .plan
+                .get(&allocas[0])
+                .expect("missing alloca plan")
+                .offset_words;
+            let off1 = layout
+                .plan
+                .get(&allocas[1])
+                .expect("missing alloca plan")
+                .offset_words;
+            assert_ne!(off0, off1, "allocas should not overlap in memory");
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "alloca escapes in f")]
+    fn alloca_escape_through_local_store_load_is_rejected() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f() -> *i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.**i256 = alloca *i256;
+    mstore v1 v0 *i256;
+    v2.*i256 = mload v1 *i256;
+    return v2;
+}
+"#,
+        )
+        .unwrap();
+
+        let f = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&f| parsed.module.ctx.func_sig(f, |sig| sig.name() == "f"))
+            .expect("missing function f");
+
+        let isa = Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        });
+
+        parsed.module.func_store.view(f, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+
+            let mut liveness = Liveness::new();
+            liveness.compute(function, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let block_order = dom.rpo().to_owned();
+
+            let _ = compute_stack_alloca_layout(
+                f,
+                function,
+                &parsed.module.ctx,
+                &isa,
+                &FxHashMap::default(),
+                &BitSet::default(),
+                &block_order,
+            );
+        });
+    }
 }
