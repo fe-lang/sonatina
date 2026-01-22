@@ -1,0 +1,25 @@
+#! Regression: SCCP must not leave non-`Interpret` results at `Bot` in reachable code.
+
+target = "evm-ethereum-london"
+
+# sameln: func public %branch_on_evm_exp() -> i32 {
+# nextln:     block0:
+# nextln:         v0.i32 = evm_exp 2.i32 3.i32;
+# nextln:         br v0 block1 block2;
+# nextln: 
+# nextln:     block1:
+# nextln:         return 1.i32;
+# nextln: 
+# nextln:     block2:
+# nextln:         return 2.i32;
+func public %branch_on_evm_exp() -> i32 {
+    block0:
+        v0.i32 = evm_exp 2.i32 3.i32;
+        br v0 block1 block2;
+
+    block1:
+        return 1.i32;
+
+    block2:
+        return 2.i32;
+}
