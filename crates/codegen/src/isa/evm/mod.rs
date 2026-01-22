@@ -1,7 +1,9 @@
 mod alloca_plan;
 mod heap_plan;
+mod mem_effects;
 mod memory_plan;
 pub mod opcode;
+mod provenance;
 mod ptr_escape;
 
 use opcode::OpCode;
@@ -9,6 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::RefCell;
 
 use crate::{
+    bitset::BitSet,
     critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
@@ -20,20 +23,19 @@ use crate::{
 };
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, Function, Immediate, InstId, InstSetExt, Module, Type, U256,
+    BlockId, Function, Immediate, InstId, InstSetExt, Module, Type, U256, ValueId,
     cfg::ControlFlowGraph,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
-    object::Directive,
     types::CompoundType,
 };
 use sonatina_triple::{EvmVersion, OperatingSystem};
 
+use mem_effects::{FuncMemEffects, compute_func_mem_effects};
 use memory_plan::{
-    AllocaClass, DYN_FP_SLOT, DYN_SP_SLOT, EntryMemInitPlan, FREE_PTR_SLOT, FuncLocalMemInfo,
-    FuncMemPlan, MemScheme, ProgramMemoryPlan, STATIC_BASE, StackObjectPlan, WORD_BYTES, ZERO_SLOT,
-    compute_program_memory_plan,
+    AllocaClass, DYN_FP_SLOT, DYN_SP_SLOT, FREE_PTR_SLOT, FuncLocalMemInfo, FuncMemPlan, MemScheme,
+    ProgramMemoryPlan, STATIC_BASE, StackObjectPlan, WORD_BYTES, compute_program_memory_plan,
 };
 use ptr_escape::{PtrEscapeSummary, compute_ptr_escape_summaries};
 
@@ -48,19 +50,6 @@ struct PreparedSection {
     plan: ProgramMemoryPlan,
     allocs: FxHashMap<FuncRef, StackifyAlloc>,
     block_orders: FxHashMap<FuncRef, Vec<BlockId>>,
-}
-
-fn section_entry_func(module: &Module, section_ctx: &SectionLoweringCtx<'_>) -> Option<FuncRef> {
-    let object = module.objects.get(section_ctx.object.0.as_str())?;
-    let section = object
-        .sections
-        .iter()
-        .find(|s| s.name == *section_ctx.section)?;
-
-    section.directives.iter().find_map(|d| match d {
-        Directive::Entry(func) => Some(*func),
-        _ => None,
-    })
 }
 
 struct PreparedFunction {
@@ -184,19 +173,45 @@ impl LowerBackend for EvmBackend {
         &self,
         module: &Module,
         funcs: &[FuncRef],
-        section_ctx: &SectionLoweringCtx<'_>,
+        _section_ctx: &SectionLoweringCtx<'_>,
     ) {
+        let ptr_escape = compute_ptr_escape_summaries(module, funcs, &self.isa);
+
+        // Pass 1: conservative (treat all calls as clobbering).
+        let mut local_mem_pass1: FxHashMap<FuncRef, FuncLocalMemInfo> = FxHashMap::default();
+        let mut alloca_plan_pass1: FxHashMap<FuncRef, FxHashMap<InstId, StackObjectPlan>> =
+            FxHashMap::default();
+
+        for &func in funcs {
+            let prepared = module.func_store.modify(func, |function| {
+                prepare_function(func, function, &module.ctx, self, &ptr_escape, None)
+            });
+            local_mem_pass1.insert(func, prepared.local_mem);
+            alloca_plan_pass1.insert(func, prepared.alloca_plan);
+        }
+
+        let plan_pass1 =
+            compute_program_memory_plan(module, funcs, &local_mem_pass1, &alloca_plan_pass1);
+        let mem_effects =
+            compute_func_mem_effects(module, funcs, &plan_pass1, &local_mem_pass1, &self.isa);
+
+        // Pass 2: clobber-aware call liveness.
         let mut allocs: FxHashMap<FuncRef, StackifyAlloc> = FxHashMap::default();
         let mut block_orders: FxHashMap<FuncRef, Vec<BlockId>> = FxHashMap::default();
         let mut local_mem: FxHashMap<FuncRef, FuncLocalMemInfo> = FxHashMap::default();
         let mut alloca_plan: FxHashMap<FuncRef, FxHashMap<InstId, StackObjectPlan>> =
             FxHashMap::default();
 
-        let ptr_escape = compute_ptr_escape_summaries(module, funcs, &self.isa);
-
         for &func in funcs {
             let prepared = module.func_store.modify(func, |function| {
-                prepare_function(func, function, &module.ctx, self, &ptr_escape)
+                prepare_function(
+                    func,
+                    function,
+                    &module.ctx,
+                    self,
+                    &ptr_escape,
+                    Some(&mem_effects),
+                )
             });
 
             local_mem.insert(func, prepared.local_mem);
@@ -215,43 +230,8 @@ impl LowerBackend for EvmBackend {
             }
         }
 
-        let section_entry = section_entry_func(module, section_ctx);
-        let uses_malloc = funcs.iter().any(|&func| {
-            module.func_store.view(func, |function| {
-                for block in function.layout.iter_block() {
-                    for inst in function.layout.iter_inst(block) {
-                        if matches!(
-                            self.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
-                            EvmInstKind::EvmMalloc(_)
-                        ) {
-                            return true;
-                        }
-                    }
-                }
-                false
-            })
-        });
-
-        let uses_dynamic_frame = funcs.iter().any(|&func| {
-            let Some(mem_plan) = plan.funcs.get(&func) else {
-                return false;
-            };
-            if !matches!(mem_plan.scheme, MemScheme::DynamicFrame) {
-                return false;
-            }
-
-            let spill_slots = allocs.get(&func).map(|a| a.frame_size_slots()).unwrap_or(0);
-            spill_slots != 0 || mem_plan.alloca_words != 0
-        });
-
-        if let Some(entry) = section_entry
-            && (uses_malloc || uses_dynamic_frame)
-            && let Some(mem_plan) = plan.funcs.get_mut(&entry)
-        {
-            mem_plan.entry_mem_init = Some(EntryMemInitPlan {
-                heap_base: plan.dyn_base,
-                init_dynamic_frame: uses_dynamic_frame,
-            });
+        if std::env::var_os("SONATINA_EVM_MEM_DEBUG").is_some() {
+            debug_print_mem_plan(module, funcs, &plan, &local_mem);
         }
 
         *self.section_state.borrow_mut() = Some(PreparedSection {
@@ -276,7 +256,7 @@ impl LowerBackend for EvmBackend {
         let ptr_escape =
             compute_ptr_escape_summaries(module, std::slice::from_ref(&func), &self.isa);
         let prepared = module.func_store.modify(func, |function| {
-            prepare_function(func, function, &module.ctx, self, &ptr_escape)
+            prepare_function(func, function, &module.ctx, self, &ptr_escape, None)
         });
         let lowering = PreparedLowering {
             alloc: prepared.alloc,
@@ -287,7 +267,6 @@ impl LowerBackend for EvmBackend {
                 alloca_words: prepared.local_mem.alloca_words,
                 persistent_alloca_words: prepared.local_mem.persistent_alloca_words,
                 malloc_future_static_words: FxHashMap::default(),
-                entry_mem_init: None,
             },
         };
         self.lower_prepared_function(module, func, lowering)
@@ -332,14 +311,6 @@ impl LowerBackend for EvmBackend {
         alloc: &mut dyn Allocator,
         function: &Function,
     ) {
-        if let Some(init) = self
-            .current_mem_plan
-            .borrow()
-            .as_ref()
-            .and_then(|p| p.entry_mem_init)
-        {
-            emit_entry_mem_init(ctx, init);
-        }
         enter_frame(ctx, alloc.frame_size_slots(), self.dyn_base());
         perform_actions(ctx, &alloc.enter_function(function));
     }
@@ -1309,30 +1280,6 @@ fn emit_max_top_two(ctx: &mut Lower<OpCode>) {
     ctx.add_label_reference(end_push, Label::Insn(end));
 }
 
-fn emit_entry_mem_init(ctx: &mut Lower<OpCode>, init: EntryMemInitPlan) {
-    // mstore(ZERO_SLOT, 0)
-    ctx.push(OpCode::PUSH0);
-    push_bytes(ctx, &[ZERO_SLOT]);
-    ctx.push(OpCode::MSTORE);
-
-    // mstore(FREE_PTR_SLOT, HEAP_BASE_GLOBAL)
-    push_bytes(ctx, &u32_to_be(init.heap_base));
-    push_bytes(ctx, &[FREE_PTR_SLOT]);
-    ctx.push(OpCode::MSTORE);
-
-    if init.init_dynamic_frame {
-        // mstore(DYN_SP_SLOT, HEAP_BASE_GLOBAL)
-        push_bytes(ctx, &u32_to_be(init.heap_base));
-        push_bytes(ctx, &[DYN_SP_SLOT]);
-        ctx.push(OpCode::MSTORE);
-
-        // mstore(DYN_FP_SLOT, 0)
-        ctx.push(OpCode::PUSH0);
-        push_bytes(ctx, &[DYN_FP_SLOT]);
-        ctx.push(OpCode::MSTORE);
-    }
-}
-
 fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
     if frame_slots == 0 {
         return;
@@ -1509,6 +1456,7 @@ fn prepare_function(
     module: &ModuleCtx,
     backend: &EvmBackend,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    mem_effects: Option<&FxHashMap<FuncRef, FuncMemEffects>>,
 ) -> PreparedFunction {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
@@ -1522,20 +1470,27 @@ fn prepare_function(
     let mut dom = DomTree::new();
     dom.compute(&cfg);
 
-    let alloc = StackifyAlloc::for_function(
+    let block_order = dom.rpo().to_owned();
+
+    let mut inst_liveness = InstLiveness::new();
+    inst_liveness.compute(function, &cfg, &liveness);
+    let call_live_values = mem_effects.map_or_else(
+        || inst_liveness.call_live_values(function),
+        |effects| compute_call_live_values_filtered(function, &inst_liveness, effects),
+    );
+
+    let scratch_spill_slots = scratch_spill_slots_v1(function, &backend.isa);
+    let alloc = StackifyAlloc::for_function_with_call_live_values_and_scratch_spills(
         function,
         &cfg,
         &dom,
         &liveness,
         backend.stackify_reach_depth,
+        call_live_values.clone(),
+        scratch_spill_slots,
     );
-    let block_order = dom.rpo().to_owned();
     let persistent_frame_slots = alloc.persistent_frame_slots;
     let transient_frame_slots = alloc.transient_frame_slots;
-
-    let mut inst_liveness = InstLiveness::new();
-    inst_liveness.compute(function, &cfg, &liveness);
-    let call_live_values = inst_liveness.call_live_values(function);
 
     let alloca_layout = alloca_plan::compute_stack_alloca_layout(
         func_ref,
@@ -1569,6 +1524,153 @@ fn prepare_function(
         block_order,
         local_mem,
         alloca_plan: alloca_layout.plan,
+    }
+}
+
+fn compute_call_live_values_filtered(
+    function: &Function,
+    inst_liveness: &InstLiveness,
+    effects: &FxHashMap<FuncRef, FuncMemEffects>,
+) -> BitSet<ValueId> {
+    let mut call_live_values = BitSet::default();
+
+    for block in function.layout.iter_block() {
+        for inst in function.layout.iter_inst(block) {
+            let Some(call) = function.dfg.call_info(inst) else {
+                continue;
+            };
+            let callee = call.callee();
+            let clobbers_static = effects
+                .get(&callee)
+                .copied()
+                .unwrap_or_default()
+                .touches_static_arena;
+
+            if clobbers_static {
+                call_live_values.union_with(inst_liveness.live_out(inst));
+                if let Some(def) = function.dfg.inst_result(inst) {
+                    call_live_values.remove(def);
+                }
+            }
+        }
+    }
+
+    call_live_values
+}
+
+fn scratch_spill_slots_v1(function: &Function, isa: &Evm) -> u32 {
+    for block in function.layout.iter_block() {
+        for inst in function.layout.iter_inst(block) {
+            if function.dfg.call_info(inst).is_some() {
+                return 0;
+            }
+
+            let inst = isa.inst_set().resolve_inst(function.dfg.inst(inst));
+            if matches!(
+                inst,
+                EvmInstKind::Mload(_)
+                    | EvmInstKind::Mstore(_)
+                    | EvmInstKind::EvmKeccak256(_)
+                    | EvmInstKind::EvmMcopy(_)
+                    | EvmInstKind::EvmCalldataCopy(_)
+                    | EvmInstKind::EvmCodeCopy(_)
+                    | EvmInstKind::EvmExtCodeCopy(_)
+                    | EvmInstKind::EvmReturnDataCopy(_)
+                    | EvmInstKind::EvmMalloc(_)
+                    | EvmInstKind::EvmMstore8(_)
+                    | EvmInstKind::EvmReturn(_)
+                    | EvmInstKind::EvmRevert(_)
+                    | EvmInstKind::EvmLog0(_)
+                    | EvmInstKind::EvmLog1(_)
+                    | EvmInstKind::EvmLog2(_)
+                    | EvmInstKind::EvmLog3(_)
+                    | EvmInstKind::EvmLog4(_)
+                    | EvmInstKind::EvmCreate(_)
+                    | EvmInstKind::EvmCreate2(_)
+                    | EvmInstKind::EvmCall(_)
+                    | EvmInstKind::EvmCallCode(_)
+                    | EvmInstKind::EvmDelegateCall(_)
+                    | EvmInstKind::EvmStaticCall(_)
+            ) {
+                return 0;
+            }
+        }
+    }
+
+    2
+}
+
+fn debug_print_mem_plan(
+    module: &Module,
+    funcs: &[FuncRef],
+    plan: &ProgramMemoryPlan,
+    local_mem: &FxHashMap<FuncRef, FuncLocalMemInfo>,
+) {
+    let mut funcs_by_name: Vec<(String, FuncRef)> = funcs
+        .iter()
+        .copied()
+        .map(|f| (module.ctx.func_sig(f, |sig| sig.name().to_string()), f))
+        .collect();
+    funcs_by_name.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+
+    eprintln!(
+        "evm mem debug: dyn_base=0x{:x} static_base=0x{:x}",
+        plan.dyn_base, STATIC_BASE
+    );
+    eprintln!("evm mem debug: entry_mem_init_stores=0");
+
+    for (name, func) in funcs_by_name {
+        let Some(func_plan) = plan.funcs.get(&func) else {
+            continue;
+        };
+        let mem = local_mem.get(&func).copied().unwrap_or(FuncLocalMemInfo {
+            persistent_words: 0,
+            transient_words: 0,
+            alloca_words: 0,
+            persistent_alloca_words: 0,
+        });
+
+        let (scheme, base_words) = match &func_plan.scheme {
+            MemScheme::StaticTree(st) => ("StaticTree", Some(st.base_words)),
+            MemScheme::DynamicFrame => ("DynamicFrame", None),
+        };
+
+        let (malloc_min, malloc_max, malloc_count) =
+            if func_plan.malloc_future_static_words.is_empty() {
+                (None, None, 0)
+            } else {
+                let mut min: u32 = u32::MAX;
+                let mut max: u32 = 0;
+                for &w in func_plan.malloc_future_static_words.values() {
+                    min = min.min(w);
+                    max = max.max(w);
+                }
+                (
+                    Some(min),
+                    Some(max),
+                    func_plan.malloc_future_static_words.len(),
+                )
+            };
+
+        let static_end = match &func_plan.scheme {
+            MemScheme::StaticTree(st) => st
+                .base_words
+                .checked_add(mem.persistent_words)
+                .and_then(|w| w.checked_add(mem.transient_words))
+                .and_then(|w| w.checked_mul(WORD_BYTES))
+                .and_then(|b| STATIC_BASE.checked_add(b)),
+            MemScheme::DynamicFrame => None,
+        };
+
+        eprintln!(
+            "evm mem debug: {name} scheme={scheme} base_words={:?} persistent_words={} transient_words={} malloc_bounds(min,max,count)=({:?},{:?},{malloc_count}) static_end={:?}",
+            base_words,
+            mem.persistent_words,
+            mem.transient_words,
+            malloc_min,
+            malloc_max,
+            static_end
+        );
     }
 }
 

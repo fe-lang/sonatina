@@ -7,7 +7,6 @@ use crate::module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef};
 pub const WORD_BYTES: u32 = 32;
 
 pub const FREE_PTR_SLOT: u8 = 0x40;
-pub const ZERO_SLOT: u8 = 0x60;
 
 pub const DYN_SP_SLOT: u8 = 0x80;
 pub const DYN_FP_SLOT: u8 = 0xa0;
@@ -27,13 +26,6 @@ pub struct FuncMemPlan {
     pub alloca_words: u32,
     pub persistent_alloca_words: u32,
     pub malloc_future_static_words: FxHashMap<InstId, u32>,
-    pub entry_mem_init: Option<EntryMemInitPlan>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct EntryMemInitPlan {
-    pub heap_base: u32,
-    pub init_dynamic_frame: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,7 +129,6 @@ pub fn compute_program_memory_plan(
                 alloca_words: mem.alloca_words,
                 persistent_alloca_words: mem.persistent_alloca_words,
                 malloc_future_static_words: FxHashMap::default(),
-                entry_mem_init: None,
             },
         );
     }
