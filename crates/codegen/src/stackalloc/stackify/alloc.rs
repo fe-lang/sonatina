@@ -23,8 +23,8 @@ pub struct StackifyAlloc {
     /// Slots are allocated deterministically and may be shared by multiple values as long as
     /// their lifetimes do not overlap (currently: within-block reuse based on last-use tracking).
     pub(super) slot_of_value: SecondaryMap<ValueId, Option<SpillSlotRef>>,
-    pub(super) persistent_frame_slots: u32,
-    pub(super) transient_frame_slots: u32,
+    pub(crate) persistent_frame_slots: u32,
+    pub(crate) transient_frame_slots: u32,
 }
 
 impl StackifyAlloc {
