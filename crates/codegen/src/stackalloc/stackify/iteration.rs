@@ -77,12 +77,9 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         let mem = planner::MemPlan::new(
             self.spill,
             &mut *self.spill_requests,
-            &self.ctx.call_live_values,
-            &self.ctx.scratch_live_values,
-            self.ctx.scratch_spill_slots,
+            self.ctx,
             free_slots,
             &mut *self.slots,
-            self.ctx.liveness,
         );
         let mut planner = Planner::new(self.ctx, stack, actions, mem);
         f(&mut planner)
@@ -99,12 +96,9 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         let mem = planner::MemPlan::new(
             self.spill,
             &mut *self.spill_requests,
-            &self.ctx.call_live_values,
-            &self.ctx.scratch_live_values,
-            self.ctx.scratch_spill_slots,
+            self.ctx,
             free_slots,
             &mut *self.slots,
-            self.ctx.liveness,
         );
         let mut planner = Planner::new(self.ctx, stack, actions, mem);
         f(&mut planner)
@@ -121,12 +115,9 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         let mem = planner::MemPlan::new(
             self.spill,
             &mut *self.spill_requests,
-            &self.ctx.call_live_values,
-            &self.ctx.scratch_live_values,
-            self.ctx.scratch_spill_slots,
+            self.ctx,
             free_slots,
             &mut *self.slots,
-            self.ctx.liveness,
         );
         let mut planner = Planner::new(self.ctx, stack, actions, mem);
         f(&mut planner)

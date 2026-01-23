@@ -11,6 +11,11 @@ use crate::{
 
 use super::{builder::StackifyBuilder, trace::StackifyTrace};
 
+pub struct StackifyLiveValues {
+    pub call_live_values: BitSet<ValueId>,
+    pub scratch_live_values: BitSet<ValueId>,
+}
+
 #[derive(Default)]
 pub struct StackifyAlloc {
     pub(super) pre_actions: SecondaryMap<InstId, Actions>,
@@ -60,10 +65,13 @@ impl StackifyAlloc {
         dom: &DomTree,
         liveness: &Liveness,
         reach_depth: u8,
-        call_live_values: BitSet<ValueId>,
-        scratch_live_values: BitSet<ValueId>,
+        live_values: StackifyLiveValues,
         scratch_spill_slots: u32,
     ) -> Self {
+        let StackifyLiveValues {
+            call_live_values,
+            scratch_live_values,
+        } = live_values;
         let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
             .with_call_live_values(call_live_values)
             .with_scratch_live_values(scratch_live_values)
@@ -109,10 +117,13 @@ impl StackifyAlloc {
         dom: &DomTree,
         liveness: &Liveness,
         reach_depth: u8,
-        call_live_values: BitSet<ValueId>,
-        scratch_live_values: BitSet<ValueId>,
+        live_values: StackifyLiveValues,
         scratch_spill_slots: u32,
     ) -> (Self, String) {
+        let StackifyLiveValues {
+            call_live_values,
+            scratch_live_values,
+        } = live_values;
         let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
             .with_call_live_values(call_live_values)
             .with_scratch_live_values(scratch_live_values)

@@ -409,12 +409,9 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             let mem = MemPlan::new(
                 self.mem.spill_set(),
                 &mut sim_spill_requests,
-                &self.ctx.call_live_values,
-                &self.ctx.scratch_live_values,
-                self.ctx.scratch_spill_slots,
+                self.ctx,
                 &mut sim_free_slots,
                 &mut sim_slots,
-                self.mem.liveness(),
             );
             let mut planner = Planner::new(self.ctx, &mut sim_stack, &mut sim_actions, mem);
             planner.prepare_operands(args, consume_last_use);

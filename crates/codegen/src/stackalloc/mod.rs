@@ -2,7 +2,7 @@ use smallvec::SmallVec;
 use sonatina_ir::{BlockId, Function, Immediate, InstId, ValueId};
 
 mod stackify;
-pub use stackify::StackifyAlloc;
+pub use stackify::{StackifyAlloc, StackifyLiveValues};
 
 pub type Actions = SmallVec<[Action; 2]>;
 

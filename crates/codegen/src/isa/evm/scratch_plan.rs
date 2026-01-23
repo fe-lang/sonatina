@@ -111,7 +111,7 @@ pub(crate) fn compute_scratch_live_values(
         for inst in function.layout.iter_inst(block) {
             let is_barrier = if let Some(call) = function.dfg.call_info(inst) {
                 let callee = call.callee();
-                mem_effects.map_or(true, |effects| {
+                mem_effects.is_none_or(|effects| {
                     effects
                         .get(&callee)
                         .copied()
