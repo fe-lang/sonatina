@@ -410,6 +410,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 self.mem.spill_set(),
                 &mut sim_spill_requests,
                 &self.ctx.call_live_values,
+                &self.ctx.scratch_live_values,
                 self.ctx.scratch_spill_slots,
                 &mut sim_free_slots,
                 &mut sim_slots,

@@ -270,6 +270,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                             spill,
                             spill_requests,
                             &ctx.call_live_values,
+                            &ctx.scratch_live_values,
                             ctx.scratch_spill_slots,
                             &mut free_slots,
                             slots,
@@ -325,6 +326,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                     spill,
                     spill_requests,
                     &ctx.call_live_values,
+                    &ctx.scratch_live_values,
                     ctx.scratch_spill_slots,
                     &mut free_slots,
                     slots,
@@ -341,6 +343,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                 spill,
                 spill_requests,
                 &ctx.call_live_values,
+                &ctx.scratch_live_values,
                 ctx.scratch_spill_slots,
                 &mut free_slots,
                 slots,
@@ -362,15 +365,15 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                     if before != 0 && *n == 0 {
                         live_future.remove(v);
                         if !live_out.contains(v) {
-                            if ctx.call_live_values.contains(v) {
-                                slots
-                                    .persistent
-                                    .release_if_assigned(v, &mut free_slots.persistent);
-                            } else {
-                                slots
-                                    .transient
-                                    .release_if_assigned(v, &mut free_slots.transient);
-                            }
+                            slots
+                                .persistent
+                                .release_if_assigned(v, &mut free_slots.persistent);
+                            slots
+                                .scratch
+                                .release_if_assigned(v, &mut free_slots.scratch);
+                            slots
+                                .transient
+                                .release_if_assigned(v, &mut free_slots.transient);
                         }
                     }
                 }
@@ -389,6 +392,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                         spill,
                         spill_requests,
                         &ctx.call_live_values,
+                        &ctx.scratch_live_values,
                         ctx.scratch_spill_slots,
                         &mut free_slots,
                         slots,

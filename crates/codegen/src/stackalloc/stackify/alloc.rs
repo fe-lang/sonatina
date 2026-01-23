@@ -61,10 +61,12 @@ impl StackifyAlloc {
         liveness: &Liveness,
         reach_depth: u8,
         call_live_values: BitSet<ValueId>,
+        scratch_live_values: BitSet<ValueId>,
         scratch_spill_slots: u32,
     ) -> Self {
         let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
             .with_call_live_values(call_live_values)
+            .with_scratch_live_values(scratch_live_values)
             .with_scratch_spills(scratch_spill_slots);
         builder.compute()
     }
@@ -108,15 +110,23 @@ impl StackifyAlloc {
         liveness: &Liveness,
         reach_depth: u8,
         call_live_values: BitSet<ValueId>,
+        scratch_live_values: BitSet<ValueId>,
         scratch_spill_slots: u32,
     ) -> (Self, String) {
         let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
             .with_call_live_values(call_live_values)
+            .with_scratch_live_values(scratch_live_values)
             .with_scratch_spills(scratch_spill_slots);
         let mut trace = StackifyTrace::default();
         let alloc = builder.compute_with_observer(&mut trace);
         let trace = trace.render(func, &alloc);
         (alloc, trace)
+    }
+
+    pub(crate) fn uses_scratch_spills(&self) -> bool {
+        self.slot_of_value
+            .values()
+            .any(|slot| matches!(*slot, Some(SpillSlotRef::Scratch(_))))
     }
 }
 

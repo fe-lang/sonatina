@@ -3,13 +3,17 @@ use sonatina_ir::{
     Function, InstSetExt, Module,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
-    module::FuncRef,
+    module::{FuncRef, ModuleCtx},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef};
 
-use super::memory_plan::{FuncLocalMemInfo, MemScheme, ProgramMemoryPlan};
+use super::{
+    memory_plan::{FuncLocalMemInfo, MemScheme, ProgramMemoryPlan},
+    provenance::compute_value_provenance,
+    scratch_plan::inst_is_scratch_clobber,
+};
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct FuncMemEffects {
@@ -33,6 +37,7 @@ pub(crate) fn compute_func_mem_effects(
     funcs: &[FuncRef],
     plan: &ProgramMemoryPlan,
     local_mem: &FxHashMap<FuncRef, FuncLocalMemInfo>,
+    scratch_spill_funcs: &FxHashSet<FuncRef>,
     isa: &Evm,
 ) -> FxHashMap<FuncRef, FuncMemEffects> {
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
@@ -57,15 +62,19 @@ pub(crate) fn compute_func_mem_effects(
         let touches_dyn_frame = matches!(scheme, Some(MemScheme::DynamicFrame))
             && (mem.persistent_words != 0 || mem.transient_words != 0);
 
-        let touches_heap_meta = module
-            .func_store
-            .view(func, |function| func_uses_malloc(function, isa));
+        let (touches_heap_meta, touches_scratch_clobber) = module.func_store.view(func, |f| {
+            (
+                func_uses_malloc(f, isa),
+                func_clobbers_scratch(f, &module.ctx, isa),
+            )
+        });
+        let touches_scratch = scratch_spill_funcs.contains(&func) || touches_scratch_clobber;
 
         local_effects.insert(
             func,
             FuncMemEffects {
                 touches_static_arena,
-                touches_scratch: false,
+                touches_scratch,
                 touches_dyn_frame,
                 touches_heap_meta,
             },
@@ -116,6 +125,23 @@ fn func_uses_malloc(function: &Function, isa: &Evm) -> bool {
             }
         }
     }
+    false
+}
+
+fn func_clobbers_scratch(function: &Function, module: &ModuleCtx, isa: &Evm) -> bool {
+    let prov = compute_value_provenance(function, module, isa, |callee| {
+        let arg_count = module.func_sig(callee, |sig| sig.args().len());
+        vec![true; arg_count]
+    });
+
+    for block in function.layout.iter_block() {
+        for inst in function.layout.iter_inst(block) {
+            if inst_is_scratch_clobber(function, isa, inst, &prov) {
+                return true;
+            }
+        }
+    }
+
     false
 }
 

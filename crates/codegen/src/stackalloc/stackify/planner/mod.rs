@@ -18,6 +18,7 @@ use super::{
 
 pub(super) struct MemPlan<'a> {
     call_live_values: &'a BitSet<ValueId>,
+    scratch_live_values: &'a BitSet<ValueId>,
     scratch_spill_slots: u32,
     free_slots: &'a mut FreeSlotPools,
     slots: &'a mut SpillSlotPools,
@@ -30,6 +31,7 @@ impl<'a> MemPlan<'a> {
         spill: SpillSet<'a>,
         spill_requests: &'a mut BitSet<ValueId>,
         call_live_values: &'a BitSet<ValueId>,
+        scratch_live_values: &'a BitSet<ValueId>,
         scratch_spill_slots: u32,
         free_slots: &'a mut FreeSlotPools,
         slots: &'a mut SpillSlotPools,
@@ -37,6 +39,7 @@ impl<'a> MemPlan<'a> {
     ) -> Self {
         Self {
             call_live_values,
+            scratch_live_values,
             scratch_spill_slots,
             free_slots,
             slots,
@@ -85,6 +88,7 @@ impl<'a> MemPlan<'a> {
         }
 
         if self.scratch_spill_slots != 0
+            && !self.scratch_live_values.contains(v)
             && let Some(slot) = self.slots.scratch.try_ensure_slot(
                 spilled,
                 self.liveness,
@@ -122,6 +126,7 @@ impl<'a> MemPlan<'a> {
         }
 
         if self.scratch_spill_slots != 0
+            && !self.scratch_live_values.contains(v)
             && let Some(slot) = self.slots.scratch.try_ensure_slot(
                 spilled,
                 self.liveness,
