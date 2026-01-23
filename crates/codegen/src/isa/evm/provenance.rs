@@ -12,6 +12,7 @@ use sonatina_ir::{
 enum PtrBase {
     Arg(u32),
     Alloca(InstId),
+    Malloc(InstId),
 }
 
 impl PtrBase {
@@ -19,6 +20,7 @@ impl PtrBase {
         match self {
             PtrBase::Arg(i) => (0, i),
             PtrBase::Alloca(inst) => (1, inst.as_u32()),
+            PtrBase::Malloc(inst) => (2, inst.as_u32()),
         }
     }
 }
@@ -29,6 +31,10 @@ pub(crate) struct Provenance {
 }
 
 impl Provenance {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.bases.is_empty()
+    }
+
     pub(crate) fn union_with(&mut self, other: &Self) -> bool {
         if other.bases.is_empty() {
             return false;
@@ -56,7 +62,7 @@ impl Provenance {
     pub(crate) fn arg_indices(&self) -> impl Iterator<Item = u32> + '_ {
         self.bases.iter().filter_map(|b| match b {
             PtrBase::Arg(i) => Some(*i),
-            PtrBase::Alloca(_) => None,
+            PtrBase::Alloca(_) | PtrBase::Malloc(_) => None,
         })
     }
 
@@ -68,6 +74,14 @@ impl Provenance {
         self.bases.iter().filter_map(|b| match b {
             PtrBase::Alloca(inst) => Some(*inst),
             PtrBase::Arg(_) => None,
+            PtrBase::Malloc(_) => None,
+        })
+    }
+
+    pub(crate) fn malloc_insts(&self) -> impl Iterator<Item = InstId> + '_ {
+        self.bases.iter().filter_map(|b| match b {
+            PtrBase::Malloc(inst) => Some(*inst),
+            PtrBase::Arg(_) | PtrBase::Alloca(_) => None,
         })
     }
 }
@@ -96,6 +110,12 @@ pub(crate) fn compute_value_provenance(
                 && let Some(def) = function.dfg.inst_result(inst)
             {
                 prov[def].bases.push(PtrBase::Alloca(inst));
+            }
+
+            if let EvmInstKind::EvmMalloc(_) = data
+                && let Some(def) = function.dfg.inst_result(inst)
+            {
+                prov[def].bases.push(PtrBase::Malloc(inst));
             }
         }
     }
@@ -133,6 +153,7 @@ pub(crate) fn compute_value_provenance(
 
                 match data {
                     EvmInstKind::Alloca(_) => next.bases.push(PtrBase::Alloca(inst)),
+                    EvmInstKind::EvmMalloc(_) => next.bases.push(PtrBase::Malloc(inst)),
                     EvmInstKind::Mload(mload) => {
                         let addr = *mload.addr();
                         let addr_prov = &prov[addr];

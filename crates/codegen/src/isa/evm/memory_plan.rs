@@ -26,6 +26,7 @@ pub struct FuncMemPlan {
     pub alloca_words: u32,
     pub persistent_alloca_words: u32,
     pub malloc_future_static_words: FxHashMap<InstId, u32>,
+    pub transient_mallocs: FxHashSet<InstId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,6 +130,7 @@ pub fn compute_program_memory_plan(
                 alloca_words: mem.alloca_words,
                 persistent_alloca_words: mem.persistent_alloca_words,
                 malloc_future_static_words: FxHashMap::default(),
+                transient_mallocs: FxHashSet::default(),
             },
         );
     }

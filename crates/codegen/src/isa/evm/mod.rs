@@ -1,5 +1,6 @@
 mod alloca_plan;
 mod heap_plan;
+mod malloc_plan;
 mod mem_effects;
 mod memory_plan;
 pub mod opcode;
@@ -57,6 +58,7 @@ struct PreparedFunction {
     block_order: Vec<BlockId>,
     local_mem: FuncLocalMemInfo,
     alloca_plan: FxHashMap<InstId, StackObjectPlan>,
+    transient_mallocs: FxHashSet<InstId>,
 }
 
 struct PreparedLowering {
@@ -201,6 +203,7 @@ impl LowerBackend for EvmBackend {
         let mut local_mem: FxHashMap<FuncRef, FuncLocalMemInfo> = FxHashMap::default();
         let mut alloca_plan: FxHashMap<FuncRef, FxHashMap<InstId, StackObjectPlan>> =
             FxHashMap::default();
+        let mut transient_mallocs: FxHashMap<FuncRef, FxHashSet<InstId>> = FxHashMap::default();
 
         for &func in funcs {
             let prepared = module.func_store.modify(func, |function| {
@@ -218,11 +221,17 @@ impl LowerBackend for EvmBackend {
             alloca_plan.insert(func, prepared.alloca_plan);
             allocs.insert(func, prepared.alloc);
             block_orders.insert(func, prepared.block_order);
+            transient_mallocs.insert(func, prepared.transient_mallocs);
         }
 
         let mut plan = compute_program_memory_plan(module, funcs, &local_mem, &alloca_plan);
+        for &func in funcs {
+            if let Some(mem_plan) = plan.funcs.get_mut(&func) {
+                mem_plan.transient_mallocs = transient_mallocs.remove(&func).unwrap_or_default();
+            }
+        }
         let malloc_bounds = heap_plan::compute_malloc_future_static_words(
-            module, funcs, &plan, &local_mem, &self.isa,
+            module, funcs, &plan, &local_mem, &allocs, &self.isa,
         );
         for (func, bounds) in malloc_bounds {
             if let Some(mem_plan) = plan.funcs.get_mut(&func) {
@@ -267,6 +276,7 @@ impl LowerBackend for EvmBackend {
                 alloca_words: prepared.local_mem.alloca_words,
                 persistent_alloca_words: prepared.local_mem.persistent_alloca_words,
                 malloc_future_static_words: FxHashMap::default(),
+                transient_mallocs: FxHashSet::default(),
             },
         };
         self.lower_prepared_function(module, func, lowering)
@@ -788,6 +798,7 @@ impl LowerBackend for EvmBackend {
                 let mem_plan = mem_plan
                     .as_ref()
                     .expect("missing memory plan during lowering");
+                let is_transient = mem_plan.transient_mallocs.contains(&insn);
 
                 let dyn_base_words = self
                     .dyn_base()
@@ -809,6 +820,30 @@ impl LowerBackend for EvmBackend {
                     .expect("malloc static bound bytes overflow");
 
                 perform_actions(ctx, &alloc.read(insn, &args));
+
+                if is_transient {
+                    // Drop the requested size; this is a transient bump allocation that does not
+                    // update `FREE_PTR_SLOT` and is allowed to overlap with later allocations.
+                    ctx.push(OpCode::POP);
+
+                    // heap_end = mload(0x40)
+                    push_bytes(ctx, &[FREE_PTR_SLOT]);
+                    ctx.push(OpCode::MLOAD);
+
+                    // sp = mload(DYN_SP_SLOT)
+                    push_bytes(ctx, &[DYN_SP_SLOT]);
+                    ctx.push(OpCode::MLOAD);
+
+                    // max(heap_end, sp)
+                    emit_max_top_two(ctx);
+
+                    // max(max(heap_end, sp), min_base)
+                    push_bytes(ctx, &u32_to_be(min_base_bytes));
+                    emit_max_top_two(ctx);
+
+                    perform_actions(ctx, &alloc.write(insn, result));
+                    return;
+                }
 
                 // Align to 32 bytes:
                 // aligned = ((size + 31) / 32) * 32
@@ -1464,66 +1499,95 @@ fn prepare_function(
     let mut splitter = CriticalEdgeSplitter::new();
     splitter.run(function, &mut cfg);
 
-    let mut liveness = Liveness::new();
-    liveness.compute(function, &cfg);
-
     let mut dom = DomTree::new();
     dom.compute(&cfg);
 
     let block_order = dom.rpo().to_owned();
 
-    let mut inst_liveness = InstLiveness::new();
-    inst_liveness.compute(function, &cfg, &liveness);
-    let call_live_values = mem_effects.map_or_else(
-        || inst_liveness.call_live_values(function),
-        |effects| compute_call_live_values_filtered(function, &inst_liveness, effects),
-    );
+    let mut did_insert_free_ptr_restore = false;
+    loop {
+        let mut liveness = Liveness::new();
+        liveness.compute(function, &cfg);
 
-    let scratch_spill_slots = scratch_spill_slots_v1(function, &backend.isa);
-    let alloc = StackifyAlloc::for_function_with_call_live_values_and_scratch_spills(
-        function,
-        &cfg,
-        &dom,
-        &liveness,
-        backend.stackify_reach_depth,
-        call_live_values.clone(),
-        scratch_spill_slots,
-    );
-    let persistent_frame_slots = alloc.persistent_frame_slots;
-    let transient_frame_slots = alloc.transient_frame_slots;
+        let mut inst_liveness = InstLiveness::new();
+        inst_liveness.compute(function, &cfg, &liveness);
 
-    let alloca_layout = alloca_plan::compute_stack_alloca_layout(
-        func_ref,
-        function,
-        module,
-        &backend.isa,
-        ptr_escape,
-        &call_live_values,
-        &block_order,
-    );
+        let transient_mallocs = malloc_plan::compute_transient_mallocs(
+            function,
+            module,
+            &backend.isa,
+            ptr_escape,
+            mem_effects,
+            &inst_liveness,
+        );
 
-    let persistent_alloca_words = alloca_layout.persistent_words;
-    let transient_alloca_words = alloca_layout.transient_words;
-    let alloca_words = persistent_alloca_words
-        .checked_add(transient_alloca_words)
-        .expect("alloca words overflow");
+        if mem_effects.is_none()
+            && !did_insert_free_ptr_restore
+            && malloc_plan::should_restore_free_ptr_on_internal_returns(
+                function,
+                module,
+                &backend.isa,
+                ptr_escape,
+                &transient_mallocs,
+            )
+        {
+            malloc_plan::insert_free_ptr_restore_on_internal_returns(function, &backend.isa);
+            did_insert_free_ptr_restore = true;
+            continue;
+        }
 
-    let local_mem = FuncLocalMemInfo {
-        persistent_words: persistent_frame_slots
-            .checked_add(persistent_alloca_words)
-            .expect("persistent words overflow"),
-        transient_words: transient_frame_slots
+        let call_live_values = mem_effects.map_or_else(
+            || inst_liveness.call_live_values(function),
+            |effects| compute_call_live_values_filtered(function, &inst_liveness, effects),
+        );
+
+        let scratch_spill_slots = scratch_spill_slots_v1(function, &backend.isa);
+        let alloc = StackifyAlloc::for_function_with_call_live_values_and_scratch_spills(
+            function,
+            &cfg,
+            &dom,
+            &liveness,
+            backend.stackify_reach_depth,
+            call_live_values.clone(),
+            scratch_spill_slots,
+        );
+        let persistent_frame_slots = alloc.persistent_frame_slots;
+        let transient_frame_slots = alloc.transient_frame_slots;
+
+        let alloca_layout = alloca_plan::compute_stack_alloca_layout(
+            func_ref,
+            function,
+            module,
+            &backend.isa,
+            ptr_escape,
+            &call_live_values,
+            &block_order,
+        );
+
+        let persistent_alloca_words = alloca_layout.persistent_words;
+        let transient_alloca_words = alloca_layout.transient_words;
+        let alloca_words = persistent_alloca_words
             .checked_add(transient_alloca_words)
-            .expect("transient words overflow"),
-        alloca_words,
-        persistent_alloca_words,
-    };
+            .expect("alloca words overflow");
 
-    PreparedFunction {
-        alloc,
-        block_order,
-        local_mem,
-        alloca_plan: alloca_layout.plan,
+        let local_mem = FuncLocalMemInfo {
+            persistent_words: persistent_frame_slots
+                .checked_add(persistent_alloca_words)
+                .expect("persistent words overflow"),
+            transient_words: transient_frame_slots
+                .checked_add(transient_alloca_words)
+                .expect("transient words overflow"),
+            alloca_words,
+            persistent_alloca_words,
+        };
+
+        return PreparedFunction {
+            alloc,
+            block_order,
+            local_mem,
+            alloca_plan: alloca_layout.plan,
+            transient_mallocs,
+        };
     }
 }
 
