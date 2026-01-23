@@ -53,6 +53,7 @@ pub(super) struct StackifyBuilder<'a> {
     liveness: &'a Liveness,
     reach: StackifyReachability,
     call_live_values_override: Option<BitSet<ValueId>>,
+    scratch_live_values_override: Option<BitSet<ValueId>>,
     scratch_spill_slots: u32,
 }
 
@@ -62,6 +63,7 @@ pub(super) struct StackifyContext<'a> {
     pub(super) dom: &'a DomTree,
     pub(super) liveness: &'a Liveness,
     pub(super) call_live_values: BitSet<ValueId>,
+    pub(super) scratch_live_values: BitSet<ValueId>,
     pub(super) scratch_spill_slots: u32,
     pub(super) entry: BlockId,
     pub(super) scc: CfgSccAnalysis,
@@ -88,12 +90,18 @@ impl<'a> StackifyBuilder<'a> {
             liveness,
             reach: StackifyReachability::new(reach_depth),
             call_live_values_override: None,
+            scratch_live_values_override: None,
             scratch_spill_slots: 0,
         }
     }
 
     pub(super) fn with_call_live_values(mut self, call_live_values: BitSet<ValueId>) -> Self {
         self.call_live_values_override = Some(call_live_values);
+        self
+    }
+
+    pub(super) fn with_scratch_live_values(mut self, scratch_live_values: BitSet<ValueId>) -> Self {
+        self.scratch_live_values_override = Some(scratch_live_values);
         self
     }
 
@@ -127,12 +135,25 @@ impl<'a> StackifyBuilder<'a> {
             inst_liveness.call_live_values(self.func)
         };
 
+        let scratch_live_values = if self.scratch_spill_slots == 0 {
+            BitSet::default()
+        } else if let Some(scratch_live_values) = self.scratch_live_values_override {
+            scratch_live_values
+        } else {
+            let mut scratch_live_values = BitSet::default();
+            for value in self.func.dfg.values.keys() {
+                scratch_live_values.insert(value);
+            }
+            scratch_live_values
+        };
+
         let ctx = StackifyContext {
             func: self.func,
             cfg: self.cfg,
             dom: self.dom,
             liveness: self.liveness,
             call_live_values,
+            scratch_live_values,
             scratch_spill_slots: self.scratch_spill_slots,
             entry,
             scc,
@@ -205,6 +226,7 @@ impl<'a> StackifyBuilder<'a> {
                 }
 
                 if ctx.scratch_spill_slots != 0
+                    && !ctx.scratch_live_values.contains(arg)
                     && slots
                         .scratch
                         .try_ensure_slot(

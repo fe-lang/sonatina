@@ -6,6 +6,7 @@ mod memory_plan;
 pub mod opcode;
 mod provenance;
 mod ptr_escape;
+mod scratch_plan;
 
 use opcode::OpCode;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -194,10 +195,17 @@ impl LowerBackend for EvmBackend {
 
         let plan_pass1 =
             compute_program_memory_plan(module, funcs, &local_mem_pass1, &alloca_plan_pass1);
-        let mem_effects =
-            compute_func_mem_effects(module, funcs, &plan_pass1, &local_mem_pass1, &self.isa);
+        let mut scratch_spill_funcs: FxHashSet<FuncRef> = FxHashSet::default();
+        let mut mem_effects = compute_func_mem_effects(
+            module,
+            funcs,
+            &plan_pass1,
+            &local_mem_pass1,
+            &scratch_spill_funcs,
+            &self.isa,
+        );
 
-        // Pass 2: clobber-aware call liveness.
+        // Pass 2: clobber-aware call liveness + scratch-spill barriers.
         let mut allocs: FxHashMap<FuncRef, StackifyAlloc> = FxHashMap::default();
         let mut block_orders: FxHashMap<FuncRef, Vec<BlockId>> = FxHashMap::default();
         let mut local_mem: FxHashMap<FuncRef, FuncLocalMemInfo> = FxHashMap::default();
@@ -205,23 +213,50 @@ impl LowerBackend for EvmBackend {
             FxHashMap::default();
         let mut transient_mallocs: FxHashMap<FuncRef, FxHashSet<InstId>> = FxHashMap::default();
 
-        for &func in funcs {
-            let prepared = module.func_store.modify(func, |function| {
-                prepare_function(
-                    func,
-                    function,
-                    &module.ctx,
-                    self,
-                    &ptr_escape,
-                    Some(&mem_effects),
-                )
-            });
+        loop {
+            allocs.clear();
+            block_orders.clear();
+            local_mem.clear();
+            alloca_plan.clear();
+            transient_mallocs.clear();
 
-            local_mem.insert(func, prepared.local_mem);
-            alloca_plan.insert(func, prepared.alloca_plan);
-            allocs.insert(func, prepared.alloc);
-            block_orders.insert(func, prepared.block_order);
-            transient_mallocs.insert(func, prepared.transient_mallocs);
+            let mut added_scratch_spill_func = false;
+
+            for &func in funcs {
+                let prepared = module.func_store.modify(func, |function| {
+                    prepare_function(
+                        func,
+                        function,
+                        &module.ctx,
+                        self,
+                        &ptr_escape,
+                        Some(&mem_effects),
+                    )
+                });
+
+                if prepared.alloc.uses_scratch_spills() && scratch_spill_funcs.insert(func) {
+                    added_scratch_spill_func = true;
+                }
+
+                local_mem.insert(func, prepared.local_mem);
+                alloca_plan.insert(func, prepared.alloca_plan);
+                allocs.insert(func, prepared.alloc);
+                block_orders.insert(func, prepared.block_order);
+                transient_mallocs.insert(func, prepared.transient_mallocs);
+            }
+
+            if !added_scratch_spill_func {
+                break;
+            }
+
+            mem_effects = compute_func_mem_effects(
+                module,
+                funcs,
+                &plan_pass1,
+                &local_mem_pass1,
+                &scratch_spill_funcs,
+                &self.isa,
+            );
         }
 
         let mut plan = compute_program_memory_plan(module, funcs, &local_mem, &alloca_plan);
@@ -1541,7 +1576,15 @@ fn prepare_function(
             |effects| compute_call_live_values_filtered(function, &inst_liveness, effects),
         );
 
-        let scratch_spill_slots = scratch_spill_slots_v1(function, &backend.isa);
+        let scratch_spill_slots = scratch_plan::SCRATCH_SPILL_SLOTS;
+        let scratch_live_values = scratch_plan::compute_scratch_live_values(
+            function,
+            module,
+            &backend.isa,
+            ptr_escape,
+            mem_effects,
+            &inst_liveness,
+        );
         let alloc = StackifyAlloc::for_function_with_call_live_values_and_scratch_spills(
             function,
             &cfg,
@@ -1549,6 +1592,7 @@ fn prepare_function(
             &liveness,
             backend.stackify_reach_depth,
             call_live_values.clone(),
+            scratch_live_values,
             scratch_spill_slots,
         );
         let persistent_frame_slots = alloc.persistent_frame_slots;
@@ -1620,48 +1664,6 @@ fn compute_call_live_values_filtered(
     }
 
     call_live_values
-}
-
-fn scratch_spill_slots_v1(function: &Function, isa: &Evm) -> u32 {
-    for block in function.layout.iter_block() {
-        for inst in function.layout.iter_inst(block) {
-            if function.dfg.call_info(inst).is_some() {
-                return 0;
-            }
-
-            let inst = isa.inst_set().resolve_inst(function.dfg.inst(inst));
-            if matches!(
-                inst,
-                EvmInstKind::Mload(_)
-                    | EvmInstKind::Mstore(_)
-                    | EvmInstKind::EvmKeccak256(_)
-                    | EvmInstKind::EvmMcopy(_)
-                    | EvmInstKind::EvmCalldataCopy(_)
-                    | EvmInstKind::EvmCodeCopy(_)
-                    | EvmInstKind::EvmExtCodeCopy(_)
-                    | EvmInstKind::EvmReturnDataCopy(_)
-                    | EvmInstKind::EvmMalloc(_)
-                    | EvmInstKind::EvmMstore8(_)
-                    | EvmInstKind::EvmReturn(_)
-                    | EvmInstKind::EvmRevert(_)
-                    | EvmInstKind::EvmLog0(_)
-                    | EvmInstKind::EvmLog1(_)
-                    | EvmInstKind::EvmLog2(_)
-                    | EvmInstKind::EvmLog3(_)
-                    | EvmInstKind::EvmLog4(_)
-                    | EvmInstKind::EvmCreate(_)
-                    | EvmInstKind::EvmCreate2(_)
-                    | EvmInstKind::EvmCall(_)
-                    | EvmInstKind::EvmCallCode(_)
-                    | EvmInstKind::EvmDelegateCall(_)
-                    | EvmInstKind::EvmStaticCall(_)
-            ) {
-                return 0;
-            }
-        }
-    }
-
-    2
 }
 
 fn debug_print_mem_plan(

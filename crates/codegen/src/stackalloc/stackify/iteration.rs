@@ -78,6 +78,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             self.spill,
             &mut *self.spill_requests,
             &self.ctx.call_live_values,
+            &self.ctx.scratch_live_values,
             self.ctx.scratch_spill_slots,
             free_slots,
             &mut *self.slots,
@@ -99,6 +100,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             self.spill,
             &mut *self.spill_requests,
             &self.ctx.call_live_values,
+            &self.ctx.scratch_live_values,
             self.ctx.scratch_spill_slots,
             free_slots,
             &mut *self.slots,
@@ -120,6 +122,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             self.spill,
             &mut *self.spill_requests,
             &self.ctx.call_live_values,
+            &self.ctx.scratch_live_values,
             self.ctx.scratch_spill_slots,
             free_slots,
             &mut *self.slots,
@@ -488,15 +491,15 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                 if before != 0 && *n == 0 {
                     state.live_future.remove(v);
                     if !state.live_out.contains(v) {
-                        if self.ctx.call_live_values.contains(v) {
-                            self.slots
-                                .persistent
-                                .release_if_assigned(v, &mut state.free_slots.persistent);
-                        } else {
-                            self.slots
-                                .transient
-                                .release_if_assigned(v, &mut state.free_slots.transient);
-                        }
+                        self.slots
+                            .persistent
+                            .release_if_assigned(v, &mut state.free_slots.persistent);
+                        self.slots
+                            .scratch
+                            .release_if_assigned(v, &mut state.free_slots.scratch);
+                        self.slots
+                            .transient
+                            .release_if_assigned(v, &mut state.free_slots.transient);
                     }
                 }
             }
