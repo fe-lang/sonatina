@@ -27,7 +27,7 @@ mod sym_stack;
 mod templates;
 mod trace;
 
-pub use alloc::StackifyAlloc;
+pub use alloc::{StackifyAlloc, StackifyLiveValues};
 
 use builder::StackifyContext;
 

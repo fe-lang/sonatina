@@ -21,7 +21,7 @@ use crate::{
         lower::{FixupUpdate, Lower, LowerBackend, LoweredFunction, SectionLoweringCtx},
         vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeInst},
     },
-    stackalloc::{Action, Actions, Allocator, StackifyAlloc},
+    stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyLiveValues},
 };
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
@@ -1591,8 +1591,10 @@ fn prepare_function(
             &dom,
             &liveness,
             backend.stackify_reach_depth,
-            call_live_values.clone(),
-            scratch_live_values,
+            StackifyLiveValues {
+                call_live_values: call_live_values.clone(),
+                scratch_live_values,
+            },
             scratch_spill_slots,
         );
         let persistent_frame_slots = alloc.persistent_frame_slots;

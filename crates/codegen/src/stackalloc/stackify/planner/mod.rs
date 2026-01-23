@@ -30,20 +30,17 @@ impl<'a> MemPlan<'a> {
     pub(super) fn new(
         spill: SpillSet<'a>,
         spill_requests: &'a mut BitSet<ValueId>,
-        call_live_values: &'a BitSet<ValueId>,
-        scratch_live_values: &'a BitSet<ValueId>,
-        scratch_spill_slots: u32,
+        ctx: &'a StackifyContext<'_>,
         free_slots: &'a mut FreeSlotPools,
         slots: &'a mut SpillSlotPools,
-        liveness: &'a Liveness,
     ) -> Self {
         Self {
-            call_live_values,
-            scratch_live_values,
-            scratch_spill_slots,
+            call_live_values: &ctx.call_live_values,
+            scratch_live_values: &ctx.scratch_live_values,
+            scratch_spill_slots: ctx.scratch_spill_slots,
             free_slots,
             slots,
-            liveness,
+            liveness: ctx.liveness,
             spill: SpillDiscovery::new(spill, spill_requests),
         }
     }
@@ -62,10 +59,6 @@ impl<'a> MemPlan<'a> {
 
     pub(super) fn slot_state(&self) -> &SpillSlotPools {
         &*self.slots
-    }
-
-    pub(super) fn liveness(&self) -> &Liveness {
-        self.liveness
     }
 
     fn load_frame_slot_or_placeholder(&mut self, v: ValueId) -> Action {
