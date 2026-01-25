@@ -1,0 +1,33 @@
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i1) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v1.*i256 = alloca i256;
+        mstore v1 1.i256 i256;
+        jump block3;
+
+    block2:
+        v2.*i256 = alloca i256;
+        mstore v2 2.i256 i256;
+        jump block3;
+
+    block3:
+        return 0.i256;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = call %main 1.i1;
+        mstore 0.i32 v0 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+

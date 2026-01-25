@@ -105,6 +105,171 @@ impl EvmBackend {
         self.stackify_reach_depth
     }
 
+    /// Render a deterministic memory-plan summary for snapshot tests.
+    ///
+    /// This intentionally includes alloca layout (class/offset/size + computed address),
+    /// so snapshots can assert that alloca reuse is correct across loops/branches.
+    pub fn snapshot_mem_plan(&self, module: &Module, funcs: &[FuncRef]) -> String {
+        use std::fmt::Write as _;
+
+        let state = self.section_state.borrow();
+        let Some(section) = state.as_ref() else {
+            return String::new();
+        };
+
+        let mut out = String::new();
+        writeln!(
+            &mut out,
+            "evm mem plan: dyn_base=0x{:x} static_base=0x{:x}",
+            section.plan.dyn_base, STATIC_BASE
+        )
+        .expect("mem plan write failed");
+
+        for &func in funcs {
+            let Some(func_plan) = section.plan.funcs.get(&func) else {
+                continue;
+            };
+
+            let name = module.ctx.func_sig(func, |sig| sig.name().to_string());
+
+            let mut spill_slots: Option<u32> = None;
+            match &func_plan.scheme {
+                MemScheme::StaticTree(st) => {
+                    writeln!(
+                        &mut out,
+                        "evm mem plan: {name} scheme=StaticTree base_words={} persistent_words={} alloca_words={} persistent_alloca_words={}",
+                        st.base_words,
+                        st.persistent_words,
+                        func_plan.alloca_words,
+                        func_plan.persistent_alloca_words
+                    )
+                    .expect("mem plan write failed");
+                }
+                MemScheme::DynamicFrame => {
+                    let spill_slots_inner = section
+                        .allocs
+                        .get(&func)
+                        .map(|alloc| alloc.frame_size_slots());
+                    spill_slots = spill_slots_inner;
+                    let frame_slots = spill_slots_inner
+                        .and_then(|slots| slots.checked_add(func_plan.alloca_words));
+
+                    let frame_slots =
+                        frame_slots.map_or_else(|| "-".to_string(), |w| w.to_string());
+                    let spill_slots =
+                        spill_slots_inner.map_or_else(|| "-".to_string(), |w| w.to_string());
+
+                    writeln!(
+                        &mut out,
+                        "evm mem plan: {name} scheme=DynamicFrame frame_slots={frame_slots} spill_slots={spill_slots} alloca_words={} persistent_alloca_words={}",
+                        func_plan.alloca_words, func_plan.persistent_alloca_words
+                    )
+                    .expect("mem plan write failed");
+                }
+            }
+
+            let mut allocas: Vec<(ValueId, AllocaClass, u32, u32, String)> = Vec::new();
+            module.func_store.view(func, |function| {
+                for block in function.layout.iter_block() {
+                    for insn in function.layout.iter_inst(block) {
+                        let data = self.isa.inst_set().resolve_inst(function.dfg.inst(insn));
+                        let EvmInstKind::Alloca(alloca) = data else {
+                            continue;
+                        };
+                        let Some(value) = function.dfg.inst_result(insn) else {
+                            continue;
+                        };
+                        let StackObjectPlan {
+                            class,
+                            offset_words,
+                        } = *func_plan.alloca.get(&insn).expect("missing alloca plan");
+
+                        let size_bytes = self
+                            .isa
+                            .type_layout()
+                            .size_of(*alloca.ty(), &module.ctx)
+                            .expect("alloca has invalid type")
+                            as u32;
+                        let size_words = size_bytes.div_ceil(WORD_BYTES);
+
+                        let addr = match &func_plan.scheme {
+                            MemScheme::StaticTree(st) => {
+                                let persistent_spills = st
+                                    .persistent_words
+                                    .checked_sub(func_plan.persistent_alloca_words)
+                                    .expect("persistent spill words underflow");
+
+                                let addr_words = match class {
+                                    AllocaClass::Persistent => st
+                                        .base_words
+                                        .checked_add(persistent_spills)
+                                        .and_then(|w| w.checked_add(offset_words))
+                                        .expect("alloca address words overflow"),
+                                    AllocaClass::Transient => st
+                                        .base_words
+                                        .checked_add(st.persistent_words)
+                                        .and_then(|w| w.checked_add(offset_words))
+                                        .expect("alloca address words overflow"),
+                                };
+
+                                let addr_bytes = STATIC_BASE
+                                    .checked_add(
+                                        WORD_BYTES
+                                            .checked_mul(addr_words)
+                                            .expect("alloca address bytes overflow"),
+                                    )
+                                    .expect("alloca address bytes overflow");
+
+                                format!("0x{addr_bytes:x}")
+                            }
+                            MemScheme::DynamicFrame => match spill_slots {
+                                Some(spill_slots) => {
+                                    let offset_words = match class {
+                                        AllocaClass::Persistent => offset_words,
+                                        AllocaClass::Transient => func_plan
+                                            .persistent_alloca_words
+                                            .checked_add(offset_words)
+                                            .expect("dynamic alloca offset overflow"),
+                                    };
+                                    let addr_words = spill_slots
+                                        .checked_add(offset_words)
+                                        .expect("alloca address words overflow");
+                                    let addr_bytes = addr_words
+                                        .checked_mul(WORD_BYTES)
+                                        .expect("alloca address bytes overflow");
+                                    if addr_bytes == 0 {
+                                        "fp".to_string()
+                                    } else {
+                                        format!("fp+0x{addr_bytes:x}")
+                                    }
+                                }
+                                None => "<unknown>".to_string(),
+                            },
+                        };
+
+                        allocas.push((value, class, offset_words, size_words, addr));
+                    }
+                }
+            });
+
+            if allocas.is_empty() {
+                continue;
+            }
+
+            allocas.sort_unstable_by_key(|(v, _, _, _, _)| v.as_u32());
+            for (value, class, offset_words, size_words, addr) in allocas {
+                writeln!(
+                    &mut out,
+                    "  alloca v{} class={class:?} offset_words={offset_words} size_words={size_words} addr={addr}",
+                    value.as_u32()
+                )
+                .expect("mem plan write failed");
+            }
+        }
+
+        out
+    }
+
     fn take_prepared_function(&self, func: FuncRef) -> Option<PreparedLowering> {
         let mut state = self.section_state.borrow_mut();
         let section = state.as_mut()?;
@@ -1606,7 +1771,10 @@ fn prepare_function(
             module,
             &backend.isa,
             ptr_escape,
-            &call_live_values,
+            alloca_plan::AllocaLayoutLiveness {
+                call_live_values: &call_live_values,
+                inst_liveness: &inst_liveness,
+            },
             &block_order,
         );
 
