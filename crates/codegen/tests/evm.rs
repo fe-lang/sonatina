@@ -107,6 +107,8 @@ fn test_evm(fixture: Fixture<&str>) {
 
     backend.prepare_section(&parsed.module, &parsed.debug.func_order, &section_ctx);
 
+    let mem_plan = backend.snapshot_mem_plan(&parsed.module, &parsed.debug.func_order);
+
     let mut stackify_out = Vec::new();
     let mut lowered_out = Vec::new();
     for fref in parsed.debug.func_order.iter() {
@@ -134,6 +136,9 @@ fn test_evm(fixture: Fixture<&str>) {
     }
 
     let mut v = Vec::new();
+    if !mem_plan.is_empty() {
+        writeln!(&mut v, "{mem_plan}").unwrap();
+    }
     v.append(&mut stackify_out);
     v.append(&mut lowered_out);
 

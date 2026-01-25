@@ -1,4 +1,4 @@
-use crate::bitset::BitSet;
+use crate::{bitset::BitSet, liveness::InstLiveness};
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
@@ -36,13 +36,19 @@ pub(crate) struct StackAllocaLayout {
     pub(crate) transient_words: u32,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct AllocaLayoutLiveness<'a> {
+    pub(crate) call_live_values: &'a BitSet<ValueId>,
+    pub(crate) inst_liveness: &'a InstLiveness,
+}
+
 pub(crate) fn compute_stack_alloca_layout(
     func_ref: FuncRef,
     function: &Function,
     module: &ModuleCtx,
     isa: &Evm,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
-    call_live_values: &BitSet<ValueId>,
+    live: AllocaLayoutLiveness<'_>,
     block_order: &[BlockId],
 ) -> StackAllocaLayout {
     let (inst_order, inst_pos) = compute_inst_order(function, block_order);
@@ -97,16 +103,16 @@ pub(crate) fn compute_stack_alloca_layout(
     }
 
     let mut persistent: FxHashSet<InstId> = FxHashSet::default();
-    for val in call_live_values.iter() {
+    for val in live.call_live_values.iter() {
         for inst in prov[val].alloca_insts() {
             persistent.insert(inst);
         }
     }
 
-    let mut last_use: FxHashMap<InstId, u32> = FxHashMap::default();
+    let mut last_live: FxHashMap<InstId, u32> = FxHashMap::default();
     for &inst in allocas.keys() {
         let pos = inst_pos.get(&inst).copied().unwrap_or_default();
-        last_use.insert(inst, pos);
+        last_live.insert(inst, pos);
     }
 
     for &inst in &inst_order {
@@ -116,26 +122,35 @@ pub(crate) fn compute_stack_alloca_layout(
             for (val, pred) in phi.args().iter() {
                 let use_pos = block_end_pos.get(pred).copied().unwrap_or_default();
                 for base in prov[*val].alloca_insts() {
-                    let entry = last_use.get_mut(&base).expect("missing alloca last-use");
+                    let entry = last_live.get_mut(&base).expect("missing alloca last-live");
                     *entry = (*entry).max(use_pos);
                 }
             }
-            continue;
+        } else {
+            function.dfg.inst(inst).for_each_value(&mut |v| {
+                for base in prov[v].alloca_insts() {
+                    let entry = last_live.get_mut(&base).expect("missing alloca last-live");
+                    *entry = (*entry).max(pos);
+                }
+            });
         }
 
-        function.dfg.inst(inst).for_each_value(&mut |v| {
-            for base in prov[v].alloca_insts() {
-                let entry = last_use.get_mut(&base).expect("missing alloca last-use");
+        for val in live.inst_liveness.live_out(inst).iter() {
+            if prov[val].is_empty() {
+                continue;
+            }
+            for base in prov[val].alloca_insts() {
+                let entry = last_live.get_mut(&base).expect("missing alloca last-live");
                 *entry = (*entry).max(pos);
             }
-        });
+        }
     }
 
     let mut persistent_objects: Vec<AllocaObject> = Vec::new();
     let mut transient_objects: Vec<AllocaObject> = Vec::new();
     for (&inst, &size_words) in &allocas {
         let start_pos = inst_pos.get(&inst).copied().unwrap_or_default();
-        let end_pos = last_use.get(&inst).copied().unwrap_or(start_pos);
+        let end_pos = last_live.get(&inst).copied().unwrap_or(start_pos);
         let obj = AllocaObject {
             inst,
             start_pos,
@@ -448,7 +463,10 @@ fn color_allocas(objects: &mut [AllocaObject]) -> (FxHashMap<InstId, u32>, u32) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{domtree::DomTree, liveness::Liveness};
+    use crate::{
+        domtree::DomTree,
+        liveness::{InstLiveness, Liveness},
+    };
     use sonatina_ir::cfg::ControlFlowGraph;
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
@@ -506,18 +524,25 @@ block4:
             let mut liveness = Liveness::new();
             liveness.compute(function, &cfg);
 
+            let mut inst_liveness = InstLiveness::new();
+            inst_liveness.compute(function, &cfg, &liveness);
+
             let mut dom = DomTree::new();
             dom.compute(&cfg);
 
             let block_order = dom.rpo().to_owned();
 
+            let call_live_values = BitSet::default();
             let layout = compute_stack_alloca_layout(
                 f,
                 function,
                 &parsed.module.ctx,
                 &isa,
                 &FxHashMap::default(),
-                &BitSet::default(),
+                AllocaLayoutLiveness {
+                    call_live_values: &call_live_values,
+                    inst_liveness: &inst_liveness,
+                },
                 &block_order,
             );
 
@@ -591,18 +616,25 @@ block0:
             let mut liveness = Liveness::new();
             liveness.compute(function, &cfg);
 
+            let mut inst_liveness = InstLiveness::new();
+            inst_liveness.compute(function, &cfg, &liveness);
+
             let mut dom = DomTree::new();
             dom.compute(&cfg);
 
             let block_order = dom.rpo().to_owned();
 
+            let call_live_values = BitSet::default();
             let _ = compute_stack_alloca_layout(
                 f,
                 function,
                 &parsed.module.ctx,
                 &isa,
                 &FxHashMap::default(),
-                &BitSet::default(),
+                AllocaLayoutLiveness {
+                    call_live_values: &call_live_values,
+                    inst_liveness: &inst_liveness,
+                },
                 &block_order,
             );
         });

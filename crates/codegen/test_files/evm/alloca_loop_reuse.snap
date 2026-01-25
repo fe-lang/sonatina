@@ -1,0 +1,185 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(v).unwrap()"
+input_file: test_files/evm/alloca_loop_reuse.sntn
+---
+evm mem plan: dyn_base=0x100 static_base=0xc0
+evm mem plan: main scheme=StaticTree base_words=0 persistent_words=0 alloca_words=2 persistent_alloca_words=0
+  alloca v0 class=Transient offset_words=0 size_words=1 addr=0xc0
+  alloca v3 class=Transient offset_words=1 size_words=1 addr=0xe0
+evm mem plan: entry scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
+
+// func public %main() -> i256
+  block0 P=[] T=[]
+    - stack=[<RET>]
+      alloca [] -> v0
+    - stack=[v0, <RET>]
+      exit(block1): [PUSH(0)]
+      jump -> block1
+  block1 P=[v1] T=[v0]
+    - stack=[v1, v0, <RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), DUP3]
+      mstore [v0, I256 { is_negative: false, abs: 0 }]
+    - stack=[v1, v0, <RET>]
+      pre: [PUSH(2), DUP2]
+      lt [v1, 2] -> v2
+    - stack=[v2, v1, v0, <RET>]
+      br [v2] -> [block2, block3]
+  block2 P=[] T=[v1, v0]
+    inherited from block1: [v1, v0, <RET>]
+    - stack=[v1, v0, <RET>]
+      alloca [] -> v3
+    - stack=[v3, v1, v0, <RET>], last_use=[v3]
+      pre: [PUSH(I256 { is_negative: false, abs: 1 }), SWAP1]
+      mstore [v3, I256 { is_negative: false, abs: 1 }]
+    - stack=[v1, v0, <RET>], last_use=[v1]
+      pre: [PUSH(1)]
+      add [1, v1] -> v4
+    - stack=[v4, v0, <RET>]
+      jump -> block1
+  block3 P=[] T=[]
+    inherited from block1: [v1x, v0x, <RET>]
+    prologue: [POP, POP]
+    - stack=[<RET>]
+      return: [PUSH(I256 { is_negative: false, abs: 0 })]
+      return [I256 { is_negative: false, abs: 0 }]
+
+// func public %entry()
+  block0 P=[] T=[]
+    - stack=[]
+      pre: [PUSH_CONT]
+      call [] -> v0
+    - stack=[v0], last_use=[v0]
+      pre: [PUSH(0)]
+      mstore [0, v0]
+    - stack=[]
+      pre: [PUSH(32), PUSH(0)]
+      evm_return [0, 32]
+
+// func public %main() -> i256
+main:
+  block0:
+    JUMPDEST
+    PUSH1 0xc0 (192)  // v0.*i256 = alloca i256;
+    PUSH0  // jump block1;
+  block1:
+    JUMPDEST
+    PUSH0  // mstore v0 0.i256 i256;
+    DUP3
+    MSTORE
+    PUSH1 0x2 (2)  // v2.i1 = lt v1 2.i32;
+    DUP2
+    LT
+    ISZERO  // br v2 block2 block3;
+    PUSH1 block3
+    JUMPI
+  block2:
+    JUMPDEST
+    PUSH1 0xe0 (224)  // v3.*i256 = alloca i256;
+    PUSH1 0x1 (1)  // mstore v3 1.i256 i256;
+    SWAP1
+    MSTORE
+    PUSH1 0x1 (1)  // v4.i32 = add v1 1.i32;
+    ADD
+    PUSH1 block1  // jump block1;
+    JUMP
+  block3:
+    JUMPDEST
+    POP  // return 0.i256;
+    POP
+    PUSH0
+    SWAP1
+    JUMP
+
+// func public %entry()
+entry:
+  block0:
+    JUMPDEST
+    PUSH1 `pc + (3)`  // v0.i256 = call %main;
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    PUSH0  // mstore 0.i32 v0 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH0
+    RETURN
+
+
+
+---------------
+
+// section runtime
+0x5b6006600d565b5f5260205ff35b60c05f5b5f82526002811015602a575b60e0600190526001016011565b50505f9056
+
+
+Success { reason: Return, gas_used: 21292, gas_refunded: 0, logs: [], output: Call(0x0000000000000000000000000000000000000000000000000000000000000000) }
+
+    pc  opcode            input (stack grows to the right)
+     0  5b  JUMPDEST      []
+     1  60  PUSH1         0x06  []
+     3  60  PUSH1         0x0d  [0x6]
+     5  56  JUMP          [0x6, 0xd]
+    13  5b  JUMPDEST      [0x6]
+    14  60  PUSH1         0xc0  [0x6]
+    16  5f  PUSH0         [0x6, 0xc0]
+    17  5b  JUMPDEST      [0x6, 0xc0, 0x0]
+    18  5f  PUSH0         [0x6, 0xc0, 0x0]
+    19  82  DUP3          [0x6, 0xc0, 0x0, 0x0]
+    20  52  MSTORE        [0x6, 0xc0, 0x0, 0x0, 0xc0]
+    21  60  PUSH1         0x02  [0x6, 0xc0, 0x0]
+    23  81  DUP2          [0x6, 0xc0, 0x0, 0x2]
+    24  10  LT            [0x6, 0xc0, 0x0, 0x2, 0x0]
+    25  15  ISZERO        [0x6, 0xc0, 0x0, 0x1]
+    26  60  PUSH1         0x2a  [0x6, 0xc0, 0x0, 0x0]
+    28  57  JUMPI         [0x6, 0xc0, 0x0, 0x0, 0x2a]
+    29  5b  JUMPDEST      [0x6, 0xc0, 0x0]
+    30  60  PUSH1         0xe0  [0x6, 0xc0, 0x0]
+    32  60  PUSH1         0x01  [0x6, 0xc0, 0x0, 0xe0]
+    34  90  SWAP1         [0x6, 0xc0, 0x0, 0xe0, 0x1]
+    35  52  MSTORE        [0x6, 0xc0, 0x0, 0x1, 0xe0]
+    36  60  PUSH1         0x01  [0x6, 0xc0, 0x0]
+    38  01  ADD           [0x6, 0xc0, 0x0, 0x1]
+    39  60  PUSH1         0x11  [0x6, 0xc0, 0x1]
+    41  56  JUMP          [0x6, 0xc0, 0x1, 0x11]
+    17  5b  JUMPDEST      [0x6, 0xc0, 0x1]
+    18  5f  PUSH0         [0x6, 0xc0, 0x1]
+    19  82  DUP3          [0x6, 0xc0, 0x1, 0x0]
+    20  52  MSTORE        [0x6, 0xc0, 0x1, 0x0, 0xc0]
+    21  60  PUSH1         0x02  [0x6, 0xc0, 0x1]
+    23  81  DUP2          [0x6, 0xc0, 0x1, 0x2]
+    24  10  LT            [0x6, 0xc0, 0x1, 0x2, 0x1]
+    25  15  ISZERO        [0x6, 0xc0, 0x1, 0x1]
+    26  60  PUSH1         0x2a  [0x6, 0xc0, 0x1, 0x0]
+    28  57  JUMPI         [0x6, 0xc0, 0x1, 0x0, 0x2a]
+    29  5b  JUMPDEST      [0x6, 0xc0, 0x1]
+    30  60  PUSH1         0xe0  [0x6, 0xc0, 0x1]
+    32  60  PUSH1         0x01  [0x6, 0xc0, 0x1, 0xe0]
+    34  90  SWAP1         [0x6, 0xc0, 0x1, 0xe0, 0x1]
+    35  52  MSTORE        [0x6, 0xc0, 0x1, 0x1, 0xe0]
+    36  60  PUSH1         0x01  [0x6, 0xc0, 0x1]
+    38  01  ADD           [0x6, 0xc0, 0x1, 0x1]
+    39  60  PUSH1         0x11  [0x6, 0xc0, 0x2]
+    41  56  JUMP          [0x6, 0xc0, 0x2, 0x11]
+    17  5b  JUMPDEST      [0x6, 0xc0, 0x2]
+    18  5f  PUSH0         [0x6, 0xc0, 0x2]
+    19  82  DUP3          [0x6, 0xc0, 0x2, 0x0]
+    20  52  MSTORE        [0x6, 0xc0, 0x2, 0x0, 0xc0]
+    21  60  PUSH1         0x02  [0x6, 0xc0, 0x2]
+    23  81  DUP2          [0x6, 0xc0, 0x2, 0x2]
+    24  10  LT            [0x6, 0xc0, 0x2, 0x2, 0x2]
+    25  15  ISZERO        [0x6, 0xc0, 0x2, 0x0]
+    26  60  PUSH1         0x2a  [0x6, 0xc0, 0x2, 0x1]
+    28  57  JUMPI         [0x6, 0xc0, 0x2, 0x1, 0x2a]
+    42  5b  JUMPDEST      [0x6, 0xc0, 0x2]
+    43  50  POP           [0x6, 0xc0, 0x2]
+    44  50  POP           [0x6, 0xc0]
+    45  5f  PUSH0         [0x6]
+    46  90  SWAP1         [0x6, 0x0]
+    47  56  JUMP          [0x0, 0x6]
+     6  5b  JUMPDEST      [0x0]
+     7  5f  PUSH0         [0x0]
+     8  52  MSTORE        [0x0, 0x0]
+     9  60  PUSH1         0x20  []
+    11  5f  PUSH0         [0x20]
+    12  f3  RETURN        [0x20, 0x0]

@@ -3,6 +3,13 @@ source: crates/codegen/tests/evm.rs
 expression: "String::from_utf8(v).unwrap()"
 input_file: test_files/evm/malloc_path_sensitive.sntn
 ---
+evm mem plan: dyn_base=0x1c0 static_base=0xc0
+evm mem plan: big scheme=StaticTree base_words=0 persistent_words=0 alloca_words=8 persistent_alloca_words=0
+  alloca v0 class=Transient offset_words=0 size_words=8 addr=0xc0
+evm mem plan: small scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
+evm mem plan: dispatch scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
+evm mem plan: entry scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
+
 // func public %big() -> i256
   block0 P=[] T=[]
     - stack=[<RET>]
