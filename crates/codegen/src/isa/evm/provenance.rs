@@ -28,6 +28,7 @@ impl PtrBase {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Provenance {
     bases: SmallVec<[PtrBase; 4]>,
+    unknown_ptr: bool,
 }
 
 impl Provenance {
@@ -35,7 +36,26 @@ impl Provenance {
         self.bases.is_empty()
     }
 
+    pub(crate) fn is_unknown_ptr(&self) -> bool {
+        self.unknown_ptr
+    }
+
+    fn mark_unknown_ptr(&mut self) -> bool {
+        let changed = !self.unknown_ptr || !self.bases.is_empty();
+        self.unknown_ptr = true;
+        self.bases.clear();
+        changed
+    }
+
     pub(crate) fn union_with(&mut self, other: &Self) -> bool {
+        if self.unknown_ptr {
+            return false;
+        }
+
+        if other.unknown_ptr {
+            return self.mark_unknown_ptr();
+        }
+
         if other.bases.is_empty() {
             return false;
         }
@@ -67,7 +87,9 @@ impl Provenance {
     }
 
     pub(crate) fn is_local_addr(&self) -> bool {
-        !self.bases.is_empty() && self.bases.iter().all(|b| matches!(b, PtrBase::Alloca(_)))
+        !self.unknown_ptr
+            && !self.bases.is_empty()
+            && self.bases.iter().all(|b| matches!(b, PtrBase::Alloca(_)))
     }
 
     pub(crate) fn alloca_insts(&self) -> impl Iterator<Item = InstId> + '_ {
@@ -83,6 +105,62 @@ impl Provenance {
             PtrBase::Malloc(inst) => Some(*inst),
             PtrBase::Arg(_) | PtrBase::Alloca(_) => None,
         })
+    }
+}
+
+fn store_local_mem(
+    mem: &mut FxHashMap<InstId, Provenance>,
+    addr_prov: &Provenance,
+    val_prov: &Provenance,
+) -> bool {
+    if !addr_prov.is_local_addr() {
+        return false;
+    }
+
+    let mut changed = false;
+    for base in addr_prov.alloca_insts() {
+        changed |= mem.entry(base).or_default().union_with(val_prov);
+    }
+    changed
+}
+
+fn load_local_mem(mem: &FxHashMap<InstId, Provenance>, addr_prov: &Provenance) -> Provenance {
+    let mut out = Provenance::default();
+    if addr_prov.is_local_addr() {
+        for base in addr_prov.alloca_insts() {
+            if let Some(stored) = mem.get(&base) {
+                let _ = out.union_with(stored);
+            }
+        }
+    }
+    out
+}
+
+fn poison_local_mem(mem: &mut FxHashMap<InstId, Provenance>, addr_prov: &Provenance) -> bool {
+    if !addr_prov.is_local_addr() {
+        return false;
+    }
+
+    let mut changed = false;
+    for base in addr_prov.alloca_insts() {
+        changed |= mem.entry(base).or_default().mark_unknown_ptr();
+    }
+    changed
+}
+
+fn unmodeled_write_addr(data: &EvmInstKind) -> Option<ValueId> {
+    match data {
+        EvmInstKind::EvmMstore8(mstore8) => Some(*mstore8.addr()),
+        EvmInstKind::EvmMcopy(mcopy) => Some(*mcopy.dest()),
+        EvmInstKind::EvmCalldataCopy(copy) => Some(*copy.dst_addr()),
+        EvmInstKind::EvmCodeCopy(copy) => Some(*copy.dst_addr()),
+        EvmInstKind::EvmExtCodeCopy(copy) => Some(*copy.dst_addr()),
+        EvmInstKind::EvmReturnDataCopy(copy) => Some(*copy.dst_addr()),
+        EvmInstKind::EvmCall(call) => Some(*call.ret_addr()),
+        EvmInstKind::EvmCallCode(call) => Some(*call.ret_addr()),
+        EvmInstKind::EvmDelegateCall(call) => Some(*call.ret_addr()),
+        EvmInstKind::EvmStaticCall(call) => Some(*call.ret_addr()),
+        _ => None,
     }
 }
 
@@ -106,16 +184,12 @@ pub(crate) fn compute_value_provenance(
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
-            if let EvmInstKind::Alloca(_) = data
-                && let Some(def) = function.dfg.inst_result(inst)
-            {
-                prov[def].bases.push(PtrBase::Alloca(inst));
-            }
-
-            if let EvmInstKind::EvmMalloc(_) = data
-                && let Some(def) = function.dfg.inst_result(inst)
-            {
-                prov[def].bases.push(PtrBase::Malloc(inst));
+            if let Some(def) = function.dfg.inst_result(inst) {
+                match data {
+                    EvmInstKind::Alloca(_) => prov[def].bases.push(PtrBase::Alloca(inst)),
+                    EvmInstKind::EvmMalloc(_) => prov[def].bases.push(PtrBase::Malloc(inst)),
+                    _ => {}
+                }
             }
         }
     }
@@ -130,19 +204,13 @@ pub(crate) fn compute_value_provenance(
             for inst in function.layout.iter_inst(block) {
                 let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
 
-                if let EvmInstKind::Mstore(mstore) = data {
-                    let addr = *mstore.addr();
-                    let addr_prov = &prov[addr];
-                    if addr_prov.is_local_addr() {
-                        let val = *mstore.value();
-                        let val_prov = &prov[val];
-                        for base in addr_prov.alloca_insts() {
-                            let entry = mem.entry(base).or_default();
-                            if entry.union_with(val_prov) {
-                                changed = true;
-                            }
-                        }
-                    }
+                if let EvmInstKind::Mstore(mstore) = &data {
+                    changed |=
+                        store_local_mem(&mut mem, &prov[*mstore.addr()], &prov[*mstore.value()]);
+                }
+
+                if let Some(dst) = unmodeled_write_addr(&data) {
+                    changed |= poison_local_mem(&mut mem, &prov[dst]);
                 }
 
                 let Some(def) = function.dfg.inst_result(inst) else {
@@ -155,15 +223,7 @@ pub(crate) fn compute_value_provenance(
                     EvmInstKind::Alloca(_) => next.bases.push(PtrBase::Alloca(inst)),
                     EvmInstKind::EvmMalloc(_) => next.bases.push(PtrBase::Malloc(inst)),
                     EvmInstKind::Mload(mload) => {
-                        let addr = *mload.addr();
-                        let addr_prov = &prov[addr];
-                        if addr_prov.is_local_addr() {
-                            for base in addr_prov.alloca_insts() {
-                                if let Some(stored) = mem.get(&base) {
-                                    let _ = next.union_with(stored);
-                                }
-                            }
-                        }
+                        let _ = next.union_with(&load_local_mem(&mem, &prov[*mload.addr()]));
                     }
                     EvmInstKind::Phi(phi) => {
                         for (val, _) in phi.args().iter() {
@@ -180,7 +240,12 @@ pub(crate) fn compute_value_provenance(
                         let _ = next.union_with(&prov[*bc.from()]);
                     }
                     EvmInstKind::IntToPtr(i2p) => {
-                        let _ = next.union_with(&prov[*i2p.from()]);
+                        let from = *i2p.from();
+                        let from_prov = &prov[from];
+                        let _ = next.union_with(from_prov);
+                        if from_prov.bases.is_empty() && !from_prov.unknown_ptr {
+                            next.unknown_ptr = true;
+                        }
                     }
                     EvmInstKind::PtrToInt(p2i) => {
                         let _ = next.union_with(&prov[*p2i.from()]);

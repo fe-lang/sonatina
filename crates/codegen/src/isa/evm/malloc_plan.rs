@@ -1,6 +1,8 @@
+use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    Function, InstId, InstSetExt, Type, ValueId,
+    BlockId, Function, InstId, InstSetExt, Type, ValueId,
+    cfg::ControlFlowGraph,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{
         data::{Mload, Mstore},
@@ -10,7 +12,7 @@ use sonatina_ir::{
     module::{FuncRef, ModuleCtx},
 };
 
-use crate::liveness::InstLiveness;
+use crate::{bitset::BitSet, liveness::InstLiveness};
 
 use super::{
     mem_effects::FuncMemEffects,
@@ -174,13 +176,16 @@ pub(crate) fn compute_transient_mallocs(
             .arg_may_be_returned
     });
 
-    let escaping = compute_escaping_mallocs(function, module, isa, ptr_escape, &prov);
+    let block_malloc_in = compute_block_malloc_in(function, isa);
+    let escaping =
+        compute_escaping_mallocs(function, module, isa, ptr_escape, &prov, &block_malloc_in);
 
     for base in escaping {
         mallocs.remove(&base);
     }
 
     for block in function.layout.iter_block() {
+        let mut seen_mallocs = block_malloc_in[block].clone();
         for inst in function.layout.iter_inst(block) {
             let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
 
@@ -190,7 +195,8 @@ pub(crate) fn compute_transient_mallocs(
                     live.remove(def);
                 }
 
-                remove_live_mallocs(&mut mallocs, &live, &prov);
+                remove_live_mallocs(&mut mallocs, &live, &prov, &seen_mallocs);
+                seen_mallocs.insert(inst);
                 continue;
             }
 
@@ -208,7 +214,7 @@ pub(crate) fn compute_transient_mallocs(
             }
 
             let live = inst_liveness.live_out(inst);
-            remove_live_mallocs(&mut mallocs, live, &prov);
+            remove_live_mallocs(&mut mallocs, live, &prov, &seen_mallocs);
         }
     }
 
@@ -217,14 +223,85 @@ pub(crate) fn compute_transient_mallocs(
 
 fn remove_live_mallocs(
     mallocs: &mut FxHashSet<InstId>,
-    live: &crate::bitset::BitSet<ValueId>,
-    prov: &cranelift_entity::SecondaryMap<ValueId, Provenance>,
+    live: &BitSet<ValueId>,
+    prov: &SecondaryMap<ValueId, Provenance>,
+    seen_mallocs: &BitSet<InstId>,
 ) {
+    let mut has_unknown_ptr = false;
     for v in live.iter() {
-        for base in prov[v].malloc_insts() {
+        let v_prov = &prov[v];
+        if v_prov.is_unknown_ptr() {
+            has_unknown_ptr = true;
+        }
+        for base in v_prov.malloc_insts() {
             mallocs.remove(&base);
         }
     }
+
+    if has_unknown_ptr {
+        mallocs.retain(|m| !seen_mallocs.contains(*m));
+    }
+}
+
+fn compute_block_malloc_in(
+    function: &Function,
+    isa: &Evm,
+) -> SecondaryMap<BlockId, BitSet<InstId>> {
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(function);
+
+    let mut block_in: SecondaryMap<BlockId, BitSet<InstId>> = SecondaryMap::new();
+    let mut block_out: SecondaryMap<BlockId, BitSet<InstId>> = SecondaryMap::new();
+    for block in function.layout.iter_block() {
+        let _ = &mut block_in[block];
+        let _ = &mut block_out[block];
+    }
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+
+        for block in function.layout.iter_block() {
+            let mut next_in = BitSet::default();
+            for pred in cfg.preds_of(block) {
+                next_in.union_with(&block_out[*pred]);
+            }
+
+            let mut next_out = next_in.clone();
+            for inst in function.layout.iter_inst(block) {
+                if matches!(
+                    isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                    EvmInstKind::EvmMalloc(_)
+                ) {
+                    next_out.insert(inst);
+                }
+            }
+
+            if block_in[block] != next_in {
+                block_in[block] = next_in;
+                changed = true;
+            }
+            if block_out[block] != next_out {
+                block_out[block] = next_out;
+                changed = true;
+            }
+        }
+    }
+
+    block_in
+}
+
+fn record_escaping_mallocs(
+    escaping: &mut FxHashSet<InstId>,
+    value: ValueId,
+    prov: &SecondaryMap<ValueId, Provenance>,
+    seen_mallocs: &BitSet<InstId>,
+) {
+    let p = &prov[value];
+    if p.is_unknown_ptr() {
+        escaping.extend(seen_mallocs.iter());
+    }
+    escaping.extend(p.malloc_insts());
 }
 
 fn compute_escaping_mallocs(
@@ -232,11 +309,13 @@ fn compute_escaping_mallocs(
     module: &ModuleCtx,
     isa: &Evm,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
-    prov: &cranelift_entity::SecondaryMap<ValueId, Provenance>,
+    prov: &SecondaryMap<ValueId, Provenance>,
+    block_malloc_in: &SecondaryMap<BlockId, BitSet<InstId>>,
 ) -> FxHashSet<InstId> {
     let mut escaping: FxHashSet<InstId> = FxHashSet::default();
 
     for block in function.layout.iter_block() {
+        let mut seen_mallocs = block_malloc_in[block].clone();
         for inst in function.layout.iter_inst(block) {
             let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
             match data {
@@ -244,9 +323,7 @@ fn compute_escaping_mallocs(
                     let Some(ret_val) = *ret.arg() else {
                         continue;
                     };
-                    for base in prov[ret_val].malloc_insts() {
-                        escaping.insert(base);
-                    }
+                    record_escaping_mallocs(&mut escaping, ret_val, prov, &seen_mallocs);
                 }
                 EvmInstKind::Mstore(mstore) => {
                     let addr = *mstore.addr();
@@ -255,9 +332,7 @@ fn compute_escaping_mallocs(
                     }
 
                     let val = *mstore.value();
-                    for base in prov[val].malloc_insts() {
-                        escaping.insert(base);
-                    }
+                    record_escaping_mallocs(&mut escaping, val, prov, &seen_mallocs);
                 }
                 EvmInstKind::Call(call) => {
                     let callee = *call.callee();
@@ -267,13 +342,15 @@ fn compute_escaping_mallocs(
                         .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee));
                     for (idx, &arg) in call.args().iter().enumerate() {
                         if idx < callee_sum.arg_may_escape.len() && callee_sum.arg_may_escape[idx] {
-                            for base in prov[arg].malloc_insts() {
-                                escaping.insert(base);
-                            }
+                            record_escaping_mallocs(&mut escaping, arg, prov, &seen_mallocs);
                         }
                     }
                 }
                 _ => {}
+            }
+
+            if matches!(data, EvmInstKind::EvmMalloc(_)) {
+                seen_mallocs.insert(inst);
             }
         }
     }
@@ -294,8 +371,9 @@ fn value_may_be_heap_derived(
     function: &Function,
     module: &ModuleCtx,
     value: ValueId,
-    prov: &cranelift_entity::SecondaryMap<ValueId, Provenance>,
+    prov: &SecondaryMap<ValueId, Provenance>,
 ) -> bool {
     prov[value].malloc_insts().next().is_some()
+        || prov[value].is_unknown_ptr()
         || (function.dfg.value_ty(value).is_pointer(module) && prov[value].is_empty())
 }
