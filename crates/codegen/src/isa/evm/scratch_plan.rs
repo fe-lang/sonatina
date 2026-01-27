@@ -46,7 +46,7 @@ fn addr_may_overlap_scratch(
     }
 
     let prov = &prov[addr];
-    prov.is_empty() || prov.has_any_arg()
+    prov.is_unknown_ptr() || prov.is_empty() || prov.has_any_arg()
 }
 
 pub(crate) fn inst_is_scratch_clobber(
