@@ -1,0 +1,40 @@
+#! SCCP folds EVM `addmod`/`mulmod` when operands are constant.
+
+target = "evm-ethereum-london"
+
+# sameln: func public %addmod_fold() -> i32 {
+# nextln:     block0:
+# nextln:         return 3.i32;
+func public %addmod_fold() -> i32 {
+    block0:
+        v0.i32 = evm_add_mod 5.i32 6.i32 4.i32;
+        return v0;
+}
+
+# sameln: func public %mulmod_fold() -> i32 {
+# nextln:     block0:
+# nextln:         return 2.i32;
+func public %mulmod_fold() -> i32 {
+    block0:
+        v0.i32 = evm_mul_mod 5.i32 6.i32 4.i32;
+        return v0;
+}
+
+# sameln: func public %addmod_modulus_zero() -> i32 {
+# nextln:     block0:
+# nextln:         return 0.i32;
+func public %addmod_modulus_zero() -> i32 {
+    block0:
+        v0.i32 = evm_add_mod 5.i32 6.i32 0.i32;
+        return v0;
+}
+
+# sameln: func public %mulmod_modulus_zero() -> i32 {
+# nextln:     block0:
+# nextln:         return 0.i32;
+func public %mulmod_modulus_zero() -> i32 {
+    block0:
+        v0.i32 = evm_mul_mod 5.i32 6.i32 0.i32;
+        return v0;
+}
+

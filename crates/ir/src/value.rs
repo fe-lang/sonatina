@@ -375,7 +375,7 @@ impl ops::Shr for Immediate {
     type Output = Self;
 
     fn shr(self, rhs: Self) -> Self::Output {
-        self.apply_binop(rhs, ops::Shl::shl)
+        self.apply_binop(rhs, ops::Shr::shr)
     }
 }
 

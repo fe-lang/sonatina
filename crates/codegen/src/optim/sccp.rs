@@ -176,8 +176,13 @@ impl SccpSolver {
             return;
         };
 
+        let Some(inst_result) = func.dfg.inst_result(inst_id) else {
+            return;
+        };
+
         let inst = func.dfg.inst(inst_id);
         if inst.side_effect().has_effect() {
+            self.set_lattice_cell(inst_result, LatticeCell::Top);
             return;
         }
 
@@ -186,11 +191,10 @@ impl SccpSolver {
             i.interpret(&mut cell_state)
         });
 
-        let inst_result = func.dfg.inst_result(inst_id).unwrap();
-        let cell = if let Some(EvalValue::Imm(value)) = value {
-            LatticeCell::Const(value)
-        } else {
-            cell_state.cell()
+        let cell = match value {
+            Some(EvalValue::Imm(value)) => LatticeCell::Const(value),
+            Some(_) => cell_state.cell(),
+            None => LatticeCell::Top,
         };
 
         self.set_lattice_cell(inst_result, cell);
@@ -205,15 +209,17 @@ impl SccpSolver {
             BranchKind::Br(br) => {
                 let v_cell = self.lattice[*br.cond()];
 
-                if v_cell.is_top() {
-                    self.flow_work.push(FlowEdge::new(inst, *br.z_dest()));
-                    self.flow_work.push(FlowEdge::new(inst, *br.nz_dest()));
-                } else if v_cell.is_bot() {
-                    unreachable!();
-                } else if v_cell.is_zero() {
-                    self.flow_work.push(FlowEdge::new(inst, *br.z_dest()));
-                } else {
-                    self.flow_work.push(FlowEdge::new(inst, *br.nz_dest()));
+                match v_cell {
+                    LatticeCell::Const(_) if v_cell.is_zero() => {
+                        self.flow_work.push(FlowEdge::new(inst, *br.z_dest()));
+                    }
+                    LatticeCell::Const(_) => {
+                        self.flow_work.push(FlowEdge::new(inst, *br.nz_dest()));
+                    }
+                    LatticeCell::Top | LatticeCell::Bot => {
+                        self.flow_work.push(FlowEdge::new(inst, *br.z_dest()));
+                        self.flow_work.push(FlowEdge::new(inst, *br.nz_dest()));
+                    }
                 }
             }
 
@@ -230,36 +236,28 @@ impl SccpSolver {
 
                 let v_cell = self.lattice[*brt.scrutinee()];
 
-                // If the argument of the `BrTable` is top, then add all destinations.
-                if v_cell.is_top() {
+                // If the argument of the `BrTable` is unknown, then add all destinations.
+                if v_cell.is_top() || v_cell.is_bot() {
                     add_all_dest();
                     return;
                 }
 
-                // Verifier verifies that the use of the argument must dominated by the its
-                // definition, so `v_cell` must not be bot.
-                if v_cell.is_bot() {
-                    unreachable!()
-                }
-
-                let mut contains_top = false;
                 for (value, dest) in brt.table() {
-                    if self.lattice[*value] == v_cell {
+                    let entry_cell = self.lattice[*value];
+                    if entry_cell.is_top() || entry_cell.is_bot() {
+                        add_all_dest();
+                        return;
+                    }
+
+                    if entry_cell == v_cell {
                         self.flow_work.push(FlowEdge::new(inst, *dest));
                         return;
-                    } else if v_cell.is_top() {
-                        contains_top = true;
                     }
                 }
 
-                if contains_top {
-                    // If one of the table value is top, then add all dests.
-                    add_all_dest();
-                } else {
-                    // If all table values is not top, then just add default destination.
-                    if let Some(default) = brt.default() {
-                        self.flow_work.push(FlowEdge::new(inst, *default));
-                    }
+                // If all table values are known, then just add default destination.
+                if let Some(default) = brt.default() {
+                    self.flow_work.push(FlowEdge::new(inst, *default));
                 }
             }
         }

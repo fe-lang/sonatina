@@ -1,0 +1,23 @@
+#! Regression: SCCP must treat `Bot` branch conditions conservatively.
+
+target = "evm-ethereum-london"
+
+# sameln: func public %branch_on_undef() -> i32 {
+# nextln:     block0:
+# nextln:         br undef.i1 block1 block2;
+# nextln: 
+# nextln:     block1:
+# nextln:         return 1.i32;
+# nextln: 
+# nextln:     block2:
+# nextln:         return 2.i32;
+func public %branch_on_undef() -> i32 {
+    block0:
+        br undef.i1 block1 block2;
+
+    block1:
+        return 1.i32;
+
+    block2:
+        return 2.i32;
+}
