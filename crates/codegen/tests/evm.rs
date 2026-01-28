@@ -88,6 +88,7 @@ fn parse_sona(content: &str) -> ParsedModule {
 fn test_evm(fixture: Fixture<&str>) {
     let parsed = parse_sona(fixture.content());
     let stackify_reach_depth = stackify_reach_depth_for_fixture(fixture.path());
+    let calldata = calldata_for_fixture(fixture.path());
 
     let backend = EvmBackend::new(Evm::new(sonatina_triple::TargetTriple {
         architecture: Architecture::Evm,
@@ -167,7 +168,6 @@ fn test_evm(fixture: Fixture<&str>) {
         .map(|(_, s)| s.bytes.clone())
         .unwrap();
 
-    let calldata = [0, 0, 0, 11, 0, 0, 0, 22];
     if let Some(init) = init {
         let (create_res, create_trace, db, deployed) = deploy_on_evm(&init);
         writeln!(&mut v, "\n{create_res:?}").unwrap();
@@ -348,6 +348,31 @@ fn stackify_reach_depth_for_fixture(path: &str) -> u8 {
     }
 
     digits.parse().unwrap_or(16)
+}
+
+fn calldata_for_fixture(path: &str) -> Vec<u8> {
+    let Some(stem) = std::path::Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+    else {
+        return vec![0, 0, 0, 11, 0, 0, 0, 22];
+    };
+
+    // TODO: better test case specification :)
+    match stem {
+        // `fe_enum.sntn` expects:
+        // - 4 bytes: selector `1817627404` (big-endian u32)
+        // - 32 bytes: ABI-encoded `u256=42` (big-endian 32 bytes)
+        "fe_enum" => {
+            let mut bytes = Vec::with_capacity(36);
+            bytes.extend_from_slice(&1817627404u32.to_be_bytes());
+            let mut arg = [0u8; 32];
+            arg[31] = 42;
+            bytes.extend_from_slice(&arg);
+            bytes
+        }
+        _ => vec![0, 0, 0, 11, 0, 0, 0, 22],
+    }
 }
 
 fn fmt_evm_stack(stack: &[U256]) -> String {

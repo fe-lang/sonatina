@@ -1,0 +1,311 @@
+---
+source: crates/codegen/tests/evm.rs
+assertion_line: 185
+expression: "String::from_utf8(v).unwrap()"
+input_file: test_files/evm/fe_enum.sntn
+---
+evm mem plan: dyn_base=0xc0 static_base=0xc0
+evm mem plan: abi_encode_u256 scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
+evm mem plan: runtime__StorPtr_Evm___207f35a85ac4062e scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
+
+// func public %abi_encode_u256(v0.i256, v1.i256)
+  block0 P=[v0, v1] T=[]
+    - stack=[v0, v1x], last_use=[v0]
+      cleanup: [SWAP1, POP]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 })]
+      mstore [I256 { is_negative: false, abs: 0 }, v0]
+    - stack=[]
+      pre: [PUSH(I256 { is_negative: false, abs: 32 }), PUSH(I256 { is_negative: false, abs: 0 })]
+      evm_return [I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 32 }]
+
+// func public %runtime__StorPtr_Evm___207f35a85ac4062e()
+  block0 P=[] T=[]
+    - stack=[]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 })]
+      evm_calldata_load [I256 { is_negative: false, abs: 0 }] -> v0
+    - stack=[v0], last_use=[v0]
+      pre: [PUSH(I256 { is_negative: false, abs: 224 })]
+      shr [I256 { is_negative: false, abs: 224 }, v0] -> v1
+    - stack=[v1], last_use=[v1]
+      pre: [PUSH(I256 { is_negative: false, abs: 1817627404 })]
+      eq [I256 { is_negative: false, abs: 1817627404 }, v1] -> v2
+    - stack=[v2]
+      br [v2] -> [block1, block2]
+  block1 P=[] T=[]
+    inherited from block0: []
+    - stack=[]
+      pre: [PUSH(I256 { is_negative: false, abs: 4 })]
+      evm_calldata_load [I256 { is_negative: false, abs: 4 }] -> v3
+    - stack=[v3]
+      pre: [PUSH(I256 { is_negative: false, abs: 64 })]
+      evm_malloc [I256 { is_negative: false, abs: 64 }] -> v4
+    - stack=[v4, v3]
+      pre: [PUSH(I256 { is_negative: false, abs: 1 }), DUP2]
+      mstore [v4, I256 { is_negative: false, abs: 1 }]
+    - stack=[v4, v3]
+      pre: [PUSH(I256 { is_negative: false, abs: 32 }), DUP2]
+      add [v4, I256 { is_negative: false, abs: 32 }] -> v5
+    - stack=[v5, v4, v3], last_use=[v3, v5]
+      pre: [SWAP1, SWAP2, SWAP1]
+      mstore [v5, v3]
+    - stack=[v4]
+      jump -> block6
+  block6 P=[] T=[v4]
+    - stack=[v4]
+      pre: [DUP1]
+      mload [v4] -> v9
+    - stack=[v9, v4]
+      pre: [PUSH(I256 { is_negative: false, abs: 1 }), DUP2]
+      eq [v9, I256 { is_negative: false, abs: 1 }] -> v10
+    - stack=[v10, v9, v4]
+      br [v10] -> [block3, block8]
+  block3 P=[] T=[v4]
+    inherited from block6: [v9x, v4]
+    prologue: [POP]
+    - stack=[v4], last_use=[v4]
+      pre: [PUSH(I256 { is_negative: false, abs: 32 })]
+      add [I256 { is_negative: false, abs: 32 }, v4] -> v6
+    - stack=[v6], last_use=[v6]
+      mload [v6] -> v7
+    - stack=[v7]
+      jump -> block4
+  block8 P=[] T=[v9]
+    inherited from block6: [v9, v4x]
+    prologue: [SWAP1, POP]
+    - stack=[v9], last_use=[v9]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 })]
+      eq [I256 { is_negative: false, abs: 0 }, v9] -> v11
+    - stack=[v11]
+      br [v11] -> [block5, block7]
+  block5 P=[] T=[]
+    inherited from block8: []
+    - stack=[]
+      exit(block4): [PUSH(I256 { is_negative: false, abs: 0 })]
+      jump -> block4
+  block4 P=[v8] T=[]
+    - stack=[v8], last_use=[v8]
+      pre: [PUSH_CONT, PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP3]
+      call [v8, I256 { is_negative: false, abs: 0 }]
+    - stack=[I256 { is_negative: false, abs: 0 }]
+      cleanup: [POP]
+      evm_invalid []
+  block7 P=[] T=[]
+    inherited from block8: []
+    - stack=[]
+      evm_invalid []
+  block2 P=[] T=[]
+    inherited from block0: []
+    - stack=[]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 })]
+      evm_return [I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }]
+
+// func public %abi_encode_u256(v0.i256, v1.i256)
+abi_encode_u256:
+  block0:
+    JUMPDEST
+    SWAP1  // mstore 0.i256 v0 i256;
+    POP
+    PUSH0
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH0
+    RETURN
+
+// func public %runtime__StorPtr_Evm___207f35a85ac4062e()
+runtime__StorPtr_Evm___207f35a85ac4062e:
+  block0:
+    JUMPDEST
+    PUSH0  // v1.i256 = evm_calldata_load 0.i256;
+    CALLDATALOAD
+    PUSH1 0xe0 (224)  // v3.i256 = shr 224.i256 v1;
+    SHR
+    PUSH4 0x6c56cb0c (1817627404)  // v5.i256 = eq v3 1817627404.i256;
+    EQ
+    ISZERO  // br v5 block1 block2;
+    PUSH1 block2
+    JUMPI
+  block1:
+    JUMPDEST
+    PUSH1 0x4 (4)  // v7.i256 = evm_calldata_load 4.i256;
+    CALLDATALOAD
+    PUSH1 0x40 (64)  // v9.i256 = evm_malloc 64.i256;
+    POP
+    PUSH1 0x40 (64)
+    MLOAD
+    PUSH1 0x80 (128)
+    MLOAD
+    DUP2
+    DUP2
+    GT
+    PUSH1 `pc + (5)`
+    JUMPI
+    POP
+    PUSH1 `pc + (5)`
+    JUMP
+    JUMPDEST
+    SWAP1
+    POP
+    JUMPDEST
+    PUSH1 0xc0 (192)
+    DUP2
+    DUP2
+    GT
+    PUSH1 `pc + (5)`
+    JUMPI
+    POP
+    PUSH1 `pc + (5)`
+    JUMP
+    JUMPDEST
+    SWAP1
+    POP
+    JUMPDEST
+    PUSH1 0x1 (1)  // mstore v9 1.i256 i256;
+    DUP2
+    MSTORE
+    PUSH1 0x20 (32)  // v12.i256 = add v9 32.i256;
+    DUP2
+    ADD
+    SWAP1  // mstore v12 v7 i256;
+    SWAP2
+    SWAP1
+    MSTORE
+  block2:
+    JUMPDEST
+    PUSH0  // evm_return 0.i256 0.i256;
+    PUSH0
+    RETURN
+  block3:
+    JUMPDEST
+    POP  // v14.i256 = add v9 32.i256;
+    PUSH1 0x20 (32)
+    ADD
+    MLOAD  // v15.i256 = mload v14 i256;
+    PUSH1 block4  // jump block4;
+    JUMP
+  block4:
+    JUMPDEST
+    PUSH1 `pc + (6)`  // call %abi_encode_u256 v16 0.i256;
+    PUSH0
+    PUSH0
+    SWAP3
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    POP  // evm_invalid;
+    INVALID
+  block5:
+    JUMPDEST
+    PUSH0  // jump block4;
+  block6:
+    JUMPDEST
+    DUP1  // v18.i256 = mload v9 i256;
+    MLOAD
+    PUSH1 0x1 (1)  // v19.i256 = eq v18 1.i256;
+    DUP2
+    EQ
+    ISZERO  // br v19 block3 block8;
+    PUSH1 block8
+    JUMPI
+  block7:
+    JUMPDEST
+    INVALID  // evm_invalid;
+  block8:
+    JUMPDEST
+    SWAP1  // v20.i256 = eq v18 0.i256;
+    POP
+    PUSH0
+    EQ
+    ISZERO  // br v20 block5 block7;
+    PUSH1 block7
+    JUMPI
+
+
+
+---------------
+
+// section runtime
+0x5b5f3560e01c636c56cb0c14156074575b60043560405060405160805181811160275750602a565b90505b60c081811160375750603a565b90505b6001815260208101909190525b80516001811415605b575b50602001516066565b90505f14156072575b5f5b606f5f5f926078565b50fe5bfe5b5f5ff35b90505f5260205ff3
+
+
+Success { reason: Return, gas_used: 21477, gas_refunded: 0, logs: [], output: Call(0x000000000000000000000000000000000000000000000000000000000000002a) }
+
+    pc  opcode            input (stack grows to the right)
+     0  5b  JUMPDEST      []
+     1  5f  PUSH0         []
+     2  35  CALLDATALOAD  [0x0]
+     3  60  PUSH1         0xe0  [0x6c56cb0c00000000000000000000000000000000000000000000000000000000]
+     5  1c  SHR           [0x6c56cb0c00000000000000000000000000000000000000000000000000000000, 0xe0]
+     6  63  PUSH4         0x6c56cb0c  [0x6c56cb0c]
+    11  14  EQ            [0x6c56cb0c, 0x6c56cb0c]
+    12  15  ISZERO        [0x1]
+    13  60  PUSH1         0x74  [0x0]
+    15  57  JUMPI         [0x0, 0x74]
+    16  5b  JUMPDEST      []
+    17  60  PUSH1         0x04  []
+    19  35  CALLDATALOAD  [0x4]
+    20  60  PUSH1         0x40  [0x2a]
+    22  50  POP           [0x2a, 0x40]
+    23  60  PUSH1         0x40  [0x2a]
+    25  51  MLOAD         [0x2a, 0x40]
+    26  60  PUSH1         0x80  [0x2a, 0x0]
+    28  51  MLOAD         [0x2a, 0x0, 0x80]
+    29  81  DUP2          [0x2a, 0x0, 0x0]
+    30  81  DUP2          [0x2a, 0x0, 0x0, 0x0]
+    31  11  GT            [0x2a, 0x0, 0x0, 0x0, 0x0]
+    32  60  PUSH1         0x27  [0x2a, 0x0, 0x0, 0x0]
+    34  57  JUMPI         [0x2a, 0x0, 0x0, 0x0, 0x27]
+    35  50  POP           [0x2a, 0x0, 0x0]
+    36  60  PUSH1         0x2a  [0x2a, 0x0]
+    38  56  JUMP          [0x2a, 0x0, 0x2a]
+    42  5b  JUMPDEST      [0x2a, 0x0]
+    43  60  PUSH1         0xc0  [0x2a, 0x0]
+    45  81  DUP2          [0x2a, 0x0, 0xc0]
+    46  81  DUP2          [0x2a, 0x0, 0xc0, 0x0]
+    47  11  GT            [0x2a, 0x0, 0xc0, 0x0, 0xc0]
+    48  60  PUSH1         0x37  [0x2a, 0x0, 0xc0, 0x1]
+    50  57  JUMPI         [0x2a, 0x0, 0xc0, 0x1, 0x37]
+    55  5b  JUMPDEST      [0x2a, 0x0, 0xc0]
+    56  90  SWAP1         [0x2a, 0x0, 0xc0]
+    57  50  POP           [0x2a, 0xc0, 0x0]
+    58  5b  JUMPDEST      [0x2a, 0xc0]
+    59  60  PUSH1         0x01  [0x2a, 0xc0]
+    61  81  DUP2          [0x2a, 0xc0, 0x1]
+    62  52  MSTORE        [0x2a, 0xc0, 0x1, 0xc0]
+    63  60  PUSH1         0x20  [0x2a, 0xc0]
+    65  81  DUP2          [0x2a, 0xc0, 0x20]
+    66  01  ADD           [0x2a, 0xc0, 0x20, 0xc0]
+    67  90  SWAP1         [0x2a, 0xc0, 0xe0]
+    68  91  SWAP2         [0x2a, 0xe0, 0xc0]
+    69  90  SWAP1         [0xc0, 0xe0, 0x2a]
+    70  52  MSTORE        [0xc0, 0x2a, 0xe0]
+    71  5b  JUMPDEST      [0xc0]
+    72  80  DUP1          [0xc0]
+    73  51  MLOAD         [0xc0, 0xc0]
+    74  60  PUSH1         0x01  [0xc0, 0x1]
+    76  81  DUP2          [0xc0, 0x1, 0x1]
+    77  14  EQ            [0xc0, 0x1, 0x1, 0x1]
+    78  15  ISZERO        [0xc0, 0x1, 0x1]
+    79  60  PUSH1         0x5b  [0xc0, 0x1, 0x0]
+    81  57  JUMPI         [0xc0, 0x1, 0x0, 0x5b]
+    82  5b  JUMPDEST      [0xc0, 0x1]
+    83  50  POP           [0xc0, 0x1]
+    84  60  PUSH1         0x20  [0xc0]
+    86  01  ADD           [0xc0, 0x20]
+    87  51  MLOAD         [0xe0]
+    88  60  PUSH1         0x66  [0x2a]
+    90  56  JUMP          [0x2a, 0x66]
+   102  5b  JUMPDEST      [0x2a]
+   103  60  PUSH1         0x6f  [0x2a]
+   105  5f  PUSH0         [0x2a, 0x6f]
+   106  5f  PUSH0         [0x2a, 0x6f, 0x0]
+   107  92  SWAP3         [0x2a, 0x6f, 0x0, 0x0]
+   108  60  PUSH1         0x78  [0x0, 0x6f, 0x0, 0x2a]
+   110  56  JUMP          [0x0, 0x6f, 0x0, 0x2a, 0x78]
+   120  5b  JUMPDEST      [0x0, 0x6f, 0x0, 0x2a]
+   121  90  SWAP1         [0x0, 0x6f, 0x0, 0x2a]
+   122  50  POP           [0x0, 0x6f, 0x2a, 0x0]
+   123  5f  PUSH0         [0x0, 0x6f, 0x2a]
+   124  52  MSTORE        [0x0, 0x6f, 0x2a, 0x0]
+   125  60  PUSH1         0x20  [0x0, 0x6f]
+   127  5f  PUSH0         [0x0, 0x6f, 0x20]
+   128  f3  RETURN        [0x0, 0x6f, 0x20, 0x0]

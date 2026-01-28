@@ -304,7 +304,7 @@ impl EvmBackend {
         let vcode = module.func_store.view(func, |function| {
             let _plan_guard = CurrentMemPlanGuard::new(&self.current_mem_plan, mem_plan.clone());
             let mut alloc = PlannedAlloc::new(prepared.alloc, mem_plan);
-            let lower = Lower::new(&module.ctx, function);
+            let lower = Lower::new(&module.ctx, function, &prepared.block_order);
             lower.lower(self, &mut alloc).map_err(|e| format!("{e:?}"))
         })?;
 
