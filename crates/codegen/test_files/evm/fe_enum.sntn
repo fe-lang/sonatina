@@ -1,3 +1,10 @@
+#! evm.case: ok
+#!   calldata: u32be(1817627404) u256(42)
+#!   expect: return u256(42)
+#! evm.case: fallback
+#!   calldata: u32be(0)
+#!   expect: return 0x
+
 target = "evm-ethereum-osaka"
 
 func public %abi_encode_u256(v0.i256, v1.i256) {
