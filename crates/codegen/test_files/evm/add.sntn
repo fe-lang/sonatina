@@ -1,3 +1,4 @@
+#! evm.config: { emit_debug_trace: true }
 #! evm.case: ok
 #!   calldata: u32be(11) u32be(22)
 #!   expect: return u256(33)
