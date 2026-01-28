@@ -1,5 +1,6 @@
 use super::vcode::{Label, SymFixup, VCode, VCodeFixup, VCodeInst};
 use crate::stackalloc::Allocator;
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, Function, Immediate, Inst, InstId, Module, Type, ValueId,
@@ -93,16 +94,28 @@ pub struct Lower<'a, Op> {
 
     cur_insn: Option<InstId>,
     cur_block: Option<BlockId>,
+
+    // Optional mapping from block -> next block in the final emission layout.
+    //
+    // When present, `is_next_block` uses this instead of the IR block layout, so
+    // fallthrough optimizations match the actual assembled `block_order`.
+    next_block_in_layout: Option<FxHashMap<BlockId, BlockId>>,
 }
 
 impl<'a, Op: Default> Lower<'a, Op> {
-    pub fn new(module: &'a ModuleCtx, function: &'a Function) -> Self {
+    pub fn new(module: &'a ModuleCtx, function: &'a Function, block_order: &'a [BlockId]) -> Self {
+        let mut next_block_in_layout = FxHashMap::default();
+        for window in block_order.windows(2) {
+            next_block_in_layout.insert(window[0], window[1]);
+        }
+
         Lower {
             module,
             function,
             vcode: VCode::default(),
             cur_insn: None,
             cur_block: None,
+            next_block_in_layout: Some(next_block_in_layout),
         }
     }
 
@@ -199,6 +212,11 @@ impl<'a, Op: Default> Lower<'a, Op> {
         let Some(cur) = self.cur_block else {
             return false;
         };
+
+        if let Some(next_block_in_layout) = &self.next_block_in_layout {
+            return next_block_in_layout.get(&cur).copied() == Some(block);
+        }
+
         self.function.layout.next_block_of(cur) == Some(block)
     }
 }
