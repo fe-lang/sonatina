@@ -116,7 +116,8 @@ pub(super) fn live_in_non_params(
             set.remove(a);
         }
     }
-    // Exclude memory-only values.
+    // Exclude memory-only (spilled) values. These will be loaded from memory when needed,
+    // not carried on the stack.
     set.difference_with(spill.bitset());
     set
 }

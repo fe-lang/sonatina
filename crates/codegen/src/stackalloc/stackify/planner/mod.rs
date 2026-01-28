@@ -17,7 +17,7 @@ use super::{
 };
 
 pub(super) struct MemPlan<'a> {
-    call_live_values: &'a BitSet<ValueId>,
+    values_persistent_across_calls: &'a BitSet<ValueId>,
     scratch_live_values: &'a BitSet<ValueId>,
     scratch_spill_slots: u32,
     free_slots: &'a mut FreeSlotPools,
@@ -35,7 +35,7 @@ impl<'a> MemPlan<'a> {
         slots: &'a mut SpillSlotPools,
     ) -> Self {
         Self {
-            call_live_values: &ctx.call_live_values,
+            values_persistent_across_calls: &ctx.values_persistent_across_calls,
             scratch_live_values: &ctx.scratch_live_values,
             scratch_spill_slots: ctx.scratch_spill_slots,
             free_slots,
@@ -69,7 +69,7 @@ impl<'a> MemPlan<'a> {
             return Action::MemLoadFrameSlot(0);
         };
 
-        let persistent = self.call_live_values.contains(v);
+        let persistent = self.values_persistent_across_calls.contains(v);
 
         if persistent {
             let slot = self.slots.persistent.ensure_slot(
@@ -105,7 +105,7 @@ impl<'a> MemPlan<'a> {
             return;
         };
 
-        let persistent = self.call_live_values.contains(v);
+        let persistent = self.values_persistent_across_calls.contains(v);
         actions.push(Action::StackDup(depth));
 
         if persistent {

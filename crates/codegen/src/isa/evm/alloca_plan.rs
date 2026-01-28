@@ -38,7 +38,7 @@ pub(crate) struct StackAllocaLayout {
 
 #[derive(Clone, Copy)]
 pub(crate) struct AllocaLayoutLiveness<'a> {
-    pub(crate) call_live_values: &'a BitSet<ValueId>,
+    pub(crate) values_persistent_across_calls: &'a BitSet<ValueId>,
     pub(crate) inst_liveness: &'a InstLiveness,
 }
 
@@ -103,7 +103,7 @@ pub(crate) fn compute_stack_alloca_layout(
     }
 
     let mut persistent: FxHashSet<InstId> = FxHashSet::default();
-    for val in live.call_live_values.iter() {
+    for val in live.values_persistent_across_calls.iter() {
         for inst in prov[val].alloca_insts() {
             persistent.insert(inst);
         }
@@ -532,7 +532,7 @@ block4:
 
             let block_order = dom.rpo().to_owned();
 
-            let call_live_values = BitSet::default();
+            let values_persistent_across_calls = BitSet::default();
             let layout = compute_stack_alloca_layout(
                 f,
                 function,
@@ -540,7 +540,7 @@ block4:
                 &isa,
                 &FxHashMap::default(),
                 AllocaLayoutLiveness {
-                    call_live_values: &call_live_values,
+                    values_persistent_across_calls: &values_persistent_across_calls,
                     inst_liveness: &inst_liveness,
                 },
                 &block_order,
@@ -624,7 +624,7 @@ block0:
 
             let block_order = dom.rpo().to_owned();
 
-            let call_live_values = BitSet::default();
+            let values_persistent_across_calls = BitSet::default();
             let _ = compute_stack_alloca_layout(
                 f,
                 function,
@@ -632,7 +632,7 @@ block0:
                 &isa,
                 &FxHashMap::default(),
                 AllocaLayoutLiveness {
-                    call_live_values: &call_live_values,
+                    values_persistent_across_calls: &values_persistent_across_calls,
                     inst_liveness: &inst_liveness,
                 },
                 &block_order,

@@ -12,7 +12,12 @@ use crate::{
 use super::{builder::StackifyBuilder, trace::StackifyTrace};
 
 pub struct StackifyLiveValues {
-    pub call_live_values: BitSet<ValueId>,
+    /// Values to pre-seed into the spill set so block templates (transfer regions) do not
+    /// attempt to carry them through internal calls.
+    pub values_live_across_calls: BitSet<ValueId>,
+    /// Values that must be stored in persistent frame slots (not transient/scratch) so their
+    /// memory homes remain valid across internal calls that may reuse/clobber transient storage.
+    pub values_persistent_across_calls: BitSet<ValueId>,
     pub scratch_live_values: BitSet<ValueId>,
 }
 
@@ -46,20 +51,20 @@ impl StackifyAlloc {
         builder.compute()
     }
 
-    pub fn for_function_with_call_live_values(
+    pub fn for_function_with_values_live_across_calls(
         func: &Function,
         cfg: &ControlFlowGraph,
         dom: &DomTree,
         liveness: &Liveness,
         reach_depth: u8,
-        call_live_values: BitSet<ValueId>,
+        values_live_across_calls: BitSet<ValueId>,
     ) -> Self {
         let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
-            .with_call_live_values(call_live_values);
+            .with_values_live_across_calls(values_live_across_calls);
         builder.compute()
     }
 
-    pub fn for_function_with_call_live_values_and_scratch_spills(
+    pub fn for_function_with_values_live_across_calls_and_scratch_spills(
         func: &Function,
         cfg: &ControlFlowGraph,
         dom: &DomTree,
@@ -69,11 +74,13 @@ impl StackifyAlloc {
         scratch_spill_slots: u32,
     ) -> Self {
         let StackifyLiveValues {
-            call_live_values,
+            values_live_across_calls,
+            values_persistent_across_calls,
             scratch_live_values,
         } = live_values;
         let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
-            .with_call_live_values(call_live_values)
+            .with_values_live_across_calls(values_live_across_calls)
+            .with_values_persistent_across_calls(values_persistent_across_calls)
             .with_scratch_live_values(scratch_live_values)
             .with_scratch_spills(scratch_spill_slots);
         builder.compute()
@@ -95,23 +102,23 @@ impl StackifyAlloc {
         (alloc, trace)
     }
 
-    pub fn for_function_with_trace_and_call_live_values(
+    pub fn for_function_with_trace_and_values_live_across_calls(
         func: &Function,
         cfg: &ControlFlowGraph,
         dom: &DomTree,
         liveness: &Liveness,
         reach_depth: u8,
-        call_live_values: BitSet<ValueId>,
+        values_live_across_calls: BitSet<ValueId>,
     ) -> (Self, String) {
         let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
-            .with_call_live_values(call_live_values);
+            .with_values_live_across_calls(values_live_across_calls);
         let mut trace = StackifyTrace::default();
         let alloc = builder.compute_with_observer(&mut trace);
         let trace = trace.render(func, &alloc);
         (alloc, trace)
     }
 
-    pub fn for_function_with_trace_call_live_values_and_scratch_spills(
+    pub fn for_function_with_trace_values_live_across_calls_and_scratch_spills(
         func: &Function,
         cfg: &ControlFlowGraph,
         dom: &DomTree,
@@ -121,11 +128,13 @@ impl StackifyAlloc {
         scratch_spill_slots: u32,
     ) -> (Self, String) {
         let StackifyLiveValues {
-            call_live_values,
+            values_live_across_calls,
+            values_persistent_across_calls,
             scratch_live_values,
         } = live_values;
         let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
-            .with_call_live_values(call_live_values)
+            .with_values_live_across_calls(values_live_across_calls)
+            .with_values_persistent_across_calls(values_persistent_across_calls)
             .with_scratch_live_values(scratch_live_values)
             .with_scratch_spills(scratch_spill_slots);
         let mut trace = StackifyTrace::default();

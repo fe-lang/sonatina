@@ -345,7 +345,7 @@ impl LowerBackend for EvmBackend {
     ) {
         let ptr_escape = compute_ptr_escape_summaries(module, funcs, &self.isa);
 
-        // Pass 1: conservative (treat all calls as clobbering).
+        // Pass 1: conservative (assume internal calls may clobber scratch/static memory).
         let mut local_mem_pass1: FxHashMap<FuncRef, FuncLocalMemInfo> = FxHashMap::default();
         let mut alloca_plan_pass1: FxHashMap<FuncRef, FxHashMap<InstId, StackObjectPlan>> =
             FxHashMap::default();
@@ -370,7 +370,7 @@ impl LowerBackend for EvmBackend {
             &self.isa,
         );
 
-        // Pass 2: clobber-aware call liveness + scratch-spill barriers.
+        // Pass 2: effect-aware (refine which callees touch scratch/static memory).
         let mut allocs: FxHashMap<FuncRef, StackifyAlloc> = FxHashMap::default();
         let mut block_orders: FxHashMap<FuncRef, Vec<BlockId>> = FxHashMap::default();
         let mut local_mem: FxHashMap<FuncRef, FuncLocalMemInfo> = FxHashMap::default();
@@ -1736,9 +1736,14 @@ fn prepare_function(
             continue;
         }
 
-        let call_live_values = mem_effects.map_or_else(
-            || inst_liveness.call_live_values(function),
-            |effects| compute_call_live_values_filtered(function, &inst_liveness, effects),
+        // Values live across internal calls are pre-seeded into the spill set to keep
+        // call preparation within EVM `DUP16`/`SWAP16` reach. This is a planning convenience:
+        // internal calls do not wipe the EVM operand stack, but the temporary call return address
+        // plus argument shuffling can make deep transfer-region values unreachable.
+        let values_live_across_calls = inst_liveness.call_live_values(function);
+        let values_persistent_across_calls = mem_effects.map_or_else(
+            || values_live_across_calls.clone(),
+            |effects| compute_values_persistent_across_calls(function, &inst_liveness, effects),
         );
 
         let scratch_spill_slots = scratch_plan::SCRATCH_SPILL_SLOTS;
@@ -1750,14 +1755,15 @@ fn prepare_function(
             mem_effects,
             &inst_liveness,
         );
-        let alloc = StackifyAlloc::for_function_with_call_live_values_and_scratch_spills(
+        let alloc = StackifyAlloc::for_function_with_values_live_across_calls_and_scratch_spills(
             function,
             &cfg,
             &dom,
             &liveness,
             backend.stackify_reach_depth,
             StackifyLiveValues {
-                call_live_values: call_live_values.clone(),
+                values_live_across_calls: values_live_across_calls.clone(),
+                values_persistent_across_calls: values_persistent_across_calls.clone(),
                 scratch_live_values,
             },
             scratch_spill_slots,
@@ -1772,7 +1778,7 @@ fn prepare_function(
             &backend.isa,
             ptr_escape,
             alloca_plan::AllocaLayoutLiveness {
-                call_live_values: &call_live_values,
+                values_persistent_across_calls: &values_persistent_across_calls,
                 inst_liveness: &inst_liveness,
             },
             &block_order,
@@ -1805,12 +1811,15 @@ fn prepare_function(
     }
 }
 
-fn compute_call_live_values_filtered(
+fn compute_values_persistent_across_calls(
     function: &Function,
     inst_liveness: &InstLiveness,
     effects: &FxHashMap<FuncRef, FuncMemEffects>,
 ) -> BitSet<ValueId> {
-    let mut call_live_values = BitSet::default();
+    // In the StaticTree memory scheme, transient frame slots may be reused (and therefore
+    // clobbered) by callees that touch the static arena. Any value that is live across such a
+    // call needs a persistent memory home.
+    let mut persistent: BitSet<ValueId> = BitSet::default();
 
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
@@ -1818,22 +1827,23 @@ fn compute_call_live_values_filtered(
                 continue;
             };
             let callee = call.callee();
-            let clobbers_static = effects
+            let may_clobber_transient = effects
                 .get(&callee)
                 .copied()
                 .unwrap_or_default()
                 .touches_static_arena;
+            if !may_clobber_transient {
+                continue;
+            }
 
-            if clobbers_static {
-                call_live_values.union_with(inst_liveness.live_out(inst));
-                if let Some(def) = function.dfg.inst_result(inst) {
-                    call_live_values.remove(def);
-                }
+            persistent.union_with(inst_liveness.live_out(inst));
+            if let Some(def) = function.dfg.inst_result(inst) {
+                persistent.remove(def);
             }
         }
     }
 
-    call_live_values
+    persistent
 }
 
 fn debug_print_mem_plan(

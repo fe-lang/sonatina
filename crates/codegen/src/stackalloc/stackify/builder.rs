@@ -52,7 +52,8 @@ pub(super) struct StackifyBuilder<'a> {
     dom: &'a DomTree,
     liveness: &'a Liveness,
     reach: StackifyReachability,
-    call_live_values_override: Option<BitSet<ValueId>>,
+    values_live_across_calls_override: Option<BitSet<ValueId>>,
+    values_persistent_across_calls_override: Option<BitSet<ValueId>>,
     scratch_live_values_override: Option<BitSet<ValueId>>,
     scratch_spill_slots: u32,
 }
@@ -62,7 +63,8 @@ pub(super) struct StackifyContext<'a> {
     pub(super) cfg: &'a ControlFlowGraph,
     pub(super) dom: &'a DomTree,
     pub(super) liveness: &'a Liveness,
-    pub(super) call_live_values: BitSet<ValueId>,
+    pub(super) values_live_across_calls: BitSet<ValueId>,
+    pub(super) values_persistent_across_calls: BitSet<ValueId>,
     pub(super) scratch_live_values: BitSet<ValueId>,
     pub(super) scratch_spill_slots: u32,
     pub(super) entry: BlockId,
@@ -89,14 +91,26 @@ impl<'a> StackifyBuilder<'a> {
             dom,
             liveness,
             reach: StackifyReachability::new(reach_depth),
-            call_live_values_override: None,
+            values_live_across_calls_override: None,
+            values_persistent_across_calls_override: None,
             scratch_live_values_override: None,
             scratch_spill_slots: 0,
         }
     }
 
-    pub(super) fn with_call_live_values(mut self, call_live_values: BitSet<ValueId>) -> Self {
-        self.call_live_values_override = Some(call_live_values);
+    pub(super) fn with_values_live_across_calls(
+        mut self,
+        values_live_across_calls: BitSet<ValueId>,
+    ) -> Self {
+        self.values_live_across_calls_override = Some(values_live_across_calls);
+        self
+    }
+
+    pub(super) fn with_values_persistent_across_calls(
+        mut self,
+        values_persistent_across_calls: BitSet<ValueId>,
+    ) -> Self {
+        self.values_persistent_across_calls_override = Some(values_persistent_across_calls);
         self
     }
 
@@ -127,12 +141,21 @@ impl<'a> StackifyBuilder<'a> {
         let mut scc = CfgSccAnalysis::new();
         scc.compute(self.cfg);
 
-        let call_live_values = if let Some(call_live_values) = self.call_live_values_override {
-            call_live_values
+        let values_live_across_calls =
+            if let Some(values) = self.values_live_across_calls_override {
+                values
+            } else {
+                let mut inst_liveness = InstLiveness::default();
+                inst_liveness.compute(self.func, self.cfg, self.liveness);
+                inst_liveness.call_live_values(self.func)
+            };
+
+        let values_persistent_across_calls = if let Some(values) =
+            self.values_persistent_across_calls_override
+        {
+            values
         } else {
-            let mut inst_liveness = InstLiveness::default();
-            inst_liveness.compute(self.func, self.cfg, self.liveness);
-            inst_liveness.call_live_values(self.func)
+            values_live_across_calls.clone()
         };
 
         let scratch_live_values = if self.scratch_spill_slots == 0 {
@@ -152,7 +175,8 @@ impl<'a> StackifyBuilder<'a> {
             cfg: self.cfg,
             dom: self.dom,
             liveness: self.liveness,
-            call_live_values,
+            values_live_across_calls,
+            values_persistent_across_calls,
             scratch_live_values,
             scratch_spill_slots: self.scratch_spill_slots,
             entry,
@@ -174,7 +198,12 @@ impl<'a> StackifyBuilder<'a> {
         // Once `v ∈ spill_set`, we emit a dominating store at its definition (or phi entry) and
         // remove it from transfer regions (`T(B)` excludes `spill_set`), so future iterations
         // can rely on loads being correct.
-        let mut spill_set: BitSet<ValueId> = BitSet::default();
+        //
+        // Seed with values live across calls to manage stack depth. During call preparation,
+        // the stack holds transfer_values + CallRetAddr + args. If call-live values remain in
+        // the transfer region, this can exceed DUP16/SWAP16 reach (16-17 items), making values
+        // unreachable for the planner. Spilling them to memory keeps stack depth manageable.
+        let mut spill_set: BitSet<ValueId> = ctx.values_live_across_calls.clone();
         let mut slots: SpillSlotPools = SpillSlotPools::default();
 
         loop {
@@ -216,7 +245,7 @@ impl<'a> StackifyBuilder<'a> {
         let mut arg_free_slots: FreeSlotPools = FreeSlotPools::default();
         for &arg in ctx.func.arg_values.iter() {
             if let Some(spilled) = spill.spilled(arg) {
-                if ctx.call_live_values.contains(arg) {
+                if ctx.values_persistent_across_calls.contains(arg) {
                     let _ = slots.persistent.ensure_slot(
                         spilled,
                         ctx.liveness,
