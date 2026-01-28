@@ -1,133 +1,20 @@
 ---
 source: crates/codegen/tests/evm.rs
-expression: "String::from_utf8(v).unwrap()"
+expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/alloca_diamond_reuse.sntn
 ---
-evm mem plan: dyn_base=0xe0 static_base=0xc0
-evm mem plan: main scheme=StaticTree base_words=0 persistent_words=0 alloca_words=1 persistent_alloca_words=0
-  alloca v1 class=Transient offset_words=0 size_words=1 addr=0xc0
-  alloca v2 class=Transient offset_words=0 size_words=1 addr=0xc0
-evm mem plan: entry scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
+evm.config: stack_reach=16 emit_debug_trace=false
 
-// func public %main(v0.i1) -> i256
-  block0 P=[v0] T=[]
-    - stack=[v0, <RET>]
-      br [v0] -> [block1, block2]
-  block1 P=[] T=[]
-    inherited from block0: [<RET>]
-    - stack=[<RET>]
-      alloca [] -> v1
-    - stack=[v1, <RET>], last_use=[v1]
-      pre: [PUSH(I256 { is_negative: false, abs: 1 }), SWAP1]
-      mstore [v1, I256 { is_negative: false, abs: 1 }]
-    - stack=[<RET>]
-      jump -> block3
-  block2 P=[] T=[]
-    inherited from block0: [<RET>]
-    - stack=[<RET>]
-      alloca [] -> v2
-    - stack=[v2, <RET>], last_use=[v2]
-      pre: [PUSH(I256 { is_negative: false, abs: 2 }), SWAP1]
-      mstore [v2, I256 { is_negative: false, abs: 2 }]
-    - stack=[<RET>]
-      jump -> block3
-  block3 P=[] T=[]
-    - stack=[<RET>]
-      return: [PUSH(I256 { is_negative: false, abs: 0 })]
-      return [I256 { is_negative: false, abs: 0 }]
+object: Contract
+  section runtime: 43 bytes
+  total: 43 bytes
 
-// func public %entry()
-  block0 P=[] T=[]
-    - stack=[]
-      pre: [PUSH_CONT, PUSH(true)]
-      call [true] -> v0
-    - stack=[v0], last_use=[v0]
-      pre: [PUSH(0)]
-      mstore [0, v0]
-    - stack=[]
-      pre: [PUSH(32), PUSH(0)]
-      evm_return [0, 32]
+functions:
+  mem: dyn_base=0xe0 static_base=0xc0
+  main: ir_blocks=4 ir_insts=8 vcode_ops=20 fixups=2 imm_bytes=4
+    mem: scheme=StaticTree base_words=0 persistent_words=0 alloca_words=1 persistent_alloca_words=0
+  entry: ir_blocks=1 ir_insts=3 vcode_ops=13 fixups=2 imm_bytes=2
+    mem: scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
 
-// func public %main(v0.i1) -> i256
-main:
-  block0:
-    JUMPDEST
-    ISZERO  // br v0 block1 block2;
-    PUSH1 block2
-    JUMPI
-  block1:
-    JUMPDEST
-    PUSH1 0xc0 (192)  // v1.*i256 = alloca i256;
-    PUSH1 0x1 (1)  // mstore v1 1.i256 i256;
-    SWAP1
-    MSTORE
-    PUSH1 block3  // jump block3;
-    JUMP
-  block2:
-    JUMPDEST
-    PUSH1 0xc0 (192)  // v2.*i256 = alloca i256;
-    PUSH1 0x2 (2)  // mstore v2 2.i256 i256;
-    SWAP1
-    MSTORE
-  block3:
-    JUMPDEST
-    PUSH0  // return 0.i256;
-    SWAP1
-    JUMP
-
-// func public %entry()
-entry:
-  block0:
-    JUMPDEST
-    PUSH1 `pc + (6)`  // v0.i256 = call %main 1.i1;
-    PUSH1 0x1 (1)
-    PUSH0
-    SIGNEXTEND
-    PUSH1 FuncRef(0)
-    JUMP
-    JUMPDEST
-    PUSH0  // mstore 0.i32 v0 i256;
-    MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
-    PUSH0
-    RETURN
-
-
-
----------------
-
-// section runtime
-0x5b600a60015f0b6011565b5f5260205ff35b156020575b60c0600190526027565b60c0600290525b5f9056
-
-
-Success { reason: Return, gas_used: 21168, gas_refunded: 0, logs: [], output: Call(0x0000000000000000000000000000000000000000000000000000000000000000) }
-
-    pc  opcode            input (stack grows to the right)
-     0  5b  JUMPDEST      []
-     1  60  PUSH1         0x0a  []
-     3  60  PUSH1         0x01  [0xa]
-     5  5f  PUSH0         [0xa, 0x1]
-     6  0b  SIGNEXTEND    [0xa, 0x1, 0x0]
-     7  60  PUSH1         0x11  [0xa, 0x1]
-     9  56  JUMP          [0xa, 0x1, 0x11]
-    17  5b  JUMPDEST      [0xa, 0x1]
-    18  15  ISZERO        [0xa, 0x1]
-    19  60  PUSH1         0x20  [0xa, 0x0]
-    21  57  JUMPI         [0xa, 0x0, 0x20]
-    22  5b  JUMPDEST      [0xa]
-    23  60  PUSH1         0xc0  [0xa]
-    25  60  PUSH1         0x01  [0xa, 0xc0]
-    27  90  SWAP1         [0xa, 0xc0, 0x1]
-    28  52  MSTORE        [0xa, 0x1, 0xc0]
-    29  60  PUSH1         0x27  [0xa]
-    31  56  JUMP          [0xa, 0x27]
-    39  5b  JUMPDEST      [0xa]
-    40  5f  PUSH0         [0xa]
-    41  90  SWAP1         [0xa, 0x0]
-    42  56  JUMP          [0x0, 0xa]
-    10  5b  JUMPDEST      [0x0]
-    11  5f  PUSH0         [0x0]
-    12  52  MSTORE        [0x0, 0x0]
-    13  60  PUSH1         0x20  []
-    15  5f  PUSH0         [0x20]
-    16  f3  RETURN        [0x20, 0x0]
+evm:
+  case ok: calldata_len=8 success reason=Return gas_used=21168 gas_refunded=0 logs=0 output=call len=32

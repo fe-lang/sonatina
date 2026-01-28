@@ -2,8 +2,9 @@ use hex::FromHex as _;
 use sonatina_ir::U256;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct EvmConfig {
+struct EvmConfig {
     pub stack_reach: Option<u8>,
+    pub emit_debug_trace: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,7 +20,7 @@ pub(crate) enum EvmExpect {
     Revert(Vec<u8>),
 }
 
-pub(crate) fn parse_evm_config(module_comments: &[String]) -> Result<EvmConfig, String> {
+fn parse_evm_config(module_comments: &[String]) -> Result<EvmConfig, String> {
     let mut cfg = EvmConfig::default();
 
     for raw in module_comments {
@@ -42,6 +43,12 @@ pub(crate) fn parse_evm_config(module_comments: &[String]) -> Result<EvmConfig, 
 
 pub(crate) fn stack_reach_depth(module_comments: &[String]) -> Result<u8, String> {
     Ok(parse_evm_config(module_comments)?.stack_reach.unwrap_or(16))
+}
+
+pub(crate) fn emit_debug_trace(module_comments: &[String]) -> Result<bool, String> {
+    Ok(parse_evm_config(module_comments)?
+        .emit_debug_trace
+        .unwrap_or(false))
 }
 
 pub(crate) fn parse_evm_cases(module_comments: &[String]) -> Result<Vec<EvmCase>, String> {
@@ -97,15 +104,6 @@ pub(crate) fn parse_evm_cases(module_comments: &[String]) -> Result<Vec<EvmCase>
         .into_iter()
         .map(EvmCaseBuilder::finish)
         .collect::<Result<Vec<_>, _>>()
-}
-
-#[allow(dead_code)]
-pub(crate) fn first_evm_case_calldata(
-    module_comments: &[String],
-) -> Result<Option<Vec<u8>>, String> {
-    Ok(parse_evm_cases(module_comments)?
-        .first()
-        .map(|c| c.calldata.clone()))
 }
 
 struct EvmCaseBuilder {
@@ -178,6 +176,13 @@ fn parse_evm_config_object(spec: &str, cfg: &mut EvmConfig) -> Result<(), String
                 }
                 cfg.stack_reach = Some(parse_u8_literal(value).map_err(|e| format!("{key}: {e}"))?);
             }
+            "emit_debug_trace" => {
+                if cfg.emit_debug_trace.is_some() {
+                    return Err("duplicate `emit_debug_trace`".to_string());
+                }
+                cfg.emit_debug_trace =
+                    Some(parse_bool_literal(value).map_err(|e| format!("{key}: {e}"))?);
+            }
             _ => {
                 // Ignore unknown keys for forward compatibility.
             }
@@ -248,6 +253,14 @@ fn parse_u32_literal(lit: &str) -> Result<u32, String> {
 fn parse_u8_literal(lit: &str) -> Result<u8, String> {
     let n = parse_u32_literal(lit)?;
     u8::try_from(n).map_err(|_| "literal is out of range for u8".to_string())
+}
+
+fn parse_bool_literal(lit: &str) -> Result<bool, String> {
+    match lit.trim() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err("expected `true` or `false`".to_string()),
+    }
 }
 
 fn parse_u256_be_32(lit: &str) -> Result<[u8; 32], String> {

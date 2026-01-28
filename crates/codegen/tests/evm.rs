@@ -29,7 +29,10 @@ use sonatina_ir::{
 };
 use sonatina_parser::{ParsedModule, parse_module};
 use sonatina_triple::{Architecture, OperatingSystem, Vendor};
-use std::io::{Write, stderr};
+use std::{
+    collections::HashMap,
+    io::{Write, stderr},
+};
 
 use evm_directives::{EvmCase, EvmExpect};
 
@@ -92,7 +95,10 @@ fn parse_sona(content: &str) -> ParsedModule {
 fn test_evm(fixture: Fixture<&str>) {
     let parsed = parse_sona(fixture.content());
     let stackify_reach_depth = stackify_reach_depth_for_fixture(fixture.path(), &parsed);
-    let calldata = calldata_for_fixture(fixture.path(), &parsed);
+    let emit_debug_trace = emit_debug_trace_for_fixture(fixture.path(), &parsed);
+
+    let cases = evm_directives::parse_evm_cases(&parsed.debug.module_comments)
+        .unwrap_or_else(|e| panic!("{}: {e}", fixture.path()));
 
     let backend = EvmBackend::new(Evm::new(sonatina_triple::TargetTriple {
         architecture: Architecture::Evm,
@@ -113,113 +119,110 @@ fn test_evm(fixture: Fixture<&str>) {
     backend.prepare_section(&parsed.module, &parsed.debug.func_order, &section_ctx);
 
     let mem_plan = backend.snapshot_mem_plan(&parsed.module, &parsed.debug.func_order);
+    let (mem_plan_header, mem_plan_funcs) = parse_mem_plan_summary(&mem_plan);
 
+    let mut func_stats: Vec<FuncStats> = Vec::new();
     let mut stackify_out = Vec::new();
     let mut lowered_out = Vec::new();
+
     for fref in parsed.debug.func_order.iter() {
         let lowered = backend
             .lower_function(&parsed.module, *fref, &section_ctx)
             .unwrap();
 
-        parsed.module.func_store.view(*fref, |function| {
-            let stackify = stackify_trace_for_fn(function, stackify_reach_depth);
-            let ctx = FuncWriteCtx::with_debug_provider(function, *fref, &parsed.debug);
+        let vcode_ops = lowered.vcode.insts.len();
+        let vcode_fixups = lowered.vcode.fixups.len();
+        let vcode_imm_bytes = lowered.vcode.inst_imm_bytes.len();
 
-            // Snapshot format:
-            // - all stackify traces first
-            // - then lowered functions/blocks
-            // - then the runtime EVM trace at the bottom
-            write!(&mut stackify_out, "// ").unwrap();
-            FunctionSignature.write(&mut stackify_out, &ctx).unwrap();
-            writeln!(&mut stackify_out).unwrap();
-            write!(&mut stackify_out, "{}", fmt_stackify_trace(&stackify)).unwrap();
-            writeln!(&mut stackify_out).unwrap();
+        let name = parsed
+            .module
+            .ctx
+            .func_sig(*fref, |sig| sig.name().to_string());
 
-            lowered.vcode.write(&mut lowered_out, &ctx).unwrap();
-            writeln!(&mut lowered_out).unwrap();
+        let mem = mem_plan_funcs
+            .get(&name)
+            .cloned()
+            .unwrap_or_else(|| format!("<missing mem plan entry for {name}>"));
+
+        let (ir_blocks, ir_insts) = parsed.module.func_store.view(*fref, |function| {
+            if emit_debug_trace {
+                let stackify = stackify_trace_for_fn(function, stackify_reach_depth);
+                let ctx = FuncWriteCtx::with_debug_provider(function, *fref, &parsed.debug);
+
+                write!(&mut stackify_out, "// ").unwrap();
+                FunctionSignature.write(&mut stackify_out, &ctx).unwrap();
+                writeln!(&mut stackify_out).unwrap();
+                write!(&mut stackify_out, "{}", fmt_stackify_trace(&stackify)).unwrap();
+                writeln!(&mut stackify_out).unwrap();
+
+                lowered.vcode.write(&mut lowered_out, &ctx).unwrap();
+                writeln!(&mut lowered_out).unwrap();
+            }
+
+            let ir_blocks = function.layout.iter_block().count();
+            let mut ir_insts: usize = 0;
+            for block in function.layout.iter_block() {
+                ir_insts += function.layout.iter_inst(block).count();
+            }
+            (ir_blocks, ir_insts)
+        });
+
+        func_stats.push(FuncStats {
+            name,
+            mem,
+            ir_blocks,
+            ir_insts,
+            vcode_ops,
+            vcode_fixups,
+            vcode_imm_bytes,
         });
     }
 
-    let mut v = Vec::new();
-    if !mem_plan.is_empty() {
-        writeln!(&mut v, "{mem_plan}").unwrap();
-    }
-    v.append(&mut stackify_out);
-    v.append(&mut lowered_out);
-
-    write!(&mut v, "\n\n---------------\n\n").unwrap();
     let opts = CompileOptions {
         fixup_policy: PushWidthPolicy::MinimalRelax,
         emit_symtab: false,
     };
 
-    let artifact = compile_object(&parsed.module, &backend, "Contract", &opts).unwrap();
-    for (name, section) in &artifact.sections {
-        writeln!(&mut v, "// section {}", name.0.as_str()).unwrap();
-        let hex = section.bytes.encode_hex::<String>();
-        writeln!(&mut v, "0x{hex}\n").unwrap();
-    }
-
-    let init = artifact
-        .sections
-        .iter()
-        .find(|(name, _)| name.0.as_str() == "init")
-        .map(|(_, s)| s.bytes.clone());
-    let runtime = artifact
-        .sections
-        .iter()
-        .find(|(name, _)| name.0.as_str() == "runtime")
-        .map(|(_, s)| s.bytes.clone())
-        .unwrap();
-
-    if let Some(init) = init {
-        let (create_res, create_trace, mut harness) = EvmHarness::deploy_with_trace(&init);
-        writeln!(&mut v, "\n{create_res:?}").unwrap();
-        writeln!(&mut v, "\n{create_trace}").unwrap();
-
-        let (call_res, call_trace) = harness.call_with_trace(&calldata);
-        writeln!(&mut v, "\n{call_res:?}").unwrap();
-        writeln!(&mut v, "\n{call_trace}").unwrap();
-    } else {
-        let mut harness = EvmHarness::from_runtime(&runtime);
-        let (res, trace) = harness.call_with_trace(&calldata);
-        writeln!(&mut v, "\n{res:?}").unwrap();
-        writeln!(&mut v, "\n{trace}").unwrap();
-    }
-
-    snap_test!(String::from_utf8(v).unwrap(), fixture.path());
-}
-
-#[dir_test(
-    dir: "$CARGO_MANIFEST_DIR/test_files/evm",
-    glob: "*.sntn"
-)]
-fn test_evm_exec(fixture: Fixture<&str>) {
-    if !fixture.content().contains("evm.case:") {
-        return;
-    }
-
-    let parsed = parse_sona(fixture.content());
-    let cases = evm_directives::parse_evm_cases(&parsed.debug.module_comments)
-        .unwrap_or_else(|e| panic!("{}: {e}", fixture.path()));
-    if cases.is_empty() {
-        return;
-    }
-
-    let stackify_reach_depth = stackify_reach_depth_for_fixture(fixture.path(), &parsed);
-    let backend = EvmBackend::new(Evm::new(sonatina_triple::TargetTriple {
-        architecture: Architecture::Evm,
-        vendor: Vendor::Ethereum,
-        operating_system: OperatingSystem::Evm(sonatina_triple::EvmVersion::Osaka),
-    }))
-    .with_stackify_reach_depth(stackify_reach_depth);
-
-    let opts = CompileOptions {
-        fixup_policy: PushWidthPolicy::MinimalRelax,
-        emit_symtab: false,
-    };
     let artifact = compile_object(&parsed.module, &backend, "Contract", &opts)
         .unwrap_or_else(|errs| panic!("{}: object compile failed: {errs:?}", fixture.path()));
+
+    let mut out = Vec::new();
+    writeln!(
+        &mut out,
+        "evm.config: stack_reach={stackify_reach_depth} emit_debug_trace={emit_debug_trace}"
+    )
+    .unwrap();
+    writeln!(&mut out).unwrap();
+
+    writeln!(&mut out, "object: {}", artifact.object.0.as_str()).unwrap();
+    let mut total_bytes: usize = 0;
+    for (name, section) in &artifact.sections {
+        let size = section.bytes.len();
+        total_bytes += size;
+        writeln!(&mut out, "  section {}: {} bytes", name.0.as_str(), size).unwrap();
+    }
+    writeln!(&mut out, "  total: {total_bytes} bytes").unwrap();
+    writeln!(&mut out).unwrap();
+
+    writeln!(&mut out, "functions:").unwrap();
+    if let Some(header) = mem_plan_header {
+        writeln!(&mut out, "  mem: {header}").unwrap();
+    }
+    for stat in &func_stats {
+        writeln!(
+            &mut out,
+            "  {}: ir_blocks={} ir_insts={} vcode_ops={} fixups={} imm_bytes={}",
+            stat.name,
+            stat.ir_blocks,
+            stat.ir_insts,
+            stat.vcode_ops,
+            stat.vcode_fixups,
+            stat.vcode_imm_bytes
+        )
+        .unwrap();
+        writeln!(&mut out, "    mem: {}", stat.mem).unwrap();
+    }
+    writeln!(&mut out).unwrap();
 
     let init = artifact
         .sections
@@ -233,21 +236,101 @@ fn test_evm_exec(fixture: Fixture<&str>) {
         .map(|(_, s)| s.bytes.clone())
         .unwrap_or_else(|| panic!("{}: missing `runtime` section", fixture.path()));
 
+    let mut deploy_res_dbg: Option<String> = None;
+    let mut deploy_trace: Option<String> = None;
+    let mut first_call_res_dbg: Option<String> = None;
+    let mut first_call_trace: Option<String> = None;
+
     let mut harness = if let Some(init) = init {
-        let (create_res, harness) = EvmHarness::deploy(&init);
-        match create_res {
-            ExecutionResult::Success { .. } => {}
-            _ => panic!("{}: deployment failed: {create_res:?}", fixture.path()),
+        if emit_debug_trace {
+            let (res, trace, harness) = EvmHarness::deploy_with_trace(&init);
+            deploy_res_dbg = Some(format!("{res:?}"));
+            deploy_trace = Some(trace);
+            writeln!(&mut out, "evm:").unwrap();
+            writeln!(&mut out, "  deploy: {}", summarize_execution_result(&res)).unwrap();
+            match res {
+                ExecutionResult::Success { .. } => {}
+                _ => panic!("{}: deployment failed: {res:?}", fixture.path()),
+            }
+            harness
+        } else {
+            let (res, harness) = EvmHarness::deploy(&init);
+            writeln!(&mut out, "evm:").unwrap();
+            writeln!(&mut out, "  deploy: {}", summarize_execution_result(&res)).unwrap();
+            match res {
+                ExecutionResult::Success { .. } => {}
+                _ => panic!("{}: deployment failed: {res:?}", fixture.path()),
+            }
+            harness
         }
-        harness
     } else {
+        writeln!(&mut out, "evm:").unwrap();
         EvmHarness::from_runtime(&runtime)
     };
 
-    for case in cases {
-        let res = harness.call(&case.calldata);
-        assert_case(&case, &res, fixture.path());
+    if cases.is_empty() {
+        writeln!(&mut out, "  <no evm.case directives>").unwrap();
     }
+
+    for (idx, case) in cases.iter().enumerate() {
+        let (res, trace) = if emit_debug_trace && idx == 0 {
+            let (res, trace) = harness.call_with_trace(&case.calldata);
+            (res, Some(trace))
+        } else {
+            (harness.call(&case.calldata), None)
+        };
+
+        if emit_debug_trace && idx == 0 {
+            first_call_res_dbg = Some(format!("{res:?}"));
+        }
+        if let Some(trace) = trace {
+            first_call_trace = Some(trace);
+        }
+
+        assert_case(case, &res, fixture.path());
+        writeln!(
+            &mut out,
+            "  case {}: calldata_len={} {}",
+            case.name,
+            case.calldata.len(),
+            summarize_execution_result(&res)
+        )
+        .unwrap();
+    }
+
+    if emit_debug_trace {
+        writeln!(&mut out, "\n\n--------------- DEBUG ---------------\n").unwrap();
+
+        if !mem_plan.is_empty() {
+            writeln!(&mut out, "{mem_plan}").unwrap();
+        }
+
+        out.append(&mut stackify_out);
+        out.append(&mut lowered_out);
+
+        writeln!(&mut out, "\n\n--------------- BYTECODE ---------------\n").unwrap();
+        for (name, section) in &artifact.sections {
+            writeln!(&mut out, "// section {}", name.0.as_str()).unwrap();
+            let hex = section.bytes.encode_hex::<String>();
+            writeln!(&mut out, "0x{hex}\n").unwrap();
+        }
+
+        writeln!(&mut out, "\n\n--------------- EVM TRACE ---------------\n").unwrap();
+        if let Some(res) = deploy_res_dbg {
+            writeln!(&mut out, "\n{res}").unwrap();
+        }
+        if let Some(trace) = deploy_trace {
+            writeln!(&mut out, "\n{trace}").unwrap();
+        }
+        if let Some(res) = first_call_res_dbg {
+            writeln!(&mut out, "\n{res}").unwrap();
+        }
+        if let Some(trace) = first_call_trace {
+            writeln!(&mut out, "\n{trace}").unwrap();
+        }
+    }
+
+    snap_test!(String::from_utf8(out).unwrap(), fixture.path());
 }
 
 fn assert_case(case: &EvmCase, res: &ExecutionResult, fixture_path: &str) {
@@ -502,10 +585,9 @@ fn stackify_reach_depth_for_fixture(path: &str, parsed: &ParsedModule) -> u8 {
     }
 }
 
-fn calldata_for_fixture(path: &str, parsed: &ParsedModule) -> Vec<u8> {
-    match evm_directives::first_evm_case_calldata(&parsed.debug.module_comments) {
-        Ok(Some(calldata)) => calldata,
-        Ok(None) => vec![],
+fn emit_debug_trace_for_fixture(path: &str, parsed: &ParsedModule) -> bool {
+    match evm_directives::emit_debug_trace(&parsed.debug.module_comments) {
+        Ok(v) => v,
         Err(e) => panic!("{path}: {e}"),
     }
 }
@@ -530,4 +612,68 @@ fn fmt_evm_stack(stack: &[U256]) -> String {
     let head: Vec<String> = stack.iter().take(2).map(fmt_u256).collect();
     let tail: Vec<String> = stack.iter().skip(len - 3).map(fmt_u256).collect();
     format!("[{}, …, {}] (len={len})", head.join(", "), tail.join(", "))
+}
+
+struct FuncStats {
+    name: String,
+    mem: String,
+    ir_blocks: usize,
+    ir_insts: usize,
+    vcode_ops: usize,
+    vcode_fixups: usize,
+    vcode_imm_bytes: usize,
+}
+
+fn parse_mem_plan_summary(mem_plan: &str) -> (Option<String>, HashMap<String, String>) {
+    let mut header: Option<String> = None;
+    let mut funcs: HashMap<String, String> = HashMap::new();
+
+    for line in mem_plan.lines() {
+        let Some(rest) = line.strip_prefix("evm mem plan: ") else {
+            continue;
+        };
+        if rest.starts_with("dyn_base=") {
+            header = Some(rest.to_string());
+            continue;
+        }
+
+        let Some((name, details)) = rest.split_once(' ') else {
+            continue;
+        };
+        funcs.insert(name.to_string(), details.to_string());
+    }
+
+    (header, funcs)
+}
+
+fn summarize_execution_result(res: &ExecutionResult) -> String {
+    match res {
+        ExecutionResult::Success {
+            reason,
+            gas_used,
+            gas_refunded,
+            logs,
+            output,
+        } => format!(
+            "success reason={reason:?} gas_used={gas_used} gas_refunded={gas_refunded} logs={} output={}",
+            logs.len(),
+            summarize_output(output),
+        ),
+        ExecutionResult::Revert { gas_used, output } => {
+            format!("revert gas_used={gas_used} output_len={}", output.len())
+        }
+        ExecutionResult::Halt { reason, gas_used } => {
+            format!("halt reason={reason:?} gas_used={gas_used}")
+        }
+    }
+}
+
+fn summarize_output(output: &Output) -> String {
+    match output {
+        Output::Call(bytes) => format!("call len={}", bytes.len()),
+        Output::Create(bytes, addr) => match addr {
+            Some(addr) => format!("create len={} addr={addr:?}", bytes.len()),
+            None => format!("create len={} addr=<none>", bytes.len()),
+        },
+    }
 }

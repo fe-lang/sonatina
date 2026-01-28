@@ -1,8 +1,29 @@
 ---
 source: crates/codegen/tests/evm.rs
-expression: "String::from_utf8(v).unwrap()"
+expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/deploy_codecopy.sntn
 ---
+evm.config: stack_reach=16 emit_debug_trace=true
+
+object: Contract
+  section init: 33 bytes
+  section runtime: 21 bytes
+  total: 54 bytes
+
+functions:
+  mem: dyn_base=0xc0 static_base=0xc0
+  entry: ir_blocks=1 ir_insts=7 vcode_ops=17 fixups=0 imm_bytes=4
+    mem: scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
+  init: ir_blocks=1 ir_insts=4 vcode_ops=10 fixups=2 imm_bytes=2
+    mem: scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
+
+evm:
+  deploy: success reason=Return gas_used=57761 gas_refunded=0 logs=0 output=create len=21 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case ok: calldata_len=8 success reason=Return gas_used=21102 gas_refunded=0 logs=0 output=call len=32
+
+
+--------------- DEBUG ---------------
+
 evm mem plan: dyn_base=0xc0 static_base=0xc0
 evm mem plan: entry scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
 evm mem plan: init scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
@@ -80,13 +101,17 @@ init:
 
 
 
----------------
+--------------- BYTECODE ---------------
 
 // section init
 0x5b600c60158090915f395ff35b5f358060e01c9060201b60e01c015f5260205ff3
 
 // section runtime
 0x5b5f358060e01c9060201b60e01c015f5260205ff3
+
+
+
+--------------- EVM TRACE ---------------
 
 
 Success { reason: Return, gas_used: 57761, gas_refunded: 0, logs: [], output: Create(0x5b5f358060e01c9060201b60e01c015f5260205ff3, Some(0xbd770416a3345f91e4b34576cb804a576fa48eb1)) }

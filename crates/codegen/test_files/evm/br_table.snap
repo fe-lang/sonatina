@@ -1,160 +1,20 @@
 ---
 source: crates/codegen/tests/evm.rs
-expression: "String::from_utf8(v).unwrap()"
+expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/br_table.sntn
 ---
-evm mem plan: dyn_base=0xc0 static_base=0xc0
-evm mem plan: entry scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
-evm mem plan: dispatch scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
+evm.config: stack_reach=16 emit_debug_trace=false
 
-// func public %entry()
-  block0 P=[] T=[]
-    - stack=[]
-      pre: [PUSH(0)]
-      evm_calldata_load [0] -> v0
-    - stack=[v0]
-      pre: [DUP1, PUSH(248)]
-      shr [248, v0] -> v1
-    - stack=[v1, v0], last_use=[v0]
-      pre: [SWAP1, PUSH(224)]
-      shr [224, v0] -> v2
-    - stack=[v2, v1], last_use=[v1, v2]
-      pre: [PUSH_CONT, SWAP2]
-      call [v1, v2] -> v3
-    - stack=[v3], last_use=[v3]
-      pre: [PUSH(0)]
-      mstore [0, v3]
-    - stack=[]
-      pre: [PUSH(32), PUSH(0)]
-      evm_return [0, 32]
+object: Contract
+  section runtime: 61 bytes
+  total: 61 bytes
 
-// func private %dispatch(v0.i8, v1.i32) -> i32
-  block0 P=[v0, v1] T=[]
-    - stack=[v0x, v1, <RET>]
-      cleanup: [POP]
-      br_table
-  block1 P=[] T=[]
-    inherited from block0: [v1x, <RET>]
-    prologue: [POP]
-    - stack=[<RET>]
-      return: [PUSH(100)]
-      return [100]
-  block2 P=[] T=[]
-    inherited from block0: [v1x, <RET>]
-    prologue: [POP]
-    - stack=[<RET>]
-      return: [PUSH(200)]
-      return [200]
-  block3 P=[] T=[]
-    inherited from block0: [v1x, <RET>]
-    prologue: [POP]
-    - stack=[<RET>]
-      return: [PUSH(300)]
-      return [300]
+functions:
+  mem: dyn_base=0xc0 static_base=0xc0
+  entry: ir_blocks=1 ir_insts=6 vcode_ops=19 fixups=2 imm_bytes=3
+    mem: scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
+  dispatch: ir_blocks=4 ir_insts=4 vcode_ops=29 fixups=3 imm_bytes=4
+    mem: scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
 
-// func public %entry()
-entry:
-  block0:
-    JUMPDEST
-    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
-    CALLDATALOAD
-    DUP1  // v1.i8 = shr 248.i32 v0;
-    PUSH1 0xf8 (248)
-    SHR
-    SWAP1  // v2.i32 = shr 224.i32 v0;
-    PUSH1 0xe0 (224)
-    SHR
-    PUSH1 `pc + (4)`  // v3.i32 = call %dispatch v1 v2;
-    SWAP2
-    PUSH1 FuncRef(1)
-    JUMP
-    JUMPDEST
-    PUSH0  // mstore 0.i32 v3 i32;
-    MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
-    PUSH0
-    RETURN
-
-// func private %dispatch(v0.i8, v1.i32) -> i32
-dispatch:
-  block0:
-    JUMPDEST
-    POP  // br_table v1 block3 (0.i32 block1) (11.i32 block2);
-    PUSH0
-    DUP2
-    EQ
-    PUSH1 block1
-    JUMPI
-    PUSH1 0xb (11)
-    DUP2
-    EQ
-    PUSH1 block2
-    JUMPI
-    PUSH1 block3
-    JUMP
-  block1:
-    JUMPDEST
-    POP  // return 100.i32;
-    PUSH1 0x64 (100)
-    SWAP1
-    JUMP
-  block2:
-    JUMPDEST
-    POP  // return 200.i32;
-    PUSH1 0xc8 (200)
-    SWAP1
-    JUMP
-  block3:
-    JUMPDEST
-    POP  // return 300.i32;
-    PUSH2 0x12c (300)
-    SWAP1
-    JUMP
-
-
-
----------------
-
-// section runtime
-0x5b5f358060f81c9060e01c6011916018565b5f5260205ff35b505f8114602a57600b81146030576036565b50606490565b5060c890565b5061012c9056
-
-
-Success { reason: Return, gas_used: 21174, gas_refunded: 0, logs: [], output: Call(0x00000000000000000000000000000000000000000000000000000000000000c8) }
-
-    pc  opcode            input (stack grows to the right)
-     0  5b  JUMPDEST      []
-     1  5f  PUSH0         []
-     2  35  CALLDATALOAD  [0x0]
-     3  80  DUP1          [0xb00000016000000000000000000000000000000000000000000000000]
-     4  60  PUSH1         0xf8  [0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000]
-     6  1c  SHR           [0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000, 0xf8]
-     7  90  SWAP1         [0xb00000016000000000000000000000000000000000000000000000000, 0x0]
-     8  60  PUSH1         0xe0  [0x0, 0xb00000016000000000000000000000000000000000000000000000000]
-    10  1c  SHR           [0x0, 0xb00000016000000000000000000000000000000000000000000000000, 0xe0]
-    11  60  PUSH1         0x11  [0x0, 0xb]
-    13  91  SWAP2         [0x0, 0xb, 0x11]
-    14  60  PUSH1         0x18  [0x11, 0xb, 0x0]
-    16  56  JUMP          [0x11, 0xb, 0x0, 0x18]
-    24  5b  JUMPDEST      [0x11, 0xb, 0x0]
-    25  50  POP           [0x11, 0xb, 0x0]
-    26  5f  PUSH0         [0x11, 0xb]
-    27  81  DUP2          [0x11, 0xb, 0x0]
-    28  14  EQ            [0x11, 0xb, 0x0, 0xb]
-    29  60  PUSH1         0x2a  [0x11, 0xb, 0x0]
-    31  57  JUMPI         [0x11, 0xb, 0x0, 0x2a]
-    32  60  PUSH1         0x0b  [0x11, 0xb]
-    34  81  DUP2          [0x11, 0xb, 0xb]
-    35  14  EQ            [0x11, 0xb, 0xb, 0xb]
-    36  60  PUSH1         0x30  [0x11, 0xb, 0x1]
-    38  57  JUMPI         [0x11, 0xb, 0x1, 0x30]
-    48  5b  JUMPDEST      [0x11, 0xb]
-    49  50  POP           [0x11, 0xb]
-    50  60  PUSH1         0xc8  [0x11]
-    52  90  SWAP1         [0x11, 0xc8]
-    53  56  JUMP          [0xc8, 0x11]
-    17  5b  JUMPDEST      [0xc8]
-    18  5f  PUSH0         [0xc8]
-    19  52  MSTORE        [0xc8, 0x0]
-    20  60  PUSH1         0x20  []
-    22  5f  PUSH0         [0x20]
-    23  f3  RETURN        [0x20, 0x0]
+evm:
+  case ok: calldata_len=8 success reason=Return gas_used=21174 gas_refunded=0 logs=0 output=call len=32
