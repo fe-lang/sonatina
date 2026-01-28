@@ -1,3 +1,5 @@
+mod evm_directives;
+
 use dir_test::{Fixture, dir_test};
 
 use hex::ToHex;
@@ -28,6 +30,8 @@ use sonatina_ir::{
 use sonatina_parser::{ParsedModule, parse_module};
 use sonatina_triple::{Architecture, OperatingSystem, Vendor};
 use std::io::{Write, stderr};
+
+use evm_directives::{EvmCase, EvmExpect};
 
 fn fmt_stackify_trace(trace: &str) -> String {
     let mut out = String::new();
@@ -87,8 +91,8 @@ fn parse_sona(content: &str) -> ParsedModule {
 )]
 fn test_evm(fixture: Fixture<&str>) {
     let parsed = parse_sona(fixture.content());
-    let stackify_reach_depth = stackify_reach_depth_for_fixture(fixture.path());
-    let calldata = calldata_for_fixture(fixture.path());
+    let stackify_reach_depth = stackify_reach_depth_for_fixture(fixture.path(), &parsed);
+    let calldata = calldata_for_fixture(fixture.path(), &parsed);
 
     let backend = EvmBackend::new(Evm::new(sonatina_triple::TargetTriple {
         architecture: Architecture::Evm,
@@ -169,15 +173,16 @@ fn test_evm(fixture: Fixture<&str>) {
         .unwrap();
 
     if let Some(init) = init {
-        let (create_res, create_trace, db, deployed) = deploy_on_evm(&init);
+        let (create_res, create_trace, mut harness) = EvmHarness::deploy_with_trace(&init);
         writeln!(&mut v, "\n{create_res:?}").unwrap();
         writeln!(&mut v, "\n{create_trace}").unwrap();
 
-        let (call_res, call_trace) = call_on_evm(db, deployed, &calldata);
+        let (call_res, call_trace) = harness.call_with_trace(&calldata);
         writeln!(&mut v, "\n{call_res:?}").unwrap();
         writeln!(&mut v, "\n{call_trace}").unwrap();
     } else {
-        let (res, trace) = run_on_evm(&runtime, &calldata);
+        let mut harness = EvmHarness::from_runtime(&runtime);
+        let (res, trace) = harness.call_with_trace(&calldata);
         writeln!(&mut v, "\n{res:?}").unwrap();
         writeln!(&mut v, "\n{trace}").unwrap();
     }
@@ -185,76 +190,239 @@ fn test_evm(fixture: Fixture<&str>) {
     snap_test!(String::from_utf8(v).unwrap(), fixture.path());
 }
 
-fn run_on_evm(bytecode: &[u8], calldata: &[u8]) -> (ExecutionResult, String) {
-    let mut db = revm::InMemoryDB::default();
-    let revm_bytecode = Bytecode::new_raw(Bytes::copy_from_slice(bytecode));
-    let test_address = Address::repeat_byte(0x12);
-    db.insert_account_info(
-        test_address,
-        AccountInfo {
-            balance: U256::ZERO,
-            nonce: 0,
-            code_hash: revm_bytecode.hash_slow(),
-            code: Some(revm_bytecode),
-        },
-    );
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/test_files/evm",
+    glob: "*.sntn"
+)]
+fn test_evm_exec(fixture: Fixture<&str>) {
+    if !fixture.content().contains("evm.case:") {
+        return;
+    }
 
-    let mut env = Env::default();
-    env.tx.clear();
-    env.tx.transact_to = TransactTo::Call(test_address);
-    env.tx.data = Bytes::copy_from_slice(calldata);
+    let parsed = parse_sona(fixture.content());
+    let cases = evm_directives::parse_evm_cases(&parsed.debug.module_comments)
+        .unwrap_or_else(|e| panic!("{}: {e}", fixture.path()));
+    if cases.is_empty() {
+        return;
+    }
 
-    let (res, trace, _db) = run_revm_tx(db, env);
-    (res, trace)
-}
+    let stackify_reach_depth = stackify_reach_depth_for_fixture(fixture.path(), &parsed);
+    let backend = EvmBackend::new(Evm::new(sonatina_triple::TargetTriple {
+        architecture: Architecture::Evm,
+        vendor: Vendor::Ethereum,
+        operating_system: OperatingSystem::Evm(sonatina_triple::EvmVersion::Osaka),
+    }))
+    .with_stackify_reach_depth(stackify_reach_depth);
 
-fn deploy_on_evm(init_code: &[u8]) -> (ExecutionResult, String, revm::InMemoryDB, Address) {
-    let db = revm::InMemoryDB::default();
-    let mut env = Env::default();
-    env.tx.clear();
-    env.tx.transact_to = TransactTo::Create;
-    env.tx.data = Bytes::copy_from_slice(init_code);
-
-    let (res, trace, db) = run_revm_tx(db, env);
-    let deployed = match &res {
-        ExecutionResult::Success {
-            output: Output::Create(_, Some(addr)),
-            ..
-        } => *addr,
-        _ => panic!("unexpected deployment result: {res:?}"),
+    let opts = CompileOptions {
+        fixup_policy: PushWidthPolicy::MinimalRelax,
+        emit_symtab: false,
     };
-    (res, trace, db, deployed)
+    let artifact = compile_object(&parsed.module, &backend, "Contract", &opts)
+        .unwrap_or_else(|errs| panic!("{}: object compile failed: {errs:?}", fixture.path()));
+
+    let init = artifact
+        .sections
+        .iter()
+        .find(|(name, _)| name.0.as_str() == "init")
+        .map(|(_, s)| s.bytes.clone());
+    let runtime = artifact
+        .sections
+        .iter()
+        .find(|(name, _)| name.0.as_str() == "runtime")
+        .map(|(_, s)| s.bytes.clone())
+        .unwrap_or_else(|| panic!("{}: missing `runtime` section", fixture.path()));
+
+    let mut harness = if let Some(init) = init {
+        let (create_res, harness) = EvmHarness::deploy(&init);
+        match create_res {
+            ExecutionResult::Success { .. } => {}
+            _ => panic!("{}: deployment failed: {create_res:?}", fixture.path()),
+        }
+        harness
+    } else {
+        EvmHarness::from_runtime(&runtime)
+    };
+
+    for case in cases {
+        let res = harness.call(&case.calldata);
+        assert_case(&case, &res, fixture.path());
+    }
 }
 
-fn call_on_evm(db: revm::InMemoryDB, addr: Address, calldata: &[u8]) -> (ExecutionResult, String) {
-    let mut env = Env::default();
-    env.tx.clear();
-    env.tx.transact_to = TransactTo::Call(addr);
-    env.tx.data = Bytes::copy_from_slice(calldata);
+fn assert_case(case: &EvmCase, res: &ExecutionResult, fixture_path: &str) {
+    match (&case.expect, res) {
+        (EvmExpect::Return(expected), ExecutionResult::Success { output, .. }) => {
+            let Output::Call(actual) = output else {
+                panic!(
+                    "{fixture_path}: evm.case `{}` expected call return, got {res:?}",
+                    case.name
+                );
+            };
 
-    let (res, trace, _db) = run_revm_tx(db, env);
-    (res, trace)
+            if actual.as_ref() != expected.as_slice() {
+                let expected_hex = hex::encode(expected);
+                let actual_hex = hex::encode(actual.as_ref());
+                panic!(
+                    "{fixture_path}: evm.case `{}` return mismatch: expected 0x{expected_hex}, got 0x{actual_hex} ({res:?})",
+                    case.name
+                );
+            }
+        }
+        (EvmExpect::Revert(expected), ExecutionResult::Revert { output, .. }) => {
+            if output.as_ref() != expected.as_slice() {
+                let expected_hex = hex::encode(expected);
+                let actual_hex = hex::encode(output.as_ref());
+                panic!(
+                    "{fixture_path}: evm.case `{}` revert mismatch: expected 0x{expected_hex}, got 0x{actual_hex} ({res:?})",
+                    case.name
+                );
+            }
+        }
+        _ => {
+            panic!(
+                "{fixture_path}: evm.case `{}` unexpected result: expected {:?}, got {res:?}",
+                case.name, case.expect
+            );
+        }
+    }
 }
 
-fn run_revm_tx(mut db: revm::InMemoryDB, env: Env) -> (ExecutionResult, String, revm::InMemoryDB) {
-    let context = Context::new(
-        EvmContext::new_with_env(db, Box::new(env)),
-        TestInspector::new(vec![]),
-    );
+struct EvmHarness {
+    db: revm::InMemoryDB,
+    contract: Address,
+}
 
-    let mut evm = revm::Evm::new(context, Handler::mainnet::<OsakaSpec>());
-    evm = evm
-        .modify()
-        .append_handler_register(inspector_handle_register)
-        .build();
+impl EvmHarness {
+    fn from_runtime(bytecode: &[u8]) -> Self {
+        let mut db = revm::InMemoryDB::default();
+        let revm_bytecode = Bytecode::new_raw(Bytes::copy_from_slice(bytecode));
+        let contract = Address::repeat_byte(0x12);
+        db.insert_account_info(
+            contract,
+            AccountInfo {
+                balance: U256::ZERO,
+                nonce: 0,
+                code_hash: revm_bytecode.hash_slow(),
+                code: Some(revm_bytecode),
+            },
+        );
 
-    let res = evm.transact_commit();
-    let trace = String::from_utf8(evm.context.external.w).unwrap();
-    db = std::mem::take(&mut evm.context.evm.inner.db);
+        Self { db, contract }
+    }
 
-    match res {
-        Ok(r) => (r, trace, db),
-        Err(e) => panic!("evm failure: {e}"),
+    fn deploy(init_code: &[u8]) -> (ExecutionResult, Self) {
+        let mut env = Env::default();
+        env.tx.clear();
+        env.tx.transact_to = TransactTo::Create;
+        env.tx.data = Bytes::copy_from_slice(init_code);
+
+        let (res, db) = Self::run_tx(revm::InMemoryDB::default(), env);
+        let deployed = match &res {
+            ExecutionResult::Success {
+                output: Output::Create(_, Some(addr)),
+                ..
+            } => *addr,
+            _ => panic!("unexpected deployment result: {res:?}"),
+        };
+
+        (
+            res,
+            Self {
+                db,
+                contract: deployed,
+            },
+        )
+    }
+
+    fn deploy_with_trace(init_code: &[u8]) -> (ExecutionResult, String, Self) {
+        let mut env = Env::default();
+        env.tx.clear();
+        env.tx.transact_to = TransactTo::Create;
+        env.tx.data = Bytes::copy_from_slice(init_code);
+
+        let (res, trace, db) = Self::run_tx_with_trace(revm::InMemoryDB::default(), env);
+        let deployed = match &res {
+            ExecutionResult::Success {
+                output: Output::Create(_, Some(addr)),
+                ..
+            } => *addr,
+            _ => panic!("unexpected deployment result: {res:?}"),
+        };
+
+        (
+            res,
+            trace,
+            Self {
+                db,
+                contract: deployed,
+            },
+        )
+    }
+
+    fn call(&mut self, calldata: &[u8]) -> ExecutionResult {
+        let mut env = Env::default();
+        env.tx.clear();
+        env.tx.transact_to = TransactTo::Call(self.contract);
+        env.tx.data = Bytes::copy_from_slice(calldata);
+
+        let db = std::mem::take(&mut self.db);
+        let (res, db) = Self::run_tx(db, env);
+        self.db = db;
+        res
+    }
+
+    fn call_with_trace(&mut self, calldata: &[u8]) -> (ExecutionResult, String) {
+        let mut env = Env::default();
+        env.tx.clear();
+        env.tx.transact_to = TransactTo::Call(self.contract);
+        env.tx.data = Bytes::copy_from_slice(calldata);
+
+        let db = std::mem::take(&mut self.db);
+        let (res, trace, db) = Self::run_tx_with_trace(db, env);
+        self.db = db;
+        (res, trace)
+    }
+
+    fn run_tx(mut db: revm::InMemoryDB, env: Env) -> (ExecutionResult, revm::InMemoryDB) {
+        struct NoopInspector;
+        impl<DB: revm::Database> revm::Inspector<DB> for NoopInspector {}
+
+        let context = Context::new(EvmContext::new_with_env(db, Box::new(env)), NoopInspector);
+        let mut evm = revm::Evm::new(context, Handler::mainnet::<OsakaSpec>());
+
+        let res = evm.transact_commit();
+        db = std::mem::take(&mut evm.context.evm.inner.db);
+
+        match res {
+            Ok(r) => (r, db),
+            Err(e) => panic!("evm failure: {e}"),
+        }
+    }
+
+    fn run_tx_with_trace(
+        mut db: revm::InMemoryDB,
+        env: Env,
+    ) -> (ExecutionResult, String, revm::InMemoryDB) {
+        let context = Context::new(
+            EvmContext::new_with_env(db, Box::new(env)),
+            TestInspector::new(vec![]),
+        );
+
+        let mut evm = revm::Evm::new(context, Handler::mainnet::<OsakaSpec>());
+        evm = evm
+            .modify()
+            .append_handler_register(inspector_handle_register)
+            .build();
+
+        let res = evm.transact_commit();
+        let trace = String::from_utf8(evm.context.external.w).unwrap();
+        db = std::mem::take(&mut evm.context.evm.inner.db);
+
+        match res {
+            Ok(r) => (r, trace, db),
+            Err(e) => panic!("evm failure: {e}"),
+        }
     }
 }
 
@@ -327,51 +495,18 @@ fn stackify_trace_for_fn(function: &Function, stackify_reach_depth: u8) -> Strin
     stackify
 }
 
-fn stackify_reach_depth_for_fixture(path: &str) -> u8 {
-    let Some(stem) = std::path::Path::new(path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-    else {
-        return 16;
-    };
-
-    let Some(pos) = stem.find("reach") else {
-        return 16;
-    };
-
-    let digits: String = stem[pos + "reach".len()..]
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    if digits.is_empty() {
-        return 16;
+fn stackify_reach_depth_for_fixture(path: &str, parsed: &ParsedModule) -> u8 {
+    match evm_directives::stack_reach_depth(&parsed.debug.module_comments) {
+        Ok(depth) => depth,
+        Err(e) => panic!("{path}: {e}"),
     }
-
-    digits.parse().unwrap_or(16)
 }
 
-fn calldata_for_fixture(path: &str) -> Vec<u8> {
-    let Some(stem) = std::path::Path::new(path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-    else {
-        return vec![0, 0, 0, 11, 0, 0, 0, 22];
-    };
-
-    // TODO: better test case specification :)
-    match stem {
-        // `fe_enum.sntn` expects:
-        // - 4 bytes: selector `1817627404` (big-endian u32)
-        // - 32 bytes: ABI-encoded `u256=42` (big-endian 32 bytes)
-        "fe_enum" => {
-            let mut bytes = Vec::with_capacity(36);
-            bytes.extend_from_slice(&1817627404u32.to_be_bytes());
-            let mut arg = [0u8; 32];
-            arg[31] = 42;
-            bytes.extend_from_slice(&arg);
-            bytes
-        }
-        _ => vec![0, 0, 0, 11, 0, 0, 0, 22],
+fn calldata_for_fixture(path: &str, parsed: &ParsedModule) -> Vec<u8> {
+    match evm_directives::first_evm_case_calldata(&parsed.debug.module_comments) {
+        Ok(Some(calldata)) => calldata,
+        Ok(None) => vec![],
+        Err(e) => panic!("{path}: {e}"),
     }
 }
 

@@ -1,3 +1,7 @@
+#! evm.case: ok
+#!   calldata: u32be(11) u32be(22)
+#!   expect: return u256(10)
+
 target = "evm-ethereum-osaka"
 
 func public %helper() -> i256 {
@@ -40,4 +44,3 @@ object @Contract {
     entry %entry;
   }
 }
-

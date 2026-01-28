@@ -1,3 +1,7 @@
+#! evm.case: ok
+#!   calldata: u32be(11) u32be(22)
+#!   expect: return u256(3)
+
 target = "evm-ethereum-osaka"
 
 func public %entry() {
