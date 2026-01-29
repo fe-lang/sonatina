@@ -62,6 +62,21 @@ pub(crate) struct FuncObjectLayout {
     pub(crate) locals_words: u32,
 }
 
+pub(crate) struct CallSiteLiveObjects {
+    pub(crate) inst: InstId,
+    pub(crate) callee: FuncRef,
+    pub(crate) has_return: bool,
+    pub(crate) live_objs: Vec<StackObjId>,
+}
+
+pub(crate) struct FuncStackObjects {
+    objects: Vec<StackObj>,
+    pub(crate) obj_size_words: FxHashMap<StackObjId, u32>,
+    pub(crate) alloca_ids: FxHashMap<InstId, StackObjId>,
+    pub(crate) spill_obj: SecondaryMap<ValueId, Option<StackObjId>>,
+    pub(crate) call_sites: Vec<CallSiteLiveObjects>,
+}
+
 pub(crate) fn compute_inst_order(
     function: &Function,
     block_order: &[BlockId],
@@ -119,8 +134,33 @@ pub(crate) fn plan_func_objects(
     alloc: &StackifyAlloc,
     inst_liveness: &InstLiveness,
     block_order: &[BlockId],
-    callee_need_words: impl Fn(FuncRef) -> Option<u32>,
+    _callee_need_words: impl Fn(FuncRef) -> Option<u32>,
 ) -> FuncObjectLayout {
+    let stack = compute_func_stack_objects(
+        func_ref,
+        function,
+        module,
+        isa,
+        ptr_escape,
+        alloc,
+        inst_liveness,
+        block_order,
+    );
+    let min_offset_words: FxHashMap<StackObjId, u32> = FxHashMap::default();
+    let (obj_offset_words, locals_words) = pack_objects_with_min_offsets(&stack, &min_offset_words);
+    build_func_object_layout(&stack, obj_offset_words, locals_words)
+}
+
+pub(crate) fn compute_func_stack_objects(
+    func_ref: FuncRef,
+    function: &Function,
+    module: &ModuleCtx,
+    isa: &Evm,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    alloc: &StackifyAlloc,
+    inst_liveness: &InstLiveness,
+    block_order: &[BlockId],
+) -> FuncStackObjects {
     let (inst_order, inst_pos) = compute_inst_order(function, block_order);
     let block_end_pos = compute_block_end_pos(function, &inst_pos);
 
@@ -231,46 +271,152 @@ pub(crate) fn plan_func_objects(
         });
     }
 
-    apply_call_min_offsets(
-        function,
-        inst_liveness,
-        &prov,
-        &spill_obj,
-        &alloca_ids,
-        &callee_need_words,
-        &mut objects,
-    );
+    let mut call_sites: Vec<CallSiteLiveObjects> = Vec::new();
+    for block in function.layout.iter_block() {
+        for inst in function.layout.iter_inst(block) {
+            let Some(call) = function.dfg.call_info(inst) else {
+                continue;
+            };
 
-    let (obj_offset_words, locals_words) = pack_objects(&mut objects);
+            let def = function.dfg.inst_result(inst);
+            let mut set: FxHashSet<StackObjId> = FxHashSet::default();
+            for v in inst_liveness.live_out(inst).iter() {
+                if Some(v) == def {
+                    continue;
+                }
 
-    #[cfg(debug_assertions)]
-    if std::env::var_os("SONATINA_EVM_MEM_VERIFY").is_some() {
-        verify_layout(
-            func_ref,
-            function,
-            inst_liveness,
-            &prov,
-            &spill_obj,
-            &alloca_ids,
-            &callee_need_words,
-            &objects,
-            &obj_offset_words,
-            locals_words,
-        );
+                if let Some(obj) = spill_obj[v] {
+                    set.insert(obj);
+                }
+
+                for base in prov[v].alloca_insts() {
+                    if let Some(&id) = alloca_ids.get(&base) {
+                        set.insert(id);
+                    }
+                }
+            }
+
+            let mut live_objs: Vec<StackObjId> = set.into_iter().collect();
+            live_objs.sort_unstable_by_key(|id| id.as_u32());
+            call_sites.push(CallSiteLiveObjects {
+                inst,
+                callee: call.callee(),
+                has_return: function.dfg.inst_result(inst).is_some(),
+                live_objs,
+            });
+        }
     }
 
+    let mut obj_size_words: FxHashMap<StackObjId, u32> = FxHashMap::default();
+    for obj in &objects {
+        obj_size_words.insert(obj.id, obj.size_words);
+    }
+
+    FuncStackObjects {
+        objects,
+        obj_size_words,
+        alloca_ids,
+        spill_obj,
+        call_sites,
+    }
+}
+
+pub(crate) fn pack_objects_with_min_offsets(
+    stack: &FuncStackObjects,
+    min_offset_words: &FxHashMap<StackObjId, u32>,
+) -> (FxHashMap<StackObjId, u32>, u32) {
+    let mut objs: Vec<StackObj> = stack.objects.clone();
+    for obj in &mut objs {
+        if let Some(k) = min_offset_words.get(&obj.id) {
+            obj.min_offset_words = (*k).max(obj.min_offset_words);
+        }
+    }
+    pack_objects(&mut objs)
+}
+
+pub(crate) fn build_func_object_layout(
+    stack: &FuncStackObjects,
+    obj_offset_words: FxHashMap<StackObjId, u32>,
+    locals_words: u32,
+) -> FuncObjectLayout {
     let mut alloca_offset_words: FxHashMap<InstId, u32> = FxHashMap::default();
-    for (inst, id) in alloca_ids {
-        if let Some(off) = obj_offset_words.get(&id) {
-            alloca_offset_words.insert(inst, *off);
+    for (inst, id) in stack.alloca_ids.iter() {
+        if let Some(off) = obj_offset_words.get(id) {
+            alloca_offset_words.insert(*inst, *off);
         }
     }
 
     FuncObjectLayout {
         obj_offset_words,
         alloca_offset_words,
-        spill_obj,
+        spill_obj: stack.spill_obj.clone(),
         locals_words,
+    }
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn verify_object_packing(
+    func_ref: FuncRef,
+    stack: &FuncStackObjects,
+    obj_offset_words: &FxHashMap<StackObjId, u32>,
+    locals_words: u32,
+) {
+    let mut max_end: u32 = 0;
+    for obj in &stack.objects {
+        let off = obj_offset_words
+            .get(&obj.id)
+            .copied()
+            .unwrap_or_else(|| panic!("missing offset for obj {}", obj.id.as_u32()));
+        let end = off
+            .checked_add(obj.size_words)
+            .unwrap_or_else(|| panic!("obj {} end overflows", obj.id.as_u32()));
+
+        max_end = max_end.max(end);
+        if end > locals_words {
+            panic!(
+                "StaticArena density violated in func {}: obj {} ends at {end} > locals_words={locals_words}",
+                func_ref.as_u32(),
+                obj.id.as_u32()
+            );
+        }
+    }
+    if max_end != locals_words {
+        panic!(
+            "StaticArena locals_words mismatch in func {}: locals_words={locals_words} but max_end={max_end}",
+            func_ref.as_u32()
+        );
+    }
+
+    let objects = &stack.objects;
+    for i in 0..objects.len() {
+        for j in (i + 1)..objects.len() {
+            let o1 = &objects[i];
+            let o2 = &objects[j];
+            if o1.size_words == 0
+                || o2.size_words == 0
+                || o1.interval.end < o2.interval.start
+                || o2.interval.end < o1.interval.start
+            {
+                continue;
+            }
+
+            let off1 = obj_offset_words[&o1.id];
+            let off2 = obj_offset_words[&o2.id];
+            let end1 = off1 + o1.size_words;
+            let end2 = off2 + o2.size_words;
+            if end1 <= off2 || end2 <= off1 {
+                continue;
+            }
+
+            panic!(
+                "StaticArena overlap in func {}: {:?}@[{off1},{end1}) vs {:?}@[{off2},{end2}) (intervals {:?} vs {:?})",
+                func_ref.as_u32(),
+                o1.kind,
+                o2.kind,
+                o1.interval,
+                o2.interval,
+            );
+        }
     }
 }
 
@@ -395,54 +541,6 @@ fn compute_alloca_intervals(
         out.insert(inst, LiveInterval { start, end });
     }
     out
-}
-
-fn apply_call_min_offsets(
-    function: &Function,
-    inst_liveness: &InstLiveness,
-    prov: &SecondaryMap<ValueId, Provenance>,
-    spill_obj: &SecondaryMap<ValueId, Option<StackObjId>>,
-    alloca_ids: &FxHashMap<InstId, StackObjId>,
-    callee_need_words: &impl Fn(FuncRef) -> Option<u32>,
-    objects: &mut [StackObj],
-) {
-    let mut min: FxHashMap<StackObjId, u32> = FxHashMap::default();
-    for obj in objects.iter() {
-        min.insert(obj.id, obj.min_offset_words);
-    }
-
-    for block in function.layout.iter_block() {
-        for inst in function.layout.iter_inst(block) {
-            let Some(call) = function.dfg.call_info(inst) else {
-                continue;
-            };
-            let Some(k) = callee_need_words(call.callee()) else {
-                continue;
-            };
-
-            let def = function.dfg.inst_result(inst);
-            for v in inst_liveness.live_out(inst).iter() {
-                if Some(v) == def {
-                    continue;
-                }
-
-                if let Some(obj) = spill_obj[v] {
-                    min.entry(obj).and_modify(|m| *m = (*m).max(k));
-                }
-
-                for base in prov[v].alloca_insts() {
-                    let Some(&id) = alloca_ids.get(&base) else {
-                        continue;
-                    };
-                    min.entry(id).and_modify(|m| *m = (*m).max(k));
-                }
-            }
-        }
-    }
-
-    for obj in objects {
-        obj.min_offset_words = min.get(&obj.id).copied().unwrap_or(0);
-    }
 }
 
 fn pack_objects(objects: &mut [StackObj]) -> (FxHashMap<StackObjId, u32>, u32) {
@@ -682,131 +780,6 @@ impl AllocaEscapeSite {
                     inst.as_u32()
                 )
             }
-        }
-    }
-}
-
-#[cfg(debug_assertions)]
-fn verify_layout(
-    func_ref: FuncRef,
-    function: &Function,
-    inst_liveness: &InstLiveness,
-    prov: &SecondaryMap<ValueId, Provenance>,
-    spill_obj: &SecondaryMap<ValueId, Option<StackObjId>>,
-    alloca_ids: &FxHashMap<InstId, StackObjId>,
-    callee_need_words: &impl Fn(FuncRef) -> Option<u32>,
-    objects: &[StackObj],
-    obj_offset_words: &FxHashMap<StackObjId, u32>,
-    locals_words: u32,
-) {
-    for block in function.layout.iter_block() {
-        for inst in function.layout.iter_inst(block) {
-            let Some(call) = function.dfg.call_info(inst) else {
-                continue;
-            };
-            let Some(k) = callee_need_words(call.callee()) else {
-                continue;
-            };
-
-            let def = function.dfg.inst_result(inst);
-            for v in inst_liveness.live_out(inst).iter() {
-                if Some(v) == def {
-                    continue;
-                }
-
-                // Invariant: objects live across a StaticArena call must be placed at
-                // offset >= callee clobber prefix. Should be verified in a post-plan verifier.
-                if let Some(obj) = spill_obj[v] {
-                    let off = obj_offset_words
-                        .get(&obj)
-                        .copied()
-                        .unwrap_or_else(|| panic!("missing offset for obj {}", obj.as_u32()));
-                    if off < k {
-                        panic!(
-                            "StaticArena min-offset violated in func {}: spill obj {} at {off} < need_words({})={k}",
-                            func_ref.as_u32(),
-                            obj.as_u32(),
-                            call.callee().as_u32(),
-                        );
-                    }
-                }
-
-                for base in prov[v].alloca_insts() {
-                    let id = alloca_ids
-                        .get(&base)
-                        .copied()
-                        .expect("missing alloca stack object id");
-                    let off = obj_offset_words
-                        .get(&id)
-                        .copied()
-                        .unwrap_or_else(|| panic!("missing offset for obj {}", id.as_u32()));
-                    if off < k {
-                        panic!(
-                            "StaticArena min-offset violated in func {}: alloca obj {} at {off} < need_words({})={k}",
-                            func_ref.as_u32(),
-                            id.as_u32(),
-                            call.callee().as_u32(),
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    let mut max_end: u32 = 0;
-    for obj in objects {
-        let off = obj_offset_words
-            .get(&obj.id)
-            .copied()
-            .unwrap_or_else(|| panic!("missing offset for obj {}", obj.id.as_u32()));
-        let end = off
-            .checked_add(obj.size_words)
-            .unwrap_or_else(|| panic!("obj {} end overflows", obj.id.as_u32()));
-
-        max_end = max_end.max(end);
-        if end > locals_words {
-            panic!(
-                "StaticArena density violated in func {}: obj {} ends at {end} > locals_words={locals_words}",
-                func_ref.as_u32(),
-                obj.id.as_u32()
-            );
-        }
-    }
-    if max_end != locals_words {
-        panic!(
-            "StaticArena locals_words mismatch in func {}: locals_words={locals_words} but max_end={max_end}",
-            func_ref.as_u32()
-        );
-    }
-
-    for i in 0..objects.len() {
-        for j in (i + 1)..objects.len() {
-            let o1 = &objects[i];
-            let o2 = &objects[j];
-            if o1.size_words == 0
-                || o2.size_words == 0
-                || o1.interval.end < o2.interval.start
-                || o2.interval.end < o1.interval.start
-            {
-                continue;
-            }
-
-            let off1 = obj_offset_words[&o1.id];
-            let off2 = obj_offset_words[&o2.id];
-            let end1 = off1 + o1.size_words;
-            let end2 = off2 + o2.size_words;
-            if end1 <= off2 || end2 <= off1 {
-                continue;
-            }
-
-            panic!(
-                "StaticArena overlap in func {}: {:?}@[{off1},{end1}) vs {:?}@[{off2},{end2}) (intervals {:?} vs {:?})",
-                func_ref.as_u32(),
-                o1.kind,
-                o2.kind,
-                o1.interval,
-                o2.interval,
-            );
         }
     }
 }

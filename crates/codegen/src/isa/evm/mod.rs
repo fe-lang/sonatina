@@ -36,8 +36,8 @@ use sonatina_triple::{EvmVersion, OperatingSystem};
 
 use mem_effects::compute_func_mem_effects;
 use memory_plan::{
-    DYN_FP_SLOT, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan, MemScheme, ProgramMemoryPlan,
-    STATIC_BASE, WORD_BYTES, compute_program_memory_plan,
+    ArenaCostModel, CallPreserveChoice, DYN_FP_SLOT, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan,
+    MemScheme, ProgramMemoryPlan, STATIC_BASE, WORD_BYTES, compute_program_memory_plan,
 };
 use ptr_escape::{PtrEscapeSummary, compute_ptr_escape_summaries};
 
@@ -63,6 +63,7 @@ struct PreparedLowering {
 pub struct EvmBackend {
     isa: Evm,
     stackify_reach_depth: u8,
+    arena_cost_model: ArenaCostModel,
     section_state: RefCell<Option<PreparedSection>>,
     current_mem_plan: RefCell<Option<FuncMemPlan>>,
 }
@@ -79,6 +80,7 @@ impl EvmBackend {
         Self {
             isa,
             stackify_reach_depth: 16,
+            arena_cost_model: ArenaCostModel::default(),
             section_state: RefCell::new(None),
             current_mem_plan: RefCell::new(None),
         }
@@ -95,6 +97,11 @@ impl EvmBackend {
 
     pub fn stackify_reach_depth(&self) -> u8 {
         self.stackify_reach_depth
+    }
+
+    pub fn with_arena_cost_model(mut self, model: ArenaCostModel) -> Self {
+        self.arena_cost_model = model;
+        self
     }
 
     /// Render a deterministic memory-plan summary for snapshot tests.
@@ -200,6 +207,65 @@ impl EvmBackend {
                         func_plan.locals_words, st.need_words
                     )
                     .expect("mem plan write failed");
+
+                    let mut call_info: FxHashMap<InstId, (FuncRef, bool)> = FxHashMap::default();
+                    module.func_store.view(func, |function| {
+                        for block in function.layout.iter_block() {
+                            for inst in function.layout.iter_inst(block) {
+                                let Some(call) = function.dfg.call_info(inst) else {
+                                    continue;
+                                };
+                                call_info.insert(
+                                    inst,
+                                    (call.callee(), function.dfg.inst_result(inst).is_some()),
+                                );
+                            }
+                        }
+                    });
+
+                    let mut call_choices: Vec<(InstId, CallPreserveChoice)> =
+                        st.call_choice.iter().map(|(i, c)| (*i, *c)).collect();
+                    call_choices.sort_unstable_by_key(|(i, _)| i.as_u32());
+
+                    for (inst, choice) in call_choices {
+                        let (callee, has_return) =
+                            call_info.get(&inst).copied().unwrap_or_else(|| {
+                                panic!("missing call info for inst {}", inst.as_u32())
+                            });
+                        let callee_name = module.ctx.func_sig(callee, |sig| sig.name().to_string());
+                        let callee_need_words = section
+                            .plan
+                            .funcs
+                            .get(&callee)
+                            .and_then(|p| match &p.scheme {
+                                MemScheme::StaticArena(st) => Some(st.need_words),
+                                MemScheme::DynamicFrame => None,
+                            })
+                            .unwrap_or(0);
+
+                        let save_offsets = st
+                            .call_saves
+                            .get(&inst)
+                            .map(|p| p.save_word_offsets.as_slice())
+                            .unwrap_or(&[]);
+
+                        if save_offsets.is_empty() {
+                            writeln!(
+                                &mut out,
+                                "  call inst{} callee=%{callee_name} callee_need_words={callee_need_words} choice={choice:?} has_return={has_return} save_words=0",
+                                inst.as_u32()
+                            )
+                            .expect("mem plan write failed");
+                        } else {
+                            writeln!(
+                                &mut out,
+                                "  call inst{} callee=%{callee_name} callee_need_words={callee_need_words} choice={choice:?} has_return={has_return} save_words={} save_offsets={save_offsets:?}",
+                                inst.as_u32(),
+                                save_offsets.len(),
+                            )
+                            .expect("mem plan write failed");
+                        }
+                    }
                 }
 
                 let mut scratch_spills: Vec<(ValueId, u32)> = Vec::new();
@@ -425,8 +491,14 @@ impl LowerBackend for EvmBackend {
             );
         }
 
-        let mut plan =
-            compute_program_memory_plan(module, funcs, &analyses, &ptr_escape, &self.isa);
+        let mut plan = compute_program_memory_plan(
+            module,
+            funcs,
+            &analyses,
+            &ptr_escape,
+            &self.isa,
+            &self.arena_cost_model,
+        );
 
         let mem_effects =
             compute_func_mem_effects(module, funcs, &plan, &scratch_effects, &self.isa);
@@ -1175,6 +1247,87 @@ impl FinalAlloc {
         Self { inner, mem_plan }
     }
 
+    fn abs_addr_for_word(&self, word_off: u32) -> u32 {
+        STATIC_BASE
+            .checked_add(
+                word_off
+                    .checked_mul(WORD_BYTES)
+                    .expect("stack object addr bytes overflow"),
+            )
+            .expect("stack object addr bytes overflow")
+    }
+
+    fn inject_call_save_pre(&self, inst: InstId, actions: Actions) -> Actions {
+        let MemScheme::StaticArena(st) = &self.mem_plan.scheme else {
+            return actions;
+        };
+        let Some(plan) = st.call_saves.get(&inst) else {
+            return actions;
+        };
+        if plan.save_word_offsets.is_empty() {
+            return actions;
+        }
+
+        let Some(cont_pos) = actions
+            .iter()
+            .position(|a| matches!(a, Action::PushContinuationOffset))
+        else {
+            panic!("call save expected Action::PushContinuationOffset");
+        };
+
+        let mut out = Actions::new();
+        for (idx, act) in actions.into_iter().enumerate() {
+            if idx == cont_pos {
+                for &w in &plan.save_word_offsets {
+                    out.push(Action::MemLoadAbs(self.abs_addr_for_word(w)));
+                }
+            }
+            out.push(act);
+        }
+        out
+    }
+
+    fn inject_call_save_post(&self, inst: InstId, actions: Actions) -> Actions {
+        let MemScheme::StaticArena(st) = &self.mem_plan.scheme else {
+            return actions;
+        };
+        let Some(plan) = st.call_saves.get(&inst) else {
+            return actions;
+        };
+        if plan.save_word_offsets.is_empty() {
+            return actions;
+        }
+
+        let mut restore: Actions = Actions::new();
+        let mut stack_order: Vec<u32> = plan.save_word_offsets.iter().copied().rev().collect();
+
+        if plan.has_return {
+            while !stack_order.is_empty() {
+                let m = stack_order.len().min(16);
+                restore.push(Action::StackSwap(m as u8));
+
+                // After SWAPm, the deepest saved word in this chunk is on top, followed by the
+                // remaining (m-1) saved words, then the return value.
+                let deepest = stack_order[m - 1];
+                restore.push(Action::MemStoreAbs(self.abs_addr_for_word(deepest)));
+                for &w in stack_order.iter().take(m - 1) {
+                    restore.push(Action::MemStoreAbs(self.abs_addr_for_word(w)));
+                }
+
+                stack_order.drain(..m);
+            }
+        } else {
+            for w in stack_order {
+                restore.push(Action::MemStoreAbs(self.abs_addr_for_word(w)));
+            }
+        }
+
+        let mut out: Actions = Actions::new();
+        out.extend(restore);
+        out.extend(actions);
+        out
+    }
+
     fn rewrite_actions(&self, mut actions: Actions) -> Actions {
         for action in actions.iter_mut() {
             match action {
@@ -1235,11 +1388,15 @@ impl Allocator for FinalAlloc {
     }
 
     fn read(&self, inst: InstId, vals: &[sonatina_ir::ValueId]) -> Actions {
-        self.rewrite_actions(self.inner.read(inst, vals))
+        let actions = self.inner.read(inst, vals);
+        let actions = self.inject_call_save_pre(inst, actions);
+        self.rewrite_actions(actions)
     }
 
     fn write(&self, inst: InstId, val: Option<sonatina_ir::ValueId>) -> Actions {
-        self.rewrite_actions(self.inner.write(inst, val))
+        let actions = self.inner.write(inst, val);
+        let actions = self.inject_call_save_post(inst, actions);
+        self.rewrite_actions(actions)
     }
 
     fn traverse_edge(&self, from: BlockId, to: BlockId) -> Actions {
