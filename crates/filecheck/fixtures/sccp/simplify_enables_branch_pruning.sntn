@@ -1,0 +1,21 @@
+#! SCCP companion simplifier: branch pruning enabled by simplification.
+
+target = "evm-ethereum-london"
+
+# sameln: func public %simplify_prune_branch(v0.i32) -> i32 {
+# nextln:     block0:
+# nextln:         jump block2;
+# nextln: 
+# nextln:     block2:
+# nextln:         return 2.i32;
+func public %simplify_prune_branch(v0.i32) -> i32 {
+    block0:
+        v1.i32 = xor v0 v0;
+        br v1 block1 block2;
+
+    block1:
+        return 1.i32;
+
+    block2:
+        return 2.i32;
+}

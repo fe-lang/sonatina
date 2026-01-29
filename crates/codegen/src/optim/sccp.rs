@@ -17,6 +17,7 @@ use sonatina_ir::{
 };
 
 use crate::cfg_edit::{remove_phi_incoming_from, simplify_trivial_phis_in_block};
+use super::sccp_simplify::{SimplifyResult, simplify_inst};
 
 #[derive(Debug)]
 pub struct SccpSolver {
@@ -188,6 +189,22 @@ impl SccpSolver {
             return;
         }
 
+        match simplify_inst(func, &self.lattice, inst_id) {
+            SimplifyResult::Const(imm) => {
+                self.set_lattice_cell(inst_result, LatticeCell::Const(imm));
+                return;
+            }
+            SimplifyResult::Copy(src) => {
+                let src_cell = match func.dfg.value_imm(src) {
+                    Some(imm) => LatticeCell::Const(imm),
+                    None => self.lattice[src],
+                };
+                self.set_lattice_cell(inst_result, src_cell);
+                return;
+            }
+            SimplifyResult::NoChange => {}
+        }
+
         let mut cell_state = CellState::new(&self.lattice, &func.dfg);
         let value = InstDowncast::map(func.inst_set(), inst, |i: &dyn Interpret| {
             i.interpret(&mut cell_state)
@@ -343,6 +360,14 @@ impl SccpSolver {
             None => return,
         };
 
+        if !func.dfg.is_phi(inst)
+            && let SimplifyResult::Copy(src) = simplify_inst(func, &self.lattice, inst)
+        {
+            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            func.dfg.change_to_alias(inst_result, src);
+            return;
+        }
+
         match self.lattice[inst_result].to_imm() {
             Some(imm) => {
                 InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
@@ -465,7 +490,7 @@ impl FlowEdge {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-enum LatticeCell {
+pub(super) enum LatticeCell {
     Top,
     Const(Immediate),
     #[default]

@@ -1,0 +1,43 @@
+#! SCCP companion simplifier: self-relations.
+
+target = "evm-ethereum-london"
+
+# xor x, x => 0
+# check: return 0.i8;
+func public %simplify_xor_self(v0.i8) -> i8 {
+    block0:
+        v1.i8 = xor v0 v0;
+        return v1;
+}
+
+# sub x, x => 0
+# check: return 0.i8;
+func public %simplify_sub_self(v0.i8) -> i8 {
+    block0:
+        v1.i8 = sub v0 v0;
+        return v1;
+}
+
+# eq x, x => 1
+# check: return 1.i1;
+func public %simplify_eq_self(v0.i8) -> i1 {
+    block0:
+        v1.i1 = eq v0 v0;
+        return v1;
+}
+
+# lt x, x => 0
+# check: return 0.i1;
+func public %simplify_lt_self(v0.i8) -> i1 {
+    block0:
+        v1.i1 = lt v0 v0;
+        return v1;
+}
+
+# le x, x => 1
+# check: return 1.i1;
+func public %simplify_le_self(v0.i8) -> i1 {
+    block0:
+        v1.i1 = le v0 v0;
+        return v1;
+}
