@@ -7,7 +7,7 @@
 //!     - Layouts are solved in reachable-CFG SCC topo order; cyclic SCCs use a fixed point.
 //! - For merge blocks, all incoming edges are normalized to the same `StackIn(B)` (often a no-op).
 //! - When a value cannot be duplicated from within `DUP16` reach, it is added to `spill_set`,
-//!   assigned a frame slot, and reloaded from memory; `spill_set` is discovered via a
+//!   assigned a stack object, and reloaded from memory; `spill_set` is discovered via a
 //!   monotone fixed point.
 //!
 //! Notes specific to this codebase:
@@ -41,18 +41,17 @@ const CONSUME_LAST_USE_MAX_SWAPS: usize = 3;
 
 #[cfg(test)]
 mod tests {
-    use super::StackifyAlloc;
+    use super::{StackifyAlloc, StackifyLiveValues};
     use crate::{
         critical_edge::CriticalEdgeSplitter,
         domtree::DomTree,
         liveness::{InstLiveness, Liveness},
-        stackalloc::SpillSlotRef,
     };
     use sonatina_ir::cfg::ControlFlowGraph;
     use sonatina_parser::parse_module;
 
     #[test]
-    fn spill_slots_split_by_call_liveness() {
+    fn scratch_spills_respect_scratch_live_values() {
         const SRC: &str = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/test_files/evm/spill.sntn"
@@ -80,39 +79,41 @@ mod tests {
             let mut dom = DomTree::new();
             dom.compute(&cfg);
 
-            let alloc = StackifyAlloc::for_function(function, &cfg, &dom, &liveness, 16);
-
             let mut inst_live = InstLiveness::new();
             inst_live.compute(function, &cfg, &liveness);
-            let call_live = inst_live.call_live_values(function);
+            let scratch_live_values = inst_live.call_live_values(function);
             assert!(
-                !call_live.is_empty(),
-                "expected some values live-out at calls"
+                !scratch_live_values.is_empty(),
+                "expected some scratch-live values"
             );
 
-            let mut saw_persistent = false;
-            let mut saw_any = false;
+            let alloc = StackifyAlloc::for_function_with_call_live_values_and_scratch_spills(
+                function,
+                &cfg,
+                &dom,
+                &liveness,
+                16,
+                StackifyLiveValues {
+                    scratch_live_values: scratch_live_values.clone(),
+                },
+                2,
+            );
 
-            for (v, slot) in alloc.slot_of_value.iter() {
-                let Some(slot) = *slot else {
-                    continue;
-                };
-                saw_any = true;
-                let expect_persistent = call_live.contains(v);
-                match (expect_persistent, slot) {
-                    (true, SpillSlotRef::Persistent(_)) => saw_persistent = true,
-                    (false, SpillSlotRef::Transient(_) | SpillSlotRef::Scratch(_)) => {}
-                    (true, SpillSlotRef::Transient(_) | SpillSlotRef::Scratch(_)) => {
-                        panic!("expected spilled value {v:?} to be persistent");
-                    }
-                    (false, SpillSlotRef::Persistent(_)) => {
-                        panic!("expected spilled value {v:?} to be transient");
-                    }
+            for (v, slot) in alloc.scratch_slot_of_value.iter() {
+                if slot.is_some() {
+                    assert!(
+                        !scratch_live_values.contains(v),
+                        "scratch spill used for a scratch-live value"
+                    );
                 }
             }
 
-            assert!(saw_any, "expected at least one spilled value");
-            assert!(saw_persistent, "expected at least one persistent spill");
+            assert!(
+                scratch_live_values
+                    .iter()
+                    .any(|v| alloc.spill_obj[v].is_some()),
+                "expected at least one scratch-live value to spill to a stack object"
+            );
         });
     }
 }

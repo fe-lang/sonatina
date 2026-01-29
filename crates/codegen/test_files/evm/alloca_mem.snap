@@ -12,11 +12,11 @@ object: Contract
 functions:
   mem: dyn_base=0xe0 static_base=0xc0
   helper: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=1
-    mem: scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
+    mem: scheme=StaticArena need_words=0 locals_words=0
   main: ir_blocks=1 ir_insts=15 vcode_ops=30 fixups=2 imm_bytes=6
-    mem: scheme=StaticTree base_words=0 persistent_words=0 alloca_words=1 persistent_alloca_words=0
+    mem: scheme=StaticArena need_words=1 locals_words=1
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
-    mem: scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
+    mem: scheme=StaticArena need_words=1 locals_words=0
 
 evm:
   case ok: calldata_len=8 success reason=Return gas_used=21213 gas_refunded=0 logs=0 output=call len=32
