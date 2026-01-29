@@ -1,40 +1,21 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    Function, InstSetExt, Module,
-    inst::evm::inst_set::EvmInstKind,
-    isa::{Isa, evm::Evm},
-    module::FuncRef,
+    Function, Module,
+    isa::evm::Evm,
+    module::{FuncRef, ModuleCtx},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef};
 
-use super::memory_plan::{MemScheme, ProgramMemoryPlan};
+use super::{provenance::compute_value_provenance, scratch_plan::inst_is_scratch_clobber};
 
-#[derive(Clone, Copy, Default)]
-pub(crate) struct FuncMemEffects {
-    pub(crate) touches_static_arena: bool,
-    pub(crate) touches_scratch: bool,
-    pub(crate) touches_dyn_frame: bool,
-    pub(crate) touches_heap_meta: bool,
-}
-
-impl FuncMemEffects {
-    fn union_with(&mut self, other: FuncMemEffects) {
-        self.touches_static_arena |= other.touches_static_arena;
-        self.touches_scratch |= other.touches_scratch;
-        self.touches_dyn_frame |= other.touches_dyn_frame;
-        self.touches_heap_meta |= other.touches_heap_meta;
-    }
-}
-
-pub(crate) fn compute_func_mem_effects(
+pub(crate) fn compute_scratch_effects(
     module: &Module,
     funcs: &[FuncRef],
-    plan: &ProgramMemoryPlan,
-    scratch_effects: &FxHashSet<FuncRef>,
+    scratch_spill_funcs: &FxHashSet<FuncRef>,
     isa: &Evm,
-) -> FxHashMap<FuncRef, FuncMemEffects> {
+) -> FxHashSet<FuncRef> {
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
     let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
     let scc = SccBuilder::new().compute_scc(&call_graph);
@@ -42,74 +23,60 @@ pub(crate) fn compute_func_mem_effects(
     let topo = topo_sort_sccs(&funcs_set, &call_graph, &scc);
     let edges = build_scc_edges(&funcs_set, &call_graph, &scc, &topo);
 
-    let mut local_effects: FxHashMap<FuncRef, FuncMemEffects> = FxHashMap::default();
+    let mut local: FxHashMap<FuncRef, bool> = FxHashMap::default();
     for &func in funcs {
-        let func_plan = plan.funcs.get(&func);
-        let touches_static_arena = matches!(
-            func_plan.map(|p| &p.scheme),
-            Some(MemScheme::StaticArena(st)) if st.need_words != 0
-        );
-        let touches_dyn_frame =
-            matches!(func_plan.map(|p| &p.scheme), Some(MemScheme::DynamicFrame))
-                && func_plan.is_some_and(|p| p.locals_words != 0);
-        let touches_heap_meta = module.func_store.view(func, |f| func_uses_malloc(f, isa));
-        let touches_scratch = scratch_effects.contains(&func);
-
-        local_effects.insert(
-            func,
-            FuncMemEffects {
-                touches_static_arena,
-                touches_scratch,
-                touches_dyn_frame,
-                touches_heap_meta,
-            },
-        );
+        let touches = scratch_spill_funcs.contains(&func)
+            || module
+                .func_store
+                .view(func, |f| func_clobbers_scratch(f, &module.ctx, isa));
+        local.insert(func, touches);
     }
 
-    let mut scc_effects: FxHashMap<SccRef, FuncMemEffects> = FxHashMap::default();
-    for scc_ref in &topo {
-        scc_effects.insert(*scc_ref, FuncMemEffects::default());
-    }
-
-    for scc_ref in &topo {
-        let mut eff = FuncMemEffects::default();
+    let mut scc_touches: FxHashMap<SccRef, bool> = FxHashMap::default();
+    for &scc_ref in &topo {
+        let mut touches = false;
         for &f in scc
-            .scc_info(*scc_ref)
+            .scc_info(scc_ref)
             .components
             .iter()
             .filter(|f| funcs_set.contains(f))
         {
-            eff.union_with(local_effects.get(&f).copied().unwrap_or_default());
+            touches |= local.get(&f).copied().unwrap_or(false);
         }
-        scc_effects.insert(*scc_ref, eff);
+        scc_touches.insert(scc_ref, touches);
     }
 
     for &scc_ref in topo.iter().rev() {
-        let mut eff = scc_effects.get(&scc_ref).copied().unwrap_or_default();
+        let mut touches = scc_touches.get(&scc_ref).copied().unwrap_or(false);
         for &callee in edges.get(&scc_ref).into_iter().flatten() {
-            eff.union_with(scc_effects.get(&callee).copied().unwrap_or_default());
+            touches |= scc_touches.get(&callee).copied().unwrap_or(false);
         }
-        scc_effects.insert(scc_ref, eff);
+        scc_touches.insert(scc_ref, touches);
     }
 
-    let mut out: FxHashMap<FuncRef, FuncMemEffects> = FxHashMap::default();
+    let mut out: FxHashSet<FuncRef> = FxHashSet::default();
     for &f in funcs {
-        out.insert(f, scc_effects[&scc.scc_ref(f)]);
+        if scc_touches[&scc.scc_ref(f)] {
+            out.insert(f);
+        }
     }
     out
 }
 
-fn func_uses_malloc(function: &Function, isa: &Evm) -> bool {
+fn func_clobbers_scratch(function: &Function, module: &ModuleCtx, isa: &Evm) -> bool {
+    let prov = compute_value_provenance(function, module, isa, |callee| {
+        let arg_count = module.func_sig(callee, |sig| sig.args().len());
+        vec![true; arg_count]
+    });
+
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
-            if matches!(
-                isa.inst_set().resolve_inst(function.dfg.inst(inst)),
-                EvmInstKind::EvmMalloc(_)
-            ) {
+            if inst_is_scratch_clobber(function, isa, inst, &prov) {
                 return true;
             }
         }
     }
+
     false
 }
 

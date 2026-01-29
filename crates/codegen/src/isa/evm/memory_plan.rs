@@ -1,16 +1,24 @@
+use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
-use sonatina_ir::{InstId, Module, module::FuncRef};
-use std::collections::BTreeSet;
+use sonatina_ir::{BlockId, InstId, Module, ValueId, module::FuncRef};
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef};
+use crate::{
+    liveness::InstLiveness,
+    module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef},
+    stackalloc::StackifyAlloc,
+};
+
+use super::{
+    ptr_escape::PtrEscapeSummary,
+    static_arena_alloc::{FuncObjectLayout, StackObjId, plan_func_objects},
+};
+use sonatina_ir::isa::evm::Evm;
 
 pub const WORD_BYTES: u32 = 32;
-
 pub const FREE_PTR_SLOT: u8 = 0x40;
-
 pub const DYN_SP_SLOT: u8 = 0x80;
 pub const DYN_FP_SLOT: u8 = 0xa0;
-
 pub const STATIC_BASE: u32 = 0xc0;
 
 #[derive(Clone, Debug)]
@@ -22,79 +30,150 @@ pub struct ProgramMemoryPlan {
 #[derive(Clone, Debug)]
 pub struct FuncMemPlan {
     pub scheme: MemScheme,
-    pub alloca: FxHashMap<InstId, StackObjectPlan>,
-    pub alloca_words: u32,
-    pub persistent_alloca_words: u32,
+
+    /// Word offsets for all stack objects in this function.
+    ///
+    /// For `StaticArena`, offsets are relative to `STATIC_BASE`.
+    /// For `DynamicFrame`, offsets are relative to `fp`.
+    pub obj_offset_words: FxHashMap<StackObjId, u32>,
+
+    /// Convenience map for `Alloca` lowering.
+    pub alloca_offset_words: FxHashMap<InstId, u32>,
+
+    /// Convenience map for spill rewriting: ValueId -> obj id (non-scratch spills).
+    pub spill_obj: SecondaryMap<ValueId, Option<StackObjId>>,
+
+    /// Total local object extent (max offset + size), in words.
+    pub locals_words: u32,
+
     pub malloc_future_static_words: FxHashMap<InstId, u32>,
     pub transient_mallocs: FxHashSet<InstId>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AllocaClass {
-    Persistent,
-    Transient,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StackObjectPlan {
-    pub class: AllocaClass,
-    pub offset_words: u32,
-}
-
 #[derive(Clone, Debug)]
 pub enum MemScheme {
-    StaticTree(StaticTreeFuncPlan),
+    StaticArena(StaticArenaFuncPlan),
     DynamicFrame,
 }
 
 #[derive(Clone, Debug)]
-pub struct StaticTreeFuncPlan {
-    pub base_words: u32,
-    pub persistent_words: u32,
+pub struct StaticArenaFuncPlan {
+    pub need_words: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct FuncLocalMemInfo {
-    pub persistent_words: u32,
-    pub transient_words: u32,
-    pub alloca_words: u32,
-    pub persistent_alloca_words: u32,
+pub(crate) struct FuncAnalysis {
+    pub(crate) alloc: StackifyAlloc,
+    pub(crate) inst_liveness: InstLiveness,
+    pub(crate) block_order: Vec<BlockId>,
 }
 
-pub fn compute_program_memory_plan(
+pub(crate) fn compute_program_memory_plan(
     module: &Module,
     funcs: &[FuncRef],
-    local_mem: &FxHashMap<FuncRef, FuncLocalMemInfo>,
-    alloca_offsets: &FxHashMap<FuncRef, FxHashMap<InstId, StackObjectPlan>>,
+    analyses: &FxHashMap<FuncRef, FuncAnalysis>,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    isa: &Evm,
 ) -> ProgramMemoryPlan {
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
     let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
     let scc = SccBuilder::new().compute_scc(&call_graph);
 
-    let callers = compute_callers(&funcs_set, &call_graph);
+    let topo = topo_sort_sccs(&funcs_set, &call_graph, &scc);
 
-    let mut eligible: FxHashSet<FuncRef> = FxHashSet::default();
-    for &f in funcs_set.iter() {
-        let caller_count = callers.get(&f).map_or(0, |cs| cs.len());
-        if !scc.scc_of(f).is_cycle && caller_count <= 1 {
-            eligible.insert(f);
+    let mut static_arena_funcs: FxHashSet<FuncRef> = FxHashSet::default();
+    for &f in &funcs_set {
+        if !scc.scc_of(f).is_cycle {
+            static_arena_funcs.insert(f);
         }
     }
 
-    let (children, roots) = build_forest(&eligible, &callers);
-
-    let static_enter_words =
-        compute_static_enter_words(&funcs_set, &call_graph, &scc, &eligible, local_mem);
-
     let mut need_words: FxHashMap<FuncRef, u32> = FxHashMap::default();
     let mut static_max_words: u32 = 0;
-    for &root in &roots {
-        let need = compute_need_words(root, local_mem, &children, &mut need_words);
-        let base_words = static_enter_words.get(&root).copied().unwrap_or(0);
-        let total = base_words
-            .checked_add(need)
-            .expect("static max words overflow");
-        static_max_words = static_max_words.max(total);
+    let mut plans: FxHashMap<FuncRef, FuncMemPlan> = FxHashMap::default();
+
+    for &scc_ref in topo.iter().rev() {
+        let mut component: Vec<FuncRef> = scc
+            .scc_info(scc_ref)
+            .components
+            .iter()
+            .copied()
+            .filter(|f| funcs_set.contains(f))
+            .collect();
+        component.sort_unstable_by_key(|f| f.as_u32());
+
+        for func in component {
+            let analysis = analyses.get(&func).expect("missing FuncAnalysis");
+
+            let is_static = static_arena_funcs.contains(&func);
+            let layout: FuncObjectLayout = module.func_store.view(func, |function| {
+                let callee_need_words = |callee: FuncRef| {
+                    (is_static && static_arena_funcs.contains(&callee)).then(|| {
+                        need_words
+                            .get(&callee)
+                            .copied()
+                            .expect("callee need_words missing")
+                    })
+                };
+
+                plan_func_objects(
+                    func,
+                    function,
+                    &module.ctx,
+                    isa,
+                    ptr_escape,
+                    &analysis.alloc,
+                    &analysis.inst_liveness,
+                    &analysis.block_order,
+                    callee_need_words,
+                )
+            });
+
+            let scheme = if static_arena_funcs.contains(&func) {
+                let child_need = call_graph
+                    .callee_of(func)
+                    .iter()
+                    .filter(|c| static_arena_funcs.contains(c))
+                    .map(|c| {
+                        need_words
+                            .get(c)
+                            .copied()
+                            .expect("callee need_words missing")
+                    })
+                    .max()
+                    .unwrap_or(0);
+                let need = layout.locals_words.max(child_need);
+
+                #[cfg(debug_assertions)]
+                if std::env::var_os("SONATINA_EVM_MEM_VERIFY").is_some()
+                    && (need < layout.locals_words || need < child_need)
+                {
+                    panic!(
+                        "StaticArena need_words violated in func {}: need_words={need}, locals_words={}, child_need={child_need}",
+                        func.as_u32(),
+                        layout.locals_words
+                    );
+                }
+
+                need_words.insert(func, need);
+                static_max_words = static_max_words.max(need);
+                MemScheme::StaticArena(StaticArenaFuncPlan { need_words: need })
+            } else {
+                MemScheme::DynamicFrame
+            };
+
+            plans.insert(
+                func,
+                FuncMemPlan {
+                    scheme,
+                    obj_offset_words: layout.obj_offset_words,
+                    alloca_offset_words: layout.alloca_offset_words,
+                    spill_obj: layout.spill_obj,
+                    locals_words: layout.locals_words,
+                    malloc_future_static_words: FxHashMap::default(),
+                    transient_mallocs: FxHashSet::default(),
+                },
+            );
+        }
     }
 
     let static_max_bytes = static_max_words
@@ -104,109 +183,24 @@ pub fn compute_program_memory_plan(
         .checked_add(static_max_bytes)
         .expect("dyn base overflow");
 
-    let mut plans: FxHashMap<FuncRef, FuncMemPlan> = FxHashMap::default();
-    for &f in funcs {
-        let Some(mem) = local_mem.get(&f) else {
-            continue;
-        };
-
-        let alloca = alloca_offsets.get(&f).cloned().unwrap_or_default();
-
-        let scheme = if eligible.contains(&f) {
-            let base_words = static_enter_words.get(&f).copied().unwrap_or(0);
-            MemScheme::StaticTree(StaticTreeFuncPlan {
-                base_words,
-                persistent_words: mem.persistent_words,
-            })
-        } else {
-            MemScheme::DynamicFrame
-        };
-
-        plans.insert(
-            f,
-            FuncMemPlan {
-                scheme,
-                alloca,
-                alloca_words: mem.alloca_words,
-                persistent_alloca_words: mem.persistent_alloca_words,
-                malloc_future_static_words: FxHashMap::default(),
-                transient_mallocs: FxHashSet::default(),
-            },
-        );
-    }
-
     ProgramMemoryPlan {
         dyn_base,
         funcs: plans,
     }
 }
 
-fn compute_callers(
-    funcs: &FxHashSet<FuncRef>,
-    call_graph: &CallGraph,
-) -> FxHashMap<FuncRef, Vec<FuncRef>> {
-    let mut callers: FxHashMap<FuncRef, Vec<FuncRef>> = FxHashMap::default();
-    for &f in funcs {
-        callers.entry(f).or_default();
-    }
-
-    for &f in funcs {
-        for &callee in call_graph.callee_of(f) {
-            debug_assert!(funcs.contains(&callee), "subset call graph invariant");
-            callers.entry(callee).or_default().push(f);
-        }
-    }
-
-    for cs in callers.values_mut() {
-        cs.sort_unstable_by_key(|f| f.as_u32());
-    }
-
-    callers
-}
-
-fn build_forest(
-    eligible: &FxHashSet<FuncRef>,
-    callers: &FxHashMap<FuncRef, Vec<FuncRef>>,
-) -> (FxHashMap<FuncRef, Vec<FuncRef>>, Vec<FuncRef>) {
-    let mut children: FxHashMap<FuncRef, Vec<FuncRef>> = FxHashMap::default();
-    let mut roots: Vec<FuncRef> = Vec::new();
-
-    for &f in eligible {
-        let p = match callers.get(&f).map(Vec::as_slice).unwrap_or_default() {
-            [only] if eligible.contains(only) => Some(*only),
-            _ => None,
-        };
-        children.entry(f).or_default();
-        if let Some(p) = p {
-            children.entry(p).or_default().push(f);
-        } else {
-            roots.push(f);
-        }
-    }
-
-    for cs in children.values_mut() {
-        cs.sort_unstable_by_key(|f| f.as_u32());
-    }
-
-    roots.sort_unstable_by_key(|f| f.as_u32());
-
-    (children, roots)
-}
-
-fn compute_static_enter_words(
+fn topo_sort_sccs(
     funcs: &FxHashSet<FuncRef>,
     call_graph: &CallGraph,
     scc: &CallGraphSccs,
-    eligible: &FxHashSet<FuncRef>,
-    local_mem: &FxHashMap<FuncRef, FuncLocalMemInfo>,
-) -> FxHashMap<FuncRef, u32> {
+) -> Vec<SccRef> {
     let mut sccs: BTreeSet<SccRef> = BTreeSet::new();
     for &f in funcs {
         sccs.insert(scc.scc_ref(f));
     }
 
-    let mut edges: FxHashMap<SccRef, BTreeSet<SccRef>> = FxHashMap::default();
-    let mut indegree: FxHashMap<SccRef, usize> = FxHashMap::default();
+    let mut edges: BTreeMap<SccRef, BTreeSet<SccRef>> = BTreeMap::new();
+    let mut indegree: BTreeMap<SccRef, usize> = BTreeMap::new();
     for &s in &sccs {
         edges.insert(s, BTreeSet::new());
         indegree.insert(s, 0);
@@ -215,7 +209,6 @@ fn compute_static_enter_words(
     for &f in funcs {
         let from = scc.scc_ref(f);
         for &callee in call_graph.callee_of(f) {
-            debug_assert!(funcs.contains(&callee), "subset call graph invariant");
             let to = scc.scc_ref(callee);
             if from == to {
                 continue;
@@ -256,114 +249,66 @@ fn compute_static_enter_words(
     }
 
     debug_assert_eq!(topo.len(), sccs.len(), "SCC topo sort incomplete");
-
-    let mut enter_words: FxHashMap<SccRef, u32> = FxHashMap::default();
-    for &s in &sccs {
-        enter_words.insert(s, 0);
-    }
-
-    for &s in &topo {
-        let base = enter_words.get(&s).copied().unwrap_or(0);
-        let push_words = scc_push_words(scc, s, eligible, local_mem);
-
-        for &to in edges.get(&s).expect("missing scc") {
-            let next = base
-                .checked_add(push_words)
-                .expect("static enter words overflow");
-            let dest = enter_words.get_mut(&to).expect("missing scc");
-            *dest = (*dest).max(next);
-        }
-    }
-
-    let mut out: FxHashMap<FuncRef, u32> = FxHashMap::default();
-    for &f in funcs {
-        let s = scc.scc_ref(f);
-        out.insert(f, enter_words.get(&s).copied().unwrap_or(0));
-    }
-
-    out
-}
-
-fn scc_push_words(
-    scc: &CallGraphSccs,
-    scc_ref: SccRef,
-    eligible: &FxHashSet<FuncRef>,
-    local_mem: &FxHashMap<FuncRef, FuncLocalMemInfo>,
-) -> u32 {
-    let info = scc.scc_info(scc_ref);
-    if info.is_cycle {
-        return 0;
-    }
-
-    let Some(&func) = info.components.iter().min_by_key(|f| f.as_u32()) else {
-        return 0;
-    };
-
-    if eligible.contains(&func) {
-        local_mem.get(&func).map_or(0, |m| m.persistent_words)
-    } else {
-        0
-    }
-}
-
-fn compute_need_words(
-    f: FuncRef,
-    local_mem: &FxHashMap<FuncRef, FuncLocalMemInfo>,
-    children: &FxHashMap<FuncRef, Vec<FuncRef>>,
-    memo: &mut FxHashMap<FuncRef, u32>,
-) -> u32 {
-    if let Some(&cached) = memo.get(&f) {
-        return cached;
-    }
-
-    let Some(mem) = local_mem.get(&f) else {
-        memo.insert(f, 0);
-        return 0;
-    };
-
-    let child_need = children
-        .get(&f)
-        .map(Vec::as_slice)
-        .unwrap_or_default()
-        .iter()
-        .map(|&c| compute_need_words(c, local_mem, children, memo))
-        .max()
-        .unwrap_or(0);
-
-    let need = mem
-        .persistent_words
-        .checked_add(mem.transient_words.max(child_need))
-        .expect("need words overflow");
-    memo.insert(f, need);
-    need
+    topo
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{critical_edge::CriticalEdgeSplitter, domtree::DomTree, liveness::Liveness};
+    use sonatina_ir::cfg::ControlFlowGraph;
     use sonatina_parser::parse_module;
+    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
     fn plan_from_src(src: &str) -> (ProgramMemoryPlan, FxHashMap<String, FuncRef>) {
         let parsed = parse_module(src).unwrap();
         let funcs: Vec<FuncRef> = parsed.module.funcs();
 
-        let mut local_mem: FxHashMap<FuncRef, FuncLocalMemInfo> = FxHashMap::default();
-        let mut alloca_offsets: FxHashMap<FuncRef, FxHashMap<InstId, StackObjectPlan>> =
-            FxHashMap::default();
-        for f in &funcs {
-            local_mem.insert(
-                *f,
-                FuncLocalMemInfo {
-                    persistent_words: 1,
-                    transient_words: 0,
-                    alloca_words: 0,
-                    persistent_alloca_words: 0,
-                },
-            );
-            alloca_offsets.insert(*f, FxHashMap::default());
+        let isa = Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        });
+
+        let mut analyses: FxHashMap<FuncRef, FuncAnalysis> = FxHashMap::default();
+        for &func in &funcs {
+            parsed.module.func_store.modify(func, |function| {
+                let mut cfg = ControlFlowGraph::new();
+                cfg.compute(function);
+
+                let mut splitter = CriticalEdgeSplitter::new();
+                splitter.run(function, &mut cfg);
+
+                let mut liveness = Liveness::new();
+                liveness.compute(function, &cfg);
+
+                let mut inst_liveness = InstLiveness::new();
+                inst_liveness.compute(function, &cfg, &liveness);
+
+                let mut dom = DomTree::new();
+                dom.compute(&cfg);
+
+                let block_order = dom.rpo().to_owned();
+                let alloc = StackifyAlloc::for_function(function, &cfg, &dom, &liveness, 16);
+
+                analyses.insert(
+                    func,
+                    FuncAnalysis {
+                        alloc,
+                        inst_liveness,
+                        block_order,
+                    },
+                );
+            });
         }
 
-        let plan = compute_program_memory_plan(&parsed.module, &funcs, &local_mem, &alloca_offsets);
+        let plan = compute_program_memory_plan(
+            &parsed.module,
+            &funcs,
+            &analyses,
+            &FxHashMap::default(),
+            &isa,
+        );
 
         let mut names: FxHashMap<String, FuncRef> = FxHashMap::default();
         for f in funcs {
@@ -375,166 +320,125 @@ mod tests {
     }
 
     #[test]
-    fn static_tree_chain() {
+    fn static_arena_chain_has_no_base_stacking() {
         let (plan, names) = plan_from_src(
             r#"
 target = "evm-ethereum-osaka"
 
 func public %c() -> i256 {
 block0:
+    v0.*i256 = alloca i256;
     return 0.i256;
 }
 
 func public %b() -> i256 {
 block0:
-    v0.i256 = call %c;
-    return v0;
-}
-
-func public %a() -> i256 {
-block0:
-    v0.i256 = call %b;
-    return v0;
-}
-"#,
-        );
-
-        assert_eq!(plan.dyn_base, STATIC_BASE + 3 * WORD_BYTES);
-
-        let a = names["a"];
-        let b = names["b"];
-        let c = names["c"];
-
-        let MemScheme::StaticTree(a_plan) = &plan.funcs[&a].scheme else {
-            panic!("expected a to be StaticTree");
-        };
-        let MemScheme::StaticTree(b_plan) = &plan.funcs[&b].scheme else {
-            panic!("expected b to be StaticTree");
-        };
-        let MemScheme::StaticTree(c_plan) = &plan.funcs[&c].scheme else {
-            panic!("expected c to be StaticTree");
-        };
-
-        assert_eq!(a_plan.base_words, 0);
-        assert_eq!(b_plan.base_words, 1);
-        assert_eq!(c_plan.base_words, 2);
-    }
-
-    #[test]
-    fn static_tree_diamond_marks_multi_parent_ineligible() {
-        let (plan, names) = plan_from_src(
-            r#"
-target = "evm-ethereum-osaka"
-
-func public %d() -> i256 {
-block0:
-    return 0.i256;
-}
-
-func public %b() -> i256 {
-block0:
-    v0.i256 = call %d;
-    return v0;
-}
-
-func public %c() -> i256 {
-block0:
-    v0.i256 = call %d;
-    return v0;
-}
-
-func public %a() -> i256 {
-block0:
-    v0.i256 = call %b;
+    v0.*i256 = alloca i256;
     v1.i256 = call %c;
     return v1;
 }
-"#,
-        );
-
-        let a = names["a"];
-        let b = names["b"];
-        let c = names["c"];
-        let d = names["d"];
-
-        assert!(matches!(plan.funcs[&d].scheme, MemScheme::DynamicFrame));
-
-        let MemScheme::StaticTree(a_plan) = &plan.funcs[&a].scheme else {
-            panic!("expected a to be StaticTree");
-        };
-        let MemScheme::StaticTree(b_plan) = &plan.funcs[&b].scheme else {
-            panic!("expected b to be StaticTree");
-        };
-        let MemScheme::StaticTree(c_plan) = &plan.funcs[&c].scheme else {
-            panic!("expected c to be StaticTree");
-        };
-
-        assert_eq!(a_plan.base_words, 0);
-        assert_eq!(b_plan.base_words, 1);
-        assert_eq!(c_plan.base_words, 1);
-        assert_eq!(plan.dyn_base, STATIC_BASE + 2 * WORD_BYTES);
-    }
-
-    #[test]
-    fn static_tree_self_recursion_ineligible() {
-        let (plan, names) = plan_from_src(
-            r#"
-target = "evm-ethereum-osaka"
 
 func public %a() -> i256 {
 block0:
-    v0.i256 = call %a;
-    return v0;
-}
-"#,
-        );
-
-        let a = names["a"];
-        assert!(matches!(plan.funcs[&a].scheme, MemScheme::DynamicFrame));
-        assert_eq!(plan.dyn_base, STATIC_BASE);
-    }
-
-    #[test]
-    fn static_tree_base_propagates_through_dynamic_parent() {
-        let (plan, names) = plan_from_src(
-            r#"
-target = "evm-ethereum-osaka"
-
-func public %b() -> i256 {
-block0:
-    return 0.i256;
-}
-
-func public %d() -> i256 {
-block0:
-    v0.i256 = call %d;
+    v0.*i256 = alloca i256;
     v1.i256 = call %b;
     return v1;
 }
+"#,
+        );
 
-func public %a() -> i256 {
+        assert_eq!(plan.dyn_base, STATIC_BASE + WORD_BYTES);
+
+        for name in ["a", "b", "c"] {
+            let func = names[name];
+            let MemScheme::StaticArena(p) = &plan.funcs[&func].scheme else {
+                panic!("expected {name} to be StaticArena");
+            };
+            assert_eq!(p.need_words, 1);
+        }
+    }
+
+    #[test]
+    fn call_live_alloca_is_placed_above_callee_need() {
+        let (plan, names) = plan_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %callee() -> i256 {
 block0:
-    v0.i256 = call %d;
-    return v0;
+    v0.*i256 = alloca i256;
+    v1.*i256 = alloca i256;
+    v2.*i256 = alloca i256;
+    v3.*i256 = alloca i256;
+    v4.*i256 = alloca i256;
+    mstore v0 0.i256 i256;
+    mstore v1 0.i256 i256;
+    mstore v2 0.i256 i256;
+    mstore v3 0.i256 i256;
+    mstore v4 0.i256 i256;
+    v5.i256 = mload v0 i256;
+    v6.i256 = mload v1 i256;
+    v7.i256 = mload v2 i256;
+    v8.i256 = mload v3 i256;
+    v9.i256 = mload v4 i256;
+    v10.i256 = add v5 v6;
+    v11.i256 = add v10 v7;
+    v12.i256 = add v11 v8;
+    v13.i256 = add v12 v9;
+    return v13;
+}
+
+func public %caller() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    mstore v0 1.i256 i256;
+    v1.i256 = call %callee;
+    mstore v0 v1 i256;
+    v2.i256 = mload v0 i256;
+    return v2;
 }
 "#,
         );
 
-        let a = names["a"];
-        let b = names["b"];
-        let d = names["d"];
+        let callee = names["callee"];
+        let caller = names["caller"];
 
-        assert!(matches!(plan.funcs[&d].scheme, MemScheme::DynamicFrame));
-
-        let MemScheme::StaticTree(a_plan) = &plan.funcs[&a].scheme else {
-            panic!("expected a to be StaticTree");
+        let MemScheme::StaticArena(callee_plan) = &plan.funcs[&callee].scheme else {
+            panic!("expected callee to be StaticArena");
         };
-        let MemScheme::StaticTree(b_plan) = &plan.funcs[&b].scheme else {
-            panic!("expected b to be StaticTree");
+        let MemScheme::StaticArena(_) = &plan.funcs[&caller].scheme else {
+            panic!("expected caller to be StaticArena");
         };
 
-        assert_eq!(a_plan.base_words, 0);
-        assert_eq!(b_plan.base_words, 1);
-        assert_eq!(plan.dyn_base, STATIC_BASE + 2 * WORD_BYTES);
+        let mut allocas: Vec<InstId> = Vec::new();
+        plan.funcs[&caller]
+            .alloca_offset_words
+            .keys()
+            .for_each(|i| allocas.push(*i));
+        allocas.sort_unstable_by_key(|i| i.as_u32());
+        assert_eq!(allocas.len(), 1);
+
+        let off = plan.funcs[&caller].alloca_offset_words[&allocas[0]];
+        assert!(off >= callee_plan.need_words);
+    }
+
+    #[test]
+    fn self_recursion_uses_dynamic_frame() {
+        let (plan, names) = plan_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.i256 = call %f;
+    return v1;
+}
+"#,
+        );
+
+        let f = names["f"];
+        assert!(matches!(plan.funcs[&f].scheme, MemScheme::DynamicFrame));
+        assert_eq!(plan.dyn_base, STATIC_BASE);
     }
 }

@@ -1,5 +1,5 @@
 use cranelift_entity::SecondaryMap;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     Function, Immediate, InstId, InstSetExt, U256, ValueId,
     inst::evm::inst_set::EvmInstKind,
@@ -10,7 +10,6 @@ use sonatina_ir::{
 use crate::{bitset::BitSet, liveness::InstLiveness};
 
 use super::{
-    mem_effects::FuncMemEffects,
     memory_plan::WORD_BYTES,
     provenance::{Provenance, compute_value_provenance},
     ptr_escape::PtrEscapeSummary,
@@ -92,7 +91,7 @@ pub(crate) fn compute_scratch_live_values(
     module: &ModuleCtx,
     isa: &Evm,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
-    mem_effects: Option<&FxHashMap<FuncRef, FuncMemEffects>>,
+    scratch_effects: Option<&FxHashSet<FuncRef>>,
     inst_liveness: &InstLiveness,
 ) -> BitSet<ValueId> {
     let prov = compute_value_provenance(function, module, isa, |callee| {
@@ -111,13 +110,7 @@ pub(crate) fn compute_scratch_live_values(
         for inst in function.layout.iter_inst(block) {
             let is_barrier = if let Some(call) = function.dfg.call_info(inst) {
                 let callee = call.callee();
-                mem_effects.is_none_or(|effects| {
-                    effects
-                        .get(&callee)
-                        .copied()
-                        .unwrap_or_default()
-                        .touches_scratch
-                })
+                scratch_effects.is_none_or(|effects| effects.contains(&callee))
             } else {
                 inst_is_scratch_clobber(function, isa, inst, &prov)
             };
