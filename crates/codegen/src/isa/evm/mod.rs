@@ -1093,11 +1093,11 @@ impl FinalAlloc {
         for action in actions.iter_mut() {
             match action {
                 Action::MemLoadObj(id) => {
-                    let off = *self
-                        .mem_plan
-                        .obj_offset_words
-                        .get(id)
-                        .expect("missing stack object offset");
+                    // Invariant: every stackify `Mem*Obj` must have a planned offset.
+                    // Should be checked by a post-plan verifier.
+                    let off = *self.mem_plan.obj_offset_words.get(id).unwrap_or_else(|| {
+                        panic!("missing stack object offset for obj {}", id.as_u32())
+                    });
                     *action = match &self.mem_plan.scheme {
                         MemScheme::StaticArena(_) => Action::MemLoadAbs(
                             STATIC_BASE
@@ -1111,11 +1111,11 @@ impl FinalAlloc {
                     };
                 }
                 Action::MemStoreObj(id) => {
-                    let off = *self
-                        .mem_plan
-                        .obj_offset_words
-                        .get(id)
-                        .expect("missing stack object offset");
+                    // Invariant: every stackify `Mem*Obj` must have a planned offset.
+                    // Should be checked by a post-plan verifier.
+                    let off = *self.mem_plan.obj_offset_words.get(id).unwrap_or_else(|| {
+                        panic!("missing stack object offset for obj {}", id.as_u32())
+                    });
                     *action = match &self.mem_plan.scheme {
                         MemScheme::StaticArena(_) => Action::MemStoreAbs(
                             STATIC_BASE

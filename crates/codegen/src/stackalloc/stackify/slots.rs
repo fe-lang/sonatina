@@ -18,6 +18,10 @@ impl SlotPool {
         std::mem::take(&mut self.slot_of)
     }
 
+    pub(super) fn slot_for(&self, v: ValueId) -> Option<u32> {
+        self.slot_of[v]
+    }
+
     pub(super) fn try_ensure_slot(
         &mut self,
         v: SpilledValueId,

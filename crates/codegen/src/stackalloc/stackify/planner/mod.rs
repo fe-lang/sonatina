@@ -67,7 +67,7 @@ impl<'a> MemPlan<'a> {
     }
 
     fn load_frame_slot_or_placeholder(&mut self, v: ValueId) -> Action {
-        let Some(spilled) = self.spill.spilled(v) else {
+        let Some(_) = self.spill.spilled(v) else {
             self.spill.request_spill(v);
             // This fixed-point iteration will be discarded; the real slot assignment happens at
             // `v`'s definition once it becomes part of `spill_set`.
@@ -76,12 +76,7 @@ impl<'a> MemPlan<'a> {
 
         if self.scratch_spill_slots != 0
             && !self.scratch_live_values.contains(v)
-            && let Some(slot) = self.slots.scratch.try_ensure_slot(
-                spilled,
-                self.liveness,
-                &mut self.free_slots.scratch,
-                Some(self.scratch_spill_slots),
-            )
+            && let Some(slot) = self.slots.scratch.slot_for(v)
         {
             return Action::MemLoadAbs(slot * 32);
         }
