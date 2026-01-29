@@ -1,0 +1,49 @@
+#! evm.case: ok
+#!   calldata: u32be(11) u32be(22)
+#!   expect: return u256(1)
+
+target = "evm-ethereum-osaka"
+
+type @big = { i256, i256, i256, i256, i256, i256, i256, i256 };
+
+func public %big() -> i256 {
+    block0:
+        v0.*@big = alloca @big;
+        v1.*i256 = gep v0 0.i8 0.i8;
+        mstore v1 1.i256 i256;
+        v2.i256 = mload v1 i256;
+        return v2;
+}
+
+func public %small() -> i256 {
+    block0:
+        return 2.i256;
+}
+
+func public %dispatch(v0.i1) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v1.*i8 = evm_malloc 32.i256;
+        v2.i256 = call %big;
+        return v2;
+
+    block2:
+        v3.*i8 = evm_malloc 32.i256;
+        v4.i256 = call %small;
+        return v4;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = call %dispatch 1.i1;
+        mstore 0.i32 v0 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

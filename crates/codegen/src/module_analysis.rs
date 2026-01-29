@@ -133,6 +133,40 @@ impl CallGraph {
         CallGraph { nodes }
     }
 
+    /// Builds a call graph restricted to `funcs`.
+    ///
+    /// Any call edges to functions outside `funcs` are ignored.
+    pub fn build_graph_subset(module: &Module, funcs: &FxHashSet<FuncRef>) -> Self {
+        let mut nodes = SecondaryMap::new();
+
+        let mut ordered: Vec<FuncRef> = funcs.iter().copied().collect();
+        ordered.sort_unstable_by_key(|f| f.as_u32());
+
+        for func_ref in ordered {
+            let callees = module.func_store.view(func_ref, |func| {
+                let mut callees = FxHashSet::default();
+                for block in func.layout.iter_block() {
+                    for inst_id in func.layout.iter_inst(block) {
+                        if let Some(call) = func.dfg.call_info(inst_id) {
+                            let callee = call.callee();
+                            if funcs.contains(&callee) {
+                                callees.insert(callee);
+                            }
+                        }
+                    }
+                }
+
+                let mut callees: Vec<_> = callees.into_iter().collect();
+                callees.sort_unstable();
+                callees
+            });
+
+            nodes[func_ref] = Node { callees };
+        }
+
+        CallGraph { nodes }
+    }
+
     pub fn funcs(&self) -> impl Iterator<Item = FuncRef> {
         self.nodes.keys()
     }

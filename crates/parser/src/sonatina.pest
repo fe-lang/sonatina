@@ -1,4 +1,5 @@
-module = { SOI ~ NEWLINE* ~ target_specifier ~ (NEWLINE+ ~ declaration)* ~ (NEWLINE+ ~ function)* ~ NEWLINE* ~ EOI }
+module = { SOI ~ NEWLINE* ~ target_specifier ~ (NEWLINE+ ~ declaration)* ~ (NEWLINE+ ~ function)* ~ (NEWLINE+ ~ object_definition)* ~ NEWLINE* ~ EOI }
+object_file = { SOI ~ NEWLINE* ~ (object_definition ~ NEWLINE*)* ~ EOI }
 
 WHITESPACE = _{ " " | "\t" }
 COMMENT    =  { "#" ~ (!NEWLINE ~ ANY)* }
@@ -33,7 +34,7 @@ function_body       = _{ "{" ~ (NEWLINE+ ~ block?)* ~ "}" }
 block               =  { block_ident ~ ":" ~ (NEWLINE+ ~ stmt)* }
 _stmts              = _{ (stmt ~ NEWLINE+)* }
 
-gv_declaration  =  { "global" ~ linkage ~ gv_const? ~ type_name ~ gv_identifier ~ ("=" ~ gv_initializer)?  ~ ";" } 
+gv_declaration  =  { "global" ~ linkage ~ gv_const? ~ type_name ~ gv_identifier ~ ("=" ~ gv_initializer)?  ~ ";" }
 gv_identifier   = ${ "$" ~ gv_name }
 gv_name         = @{ ident_start_char ~ ident_body_char* }
 gv_const        =  { "const" }
@@ -57,6 +58,25 @@ unit_type          =  { "unit" }
 
 value_declaration = ${ value_name ~ "." ~ type_name }
 
+// Object
+object_definition   =  { "object" ~ object_identifier ~ object_body }
+object_identifier   = ${ "@" ~ object_name }
+object_name         = @{ ident_start_char ~ ident_body_char* }
+object_body         = _{ "{" ~ (NEWLINE* ~ object_section ~ NEWLINE*)* ~ "}" }
+object_section      =  { "section" ~ section_name ~ section_body }
+section_name        = @{ ident_start_char ~ ident_body_char* }
+section_body        = _{ "{" ~ (NEWLINE* ~ section_stmt ~ NEWLINE*)* ~ "}" }
+section_stmt        =  { section_entry | section_include | section_data | section_embed }
+section_entry       =  { "entry" ~ function_identifier ~ ";" }
+section_include     =  { "include" ~ function_identifier ~ ";" }
+section_data        =  { "data" ~ gv_identifier ~ ";" }
+section_embed       =  { "embed" ~ section_ref ~ "as" ~ embed_symbol ~ ";" }
+section_ref         =  { local_section_ref | external_section_ref }
+local_section_ref   =  { "." ~ section_name }
+external_section_ref = { object_identifier ~ "." ~ section_name }
+embed_symbol        = ${ "&" ~ embed_name }
+embed_name          = @{ ident_start_char ~ ident_body_char* }
+
 // Stmts
 stmt        = { (assign_stmt | inst_stmt) ~ ";" }
 assign_stmt = { value_declaration ~ "=" ~ inst }
@@ -65,7 +85,7 @@ inst_stmt   = { inst }
 inst            = { inst_name ~ inst_arg* }
 inst_name       = { inst_identifier }
 inst_identifier = @{ ident_start_char ~ ident_body_char* }
-inst_arg        = { value | type_name | block_ident | value_block_map | function_identifier}
+inst_arg        = { value | type_name | block_ident | value_block_map | function_identifier | embed_symbol }
 value_block_map = { "(" ~ value ~ block_ident ~ ")" }
 
 value        =  { value_name | imm_number | undef | global_value }

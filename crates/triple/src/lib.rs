@@ -125,8 +125,9 @@ impl OperatingSystem {
                     "istanbul" => EvmVersion::Istanbul,
                     "london" => EvmVersion::London,
                     "paris" => EvmVersion::Paris,
-                    "Shanghai" => EvmVersion::Shanghai,
+                    "shanghai" => EvmVersion::Shanghai,
                     "cancun" => EvmVersion::Cancun,
+                    "osaka" => EvmVersion::Osaka,
                     _ => return Err(InvalidTriple::OsNotSupported),
                 };
                 Ok(Self::Evm(evm_version))
@@ -155,6 +156,7 @@ pub enum EvmVersion {
     Paris,
     Shanghai,
     Cancun,
+    Osaka,
 }
 
 #[derive(Debug, Clone, Error)]
@@ -188,6 +190,7 @@ impl Display for EvmVersion {
             Self::Paris => write!(f, "paris"),
             Self::Shanghai => write!(f, "shanghai"),
             Self::Cancun => write!(f, "cancun"),
+            Self::Osaka => write!(f, "osaka"),
         }
     }
 }
@@ -198,14 +201,17 @@ mod tests {
 
     #[test]
     fn test() {
-        let target = "evm-ethereum-istanbul";
-        let triple = TargetTriple::parse(target).unwrap();
-
-        assert_eq!(triple.architecture, Architecture::Evm);
-        assert_eq!(triple.vendor, Vendor::Ethereum);
-        assert_eq!(
-            triple.operating_system,
-            OperatingSystem::Evm(EvmVersion::Istanbul)
-        );
+        for (target, want) in [
+            ("evm-ethereum-istanbul", EvmVersion::Istanbul),
+            ("evm-ethereum-shanghai", EvmVersion::Shanghai),
+            ("evm-ethereum-cancun", EvmVersion::Cancun),
+            ("evm-ethereum-osaka", EvmVersion::Osaka),
+        ] {
+            let triple = TargetTriple::parse(target).unwrap();
+            assert_eq!(triple.architecture, Architecture::Evm);
+            assert_eq!(triple.vendor, Vendor::Ethereum);
+            assert_eq!(triple.operating_system, OperatingSystem::Evm(want));
+            assert_eq!(target, triple.to_string());
+        }
     }
 }

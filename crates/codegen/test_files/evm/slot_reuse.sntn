@@ -1,0 +1,94 @@
+#! evm.case: ok
+#!   calldata: u32be(11) u32be(22)
+#!   expect: return u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe4)
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = shr 224.i32 v0;
+
+        v2.i256 = not v1;
+
+        v3.i256 = not v1;
+        v4.i256 = not v3;
+        v5.i256 = not v4;
+        v6.i256 = not v5;
+        v7.i256 = not v6;
+        v8.i256 = not v7;
+        v9.i256 = not v8;
+        v10.i256 = not v9;
+        v11.i256 = not v10;
+        v12.i256 = not v11;
+        v13.i256 = not v12;
+        v14.i256 = not v13;
+        v15.i256 = not v14;
+        v16.i256 = not v15;
+        v17.i256 = not v16;
+        v18.i256 = not v17;
+
+        v19.i256 = not v2;
+
+        v20.i256 = not v18;
+        v21.i256 = not v20;
+        v22.i256 = not v21;
+        v23.i256 = not v22;
+        v24.i256 = not v23;
+        v25.i256 = not v24;
+        v26.i256 = not v25;
+        v27.i256 = not v26;
+        v28.i256 = not v27;
+        v29.i256 = not v28;
+        v30.i256 = not v29;
+        v31.i256 = not v30;
+        v32.i256 = not v31;
+        v33.i256 = not v32;
+        v34.i256 = not v33;
+        v35.i256 = not v34;
+
+        v36.i256 = not v19;
+
+        v37.i256 = add v36 v35;
+        v38.i256 = add v37 v34;
+        v39.i256 = add v38 v33;
+        v40.i256 = add v39 v32;
+        v41.i256 = add v40 v31;
+        v42.i256 = add v41 v30;
+        v43.i256 = add v42 v29;
+        v44.i256 = add v43 v28;
+        v45.i256 = add v44 v27;
+        v46.i256 = add v45 v26;
+        v47.i256 = add v46 v25;
+        v48.i256 = add v47 v24;
+        v49.i256 = add v48 v23;
+        v50.i256 = add v49 v22;
+        v51.i256 = add v50 v21;
+        v52.i256 = add v51 v20;
+
+        v53.i256 = add v52 v18;
+        v54.i256 = add v53 v17;
+        v55.i256 = add v54 v16;
+        v56.i256 = add v55 v15;
+        v57.i256 = add v56 v14;
+        v58.i256 = add v57 v13;
+        v59.i256 = add v58 v12;
+        v60.i256 = add v59 v11;
+        v61.i256 = add v60 v10;
+        v62.i256 = add v61 v9;
+        v63.i256 = add v62 v8;
+        v64.i256 = add v63 v7;
+        v65.i256 = add v64 v6;
+        v66.i256 = add v65 v5;
+        v67.i256 = add v66 v4;
+        v68.i256 = add v67 v3;
+
+        mstore 0.i32 v68 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

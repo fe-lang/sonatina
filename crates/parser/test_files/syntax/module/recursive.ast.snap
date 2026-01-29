@@ -36,6 +36,7 @@ Module {
         },
     ],
     functions: [],
+    objects: [],
     comments: [
         "#! this is a module",
         "#! with recursive type",

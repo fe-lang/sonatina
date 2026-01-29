@@ -5,7 +5,7 @@
 //! visited in order to cover the whole sonatina-IR.
 use smallvec::{Array, SmallVec};
 
-use crate::{BlockId, Type, ValueId, module::FuncRef};
+use crate::{BlockId, GlobalVariableRef, Type, ValueId, module::FuncRef};
 
 pub trait Visitable {
     fn accept(&self, visitor: &mut dyn Visitor);
@@ -60,6 +60,8 @@ pub trait Visitor {
     fn visit_block_id(&mut self, item: BlockId) {}
 
     fn visit_func_ref(&mut self, item: FuncRef) {}
+
+    fn visit_gv_ref(&mut self, item: GlobalVariableRef) {}
 }
 
 #[allow(unused_variables)]
@@ -71,6 +73,8 @@ pub trait VisitorMut {
     fn visit_block_id(&mut self, item: &mut BlockId) {}
 
     fn visit_func_ref(&mut self, item: &mut FuncRef) {}
+
+    fn visit_gv_ref(&mut self, item: &mut GlobalVariableRef) {}
 }
 
 impl Visitable for Type {
@@ -114,6 +118,17 @@ impl Visitable for FuncRef {
 impl VisitableMut for FuncRef {
     fn accept_mut(&mut self, visitor: &mut dyn VisitorMut) {
         visitor.visit_func_ref(self);
+    }
+}
+
+impl Visitable for GlobalVariableRef {
+    fn accept(&self, visitor: &mut dyn Visitor) {
+        visitor.visit_gv_ref(*self);
+    }
+}
+impl VisitableMut for GlobalVariableRef {
+    fn accept_mut(&mut self, visitor: &mut dyn VisitorMut) {
+        visitor.visit_gv_ref(self);
     }
 }
 

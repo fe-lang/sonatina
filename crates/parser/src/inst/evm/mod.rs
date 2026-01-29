@@ -10,6 +10,7 @@ super::impl_inst_build! {EvmAddMod, (lhs: ValueId, rhs: ValueId, modulus: ValueI
 super::impl_inst_build! {EvmMulMod, (lhs: ValueId, rhs: ValueId, modulus: ValueId)}
 super::impl_inst_build! {EvmExp, (base: ValueId, exponent: ValueId)}
 super::impl_inst_build! {EvmByte, (pos: ValueId, value: ValueId)}
+super::impl_inst_build! {EvmClz, (word: ValueId)}
 super::impl_inst_build! {EvmKeccak256, (addr: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmAddress, ()}
 super::impl_inst_build! {EvmBalance, (contract_addr: ValueId)}
@@ -28,7 +29,7 @@ super::impl_inst_build! {EvmReturnDataSize, ()}
 super::impl_inst_build! {EvmReturnDataCopy, (dst_addr: ValueId, data_offset: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmExtCodeHash, (ext_addr: ValueId)}
 super::impl_inst_build! {EvmBlockHash, (block_num: ValueId)}
-super::impl_inst_build! {EvmCoinBase, (block_num: ValueId)}
+super::impl_inst_build! {EvmCoinBase, ()}
 super::impl_inst_build! {EvmTimestamp, ()}
 super::impl_inst_build! {EvmNumber, ()}
 super::impl_inst_build! {EvmPrevRandao, ()}
@@ -61,4 +62,3 @@ super::impl_inst_build! {EvmStaticCall, (gas: ValueId, ext_addr: ValueId, arg_ad
 super::impl_inst_build! {EvmRevert, (addr: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmSelfDestruct, (addr: ValueId)}
 super::impl_inst_build! {EvmMalloc, (size: ValueId)}
-super::impl_inst_build! {EvmContractSize, (contract: FuncRef)}
