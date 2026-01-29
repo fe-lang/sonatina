@@ -1,0 +1,75 @@
+#! evm.config: { stack_reach: 4, emit_mem_plan: true }
+
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256) -> i256 {
+    block0:
+        v1.i1 = eq v0 0.i256;
+        br v1 block1 block2;
+
+    block1:
+        return 0.i256;
+
+    block2:
+        v2.*i256 = alloca i256;
+        mstore v2 v0 i256;
+        v3.i256 = mload v2 i256;
+
+        v4.i256 = add v3 1.i256;
+        v5.i256 = add v3 2.i256;
+        v6.i256 = add v3 3.i256;
+        v7.i256 = add v3 4.i256;
+
+        v8.i256 = add v3 10.i256;
+        v9.i256 = add v3 11.i256;
+        v10.i256 = add v3 12.i256;
+        v11.i256 = add v3 13.i256;
+        v15.i256 = add v3 14.i256;
+        v16.i256 = add v3 15.i256;
+        v17.i256 = add v3 16.i256;
+        v18.i256 = add v3 17.i256;
+        v19.i256 = call %sink8 v8 v9 v10 v11 v15 v16 v17 v18;
+
+        mstore v2 v7 i256;
+
+        v12.i256 = sub v3 1.i256;
+        v13.i256 = call %f v12;
+
+        v14.i256 = mload v2 i256;
+        v20.i256 = add v13 v14;
+        v21.i256 = add v20 v4;
+        v22.i256 = add v21 v5;
+        v23.i256 = add v22 v6;
+        return v23;
+}
+
+func public %sink8(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256, v7.i256) -> i256 {
+    block0:
+        v8.i256 = add v0 v1;
+        v9.i256 = add v2 v3;
+        v10.i256 = add v4 v5;
+        v11.i256 = add v6 v7;
+        v12.i256 = add v8 v9;
+        v13.i256 = add v10 v11;
+        v14.i256 = add v12 v13;
+        return v14;
+}
+
+func public %a() -> i256 {
+    block0:
+        v0.i256 = call %f 3.i256;
+        return v0;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = call %a;
+        mstore 0.i32 v0 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

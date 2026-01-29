@@ -1,0 +1,44 @@
+---
+source: crates/codegen/tests/evm.rs
+assertion_line: 351
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/arena_alloc_recursion_spills.sntn
+---
+evm.config: stack_reach=4 emit_debug_trace=false emit_mem_plan=true
+
+object: Contract
+  section runtime: 337 bytes
+  total: 337 bytes
+
+functions:
+  mem: dyn_base=0xc0 static_base=0xc0
+  f: ir_blocks=3 ir_insts=28 vcode_ops=229 fixups=8 imm_bytes=53
+    mem: scheme=DynamicFrame locals_words=6
+  sink8: ir_blocks=1 ir_insts=8 vcode_ops=19 fixups=0 imm_bytes=0
+    mem: scheme=StaticArena need_words=0 locals_words=0
+  a: ir_blocks=1 ir_insts=2 vcode_ops=9 fixups=2 imm_bytes=1
+    mem: scheme=StaticArena need_words=0 locals_words=0
+  entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
+    mem: scheme=StaticArena need_words=0 locals_words=0
+
+--------------- MEM PLAN ---------------
+
+evm mem plan: dyn_base=0xc0 static_base=0xc0
+evm mem plan: f scheme=DynamicFrame locals_words=6
+  scratch_spill v7 slot=0 addr=0x0
+  scratch_spill v8 slot=1 addr=0x20
+  spill v2 offset_words=0 addr=fp
+  spill v9 offset_words=2 addr=fp+0x40
+  spill v10 offset_words=3 addr=fp+0x60
+  spill v11 offset_words=4 addr=fp+0x80
+  spill v12 offset_words=5 addr=fp+0xa0
+  alloca v2 offset_words=1 size_words=1 addr=fp+0x20
+evm mem plan: sink8 scheme=StaticArena need_words=0 locals_words=0
+  detail locals_words=0 direct_callee_need_max_words=0 need_words=0
+evm mem plan: a scheme=StaticArena need_words=0 locals_words=0
+  detail locals_words=0 direct_callee_need_max_words=0 need_words=0
+evm mem plan: entry scheme=StaticArena need_words=0 locals_words=0
+  detail locals_words=0 direct_callee_need_max_words=0 need_words=0
+
+evm:
+  <no evm.case directives>
