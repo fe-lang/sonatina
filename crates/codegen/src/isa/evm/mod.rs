@@ -7,6 +7,7 @@ pub mod opcode;
 mod provenance;
 mod ptr_escape;
 mod scratch_plan;
+pub(crate) mod static_arena_alloc;
 
 use opcode::OpCode;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -1165,6 +1166,14 @@ impl PlannedAlloc {
     }
 
     fn rewrite_actions(&self, mut actions: Actions) -> Actions {
+        for action in actions.iter_mut() {
+            match action {
+                Action::MemLoadObj(obj) => *action = Action::MemLoadFrameSlot(obj.as_u32()),
+                Action::MemStoreObj(obj) => *action = Action::MemStoreFrameSlot(obj.as_u32()),
+                _ => {}
+            }
+        }
+
         let MemScheme::StaticTree(plan) = &self.mem_plan.scheme else {
             return actions;
         };
@@ -1199,6 +1208,20 @@ impl PlannedAlloc {
         }
 
         actions
+    }
+
+    fn spill_slots(&self) -> u32 {
+        self.inner
+            .spill_obj
+            .iter()
+            .filter_map(|(v, obj)| {
+                if self.inner.scratch_slot_of_value[v].is_some() {
+                    return None;
+                }
+                obj.map(|o| o.as_u32().checked_add(1).expect("spill slot overflow"))
+            })
+            .max()
+            .unwrap_or(0)
     }
 
     fn static_spill_addr(
@@ -1239,8 +1262,7 @@ impl Allocator for PlannedAlloc {
         match self.mem_plan.scheme {
             MemScheme::StaticTree(_) => 0,
             MemScheme::DynamicFrame => self
-                .inner
-                .frame_size_slots()
+                .spill_slots()
                 .checked_add(self.mem_plan.alloca_words)
                 .expect("frame size overflow"),
         }
@@ -1406,6 +1428,11 @@ fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
                     ctx.push(OpCode::ADD);
                 }
                 ctx.push(OpCode::MSTORE);
+            }
+            Action::MemLoadObj(_) | Action::MemStoreObj(_) => {
+                // Invariant: stack-object ops must be rewritten by the allocator wrapper
+                // (`PlannedAlloc` / StaticArena finalization) before lowering.
+                panic!("unlowered Mem*Obj action");
             }
             Action::PushContinuationOffset => {
                 panic!("handle PushContinuationOffset elsewhere");
@@ -1756,13 +1783,21 @@ fn prepare_function(
             &liveness,
             backend.stackify_reach_depth,
             StackifyLiveValues {
-                call_live_values: call_live_values.clone(),
                 scratch_live_values,
             },
             scratch_spill_slots,
         );
-        let persistent_frame_slots = alloc.persistent_frame_slots;
-        let transient_frame_slots = alloc.transient_frame_slots;
+        let spill_slots = alloc
+            .spill_obj
+            .iter()
+            .filter_map(|(v, obj)| {
+                if alloc.scratch_slot_of_value[v].is_some() {
+                    return None;
+                }
+                obj.map(|o| o.as_u32().checked_add(1).expect("spill slot overflow"))
+            })
+            .max()
+            .unwrap_or(0);
 
         let alloca_layout = alloca_plan::compute_stack_alloca_layout(
             func_ref,
@@ -1784,12 +1819,10 @@ fn prepare_function(
             .expect("alloca words overflow");
 
         let local_mem = FuncLocalMemInfo {
-            persistent_words: persistent_frame_slots
+            persistent_words: spill_slots
                 .checked_add(persistent_alloca_words)
                 .expect("persistent words overflow"),
-            transient_words: transient_frame_slots
-                .checked_add(transient_alloca_words)
-                .expect("transient words overflow"),
+            transient_words: transient_alloca_words,
             alloca_words,
             persistent_alloca_words,
         };

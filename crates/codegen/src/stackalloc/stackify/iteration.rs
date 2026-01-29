@@ -78,6 +78,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             self.spill,
             &mut *self.spill_requests,
             self.ctx,
+            &self.alloc.spill_obj,
             free_slots,
             &mut *self.slots,
         );
@@ -97,6 +98,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             self.spill,
             &mut *self.spill_requests,
             self.ctx,
+            &self.alloc.spill_obj,
             free_slots,
             &mut *self.slots,
         );
@@ -116,6 +118,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             self.spill,
             &mut *self.spill_requests,
             self.ctx,
+            &self.alloc.spill_obj,
             free_slots,
             &mut *self.slots,
         );
@@ -483,14 +486,8 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     state.live_future.remove(v);
                     if !state.live_out.contains(v) {
                         self.slots
-                            .persistent
-                            .release_if_assigned(v, &mut state.free_slots.persistent);
-                        self.slots
                             .scratch
                             .release_if_assigned(v, &mut state.free_slots.scratch);
-                        self.slots
-                            .transient
-                            .release_if_assigned(v, &mut state.free_slots.transient);
                     }
                 }
             }

@@ -7,19 +7,20 @@ use crate::{
     liveness::Liveness,
     stackalloc::{Action, Actions},
 };
+use cranelift_entity::{EntityRef, SecondaryMap};
 use sonatina_ir::ValueId;
 
 use super::{
     StackifyContext,
-    slots::{FreeSlotPools, SpillSlotPools, TRANSIENT_SLOT_TAG},
+    slots::{FreeSlotPools, SpillSlotPools},
     spill::{SpillDiscovery, SpillSet},
     sym_stack::SymStack,
 };
 
 pub(super) struct MemPlan<'a> {
-    call_live_values: &'a BitSet<ValueId>,
     scratch_live_values: &'a BitSet<ValueId>,
     scratch_spill_slots: u32,
+    spill_obj: &'a SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
     free_slots: &'a mut FreeSlotPools,
     slots: &'a mut SpillSlotPools,
     liveness: &'a Liveness,
@@ -31,13 +32,17 @@ impl<'a> MemPlan<'a> {
         spill: SpillSet<'a>,
         spill_requests: &'a mut BitSet<ValueId>,
         ctx: &'a StackifyContext<'_>,
+        spill_obj: &'a SecondaryMap<
+            ValueId,
+            Option<crate::isa::evm::static_arena_alloc::StackObjId>,
+        >,
         free_slots: &'a mut FreeSlotPools,
         slots: &'a mut SpillSlotPools,
     ) -> Self {
         Self {
-            call_live_values: &ctx.call_live_values,
             scratch_live_values: &ctx.scratch_live_values,
             scratch_spill_slots: ctx.scratch_spill_slots,
+            spill_obj,
             free_slots,
             slots,
             liveness: ctx.liveness,
@@ -66,19 +71,8 @@ impl<'a> MemPlan<'a> {
             self.spill.request_spill(v);
             // This fixed-point iteration will be discarded; the real slot assignment happens at
             // `v`'s definition once it becomes part of `spill_set`.
-            return Action::MemLoadFrameSlot(0);
+            return Action::MemLoadObj(crate::isa::evm::static_arena_alloc::StackObjId::new(0));
         };
-
-        let persistent = self.call_live_values.contains(v);
-
-        if persistent {
-            let slot = self.slots.persistent.ensure_slot(
-                spilled,
-                self.liveness,
-                &mut self.free_slots.persistent,
-            );
-            return Action::MemLoadFrameSlot(slot);
-        }
 
         if self.scratch_spill_slots != 0
             && !self.scratch_live_values.contains(v)
@@ -92,12 +86,9 @@ impl<'a> MemPlan<'a> {
             return Action::MemLoadAbs(slot * 32);
         }
 
-        let slot = self.slots.transient.ensure_slot(
-            spilled,
-            self.liveness,
-            &mut self.free_slots.transient,
-        );
-        Action::MemLoadFrameSlot(TRANSIENT_SLOT_TAG | slot)
+        // Invariant: every spilled value has a `StackObjId` assigned by stackify's builder
+        // (should be verified when finalizing the spill set).
+        Action::MemLoadObj(self.spill_obj[v].expect("spilled value missing stack object id"))
     }
 
     fn emit_store_if_spilled_at_depth(&mut self, v: ValueId, depth: u8, actions: &mut Actions) {
@@ -105,18 +96,7 @@ impl<'a> MemPlan<'a> {
             return;
         };
 
-        let persistent = self.call_live_values.contains(v);
         actions.push(Action::StackDup(depth));
-
-        if persistent {
-            let slot = self.slots.persistent.ensure_slot(
-                spilled,
-                self.liveness,
-                &mut self.free_slots.persistent,
-            );
-            actions.push(Action::MemStoreFrameSlot(slot));
-            return;
-        }
 
         if self.scratch_spill_slots != 0
             && !self.scratch_live_values.contains(v)
@@ -131,12 +111,9 @@ impl<'a> MemPlan<'a> {
             return;
         }
 
-        let slot = self.slots.transient.ensure_slot(
-            spilled,
-            self.liveness,
-            &mut self.free_slots.transient,
-        );
-        actions.push(Action::MemStoreFrameSlot(TRANSIENT_SLOT_TAG | slot));
+        actions.push(Action::MemStoreObj(
+            self.spill_obj[v].expect("spilled value missing stack object id"),
+        ));
     }
 }
 

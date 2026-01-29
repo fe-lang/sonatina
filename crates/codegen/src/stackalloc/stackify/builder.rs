@@ -1,21 +1,15 @@
-use cranelift_entity::SecondaryMap;
+use cranelift_entity::{EntityRef, SecondaryMap};
 use smallvec::SmallVec;
 use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
 use std::collections::BTreeMap;
 
-use crate::{
-    bitset::BitSet,
-    cfg_scc::CfgSccAnalysis,
-    domtree::DomTree,
-    liveness::{InstLiveness, Liveness},
-    stackalloc::SpillSlotRef,
-};
+use crate::{bitset::BitSet, cfg_scc::CfgSccAnalysis, domtree::DomTree, liveness::Liveness};
 
 use super::{
     alloc::StackifyAlloc,
     flow_templates::solve_templates_from_flow,
     iteration::IterationPlanner,
-    slots::{FreeSlotPools, SpillSlotPools, TRANSIENT_SLOT_TAG},
+    slots::{FreeSlotPools, SpillSlotPools},
     spill::SpillSet,
     sym_stack::SymStack,
     templates::{
@@ -52,7 +46,6 @@ pub(super) struct StackifyBuilder<'a> {
     dom: &'a DomTree,
     liveness: &'a Liveness,
     reach: StackifyReachability,
-    call_live_values_override: Option<BitSet<ValueId>>,
     scratch_live_values_override: Option<BitSet<ValueId>>,
     scratch_spill_slots: u32,
 }
@@ -62,7 +55,6 @@ pub(super) struct StackifyContext<'a> {
     pub(super) cfg: &'a ControlFlowGraph,
     pub(super) dom: &'a DomTree,
     pub(super) liveness: &'a Liveness,
-    pub(super) call_live_values: BitSet<ValueId>,
     pub(super) scratch_live_values: BitSet<ValueId>,
     pub(super) scratch_spill_slots: u32,
     pub(super) entry: BlockId,
@@ -89,15 +81,9 @@ impl<'a> StackifyBuilder<'a> {
             dom,
             liveness,
             reach: StackifyReachability::new(reach_depth),
-            call_live_values_override: None,
             scratch_live_values_override: None,
             scratch_spill_slots: 0,
         }
-    }
-
-    pub(super) fn with_call_live_values(mut self, call_live_values: BitSet<ValueId>) -> Self {
-        self.call_live_values_override = Some(call_live_values);
-        self
     }
 
     pub(super) fn with_scratch_live_values(mut self, scratch_live_values: BitSet<ValueId>) -> Self {
@@ -127,14 +113,6 @@ impl<'a> StackifyBuilder<'a> {
         let mut scc = CfgSccAnalysis::new();
         scc.compute(self.cfg);
 
-        let call_live_values = if let Some(call_live_values) = self.call_live_values_override {
-            call_live_values
-        } else {
-            let mut inst_liveness = InstLiveness::default();
-            inst_liveness.compute(self.func, self.cfg, self.liveness);
-            inst_liveness.call_live_values(self.func)
-        };
-
         let scratch_live_values = if self.scratch_spill_slots == 0 {
             BitSet::default()
         } else if let Some(scratch_live_values) = self.scratch_live_values_override {
@@ -152,7 +130,6 @@ impl<'a> StackifyBuilder<'a> {
             cfg: self.cfg,
             dom: self.dom,
             liveness: self.liveness,
-            call_live_values,
             scratch_live_values,
             scratch_spill_slots: self.scratch_spill_slots,
             entry,
@@ -184,19 +161,7 @@ impl<'a> StackifyBuilder<'a> {
                 Self::plan_iteration(&ctx, observer, SpillSet::new(&spill_set), &mut slots);
 
             if spill_requests.is_subset(&spill_set) {
-                let persistent_frame_slots = slots.persistent.frame_size_slots();
-                let transient_frame_slots = slots.transient.frame_size_slots();
-
-                lower_encoded_frame_slots(&mut alloc, persistent_frame_slots);
-
-                alloc.persistent_frame_slots = persistent_frame_slots;
-                alloc.transient_frame_slots = transient_frame_slots;
-
-                alloc.slot_of_value = merge_slot_maps(
-                    slots.persistent.take_slot_map(),
-                    slots.transient.take_slot_map(),
-                    slots.scratch.take_slot_map(),
-                );
+                alloc.scratch_slot_of_value = slots.scratch.take_slot_map();
                 return alloc;
             }
 
@@ -211,20 +176,9 @@ impl<'a> StackifyBuilder<'a> {
         spill: SpillSet<'_>,
         slots: &mut SpillSlotPools,
     ) -> (StackifyAlloc, BitSet<ValueId>) {
-        // Function arguments that are in `spill_set` must have a stable slot from function entry.
-        // We allocate these up-front (fresh; no reuse possible before entry).
         let mut arg_free_slots: FreeSlotPools = FreeSlotPools::default();
         for &arg in ctx.func.arg_values.iter() {
             if let Some(spilled) = spill.spilled(arg) {
-                if ctx.call_live_values.contains(arg) {
-                    let _ = slots.persistent.ensure_slot(
-                        spilled,
-                        ctx.liveness,
-                        &mut arg_free_slots.persistent,
-                    );
-                    continue;
-                }
-
                 if ctx.scratch_spill_slots != 0
                     && !ctx.scratch_live_values.contains(arg)
                     && slots
@@ -239,28 +193,24 @@ impl<'a> StackifyBuilder<'a> {
                 {
                     continue;
                 }
-
-                let _ = slots.transient.ensure_slot(
-                    spilled,
-                    ctx.liveness,
-                    &mut arg_free_slots.transient,
-                );
             }
         }
+
+        let spill_obj = assign_spill_obj_ids(ctx.func, spill);
 
         // Template solving may encounter temporary unreachable values while iterating toward a
         // fixed point, but those requests are not necessarily required under the final chosen
         // templates. Treat spill discovery as the responsibility of the final planning pass.
         let mut solver_spill_requests: BitSet<ValueId> = BitSet::default();
-        let templates = solve_templates_from_flow(ctx, spill, &mut solver_spill_requests);
+        let templates =
+            solve_templates_from_flow(ctx, spill, &spill_obj, &mut solver_spill_requests);
 
         let mut alloc = StackifyAlloc {
             pre_actions: SecondaryMap::new(),
             post_actions: SecondaryMap::new(),
             brtable_actions: BTreeMap::new(),
-            slot_of_value: SecondaryMap::new(),
-            persistent_frame_slots: 0,
-            transient_frame_slots: 0,
+            spill_obj,
+            scratch_slot_of_value: SecondaryMap::new(),
         };
 
         let mut spill_requests: BitSet<ValueId> = BitSet::default();
@@ -292,60 +242,21 @@ impl<'a> StackifyBuilder<'a> {
     }
 }
 
-fn merge_slot_maps(
-    persistent: SecondaryMap<ValueId, Option<u32>>,
-    transient: SecondaryMap<ValueId, Option<u32>>,
-    scratch: SecondaryMap<ValueId, Option<u32>>,
-) -> SecondaryMap<ValueId, Option<SpillSlotRef>> {
-    let mut out: SecondaryMap<ValueId, Option<SpillSlotRef>> = SecondaryMap::new();
-
-    for (v, slot) in persistent.iter() {
-        if let Some(slot) = *slot {
-            debug_assert!(out[v].is_none(), "spill slot already assigned");
-            out[v] = Some(SpillSlotRef::Persistent(slot));
-        }
-    }
-    for (v, slot) in transient.iter() {
-        if let Some(slot) = *slot {
-            debug_assert!(out[v].is_none(), "spill slot already assigned");
-            out[v] = Some(SpillSlotRef::Transient(slot));
-        }
-    }
-    for (v, slot) in scratch.iter() {
-        if let Some(slot) = *slot {
-            debug_assert!(out[v].is_none(), "spill slot already assigned");
-            out[v] = Some(SpillSlotRef::Scratch(slot));
-        }
+fn assign_spill_obj_ids(
+    func: &Function,
+    spill: SpillSet<'_>,
+) -> SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>> {
+    let mut map: SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>> =
+        SecondaryMap::new();
+    for v in func.dfg.values.keys() {
+        let _ = &mut map[v];
     }
 
-    out
-}
+    let mut spilled: Vec<ValueId> = spill.bitset().iter().collect();
+    spilled.sort_unstable_by_key(|v| v.as_u32());
 
-fn lower_encoded_frame_slots(alloc: &mut StackifyAlloc, persistent_frame_slots: u32) {
-    fn lower_actions(actions: &mut crate::stackalloc::Actions, persistent_frame_slots: u32) {
-        for action in actions.iter_mut() {
-            match action {
-                crate::stackalloc::Action::MemLoadFrameSlot(slot)
-                | crate::stackalloc::Action::MemStoreFrameSlot(slot) => {
-                    if *slot & TRANSIENT_SLOT_TAG != 0 {
-                        let local = *slot & !TRANSIENT_SLOT_TAG;
-                        *slot = persistent_frame_slots
-                            .checked_add(local)
-                            .expect("frame slot offset overflow");
-                    }
-                }
-                _ => {}
-            }
-        }
+    for (idx, v) in spilled.into_iter().enumerate() {
+        map[v] = Some(crate::isa::evm::static_arena_alloc::StackObjId::new(idx));
     }
-
-    for (_, actions) in alloc.pre_actions.iter_mut() {
-        lower_actions(actions, persistent_frame_slots);
-    }
-    for (_, actions) in alloc.post_actions.iter_mut() {
-        lower_actions(actions, persistent_frame_slots);
-    }
-    for actions in alloc.brtable_actions.values_mut() {
-        lower_actions(actions, persistent_frame_slots);
-    }
+    map
 }

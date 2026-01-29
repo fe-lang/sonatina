@@ -6,8 +6,6 @@ use crate::{bitset::BitSet, liveness::Liveness};
 
 use super::spill::SpilledValueId;
 
-pub(super) const TRANSIENT_SLOT_TAG: u32 = 1 << 31;
-
 #[derive(Default, Clone)]
 pub(super) struct SlotPool {
     slot_of: SecondaryMap<ValueId, Option<u32>>,
@@ -16,14 +14,6 @@ pub(super) struct SlotPool {
 }
 
 impl SlotPool {
-    pub(super) fn frame_size_slots(&self) -> u32 {
-        self.next_slot
-    }
-
-    pub(super) fn snapshot_slot_map(&self) -> &SecondaryMap<ValueId, Option<u32>> {
-        &self.slot_of
-    }
-
     pub(super) fn take_slot_map(&mut self) -> SecondaryMap<ValueId, Option<u32>> {
         std::mem::take(&mut self.slot_of)
     }
@@ -88,28 +78,8 @@ impl SlotPool {
         Some(slot)
     }
 
-    /// Return the frame slot for `v`, allocating one if needed.
-    ///
-    /// Allocation is deterministic: we reuse the lowest-numbered currently-free slot, falling back
-    /// to `next_slot` growth. In addition to within-block reuse, we also allow cross-block reuse
-    /// when liveness indicates two values' live block sets are disjoint (see
-    /// `Liveness::val_live_blocks`).
-    pub(super) fn ensure_slot(
-        &mut self,
-        v: SpilledValueId,
-        liveness: &Liveness,
-        free_slots: &mut FreeSlots,
-    ) -> u32 {
-        self.try_ensure_slot(v, liveness, free_slots, None)
-            .expect("frame slot allocation failed")
-    }
-
-    pub(super) fn slot_of_value(&self, v: ValueId) -> Option<u32> {
-        self.snapshot_slot_map()[v]
-    }
-
     pub(super) fn release_if_assigned(&self, v: ValueId, free_slots: &mut FreeSlots) {
-        if let Some(slot) = self.slot_of_value(v) {
+        if let Some(slot) = self.slot_of[v] {
             free_slots.release(slot);
         }
     }
@@ -117,15 +87,11 @@ impl SlotPool {
 
 #[derive(Default, Clone)]
 pub(super) struct FreeSlotPools {
-    pub(super) persistent: FreeSlots,
-    pub(super) transient: FreeSlots,
     pub(super) scratch: FreeSlots,
 }
 
 #[derive(Default, Clone)]
 pub(super) struct SpillSlotPools {
-    pub(super) persistent: SlotPool,
-    pub(super) transient: SlotPool,
     pub(super) scratch: SlotPool,
 }
 

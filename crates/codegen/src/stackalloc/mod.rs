@@ -1,6 +1,8 @@
 use smallvec::SmallVec;
 use sonatina_ir::{BlockId, Function, Immediate, InstId, ValueId};
 
+use crate::isa::evm::static_arena_alloc::StackObjId;
+
 mod stackify;
 pub use stackify::{StackifyAlloc, StackifyLiveValues};
 
@@ -38,6 +40,10 @@ pub enum Action {
     MemLoadFrameSlot(u32),
     MemStoreAbs(u32),
     MemStoreFrameSlot(u32),
+
+    /// Virtual stack-object memory operation, rewritten during lowering.
+    MemLoadObj(StackObjId),
+    MemStoreObj(StackObjId),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]

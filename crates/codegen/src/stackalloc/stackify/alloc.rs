@@ -6,13 +6,12 @@ use crate::{
     bitset::BitSet,
     domtree::DomTree,
     liveness::Liveness,
-    stackalloc::{Action, Actions, Allocator, SpillSlotRef},
+    stackalloc::{Action, Actions, Allocator},
 };
 
 use super::{builder::StackifyBuilder, trace::StackifyTrace};
 
 pub struct StackifyLiveValues {
-    pub call_live_values: BitSet<ValueId>,
     pub scratch_live_values: BitSet<ValueId>,
 }
 
@@ -24,13 +23,9 @@ pub struct StackifyAlloc {
     /// br_table lowering uses per-case action sequences keyed by (scrutinee, case_val).
     pub(super) brtable_actions: BTreeMap<(InstId, ValueId, ValueId), Actions>,
 
-    /// Value -> frame slot index (32-byte slots).
-    ///
-    /// Slots are allocated deterministically and may be shared by multiple values as long as
-    /// their lifetimes do not overlap (currently: within-block reuse based on last-use tracking).
-    pub(super) slot_of_value: SecondaryMap<ValueId, Option<SpillSlotRef>>,
-    pub(crate) persistent_frame_slots: u32,
-    pub(crate) transient_frame_slots: u32,
+    pub(crate) spill_obj:
+        SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
+    pub(crate) scratch_slot_of_value: SecondaryMap<ValueId, Option<u32>>,
 }
 
 impl StackifyAlloc {
@@ -52,10 +47,9 @@ impl StackifyAlloc {
         dom: &DomTree,
         liveness: &Liveness,
         reach_depth: u8,
-        call_live_values: BitSet<ValueId>,
+        _call_live_values: BitSet<ValueId>,
     ) -> Self {
-        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
-            .with_call_live_values(call_live_values);
+        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth);
         builder.compute()
     }
 
@@ -69,11 +63,9 @@ impl StackifyAlloc {
         scratch_spill_slots: u32,
     ) -> Self {
         let StackifyLiveValues {
-            call_live_values,
             scratch_live_values,
         } = live_values;
         let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
-            .with_call_live_values(call_live_values)
             .with_scratch_live_values(scratch_live_values)
             .with_scratch_spills(scratch_spill_slots);
         builder.compute()
@@ -101,10 +93,9 @@ impl StackifyAlloc {
         dom: &DomTree,
         liveness: &Liveness,
         reach_depth: u8,
-        call_live_values: BitSet<ValueId>,
+        _call_live_values: BitSet<ValueId>,
     ) -> (Self, String) {
-        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
-            .with_call_live_values(call_live_values);
+        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth);
         let mut trace = StackifyTrace::default();
         let alloc = builder.compute_with_observer(&mut trace);
         let trace = trace.render(func, &alloc);
@@ -121,11 +112,9 @@ impl StackifyAlloc {
         scratch_spill_slots: u32,
     ) -> (Self, String) {
         let StackifyLiveValues {
-            call_live_values,
             scratch_live_values,
         } = live_values;
         let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
-            .with_call_live_values(call_live_values)
             .with_scratch_live_values(scratch_live_values)
             .with_scratch_spills(scratch_spill_slots);
         let mut trace = StackifyTrace::default();
@@ -135,9 +124,9 @@ impl StackifyAlloc {
     }
 
     pub(crate) fn uses_scratch_spills(&self) -> bool {
-        self.slot_of_value
+        self.scratch_slot_of_value
             .values()
-            .any(|slot| matches!(*slot, Some(SpillSlotRef::Scratch(_))))
+            .any(|slot| slot.is_some())
     }
 }
 
@@ -145,27 +134,19 @@ impl Allocator for StackifyAlloc {
     fn enter_function(&self, function: &Function) -> Actions {
         let mut act = Actions::new();
         for (idx, &arg) in function.arg_values.iter().enumerate() {
-            let Some(slot) = self.slot_of_value[arg] else {
-                continue;
-            };
             debug_assert!(
                 idx < super::DUP_MAX,
                 "function arg depth exceeds DUP16 reach"
             );
-            act.push(Action::StackDup(idx as u8));
-            match slot {
-                SpillSlotRef::Persistent(slot) => act.push(Action::MemStoreFrameSlot(slot)),
-                SpillSlotRef::Transient(slot) => act.push(Action::MemStoreFrameSlot(
-                    self.persistent_frame_slots + slot,
-                )),
-                SpillSlotRef::Scratch(slot) => act.push(Action::MemStoreAbs(slot * 32)),
+            if let Some(slot) = self.scratch_slot_of_value[arg] {
+                act.push(Action::StackDup(idx as u8));
+                act.push(Action::MemStoreAbs(slot * 32));
+            } else if let Some(obj) = self.spill_obj[arg] {
+                act.push(Action::StackDup(idx as u8));
+                act.push(Action::MemStoreObj(obj));
             }
         }
         act
-    }
-
-    fn frame_size_slots(&self) -> u32 {
-        self.persistent_frame_slots + self.transient_frame_slots
     }
 
     fn read(&self, inst: InstId, vals: &[ValueId]) -> Actions {

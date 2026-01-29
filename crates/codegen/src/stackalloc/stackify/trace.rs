@@ -2,12 +2,11 @@ use std::{collections::BTreeMap, fmt::Write};
 
 use sonatina_ir::{BlockId, Function, InstId, ValueId};
 
-use crate::{bitset::BitSet, stackalloc::SpillSlotRef};
+use crate::bitset::BitSet;
 
 use super::{
     super::Action,
     StackifyAlloc,
-    slots::TRANSIENT_SLOT_TAG,
     sym_stack::{StackItem, SymStack},
     templates::BlockTemplate,
 };
@@ -109,16 +108,21 @@ impl StackifyTrace {
         let mut out = String::new();
         let _ = writeln!(&mut out, "STACKIFY");
 
-        // Print spill-set slots in slot order.
         let mut spill_set_by_slot: BTreeMap<(u8, u32), Vec<ValueId>> = BTreeMap::new();
-        for (v, slot) in alloc.slot_of_value.iter() {
+        for (v, slot) in alloc.scratch_slot_of_value.iter() {
             if let Some(slot) = *slot {
-                let slot = match slot {
-                    SpillSlotRef::Scratch(slot) => (0, slot),
-                    SpillSlotRef::Persistent(slot) => (1, slot),
-                    SpillSlotRef::Transient(slot) => (2, alloc.persistent_frame_slots + slot),
-                };
-                spill_set_by_slot.entry(slot).or_default().push(v);
+                spill_set_by_slot.entry((0, slot)).or_default().push(v);
+            }
+        }
+        for (v, obj) in alloc.spill_obj.iter() {
+            if alloc.scratch_slot_of_value[v].is_some() {
+                continue;
+            }
+            if let Some(obj) = *obj {
+                spill_set_by_slot
+                    .entry((1, obj.as_u32()))
+                    .or_default()
+                    .push(v);
             }
         }
         if !spill_set_by_slot.is_empty() {
@@ -131,7 +135,7 @@ impl StackifyTrace {
                 let slot_label = if kind == 0 {
                     format!("s{slot}")
                 } else {
-                    slot.to_string()
+                    format!("o{slot}")
                 };
                 if values.len() == 1 {
                     let _ = write!(&mut out, "{slot_label}={}", fmt_value(func, values[0]));
@@ -145,7 +149,7 @@ impl StackifyTrace {
         let _ = writeln!(&mut out, "trace:");
         let mut trace = self.out;
         for chunk in self.action_chunks {
-            let formatted = fmt_actions(&chunk.actions, alloc.persistent_frame_slots);
+            let formatted = fmt_actions(&chunk.actions);
             trace = trace.replace(&chunk.placeholder, &formatted);
         }
         out.push_str(&trace);
@@ -357,17 +361,7 @@ fn fmt_stack(
     s
 }
 
-fn fmt_actions(actions: &[Action], persistent_frame_slots: u32) -> String {
-    fn decode_slot(slot: u32, persistent_frame_slots: u32) -> u32 {
-        if slot & TRANSIENT_SLOT_TAG != 0 {
-            persistent_frame_slots
-                .checked_add(slot & !TRANSIENT_SLOT_TAG)
-                .expect("frame slot overflow")
-        } else {
-            slot
-        }
-    }
-
+fn fmt_actions(actions: &[Action]) -> String {
     let mut s = String::new();
     s.push('[');
     for (i, a) in actions.iter().enumerate() {
@@ -390,15 +384,19 @@ fn fmt_actions(actions: &[Action], persistent_frame_slots: u32) -> String {
                 let _ = write!(&mut s, "MLOAD_ABS({addr})");
             }
             Action::MemLoadFrameSlot(slot) => {
-                let slot = decode_slot(slot, persistent_frame_slots);
                 let _ = write!(&mut s, "MLOAD_SLOT({slot})");
+            }
+            Action::MemLoadObj(obj) => {
+                let _ = write!(&mut s, "MLOAD_OBJ({})", obj.as_u32());
             }
             Action::MemStoreAbs(addr) => {
                 let _ = write!(&mut s, "MSTORE_ABS({addr})");
             }
             Action::MemStoreFrameSlot(slot) => {
-                let slot = decode_slot(slot, persistent_frame_slots);
                 let _ = write!(&mut s, "MSTORE_SLOT({slot})");
+            }
+            Action::MemStoreObj(obj) => {
+                let _ = write!(&mut s, "MSTORE_OBJ({})", obj.as_u32());
             }
         }
     }

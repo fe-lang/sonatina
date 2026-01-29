@@ -35,6 +35,7 @@ struct LayoutState {
 struct FlowTemplateSolver<'a, 'ctx> {
     ctx: &'a StackifyContext<'ctx>,
     spill: SpillSet<'a>,
+    spill_obj: &'a SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
     slots: &'a mut SpillSlotPools,
     spill_requests: &'a mut BitSet<ValueId>,
     params_map: &'a SecondaryMap<BlockId, SmallVec<[ValueId; 4]>>,
@@ -46,6 +47,7 @@ struct FlowTemplateSolver<'a, 'ctx> {
 pub(super) fn solve_templates_from_flow(
     ctx: &StackifyContext<'_>,
     spill: SpillSet<'_>,
+    spill_obj: &SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
     spill_requests: &mut BitSet<ValueId>,
 ) -> SecondaryMap<BlockId, BlockTemplate> {
     let mut params_map: SecondaryMap<BlockId, SmallVec<[ValueId; 4]>> = SecondaryMap::new();
@@ -83,6 +85,7 @@ pub(super) fn solve_templates_from_flow(
     let mut solver = FlowTemplateSolver {
         ctx,
         spill: SpillSet::new(spill.bitset()),
+        spill_obj,
         slots: &mut scratch_slots,
         spill_requests,
         params_map: &params_map,
@@ -266,6 +269,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                             spill,
                             spill_requests,
                             ctx,
+                            self.spill_obj,
                             &mut free_slots,
                             slots,
                         );
@@ -315,7 +319,14 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
             }
 
             if ctx.func.dfg.is_return(inst) {
-                let mem = planner::MemPlan::new(spill, spill_requests, ctx, &mut free_slots, slots);
+                let mem = planner::MemPlan::new(
+                    spill,
+                    spill_requests,
+                    ctx,
+                    self.spill_obj,
+                    &mut free_slots,
+                    slots,
+                );
                 with_planner(ctx, mem, &mut stack, &mut actions, |planner| {
                     planner.plan_internal_return(inst)
                 });
@@ -323,7 +334,14 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
             }
 
             // Normal instruction.
-            let mem = planner::MemPlan::new(spill, spill_requests, ctx, &mut free_slots, slots);
+            let mem = planner::MemPlan::new(
+                spill,
+                spill_requests,
+                ctx,
+                self.spill_obj,
+                &mut free_slots,
+                slots,
+            );
 
             with_planner(ctx, mem, &mut stack, &mut actions, |planner| {
                 planner.prepare_operands_for_inst(inst, &mut args, last_use)
@@ -346,14 +364,8 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                         live_future.remove(v);
                         if !live_out.contains(v) {
                             slots
-                                .persistent
-                                .release_if_assigned(v, &mut free_slots.persistent);
-                            slots
                                 .scratch
                                 .release_if_assigned(v, &mut free_slots.scratch);
-                            slots
-                                .transient
-                                .release_if_assigned(v, &mut free_slots.transient);
                         }
                     }
                 }
@@ -368,8 +380,14 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
             if let Some(res) = res {
                 stack.push_value(res);
                 if live_future.contains(res) || live_out.contains(res) {
-                    let mem =
-                        planner::MemPlan::new(spill, spill_requests, ctx, &mut free_slots, slots);
+                    let mem = planner::MemPlan::new(
+                        spill,
+                        spill_requests,
+                        ctx,
+                        self.spill_obj,
+                        &mut free_slots,
+                        slots,
+                    );
                     with_planner(ctx, mem, &mut stack, &mut actions, |planner| {
                         planner.emit_store_if_spilled(res)
                     });
