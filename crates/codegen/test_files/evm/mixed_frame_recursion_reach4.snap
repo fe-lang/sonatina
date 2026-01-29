@@ -1,24 +1,25 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 333
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/mixed_frame_recursion_reach4.sntn
 ---
 evm.config: stack_reach=4 emit_debug_trace=false
 
 object: Contract
-  section runtime: 199 bytes
-  total: 199 bytes
+  section runtime: 201 bytes
+  total: 201 bytes
 
 functions:
   mem: dyn_base=0xe0 static_base=0xc0
   b: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=0 imm_bytes=1
     mem: scheme=StaticTree base_words=0 persistent_words=0 alloca_words=1 persistent_alloca_words=0
-  d: ir_blocks=3 ir_insts=23 vcode_ops=133 fixups=8 imm_bytes=25
+  d: ir_blocks=3 ir_insts=23 vcode_ops=134 fixups=8 imm_bytes=25
     mem: scheme=DynamicFrame frame_slots=1 spill_slots=0 alloca_words=1 persistent_alloca_words=0
-  a: ir_blocks=1 ir_insts=2 vcode_ops=8 fixups=2 imm_bytes=1
+  a: ir_blocks=1 ir_insts=2 vcode_ops=9 fixups=2 imm_bytes=1
     mem: scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
     mem: scheme=StaticTree base_words=0 persistent_words=0 alloca_words=0 persistent_alloca_words=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=22090 gas_refunded=0 logs=0 output=call len=32
+  case ok: calldata_len=8 success reason=Return gas_used=22096 gas_refunded=0 logs=0 output=call len=32

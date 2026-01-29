@@ -240,10 +240,6 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                 );
             }
 
-            if is_call {
-                stack.push_call_continuation(&mut actions);
-            }
-
             if let Some(branch) = ctx.func.dfg.branch_info(inst) {
                 match branch.branch_kind() {
                     BranchKind::Jump(jump) => {
@@ -332,6 +328,11 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
             with_planner(ctx, mem, &mut stack, &mut actions, |planner| {
                 planner.prepare_operands_for_inst(inst, &mut args, last_use)
             });
+
+            if is_call {
+                stack.push_call_continuation(&mut actions);
+                stack.position_call_ret_below_operands(args.len(), &mut actions);
+            }
 
             let res = ctx.func.dfg.inst_result(inst);
 
