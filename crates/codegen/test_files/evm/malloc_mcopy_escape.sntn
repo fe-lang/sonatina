@@ -1,6 +1,6 @@
 #! evm.case: ok
 #!   calldata: u32be(11) u32be(22)
-#!   expect: return u256(222)
+#!   expect: return u256(111)
 
 target = "evm-ethereum-osaka"
 

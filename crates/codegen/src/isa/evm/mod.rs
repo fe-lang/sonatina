@@ -1046,13 +1046,12 @@ impl LowerBackend for EvmBackend {
                 }
 
                 // Align to 32 bytes:
-                // aligned = ((size + 31) / 32) * 32
+                // aligned = (size + 31) & !31
                 push_bytes(ctx, &[0x1f]);
                 ctx.push(OpCode::ADD);
-                push_bytes(ctx, &[0x20]);
-                ctx.push(OpCode::DIV);
-                push_bytes(ctx, &[0x20]);
-                ctx.push(OpCode::MUL);
+                push_bytes(ctx, &[0x1f]);
+                ctx.push(OpCode::NOT);
+                ctx.push(OpCode::AND);
 
                 // heap_end = mload(0x40)
                 push_bytes(ctx, &[FREE_PTR_SLOT]);
