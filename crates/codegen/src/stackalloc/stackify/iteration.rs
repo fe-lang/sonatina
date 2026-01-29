@@ -246,9 +246,6 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         );
 
         // Stable cleanup: pop dead values (and dead chains under the top live value).
-        //
-        // For calls, do this before pushing the continuation target so we can still
-        // pop dead values that were on top of the caller's stack segment.
         let before_cleanup_len = self.alloc.pre_actions[inst].len();
         clean_dead_stack_prefix(
             self.ctx.reach,
@@ -280,14 +277,6 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             &self.alloc.pre_actions[inst][before_cleanup_len..after_cleanup_len],
             None,
         );
-
-        // Calls push a continuation target before argument setup (the backend consumes
-        // `Action::PushContinuationOffset`).
-        if is_call {
-            state
-                .stack
-                .push_call_continuation(&mut self.alloc.pre_actions[inst]);
-        }
 
         if let Some(branch) = self.ctx.func.dfg.branch_info(inst) {
             match branch.branch_kind() {
@@ -463,6 +452,17 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             p.prepare_operands_for_inst(inst, &mut args, &consume_last_use);
         });
 
+        if is_call {
+            // Insert the continuation marker after operand preparation so operand prep cannot
+            // reorder it relative to the call operands.
+            state
+                .stack
+                .push_call_continuation(&mut self.alloc.pre_actions[inst]);
+            state
+                .stack
+                .position_call_ret_below_operands(args.len(), &mut self.alloc.pre_actions[inst]);
+        }
+
         self.observer.on_inst_actions(
             "pre",
             &self.alloc.pre_actions[inst][after_cleanup_len..],
@@ -615,7 +615,18 @@ pub(super) fn operand_order_for_evm(func: &Function, inst: InstId) -> SmallVec<[
     // (e.g. `mstore addr value`, `gt lhs rhs`, `shl bits value`).
     //
     // Keeping this as a dedicated hook makes the required operand conventions explicit.
-    func.dfg.inst(inst).collect_values().into_iter().collect()
+    let mut args: SmallVec<[ValueId; 8]> =
+        func.dfg.inst(inst).collect_values().into_iter().collect();
+
+    // For internal calls, we want the continuation address to end up directly under the call
+    // operands. We arrange the operands as a left rotation so that after the backend pushes the
+    // continuation (at the `Action::PushContinuationOffset` marker), a single `SWAP{arity}` places
+    // it under the operands and restores the callee ABI operand order.
+    if func.dfg.is_call(inst) && !args.is_empty() {
+        args.as_mut_slice().rotate_left(1);
+    }
+
+    args
 }
 
 pub(super) fn last_use_values_in_inst(
