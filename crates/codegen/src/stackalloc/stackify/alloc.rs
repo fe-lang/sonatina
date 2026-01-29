@@ -41,18 +41,6 @@ impl StackifyAlloc {
         builder.compute()
     }
 
-    pub fn for_function_with_call_live_values(
-        func: &Function,
-        cfg: &ControlFlowGraph,
-        dom: &DomTree,
-        liveness: &Liveness,
-        reach_depth: u8,
-        _call_live_values: BitSet<ValueId>,
-    ) -> Self {
-        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth);
-        builder.compute()
-    }
-
     pub fn for_function_with_call_live_values_and_scratch_spills(
         func: &Function,
         cfg: &ControlFlowGraph,
@@ -79,21 +67,6 @@ impl StackifyAlloc {
         dom: &DomTree,
         liveness: &Liveness,
         reach_depth: u8,
-    ) -> (Self, String) {
-        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth);
-        let mut trace = StackifyTrace::default();
-        let alloc = builder.compute_with_observer(&mut trace);
-        let trace = trace.render(func, &alloc);
-        (alloc, trace)
-    }
-
-    pub fn for_function_with_trace_and_call_live_values(
-        func: &Function,
-        cfg: &ControlFlowGraph,
-        dom: &DomTree,
-        liveness: &Liveness,
-        reach_depth: u8,
-        _call_live_values: BitSet<ValueId>,
     ) -> (Self, String) {
         let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth);
         let mut trace = StackifyTrace::default();
