@@ -1,4 +1,4 @@
-#! evm.config: { stack_reach: 16 }
+#! evm.config: { stack_reach: 16, emit_mem_plan: true }
 #! evm.case: ok
 #!   calldata: u32be(11) u32be(22)
 #!   expect: return u256(465)

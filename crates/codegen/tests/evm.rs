@@ -96,6 +96,7 @@ fn test_evm(fixture: Fixture<&str>) {
     let parsed = parse_sona(fixture.content());
     let stackify_reach_depth = stackify_reach_depth_for_fixture(fixture.path(), &parsed);
     let emit_debug_trace = emit_debug_trace_for_fixture(fixture.path(), &parsed);
+    let emit_mem_plan = emit_mem_plan_for_fixture(fixture.path(), &parsed);
 
     let cases = evm_directives::parse_evm_cases(&parsed.debug.module_comments)
         .unwrap_or_else(|e| panic!("{}: {e}", fixture.path()));
@@ -119,6 +120,8 @@ fn test_evm(fixture: Fixture<&str>) {
     backend.prepare_section(&parsed.module, &parsed.debug.func_order, &section_ctx);
 
     let mem_plan = backend.snapshot_mem_plan(&parsed.module, &parsed.debug.func_order);
+    let mem_plan_detail = emit_mem_plan
+        .then(|| backend.snapshot_mem_plan_detail(&parsed.module, &parsed.debug.func_order));
     let (mem_plan_header, mem_plan_funcs) = parse_mem_plan_summary(&mem_plan);
 
     let mut func_stats: Vec<FuncStats> = Vec::new();
@@ -187,11 +190,19 @@ fn test_evm(fixture: Fixture<&str>) {
         .unwrap_or_else(|errs| panic!("{}: object compile failed: {errs:?}", fixture.path()));
 
     let mut out = Vec::new();
-    writeln!(
-        &mut out,
-        "evm.config: stack_reach={stackify_reach_depth} emit_debug_trace={emit_debug_trace}"
-    )
-    .unwrap();
+    if emit_mem_plan {
+        writeln!(
+            &mut out,
+            "evm.config: stack_reach={stackify_reach_depth} emit_debug_trace={emit_debug_trace} emit_mem_plan=true"
+        )
+        .unwrap();
+    } else {
+        writeln!(
+            &mut out,
+            "evm.config: stack_reach={stackify_reach_depth} emit_debug_trace={emit_debug_trace}"
+        )
+        .unwrap();
+    }
     writeln!(&mut out).unwrap();
 
     writeln!(&mut out, "object: {}", artifact.object.0.as_str()).unwrap();
@@ -223,6 +234,13 @@ fn test_evm(fixture: Fixture<&str>) {
         writeln!(&mut out, "    mem: {}", stat.mem).unwrap();
     }
     writeln!(&mut out).unwrap();
+
+    if let Some(mem_plan_detail) = mem_plan_detail
+        && !mem_plan_detail.is_empty()
+    {
+        writeln!(&mut out, "--------------- MEM PLAN ---------------\n").unwrap();
+        writeln!(&mut out, "{mem_plan_detail}").unwrap();
+    }
 
     let init = artifact
         .sections
@@ -587,6 +605,13 @@ fn stackify_reach_depth_for_fixture(path: &str, parsed: &ParsedModule) -> u8 {
 
 fn emit_debug_trace_for_fixture(path: &str, parsed: &ParsedModule) -> bool {
     match evm_directives::emit_debug_trace(&parsed.debug.module_comments) {
+        Ok(v) => v,
+        Err(e) => panic!("{path}: {e}"),
+    }
+}
+
+fn emit_mem_plan_for_fixture(path: &str, parsed: &ParsedModule) -> bool {
+    match evm_directives::emit_mem_plan(&parsed.debug.module_comments) {
         Ok(v) => v,
         Err(e) => panic!("{path}: {e}"),
     }

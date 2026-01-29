@@ -102,6 +102,14 @@ impl EvmBackend {
     /// This intentionally includes alloca layout (offset/size + computed address),
     /// so snapshots can assert that alloca reuse is correct across loops/branches.
     pub fn snapshot_mem_plan(&self, module: &Module, funcs: &[FuncRef]) -> String {
+        self.snapshot_mem_plan_impl(module, funcs, false)
+    }
+
+    pub fn snapshot_mem_plan_detail(&self, module: &Module, funcs: &[FuncRef]) -> String {
+        self.snapshot_mem_plan_impl(module, funcs, true)
+    }
+
+    fn snapshot_mem_plan_impl(&self, module: &Module, funcs: &[FuncRef], detail: bool) -> String {
         use std::fmt::Write as _;
 
         let state = self.section_state.borrow();
@@ -143,6 +151,107 @@ impl EvmBackend {
                 }
             }
 
+            let addr_of = |offset_words: u32| match &func_plan.scheme {
+                MemScheme::StaticArena(_) => {
+                    let addr_bytes = STATIC_BASE
+                        .checked_add(
+                            offset_words
+                                .checked_mul(WORD_BYTES)
+                                .expect("address bytes overflow"),
+                        )
+                        .expect("address bytes overflow");
+                    format!("0x{addr_bytes:x}")
+                }
+                MemScheme::DynamicFrame => {
+                    let addr_bytes = offset_words
+                        .checked_mul(WORD_BYTES)
+                        .expect("address bytes overflow");
+                    if addr_bytes == 0 {
+                        "fp".to_string()
+                    } else {
+                        format!("fp+0x{addr_bytes:x}")
+                    }
+                }
+            };
+
+            if detail {
+                let mut direct_callee_need_max: u32 = 0;
+                module.func_store.view(func, |function| {
+                    for block in function.layout.iter_block() {
+                        for insn in function.layout.iter_inst(block) {
+                            let Some(call) = function.dfg.call_info(insn) else {
+                                continue;
+                            };
+                            let Some(callee_plan) = section.plan.funcs.get(&call.callee()) else {
+                                continue;
+                            };
+                            let MemScheme::StaticArena(st) = &callee_plan.scheme else {
+                                continue;
+                            };
+                            direct_callee_need_max = direct_callee_need_max.max(st.need_words);
+                        }
+                    }
+                });
+
+                if let MemScheme::StaticArena(st) = &func_plan.scheme {
+                    writeln!(
+                        &mut out,
+                        "  detail locals_words={} direct_callee_need_max_words={direct_callee_need_max} need_words={}",
+                        func_plan.locals_words, st.need_words
+                    )
+                    .expect("mem plan write failed");
+                }
+
+                let mut scratch_spills: Vec<(ValueId, u32)> = Vec::new();
+                if let Some(alloc) = section.allocs.get(&func) {
+                    module.func_store.view(func, |function| {
+                        for v in function.dfg.values.keys() {
+                            let Some(slot) = alloc.scratch_slot_of_value[v] else {
+                                continue;
+                            };
+                            scratch_spills.push((v, slot));
+                        }
+                    });
+                }
+
+                scratch_spills.sort_unstable_by_key(|(v, _)| v.as_u32());
+                for (v, slot) in scratch_spills {
+                    let addr_bytes = slot
+                        .checked_mul(WORD_BYTES)
+                        .expect("scratch slot addr overflow");
+                    writeln!(
+                        &mut out,
+                        "  scratch_spill v{} slot={slot} addr=0x{addr_bytes:x}",
+                        v.as_u32()
+                    )
+                    .expect("mem plan write failed");
+                }
+
+                let mut spills: Vec<(ValueId, u32, String)> = Vec::new();
+                module.func_store.view(func, |function| {
+                    for v in function.dfg.values.keys() {
+                        let Some(obj) = func_plan.spill_obj[v] else {
+                            continue;
+                        };
+                        let offset_words = *func_plan
+                            .obj_offset_words
+                            .get(&obj)
+                            .expect("missing stack object offset");
+                        spills.push((v, offset_words, addr_of(offset_words)));
+                    }
+                });
+
+                spills.sort_unstable_by_key(|(v, _, _)| v.as_u32());
+                for (v, offset_words, addr) in spills {
+                    writeln!(
+                        &mut out,
+                        "  spill v{} offset_words={offset_words} addr={addr}",
+                        v.as_u32()
+                    )
+                    .expect("mem plan write failed");
+                }
+            }
+
             let mut allocas: Vec<(ValueId, u32, u32, String)> = Vec::new();
             module.func_store.view(func, |function| {
                 for block in function.layout.iter_block() {
@@ -167,30 +276,7 @@ impl EvmBackend {
                             as u32;
                         let size_words = size_bytes.div_ceil(WORD_BYTES);
 
-                        let addr = match &func_plan.scheme {
-                            MemScheme::StaticArena(_) => {
-                                let addr_bytes = STATIC_BASE
-                                    .checked_add(
-                                        offset_words
-                                            .checked_mul(WORD_BYTES)
-                                            .expect("alloca address bytes overflow"),
-                                    )
-                                    .expect("alloca address bytes overflow");
-                                format!("0x{addr_bytes:x}")
-                            }
-                            MemScheme::DynamicFrame => {
-                                let addr_bytes = offset_words
-                                    .checked_mul(WORD_BYTES)
-                                    .expect("alloca address bytes overflow");
-                                if addr_bytes == 0 {
-                                    "fp".to_string()
-                                } else {
-                                    format!("fp+0x{addr_bytes:x}")
-                                }
-                            }
-                        };
-
-                        allocas.push((value, offset_words, size_words, addr));
+                        allocas.push((value, offset_words, size_words, addr_of(offset_words)));
                     }
                 }
             });
