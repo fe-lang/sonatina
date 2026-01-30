@@ -156,18 +156,13 @@ pub(crate) fn compute_program_memory_plan(
         }
 
         struct PlannedFunc {
-            stack: FuncStackObjects,
             layout: FuncObjectLayout,
             call_choice: FxHashMap<InstId, CallPreserveChoice>,
         }
 
-        let mut planned: FxHashMap<FuncRef, PlannedFunc> = FxHashMap::default();
-        let mut max_locals_words: u32 = 0;
-        let mut fallback_dynamic = false;
-
+        let mut stacks: FxHashMap<FuncRef, FuncStackObjects> = FxHashMap::default();
         for &func in &component {
             let analysis = analyses.get(&func).expect("missing FuncAnalysis");
-
             let stack: FuncStackObjects = module.func_store.view(func, |function| {
                 compute_func_stack_objects(
                     func,
@@ -180,41 +175,53 @@ pub(crate) fn compute_program_memory_plan(
                     &analysis.block_order,
                 )
             });
+            stacks.insert(func, stack);
+        }
 
-            let Some((call_choice, layout)) = solve_call_preservation_for_func(
-                &stack,
-                &need_words,
-                &scc,
-                scc_ref,
-                is_cyclic,
-                cost_model,
-            ) else {
-                fallback_dynamic = true;
-                let min_offset_words: FxHashMap<StackObjId, u32> = FxHashMap::default();
-                let (obj_offset_words, locals_words) =
-                    pack_objects_with_min_offsets(&stack, &min_offset_words);
-                let layout = build_func_object_layout(&stack, obj_offset_words, locals_words);
+        let mut planned: FxHashMap<FuncRef, PlannedFunc> = FxHashMap::default();
+        let mut max_locals_words: u32;
+        let mut fallback_dynamic: bool;
+        let mut cap: u32 = ext_need_max;
+
+        loop {
+            planned.clear();
+            max_locals_words = 0;
+            fallback_dynamic = false;
+
+            for &func in &component {
+                let stack = stacks.get(&func).expect("missing stack");
+                let Some((call_choice, layout)) = solve_call_preservation_for_func(
+                    stack,
+                    &need_words,
+                    &scc,
+                    scc_ref,
+                    is_cyclic,
+                    cost_model,
+                    cap,
+                ) else {
+                    fallback_dynamic = true;
+                    break;
+                };
+
+                max_locals_words = max_locals_words.max(layout.locals_words);
                 planned.insert(
                     func,
                     PlannedFunc {
-                        stack,
                         layout,
-                        call_choice: FxHashMap::default(),
+                        call_choice,
                     },
                 );
-                continue;
-            };
+            }
 
-            max_locals_words = max_locals_words.max(layout.locals_words);
+            if fallback_dynamic {
+                break;
+            }
 
-            planned.insert(
-                func,
-                PlannedFunc {
-                    stack,
-                    layout,
-                    call_choice,
-                },
-            );
+            let new_cap = ext_need_max.max(max_locals_words);
+            if new_cap == cap {
+                break;
+            }
+            cap = new_cap;
         }
 
         if fallback_dynamic {
@@ -223,12 +230,11 @@ pub(crate) fn compute_program_memory_plan(
             }
 
             for &func in &component {
-                let planned_func = planned.remove(&func).expect("missing planned func");
+                let stack = stacks.get(&func).expect("missing stack");
                 let min_offset_words: FxHashMap<StackObjId, u32> = FxHashMap::default();
                 let (obj_offset_words, locals_words) =
-                    pack_objects_with_min_offsets(&planned_func.stack, &min_offset_words);
-                let layout =
-                    build_func_object_layout(&planned_func.stack, obj_offset_words, locals_words);
+                    pack_objects_with_min_offsets(stack, &min_offset_words);
+                let layout = build_func_object_layout(stack, obj_offset_words, locals_words);
                 plans.insert(
                     func,
                     FuncMemPlan {
@@ -245,7 +251,7 @@ pub(crate) fn compute_program_memory_plan(
             continue;
         }
 
-        let need_scc = ext_need_max.max(max_locals_words);
+        let need_scc = cap;
         for &func in &component {
             need_words.insert(func, need_scc);
             static_max_words = static_max_words.max(need_scc);
@@ -253,10 +259,11 @@ pub(crate) fn compute_program_memory_plan(
 
         for &func in &component {
             let planned_func = planned.remove(&func).expect("missing planned func");
+            let stack = stacks.get(&func).expect("missing stack");
             let call_saves = module.func_store.view(func, |function| {
                 finalize_call_save_plans_for_func(
                     function,
-                    &planned_func.stack,
+                    stack,
                     &planned_func.layout.obj_offset_words,
                     &planned_func.call_choice,
                     &need_words,
@@ -330,7 +337,12 @@ fn solve_call_preservation_for_func(
     scc_ref: SccRef,
     is_cyclic_scc: bool,
     cost_model: &ArenaCostModel,
+    mem_cost_cap_words: u32,
 ) -> Option<(FxHashMap<InstId, CallPreserveChoice>, FuncObjectLayout)> {
+    if stack.requires_dynamic_frame {
+        return None;
+    }
+
     let mut calls: Vec<CallMeta> = Vec::new();
     for call in &stack.call_sites {
         let is_internal = is_cyclic_scc && scc.scc_ref(call.callee) == scc_ref;
@@ -471,6 +483,7 @@ fn solve_call_preservation_for_func(
         calls: &[CallMeta],
         layout_calls: &FxHashSet<InstId>,
         child_need_max: u32,
+        mem_cost_cap_words: u32,
         cost_model: &ArenaCostModel,
     ) -> Option<(u64, FuncObjectLayout)> {
         let mut min_offset_words: FxHashMap<StackObjId, u32> = FxHashMap::default();
@@ -497,9 +510,10 @@ fn solve_call_preservation_for_func(
             pack_objects_with_min_offsets(stack, &min_offset_words);
 
         let need_est = locals_words.max(child_need_max);
+        let need_for_cost = need_est.max(mem_cost_cap_words);
         let base_words = STATIC_BASE / WORD_BYTES;
         let mem_words = base_words
-            .checked_add(need_est)
+            .checked_add(need_for_cost)
             .expect("mem words overflow");
         let mut cost = cost_model
             .w_mem
@@ -575,8 +589,14 @@ fn solve_call_preservation_for_func(
     }
 
     let mut layout_calls: FxHashSet<InstId> = FxHashSet::default();
-    let (mut best_cost, mut best_layout) =
-        evaluate(stack, &calls, &layout_calls, child_need_max, cost_model)?;
+    let (mut best_cost, mut best_layout) = evaluate(
+        stack,
+        &calls,
+        &layout_calls,
+        child_need_max,
+        mem_cost_cap_words,
+        cost_model,
+    )?;
 
     let mut promotion_order: Vec<InstId> = Vec::new();
     loop {
@@ -599,6 +619,7 @@ fn solve_call_preservation_for_func(
                 &calls,
                 &candidate_layout_calls,
                 child_need_max,
+                mem_cost_cap_words,
                 cost_model,
             ) else {
                 continue;
@@ -645,6 +666,7 @@ fn solve_call_preservation_for_func(
             &calls,
             &candidate_layout_calls,
             child_need_max,
+            mem_cost_cap_words,
             cost_model,
         ) else {
             continue;
@@ -901,6 +923,53 @@ fn verify_static_arena_plan(
                             call.inst.as_u32(),
                             obj.as_u32(),
                         );
+                    }
+                }
+
+                if !matches!(choice, CallPreserveChoice::Layout) {
+                    let saved = st
+                        .call_saves
+                        .get(&call.inst)
+                        .map(|p| p.save_word_offsets.as_slice())
+                        .unwrap_or(&[]);
+
+                    for &obj in &call.live_out_objs {
+                        if call.must_layout_objs.binary_search(&obj).is_ok() {
+                            continue;
+                        }
+
+                        let off =
+                            func_plan.obj_offset_words.get(&obj).copied().unwrap_or_else(|| {
+                                panic!(
+                                    "missing offset for obj {} in func {}",
+                                    obj.as_u32(),
+                                    func.as_u32()
+                                )
+                            });
+                        let size = stack.obj_size_words.get(&obj).copied().unwrap_or_else(|| {
+                            panic!(
+                                "missing size for obj {} in func {}",
+                                obj.as_u32(),
+                                func.as_u32()
+                            )
+                        });
+                        if size == 0 || off >= callee_need_words {
+                            continue;
+                        }
+
+                        let end = off
+                            .checked_add(size)
+                            .expect("obj end words overflow")
+                            .min(callee_need_words);
+                        for w in off..end {
+                            if saved.binary_search(&w).is_err() {
+                                panic!(
+                                    "StaticArena save plan missing word {w} in func {} at inst {}",
+                                    func.as_u32(),
+                                    call.inst.as_u32()
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -1239,6 +1308,57 @@ block0:
         assert!(off >= callee_plan.need_words);
         if let Some(save) = caller_plan.call_saves.get(&call_inst) {
             assert!(!save.save_word_offsets.contains(&off));
+        }
+    }
+
+    #[test]
+    fn transitive_points_to_through_local_memory_is_must_layout() {
+        let (_module, plan, names) = plan_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %callee(v0.**i256) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    mstore v1 0.i256 i256;
+    v2.*i256 = mload v0 *i256;
+    mstore v2 42.i256 i256;
+    return 0.i256;
+}
+
+func public %caller() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.**i256 = alloca *i256;
+    mstore v0 1.i256 i256;
+    mstore v1 v0 *i256;
+    v2.i256 = call %callee v1;
+    return v2;
+}
+"#,
+        );
+
+        let callee = names["callee"];
+        let caller = names["caller"];
+
+        let MemScheme::StaticArena(callee_plan) = &plan.funcs[&callee].scheme else {
+            panic!("expected callee to be StaticArena");
+        };
+        let MemScheme::StaticArena(_) = &plan.funcs[&caller].scheme else {
+            panic!("expected caller to be StaticArena");
+        };
+
+        let mut allocas: Vec<InstId> = plan.funcs[&caller]
+            .alloca_offset_words
+            .keys()
+            .copied()
+            .collect();
+        allocas.sort_unstable_by_key(|i| i.as_u32());
+        assert_eq!(allocas.len(), 2);
+
+        for inst in allocas {
+            let off = plan.funcs[&caller].alloca_offset_words[&inst];
+            assert!(off >= callee_plan.need_words);
         }
     }
 
