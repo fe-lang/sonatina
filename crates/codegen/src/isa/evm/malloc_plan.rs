@@ -206,7 +206,12 @@ pub(crate) fn compute_transient_mallocs(
 
             let callee = call.callee();
             let is_barrier = mem_effects.is_none_or(|effects| {
-                let eff = effects.get(&callee).copied().unwrap_or_default();
+                let eff = effects.get(&callee).copied().unwrap_or_else(|| {
+                    panic!(
+                        "missing mem effects for callee {} in transient malloc analysis",
+                        callee.as_u32()
+                    )
+                });
                 eff.touches_heap_meta || eff.touches_dyn_frame
             });
             if !is_barrier {

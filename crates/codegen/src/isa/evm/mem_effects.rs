@@ -79,15 +79,25 @@ pub(crate) fn compute_func_mem_effects(
             .iter()
             .filter(|f| funcs_set.contains(f))
         {
-            eff.union_with(local_effects.get(&f).copied().unwrap_or_default());
+            let local = local_effects
+                .get(&f)
+                .copied()
+                .unwrap_or_else(|| panic!("missing local effects for func {}", f.as_u32()));
+            eff.union_with(local);
         }
         scc_effects.insert(*scc_ref, eff);
     }
 
     for &scc_ref in topo.iter().rev() {
-        let mut eff = scc_effects.get(&scc_ref).copied().unwrap_or_default();
+        let mut eff = scc_effects
+            .get(&scc_ref)
+            .copied()
+            .unwrap_or_else(|| panic!("missing SCC effects for scc {}", scc_ref.as_u32()));
         for &callee in edges.get(&scc_ref).into_iter().flatten() {
-            eff.union_with(scc_effects.get(&callee).copied().unwrap_or_default());
+            let callee_eff = scc_effects.get(&callee).copied().unwrap_or_else(|| {
+                panic!("missing SCC effects for callee scc {}", callee.as_u32())
+            });
+            eff.union_with(callee_eff);
         }
         scc_effects.insert(scc_ref, eff);
     }
