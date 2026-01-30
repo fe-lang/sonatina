@@ -66,7 +66,9 @@ pub(crate) struct CallSiteLiveObjects {
     pub(crate) inst: InstId,
     pub(crate) callee: FuncRef,
     pub(crate) has_return: bool,
-    pub(crate) live_objs: Vec<StackObjId>,
+    pub(crate) arg_count: u8,
+    pub(crate) live_out_objs: Vec<StackObjId>,
+    pub(crate) must_layout_objs: Vec<StackObjId>,
 }
 
 pub(crate) struct FuncStackObjects {
@@ -274,9 +276,10 @@ pub(crate) fn compute_func_stack_objects(
     let mut call_sites: Vec<CallSiteLiveObjects> = Vec::new();
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
-            let Some(call) = function.dfg.call_info(inst) else {
+            let Some(call) = function.dfg.cast_call(inst) else {
                 continue;
             };
+            let arg_count = u8::try_from(call.args().len()).expect("call arg count too large");
 
             let def = function.dfg.inst_result(inst);
             let mut set: FxHashSet<StackObjId> = FxHashSet::default();
@@ -298,11 +301,24 @@ pub(crate) fn compute_func_stack_objects(
 
             let mut live_objs: Vec<StackObjId> = set.into_iter().collect();
             live_objs.sort_unstable_by_key(|id| id.as_u32());
+
+            let mut must_layout: FxHashSet<StackObjId> = FxHashSet::default();
+            for &arg in call.args() {
+                for base in prov[arg].alloca_insts() {
+                    if let Some(&id) = alloca_ids.get(&base) {
+                        must_layout.insert(id);
+                    }
+                }
+            }
+            let mut must_layout_objs: Vec<StackObjId> = must_layout.into_iter().collect();
+            must_layout_objs.sort_unstable_by_key(|id| id.as_u32());
             call_sites.push(CallSiteLiveObjects {
                 inst,
-                callee: call.callee(),
+                callee: *call.callee(),
                 has_return: function.dfg.inst_result(inst).is_some(),
-                live_objs,
+                arg_count,
+                live_out_objs: live_objs,
+                must_layout_objs,
             });
         }
     }
