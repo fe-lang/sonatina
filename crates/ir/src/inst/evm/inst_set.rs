@@ -33,6 +33,7 @@ pub struct EvmInstSet(
     control_flow::BrTable,
     control_flow::Call,
     control_flow::Return,
+    control_flow::Unreachable,
     data::Mload,
     data::Mstore,
     data::Gep,

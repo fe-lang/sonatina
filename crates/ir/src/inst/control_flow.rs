@@ -69,6 +69,11 @@ pub struct Return {
     arg: Option<ValueId>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(super::SideEffect::Write))]
+#[inst(terminator)]
+pub struct Unreachable {}
+
 /// A trait for instructions that can be used as a call.
 #[inst_prop]
 pub trait CallInfo {
@@ -190,11 +195,10 @@ impl BranchInfo for BrTable {
         brt.table = keep;
 
         let dest_num = brt.dests().len();
-        if dest_num == 1 {
-            let jump = Jump::new(isb.jump(), brt.dests()[0]);
-            Box::new(jump)
-        } else {
-            Box::new(brt)
+        match dest_num {
+            0 => Box::new(Unreachable::new_unchecked(isb)),
+            1 => Box::new(Jump::new(isb.jump(), brt.dests()[0])),
+            _ => Box::new(brt),
         }
     }
 

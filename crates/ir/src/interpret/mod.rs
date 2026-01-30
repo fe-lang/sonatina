@@ -63,6 +63,7 @@ pub trait Interpret {
         inst::control_flow::Phi,
         inst::control_flow::Call,
         inst::control_flow::Return,
+        inst::control_flow::Unreachable,
         inst::evm::EvmUdiv,
         inst::evm::EvmSdiv,
         inst::evm::EvmUmod,

@@ -95,3 +95,9 @@ impl Interpret for Return {
         EvalValue::Undef
     }
 }
+
+impl Interpret for Unreachable {
+    fn interpret(&self, _state: &mut dyn State) -> EvalValue {
+        panic!("unreachable executed")
+    }
+}
