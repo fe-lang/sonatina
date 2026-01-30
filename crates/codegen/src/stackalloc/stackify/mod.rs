@@ -32,7 +32,8 @@ pub use alloc::{StackifyAlloc, StackifyLiveValues};
 use builder::StackifyContext;
 
 const DUP_MAX: usize = 16; // DUP16 duplicates stack[15]
-const SWAP_MAX: usize = 17; // SWAP16 swaps stack[0] and stack[16]
+const SWAP_DEPTH_MAX: usize = 16; // SWAP16 swaps stack[0] and stack[16]
+const SWAP_WINDOW_MAX: usize = SWAP_DEPTH_MAX + 1; // reachable items (incl. top)
 /// Maximum `SWAP*` chain length used to consume a last-use operand directly from the stack.
 ///
 /// This is a purely local heuristic: we rotate a last-use value up (preserving the current

@@ -34,7 +34,7 @@ impl StackifyReachability {
         );
 
         let dup_max = reach_depth as usize;
-        let swap_max = (dup_max + 1).min(super::SWAP_MAX);
+        let swap_max = (dup_max + 1).min(super::SWAP_WINDOW_MAX);
 
         Self { dup_max, swap_max }
     }

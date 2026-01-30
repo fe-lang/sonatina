@@ -131,8 +131,8 @@ impl SymStack {
 
     /// Duplicate `stack[pos]` to the top (`DUP{pos+1}`).
     pub(super) fn dup(&mut self, pos: usize, actions: &mut Actions) {
-        debug_assert!(pos < super::DUP_MAX, "DUP out of range");
-        debug_assert!(pos < self.len_above_func_ret());
+        assert!(pos < super::DUP_MAX, "DUP out of range");
+        assert!(pos < self.len_above_func_ret(), "DUP past call barrier");
 
         let item = self.items[pos].clone();
         self.items.push_front(item);
@@ -141,8 +141,14 @@ impl SymStack {
 
     /// Delete `stack[depth-1]` (1-indexed), preserving the relative order of the remaining items.
     pub(super) fn stable_delete_at_depth(&mut self, depth: usize, actions: &mut Actions) {
-        debug_assert!((1..=super::SWAP_MAX).contains(&depth));
-        debug_assert!(depth <= self.len_above_func_ret());
+        assert!(
+            (1..=super::SWAP_WINDOW_MAX).contains(&depth),
+            "stable delete out of range"
+        );
+        assert!(
+            depth <= self.len_above_func_ret(),
+            "stable delete past call barrier"
+        );
 
         for k in 1..depth {
             self.swap(k, actions);
@@ -165,8 +171,8 @@ impl SymStack {
         if depth == 0 {
             return;
         }
-        debug_assert!(depth <= 16, "SWAP out of range");
-        debug_assert!(depth < self.len_above_func_ret());
+        assert!(depth <= super::SWAP_DEPTH_MAX, "SWAP out of range");
+        assert!(depth < self.len_above_func_ret(), "SWAP past call barrier");
 
         actions.push(Action::StackSwap(depth as u8));
         self.items.swap(0, depth);
@@ -176,8 +182,8 @@ impl SymStack {
         if pos == 0 {
             return;
         }
-        debug_assert!(pos <= 16, "SWAP out of range");
-        debug_assert!(pos < self.len_above_func_ret());
+        assert!(pos <= super::SWAP_DEPTH_MAX, "SWAP out of range");
+        assert!(pos < self.len_above_func_ret(), "SWAP past call barrier");
         for k in 1..=pos {
             self.swap(k, actions);
         }
@@ -233,11 +239,14 @@ impl SymStack {
         }
 
         // Stackify planning should keep the call continuation SWAP-reachable.
-        debug_assert!(
-            operand_count <= super::SWAP_MAX,
+        assert!(
+            operand_count <= super::SWAP_DEPTH_MAX,
             "call operand count exceeds SWAP16"
         );
-        debug_assert!(operand_count < self.len_above_func_ret());
+        assert!(
+            operand_count < self.len_above_func_ret(),
+            "call operand count exceeds stack depth"
+        );
 
         // During call operand preparation we arrange the operands as a left-rotation of the
         // callee ABI order. With that setup, a single swap with the bottom operand moves the
