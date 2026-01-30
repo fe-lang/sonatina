@@ -1,8 +1,6 @@
-use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, InstId,
-    func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::control_flow::Jump,
-};
+use sonatina_ir::{BlockId, ControlFlowGraph, Function, InstId};
+
+use crate::cfg_edit::{CfgEditor, CleanupMode};
 
 #[derive(Debug)]
 pub struct CriticalEdgeSplitter {
@@ -32,9 +30,13 @@ impl CriticalEdgeSplitter {
         }
 
         let edges = std::mem::take(&mut self.critical_edges);
+        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
         for edge in edges {
-            self.split_edge(edge, func, cfg);
+            let from = editor.func().layout.inst_block(edge.inst);
+            editor.split_edge(from, edge.to);
         }
+
+        cfg.compute(editor.func());
     }
 
     pub fn clear(&mut self) {
@@ -55,58 +57,6 @@ impl CriticalEdgeSplitter {
                 self.critical_edges.push(CriticalEdge::new(inst_id, dest));
             }
         }
-    }
-
-    fn split_edge(&mut self, edge: CriticalEdge, func: &mut Function, cfg: &mut ControlFlowGraph) {
-        let inst = edge.inst;
-        let original_dest = edge.to;
-        let source_block = func.layout.inst_block(inst);
-
-        // Create a new block that contains only a jump inst to the destinating block of
-        // the critical edge.
-        let inserted_dest = func.dfg.make_block();
-        let jump = Jump::new(func.dfg.inst_set().jump(), original_dest);
-        let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(original_dest));
-        cursor.append_block(func, inserted_dest);
-        cursor.set_location(CursorLocation::BlockTop(inserted_dest));
-        cursor.append_inst_data(func, jump);
-
-        // Rewrite branch destination to the new block.
-        func.dfg
-            .rewrite_branch_dest(inst, original_dest, inserted_dest);
-        self.modify_cfg(cfg, source_block, original_dest, inserted_dest);
-        self.modify_phi_blocks(func, original_dest, inserted_dest);
-    }
-
-    fn modify_phi_blocks(
-        &self,
-        func: &mut Function,
-        original_dest: BlockId,
-        inserted_dest: BlockId,
-    ) {
-        for inst in func.layout.iter_inst(original_dest) {
-            let Some(phi) = func.dfg.cast_phi_mut(inst) else {
-                continue;
-            };
-
-            for (_, block) in phi.args_mut() {
-                if *block == original_dest {
-                    *block = inserted_dest;
-                }
-            }
-        }
-    }
-
-    fn modify_cfg(
-        &self,
-        cfg: &mut ControlFlowGraph,
-        source_block: BlockId,
-        original_dest: BlockId,
-        inserted_dest: BlockId,
-    ) {
-        cfg.remove_edge(source_block, original_dest);
-        cfg.add_edge(source_block, inserted_dest);
-        cfg.add_edge(inserted_dest, original_dest);
     }
 }
 
@@ -179,11 +129,11 @@ mod tests {
     block1:
         jump block2;
 
-    block2:
-        return;
-
     block3:
         jump block2;
+
+    block2:
+        return;
 }
 "
         );
@@ -252,17 +202,17 @@ mod tests {
     block2:
         br 1.i8 block4 block6;
 
-    block3:
-        return;
-
-    block4:
-        return;
-
     block5:
         jump block3;
 
     block6:
         jump block3;
+
+    block3:
+        return;
+
+    block4:
+        return;
 }
 "
         );
@@ -314,6 +264,9 @@ mod tests {
     block0:
         jump block1;
 
+    block3:
+        jump block1;
+
     block1:
         v1.i8 = phi (1.i8 block0) (v2 block3);
         v2.i8 = add v1 1.i8;
@@ -321,9 +274,6 @@ mod tests {
 
     block2:
         return;
-
-    block3:
-        jump block1;
 }
 "
         );
@@ -333,6 +283,59 @@ mod tests {
             .func_store
             .view(func_ref, |func| cfg_split.compute(func));
         assert_eq!(cfg, cfg_split);
+    }
+
+    #[test]
+    fn critical_edge_phi_label_update_from_other_pred() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let a = builder.append_block();
+        let b = builder.append_block();
+        let c = builder.append_block();
+
+        builder.switch_to_block(a);
+        let cond = builder.make_imm_value(true);
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, c, b));
+
+        builder.switch_to_block(b);
+        builder.insert_inst_no_result_with(|| Jump::new(is, c));
+
+        builder.switch_to_block(c);
+        let v = builder.make_imm_value(1i8);
+        builder.insert_inst_with(|| Phi::new(is, vec![(v, a), (v, b)]), Type::I8);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
+
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        let mut cfg = ControlFlowGraph::default();
+        module.func_store.modify(func_ref, |func| {
+            cfg.compute(func);
+            CriticalEdgeSplitter::new().run(func, &mut cfg);
+        });
+
+        assert_eq!(
+            dump_func(&module, func_ref),
+            "func public %test_func() {
+    block0:
+        br 1.i1 block3 block1;
+
+    block1:
+        jump block2;
+
+    block3:
+        jump block2;
+
+    block2:
+        v2.i8 = phi (1.i8 block3) (1.i8 block1);
+        return;
+}
+"
+        );
     }
 
     #[test]
@@ -384,6 +387,9 @@ mod tests {
     block0:
         br 1.i1 block5 block6;
 
+    block5:
+        jump block1;
+
     block1:
         br_table 0.i32 block2 (1.i32 block3) (2.i32 block7);
 
@@ -393,17 +399,14 @@ mod tests {
     block3:
         return;
 
-    block4:
-        return;
-
-    block5:
-        jump block1;
-
     block6:
         jump block4;
 
     block7:
         jump block4;
+
+    block4:
+        return;
 }
 "
         );
