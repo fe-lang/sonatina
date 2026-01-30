@@ -109,11 +109,12 @@ impl BranchInfo for Jump {
         1
     }
 
-    fn remove_dest(&self, _isb: &dyn InstSetBase, dest: BlockId) -> Box<dyn Inst> {
+    fn remove_dest(&self, isb: &dyn InstSetBase, dest: BlockId) -> Box<dyn Inst> {
         if dest == self.dest {
-            panic!("can't remove destination from `Jump` inst")
+            Box::new(Unreachable::new_unchecked(isb))
+        } else {
+            Box::new(*self)
         }
-        Box::new(*self)
     }
 
     fn rewrite_dest(&self, _isb: &dyn InstSetBase, from: BlockId, to: BlockId) -> Box<dyn Inst> {
