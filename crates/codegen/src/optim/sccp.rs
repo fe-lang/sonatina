@@ -334,15 +334,33 @@ impl SccpSolver {
     }
 
     fn try_fold_phi(&self, func: &mut Function, inst: InstId) {
-        let phi = func.dfg.cast_phi_mut(inst).unwrap();
-        phi.retain(|block| self.reachable_blocks.contains(&block));
+        func.dfg.untrack_inst(inst);
+
+        let mut fold_arg = None;
+        {
+            let phi = func.dfg.cast_phi_mut(inst).unwrap();
+            phi.retain(|block| self.reachable_blocks.contains(&block));
+
+            let mut seen = BTreeSet::new();
+            for &(_, pred) in phi.args() {
+                assert!(
+                    seen.insert(pred),
+                    "phi {inst:?} has duplicate incoming from {pred:?}"
+                );
+            }
+
+            if phi.args().len() == 1 {
+                fold_arg = Some(phi.args()[0].0);
+            }
+        }
 
         // Remove phi function if it has just one argument.
-        if phi.args().len() == 1 {
-            let phi_arg = phi.args()[0].0;
+        if let Some(phi_arg) = fold_arg {
             let phi_value = func.dfg.inst_result(inst).unwrap();
             func.dfg.change_to_alias(phi_value, phi_arg);
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        } else {
+            func.dfg.attach_user(inst);
         }
     }
 
