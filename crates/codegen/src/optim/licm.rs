@@ -157,6 +157,19 @@ impl LicmSolver {
         original_preheaders: &[BlockId],
         new_preheader: BlockId,
     ) {
+        if original_preheaders.is_empty() {
+            if func
+                .layout
+                .first_inst_of(lp_header)
+                .is_some_and(|inst| func.dfg.is_phi(inst))
+            {
+                panic!(
+                    "loop header {lp_header:?} has phi but no non-loop predecessors; cannot create a preheader"
+                );
+            }
+            return;
+        }
+
         // Record inserted phis to avoid duplication of the same phi.
         let mut inserted_phis = FxHashMap::default();
 
