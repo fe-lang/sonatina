@@ -164,12 +164,17 @@ fn unmodeled_write_addr(data: &EvmInstKind) -> Option<ValueId> {
     }
 }
 
-pub(crate) fn compute_value_provenance(
+pub(crate) struct ProvenanceInfo {
+    pub(crate) value: SecondaryMap<ValueId, Provenance>,
+    pub(crate) local_mem: FxHashMap<InstId, Provenance>,
+}
+
+pub(crate) fn compute_provenance(
     function: &Function,
     module: &ModuleCtx,
     isa: &Evm,
     callee_arg_may_be_returned: impl Fn(FuncRef) -> Vec<bool>,
-) -> SecondaryMap<ValueId, Provenance> {
+) -> ProvenanceInfo {
     let mut prov: SecondaryMap<ValueId, Provenance> = SecondaryMap::new();
     for value in function.dfg.values.keys() {
         let _ = &mut prov[value];
@@ -294,5 +299,17 @@ pub(crate) fn compute_value_provenance(
         }
     }
 
-    prov
+    ProvenanceInfo {
+        value: prov,
+        local_mem: mem,
+    }
+}
+
+pub(crate) fn compute_value_provenance(
+    function: &Function,
+    module: &ModuleCtx,
+    isa: &Evm,
+    callee_arg_may_be_returned: impl Fn(FuncRef) -> Vec<bool>,
+) -> SecondaryMap<ValueId, Provenance> {
+    compute_provenance(function, module, isa, callee_arg_may_be_returned).value
 }

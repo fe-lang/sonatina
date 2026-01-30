@@ -26,7 +26,7 @@ use crate::{bitset::BitSet, liveness::InstLiveness, stackalloc::StackifyAlloc};
 
 use super::{
     memory_plan::WORD_BYTES,
-    provenance::{Provenance, compute_value_provenance},
+    provenance::{Provenance, compute_provenance},
     ptr_escape::PtrEscapeSummary,
 };
 
@@ -77,6 +77,41 @@ pub(crate) struct FuncStackObjects {
     pub(crate) alloca_ids: FxHashMap<InstId, StackObjId>,
     pub(crate) spill_obj: SecondaryMap<ValueId, Option<StackObjId>>,
     pub(crate) call_sites: Vec<CallSiteLiveObjects>,
+    pub(crate) requires_dynamic_frame: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct UnknownLocalPtr;
+
+fn closure_allocas(
+    roots: impl IntoIterator<Item = InstId>,
+    edges: &FxHashMap<InstId, FxHashSet<InstId>>,
+    unknown: &FxHashSet<InstId>,
+) -> Result<FxHashSet<InstId>, UnknownLocalPtr> {
+    let mut out: FxHashSet<InstId> = FxHashSet::default();
+    let mut work: Vec<InstId> = Vec::new();
+    for root in roots {
+        if out.insert(root) {
+            work.push(root);
+        }
+    }
+
+    while let Some(base) = work.pop() {
+        if unknown.contains(&base) {
+            return Err(UnknownLocalPtr);
+        }
+
+        let Some(next) = edges.get(&base) else {
+            continue;
+        };
+        for &child in next {
+            if out.insert(child) {
+                work.push(child);
+            }
+        }
+    }
+
+    Ok(out)
 }
 
 pub(crate) fn compute_inst_order(
@@ -166,15 +201,28 @@ pub(crate) fn compute_func_stack_objects(
     let (inst_order, inst_pos) = compute_inst_order(function, block_order);
     let block_end_pos = compute_block_end_pos(function, &inst_pos);
 
-    let prov = compute_value_provenance(function, module, isa, |callee| {
+    let prov_info = compute_provenance(function, module, isa, |callee| {
         ptr_escape
             .get(&callee)
             .cloned()
             .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee))
             .arg_may_be_returned
     });
+    let prov = &prov_info.value;
 
-    let escaping_sites = compute_escaping_allocas(function, module, isa, ptr_escape, &prov);
+    let mut local_edges: FxHashMap<InstId, FxHashSet<InstId>> = FxHashMap::default();
+    let mut local_unknown: FxHashSet<InstId> = FxHashSet::default();
+    for (&base, stored) in &prov_info.local_mem {
+        if stored.is_unknown_ptr() {
+            local_unknown.insert(base);
+            continue;
+        }
+        for child in stored.alloca_insts() {
+            local_edges.entry(base).or_default().insert(child);
+        }
+    }
+
+    let escaping_sites = compute_escaping_allocas(function, module, isa, ptr_escape, prov);
     if !escaping_sites.is_empty() {
         panic!(
             "{}",
@@ -238,7 +286,7 @@ pub(crate) fn compute_func_stack_objects(
         &inst_pos,
         &block_end_pos,
         inst_liveness,
-        &prov,
+        prov,
     );
 
     let mut alloca_ids: FxHashMap<InstId, StackObjId> = FxHashMap::default();
@@ -273,6 +321,7 @@ pub(crate) fn compute_func_stack_objects(
         });
     }
 
+    let mut requires_dynamic_frame = false;
     let mut call_sites: Vec<CallSiteLiveObjects> = Vec::new();
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
@@ -283,6 +332,7 @@ pub(crate) fn compute_func_stack_objects(
 
             let def = function.dfg.inst_result(inst);
             let mut set: FxHashSet<StackObjId> = FxHashSet::default();
+            let mut roots: FxHashSet<InstId> = FxHashSet::default();
             for v in inst_liveness.live_out(inst).iter() {
                 if Some(v) == def {
                     continue;
@@ -293,9 +343,24 @@ pub(crate) fn compute_func_stack_objects(
                 }
 
                 for base in prov[v].alloca_insts() {
-                    if let Some(&id) = alloca_ids.get(&base) {
-                        set.insert(id);
+                    roots.insert(base);
+                }
+            }
+
+            let allocas = if requires_dynamic_frame {
+                roots
+            } else {
+                match closure_allocas(roots.iter().copied(), &local_edges, &local_unknown) {
+                    Ok(s) => s,
+                    Err(UnknownLocalPtr) => {
+                        requires_dynamic_frame = true;
+                        roots
                     }
+                }
+            };
+            for base in allocas {
+                if let Some(&id) = alloca_ids.get(&base) {
+                    set.insert(id);
                 }
             }
 
@@ -303,11 +368,26 @@ pub(crate) fn compute_func_stack_objects(
             live_objs.sort_unstable_by_key(|id| id.as_u32());
 
             let mut must_layout: FxHashSet<StackObjId> = FxHashSet::default();
+            let mut roots: FxHashSet<InstId> = FxHashSet::default();
             for &arg in call.args() {
                 for base in prov[arg].alloca_insts() {
-                    if let Some(&id) = alloca_ids.get(&base) {
-                        must_layout.insert(id);
+                    roots.insert(base);
+                }
+            }
+            let allocas = if requires_dynamic_frame {
+                roots
+            } else {
+                match closure_allocas(roots.iter().copied(), &local_edges, &local_unknown) {
+                    Ok(s) => s,
+                    Err(UnknownLocalPtr) => {
+                        requires_dynamic_frame = true;
+                        roots
                     }
+                }
+            };
+            for base in allocas {
+                if let Some(&id) = alloca_ids.get(&base) {
+                    must_layout.insert(id);
                 }
             }
             let mut must_layout_objs: Vec<StackObjId> = must_layout.into_iter().collect();
@@ -334,6 +414,7 @@ pub(crate) fn compute_func_stack_objects(
         alloca_ids,
         spill_obj,
         call_sites,
+        requires_dynamic_frame,
     }
 }
 
@@ -580,26 +661,49 @@ fn pack_objects(objects: &mut [StackObj]) -> (FxHashMap<StackObjId, u32>, u32) {
             continue;
         }
 
-        let mut found: Option<(u32, u32)> = None;
-        for (&start, &len) in free.range(obj.min_offset_words..) {
-            if len >= obj.size_words {
-                found = Some((start, len));
-                break;
-            }
+        let mut found: Option<(u32, u32)> = free
+            .range(..=obj.min_offset_words)
+            .next_back()
+            .filter(|&(&start, &len)| {
+                let end = start.checked_add(len).expect("free segment overflow");
+                let alloc_start = start.max(obj.min_offset_words);
+                let alloc_end = alloc_start
+                    .checked_add(obj.size_words)
+                    .expect("free segment overflow");
+                end >= alloc_end
+            })
+            .map(|(&start, &len)| (start, len));
+
+        if found.is_none() {
+            found = free
+                .range(obj.min_offset_words..)
+                .find(|&(_, &len)| len >= obj.size_words)
+                .map(|(&start, &len)| (start, len));
         }
 
         let off = if let Some((start, len)) = found {
             free.remove(&start);
-            if len > obj.size_words {
-                let tail_start = start
-                    .checked_add(obj.size_words)
-                    .expect("free segment overflow");
-                let tail_len = len
-                    .checked_sub(obj.size_words)
-                    .expect("free segment underflow");
-                free.insert(tail_start, tail_len);
-            }
-            start
+
+            let end = start.checked_add(len).expect("free segment overflow");
+            let alloc_start = start.max(obj.min_offset_words);
+            let alloc_end = alloc_start
+                .checked_add(obj.size_words)
+                .expect("free segment overflow");
+
+            insert_free_segment(
+                &mut free,
+                start,
+                alloc_start
+                    .checked_sub(start)
+                    .expect("free segment underflow"),
+            );
+            insert_free_segment(
+                &mut free,
+                alloc_end,
+                end.checked_sub(alloc_end).expect("free segment underflow"),
+            );
+
+            alloc_start
         } else {
             let off = obj.min_offset_words.max(max_used);
             max_used = off
