@@ -2018,3 +2018,168 @@ fn u32_to_evm_push_bytes(value: u32, policy: PushWidthPolicy) -> SmallVec<[u8; 4
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sonatina_ir::cfg::ControlFlowGraph;
+    use sonatina_parser::parse_module;
+    use sonatina_triple::{Architecture, TargetTriple, Vendor};
+
+    #[test]
+    fn call_save_pre_tucks_saved_words_below_operands() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %callee(v0.i256, v1.i256) -> i256 {
+block0:
+    v2.*i256 = alloca i256;
+    mstore v2 v0 i256;
+    v3.i256 = mload v2 i256;
+    v4.i256 = add v3 v1;
+    return v4;
+}
+
+func public %caller() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    mstore v0 1.i256 i256;
+    v1.i256 = call %callee 11.i256 22.i256;
+    v2.i256 = mload v0 i256;
+    v3.i256 = add v1 v2;
+    return v3;
+}
+"#,
+        )
+        .unwrap();
+
+        let funcs = parsed.module.funcs();
+        let isa = Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        });
+        let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
+
+        let mut analyses: FxHashMap<FuncRef, memory_plan::FuncAnalysis> = FxHashMap::default();
+        for &func in &funcs {
+            parsed.module.func_store.modify(func, |function| {
+                let mut cfg = ControlFlowGraph::new();
+                cfg.compute(function);
+
+                let mut splitter = CriticalEdgeSplitter::new();
+                splitter.run(function, &mut cfg);
+
+                let mut liveness = Liveness::new();
+                liveness.compute(function, &cfg);
+
+                let mut inst_liveness = InstLiveness::new();
+                inst_liveness.compute(function, &cfg, &liveness);
+
+                let mut dom = DomTree::new();
+                dom.compute(&cfg);
+
+                let block_order = dom.rpo().to_owned();
+                let alloc = StackifyAlloc::for_function(function, &cfg, &dom, &liveness, 16);
+
+                analyses.insert(
+                    func,
+                    memory_plan::FuncAnalysis {
+                        alloc,
+                        inst_liveness,
+                        block_order,
+                    },
+                );
+            });
+        }
+
+        let cost_model = ArenaCostModel {
+            w_save: 0,
+            w_code: 0,
+            ..ArenaCostModel::default()
+        };
+        let plan = compute_program_memory_plan(
+            &parsed.module,
+            &funcs,
+            &analyses,
+            &ptr_escape,
+            &isa,
+            &cost_model,
+        );
+
+        let mut names: FxHashMap<String, FuncRef> = FxHashMap::default();
+        for &f in &funcs {
+            let name = parsed.module.ctx.func_sig(f, |sig| sig.name().to_string());
+            names.insert(name, f);
+        }
+        let caller = names["caller"];
+
+        let (call_inst, call_args): (InstId, SmallVec<[ValueId; 8]>) =
+            parsed.module.func_store.view(caller, |function| {
+                for block in function.layout.iter_block() {
+                    for inst in function.layout.iter_inst(block) {
+                        let Some(call) = function.dfg.cast_call(inst) else {
+                            continue;
+                        };
+                        return (inst, call.args().clone());
+                    }
+                }
+                panic!("missing call inst");
+            });
+
+        assert_eq!(call_args.len(), 2, "test expects a 2-arg call");
+
+        let analysis = analyses.remove(&caller).expect("missing caller analysis");
+        let mem_plan = plan
+            .funcs
+            .get(&caller)
+            .expect("missing caller plan")
+            .clone();
+        let alloc = FinalAlloc::new(analysis.alloc, mem_plan);
+
+        let MemScheme::StaticArena(st) = &alloc.mem_plan.scheme else {
+            panic!("expected StaticArena plan for caller");
+        };
+        let save_plan = st
+            .call_saves
+            .get(&call_inst)
+            .expect("expected non-empty call_saves entry for call");
+        assert!(
+            !save_plan.save_word_offsets.is_empty(),
+            "expected at least one saved word"
+        );
+
+        let actions = alloc.read(call_inst, &call_args);
+        let cont_pos = actions
+            .iter()
+            .position(|a| matches!(a, Action::PushContinuationOffset))
+            .expect("missing continuation marker");
+
+        let arity = call_args.len();
+        let expected_len = save_plan
+            .save_word_offsets
+            .len()
+            .checked_mul(arity + 1)
+            .expect("expected injected length overflow");
+        assert!(
+            cont_pos >= expected_len,
+            "expected injected actions immediately before continuation marker"
+        );
+        let injected = &actions[cont_pos - expected_len..cont_pos];
+
+        for (i, &w) in save_plan.save_word_offsets.iter().enumerate() {
+            let base = i * (arity + 1);
+            assert_eq!(
+                injected[base],
+                Action::MemLoadAbs(alloc.abs_addr_for_word(w))
+            );
+            for (j, depth) in (1..=arity).rev().enumerate() {
+                assert_eq!(
+                    injected[base + 1 + j],
+                    Action::StackSwap(u8::try_from(depth).expect("swap depth too large"))
+                );
+            }
+        }
+    }
+}
