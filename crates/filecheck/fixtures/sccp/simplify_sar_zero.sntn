@@ -1,0 +1,12 @@
+#! SCCP companion simplifier: sar 0, x => x.
+
+target = "evm-ethereum-london"
+
+# sameln: func public %sccp_sar_zero(v0.i32) -> i32 {
+# nextln:     block0:
+# nextln:         return v0;
+func public %sccp_sar_zero(v0.i32) -> i32 {
+    block0:
+        v1.i32 = sar 0.i32 v0;
+        return v1;
+}

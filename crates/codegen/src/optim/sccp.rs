@@ -7,7 +7,6 @@
 use std::collections::BTreeSet;
 
 use cranelift_entity::SecondaryMap;
-use rustc_hash::FxHashSet;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, InstId, Type, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
@@ -56,17 +55,12 @@ impl SccpSolver {
         self.reachable_blocks.insert(entry_block);
         self.eval_insts_in(func, entry_block);
 
-        let mut changed = true;
-        while changed {
-            changed = false;
-
+        while !(self.flow_work.is_empty() && self.ssa_work.is_empty()) {
             while let Some(edge) = self.flow_work.pop() {
-                changed = true;
                 self.eval_edge(func, edge);
             }
 
             while let Some(value) = self.ssa_work.pop() {
-                changed = true;
                 for &user in func.dfg.users(value) {
                     let user_block = func.layout.inst_block(user);
                     if self.reachable_blocks.contains(&user_block) {
@@ -79,6 +73,9 @@ impl SccpSolver {
                 }
             }
         }
+
+        #[cfg(debug_assertions)]
+        self.assert_no_executable_inst_results_are_bot(func);
 
         self.remove_unreachable_edges(func);
         cfg.compute(func);
@@ -132,19 +129,13 @@ impl SccpSolver {
                 .contains(&func.layout.inst_block(inst))
         );
 
-        func.dfg.inst(inst).for_each_value(&mut |value| {
-            if let Some(imm) = func.dfg.value_imm(value) {
-                self.set_lattice_cell(value, LatticeCell::Const(imm));
-            }
-        });
-
         let block = func.layout.inst_block(inst);
         let phi = func.dfg.cast_phi(inst).unwrap();
 
         let mut eval_result = LatticeCell::Bot;
         for (val, from) in phi.args() {
             if self.is_reachable(func, *from, block) {
-                let v_cell = self.lattice[*val];
+                let v_cell = self.cell_of(func, *val);
                 eval_result = eval_result.join(v_cell);
             }
         }
@@ -168,14 +159,8 @@ impl SccpSolver {
 
     fn eval_inst(&mut self, func: &Function, inst_id: InstId) {
         debug_assert!(!func.dfg.is_phi(inst_id));
-        func.dfg.inst(inst_id).for_each_value(&mut |value| {
-            if let Some(imm) = func.dfg.value_imm(value) {
-                self.set_lattice_cell(value, LatticeCell::Const(imm));
-            }
-        });
-
         if let Some(bi) = func.dfg.branch_info(inst_id) {
-            self.eval_branch(inst_id, bi);
+            self.eval_branch(func, inst_id, bi);
             return;
         };
 
@@ -195,10 +180,7 @@ impl SccpSolver {
                 return;
             }
             SimplifyResult::Copy(src) => {
-                let src_cell = match func.dfg.value_imm(src) {
-                    Some(imm) => LatticeCell::Const(imm),
-                    None => self.lattice[src],
-                };
+                let src_cell = self.cell_of(func, src);
                 self.set_lattice_cell(inst_result, src_cell);
                 return;
             }
@@ -212,21 +194,21 @@ impl SccpSolver {
 
         let cell = match value {
             Some(EvalValue::Imm(value)) => LatticeCell::Const(value),
-            Some(_) => cell_state.cell(),
+            Some(_) => cell_state.nonconst_result_cell(),
             None => LatticeCell::Top,
         };
 
         self.set_lattice_cell(inst_result, cell);
     }
 
-    fn eval_branch(&mut self, inst: InstId, bi: &dyn BranchInfo) {
+    fn eval_branch(&mut self, func: &Function, inst: InstId, bi: &dyn BranchInfo) {
         match bi.branch_kind() {
             BranchKind::Jump(jump) => {
                 self.flow_work.push(FlowEdge::new(inst, *jump.dest()));
             }
 
             BranchKind::Br(br) => {
-                let v_cell = self.lattice[*br.cond()];
+                let v_cell = self.cell_of(func, *br.cond());
 
                 match v_cell {
                     LatticeCell::Const(_) if v_cell.is_zero() => {
@@ -243,40 +225,36 @@ impl SccpSolver {
             }
 
             BranchKind::BrTable(brt) => {
-                // An closure that add all destinations of the `BrTable.
-                let mut add_all_dest = || {
-                    if let Some(default) = brt.default() {
-                        self.flow_work.push(FlowEdge::new(inst, *default));
+                let scrutinee_cell = self.cell_of(func, *brt.scrutinee());
+
+                match scrutinee_cell {
+                    LatticeCell::Const(scrutinee) => {
+                        for (case_value, dest) in brt.table() {
+                            match self.cell_of(func, *case_value) {
+                                LatticeCell::Const(case) => {
+                                    if case == scrutinee {
+                                        self.flow_work.push(FlowEdge::new(inst, *dest));
+                                        return;
+                                    }
+                                }
+                                LatticeCell::Top | LatticeCell::Bot => {
+                                    self.flow_work.push(FlowEdge::new(inst, *dest));
+                                }
+                            }
+                        }
+
+                        if let Some(default) = brt.default() {
+                            self.flow_work.push(FlowEdge::new(inst, *default));
+                        }
                     }
-                    for (_, dest) in brt.table() {
-                        self.flow_work.push(FlowEdge::new(inst, *dest));
+                    LatticeCell::Top | LatticeCell::Bot => {
+                        if let Some(default) = brt.default() {
+                            self.flow_work.push(FlowEdge::new(inst, *default));
+                        }
+                        for (_, dest) in brt.table() {
+                            self.flow_work.push(FlowEdge::new(inst, *dest));
+                        }
                     }
-                };
-
-                let v_cell = self.lattice[*brt.scrutinee()];
-
-                // If the argument of the `BrTable` is unknown, then add all destinations.
-                if v_cell.is_top() || v_cell.is_bot() {
-                    add_all_dest();
-                    return;
-                }
-
-                for (value, dest) in brt.table() {
-                    let entry_cell = self.lattice[*value];
-                    if entry_cell.is_top() || entry_cell.is_bot() {
-                        add_all_dest();
-                        return;
-                    }
-
-                    if entry_cell == v_cell {
-                        self.flow_work.push(FlowEdge::new(inst, *dest));
-                        return;
-                    }
-                }
-
-                // If all table values are known, then just add default destination.
-                if let Some(default) = brt.default() {
-                    self.flow_work.push(FlowEdge::new(inst, *default));
                 }
             }
         }
@@ -469,6 +447,46 @@ impl SccpSolver {
             self.ssa_work.push(value);
         }
     }
+
+    fn cell_of(&self, func: &Function, value: ValueId) -> LatticeCell {
+        if let Some(imm) = func.dfg.value_imm(value) {
+            return LatticeCell::Const(imm);
+        }
+
+        self.lattice.get(value).copied().unwrap_or_default()
+    }
+
+    #[cfg(debug_assertions)]
+    fn assert_no_executable_inst_results_are_bot(&self, func: &Function) {
+        for &block in self.reachable_blocks.iter() {
+            for inst in func.layout.iter_inst(block) {
+                if func.dfg.is_phi(inst) || func.dfg.branch_info(inst).is_some() {
+                    continue;
+                }
+
+                let inst_data = func.dfg.inst(inst);
+                if inst_data.side_effect().has_effect() {
+                    continue;
+                }
+
+                let Some(result) = func.dfg.inst_result(inst) else {
+                    continue;
+                };
+
+                let mut operands_all_non_bot = true;
+                inst_data.for_each_value(&mut |value| {
+                    if self.cell_of(func, value).is_bot() {
+                        operands_all_non_bot = false;
+                    }
+                });
+
+                let result_cell = self.lattice.get(result).copied().unwrap_or_default();
+                if operands_all_non_bot && result_cell.is_bot() {
+                    panic!("SCCP produced Bot for executable inst result: {inst:?}");
+                }
+            }
+        }
+    }
 }
 
 impl Default for SccpSolver {
@@ -522,10 +540,6 @@ impl LatticeCell {
         }
     }
 
-    fn is_top(self) -> bool {
-        matches!(self, Self::Top)
-    }
-
     fn is_bot(self) -> bool {
         matches!(self, Self::Bot)
     }
@@ -547,36 +561,50 @@ impl LatticeCell {
 
 struct CellState<'a, 'i> {
     map: &'i SecondaryMap<ValueId, LatticeCell>,
-    used_val: FxHashSet<ValueId>,
+    used_has_top: bool,
+    used_has_bot: bool,
     dfg: &'a DataFlowGraph,
 }
 impl<'a, 'i> CellState<'a, 'i> {
     fn new(map: &'i SecondaryMap<ValueId, LatticeCell>, dfg: &'a DataFlowGraph) -> Self {
         Self {
             map,
-            used_val: Default::default(),
+            used_has_top: false,
+            used_has_bot: false,
             dfg,
         }
     }
 
-    fn cell(&self) -> LatticeCell {
-        for &used in self.used_val.iter() {
-            if self.map[used] == LatticeCell::Top {
-                return LatticeCell::Top;
-            }
+    fn nonconst_result_cell(&self) -> LatticeCell {
+        if self.used_has_top {
+            return LatticeCell::Top;
+        }
+        if self.used_has_bot {
+            return LatticeCell::Bot;
         }
 
-        LatticeCell::Bot
+        LatticeCell::Top
     }
 }
 
 impl State for CellState<'_, '_> {
     fn lookup_val(&mut self, value: ValueId) -> EvalValue {
-        self.used_val.insert(value);
+        let cell = if let Some(imm) = self.dfg.value_imm(value) {
+            LatticeCell::Const(imm)
+        } else {
+            self.map.get(value).copied().unwrap_or_default()
+        };
 
-        match self.map.get(value) {
-            Some(LatticeCell::Const(imm)) => EvalValue::Imm(*imm),
-            _ => EvalValue::Undef,
+        match cell {
+            LatticeCell::Const(imm) => EvalValue::Imm(imm),
+            LatticeCell::Top => {
+                self.used_has_top = true;
+                EvalValue::Undef
+            }
+            LatticeCell::Bot => {
+                self.used_has_bot = true;
+                EvalValue::Undef
+            }
         }
     }
 

@@ -27,8 +27,26 @@ fn is_explicit_undef(func: &Function, v: ValueId) -> bool {
     matches!(func.dfg.value(v), Value::Undef { .. })
 }
 
-fn same_non_undef(func: &Function, lhs: ValueId, rhs: ValueId) -> bool {
-    lhs == rhs && !is_explicit_undef(func, lhs)
+fn same_non_undef(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> bool {
+    if lhs != rhs {
+        return false;
+    }
+    if is_explicit_undef(func, lhs) {
+        return false;
+    }
+    if func.dfg.value_imm(lhs).is_some() {
+        return true;
+    }
+
+    match lattice.get(lhs) {
+        Some(LatticeCell::Bot) | None => false,
+        _ => true,
+    }
 }
 
 fn simplify_commutative_and(
@@ -53,7 +71,7 @@ fn simplify_commutative_and(
     if rhs_imm == Some(all_one) {
         return SimplifyResult::Copy(lhs);
     }
-    if same_non_undef(func, lhs, rhs) {
+    if same_non_undef(func, lattice, lhs, rhs) {
         return SimplifyResult::Copy(lhs);
     }
 
@@ -82,7 +100,7 @@ fn simplify_commutative_or(
     if rhs_imm == Some(zero) {
         return SimplifyResult::Copy(lhs);
     }
-    if same_non_undef(func, lhs, rhs) {
+    if same_non_undef(func, lattice, lhs, rhs) {
         return SimplifyResult::Copy(lhs);
     }
 
@@ -107,7 +125,7 @@ fn simplify_commutative_xor(
     if rhs_imm == Some(zero) {
         return SimplifyResult::Copy(lhs);
     }
-    if same_non_undef(func, lhs, rhs) {
+    if same_non_undef(func, lattice, lhs, rhs) {
         return SimplifyResult::Const(zero);
     }
 
@@ -172,7 +190,7 @@ fn simplify_sub(
     let rhs_imm = known_imm(func, lattice, rhs);
     let zero = Immediate::zero(ty);
 
-    if same_non_undef(func, lhs, rhs) {
+    if same_non_undef(func, lattice, lhs, rhs) {
         return SimplifyResult::Const(zero);
     }
     if rhs_imm == Some(zero) {
@@ -213,8 +231,14 @@ fn simplify_redundant_cast(func: &Function, from: ValueId, ty: Type) -> Simplify
     SimplifyResult::NoChange
 }
 
-fn simplify_cmp_self(func: &Function, lhs: ValueId, rhs: ValueId, result: bool) -> SimplifyResult {
-    if same_non_undef(func, lhs, rhs) {
+fn simplify_cmp_self(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    lhs: ValueId,
+    rhs: ValueId,
+    result: bool,
+) -> SimplifyResult {
+    if same_non_undef(func, lattice, lhs, rhs) {
         return SimplifyResult::Const(Immediate::I1(result));
     }
 
@@ -256,7 +280,7 @@ pub(super) fn simplify_inst(
         return simplify_shift(func, lattice, *i.bits(), *i.value(), true);
     }
     if let Some(i) = <&arith::Sar as InstDowncast>::downcast(is, inst) {
-        return simplify_shift(func, lattice, *i.bits(), *i.value(), false);
+        return simplify_shift(func, lattice, *i.bits(), *i.value(), true);
     }
 
     if let Some(i) = <&cast::Zext as InstDowncast>::downcast(is, inst) {
@@ -273,36 +297,36 @@ pub(super) fn simplify_inst(
     }
 
     if let Some(i) = <&cmp::Eq as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, *i.lhs(), *i.rhs(), true);
+        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), true);
     }
     if let Some(i) = <&cmp::Ne as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, *i.lhs(), *i.rhs(), false);
+        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), false);
     }
 
     if let Some(i) = <&cmp::Lt as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, *i.lhs(), *i.rhs(), false);
+        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), false);
     }
     if let Some(i) = <&cmp::Gt as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, *i.lhs(), *i.rhs(), false);
+        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), false);
     }
     if let Some(i) = <&cmp::Slt as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, *i.lhs(), *i.rhs(), false);
+        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), false);
     }
     if let Some(i) = <&cmp::Sgt as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, *i.lhs(), *i.rhs(), false);
+        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), false);
     }
 
     if let Some(i) = <&cmp::Le as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, *i.lhs(), *i.rhs(), true);
+        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), true);
     }
     if let Some(i) = <&cmp::Ge as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, *i.lhs(), *i.rhs(), true);
+        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), true);
     }
     if let Some(i) = <&cmp::Sle as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, *i.lhs(), *i.rhs(), true);
+        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), true);
     }
     if let Some(i) = <&cmp::Sge as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, *i.lhs(), *i.rhs(), true);
+        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), true);
     }
 
     SimplifyResult::NoChange
