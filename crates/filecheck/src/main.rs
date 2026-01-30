@@ -1,10 +1,13 @@
 use sonatina_filecheck::{
-    FileCheckRunner, adce::AdceTransform, egraph::EgraphTransform, licm::LicmTransformer,
-    sccp::SccpTransform,
+    FileCheckRunner, adce::AdceTransform, cfg_cleanup::CfgCleanupTransform,
+    egraph::EgraphTransform, licm::LicmTransformer, sccp::SccpTransform,
 };
 
 fn main() {
     let mut runner = FileCheckRunner::new(SccpTransform::default());
+    runner.run();
+
+    runner.attach_transformer(CfgCleanupTransform::default());
     runner.run();
 
     runner.attach_transformer(AdceTransform::default());

@@ -1,4 +1,5 @@
 pub mod adce;
+pub mod cfg_cleanup;
 pub mod egraph;
 pub mod gvn;
 pub mod insn_simplify;

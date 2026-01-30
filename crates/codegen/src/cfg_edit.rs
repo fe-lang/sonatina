@@ -240,7 +240,7 @@ fn replace_phi_incoming_block(
     }
 }
 
-fn simplify_trivial_phis_in_block(func: &mut Function, block: BlockId) -> bool {
+pub(crate) fn simplify_trivial_phis_in_block(func: &mut Function, block: BlockId) -> bool {
     let mut changed = false;
     let mut next_inst = func.layout.first_inst_of(block);
     while let Some(phi_inst) = next_inst {
@@ -253,7 +253,7 @@ fn simplify_trivial_phis_in_block(func: &mut Function, block: BlockId) -> bool {
     changed
 }
 
-fn simplify_trivial_phi(func: &mut Function, phi_inst: InstId) -> bool {
+pub(crate) fn simplify_trivial_phi(func: &mut Function, phi_inst: InstId) -> bool {
     let phi = func.dfg.cast_phi(phi_inst).unwrap();
     let arg = match phi.args().len() {
         0 => {

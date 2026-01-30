@@ -79,7 +79,7 @@ mod tests {
         builder::test_util::*,
         inst::{
             arith::Add,
-            control_flow::{Br, BrTable, Phi, Return},
+            control_flow::{Br, BrTable, Jump, Phi, Return},
         },
         isa::Isa,
     };
