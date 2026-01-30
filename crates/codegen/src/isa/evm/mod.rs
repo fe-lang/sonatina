@@ -1257,7 +1257,12 @@ impl FinalAlloc {
             .expect("stack object addr bytes overflow")
     }
 
-    fn inject_call_save_pre(&self, inst: InstId, actions: Actions) -> Actions {
+    fn inject_call_save_pre(
+        &self,
+        inst: InstId,
+        operand_count: usize,
+        actions: Actions,
+    ) -> Actions {
         let MemScheme::StaticArena(st) = &self.mem_plan.scheme else {
             return actions;
         };
@@ -1268,6 +1273,10 @@ impl FinalAlloc {
             return actions;
         }
 
+        assert!(
+            operand_count <= 16,
+            "call operand count exceeds SWAP16: {operand_count}"
+        );
         let Some(cont_pos) = actions
             .iter()
             .position(|a| matches!(a, Action::PushContinuationOffset))
@@ -1280,6 +1289,13 @@ impl FinalAlloc {
             if idx == cont_pos {
                 for &w in &plan.save_word_offsets {
                     out.push(Action::MemLoadAbs(self.abs_addr_for_word(w)));
+                    if operand_count != 0 {
+                        for depth in (1..=operand_count).rev() {
+                            out.push(Action::StackSwap(
+                                u8::try_from(depth).expect("swap depth too large"),
+                            ));
+                        }
+                    }
                 }
             }
             out.push(act);
@@ -1389,7 +1405,7 @@ impl Allocator for FinalAlloc {
 
     fn read(&self, inst: InstId, vals: &[sonatina_ir::ValueId]) -> Actions {
         let actions = self.inner.read(inst, vals);
-        let actions = self.inject_call_save_pre(inst, actions);
+        let actions = self.inject_call_save_pre(inst, vals.len(), actions);
         self.rewrite_actions(actions)
     }
 
