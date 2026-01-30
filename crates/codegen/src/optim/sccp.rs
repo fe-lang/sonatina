@@ -15,8 +15,8 @@ use sonatina_ir::{
     prelude::*,
 };
 
-use crate::cfg_edit::{remove_phi_incoming_from, simplify_trivial_phis_in_block};
 use super::sccp_simplify::{SimplifyResult, simplify_inst};
+use crate::cfg_edit::{remove_phi_incoming_from, simplify_trivial_phis_in_block};
 
 #[derive(Debug)]
 pub struct SccpSolver {
@@ -106,15 +106,6 @@ impl SccpSolver {
         } else {
             self.reachable_blocks.insert(dest);
             self.eval_insts_in(func, dest);
-        }
-
-        if let Some(last_inst) = func.layout.last_inst_of(dest) {
-            let Some(bi) = func.dfg.branch_info(last_inst) else {
-                return;
-            };
-            if bi.num_dests() == 1 {
-                self.flow_work.push(FlowEdge::new(last_inst, bi.dests()[0]))
-            }
         }
     }
 
@@ -360,6 +351,16 @@ impl SccpSolver {
 
         match self.lattice[inst_result].to_imm() {
             Some(imm) => {
+                let result_ty = func.dfg.value_ty(inst_result);
+                debug_assert_eq!(
+                    imm.ty(),
+                    result_ty,
+                    "SCCP tried to fold an immediate of a different type: {inst:?}"
+                );
+                if imm.ty() != result_ty {
+                    return;
+                }
+
                 InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
                 let new_value = func.dfg.make_imm_value(imm);
                 func.dfg.change_to_alias(inst_result, new_value);
@@ -606,14 +607,11 @@ impl<'a, 'i> CellState<'a, 'i> {
     }
 
     fn nonconst_result_cell(&self) -> LatticeCell {
-        if self.used_has_top {
-            return LatticeCell::Top;
+        match (self.used_has_top, self.used_has_bot) {
+            (true, _) => LatticeCell::Top,
+            (false, true) => LatticeCell::Bot,
+            (false, false) => LatticeCell::Top,
         }
-        if self.used_has_bot {
-            return LatticeCell::Bot;
-        }
-
-        LatticeCell::Top
     }
 }
 
