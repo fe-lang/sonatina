@@ -169,6 +169,7 @@ impl LicmSolver {
             // Create new phi inst that should be inserted to the preheader, and remove inst
             // arguments passing through original preheaders.
             let mut new_phi = func.dfg.make_phi(vec![]);
+            func.dfg.untrack_inst(phi_inst_id);
             let old_phi = func.dfg.cast_phi_mut(phi_inst_id).unwrap();
 
             for &block in original_preheaders {
