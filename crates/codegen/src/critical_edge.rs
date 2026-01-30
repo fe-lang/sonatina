@@ -44,17 +44,14 @@ impl CriticalEdgeSplitter {
     }
 
     fn add_critical_edges(&mut self, inst_id: InstId, func: &Function, cfg: &ControlFlowGraph) {
-        let Some(branch_info) = func.dfg.branch_info(inst_id) else {
-            return;
-        };
-
-        if branch_info.num_dests() < 2 {
+        let block = func.layout.inst_block(inst_id);
+        if cfg.succ_num_of(block) < 2 {
             return;
         }
 
-        for dest in branch_info.dests() {
-            if cfg.pred_num_of(dest) > 1 {
-                self.critical_edges.push(CriticalEdge::new(inst_id, dest));
+        for &succ in cfg.succs_of(block) {
+            if cfg.pred_num_of(succ) > 1 {
+                self.critical_edges.push(CriticalEdge::new(inst_id, succ));
             }
         }
     }
