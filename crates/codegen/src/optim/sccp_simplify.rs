@@ -27,16 +27,25 @@ fn is_explicit_undef(func: &Function, v: ValueId) -> bool {
     matches!(func.dfg.value(v), Value::Undef { .. })
 }
 
+fn is_may_be_undef(
+    func: &Function,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
+    v: ValueId,
+) -> bool {
+    is_explicit_undef(func, v) || may_be_undef.get(v).copied().unwrap_or_default()
+}
+
 fn same_non_undef(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
     lhs: ValueId,
     rhs: ValueId,
 ) -> bool {
     if lhs != rhs {
         return false;
     }
-    if is_explicit_undef(func, lhs) {
+    if is_may_be_undef(func, may_be_undef, lhs) {
         return false;
     }
     if func.dfg.value_imm(lhs).is_some() {
@@ -52,6 +61,7 @@ fn same_non_undef(
 fn simplify_commutative_and(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyResult {
@@ -71,7 +81,7 @@ fn simplify_commutative_and(
     if rhs_imm == Some(all_one) {
         return SimplifyResult::Copy(lhs);
     }
-    if same_non_undef(func, lattice, lhs, rhs) {
+    if same_non_undef(func, lattice, may_be_undef, lhs, rhs) {
         return SimplifyResult::Copy(lhs);
     }
 
@@ -81,6 +91,7 @@ fn simplify_commutative_and(
 fn simplify_commutative_or(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyResult {
@@ -100,7 +111,7 @@ fn simplify_commutative_or(
     if rhs_imm == Some(zero) {
         return SimplifyResult::Copy(lhs);
     }
-    if same_non_undef(func, lattice, lhs, rhs) {
+    if same_non_undef(func, lattice, may_be_undef, lhs, rhs) {
         return SimplifyResult::Copy(lhs);
     }
 
@@ -110,6 +121,7 @@ fn simplify_commutative_or(
 fn simplify_commutative_xor(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyResult {
@@ -125,7 +137,7 @@ fn simplify_commutative_xor(
     if rhs_imm == Some(zero) {
         return SimplifyResult::Copy(lhs);
     }
-    if same_non_undef(func, lattice, lhs, rhs) {
+    if same_non_undef(func, lattice, may_be_undef, lhs, rhs) {
         return SimplifyResult::Const(zero);
     }
 
@@ -183,6 +195,7 @@ fn simplify_commutative_add(
 fn simplify_sub(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyResult {
@@ -190,7 +203,7 @@ fn simplify_sub(
     let rhs_imm = known_imm(func, lattice, rhs);
     let zero = Immediate::zero(ty);
 
-    if same_non_undef(func, lattice, lhs, rhs) {
+    if same_non_undef(func, lattice, may_be_undef, lhs, rhs) {
         return SimplifyResult::Const(zero);
     }
     if rhs_imm == Some(zero) {
@@ -234,11 +247,12 @@ fn simplify_redundant_cast(func: &Function, from: ValueId, ty: Type) -> Simplify
 fn simplify_cmp_self(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
     lhs: ValueId,
     rhs: ValueId,
     result: bool,
 ) -> SimplifyResult {
-    if same_non_undef(func, lattice, lhs, rhs) {
+    if same_non_undef(func, lattice, may_be_undef, lhs, rhs) {
         return SimplifyResult::Const(Immediate::I1(result));
     }
 
@@ -248,19 +262,20 @@ fn simplify_cmp_self(
 pub(super) fn simplify_inst(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
     inst_id: InstId,
 ) -> SimplifyResult {
     let inst = func.dfg.inst(inst_id);
     let is = func.inst_set();
 
     if let Some(i) = <&logic::And as InstDowncast>::downcast(is, inst) {
-        return simplify_commutative_and(func, lattice, *i.lhs(), *i.rhs());
+        return simplify_commutative_and(func, lattice, may_be_undef, *i.lhs(), *i.rhs());
     }
     if let Some(i) = <&logic::Or as InstDowncast>::downcast(is, inst) {
-        return simplify_commutative_or(func, lattice, *i.lhs(), *i.rhs());
+        return simplify_commutative_or(func, lattice, may_be_undef, *i.lhs(), *i.rhs());
     }
     if let Some(i) = <&logic::Xor as InstDowncast>::downcast(is, inst) {
-        return simplify_commutative_xor(func, lattice, *i.lhs(), *i.rhs());
+        return simplify_commutative_xor(func, lattice, may_be_undef, *i.lhs(), *i.rhs());
     }
 
     if let Some(i) = <&arith::Mul as InstDowncast>::downcast(is, inst) {
@@ -270,7 +285,7 @@ pub(super) fn simplify_inst(
         return simplify_commutative_add(func, lattice, *i.lhs(), *i.rhs());
     }
     if let Some(i) = <&arith::Sub as InstDowncast>::downcast(is, inst) {
-        return simplify_sub(func, lattice, *i.lhs(), *i.rhs());
+        return simplify_sub(func, lattice, may_be_undef, *i.lhs(), *i.rhs());
     }
 
     if let Some(i) = <&arith::Shl as InstDowncast>::downcast(is, inst) {
@@ -297,36 +312,36 @@ pub(super) fn simplify_inst(
     }
 
     if let Some(i) = <&cmp::Eq as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), true);
+        return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), true);
     }
     if let Some(i) = <&cmp::Ne as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), false);
+        return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), false);
     }
 
     if let Some(i) = <&cmp::Lt as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), false);
+        return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), false);
     }
     if let Some(i) = <&cmp::Gt as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), false);
+        return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), false);
     }
     if let Some(i) = <&cmp::Slt as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), false);
+        return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), false);
     }
     if let Some(i) = <&cmp::Sgt as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), false);
+        return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), false);
     }
 
     if let Some(i) = <&cmp::Le as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), true);
+        return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), true);
     }
     if let Some(i) = <&cmp::Ge as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), true);
+        return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), true);
     }
     if let Some(i) = <&cmp::Sle as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), true);
+        return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), true);
     }
     if let Some(i) = <&cmp::Sge as InstDowncast>::downcast(is, inst) {
-        return simplify_cmp_self(func, lattice, *i.lhs(), *i.rhs(), true);
+        return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), true);
     }
 
     SimplifyResult::NoChange

@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, InstId, Type, ValueId,
+    BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::control_flow::{BranchInfo, BranchKind},
     interpret::{Action, EvalValue, Interpret, State},
@@ -21,6 +21,7 @@ use super::sccp_simplify::{SimplifyResult, simplify_inst};
 #[derive(Debug)]
 pub struct SccpSolver {
     lattice: SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: SecondaryMap<ValueId, bool>,
     reachable_edges: BTreeSet<FlowEdge>,
     reachable_blocks: BTreeSet<BlockId>,
 
@@ -32,6 +33,7 @@ impl SccpSolver {
     pub fn new() -> Self {
         Self {
             lattice: SecondaryMap::default(),
+            may_be_undef: SecondaryMap::default(),
             reachable_edges: BTreeSet::default(),
             reachable_blocks: BTreeSet::default(),
             flow_work: Vec::default(),
@@ -84,6 +86,7 @@ impl SccpSolver {
 
     pub fn clear(&mut self) {
         self.lattice.clear();
+        self.may_be_undef.clear();
         self.reachable_edges.clear();
         self.reachable_blocks.clear();
         self.flow_work.clear();
@@ -133,18 +136,18 @@ impl SccpSolver {
         let phi = func.dfg.cast_phi(inst).unwrap();
 
         let mut eval_result = LatticeCell::Bot;
+        let mut eval_may_be_undef = false;
         for (val, from) in phi.args() {
             if self.is_reachable(func, *from, block) {
                 let v_cell = self.cell_of(func, *val);
                 eval_result = eval_result.join(v_cell);
+                eval_may_be_undef |= self.may_be_undef_of(func, *val);
             }
         }
 
         let phi_value = func.dfg.inst_result(inst).unwrap();
-        if eval_result != self.lattice[phi_value] {
-            self.ssa_work.push(phi_value);
-            self.lattice[phi_value] = eval_result;
-        }
+        self.set_lattice_cell(phi_value, eval_result);
+        self.set_may_be_undef(phi_value, eval_may_be_undef);
     }
 
     fn eval_insts_in(&mut self, func: &Function, block: BlockId) {
@@ -174,18 +177,25 @@ impl SccpSolver {
             return;
         }
 
-        match simplify_inst(func, &self.lattice, inst_id) {
+        match simplify_inst(func, &self.lattice, &self.may_be_undef, inst_id) {
             SimplifyResult::Const(imm) => {
                 self.set_lattice_cell(inst_result, LatticeCell::Const(imm));
+                self.set_may_be_undef(inst_result, false);
                 return;
             }
             SimplifyResult::Copy(src) => {
                 let src_cell = self.cell_of(func, src);
                 self.set_lattice_cell(inst_result, src_cell);
+                self.set_may_be_undef(inst_result, self.may_be_undef_of(func, src));
                 return;
             }
             SimplifyResult::NoChange => {}
         }
+
+        let mut result_may_be_undef = false;
+        inst.for_each_value(&mut |value| {
+            result_may_be_undef |= self.may_be_undef_of(func, value);
+        });
 
         let mut cell_state = CellState::new(&self.lattice, &func.dfg);
         let value = InstDowncast::map(func.inst_set(), inst, |i: &dyn Interpret| {
@@ -199,6 +209,7 @@ impl SccpSolver {
         };
 
         self.set_lattice_cell(inst_result, cell);
+        self.set_may_be_undef(inst_result, result_may_be_undef);
     }
 
     fn eval_branch(&mut self, func: &Function, inst: InstId, bi: &dyn BranchInfo) {
@@ -339,7 +350,8 @@ impl SccpSolver {
         };
 
         if !func.dfg.is_phi(inst)
-            && let SimplifyResult::Copy(src) = simplify_inst(func, &self.lattice, inst)
+            && let SimplifyResult::Copy(src) =
+                simplify_inst(func, &self.lattice, &self.may_be_undef, inst)
         {
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             func.dfg.change_to_alias(inst_result, src);
@@ -448,12 +460,30 @@ impl SccpSolver {
         }
     }
 
-    fn cell_of(&self, func: &Function, value: ValueId) -> LatticeCell {
-        if let Some(imm) = func.dfg.value_imm(value) {
-            return LatticeCell::Const(imm);
+    fn set_may_be_undef(&mut self, value: ValueId, may_be_undef: bool) {
+        let old = self.may_be_undef.get(value).copied().unwrap_or_default();
+        if old != may_be_undef {
+            self.may_be_undef[value] = may_be_undef;
+            self.ssa_work.push(value);
         }
+    }
 
-        self.lattice.get(value).copied().unwrap_or_default()
+    fn cell_of(&self, func: &Function, value: ValueId) -> LatticeCell {
+        match func.dfg.value(value) {
+            Value::Immediate { imm, .. } => LatticeCell::Const(*imm),
+            Value::Global { .. } | Value::Undef { .. } => LatticeCell::Top,
+            Value::Arg { .. } | Value::Inst { .. } => {
+                self.lattice.get(value).copied().unwrap_or_default()
+            }
+        }
+    }
+
+    fn may_be_undef_of(&self, func: &Function, value: ValueId) -> bool {
+        match func.dfg.value(value) {
+            Value::Undef { .. } => true,
+            Value::Arg { .. } | Value::Immediate { .. } | Value::Global { .. } => false,
+            Value::Inst { .. } => self.may_be_undef.get(value).copied().unwrap_or_default(),
+        }
     }
 
     #[cfg(debug_assertions)]
@@ -589,10 +619,12 @@ impl<'a, 'i> CellState<'a, 'i> {
 
 impl State for CellState<'_, '_> {
     fn lookup_val(&mut self, value: ValueId) -> EvalValue {
-        let cell = if let Some(imm) = self.dfg.value_imm(value) {
-            LatticeCell::Const(imm)
-        } else {
-            self.map.get(value).copied().unwrap_or_default()
+        let cell = match self.dfg.value(value) {
+            Value::Immediate { imm, .. } => LatticeCell::Const(*imm),
+            Value::Global { .. } | Value::Undef { .. } => LatticeCell::Top,
+            Value::Arg { .. } | Value::Inst { .. } => {
+                self.map.get(value).copied().unwrap_or_default()
+            }
         };
 
         match cell {
