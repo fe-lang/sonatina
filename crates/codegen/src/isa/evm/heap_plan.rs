@@ -22,8 +22,13 @@ pub(crate) fn compute_malloc_future_static_words(
 ) -> FxHashMap<FuncRef, FxHashMap<InstId, u32>> {
     let mut out: FxHashMap<FuncRef, FxHashMap<InstId, u32>> = FxHashMap::default();
     for &f in funcs {
-        let func_plan = plan.funcs.get(&f);
-        let analysis = analyses.get(&f);
+        let func_plan = plan
+            .funcs
+            .get(&f)
+            .unwrap_or_else(|| panic!("missing memory plan for func {}", f.as_u32()));
+        let analysis = analyses
+            .get(&f)
+            .unwrap_or_else(|| panic!("missing analysis for func {}", f.as_u32()));
         let map = module.func_store.view(f, |function| {
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(function);
@@ -45,8 +50,8 @@ struct FutureBoundsCtx<'a> {
     module: &'a ModuleCtx,
     isa: &'a Evm,
     plan: &'a ProgramMemoryPlan,
-    func_plan: Option<&'a FuncMemPlan>,
-    analysis: Option<&'a FuncAnalysis>,
+    func_plan: &'a FuncMemPlan,
+    analysis: &'a FuncAnalysis,
 }
 
 fn compute_future_bounds_for_func(
@@ -54,17 +59,13 @@ fn compute_future_bounds_for_func(
     cfg: &ControlFlowGraph,
     ctx: &FutureBoundsCtx<'_>,
 ) -> FxHashMap<InstId, u32> {
-    let (Some(func_plan), Some(analysis)) = (ctx.func_plan, ctx.analysis) else {
-        return FxHashMap::default();
-    };
-
     let prov = compute_value_provenance(function, ctx.module, ctx.isa, |callee| {
         let arg_count = ctx.module.func_sig(callee, |sig| sig.args().len());
         vec![true; arg_count]
     });
 
     let mut alloca_end_words: FxHashMap<InstId, u32> = FxHashMap::default();
-    for (&inst, &off) in &func_plan.alloca_offset_words {
+    for (&inst, &off) in &ctx.func_plan.alloca_offset_words {
         let data = ctx.isa.inst_set().resolve_inst(function.dfg.inst(inst));
         let EvmInstKind::Alloca(alloca) = data else {
             continue;
@@ -98,8 +99,9 @@ fn compute_future_bounds_for_func(
         }
         value_alloca_bound[value] = max_end;
 
-        if let Some(obj) = func_plan.spill_obj[value] {
-            let off = *func_plan
+        if let Some(obj) = ctx.func_plan.spill_obj[value] {
+            let off = *ctx
+                .func_plan
                 .obj_offset_words
                 .get(&obj)
                 .expect("missing spilled object offset");
@@ -111,9 +113,13 @@ fn compute_future_bounds_for_func(
         let Some(call) = function.dfg.call_info(inst) else {
             return 0;
         };
-        let Some(callee_plan) = ctx.plan.funcs.get(&call.callee()) else {
-            return 0;
-        };
+        let callee = call.callee();
+        let callee_plan = ctx.plan.funcs.get(&callee).unwrap_or_else(|| {
+            panic!(
+                "missing memory plan for callee {} in heap bounds analysis",
+                callee.as_u32()
+            )
+        });
         callee_plan.static_clobber_words
     }
 
@@ -143,7 +149,7 @@ fn compute_future_bounds_for_func(
         for inst in function.layout.iter_inst(block) {
             bound = bound.max(call_bound(ctx, function, inst));
             bound = bound.max(live_bound(
-                &analysis.inst_liveness,
+                &ctx.analysis.inst_liveness,
                 &value_alloca_bound,
                 &value_spill_bound,
                 inst,
@@ -177,7 +183,7 @@ fn compute_future_bounds_for_func(
         for inst in insts.into_iter().rev() {
             bound = bound.max(call_bound(ctx, function, inst));
             bound = bound.max(live_bound(
-                &analysis.inst_liveness,
+                &ctx.analysis.inst_liveness,
                 &value_alloca_bound,
                 &value_spill_bound,
                 inst,

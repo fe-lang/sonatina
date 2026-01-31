@@ -130,6 +130,26 @@ pub(crate) fn compute_program_memory_plan(
     cost_model: &ArenaCostModel,
 ) -> ProgramMemoryPlan {
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
+
+    for &func in funcs {
+        module.func_store.view(func, |function| {
+            for block in function.layout.iter_block() {
+                for inst in function.layout.iter_inst(block) {
+                    let Some(call) = function.dfg.call_info(inst) else {
+                        continue;
+                    };
+                    let callee = call.callee();
+                    assert!(
+                        funcs_set.contains(&callee),
+                        "missing memory plan for callee {} (called from {})",
+                        callee.as_u32(),
+                        func.as_u32()
+                    );
+                }
+            }
+        });
+    }
+
     let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
     let scc = SccBuilder::new().compute_scc(&call_graph);
 
@@ -838,9 +858,13 @@ fn verify_static_arena_plan(
 
             for call in &stack.call_sites {
                 let callee = call.callee;
-                let Some(callee_plan) = plan.funcs.get(&callee) else {
-                    continue;
-                };
+                let callee_plan = plan.funcs.get(&callee).unwrap_or_else(|| {
+                    panic!(
+                        "missing memory plan for callee {} (called from {})",
+                        callee.as_u32(),
+                        func.as_u32()
+                    )
+                });
 
                 let is_internal = is_cyclic_scc && scc.scc_ref(callee) == scc_ref;
                 let callee_need_words = if is_internal {
@@ -1017,10 +1041,12 @@ fn topo_sort_sccs(
 mod tests {
     use super::*;
     use crate::{
-        critical_edge::CriticalEdgeSplitter, domtree::DomTree,
-        isa::evm::ptr_escape::compute_ptr_escape_summaries, liveness::Liveness,
+        critical_edge::CriticalEdgeSplitter,
+        domtree::DomTree,
+        isa::evm::{heap_plan, malloc_plan, mem_effects, ptr_escape::compute_ptr_escape_summaries},
+        liveness::Liveness,
     };
-    use sonatina_ir::cfg::ControlFlowGraph;
+    use sonatina_ir::{cfg::ControlFlowGraph, inst::evm::inst_set::EvmInstKind};
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
@@ -1028,10 +1054,16 @@ mod tests {
         plan_from_src_with_cost(src, &ArenaCostModel::default())
     }
 
-    fn plan_from_src_with_cost(
-        src: &str,
-        cost_model: &ArenaCostModel,
-    ) -> (Module, ProgramMemoryPlan, FxHashMap<String, FuncRef>) {
+    struct PlanTestCtx {
+        module: Module,
+        plan: ProgramMemoryPlan,
+        analyses: FxHashMap<FuncRef, FuncAnalysis>,
+        ptr_escape: FxHashMap<FuncRef, PtrEscapeSummary>,
+        isa: Evm,
+        names: FxHashMap<String, FuncRef>,
+    }
+
+    fn plan_ctx_from_src_with_cost(src: &str, cost_model: &ArenaCostModel) -> PlanTestCtx {
         let parsed = parse_module(src).unwrap();
         let funcs: Vec<FuncRef> = parsed.module.funcs();
 
@@ -1084,12 +1116,27 @@ mod tests {
         );
 
         let mut names: FxHashMap<String, FuncRef> = FxHashMap::default();
-        for f in funcs {
+        for &f in &funcs {
             let name = parsed.module.ctx.func_sig(f, |sig| sig.name().to_string());
             names.insert(name, f);
         }
 
-        (parsed.module, plan, names)
+        PlanTestCtx {
+            module: parsed.module,
+            plan,
+            analyses,
+            ptr_escape,
+            isa,
+            names,
+        }
+    }
+
+    fn plan_from_src_with_cost(
+        src: &str,
+        cost_model: &ArenaCostModel,
+    ) -> (Module, ProgramMemoryPlan, FxHashMap<String, FuncRef>) {
+        let ctx = plan_ctx_from_src_with_cost(src, cost_model);
+        (ctx.module, ctx.plan, ctx.names)
     }
 
     #[test]
@@ -1414,6 +1461,123 @@ block0:
 
         let off = plan.funcs[&caller].alloca_offset_words[&allocas[0]];
         assert!(off >= static_callee_plan.need_words);
+    }
+
+    #[test]
+    fn malloc_future_bounds_account_for_dynamic_frame_transitive_clobber() {
+        let ctx = plan_ctx_from_src_with_cost(
+            r#"
+	target = "evm-ethereum-osaka"
+
+	func public %static_callee() -> i256 {
+	block0:
+	    v0.*i256 = alloca i256;
+	    mstore v0 0.i256 i256;
+	    v1.i256 = mload v0 i256;
+	    return v1;
+	}
+
+	func public %dyn(v0.*i256) -> i256 {
+	block0:
+	    v1.*i256 = alloca i256;
+	    mstore v1 0.i256 i256;
+	    v2.i256 = call %dyn v1;
+	    v3.i256 = call %static_callee;
+	    return v3;
+	}
+
+	func public %caller() -> i256 {
+	block0:
+	    v0.*i256 = alloca i256;
+	    v1.*i8 = evm_malloc 32.i256;
+	    mstore v1 123.i256 i256;
+	    v2.i256 = call %dyn v0;
+	    v3.i256 = mload v1 i256;
+	    return v3;
+	}
+"#,
+            &ArenaCostModel::default(),
+        );
+
+        let static_callee = ctx.names["static_callee"];
+        let dyn_func = ctx.names["dyn"];
+        let caller = ctx.names["caller"];
+
+        let static_callee_need_words = match &ctx.plan.funcs[&static_callee].scheme {
+            MemScheme::StaticArena(st) => st.need_words,
+            _ => panic!("expected static_callee to be StaticArena"),
+        };
+        assert!(matches!(
+            ctx.plan.funcs[&dyn_func].scheme,
+            MemScheme::DynamicFrame
+        ));
+
+        let funcs: Vec<FuncRef> = ctx.module.funcs();
+        let scratch_effects: FxHashSet<FuncRef> = FxHashSet::default();
+        let mem_effects = mem_effects::compute_func_mem_effects(
+            &ctx.module,
+            &funcs,
+            &ctx.plan,
+            &scratch_effects,
+            &ctx.isa,
+        );
+
+        let mut plan = ctx.plan;
+        for &func in &funcs {
+            let analysis = ctx.analyses.get(&func).expect("missing analysis");
+            let transients = ctx.module.func_store.view(func, |function| {
+                malloc_plan::compute_transient_mallocs(
+                    function,
+                    &ctx.module.ctx,
+                    &ctx.isa,
+                    &ctx.ptr_escape,
+                    Some(&mem_effects),
+                    &analysis.inst_liveness,
+                )
+            });
+            plan.funcs
+                .get_mut(&func)
+                .expect("missing func memory plan")
+                .transient_mallocs = transients;
+        }
+
+        let malloc_bounds = heap_plan::compute_malloc_future_static_words(
+            &ctx.module,
+            &funcs,
+            &plan,
+            &ctx.analyses,
+            &ctx.isa,
+        );
+        for (func, bounds) in malloc_bounds {
+            plan.funcs
+                .get_mut(&func)
+                .expect("missing func memory plan")
+                .malloc_future_static_words = bounds;
+        }
+
+        let malloc_inst = ctx.module.func_store.view(caller, |function| {
+            for block in function.layout.iter_block() {
+                for inst in function.layout.iter_inst(block) {
+                    if matches!(
+                        ctx.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                        EvmInstKind::EvmMalloc(_)
+                    ) {
+                        return inst;
+                    }
+                }
+            }
+            panic!("missing malloc inst");
+        });
+        assert!(
+            !plan.funcs[&caller].transient_mallocs.contains(&malloc_inst),
+            "expected malloc to be persistent"
+        );
+
+        let bound = *plan.funcs[&caller]
+            .malloc_future_static_words
+            .get(&malloc_inst)
+            .expect("missing malloc future bound");
+        assert!(bound >= static_callee_need_words);
     }
 
     #[test]
