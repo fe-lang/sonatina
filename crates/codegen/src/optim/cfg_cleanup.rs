@@ -116,6 +116,18 @@ fn assert_phis_leading(func: &Function, block: BlockId) {
 }
 
 fn assert_ir_invariants(func: &Function, cfg: &ControlFlowGraph) {
+    let entry = func
+        .layout
+        .entry_block()
+        .unwrap_or_else(|| panic!("function has no entry block"));
+    if func
+        .layout
+        .first_inst_of(entry)
+        .is_some_and(|inst| func.dfg.is_phi(inst))
+    {
+        panic!("entry block {entry:?} must not have phis");
+    }
+
     for block in func.layout.iter_block() {
         let term = func
             .layout
@@ -125,6 +137,24 @@ fn assert_ir_invariants(func: &Function, cfg: &ControlFlowGraph) {
             func.dfg.is_terminator(term),
             "block {block:?} does not end with a terminator"
         );
+
+        let mut seen_term = false;
+        for inst in func.layout.iter_inst(block) {
+            if seen_term {
+                panic!("instruction found after terminator in {block:?}");
+            }
+
+            func.dfg.inst(inst).for_each_value(&mut |value| {
+                if let Some(def_inst) = func.dfg.value_inst(value) {
+                    assert!(
+                        func.layout.is_inst_inserted(def_inst),
+                        "value {value:?} is defined by uninserted inst {def_inst:?}"
+                    );
+                }
+            });
+
+            seen_term = func.dfg.is_terminator(inst);
+        }
 
         if let Some(branch_info) = func.dfg.branch_info(term) {
             for dest in branch_info.dests() {
