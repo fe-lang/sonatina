@@ -334,12 +334,26 @@ impl SccpSolver {
     }
 
     fn try_fold_phi(&self, func: &mut Function, inst: InstId) {
+        let block = func.layout.inst_block(inst);
+        let phi_value = func.dfg.inst_result(inst).expect("phi has no result");
+        let phi_ty = func.dfg.value_ty(phi_value);
+
+        let reachable_preds: BTreeSet<_> = func
+            .dfg
+            .cast_phi(inst)
+            .unwrap()
+            .args()
+            .iter()
+            .map(|&(_, pred)| pred)
+            .filter(|pred| self.is_reachable(func, *pred, block))
+            .collect();
+
         func.dfg.untrack_inst(inst);
 
         let mut fold_arg = None;
         {
             let phi = func.dfg.cast_phi_mut(inst).unwrap();
-            phi.retain(|block| self.reachable_blocks.contains(&block));
+            phi.retain(|pred| reachable_preds.contains(&pred));
 
             let mut seen = BTreeSet::new();
             for &(_, pred) in phi.args() {
@@ -356,7 +370,11 @@ impl SccpSolver {
 
         // Remove phi function if it has just one argument.
         if let Some(phi_arg) = fold_arg {
-            let phi_value = func.dfg.inst_result(inst).unwrap();
+            let phi_arg = if phi_arg == phi_value {
+                func.dfg.make_undef_value(phi_ty)
+            } else {
+                phi_arg
+            };
             func.dfg.change_to_alias(phi_value, phi_arg);
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
         } else {
