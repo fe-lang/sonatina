@@ -1046,7 +1046,9 @@ mod tests {
         isa::evm::{heap_plan, malloc_plan, mem_effects, ptr_escape::compute_ptr_escape_summaries},
         liveness::Liveness,
     };
-    use sonatina_ir::{cfg::ControlFlowGraph, inst::evm::inst_set::EvmInstKind};
+    use sonatina_ir::{
+        InstSetExt, cfg::ControlFlowGraph, inst::evm::inst_set::EvmInstKind, isa::Isa,
+    };
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 

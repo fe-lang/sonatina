@@ -143,16 +143,16 @@ impl EvmBackend {
                 MemScheme::StaticArena(st) => {
                     writeln!(
                         &mut out,
-                        "evm mem plan: {name} scheme=StaticArena need_words={} static_clobber_words={} locals_words={}",
-                        st.need_words, func_plan.static_clobber_words, func_plan.locals_words
+                        "evm mem plan: {name} scheme=StaticArena need_words={} locals_words={}",
+                        st.need_words, func_plan.locals_words
                     )
                     .expect("mem plan write failed");
                 }
                 MemScheme::DynamicFrame => {
                     writeln!(
                         &mut out,
-                        "evm mem plan: {name} scheme=DynamicFrame static_clobber_words={} locals_words={}",
-                        func_plan.static_clobber_words, func_plan.locals_words
+                        "evm mem plan: {name} scheme=DynamicFrame locals_words={}",
+                        func_plan.locals_words
                     )
                     .expect("mem plan write failed");
                 }
@@ -182,7 +182,7 @@ impl EvmBackend {
             };
 
             if detail {
-                let mut direct_callee_clobber_max: u32 = 0;
+                let mut direct_callee_need_max: u32 = 0;
                 module.func_store.view(func, |function| {
                     for block in function.layout.iter_block() {
                         for insn in function.layout.iter_inst(block) {
@@ -198,8 +198,10 @@ impl EvmBackend {
                                         func.as_u32()
                                     )
                                 });
-                            direct_callee_clobber_max =
-                                direct_callee_clobber_max.max(callee_plan.static_clobber_words);
+                            let MemScheme::StaticArena(st) = &callee_plan.scheme else {
+                                continue;
+                            };
+                            direct_callee_need_max = direct_callee_need_max.max(st.need_words);
                         }
                     }
                 });
@@ -207,8 +209,8 @@ impl EvmBackend {
                 if let MemScheme::StaticArena(st) = &func_plan.scheme {
                     writeln!(
                         &mut out,
-                        "  detail locals_words={} direct_callee_clobber_max_words={direct_callee_clobber_max} need_words={} static_clobber_words={}",
-                        func_plan.locals_words, st.need_words, func_plan.static_clobber_words
+                        "  detail locals_words={} direct_callee_need_max_words={direct_callee_need_max} need_words={}",
+                        func_plan.locals_words, st.need_words
                     )
                     .expect("mem plan write failed");
 
