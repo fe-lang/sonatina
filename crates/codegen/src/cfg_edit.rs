@@ -143,6 +143,14 @@ impl<'f> CfgEditor<'f> {
             return false;
         }
 
+        let preds: Vec<_> = self.cfg.preds_of(b).copied().collect();
+        for pred in preds {
+            if self.func.layout.is_block_inserted(pred) {
+                let removed = self.remove_edge(pred, b);
+                assert!(removed, "edge {pred:?} -> {b:?} does not exist");
+            }
+        }
+
         let succs: Vec<_> = self.cfg.succs_of(b).copied().collect();
         for succ in succs {
             if self.func.layout.is_block_inserted(succ) {
@@ -175,6 +183,14 @@ impl<'f> CfgEditor<'f> {
             "block {from:?} does not end with a terminator"
         );
 
+        let Some(branch_info) = self.func.dfg.branch_info(term) else {
+            panic!("terminator {term:?} has no branch info");
+        };
+        assert!(
+            branch_info.dests().into_iter().any(|dest| dest == old_to),
+            "edge {from:?} -> {old_to:?} does not exist"
+        );
+
         self.func.dfg.rewrite_branch_dest(term, old_to, new_to);
 
         remove_phi_incoming_from(self.func, old_to, from);
@@ -203,9 +219,7 @@ fn iter_phis_in_block(func: &Function, block: BlockId) -> impl Iterator<Item = I
     let mut next_inst = func.layout.first_inst_of(block);
     std::iter::from_fn(move || {
         let inst = next_inst?;
-        if func.dfg.cast_phi(inst).is_none() {
-            return None;
-        }
+        func.dfg.cast_phi(inst)?;
         next_inst = func.layout.next_inst_of(inst);
         Some(inst)
     })
@@ -232,11 +246,17 @@ fn replace_phi_incoming_block(
             !phi.args().iter().any(|(_, pred)| *pred == new_pred),
             "phi {phi_inst:?} already has incoming from {new_pred:?}"
         );
+        let mut replaced = false;
         for (_, pred) in phi.args_mut() {
             if *pred == old_pred {
                 *pred = new_pred;
+                replaced = true;
             }
         }
+        assert!(
+            replaced,
+            "phi {phi_inst:?} in {block:?} missing incoming from {old_pred:?}"
+        );
     }
 }
 
