@@ -138,16 +138,20 @@ impl BranchInfo for Br {
     }
 
     fn remove_dest(&self, isb: &dyn InstSetBase, dest: BlockId) -> Box<dyn Inst> {
-        let remain = if self.z_dest == dest {
-            self.nz_dest
-        } else if self.nz_dest == dest {
-            self.z_dest
-        } else {
-            return Box::new(self.clone());
-        };
+        let nz = self.nz_dest;
+        let z = self.z_dest;
 
-        let jump = Jump::new(isb.jump(), remain);
-        Box::new(jump)
+        if nz == dest && z == dest {
+            return Box::new(Unreachable::new_unchecked(isb));
+        }
+        if nz == dest {
+            return Box::new(Jump::new(isb.jump(), z));
+        }
+        if z == dest {
+            return Box::new(Jump::new(isb.jump(), nz));
+        }
+
+        Box::new(self.clone())
     }
 
     fn rewrite_dest(&self, isb: &dyn InstSetBase, from: BlockId, to: BlockId) -> Box<dyn Inst> {
@@ -236,15 +240,13 @@ fn try_convert_branch_to_jump(
     isb: &dyn InstSetBase,
     branch: &dyn BranchInfo,
 ) -> Option<Box<dyn Inst>> {
-    let first_dest = branch.dests()[0];
-    let is_dest_unique = branch
-        .dests()
-        .iter()
-        .skip(1)
-        .all(|dest| *dest == first_dest);
-    if is_dest_unique {
-        let jump = Jump::new(isb.jump(), first_dest);
-        Some(Box::new(jump))
+    let dests = branch.dests();
+    let Some(&first_dest) = dests.first() else {
+        return Some(Box::new(Unreachable::new_unchecked(isb)));
+    };
+
+    if dests.iter().all(|dest| *dest == first_dest) {
+        Some(Box::new(Jump::new(isb.jump(), first_dest)))
     } else {
         None
     }
