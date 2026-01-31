@@ -179,6 +179,12 @@ impl LicmSolver {
                 break;
             };
 
+            let phi_result = func
+                .dfg
+                .inst_result(phi_inst_id)
+                .unwrap_or_else(|| panic!("phi {phi_inst_id:?} has no result"));
+            let phi_ty = func.dfg.value_ty(phi_result);
+
             // Create new phi inst that should be inserted to the preheader, and remove inst
             // arguments passing through original preheaders.
             let mut new_phi = func.dfg.make_phi(vec![]);
@@ -202,8 +208,7 @@ impl LicmSolver {
                     let mut inserter =
                         InstInserter::at_location(CursorLocation::BlockTop(new_preheader));
                     let new_phi_inst = inserter.insert_inst_data(func, new_phi.clone());
-                    let ty = func.dfg.value_ty(new_phi.args()[0].0);
-                    let result = inserter.make_result(func, new_phi_inst, ty);
+                    let result = inserter.make_result(func, new_phi_inst, phi_ty);
                     inserter.attach_result(func, new_phi_inst, result);
 
                     // Add phi_inst_data to `inserted_phis` for reusing.
