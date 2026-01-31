@@ -12,8 +12,8 @@ use crate::{
 use super::{
     ptr_escape::PtrEscapeSummary,
     static_arena_alloc::{
-        FuncObjectLayout, FuncStackObjects, StackObjId, build_func_object_layout,
-        compute_func_stack_objects, pack_objects_with_min_offsets, verify_object_packing,
+        FuncObjectLayout, FuncStackObjects, StackObjId, StaticArenaAllocCtx,
+        build_func_object_layout, pack_objects_with_min_offsets, verify_object_packing,
     },
 };
 use sonatina_ir::isa::evm::Evm;
@@ -128,6 +128,8 @@ pub(crate) fn compute_program_memory_plan(
 
     let topo = topo_sort_sccs(&funcs_set, &call_graph, &scc);
 
+    let alloc_ctx = StaticArenaAllocCtx::new(&module.ctx, isa, ptr_escape);
+
     let mut need_words: FxHashMap<FuncRef, u32> = FxHashMap::default();
     let mut static_max_words: u32 = 0;
     let mut plans: FxHashMap<FuncRef, FuncMemPlan> = FxHashMap::default();
@@ -164,16 +166,7 @@ pub(crate) fn compute_program_memory_plan(
         for &func in &component {
             let analysis = analyses.get(&func).expect("missing FuncAnalysis");
             let stack: FuncStackObjects = module.func_store.view(func, |function| {
-                compute_func_stack_objects(
-                    func,
-                    function,
-                    &module.ctx,
-                    isa,
-                    ptr_escape,
-                    &analysis.alloc,
-                    &analysis.inst_liveness,
-                    &analysis.block_order,
-                )
+                alloc_ctx.compute_func_stack_objects(func, function, analysis)
             });
             stacks.insert(func, stack);
         }
@@ -260,19 +253,16 @@ pub(crate) fn compute_program_memory_plan(
         for &func in &component {
             let planned_func = planned.remove(&func).expect("missing planned func");
             let stack = stacks.get(&func).expect("missing stack");
-            let call_saves = module.func_store.view(func, |function| {
-                finalize_call_save_plans_for_func(
-                    function,
-                    stack,
-                    &planned_func.layout.obj_offset_words,
-                    &planned_func.call_choice,
-                    &need_words,
-                    &scc,
-                    scc_ref,
-                    is_cyclic,
-                    need_scc,
-                )
-            });
+            let call_saves = CallSavePlansForFuncCtx {
+                stack,
+                obj_offset_words: &planned_func.layout.obj_offset_words,
+                call_choice: &planned_func.call_choice,
+                need_words: &need_words,
+                scc: &scc,
+                scc_ref,
+                need_scc,
+            }
+            .finalize_call_save_plans_for_func();
 
             plans.insert(
                 func,
@@ -391,7 +381,7 @@ fn solve_call_preservation_for_func(
             return 0;
         }
         let bits = 32 - imm.leading_zeros();
-        u64::from((bits + 7) / 8)
+        u64::from(bits.div_ceil(8))
     }
 
     fn mem_load_abs_bytes(addr: u32) -> u64 {
@@ -406,7 +396,7 @@ fn solve_call_preservation_for_func(
 
     fn save_gas(k: u64, arg_count: u64, has_return: bool) -> u64 {
         let swap_chunks = if has_return && k != 0 {
-            (k + 15) / 16
+            k.div_ceil(16)
         } else {
             0
         };
@@ -435,7 +425,7 @@ fn solve_call_preservation_for_func(
 
         if has_return && k != 0 {
             bytes = bytes
-                .checked_add((k + 15) / 16)
+                .checked_add(k.div_ceil(16))
                 .expect("swap bytes overflow");
         }
 
@@ -701,78 +691,83 @@ fn solve_call_preservation_for_func(
     Some((call_choice, best_layout))
 }
 
-fn finalize_call_save_plans_for_func(
-    _function: &sonatina_ir::Function,
-    stack: &FuncStackObjects,
-    obj_offset_words: &FxHashMap<StackObjId, u32>,
-    call_choice: &FxHashMap<InstId, CallPreserveChoice>,
-    need_words: &FxHashMap<FuncRef, u32>,
-    scc: &CallGraphSccs,
+struct CallSavePlansForFuncCtx<'a> {
+    stack: &'a FuncStackObjects,
+    obj_offset_words: &'a FxHashMap<StackObjId, u32>,
+    call_choice: &'a FxHashMap<InstId, CallPreserveChoice>,
+    need_words: &'a FxHashMap<FuncRef, u32>,
+    scc: &'a CallGraphSccs,
     scc_ref: SccRef,
-    is_cyclic_scc: bool,
     need_scc: u32,
-) -> FxHashMap<InstId, CallSavePlan> {
-    let mut out: FxHashMap<InstId, CallSavePlan> = FxHashMap::default();
+}
 
-    for call in &stack.call_sites {
-        let Some(choice) = call_choice.get(&call.inst).copied() else {
-            continue;
-        };
-        if matches!(choice, CallPreserveChoice::Layout) {
-            continue;
-        }
+impl CallSavePlansForFuncCtx<'_> {
+    fn finalize_call_save_plans_for_func(&self) -> FxHashMap<InstId, CallSavePlan> {
+        let is_cyclic_scc = self.scc.scc_info(self.scc_ref).is_cycle;
+        let mut out: FxHashMap<InstId, CallSavePlan> = FxHashMap::default();
 
-        let callee_need_words = if is_cyclic_scc && scc.scc_ref(call.callee) == scc_ref {
-            need_scc
-        } else {
-            *need_words
-                .get(&call.callee)
-                .expect("callee missing need_words")
-        };
-
-        if callee_need_words == 0 {
-            continue;
-        }
-
-        let mut save_offsets: Vec<u32> = Vec::new();
-        for &obj in &call.live_out_objs {
-            if call.must_layout_objs.binary_search(&obj).is_ok() {
-                continue;
-            }
-            let Some(&off) = obj_offset_words.get(&obj) else {
+        for call in &self.stack.call_sites {
+            let Some(choice) = self.call_choice.get(&call.inst).copied() else {
                 continue;
             };
-            let Some(&size) = stack.obj_size_words.get(&obj) else {
-                continue;
-            };
-            if size == 0 || off >= callee_need_words {
+            if matches!(choice, CallPreserveChoice::Layout) {
                 continue;
             }
-            let end = off
-                .checked_add(size)
-                .expect("object end words overflow")
-                .min(callee_need_words);
-            for w in off..end {
-                save_offsets.push(w);
+
+            let callee_need_words =
+                if is_cyclic_scc && self.scc.scc_ref(call.callee) == self.scc_ref {
+                    self.need_scc
+                } else {
+                    *self
+                        .need_words
+                        .get(&call.callee)
+                        .expect("callee missing need_words")
+                };
+
+            if callee_need_words == 0 {
+                continue;
             }
-        }
-        save_offsets.sort_unstable();
-        save_offsets.dedup();
 
-        if save_offsets.is_empty() {
-            continue;
+            let mut save_offsets: Vec<u32> = Vec::new();
+            for &obj in &call.live_out_objs {
+                if call.must_layout_objs.binary_search(&obj).is_ok() {
+                    continue;
+                }
+                let Some(&off) = self.obj_offset_words.get(&obj) else {
+                    continue;
+                };
+                let Some(&size) = self.stack.obj_size_words.get(&obj) else {
+                    continue;
+                };
+                if size == 0 || off >= callee_need_words {
+                    continue;
+                }
+                let end = off
+                    .checked_add(size)
+                    .expect("object end words overflow")
+                    .min(callee_need_words);
+                for w in off..end {
+                    save_offsets.push(w);
+                }
+            }
+            save_offsets.sort_unstable();
+            save_offsets.dedup();
+
+            if save_offsets.is_empty() {
+                continue;
+            }
+
+            out.insert(
+                call.inst,
+                CallSavePlan {
+                    save_word_offsets: save_offsets,
+                    has_return: call.has_return,
+                },
+            );
         }
 
-        out.insert(
-            call.inst,
-            CallSavePlan {
-                save_word_offsets: save_offsets,
-                has_return: call.has_return,
-            },
-        );
+        out
     }
-
-    out
 }
 
 #[cfg(debug_assertions)]
@@ -792,6 +787,8 @@ fn verify_static_arena_plan(
         }
     }
 
+    let alloc_ctx = StaticArenaAllocCtx::new(&module.ctx, isa, ptr_escape);
+
     for &func in funcs {
         let Some(func_plan) = plan.funcs.get(&func) else {
             continue;
@@ -804,16 +801,7 @@ fn verify_static_arena_plan(
         let is_cyclic_scc = scc.scc_info(scc_ref).is_cycle;
 
         module.func_store.view(func, |function| {
-            let stack = compute_func_stack_objects(
-                func,
-                function,
-                &module.ctx,
-                isa,
-                ptr_escape,
-                &analysis.alloc,
-                &analysis.inst_liveness,
-                &analysis.block_order,
-            );
+            let stack = alloc_ctx.compute_func_stack_objects(func, function, analysis);
 
             verify_object_packing(
                 func,
@@ -822,17 +810,16 @@ fn verify_static_arena_plan(
                 func_plan.locals_words,
             );
 
-            let expected_saves = finalize_call_save_plans_for_func(
-                function,
-                &stack,
-                &func_plan.obj_offset_words,
-                &st.call_choice,
-                &need_words,
+            let expected_saves = CallSavePlansForFuncCtx {
+                stack: &stack,
+                obj_offset_words: &func_plan.obj_offset_words,
+                call_choice: &st.call_choice,
+                need_words: &need_words,
                 scc,
                 scc_ref,
-                is_cyclic_scc,
-                st.need_words,
-            );
+                need_scc: st.need_words,
+            }
+            .finalize_call_save_plans_for_func();
 
             if expected_saves.len() != st.call_saves.len() {
                 panic!(

@@ -178,21 +178,20 @@ impl<'a> StackifyBuilder<'a> {
     ) -> (StackifyAlloc, BitSet<ValueId>) {
         let mut arg_free_slots: FreeSlotPools = FreeSlotPools::default();
         for &arg in ctx.func.arg_values.iter() {
-            if let Some(spilled) = spill.spilled(arg) {
-                if ctx.scratch_spill_slots != 0
-                    && !ctx.scratch_live_values.contains(arg)
-                    && slots
-                        .scratch
-                        .try_ensure_slot(
-                            spilled,
-                            ctx.liveness,
-                            &mut arg_free_slots.scratch,
-                            Some(ctx.scratch_spill_slots),
-                        )
-                        .is_some()
-                {
-                    continue;
-                }
+            if let Some(spilled) = spill.spilled(arg)
+                && ctx.scratch_spill_slots != 0
+                && !ctx.scratch_live_values.contains(arg)
+                && slots
+                    .scratch
+                    .try_ensure_slot(
+                        spilled,
+                        ctx.liveness,
+                        &mut arg_free_slots.scratch,
+                        Some(ctx.scratch_spill_slots),
+                    )
+                    .is_some()
+            {
+                continue;
             }
         }
 

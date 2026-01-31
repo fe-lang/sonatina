@@ -570,18 +570,10 @@ impl LowerBackend for EvmBackend {
             prepare_stackify_analysis(function, &module.ctx, self, &ptr_escape, None)
         });
 
+        let alloc_ctx =
+            static_arena_alloc::StaticArenaAllocCtx::new(&module.ctx, &self.isa, &ptr_escape);
         let layout = module.func_store.view(func, |function| {
-            static_arena_alloc::plan_func_objects(
-                func,
-                function,
-                &module.ctx,
-                &self.isa,
-                &ptr_escape,
-                &analysis.alloc,
-                &analysis.inst_liveness,
-                &analysis.block_order,
-                |_| None,
-            )
+            alloc_ctx.plan_func_objects(func, function, &analysis)
         });
 
         let lowering = PreparedLowering {

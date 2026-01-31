@@ -22,10 +22,10 @@ use std::{
     collections::{BTreeMap, BinaryHeap},
 };
 
-use crate::{bitset::BitSet, liveness::InstLiveness, stackalloc::StackifyAlloc};
+use crate::{bitset::BitSet, liveness::InstLiveness};
 
 use super::{
-    memory_plan::WORD_BYTES,
+    memory_plan::{FuncAnalysis, WORD_BYTES},
     provenance::{Provenance, compute_provenance},
     ptr_escape::PtrEscapeSummary,
 };
@@ -78,6 +78,48 @@ pub(crate) struct FuncStackObjects {
     pub(crate) spill_obj: SecondaryMap<ValueId, Option<StackObjId>>,
     pub(crate) call_sites: Vec<CallSiteLiveObjects>,
     pub(crate) requires_dynamic_frame: bool,
+}
+
+pub(crate) struct StaticArenaAllocCtx<'a> {
+    module: &'a ModuleCtx,
+    isa: &'a Evm,
+    ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
+}
+
+impl<'a> StaticArenaAllocCtx<'a> {
+    pub(crate) fn new(
+        module: &'a ModuleCtx,
+        isa: &'a Evm,
+        ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
+    ) -> Self {
+        Self {
+            module,
+            isa,
+            ptr_escape,
+        }
+    }
+
+    pub(crate) fn plan_func_objects(
+        &self,
+        func_ref: FuncRef,
+        function: &Function,
+        analysis: &FuncAnalysis,
+    ) -> FuncObjectLayout {
+        let stack = self.compute_func_stack_objects(func_ref, function, analysis);
+        let min_offset_words: FxHashMap<StackObjId, u32> = FxHashMap::default();
+        let (obj_offset_words, locals_words) =
+            pack_objects_with_min_offsets(&stack, &min_offset_words);
+        build_func_object_layout(&stack, obj_offset_words, locals_words)
+    }
+
+    pub(crate) fn compute_func_stack_objects(
+        &self,
+        func_ref: FuncRef,
+        function: &Function,
+        analysis: &FuncAnalysis,
+    ) -> FuncStackObjects {
+        compute_func_stack_objects(func_ref, function, self, analysis)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -162,50 +204,20 @@ pub(crate) fn compute_block_end_pos(
     out
 }
 
-pub(crate) fn plan_func_objects(
-    func_ref: FuncRef,
-    function: &Function,
-    module: &ModuleCtx,
-    isa: &Evm,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
-    alloc: &StackifyAlloc,
-    inst_liveness: &InstLiveness,
-    block_order: &[BlockId],
-    _callee_need_words: impl Fn(FuncRef) -> Option<u32>,
-) -> FuncObjectLayout {
-    let stack = compute_func_stack_objects(
-        func_ref,
-        function,
-        module,
-        isa,
-        ptr_escape,
-        alloc,
-        inst_liveness,
-        block_order,
-    );
-    let min_offset_words: FxHashMap<StackObjId, u32> = FxHashMap::default();
-    let (obj_offset_words, locals_words) = pack_objects_with_min_offsets(&stack, &min_offset_words);
-    build_func_object_layout(&stack, obj_offset_words, locals_words)
-}
-
 pub(crate) fn compute_func_stack_objects(
     func_ref: FuncRef,
     function: &Function,
-    module: &ModuleCtx,
-    isa: &Evm,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
-    alloc: &StackifyAlloc,
-    inst_liveness: &InstLiveness,
-    block_order: &[BlockId],
+    ctx: &StaticArenaAllocCtx<'_>,
+    analysis: &FuncAnalysis,
 ) -> FuncStackObjects {
-    let (inst_order, inst_pos) = compute_inst_order(function, block_order);
+    let (inst_order, inst_pos) = compute_inst_order(function, &analysis.block_order);
     let block_end_pos = compute_block_end_pos(function, &inst_pos);
 
-    let prov_info = compute_provenance(function, module, isa, |callee| {
-        ptr_escape
+    let prov_info = compute_provenance(function, ctx.module, ctx.isa, |callee| {
+        ctx.ptr_escape
             .get(&callee)
             .cloned()
-            .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee))
+            .unwrap_or_else(|| conservative_unknown_ptr_summary(ctx.module, callee))
             .arg_may_be_returned
     });
     let prov = &prov_info.value;
@@ -222,11 +234,12 @@ pub(crate) fn compute_func_stack_objects(
         }
     }
 
-    let escaping_sites = compute_escaping_allocas(function, module, isa, ptr_escape, prov);
+    let escaping_sites =
+        compute_escaping_allocas(function, ctx.module, ctx.isa, ctx.ptr_escape, prov);
     if !escaping_sites.is_empty() {
         panic!(
             "{}",
-            render_alloca_escapes(module, func_ref, escaping_sites)
+            render_alloca_escapes(ctx.module, func_ref, escaping_sites)
         );
     }
 
@@ -236,8 +249,8 @@ pub(crate) fn compute_func_stack_objects(
     }
 
     let mut spilled_values: BitSet<ValueId> = BitSet::default();
-    for (v, obj) in alloc.spill_obj.iter() {
-        if alloc.scratch_slot_of_value[v].is_some() {
+    for (v, obj) in analysis.alloc.spill_obj.iter() {
+        if analysis.alloc.scratch_slot_of_value[v].is_some() {
             continue;
         }
         if obj.is_some() {
@@ -248,11 +261,11 @@ pub(crate) fn compute_func_stack_objects(
 
     let spill_intervals = compute_spill_intervals(
         function,
-        isa,
+        ctx.isa,
         &inst_order,
         &inst_pos,
         &block_end_pos,
-        inst_liveness,
+        &analysis.inst_liveness,
         &spilled_values,
     );
 
@@ -271,7 +284,8 @@ pub(crate) fn compute_func_stack_objects(
         });
     }
 
-    let mut next_id: u32 = alloc
+    let mut next_id: u32 = analysis
+        .alloc
         .spill_obj
         .values()
         .filter_map(|o| *o)
@@ -281,24 +295,25 @@ pub(crate) fn compute_func_stack_objects(
 
     let alloca_intervals = compute_alloca_intervals(
         function,
-        isa,
+        ctx.isa,
         &inst_order,
         &inst_pos,
         &block_end_pos,
-        inst_liveness,
+        &analysis.inst_liveness,
         prov,
     );
 
     let mut alloca_ids: FxHashMap<InstId, StackObjId> = FxHashMap::default();
     for &inst in &inst_order {
-        let EvmInstKind::Alloca(alloca) = isa.inst_set().resolve_inst(function.dfg.inst(inst))
+        let EvmInstKind::Alloca(alloca) = ctx.isa.inst_set().resolve_inst(function.dfg.inst(inst))
         else {
             continue;
         };
 
-        let size_bytes: u32 = isa
+        let size_bytes: u32 = ctx
+            .isa
             .type_layout()
-            .size_of(*alloca.ty(), module)
+            .size_of(*alloca.ty(), ctx.module)
             .expect("alloca has invalid type") as u32;
         let size_words = size_bytes.div_ceil(WORD_BYTES);
 
@@ -333,7 +348,7 @@ pub(crate) fn compute_func_stack_objects(
             let def = function.dfg.inst_result(inst);
             let mut set: FxHashSet<StackObjId> = FxHashSet::default();
             let mut roots: FxHashSet<InstId> = FxHashSet::default();
-            for v in inst_liveness.live_out(inst).iter() {
+            for v in analysis.inst_liveness.live_out(inst).iter() {
                 if Some(v) == def {
                     continue;
                 }
