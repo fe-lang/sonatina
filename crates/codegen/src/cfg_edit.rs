@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, InstId, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::control_flow::{Jump, Unreachable},
+    inst::control_flow::Jump,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -12,6 +12,10 @@ pub enum CleanupMode {
     RepairWithUndef,
 }
 
+/// Structured CFG editing helpers that keep CFG preds and phi incoming sets consistent.
+///
+/// Passes that mutate terminators directly without repairing successor phis should run a
+/// cleanup pass (e.g. `CfgCleanup`) before relying on CFG/phi invariants.
 pub struct CfgEditor<'f> {
     func: &'f mut Function,
     cfg: ControlFlowGraph,
@@ -66,7 +70,7 @@ impl<'f> CfgEditor<'f> {
         changed
     }
 
-    pub fn remove_edge(&mut self, from: BlockId, to: BlockId) -> bool {
+    pub fn remove_succ(&mut self, from: BlockId, to: BlockId) -> bool {
         let Some(term) = self.func.layout.last_inst_of(from) else {
             panic!("block {from:?} has no terminator");
         };
@@ -83,12 +87,7 @@ impl<'f> CfgEditor<'f> {
             return false;
         }
 
-        if self.func.dfg.cast_jump(term).is_some() {
-            let unreachable = Unreachable::new_unchecked(self.func.inst_set());
-            InstInserter::at_location(CursorLocation::At(term)).replace(self.func, unreachable);
-        } else {
-            self.func.dfg.remove_branch_dest(term, to);
-        }
+        self.func.dfg.remove_branch_dest(term, to);
 
         if !self.func.layout.is_block_inserted(to) {
             if matches!(self.mode, CleanupMode::Strict) {
@@ -103,6 +102,72 @@ impl<'f> CfgEditor<'f> {
 
         self.recompute_cfg();
         true
+    }
+
+    pub fn remove_edge(&mut self, from: BlockId, to: BlockId) -> bool {
+        self.remove_succ(from, to)
+    }
+
+    pub fn split_block_at(&mut self, at: InstId) -> (BlockId, BlockId) {
+        assert!(self.func.layout.is_inst_inserted(at));
+        assert!(!self.func.dfg.is_phi(at), "cannot split at a phi");
+
+        let from = self.func.layout.inst_block(at);
+        let Some(term) = self.func.layout.last_inst_of(from) else {
+            panic!("block {from:?} has no terminator");
+        };
+        assert!(
+            self.func.dfg.is_terminator(term),
+            "block {from:?} does not end with a terminator"
+        );
+
+        let succs: BTreeSet<_> = self
+            .func
+            .dfg
+            .branch_info(term)
+            .map_or_else(BTreeSet::new, |bi| bi.dests().into_iter().collect());
+
+        let new_block = self.func.dfg.make_block();
+        InstInserter::at_location(CursorLocation::BlockTop(from))
+            .insert_block(self.func, new_block);
+
+        let mut insts = Vec::new();
+        let mut next_inst = Some(at);
+        while let Some(inst) = next_inst {
+            insts.push(inst);
+            next_inst = self.func.layout.next_inst_of(inst);
+        }
+        for inst in insts {
+            self.func.layout.remove_inst(inst);
+            self.func.layout.append_inst(inst, new_block);
+        }
+
+        assert!(
+            !self
+                .func
+                .layout
+                .last_inst_of(from)
+                .is_some_and(|inst| self.func.dfg.is_terminator(inst)),
+            "split moved range did not include the terminator of {from:?}"
+        );
+
+        InstInserter::at_location(CursorLocation::BlockBottom(from))
+            .insert_inst_data(self.func, self.func.dfg.make_jump(new_block));
+
+        for succ in succs {
+            if !self.func.layout.is_block_inserted(succ) {
+                if matches!(self.mode, CleanupMode::Strict) {
+                    panic!("branch target {succ:?} is not inserted");
+                }
+                continue;
+            }
+
+            replace_phi_incoming_block(self.func, succ, from, new_block);
+            simplify_trivial_phis_in_block(self.func, succ);
+        }
+
+        self.recompute_cfg();
+        (from, new_block)
     }
 
     pub fn split_edge(&mut self, from: BlockId, to: BlockId) -> BlockId {
@@ -138,6 +203,69 @@ impl<'f> CfgEditor<'f> {
         mid
     }
 
+    pub fn fold_trampoline_block(&mut self, block: BlockId) -> bool {
+        if !self.func.layout.is_block_inserted(block)
+            || self.func.layout.entry_block() == Some(block)
+        {
+            return false;
+        }
+
+        let Some(term) = self.func.layout.last_inst_of(block) else {
+            return false;
+        };
+        let Some(jump) = self.func.dfg.cast_jump(term) else {
+            return false;
+        };
+        let succ = *jump.dest();
+
+        if self.func.layout.first_inst_of(block) != Some(term) {
+            return false;
+        }
+
+        let preds: Vec<_> = self.cfg.preds_of(block).copied().collect();
+        let [pred] = preds.as_slice() else {
+            return false;
+        };
+        let pred = *pred;
+        if pred == succ {
+            return false;
+        }
+
+        if iter_phis_in_block(self.func, succ).any(|phi_inst| {
+            self.func
+                .dfg
+                .cast_phi(phi_inst)
+                .unwrap()
+                .args()
+                .iter()
+                .any(|(_, b)| *b == pred)
+        }) {
+            return false;
+        }
+
+        let Some(pred_term) = self.func.layout.last_inst_of(pred) else {
+            panic!("block {pred:?} has no terminator");
+        };
+        assert!(
+            self.func.dfg.is_terminator(pred_term),
+            "block {pred:?} does not end with a terminator"
+        );
+        let Some(pred_branch) = self.func.dfg.branch_info(pred_term) else {
+            return false;
+        };
+        if !pred_branch.dests().into_iter().any(|dest| dest == block) {
+            return false;
+        }
+
+        self.func.dfg.rewrite_branch_dest(pred_term, block, succ);
+        replace_phi_incoming_block(self.func, succ, block, pred);
+        simplify_trivial_phis_in_block(self.func, succ);
+        InstInserter::at_location(CursorLocation::BlockTop(block)).remove_block(self.func);
+
+        self.recompute_cfg();
+        true
+    }
+
     pub fn delete_block_unreachable(&mut self, b: BlockId) -> bool {
         if !self.func.layout.is_block_inserted(b) {
             return false;
@@ -164,7 +292,7 @@ impl<'f> CfgEditor<'f> {
         true
     }
 
-    pub fn retarget_edge_with_phi_mapping(
+    pub fn replace_succ(
         &mut self,
         from: BlockId,
         old_to: BlockId,
@@ -212,6 +340,16 @@ impl<'f> CfgEditor<'f> {
         }
 
         self.recompute_cfg();
+    }
+
+    pub fn retarget_edge_with_phi_mapping(
+        &mut self,
+        from: BlockId,
+        old_to: BlockId,
+        new_to: BlockId,
+        phi_inputs: &[(InstId, ValueId)],
+    ) {
+        self.replace_succ(from, old_to, new_to, phi_inputs)
     }
 }
 
@@ -274,18 +412,22 @@ pub(crate) fn simplify_trivial_phis_in_block(func: &mut Function, block: BlockId
 }
 
 pub(crate) fn simplify_trivial_phi(func: &mut Function, phi_inst: InstId) -> bool {
+    let phi_value = func.dfg.inst_result(phi_inst).expect("phi has no result");
+    let ty = func.dfg.value_ty(phi_value);
+
     let phi = func.dfg.cast_phi(phi_inst).unwrap();
-    let arg = match phi.args().len() {
-        0 => {
-            let phi_result = func.dfg.inst_result(phi_inst).expect("phi has no result");
-            let ty = func.dfg.value_ty(phi_result);
-            func.dfg.make_undef_value(ty)
+    let arg = match phi.args().first() {
+        None => func.dfg.make_undef_value(ty),
+        Some(&(first, _)) if phi.args().iter().all(|(value, _)| *value == first) => {
+            if first == phi_value {
+                func.dfg.make_undef_value(ty)
+            } else {
+                first
+            }
         }
-        1 => phi.args()[0].0,
         _ => return false,
     };
 
-    let phi_value = func.dfg.inst_result(phi_inst).unwrap();
     func.dfg.change_to_alias(phi_value, arg);
     InstInserter::at_location(CursorLocation::At(phi_inst)).remove_inst(func);
     true
