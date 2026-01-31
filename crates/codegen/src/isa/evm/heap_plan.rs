@@ -9,7 +9,7 @@ use sonatina_ir::{
 };
 
 use super::{
-    memory_plan::{FuncAnalysis, FuncMemPlan, MemScheme, ProgramMemoryPlan, WORD_BYTES},
+    memory_plan::{FuncAnalysis, FuncMemPlan, ProgramMemoryPlan, WORD_BYTES},
     provenance::compute_value_provenance,
 };
 
@@ -114,10 +114,7 @@ fn compute_future_bounds_for_func(
         let Some(callee_plan) = ctx.plan.funcs.get(&call.callee()) else {
             return 0;
         };
-        match &callee_plan.scheme {
-            MemScheme::StaticArena(st) => st.need_words,
-            MemScheme::DynamicFrame => 0,
-        }
+        callee_plan.static_clobber_words
     }
 
     fn live_bound(

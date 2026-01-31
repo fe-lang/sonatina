@@ -237,10 +237,7 @@ impl EvmBackend {
                             .plan
                             .funcs
                             .get(&callee)
-                            .and_then(|p| match &p.scheme {
-                                MemScheme::StaticArena(st) => Some(st.need_words),
-                                MemScheme::DynamicFrame => None,
-                            })
+                            .map(|p| p.static_clobber_words)
                             .unwrap_or(0);
 
                         let save_offsets = st
@@ -581,6 +578,7 @@ impl LowerBackend for EvmBackend {
             block_order: analysis.block_order,
             mem_plan: FuncMemPlan {
                 scheme: MemScheme::DynamicFrame,
+                static_clobber_words: 0,
                 obj_offset_words: layout.obj_offset_words,
                 alloca_offset_words: layout.alloca_offset_words,
                 spill_obj: layout.spill_obj,

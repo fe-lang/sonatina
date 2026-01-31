@@ -34,6 +34,13 @@ pub struct ProgramMemoryPlan {
 pub struct FuncMemPlan {
     pub scheme: MemScheme,
 
+    /// Number of words in the `STATIC_BASE` prefix that may be clobbered by calling this function.
+    ///
+    /// For `StaticArena` functions, this is `need_words`.
+    /// For `DynamicFrame` functions, this is the maximum `need_words` of any (transitively) called
+    /// `StaticArena` function.
+    pub static_clobber_words: u32,
+
     /// Word offsets for all stack objects in this function.
     ///
     /// For `StaticArena`, offsets are relative to `STATIC_BASE`.
@@ -63,7 +70,7 @@ pub enum MemScheme {
 pub struct StaticArenaFuncPlan {
     pub need_words: u32,
 
-    /// Per-call preservation choice for calls to StaticArena callees with non-zero `need_words`.
+    /// Per-call preservation choice for calls to callees with a non-zero static clobber footprint.
     /// Only populated for StaticArena callers.
     pub call_choice: FxHashMap<InstId, CallPreserveChoice>,
 
@@ -219,7 +226,7 @@ pub(crate) fn compute_program_memory_plan(
 
         if fallback_dynamic {
             for &func in &component {
-                need_words.insert(func, 0);
+                need_words.insert(func, ext_need_max);
             }
 
             for &func in &component {
@@ -232,6 +239,7 @@ pub(crate) fn compute_program_memory_plan(
                     func,
                     FuncMemPlan {
                         scheme: MemScheme::DynamicFrame,
+                        static_clobber_words: ext_need_max,
                         obj_offset_words: layout.obj_offset_words,
                         alloca_offset_words: layout.alloca_offset_words,
                         spill_obj: layout.spill_obj,
@@ -272,6 +280,7 @@ pub(crate) fn compute_program_memory_plan(
                         call_choice: planned_func.call_choice,
                         call_saves,
                     }),
+                    static_clobber_words: need_scc,
                     obj_offset_words: planned_func.layout.obj_offset_words,
                     alloca_offset_words: planned_func.layout.alloca_offset_words,
                     spill_obj: planned_func.layout.spill_obj,
@@ -318,6 +327,41 @@ impl CallMeta {
     fn eligible_for_layout(&self) -> bool {
         !self.is_internal_scc_call && self.callee_need_words != 0
     }
+}
+
+fn compute_call_save_word_offsets(
+    stack: &FuncStackObjects,
+    obj_offset_words: &FxHashMap<StackObjId, u32>,
+    live_out_objs: &[StackObjId],
+    must_layout_objs: &[StackObjId],
+    callee_need_words: u32,
+) -> Vec<u32> {
+    if callee_need_words == 0 {
+        return Vec::new();
+    }
+
+    let mut out: Vec<u32> = Vec::new();
+    for &obj in live_out_objs {
+        if must_layout_objs.binary_search(&obj).is_ok() {
+            continue;
+        }
+        let &off = obj_offset_words
+            .get(&obj)
+            .unwrap_or_else(|| panic!("missing offset for obj {}", obj.as_u32()));
+        let &size = stack
+            .obj_size_words
+            .get(&obj)
+            .unwrap_or_else(|| panic!("missing size for obj {}", obj.as_u32()));
+        if size == 0 || off >= callee_need_words {
+            continue;
+        }
+        let end = off.checked_add(size).expect("object end words overflow");
+        let end = end.min(callee_need_words);
+        out.extend(off..end);
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 fn solve_call_preservation_for_func(
@@ -432,42 +476,6 @@ fn solve_call_preservation_for_func(
         bytes
     }
 
-    fn save_set(
-        stack: &FuncStackObjects,
-        obj_offset_words: &FxHashMap<StackObjId, u32>,
-        live_out_objs: &[StackObjId],
-        must_layout_objs: &[StackObjId],
-        callee_need_words: u32,
-    ) -> Vec<u32> {
-        if callee_need_words == 0 {
-            return Vec::new();
-        }
-
-        let mut out: Vec<u32> = Vec::new();
-        for &obj in live_out_objs {
-            if must_layout_objs.binary_search(&obj).is_ok() {
-                continue;
-            }
-            let Some(&off) = obj_offset_words.get(&obj) else {
-                continue;
-            };
-            let Some(&size) = stack.obj_size_words.get(&obj) else {
-                continue;
-            };
-            if size == 0 || off >= callee_need_words {
-                continue;
-            }
-            let end = off.checked_add(size).expect("object end words overflow");
-            let end = end.min(callee_need_words);
-            for w in off..end {
-                out.push(w);
-            }
-        }
-        out.sort_unstable();
-        out.dedup();
-        out
-    }
-
     fn evaluate(
         stack: &FuncStackObjects,
         calls: &[CallMeta],
@@ -525,7 +533,7 @@ fn solve_call_preservation_for_func(
                 call.callee_need_words
             };
 
-            let save_offsets = save_set(
+            let save_offsets = compute_call_save_word_offsets(
                 stack,
                 &obj_offset_words,
                 &call.live_out_objs,
@@ -728,30 +736,13 @@ impl CallSavePlansForFuncCtx<'_> {
                 continue;
             }
 
-            let mut save_offsets: Vec<u32> = Vec::new();
-            for &obj in &call.live_out_objs {
-                if call.must_layout_objs.binary_search(&obj).is_ok() {
-                    continue;
-                }
-                let Some(&off) = self.obj_offset_words.get(&obj) else {
-                    continue;
-                };
-                let Some(&size) = self.stack.obj_size_words.get(&obj) else {
-                    continue;
-                };
-                if size == 0 || off >= callee_need_words {
-                    continue;
-                }
-                let end = off
-                    .checked_add(size)
-                    .expect("object end words overflow")
-                    .min(callee_need_words);
-                for w in off..end {
-                    save_offsets.push(w);
-                }
-            }
-            save_offsets.sort_unstable();
-            save_offsets.dedup();
+            let save_offsets = compute_call_save_word_offsets(
+                self.stack,
+                self.obj_offset_words,
+                &call.live_out_objs,
+                &call.must_layout_objs,
+                callee_need_words,
+            );
 
             if save_offsets.is_empty() {
                 continue;
@@ -782,9 +773,7 @@ fn verify_static_arena_plan(
 ) {
     let mut need_words: FxHashMap<FuncRef, u32> = FxHashMap::default();
     for (&f, p) in &plan.funcs {
-        if let MemScheme::StaticArena(st) = &p.scheme {
-            need_words.insert(f, st.need_words);
-        }
+        need_words.insert(f, p.static_clobber_words);
     }
 
     let alloc_ctx = StaticArenaAllocCtx::new(&module.ctx, isa, ptr_escape);
@@ -852,15 +841,12 @@ fn verify_static_arena_plan(
                 let Some(callee_plan) = plan.funcs.get(&callee) else {
                     continue;
                 };
-                let MemScheme::StaticArena(callee_static) = &callee_plan.scheme else {
-                    continue;
-                };
 
                 let is_internal = is_cyclic_scc && scc.scc_ref(callee) == scc_ref;
                 let callee_need_words = if is_internal {
                     st.need_words
                 } else {
-                    callee_static.need_words
+                    callee_plan.static_clobber_words
                 };
 
                 if callee_need_words == 0 && !is_internal {
@@ -1302,7 +1288,7 @@ block0:
     fn transitive_points_to_through_local_memory_is_must_layout() {
         let (_module, plan, names) = plan_from_src(
             r#"
-target = "evm-ethereum-osaka"
+	target = "evm-ethereum-osaka"
 
 func public %callee(v0.**i256) -> i256 {
 block0:
@@ -1347,6 +1333,87 @@ block0:
             let off = plan.funcs[&caller].alloca_offset_words[&inst];
             assert!(off >= callee_plan.need_words);
         }
+    }
+
+    #[test]
+    fn dynamic_frame_callee_propagates_static_clobber_to_static_arena_caller() {
+        let (module, plan, names) = plan_from_src(
+            r#"
+	target = "evm-ethereum-osaka"
+
+	func public %static_callee() -> i256 {
+	block0:
+	    v0.*i256 = alloca i256;
+	    mstore v0 0.i256 i256;
+	    v1.i256 = mload v0 i256;
+	    return v1;
+	}
+
+	func public %dyn(v0.*i256) -> i256 {
+	block0:
+	    v1.*i256 = alloca i256;
+	    mstore v1 0.i256 i256;
+	    v2.i256 = call %dyn v1;
+	    v3.i256 = call %static_callee;
+	    return v3;
+	}
+
+	func public %caller() -> i256 {
+	block0:
+	    v0.*i256 = alloca i256;
+	    mstore v0 1.i256 i256;
+	    v1.i256 = call %dyn v0;
+	    v2.i256 = mload v0 i256;
+	    return v2;
+	}
+"#,
+        );
+
+        let static_callee = names["static_callee"];
+        let dyn_func = names["dyn"];
+        let caller = names["caller"];
+
+        let MemScheme::StaticArena(static_callee_plan) = &plan.funcs[&static_callee].scheme else {
+            panic!("expected static_callee to be StaticArena");
+        };
+        assert_eq!(
+            plan.funcs[&dyn_func].static_clobber_words,
+            static_callee_plan.need_words
+        );
+
+        assert!(matches!(
+            plan.funcs[&dyn_func].scheme,
+            MemScheme::DynamicFrame
+        ));
+        let MemScheme::StaticArena(caller_plan) = &plan.funcs[&caller].scheme else {
+            panic!("expected caller to be StaticArena");
+        };
+
+        let call_inst = module.func_store.view(caller, |function| {
+            for block in function.layout.iter_block() {
+                for inst in function.layout.iter_inst(block) {
+                    if function.dfg.call_info(inst).is_some() {
+                        return inst;
+                    }
+                }
+            }
+            panic!("missing call inst");
+        });
+        assert!(
+            caller_plan.call_choice.contains_key(&call_inst),
+            "expected call_choice entry for dyn call"
+        );
+
+        let mut allocas: Vec<InstId> = plan.funcs[&caller]
+            .alloca_offset_words
+            .keys()
+            .copied()
+            .collect();
+        allocas.sort_unstable_by_key(|i| i.as_u32());
+        assert_eq!(allocas.len(), 1);
+
+        let off = plan.funcs[&caller].alloca_offset_words[&allocas[0]];
+        assert!(off >= static_callee_plan.need_words);
     }
 
     #[test]
