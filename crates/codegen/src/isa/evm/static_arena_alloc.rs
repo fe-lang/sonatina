@@ -506,8 +506,8 @@ pub(crate) fn verify_object_packing(
             let o2 = &objects[j];
             if o1.size_words == 0
                 || o2.size_words == 0
-                || o1.interval.end < o2.interval.start
-                || o2.interval.end < o1.interval.start
+                || o1.interval.end <= o2.interval.start
+                || o2.interval.end <= o1.interval.start
             {
                 continue;
             }
@@ -665,7 +665,7 @@ fn pack_objects(objects: &mut [StackObj]) -> (FxHashMap<StackObjId, u32>, u32) {
 
     for obj in objects.iter() {
         while let Some(Reverse((end, off, size, _id))) = active.peek().copied()
-            && end < obj.interval.start
+            && end <= obj.interval.start
         {
             let _ = active.pop();
             insert_free_segment(&mut free, off, size);
