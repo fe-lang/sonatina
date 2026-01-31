@@ -143,16 +143,16 @@ impl EvmBackend {
                 MemScheme::StaticArena(st) => {
                     writeln!(
                         &mut out,
-                        "evm mem plan: {name} scheme=StaticArena need_words={} locals_words={}",
-                        st.need_words, func_plan.locals_words
+                        "evm mem plan: {name} scheme=StaticArena need_words={} static_clobber_words={} locals_words={}",
+                        st.need_words, func_plan.static_clobber_words, func_plan.locals_words
                     )
                     .expect("mem plan write failed");
                 }
                 MemScheme::DynamicFrame => {
                     writeln!(
                         &mut out,
-                        "evm mem plan: {name} scheme=DynamicFrame locals_words={}",
-                        func_plan.locals_words
+                        "evm mem plan: {name} scheme=DynamicFrame static_clobber_words={} locals_words={}",
+                        func_plan.static_clobber_words, func_plan.locals_words
                     )
                     .expect("mem plan write failed");
                 }
@@ -182,20 +182,24 @@ impl EvmBackend {
             };
 
             if detail {
-                let mut direct_callee_need_max: u32 = 0;
+                let mut direct_callee_clobber_max: u32 = 0;
                 module.func_store.view(func, |function| {
                     for block in function.layout.iter_block() {
                         for insn in function.layout.iter_inst(block) {
                             let Some(call) = function.dfg.call_info(insn) else {
                                 continue;
                             };
-                            let Some(callee_plan) = section.plan.funcs.get(&call.callee()) else {
-                                continue;
-                            };
-                            let MemScheme::StaticArena(st) = &callee_plan.scheme else {
-                                continue;
-                            };
-                            direct_callee_need_max = direct_callee_need_max.max(st.need_words);
+                            let callee = call.callee();
+                            let callee_plan =
+                                section.plan.funcs.get(&callee).unwrap_or_else(|| {
+                                    panic!(
+                                        "missing memory plan for callee {} (called from {})",
+                                        callee.as_u32(),
+                                        func.as_u32()
+                                    )
+                                });
+                            direct_callee_clobber_max =
+                                direct_callee_clobber_max.max(callee_plan.static_clobber_words);
                         }
                     }
                 });
@@ -203,8 +207,8 @@ impl EvmBackend {
                 if let MemScheme::StaticArena(st) = &func_plan.scheme {
                     writeln!(
                         &mut out,
-                        "  detail locals_words={} direct_callee_need_max_words={direct_callee_need_max} need_words={}",
-                        func_plan.locals_words, st.need_words
+                        "  detail locals_words={} direct_callee_clobber_max_words={direct_callee_clobber_max} need_words={} static_clobber_words={}",
+                        func_plan.locals_words, st.need_words, func_plan.static_clobber_words
                     )
                     .expect("mem plan write failed");
 
@@ -237,8 +241,10 @@ impl EvmBackend {
                             .plan
                             .funcs
                             .get(&callee)
-                            .map(|p| p.static_clobber_words)
-                            .unwrap_or(0);
+                            .unwrap_or_else(|| {
+                                panic!("missing memory plan for callee {}", callee.as_u32())
+                            })
+                            .static_clobber_words;
 
                         let save_offsets = st
                             .call_saves
@@ -894,7 +900,10 @@ impl LowerBackend for EvmBackend {
                     ctx.push(OpCode::POP);
                     ctx.push(OpCode::POP);
                 } else {
-                    debug_assert_eq!(ty_size, 32, "word-slot model: expected 32-byte store");
+                    assert!(
+                        ty_size == 32,
+                        "word-slot model: expected 32-byte store (got {ty_size})"
+                    );
                     ctx.push(OpCode::MSTORE);
                 }
             }
@@ -1961,6 +1970,7 @@ fn debug_print_mem_plan(module: &Module, funcs: &[FuncRef], plan: &ProgramMemory
             MemScheme::StaticArena(st) => ("StaticArena", Some(st.need_words)),
             MemScheme::DynamicFrame => ("DynamicFrame", None),
         };
+        let clobber_words = func_plan.static_clobber_words;
 
         let (malloc_min, malloc_max, malloc_count) =
             if func_plan.malloc_future_static_words.is_empty() {
@@ -1979,15 +1989,19 @@ fn debug_print_mem_plan(module: &Module, funcs: &[FuncRef], plan: &ProgramMemory
                 )
             };
 
-        let static_end = need_words.map(|w| {
+        let clobber_end = (clobber_words != 0).then(|| {
             STATIC_BASE
-                .checked_add(w.checked_mul(WORD_BYTES).expect("static end overflow"))
-                .expect("static end overflow")
+                .checked_add(
+                    clobber_words
+                        .checked_mul(WORD_BYTES)
+                        .expect("clobber end overflow"),
+                )
+                .expect("clobber end overflow")
         });
 
         eprintln!(
-            "evm mem debug: {name} scheme={scheme} locals_words={} need_words={:?} malloc_bounds(min,max,count)=({:?},{:?},{malloc_count}) static_end={:?}",
-            func_plan.locals_words, need_words, malloc_min, malloc_max, static_end
+            "evm mem debug: {name} scheme={scheme} locals_words={} need_words={:?} static_clobber_words={clobber_words} malloc_bounds(min,max,count)=({:?},{:?},{malloc_count}) clobber_end={:?}",
+            func_plan.locals_words, need_words, malloc_min, malloc_max, clobber_end
         );
     }
 }
