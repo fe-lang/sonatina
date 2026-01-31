@@ -363,7 +363,7 @@ fn iter_phis_in_block(func: &Function, block: BlockId) -> impl Iterator<Item = I
     })
 }
 
-fn remove_phi_incoming_from(func: &mut Function, block: BlockId, pred: BlockId) {
+pub(crate) fn remove_phi_incoming_from(func: &mut Function, block: BlockId, pred: BlockId) {
     for phi_inst in iter_phis_in_block(func, block).collect::<Vec<_>>() {
         func.dfg.untrack_inst(phi_inst);
         let phi = func.dfg.cast_phi_mut(phi_inst).unwrap();
