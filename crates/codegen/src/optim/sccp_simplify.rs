@@ -1,7 +1,7 @@
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
-    Function, Immediate, InstDowncast, InstId, Type, Value, ValueId,
-    inst::{arith, cast, cmp, logic},
+    Function, Immediate, InstId, Type, Value, ValueId,
+    inst::{arith, cast, cmp, downcast, evm, inst_set::InstSetBase, logic},
 };
 
 use super::sccp::LatticeCell;
@@ -52,10 +52,7 @@ fn same_non_undef(
         return true;
     }
 
-    match lattice.get(lhs) {
-        Some(LatticeCell::Bot) | None => false,
-        _ => true,
-    }
+    !matches!(lattice.get(lhs), Some(LatticeCell::Bot) | None)
 }
 
 fn simplify_commutative_and(
@@ -236,9 +233,67 @@ fn simplify_shift(
     SimplifyResult::NoChange
 }
 
+fn simplify_double_not(func: &Function, is: &dyn InstSetBase, arg: ValueId) -> SimplifyResult {
+    let Value::Inst { inst, .. } = func.dfg.value(arg) else {
+        return SimplifyResult::NoChange;
+    };
+
+    if let Some(i) = downcast::<&logic::Not>(is, func.dfg.inst(*inst)) {
+        return SimplifyResult::Copy(*i.arg());
+    }
+
+    SimplifyResult::NoChange
+}
+
+fn simplify_double_neg(func: &Function, is: &dyn InstSetBase, arg: ValueId) -> SimplifyResult {
+    let Value::Inst { inst, .. } = func.dfg.value(arg) else {
+        return SimplifyResult::NoChange;
+    };
+
+    if let Some(i) = downcast::<&arith::Neg>(is, func.dfg.inst(*inst)) {
+        return SimplifyResult::Copy(*i.arg());
+    }
+
+    SimplifyResult::NoChange
+}
+
 fn simplify_redundant_cast(func: &Function, from: ValueId, ty: Type) -> SimplifyResult {
     if func.dfg.value_ty(from) == ty {
         return SimplifyResult::Copy(from);
+    }
+
+    SimplifyResult::NoChange
+}
+
+fn simplify_div_by_one(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> SimplifyResult {
+    let ty = func.dfg.value_ty(lhs);
+    let rhs_imm = known_imm(func, lattice, rhs);
+    let one = Immediate::one(ty);
+
+    if rhs_imm == Some(one) {
+        return SimplifyResult::Copy(lhs);
+    }
+
+    SimplifyResult::NoChange
+}
+
+fn simplify_rem_by_one(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> SimplifyResult {
+    let ty = func.dfg.value_ty(lhs);
+    let rhs_imm = known_imm(func, lattice, rhs);
+    let one = Immediate::one(ty);
+
+    if rhs_imm == Some(one) {
+        return SimplifyResult::Const(Immediate::zero(ty));
     }
 
     SimplifyResult::NoChange
@@ -268,79 +323,111 @@ pub(super) fn simplify_inst(
     let inst = func.dfg.inst(inst_id);
     let is = func.inst_set();
 
-    if let Some(i) = <&logic::And as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&logic::Not>(is, inst) {
+        return simplify_double_not(func, is, *i.arg());
+    }
+    if let Some(i) = downcast::<&arith::Neg>(is, inst) {
+        return simplify_double_neg(func, is, *i.arg());
+    }
+
+    if let Some(i) = downcast::<&logic::And>(is, inst) {
         return simplify_commutative_and(func, lattice, may_be_undef, *i.lhs(), *i.rhs());
     }
-    if let Some(i) = <&logic::Or as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&logic::Or>(is, inst) {
         return simplify_commutative_or(func, lattice, may_be_undef, *i.lhs(), *i.rhs());
     }
-    if let Some(i) = <&logic::Xor as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&logic::Xor>(is, inst) {
         return simplify_commutative_xor(func, lattice, may_be_undef, *i.lhs(), *i.rhs());
     }
 
-    if let Some(i) = <&arith::Mul as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&arith::Mul>(is, inst) {
         return simplify_commutative_mul(func, lattice, *i.lhs(), *i.rhs());
     }
-    if let Some(i) = <&arith::Add as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&arith::Add>(is, inst) {
         return simplify_commutative_add(func, lattice, *i.lhs(), *i.rhs());
     }
-    if let Some(i) = <&arith::Sub as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&arith::Sub>(is, inst) {
         return simplify_sub(func, lattice, may_be_undef, *i.lhs(), *i.rhs());
     }
 
-    if let Some(i) = <&arith::Shl as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&arith::Udiv>(is, inst) {
+        return simplify_div_by_one(func, lattice, *i.lhs(), *i.rhs());
+    }
+    if let Some(i) = downcast::<&arith::Sdiv>(is, inst) {
+        return simplify_div_by_one(func, lattice, *i.lhs(), *i.rhs());
+    }
+    if let Some(i) = downcast::<&arith::Umod>(is, inst) {
+        return simplify_rem_by_one(func, lattice, *i.lhs(), *i.rhs());
+    }
+    if let Some(i) = downcast::<&arith::Smod>(is, inst) {
+        return simplify_rem_by_one(func, lattice, *i.lhs(), *i.rhs());
+    }
+    if let Some(i) = downcast::<&evm::EvmUdiv>(is, inst) {
+        return simplify_div_by_one(func, lattice, *i.lhs(), *i.rhs());
+    }
+    if let Some(i) = downcast::<&evm::EvmSdiv>(is, inst) {
+        return simplify_div_by_one(func, lattice, *i.lhs(), *i.rhs());
+    }
+    if let Some(i) = downcast::<&evm::EvmUmod>(is, inst) {
+        return simplify_rem_by_one(func, lattice, *i.lhs(), *i.rhs());
+    }
+    if let Some(i) = downcast::<&evm::EvmSmod>(is, inst) {
+        return simplify_rem_by_one(func, lattice, *i.lhs(), *i.rhs());
+    }
+
+    if let Some(i) = downcast::<&arith::Shl>(is, inst) {
         return simplify_shift(func, lattice, *i.bits(), *i.value(), true);
     }
-    if let Some(i) = <&arith::Shr as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&arith::Shr>(is, inst) {
         return simplify_shift(func, lattice, *i.bits(), *i.value(), true);
     }
-    if let Some(i) = <&arith::Sar as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&arith::Sar>(is, inst) {
         return simplify_shift(func, lattice, *i.bits(), *i.value(), true);
     }
 
-    if let Some(i) = <&cast::Zext as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&cast::Zext>(is, inst) {
         return simplify_redundant_cast(func, *i.from(), *i.ty());
     }
-    if let Some(i) = <&cast::Sext as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&cast::Sext>(is, inst) {
         return simplify_redundant_cast(func, *i.from(), *i.ty());
     }
-    if let Some(i) = <&cast::Trunc as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&cast::Trunc>(is, inst) {
         return simplify_redundant_cast(func, *i.from(), *i.ty());
     }
-    if let Some(i) = <&cast::Bitcast as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&cast::Bitcast>(is, inst) {
         return simplify_redundant_cast(func, *i.from(), *i.ty());
     }
 
-    if let Some(i) = <&cmp::Eq as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&cmp::Eq>(is, inst) {
         return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), true);
     }
-    if let Some(i) = <&cmp::Ne as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&cmp::Ne>(is, inst) {
         return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), false);
     }
 
-    if let Some(i) = <&cmp::Lt as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&cmp::Lt>(is, inst) {
         return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), false);
     }
-    if let Some(i) = <&cmp::Gt as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&cmp::Gt>(is, inst) {
         return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), false);
     }
-    if let Some(i) = <&cmp::Slt as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&cmp::Slt>(is, inst) {
         return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), false);
     }
-    if let Some(i) = <&cmp::Sgt as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&cmp::Sgt>(is, inst) {
         return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), false);
     }
 
-    if let Some(i) = <&cmp::Le as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&cmp::Le>(is, inst) {
         return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), true);
     }
-    if let Some(i) = <&cmp::Ge as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&cmp::Ge>(is, inst) {
         return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), true);
     }
-    if let Some(i) = <&cmp::Sle as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&cmp::Sle>(is, inst) {
         return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), true);
     }
-    if let Some(i) = <&cmp::Sge as InstDowncast>::downcast(is, inst) {
+    if let Some(i) = downcast::<&cmp::Sge>(is, inst) {
         return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), true);
     }
 
