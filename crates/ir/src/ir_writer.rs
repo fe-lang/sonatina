@@ -87,6 +87,21 @@ impl<'a> ModuleWriter<'a> {
             writeln!(w)?;
         }
 
+        if !self.module.objects.is_empty() {
+            let mut objects: Vec<_> = self.module.objects.values().collect();
+            objects.sort_by(|a, b| a.name.0.as_str().cmp(b.name.0.as_str()));
+
+            writeln!(w)?;
+            for (i, object) in objects.iter().enumerate() {
+                object.write(w, &self.module.ctx)?;
+                if i + 1 != objects.len() {
+                    writeln!(w)?;
+                    writeln!(w)?;
+                }
+            }
+            writeln!(w)?;
+        }
+
         Ok(())
     }
 
@@ -155,34 +170,7 @@ impl<'a> FuncWriter<'a> {
     }
 
     pub fn write(&mut self, w: &mut impl io::Write) -> io::Result<()> {
-        let func_ref = self.ctx.func_ref;
-        let m_ctx = self.ctx.module_ctx();
-
-        write!(w, "func ")?;
-        m_ctx.func_sig(func_ref, |sig| {
-            sig.linkage().write(w, &self.ctx)?;
-            write!(w, " %{}(", sig.name())?;
-            io::Result::Ok(())
-        })?;
-        let arg_values: SmallVec<[ValueWithTy; 8]> = self
-            .ctx
-            .func
-            .arg_values
-            .iter()
-            .map(|value| ValueWithTy(*value))
-            .collect();
-        arg_values.write_with_delim(w, ", ", &self.ctx)?;
-        write!(w, ")")?;
-
-        m_ctx.func_sig(func_ref, |sig| {
-            if !sig.ret_ty().is_unit() {
-                write!(w, " -> ")?;
-                sig.ret_ty().write(w, &self.ctx)
-            } else {
-                Ok(())
-            }
-        })?;
-
+        FunctionSignature.write(w, &self.ctx)?;
         writeln!(w, " {{")?;
         self.level += 1;
 
@@ -393,6 +381,43 @@ where
 
     fn has_content(&self) -> bool {
         self.as_ref().map(|x| x.has_content()).unwrap_or_default()
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct FunctionSignature;
+impl IrWrite<FuncWriteCtx<'_>> for FunctionSignature {
+    fn write<W>(&self, w: &mut W, ctx: &FuncWriteCtx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        let func_ref = ctx.func_ref;
+        let m_ctx = ctx.module_ctx();
+
+        write!(w, "func ")?;
+        m_ctx.func_sig(func_ref, |sig| {
+            sig.linkage().write(w, ctx)?;
+            write!(w, " %{}(", sig.name())?;
+            io::Result::Ok(())
+        })?;
+        let arg_values: SmallVec<[ValueWithTy; 8]> = ctx
+            .func
+            .arg_values
+            .iter()
+            .map(|value| ValueWithTy(*value))
+            .collect();
+        arg_values.write_with_delim(w, ", ", ctx)?;
+        write!(w, ")")?;
+
+        m_ctx.func_sig(func_ref, |sig| {
+            let ret_ty = sig.ret_ty();
+            if !ret_ty.is_unit() {
+                write!(w, " -> ")?;
+                ret_ty.write(w, ctx)
+            } else {
+                Ok(())
+            }
+        })
     }
 }
 

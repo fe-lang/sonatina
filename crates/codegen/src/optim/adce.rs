@@ -201,7 +201,7 @@ impl AdceSolver {
         };
         inserter.set_location(CursorLocation::At(last_inst));
 
-        let dests: Vec<_> = func
+        let dests = func
             .dfg
             .branch_info(last_inst)
             .map(|bi| bi.dests())

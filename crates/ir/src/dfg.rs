@@ -148,6 +148,10 @@ impl DataFlowGraph {
         }
     }
 
+    pub fn value_is_imm(&self, value_id: ValueId) -> bool {
+        matches!(self.values[value_id], Value::Immediate { .. })
+    }
+
     pub fn attach_user(&mut self, inst_id: InstId) {
         let inst = &self.insts[inst_id];
         inst.for_each_value(&mut |value| {
@@ -234,6 +238,18 @@ impl DataFlowGraph {
         InstDowncastMut::downcast_mut(is, inst)
     }
 
+    pub fn cast_call(&self, inst_id: InstId) -> Option<&control_flow::Call> {
+        let inst = self.inst(inst_id);
+        let is = self.inst_set();
+        InstDowncast::downcast(is, inst)
+    }
+
+    pub fn cast_br_table(&self, inst_id: InstId) -> Option<&control_flow::BrTable> {
+        let inst = self.inst(inst_id);
+        let is = self.inst_set();
+        InstDowncast::downcast(is, inst)
+    }
+
     pub fn make_phi(&self, args: Vec<(ValueId, BlockId)>) -> Phi {
         Phi::new(self.inst_set().phi(), args)
     }
@@ -264,6 +280,20 @@ impl DataFlowGraph {
 
     pub fn is_phi(&self, inst_id: InstId) -> bool {
         self.cast_phi(inst_id).is_some()
+    }
+
+    pub fn is_call(&self, inst_id: InstId) -> bool {
+        self.cast_call(inst_id).is_some()
+    }
+
+    pub fn is_return(&self, inst_id: InstId) -> bool {
+        <&control_flow::Return as InstDowncast>::downcast(self.inst_set(), self.inst(inst_id))
+            .is_some()
+    }
+
+    pub fn as_return(&self, inst: InstId) -> Option<ValueId> {
+        let r: &control_flow::Return = InstDowncast::downcast(self.inst_set(), self.inst(inst))?;
+        *r.arg()
     }
 
     pub fn rewrite_branch_dest(&mut self, inst_id: InstId, from: BlockId, to: BlockId) {

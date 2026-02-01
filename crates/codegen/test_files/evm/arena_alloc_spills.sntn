@@ -1,0 +1,130 @@
+#! evm.config: { stack_reach: 16, emit_mem_plan: true }
+#! evm.case: ok
+#!   calldata: u32be(11) u32be(22)
+#!   expect: return u256(465)
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = shr 224.i32 v0;
+        v2.i256 = shl 32.i32 v0;
+        v3.i256 = shr 224.i32 v2;
+        v4.i256 = call %caller v1 v3 3.i256 4.i256 5.i256 6.i256 7.i256 8.i256;
+
+        mstore 0.i32 v4 i256;
+        evm_return 0.i8 32.i8;
+}
+
+func public %caller(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256, v7.i256) -> i256 {
+    block0:
+        v8.*i256 = alloca i256;
+        mstore v8 v7 i256;
+
+        v9.i256 = add v0 1.i256;
+        v10.i256 = add v0 2.i256;
+        v11.i256 = add v0 3.i256;
+        v12.i256 = add v0 4.i256;
+        v13.i256 = add v0 5.i256;
+        v14.i256 = add v0 6.i256;
+        v15.i256 = add v0 7.i256;
+        v16.i256 = add v0 8.i256;
+
+        v17.i256 = add v1 9.i256;
+        v18.i256 = add v1 10.i256;
+        v19.i256 = add v1 11.i256;
+        v20.i256 = add v1 12.i256;
+        v21.i256 = add v1 13.i256;
+        v22.i256 = add v1 14.i256;
+        v23.i256 = add v1 15.i256;
+
+        v24.i256 = add v2 v3;
+        v25.i256 = add v4 v5;
+
+        v26.i256 = call %mid v0 v1 v2 v3 v4 v5 v6 v7;
+
+        v27.i256 = mload v8 i256;
+        v28.i256 = add v26 v27;
+
+        v29.i256 = add v28 v9;
+        v30.i256 = add v29 v10;
+        v31.i256 = add v30 v11;
+        v32.i256 = add v31 v12;
+        v33.i256 = add v32 v13;
+        v34.i256 = add v33 v14;
+        v35.i256 = add v34 v15;
+        v36.i256 = add v35 v16;
+        v37.i256 = add v36 v17;
+        v38.i256 = add v37 v18;
+        v39.i256 = add v38 v19;
+        v40.i256 = add v39 v20;
+        v41.i256 = add v40 v21;
+        v42.i256 = add v41 v22;
+        v43.i256 = add v42 v23;
+        v44.i256 = add v43 v24;
+        v45.i256 = add v44 v25;
+        return v45;
+}
+
+func public %mid(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256, v7.i256) -> i256 {
+    block0:
+        v8.*i256 = alloca i256;
+        mstore v8 v0 i256;
+
+        v9.i256 = call %callee v0 v1 v2 v3 v4 v5 v6 v7;
+
+        v10.i256 = mload v8 i256;
+        v11.i256 = add v9 v10;
+        return v11;
+}
+
+func public %callee(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256, v7.i256) -> i256 {
+    block0:
+        mstore 0.i32 0.i256 i256;
+
+        v8.*i256 = alloca i256;
+        v9.*i256 = alloca i256;
+        v10.*i256 = alloca i256;
+        v11.*i256 = alloca i256;
+        v12.*i256 = alloca i256;
+        v13.*i256 = alloca i256;
+        v14.*i256 = alloca i256;
+        v15.*i256 = alloca i256;
+
+        mstore v8 v0 i256;
+        mstore v9 v1 i256;
+        mstore v10 v2 i256;
+        mstore v11 v3 i256;
+        mstore v12 v4 i256;
+        mstore v13 v5 i256;
+        mstore v14 v6 i256;
+        mstore v15 v7 i256;
+
+        v16.i256 = mload v8 i256;
+        v17.i256 = mload v9 i256;
+        v18.i256 = add v16 v17;
+
+        v19.i256 = mload v10 i256;
+        v20.i256 = mload v11 i256;
+        v21.i256 = add v19 v20;
+
+        v22.i256 = mload v12 i256;
+        v23.i256 = mload v13 i256;
+        v24.i256 = add v22 v23;
+
+        v25.i256 = mload v14 i256;
+        v26.i256 = mload v15 i256;
+        v27.i256 = add v25 v26;
+
+        v28.i256 = add v18 v21;
+        v29.i256 = add v24 v27;
+        v30.i256 = add v28 v29;
+        return v30;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

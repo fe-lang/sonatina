@@ -1,0 +1,151 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/deploy_codecopy.sntn
+---
+evm.config: stack_reach=16 emit_debug_trace=true
+
+object: Contract
+  section init: 33 bytes
+  section runtime: 21 bytes
+  total: 54 bytes
+
+functions:
+  mem: dyn_base=0xc0 static_base=0xc0
+  entry: ir_blocks=1 ir_insts=7 vcode_ops=17 fixups=0 imm_bytes=4
+    mem: scheme=StaticArena need_words=0 locals_words=0
+  init: ir_blocks=1 ir_insts=4 vcode_ops=10 fixups=2 imm_bytes=2
+    mem: scheme=StaticArena need_words=0 locals_words=0
+
+evm:
+  deploy: success reason=Return gas_used=57761 gas_refunded=0 logs=0 output=create len=21 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case ok: calldata_len=8 success reason=Return gas_used=21102 gas_refunded=0 logs=0 output=call len=32
+
+
+--------------- DEBUG ---------------
+
+evm mem plan: dyn_base=0xc0 static_base=0xc0
+evm mem plan: entry scheme=StaticArena need_words=0 locals_words=0
+evm mem plan: init scheme=StaticArena need_words=0 locals_words=0
+
+// func public %entry()
+  block0 P=[] T=[]
+    - stack=[]
+      pre: [PUSH(0)]
+      evm_calldata_load [0] -> v0
+    - stack=[v0]
+      pre: [DUP1, PUSH(224)]
+      shr [224, v0] -> v1
+    - stack=[v1, v0], last_use=[v0]
+      pre: [SWAP1, PUSH(32)]
+      shl [32, v0] -> v2
+    - stack=[v2, v1], last_use=[v2]
+      pre: [PUSH(224)]
+      shr [224, v2] -> v3
+    - stack=[v3, v1], last_use=[v1, v3]
+      add [v3, v1] -> v4
+    - stack=[v4], last_use=[v4]
+      pre: [PUSH(0)]
+      mstore [0, v4]
+    - stack=[]
+      pre: [PUSH(32), PUSH(0)]
+      evm_return [0, 32]
+
+// func public %init()
+  block0 P=[] T=[]
+    - stack=[]
+      sym_addr [] -> v0
+    - stack=[v0]
+      sym_size [] -> v1
+    - stack=[v1, v0], last_use=[v0]
+      pre: [DUP1, SWAP1, SWAP2, PUSH(I256 { is_negative: false, abs: 0 })]
+      evm_code_copy [I256 { is_negative: false, abs: 0 }, v0, v1]
+    - stack=[v1], last_use=[v1]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 })]
+      evm_return [I256 { is_negative: false, abs: 0 }, v1]
+
+// func public %entry()
+entry:
+  block0:
+    JUMPDEST
+    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
+    CALLDATALOAD
+    DUP1  // v1.i32 = shr 224.i32 v0;
+    PUSH1 0xe0 (224)
+    SHR
+    SWAP1  // v2.i32 = shl 32.i32 v0;
+    PUSH1 0x20 (32)
+    SHL
+    PUSH1 0xe0 (224)  // v3.i32 = shr 224.i32 v2;
+    SHR
+    ADD  // v4.i32 = add v1 v3;
+    PUSH0  // mstore 0.i32 v4 i32;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH0
+    RETURN
+
+// func public %init()
+init:
+  block0:
+    JUMPDEST
+    PUSH0 0x0 (0)  // v0.i256 = sym_addr &runtime;
+    PUSH0 0x0 (0)  // v1.i256 = sym_size &runtime;
+    DUP1  // evm_code_copy 0.i256 v0 v1;
+    SWAP1
+    SWAP2
+    PUSH0
+    CODECOPY
+    PUSH0  // evm_return 0.i256 v1;
+    RETURN
+
+
+
+--------------- BYTECODE ---------------
+
+// section init
+0x5b600c60158090915f395ff35b5f358060e01c9060201b60e01c015f5260205ff3
+
+// section runtime
+0x5b5f358060e01c9060201b60e01c015f5260205ff3
+
+
+
+--------------- EVM TRACE ---------------
+
+
+Success { reason: Return, gas_used: 57761, gas_refunded: 0, logs: [], output: Create(0x5b5f358060e01c9060201b60e01c015f5260205ff3, Some(0xbd770416a3345f91e4b34576cb804a576fa48eb1)) }
+
+    pc  opcode            input (stack grows to the right)
+     0  5b  JUMPDEST      []
+     1  60  PUSH1         0x0c  []
+     3  60  PUSH1         0x15  [0xc]
+     5  80  DUP1          [0xc, 0x15]
+     6  90  SWAP1         [0xc, 0x15, 0x15]
+     7  91  SWAP2         [0xc, 0x15, 0x15]
+     8  5f  PUSH0         [0x15, 0x15, 0xc]
+     9  39  CODECOPY      [0x15, 0x15, 0xc, 0x0]
+    10  5f  PUSH0         [0x15]
+    11  f3  RETURN        [0x15, 0x0]
+
+
+Success { reason: Return, gas_used: 21102, gas_refunded: 0, logs: [], output: Call(0x0000000000000000000000000000000000000000000000000000000000000021) }
+
+    pc  opcode            input (stack grows to the right)
+     0  5b  JUMPDEST      []
+     1  5f  PUSH0         []
+     2  35  CALLDATALOAD  [0x0]
+     3  80  DUP1          [0xb00000016000000000000000000000000000000000000000000000000]
+     4  60  PUSH1         0xe0  [0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000]
+     6  1c  SHR           [0xb00000016000000000000000000000000000000000000000000000000, 0xb00000016000000000000000000000000000000000000000000000000, 0xe0]
+     7  90  SWAP1         [0xb00000016000000000000000000000000000000000000000000000000, 0xb]
+     8  60  PUSH1         0x20  [0xb, 0xb00000016000000000000000000000000000000000000000000000000]
+    10  1b  SHL           [0xb, 0xb00000016000000000000000000000000000000000000000000000000, 0x20]
+    11  60  PUSH1         0xe0  [0xb, 0x1600000000000000000000000000000000000000000000000000000000]
+    13  1c  SHR           [0xb, 0x1600000000000000000000000000000000000000000000000000000000, 0xe0]
+    14  01  ADD           [0xb, 0x16]
+    15  5f  PUSH0         [0x21]
+    16  52  MSTORE        [0x21, 0x0]
+    17  60  PUSH1         0x20  []
+    19  5f  PUSH0         [0x20]
+    20  f3  RETURN        [0x20, 0x0]

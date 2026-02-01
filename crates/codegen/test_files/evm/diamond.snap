@@ -1,0 +1,18 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/diamond.sntn
+---
+evm.config: stack_reach=16 emit_debug_trace=false
+
+object: Contract
+  section runtime: 31 bytes
+  total: 31 bytes
+
+functions:
+  mem: dyn_base=0xc0 static_base=0xc0
+  entry: ir_blocks=4 ir_insts=11 vcode_ops=25 fixups=2 imm_bytes=4
+    mem: scheme=StaticArena need_words=0 locals_words=0
+
+evm:
+  case ok: calldata_len=8 success reason=Return gas_used=21124 gas_refunded=0 logs=0 output=call len=32

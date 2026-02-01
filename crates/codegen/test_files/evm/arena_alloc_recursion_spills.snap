@@ -1,0 +1,48 @@
+---
+source: crates/codegen/tests/evm.rs
+assertion_line: 351
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/arena_alloc_recursion_spills.sntn
+---
+evm.config: stack_reach=4 emit_debug_trace=false emit_mem_plan=true
+
+object: Contract
+  section runtime: 236 bytes
+  total: 236 bytes
+
+functions:
+  mem: dyn_base=0x180 static_base=0xc0
+  f: ir_blocks=3 ir_insts=28 vcode_ops=148 fixups=5 imm_bytes=31
+    mem: scheme=StaticArena need_words=6 locals_words=6
+  sink8: ir_blocks=1 ir_insts=8 vcode_ops=19 fixups=0 imm_bytes=0
+    mem: scheme=StaticArena need_words=0 locals_words=0
+  a: ir_blocks=1 ir_insts=2 vcode_ops=9 fixups=2 imm_bytes=1
+    mem: scheme=StaticArena need_words=6 locals_words=0
+  entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
+    mem: scheme=StaticArena need_words=6 locals_words=0
+
+--------------- MEM PLAN ---------------
+
+evm mem plan: dyn_base=0x180 static_base=0xc0
+evm mem plan: f scheme=StaticArena need_words=6 locals_words=6
+  detail locals_words=6 direct_callee_need_max_words=6 need_words=6
+  call inst21 callee=%f callee_need_words=6 choice=ForcedSave has_return=true save_words=2 save_offsets=[0, 1]
+  scratch_spill v7 slot=0 addr=0x0
+  scratch_spill v8 slot=1 addr=0x20
+  spill v2 offset_words=0 addr=0xc0
+  spill v9 offset_words=2 addr=0x100
+  spill v10 offset_words=3 addr=0x120
+  spill v11 offset_words=4 addr=0x140
+  spill v12 offset_words=5 addr=0x160
+  alloca v2 offset_words=1 size_words=1 addr=0xe0
+evm mem plan: sink8 scheme=StaticArena need_words=0 locals_words=0
+  detail locals_words=0 direct_callee_need_max_words=0 need_words=0
+evm mem plan: a scheme=StaticArena need_words=6 locals_words=0
+  detail locals_words=0 direct_callee_need_max_words=6 need_words=6
+  call inst0 callee=%f callee_need_words=6 choice=Save has_return=true save_words=0
+evm mem plan: entry scheme=StaticArena need_words=6 locals_words=0
+  detail locals_words=0 direct_callee_need_max_words=6 need_words=6
+  call inst0 callee=%a callee_need_words=6 choice=Save has_return=true save_words=0
+
+evm:
+  <no evm.case directives>

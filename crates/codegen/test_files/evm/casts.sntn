@@ -1,0 +1,35 @@
+#! evm.case: ok
+#!   calldata: u32be(11) u32be(22)
+#!   expect: return u256(0x010000000000000000000000000000002a)
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = call %main;
+        mstore 0.i32 v0 i256;
+        evm_return 0.i8 32.i8;
+}
+
+func public %main() -> i256 {
+    block0:
+        v0.i256 = sext -1.i8 i256;
+        v1.i256 = zext 1.i1 i256;
+        v2.i128 = trunc v0 i128;
+        v3.i256 = zext v2 i256;
+
+        v4.*i8 = int_to_ptr 42.i64 *i8;
+        v5.i64 = ptr_to_int v4 i64;
+        v6.i256 = zext v5 i256;
+
+        v7.i256 = add v3 v6;
+        v8.i256 = bitcast v7 i256;
+        v9.i256 = add v8 v1;
+        return v9;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
