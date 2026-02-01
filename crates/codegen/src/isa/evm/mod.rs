@@ -801,6 +801,10 @@ impl LowerBackend for EvmBackend {
                 }
             }
             EvmInstKind::Phi(_) => {}
+            EvmInstKind::Unreachable(_) => {
+                perform_actions(ctx, &alloc.read(insn, &[]));
+                ctx.push(OpCode::INVALID);
+            }
 
             EvmInstKind::BrTable(br) => {
                 let table = br.table().clone();
