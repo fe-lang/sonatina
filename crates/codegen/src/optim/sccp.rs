@@ -16,6 +16,8 @@ use sonatina_ir::{
     prelude::*,
 };
 
+use crate::cfg_edit::{remove_phi_incoming_from, simplify_trivial_phis_in_block};
+
 #[derive(Debug)]
 pub struct SccpSolver {
     lattice: SecondaryMap<ValueId, LatticeCell>,
@@ -272,6 +274,7 @@ impl SccpSolver {
             match inserter.loc() {
                 CursorLocation::BlockTop(block) => {
                     if !self.reachable_blocks.contains(&block) {
+                        self.prune_phi_incoming_from_removed_block(func, block);
                         inserter.remove_block(func);
                     } else {
                         inserter.proceed(func);
@@ -282,9 +285,14 @@ impl SccpSolver {
 
                 CursorLocation::At(inst) => {
                     if let Some(bi) = func.dfg.branch_info(inst) {
+                        let from = func.layout.inst_block(inst);
                         for dest in bi.dests() {
                             if !self.is_reachable_edge(inst, dest) {
                                 func.dfg.remove_branch_dest(inst, dest);
+                                if func.layout.is_block_inserted(dest) {
+                                    remove_phi_incoming_from(func, dest, from);
+                                    simplify_trivial_phis_in_block(func, dest);
+                                }
                             }
                         }
                     }
@@ -292,6 +300,22 @@ impl SccpSolver {
                 }
 
                 CursorLocation::NoWhere => break,
+            }
+        }
+    }
+
+    fn prune_phi_incoming_from_removed_block(&self, func: &mut Function, block: BlockId) {
+        assert!(func.layout.is_block_inserted(block));
+        let term = func.layout.last_inst_of(block).expect("empty block");
+        assert!(func.dfg.is_terminator(term));
+        if let Some(bi) = func.dfg.branch_info(term) {
+            for succ in bi.dests() {
+                let inserted = func.layout.is_block_inserted(succ);
+                assert!(inserted || !self.reachable_blocks.contains(&succ));
+                if inserted {
+                    remove_phi_incoming_from(func, succ, block);
+                    simplify_trivial_phis_in_block(func, succ);
+                }
             }
         }
     }
@@ -334,19 +358,65 @@ impl SccpSolver {
     }
 
     fn try_fold_phi(&self, func: &mut Function, inst: InstId) {
-        let phi = func.dfg.cast_phi_mut(inst).unwrap();
-        phi.retain(|block| self.reachable_blocks.contains(&block));
+        let block = func.layout.inst_block(inst);
+        let phi_value = func.dfg.inst_result(inst).expect("phi has no result");
+        let phi_ty = func.dfg.value_ty(phi_value);
 
-        // Remove phi function if it has just one argument.
-        if phi.args().len() == 1 {
-            let phi_arg = phi.args()[0].0;
-            let phi_value = func.dfg.inst_result(inst).unwrap();
+        let reachable_preds: BTreeSet<_> = func
+            .dfg
+            .cast_phi(inst)
+            .unwrap()
+            .args()
+            .iter()
+            .map(|&(_, pred)| pred)
+            .filter(|pred| self.is_reachable(func, *pred, block))
+            .collect();
+
+        func.dfg.untrack_inst(inst);
+
+        let mut fold_arg = None;
+        {
+            let phi = func.dfg.cast_phi_mut(inst).unwrap();
+            phi.retain(|pred| reachable_preds.contains(&pred));
+
+            let mut seen = BTreeSet::new();
+            for &(_, pred) in phi.args() {
+                assert!(
+                    seen.insert(pred),
+                    "phi {inst:?} has duplicate incoming from {pred:?}"
+                );
+            }
+
+            if phi.args().len() == 1 {
+                fold_arg = Some(phi.args()[0].0);
+            }
+        }
+
+        let fold_arg = if fold_arg.is_none() && func.dfg.cast_phi(inst).unwrap().args().is_empty() {
+            Some(func.dfg.make_undef_value(phi_ty))
+        } else {
+            fold_arg
+        };
+
+        // Remove phi function if it has 0 or 1 arguments.
+        if let Some(phi_arg) = fold_arg {
+            let phi_arg = if phi_arg == phi_value {
+                func.dfg.make_undef_value(phi_ty)
+            } else {
+                phi_arg
+            };
             func.dfg.change_to_alias(phi_value, phi_arg);
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        } else {
+            func.dfg.attach_user(inst);
         }
     }
 
     fn is_reachable(&self, func: &Function, from: BlockId, to: BlockId) -> bool {
+        if !func.layout.is_block_inserted(from) || !func.layout.is_block_inserted(to) {
+            return false;
+        }
+
         let Some(last_inst) = func.layout.last_inst_of(from) else {
             return false;
         };

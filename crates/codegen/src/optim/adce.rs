@@ -9,7 +9,11 @@ use sonatina_ir::{
     inst::SideEffect,
 };
 
-use crate::post_domtree::{PDFSet, PDTIdom, PostDomTree};
+use crate::{
+    cfg_edit::CleanupMode,
+    optim::cfg_cleanup::CfgCleanup,
+    post_domtree::{PDFSet, PDTIdom, PostDomTree},
+};
 
 pub struct AdceSolver {
     live_insts: SecondaryMap<InstId, bool>,
@@ -40,6 +44,7 @@ impl AdceSolver {
 
     pub fn run(&mut self, func: &mut Function) {
         while self.run_dce(func) {}
+        CfgCleanup::new(CleanupMode::Strict).run(func);
     }
 
     /// Returns `true` if branch inst is modified while dead code elimination.
@@ -208,15 +213,24 @@ impl AdceSolver {
                 continue;
             }
 
-            match self.living_post_dom(dest) {
-                // If the destination is dead but its post dominator is living, then change the
-                // destination to the post dominator.
-                Some(postdom) => func.dfg.rewrite_branch_dest(last_inst, dest, postdom),
-
-                // If the block doesn't have post dominator, then remove the dest.
-                None => {
-                    func.dfg.remove_branch_dest(last_inst, dest);
+            let mut rewrote = false;
+            if let Some(postdom) = self.living_post_dom(dest) {
+                let safe_succ = func
+                    .dfg
+                    .branch_info(last_inst)
+                    .is_some_and(|bi| bi.dests().contains(&postdom));
+                let safe_no_phi = !func
+                    .layout
+                    .iter_inst(postdom)
+                    .any(|inst| func.dfg.is_phi(inst));
+                if safe_succ || safe_no_phi {
+                    func.dfg.rewrite_branch_dest(last_inst, dest, postdom);
+                    rewrote = true;
                 }
+            }
+
+            if !rewrote {
+                func.dfg.remove_branch_dest(last_inst, dest);
             }
 
             changed = true;

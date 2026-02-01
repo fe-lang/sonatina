@@ -1,3 +1,4 @@
+pub mod cfg_edit;
 pub mod critical_edge;
 pub mod domtree;
 pub mod loop_analysis;

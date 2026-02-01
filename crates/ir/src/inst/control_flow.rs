@@ -69,6 +69,11 @@ pub struct Return {
     arg: Option<ValueId>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(super::SideEffect::Write))]
+#[inst(terminator)]
+pub struct Unreachable {}
+
 /// A trait for instructions that can be used as a call.
 #[inst_prop]
 pub trait CallInfo {
@@ -104,11 +109,12 @@ impl BranchInfo for Jump {
         1
     }
 
-    fn remove_dest(&self, _isb: &dyn InstSetBase, dest: BlockId) -> Box<dyn Inst> {
+    fn remove_dest(&self, isb: &dyn InstSetBase, dest: BlockId) -> Box<dyn Inst> {
         if dest == self.dest {
-            panic!("can't remove destination from `Jump` inst")
+            Box::new(Unreachable::new_unchecked(isb))
+        } else {
+            Box::new(*self)
         }
-        Box::new(*self)
     }
 
     fn rewrite_dest(&self, _isb: &dyn InstSetBase, from: BlockId, to: BlockId) -> Box<dyn Inst> {
@@ -132,16 +138,20 @@ impl BranchInfo for Br {
     }
 
     fn remove_dest(&self, isb: &dyn InstSetBase, dest: BlockId) -> Box<dyn Inst> {
-        let remain = if self.z_dest == dest {
-            self.nz_dest
-        } else if self.nz_dest == dest {
-            self.z_dest
-        } else {
-            return Box::new(self.clone());
-        };
+        let nz = self.nz_dest;
+        let z = self.z_dest;
 
-        let jump = Jump::new(isb.jump(), remain);
-        Box::new(jump)
+        if nz == dest && z == dest {
+            return Box::new(Unreachable::new_unchecked(isb));
+        }
+        if nz == dest {
+            return Box::new(Jump::new(isb.jump(), z));
+        }
+        if z == dest {
+            return Box::new(Jump::new(isb.jump(), nz));
+        }
+
+        Box::new(self.clone())
     }
 
     fn rewrite_dest(&self, isb: &dyn InstSetBase, from: BlockId, to: BlockId) -> Box<dyn Inst> {
@@ -190,11 +200,10 @@ impl BranchInfo for BrTable {
         brt.table = keep;
 
         let dest_num = brt.dests().len();
-        if dest_num == 1 {
-            let jump = Jump::new(isb.jump(), brt.dests()[0]);
-            Box::new(jump)
-        } else {
-            Box::new(brt)
+        match dest_num {
+            0 => Box::new(Unreachable::new_unchecked(isb)),
+            1 => Box::new(Jump::new(isb.jump(), brt.dests()[0])),
+            _ => Box::new(brt),
         }
     }
 
@@ -231,15 +240,13 @@ fn try_convert_branch_to_jump(
     isb: &dyn InstSetBase,
     branch: &dyn BranchInfo,
 ) -> Option<Box<dyn Inst>> {
-    let first_dest = branch.dests()[0];
-    let is_dest_unique = branch
-        .dests()
-        .iter()
-        .skip(1)
-        .all(|dest| *dest == first_dest);
-    if is_dest_unique {
-        let jump = Jump::new(isb.jump(), first_dest);
-        Some(Box::new(jump))
+    let dests = branch.dests();
+    let Some(&first_dest) = dests.first() else {
+        return Some(Box::new(Unreachable::new_unchecked(isb)));
+    };
+
+    if dests.iter().all(|dest| *dest == first_dest) {
+        Some(Box::new(Jump::new(isb.jump(), first_dest)))
     } else {
         None
     }

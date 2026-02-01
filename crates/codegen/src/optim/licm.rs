@@ -30,8 +30,9 @@ impl LicmSolver {
             self.collect_invaliants(func, cfg, lpt, lp);
 
             if !self.invariants.is_empty() {
-                let preheader = self.create_preheader(func, cfg, lpt, lp);
-                self.hoist_invariants(func, preheader);
+                if let Some(preheader) = self.create_preheader(func, cfg, lpt, lp) {
+                    self.hoist_invariants(func, preheader);
+                }
                 self.invariants.clear();
             }
         }
@@ -85,7 +86,7 @@ impl LicmSolver {
             || func.dfg.is_phi(inst_id))
     }
 
-    /// Returns preheader of the loop.
+    /// Returns preheader of the loop, if one can be used/created.
     /// 1. If there is natural preheader for the loop, then returns it without
     ///    any modification of function.
     /// 2. If no natural preheader for the loop, then create the preheader and
@@ -96,7 +97,7 @@ impl LicmSolver {
         cfg: &mut ControlFlowGraph,
         lpt: &mut LoopTree,
         lp: Loop,
-    ) -> BlockId {
+    ) -> Option<BlockId> {
         let lp_header = lpt.loop_header(lp);
         let original_preheaders: Vec<BlockId> = cfg
             .preds_of(lp_header)
@@ -104,10 +105,19 @@ impl LicmSolver {
             .filter(|block| !lpt.is_in_loop(*block, lp))
             .collect();
 
+        let is_entry_header = func.layout.entry_block() == Some(lp_header);
+        let header_starts_with_phi = func
+            .layout
+            .first_inst_of(lp_header)
+            .is_some_and(|inst| func.dfg.is_phi(inst));
+        if original_preheaders.is_empty() && (!is_entry_header || header_starts_with_phi) {
+            return None;
+        }
+
         // If the loop header already has a single preheader and the edge is not a
         // critical edge, then it's possible to use the preheader as is.
         if original_preheaders.len() == 1 && cfg.succs_of(original_preheaders[0]).count() == 1 {
-            return original_preheaders[0];
+            return Some(original_preheaders[0]);
         }
 
         // Create preheader and insert it before the loop header.
@@ -137,7 +147,7 @@ impl LicmSolver {
             lpt.map_block(new_preheader, parent_lp);
         }
 
-        new_preheader
+        Some(new_preheader)
     }
 
     /// Hoist invariants to the preheader.
@@ -157,6 +167,10 @@ impl LicmSolver {
         original_preheaders: &[BlockId],
         new_preheader: BlockId,
     ) {
+        if original_preheaders.is_empty() {
+            return;
+        }
+
         // Record inserted phis to avoid duplication of the same phi.
         let mut inserted_phis = FxHashMap::default();
 
@@ -166,9 +180,16 @@ impl LicmSolver {
                 break;
             };
 
+            let phi_result = func
+                .dfg
+                .inst_result(phi_inst_id)
+                .unwrap_or_else(|| panic!("phi {phi_inst_id:?} has no result"));
+            let phi_ty = func.dfg.value_ty(phi_result);
+
             // Create new phi inst that should be inserted to the preheader, and remove inst
             // arguments passing through original preheaders.
             let mut new_phi = func.dfg.make_phi(vec![]);
+            func.dfg.untrack_inst(phi_inst_id);
             let old_phi = func.dfg.cast_phi_mut(phi_inst_id).unwrap();
 
             for &block in original_preheaders {
@@ -188,8 +209,7 @@ impl LicmSolver {
                     let mut inserter =
                         InstInserter::at_location(CursorLocation::BlockTop(new_preheader));
                     let new_phi_inst = inserter.insert_inst_data(func, new_phi.clone());
-                    let ty = func.dfg.value_ty(new_phi.args()[0].0);
-                    let result = inserter.make_result(func, new_phi_inst, ty);
+                    let result = inserter.make_result(func, new_phi_inst, phi_ty);
                     inserter.attach_result(func, new_phi_inst, result);
 
                     // Add phi_inst_data to `inserted_phis` for reusing.
@@ -211,5 +231,78 @@ impl LicmSolver {
 impl Default for LicmSolver {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sonatina_ir::{
+        ControlFlowGraph, Type,
+        builder::test_util::*,
+        inst::{
+            arith::Add,
+            cmp::Slt,
+            control_flow::{Br, Jump, Phi, Return},
+        },
+        prelude::*,
+    };
+
+    use crate::{domtree::DomTree, loop_analysis::LoopTree};
+
+    use super::LicmSolver;
+
+    #[test]
+    fn licm_skips_entry_loop_with_phi_and_no_preheader() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I32], Type::Unit);
+        let is = evm.inst_set();
+
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+        let b2 = builder.append_block();
+
+        let arg0 = builder.args()[0];
+
+        builder.switch_to_block(b0);
+        let v0 = builder.insert_inst_with(|| Phi::new(is, vec![]), Type::I32);
+        let c1 = builder.make_imm_value(1i32);
+        let invariant = builder.insert_inst_with(|| Add::new(is, arg0, c1), Type::I32);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b1));
+
+        builder.switch_to_block(b1);
+        let v1 = builder.insert_inst_with(|| Add::new(is, v0, c1), Type::I32);
+        let c10 = builder.make_imm_value(10i32);
+        let cond = builder.insert_inst_with(|| Slt::new(is, v1, c10), Type::I1);
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, b0, b2));
+        builder.append_phi_arg(v0, v1, b1);
+
+        builder.switch_to_block(b2);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
+
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let invariant_inst = func.dfg.value_inst(invariant).unwrap();
+            assert_eq!(func.layout.entry_block(), Some(b0));
+            assert_eq!(func.layout.inst_block(invariant_inst), b0);
+            assert_eq!(func.layout.iter_block().count(), 3);
+
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+            let mut lpt = LoopTree::default();
+            lpt.compute(&cfg, &domtree);
+
+            let mut solver = LicmSolver::new();
+            solver.run(func, &mut cfg, &mut lpt);
+
+            assert_eq!(func.layout.entry_block(), Some(b0));
+            assert_eq!(func.layout.inst_block(invariant_inst), b0);
+            assert_eq!(func.layout.iter_block().count(), 3);
+        });
     }
 }

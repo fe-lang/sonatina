@@ -1,0 +1,59 @@
+#! CFG cleanup pass tests.
+
+target = "evm-ethereum-london"
+
+#! Assert insts after a terminator are removed and newly unreachable blocks are pruned.
+# sameln: func public %trim_after_terminator() {
+# nextln:     block0:
+# nextln:         evm_revert 0.i32 0.i32;
+# nextln: }
+func public %trim_after_terminator() {
+    block0:
+        evm_revert 0.i32 0.i32;
+        jump block1;
+
+    block1:
+        return;
+}
+
+#! Assert unreachable blocks are removed.
+# sameln: func public %prune_unreachable_blocks() {
+# nextln:     block0:
+# nextln:         jump block1;
+# nextln: 
+# nextln:     block1:
+# nextln:         return;
+# nextln: }
+func public %prune_unreachable_blocks() {
+    block0:
+        jump block1;
+
+    block1:
+        return;
+
+    block2:
+        return;
+}
+
+#! Assert phi incomings are pruned and trivial phis are folded.
+# sameln: func public %prune_phi_incomings_and_fold_trivial_phi() -> i8 {
+# nextln:     block0:
+# nextln:         br 1.i1 block2 block1;
+# nextln: 
+# nextln:     block1:
+# nextln:         return 2.i8;
+# nextln: 
+# nextln:     block2:
+# nextln:         return 1.i8;
+# nextln: }
+func public %prune_phi_incomings_and_fold_trivial_phi() -> i8 {
+    block0:
+        br 1.i1 block2 block1;
+
+    block1:
+        return 2.i8;
+
+    block2:
+        v0.i8 = phi (1.i8 block0) (2.i8 block1);
+        return v0;
+}

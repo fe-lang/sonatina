@@ -1,6 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use sonatina_codegen::{domtree::DomTree, loop_analysis::LoopTree, optim::licm::LicmSolver};
+use sonatina_codegen::{
+    cfg_edit::CleanupMode,
+    domtree::DomTree,
+    loop_analysis::LoopTree,
+    optim::{cfg_cleanup::CfgCleanup, licm::LicmSolver},
+};
 use sonatina_ir::{ControlFlowGraph, Function};
 
 use super::{FIXTURE_ROOT, FuncTransform};
@@ -19,6 +24,7 @@ impl FuncTransform for LicmTransformer {
         self.lpt.compute(&self.cfg, &self.domtree);
         let mut solver = LicmSolver::new();
         solver.run(func, &mut self.cfg, &mut self.lpt);
+        CfgCleanup::new(CleanupMode::Strict).run(func);
     }
 
     fn test_root(&self) -> PathBuf {

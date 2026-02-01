@@ -57,6 +57,7 @@ define_inst_set_base! {
         control_flow::Br,
         control_flow::BrTable,
         control_flow::Return,
+        control_flow::Unreachable,
         control_flow::Phi,
         // Evm specific
         evm::EvmUdiv,
