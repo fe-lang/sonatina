@@ -1,0 +1,19 @@
+#! Regression: SCCP must not panic removing an unreachable block with a reachable successor.
+
+target = "evm-ethereum-london"
+
+# sameln: func public %unreachable_succ_merge() -> i32 {
+# check: return 1.i32;
+func public %unreachable_succ_merge() -> i32 {
+    block0:
+        br 0.i1 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        return 1.i32;
+}
