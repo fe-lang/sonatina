@@ -132,6 +132,8 @@ impl<'a> FileChecker<'a> {
             Err(msg) => return vec![FileCheckResult::new(self.file_path.to_owned(), Err(msg))],
         };
 
+        sonatina_codegen::analysis::func_behavior::analyze_module(&parsed_module.module);
+
         let module = &parsed_module.module;
 
         module

@@ -1,0 +1,51 @@
+target = "evm-ethereum-london"
+
+#! Assert calls to noreturn functions are canonicalized with an explicit `unreachable` terminator.
+# sameln: func private %panic() {
+# nextln:     block0:
+# nextln:         evm_revert 0.i32 0.i32;
+# nextln: }
+func private %panic() {
+    block0:
+        evm_revert 0.i32 0.i32;
+}
+
+# sameln: func public %caller() {
+# nextln:     block0:
+# nextln:         call %panic;
+# nextln:         unreachable;
+# nextln: }
+func public %caller() {
+    block0:
+        call %panic;
+        jump block1;
+
+    block1:
+        return;
+}
+
+#! Assert transitively noreturn functions are treated as noreturn at call sites.
+# sameln: func private %wrapper() {
+# nextln:     block0:
+# nextln:         call %panic;
+# nextln:         unreachable;
+# nextln: }
+func private %wrapper() {
+    block0:
+        call %panic;
+        return;
+}
+
+# sameln: func public %caller2() {
+# nextln:     block0:
+# nextln:         call %wrapper;
+# nextln:         unreachable;
+# nextln: }
+func public %caller2() {
+    block0:
+        call %wrapper;
+        jump block1;
+
+    block1:
+        return;
+}

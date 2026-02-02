@@ -4,6 +4,7 @@ use sonatina_ir::{
     BlockId, ControlFlowGraph, Function,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::control_flow::Unreachable,
+    module::FuncAttrs,
 };
 
 use crate::cfg_edit::{CfgEditor, CleanupMode, prune_phi_to_preds};
@@ -26,6 +27,7 @@ impl CfgCleanup {
 
         let mut changed = editor.trim_after_terminator();
         changed |= ensure_blocks_terminated(editor.func_mut(), self.mode);
+        changed |= trim_after_noreturn_call(editor.func_mut());
         editor.recompute_cfg();
 
         let reachable = compute_reachable(editor.cfg(), entry);
@@ -47,6 +49,45 @@ impl CfgCleanup {
 
         changed
     }
+}
+
+fn trim_after_noreturn_call(func: &mut Function) -> bool {
+    let blocks: Vec<_> = func.layout.iter_block().collect();
+    let mut changed = false;
+
+    for block in blocks {
+        let mut next_inst = func.layout.first_inst_of(block);
+        while let Some(inst) = next_inst {
+            next_inst = func.layout.next_inst_of(inst);
+
+            let Some(call_info) = func.dfg.call_info(inst) else {
+                continue;
+            };
+            let callee = call_info.callee();
+            if !func.ctx().func_attrs(callee).contains(FuncAttrs::NORETURN) {
+                continue;
+            }
+
+            let mut to_remove = Vec::new();
+            let mut cursor = func.layout.next_inst_of(inst);
+            while let Some(after) = cursor {
+                to_remove.push(after);
+                cursor = func.layout.next_inst_of(after);
+            }
+
+            for inst in to_remove {
+                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            }
+
+            let unreachable = Unreachable::new_unchecked(func.inst_set());
+            InstInserter::at_location(CursorLocation::BlockBottom(block))
+                .insert_inst_data(func, unreachable);
+            changed = true;
+            break;
+        }
+    }
+
+    changed
 }
 
 fn compute_reachable(cfg: &ControlFlowGraph, entry: BlockId) -> BTreeSet<BlockId> {

@@ -12,7 +12,7 @@ use crate::{
         control_flow::{self, BranchInfo, CallInfo, Jump, Phi},
     },
     ir_writer::{FuncWriteCtx, IrWrite},
-    module::ModuleCtx,
+    module::{FuncAttrs, ModuleCtx},
 };
 
 pub struct DataFlowGraph {
@@ -275,13 +275,13 @@ impl DataFlowGraph {
             let callee = call_info.callee();
             let attrs = self.ctx.func_attrs(callee);
 
-            if attrs.noreturn || !attrs.willreturn {
+            if attrs.contains(FuncAttrs::NORETURN) || !attrs.contains(FuncAttrs::WILLRETURN) {
                 return SideEffect::Control;
             }
 
-            if attrs.mem.has_write() {
+            if attrs.contains(FuncAttrs::MEM_WRITE) {
                 SideEffect::Write
-            } else if attrs.mem.has_read() {
+            } else if attrs.contains(FuncAttrs::MEM_READ) {
                 SideEffect::Read
             } else {
                 SideEffect::None

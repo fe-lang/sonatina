@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex, RwLock};
 
+use bitflags::bitflags;
 use cranelift_entity::{SecondaryMap, entity_impl};
 use dashmap::{DashMap, ReadOnlyView};
 use rayon::{iter::IntoParallelIterator, prelude::ParallelIterator};
@@ -15,34 +16,15 @@ use crate::{
     types::TypeStore,
 };
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct MemEffects(u8);
-
-impl MemEffects {
-    pub const NONE: MemEffects = MemEffects(0);
-    pub const READ: MemEffects = MemEffects(1);
-    pub const WRITE: MemEffects = MemEffects(2);
-    pub const READ_WRITE: MemEffects = MemEffects(3);
-
-    pub fn has_read(self) -> bool {
-        self.0 & 1 != 0
+bitflags! {
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct FuncAttrs: u8 {
+        const MEM_READ = 1 << 0;
+        const MEM_WRITE = 1 << 1;
+        const NORETURN = 1 << 2;
+        const WILLRETURN = 1 << 3;
+        const WILLTERMINATE = 1 << 4;
     }
-
-    pub fn has_write(self) -> bool {
-        self.0 & 2 != 0
-    }
-
-    pub fn union(self, rhs: MemEffects) -> MemEffects {
-        MemEffects(self.0 | rhs.0)
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct FuncAttrs {
-    pub mem: MemEffects,
-    pub noreturn: bool,
-    pub willreturn: bool,
-    pub willterminate: bool,
 }
 
 pub struct Module {
