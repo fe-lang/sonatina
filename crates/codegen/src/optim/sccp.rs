@@ -7,10 +7,15 @@
 use std::collections::BTreeSet;
 
 use cranelift_entity::SecondaryMap;
+use rustc_hash::FxHashSet;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::control_flow::{BranchInfo, BranchKind},
+    inst::{
+        arith,
+        control_flow::{BranchInfo, BranchKind},
+        downcast,
+    },
     interpret::{Action, EvalValue, Interpret, State},
     prelude::*,
 };
@@ -26,11 +31,14 @@ use crate::cfg_edit::{CleanupMode, remove_phi_incoming_from, simplify_trivial_ph
 pub struct SccpSolver {
     lattice: SecondaryMap<ValueId, LatticeCell>,
     may_be_undef: SecondaryMap<ValueId, bool>,
-    reachable_edges: BTreeSet<FlowEdge>,
-    reachable_blocks: BTreeSet<BlockId>,
+    reachable_edges: FxHashSet<FlowEdge>,
+    reachable_blocks: SecondaryMap<BlockId, bool>,
 
     flow_work: Vec<FlowEdge>,
     ssa_work: Vec<ValueId>,
+
+    flow_work_set: FxHashSet<FlowEdge>,
+    ssa_work_set: SecondaryMap<ValueId, bool>,
 }
 
 impl SccpSolver {
@@ -38,10 +46,12 @@ impl SccpSolver {
         Self {
             lattice: SecondaryMap::default(),
             may_be_undef: SecondaryMap::default(),
-            reachable_edges: BTreeSet::default(),
-            reachable_blocks: BTreeSet::default(),
+            reachable_edges: FxHashSet::default(),
+            reachable_blocks: SecondaryMap::default(),
             flow_work: Vec::default(),
             ssa_work: Vec::default(),
+            flow_work_set: FxHashSet::default(),
+            ssa_work_set: SecondaryMap::default(),
         }
     }
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) {
@@ -64,18 +74,20 @@ impl SccpSolver {
         }
 
         // Evaluate all values in entry block.
-        self.reachable_blocks.insert(entry_block);
+        self.reachable_blocks[entry_block] = true;
         self.eval_insts_in(func, entry_block);
 
         while !(self.flow_work.is_empty() && self.ssa_work.is_empty()) {
             while let Some(edge) = self.flow_work.pop() {
+                self.flow_work_set.remove(&edge);
                 self.eval_edge(func, edge);
             }
 
             while let Some(value) = self.ssa_work.pop() {
+                self.ssa_work_set[value] = false;
                 for &user in func.dfg.users(value) {
                     let user_block = func.layout.inst_block(user);
-                    if self.reachable_blocks.contains(&user_block) {
+                    if self.reachable_blocks[user_block] {
                         if func.dfg.is_phi(user) {
                             self.eval_phi(func, user);
                         } else {
@@ -107,6 +119,26 @@ impl SccpSolver {
         self.reachable_blocks.clear();
         self.flow_work.clear();
         self.ssa_work.clear();
+        self.flow_work_set.clear();
+        self.ssa_work_set.clear();
+    }
+
+    fn push_flow_work(&mut self, edge: FlowEdge) {
+        if self.reachable_edges.contains(&edge) || self.flow_work_set.contains(&edge) {
+            return;
+        }
+
+        self.flow_work.push(edge);
+        self.flow_work_set.insert(edge);
+    }
+
+    fn push_ssa_work(&mut self, value: ValueId) {
+        if self.ssa_work_set[value] {
+            return;
+        }
+
+        self.ssa_work.push(value);
+        self.ssa_work_set[value] = true;
     }
 
     fn eval_edge(&mut self, func: &mut Function, edge: FlowEdge) {
@@ -117,10 +149,10 @@ impl SccpSolver {
         }
         self.reachable_edges.insert(edge);
 
-        if self.reachable_blocks.contains(&dest) {
+        if self.reachable_blocks[dest] {
             self.eval_phis_in(func, dest);
         } else {
-            self.reachable_blocks.insert(dest);
+            self.reachable_blocks[dest] = true;
             self.eval_insts_in(func, dest);
         }
     }
@@ -134,10 +166,7 @@ impl SccpSolver {
     }
 
     fn eval_phi(&mut self, func: &Function, inst: InstId) {
-        debug_assert!(
-            self.reachable_blocks
-                .contains(&func.layout.inst_block(inst))
-        );
+        debug_assert!(self.reachable_blocks[func.layout.inst_block(inst)]);
 
         let block = func.layout.inst_block(inst);
         let phi = func.dfg.cast_phi(inst).unwrap();
@@ -215,14 +244,34 @@ impl SccpSolver {
             None => LatticeCell::Top,
         };
 
+        result_may_be_undef |= self.is_arith_div_or_rem_by_zero(func, inst_id);
+
         self.set_lattice_cell(inst_result, cell);
         self.set_may_be_undef(inst_result, result_may_be_undef);
+    }
+
+    fn is_arith_div_or_rem_by_zero(&self, func: &Function, inst_id: InstId) -> bool {
+        let inst = func.dfg.inst(inst_id);
+        let is = func.inst_set();
+
+        let Some(rhs) = downcast::<&arith::Udiv>(is, inst)
+            .map(|i| *i.rhs())
+            .or_else(|| downcast::<&arith::Sdiv>(is, inst).map(|i| *i.rhs()))
+            .or_else(|| downcast::<&arith::Umod>(is, inst).map(|i| *i.rhs()))
+            .or_else(|| downcast::<&arith::Smod>(is, inst).map(|i| *i.rhs()))
+        else {
+            return false;
+        };
+
+        self.cell_of(func, rhs)
+            .to_imm()
+            .is_some_and(|imm| imm.is_zero())
     }
 
     fn eval_branch(&mut self, func: &Function, inst: InstId, bi: &dyn BranchInfo) {
         match bi.branch_kind() {
             BranchKind::Jump(jump) => {
-                self.flow_work.push(FlowEdge::new(inst, *jump.dest()));
+                self.push_flow_work(FlowEdge::new(inst, *jump.dest()));
             }
 
             BranchKind::Br(br) => {
@@ -230,14 +279,14 @@ impl SccpSolver {
 
                 match v_cell {
                     LatticeCell::Const(_) if v_cell.is_zero() => {
-                        self.flow_work.push(FlowEdge::new(inst, *br.z_dest()));
+                        self.push_flow_work(FlowEdge::new(inst, *br.z_dest()));
                     }
                     LatticeCell::Const(_) => {
-                        self.flow_work.push(FlowEdge::new(inst, *br.nz_dest()));
+                        self.push_flow_work(FlowEdge::new(inst, *br.nz_dest()));
                     }
                     LatticeCell::Top => {
-                        self.flow_work.push(FlowEdge::new(inst, *br.z_dest()));
-                        self.flow_work.push(FlowEdge::new(inst, *br.nz_dest()));
+                        self.push_flow_work(FlowEdge::new(inst, *br.z_dest()));
+                        self.push_flow_work(FlowEdge::new(inst, *br.nz_dest()));
                     }
                     LatticeCell::Bot => {}
                 }
@@ -252,26 +301,26 @@ impl SccpSolver {
                             match self.cell_of(func, *case_value) {
                                 LatticeCell::Const(case) => {
                                     if case == scrutinee {
-                                        self.flow_work.push(FlowEdge::new(inst, *dest));
+                                        self.push_flow_work(FlowEdge::new(inst, *dest));
                                         return;
                                     }
                                 }
                                 LatticeCell::Top | LatticeCell::Bot => {
-                                    self.flow_work.push(FlowEdge::new(inst, *dest));
+                                    self.push_flow_work(FlowEdge::new(inst, *dest));
                                 }
                             }
                         }
 
                         if let Some(default) = brt.default() {
-                            self.flow_work.push(FlowEdge::new(inst, *default));
+                            self.push_flow_work(FlowEdge::new(inst, *default));
                         }
                     }
                     LatticeCell::Top => {
                         if let Some(default) = brt.default() {
-                            self.flow_work.push(FlowEdge::new(inst, *default));
+                            self.push_flow_work(FlowEdge::new(inst, *default));
                         }
                         for (_, dest) in brt.table() {
-                            self.flow_work.push(FlowEdge::new(inst, *dest));
+                            self.push_flow_work(FlowEdge::new(inst, *dest));
                         }
                     }
                     LatticeCell::Bot => {}
@@ -288,7 +337,7 @@ impl SccpSolver {
         loop {
             match inserter.loc() {
                 CursorLocation::BlockTop(block) => {
-                    if !self.reachable_blocks.contains(&block) {
+                    if !self.reachable_blocks[block] {
                         self.prune_phi_incoming_from_removed_block(func, block);
                         inserter.remove_block(func);
                     } else {
@@ -474,7 +523,7 @@ impl SccpSolver {
         let old_cell = &self.lattice[value];
         if old_cell != &cell {
             self.lattice[value] = cell;
-            self.ssa_work.push(value);
+            self.push_ssa_work(value);
         }
     }
 
@@ -482,7 +531,7 @@ impl SccpSolver {
         let old = self.may_be_undef.get(value).copied().unwrap_or_default();
         if old != may_be_undef {
             self.may_be_undef[value] = may_be_undef;
-            self.ssa_work.push(value);
+            self.push_ssa_work(value);
         }
     }
 
@@ -506,7 +555,10 @@ impl SccpSolver {
 
     #[cfg(debug_assertions)]
     fn assert_no_executable_inst_results_are_bot(&self, func: &Function) {
-        for &block in self.reachable_blocks.iter() {
+        for block in func.layout.iter_block() {
+            if !self.reachable_blocks[block] {
+                continue;
+            }
             for inst in func.layout.iter_inst(block) {
                 if func.dfg.is_phi(inst) || func.dfg.branch_info(inst).is_some() {
                     continue;
@@ -543,7 +595,7 @@ impl Default for SccpSolver {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct FlowEdge {
     inst: InstId,
     to: BlockId,
@@ -687,5 +739,90 @@ impl State for CellState<'_, '_> {
 
     fn dfg(&self) -> &DataFlowGraph {
         self.dfg
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use sonatina_ir::{
+        Linkage, Signature, Type,
+        builder::test_util::test_module_builder,
+        inst::{control_flow::Return, logic},
+    };
+
+    #[derive(Clone, Copy)]
+    struct XorShift64(u64);
+
+    impl XorShift64 {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+
+        fn pick<T>(self, values: &[T]) -> usize {
+            (self.0 as usize) % values.len()
+        }
+    }
+
+    #[test]
+    fn sccp_smoke_fuzz_no_panics() {
+        for seed in 0..8u64 {
+            let mb = test_module_builder();
+            let sig = Signature::new("fuzz", Linkage::Public, &[], Type::I256);
+            let func_ref = mb.declare_function(sig).unwrap();
+
+            let mut fb = mb.func_builder::<InstInserter>(func_ref);
+            let block0 = fb.append_block();
+            fb.switch_to_block(block0);
+
+            let ty = Type::I256;
+            let is = fb.func.inst_set();
+
+            let mut values = vec![
+                fb.make_imm_value(Immediate::zero(ty)),
+                fb.make_imm_value(Immediate::one(ty)),
+            ];
+
+            let mut rng = XorShift64(seed.wrapping_add(1));
+            for _ in 0..64 {
+                let lhs = values[rng.pick(&values)];
+                rng.next();
+                let rhs = values[rng.pick(&values)];
+                let op = rng.next() % 9;
+
+                let value = match op {
+                    0 => fb.insert_inst(arith::Add::new_unchecked(is, lhs, rhs), ty),
+                    1 => fb.insert_inst(arith::Sub::new_unchecked(is, lhs, rhs), ty),
+                    2 => fb.insert_inst(arith::Mul::new_unchecked(is, lhs, rhs), ty),
+                    3 => fb.insert_inst(arith::Shl::new_unchecked(is, lhs, rhs), ty),
+                    4 => fb.insert_inst(arith::Shr::new_unchecked(is, lhs, rhs), ty),
+                    5 => fb.insert_inst(arith::Sar::new_unchecked(is, lhs, rhs), ty),
+                    6 => fb.insert_inst(logic::And::new_unchecked(is, lhs, rhs), ty),
+                    7 => fb.insert_inst(logic::Or::new_unchecked(is, lhs, rhs), ty),
+                    _ => fb.insert_inst(logic::Xor::new_unchecked(is, lhs, rhs), ty),
+                };
+
+                values.push(value);
+            }
+
+            let ret = *values.last().unwrap();
+            fb.insert_inst_no_result(Return::new_unchecked(is, Some(ret)));
+            fb.seal_all();
+            fb.finish();
+
+            let mut cfg = ControlFlowGraph::default();
+            mb.func_store.modify(func_ref, |func| {
+                cfg.compute(func);
+                let mut solver = SccpSolver::new();
+                solver.run(func, &mut cfg);
+                CfgCleanup::new(CleanupMode::Strict).run(func);
+            });
+        }
     }
 }
