@@ -62,7 +62,10 @@ impl AdceSolver {
 
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                if matches!(func.dfg.side_effect(inst), SideEffect::Write) {
+                if matches!(
+                    func.dfg.side_effect(inst),
+                    SideEffect::Write | SideEffect::Control
+                ) {
                     self.mark_inst(func, inst);
                 }
             }
