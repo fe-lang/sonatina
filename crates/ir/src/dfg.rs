@@ -271,7 +271,24 @@ impl DataFlowGraph {
     }
 
     pub fn side_effect(&self, inst_id: InstId) -> SideEffect {
-        self.inst(inst_id).side_effect()
+        if let Some(call_info) = self.call_info(inst_id) {
+            let callee = call_info.callee();
+            let attrs = self.ctx.func_attrs(callee);
+
+            if attrs.noreturn || !attrs.willreturn {
+                return SideEffect::Control;
+            }
+
+            if attrs.mem.has_write() {
+                SideEffect::Write
+            } else if attrs.mem.has_read() {
+                SideEffect::Read
+            } else {
+                SideEffect::None
+            }
+        } else {
+            self.inst(inst_id).side_effect()
+        }
     }
 
     pub fn is_branch(&self, inst_id: InstId) -> bool {

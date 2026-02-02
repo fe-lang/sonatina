@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex, RwLock};
 
-use cranelift_entity::entity_impl;
+use cranelift_entity::{SecondaryMap, entity_impl};
 use dashmap::{DashMap, ReadOnlyView};
 use rayon::{iter::IntoParallelIterator, prelude::ParallelIterator};
 use rustc_hash::FxHashMap;
@@ -14,6 +14,36 @@ use crate::{
     object::Object,
     types::TypeStore,
 };
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MemEffects(u8);
+
+impl MemEffects {
+    pub const NONE: MemEffects = MemEffects(0);
+    pub const READ: MemEffects = MemEffects(1);
+    pub const WRITE: MemEffects = MemEffects(2);
+    pub const READ_WRITE: MemEffects = MemEffects(3);
+
+    pub fn has_read(self) -> bool {
+        self.0 & 1 != 0
+    }
+
+    pub fn has_write(self) -> bool {
+        self.0 & 2 != 0
+    }
+
+    pub fn union(self, rhs: MemEffects) -> MemEffects {
+        MemEffects(self.0 | rhs.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FuncAttrs {
+    pub mem: MemEffects,
+    pub noreturn: bool,
+    pub willreturn: bool,
+    pub willterminate: bool,
+}
 
 pub struct Module {
     pub func_store: FuncStore,
@@ -121,6 +151,7 @@ pub struct ModuleCtx {
     pub inst_set: &'static dyn InstSetBase,
     pub type_layout: &'static dyn TypeLayout,
     pub declared_funcs: Arc<DashMap<FuncRef, Signature>>,
+    func_attrs: Arc<RwLock<SecondaryMap<FuncRef, FuncAttrs>>>,
     type_store: Arc<RwLock<TypeStore>>,
     gv_store: Arc<RwLock<GlobalVariableStore>>,
 }
@@ -138,6 +169,7 @@ impl ModuleCtx {
             type_layout: isa.type_layout(),
             type_store: Arc::new(RwLock::new(TypeStore::default())),
             declared_funcs: Arc::new(DashMap::new()),
+            func_attrs: Arc::new(RwLock::new(SecondaryMap::new())),
             gv_store: Arc::new(RwLock::new(GlobalVariableStore::default())),
         }
     }
@@ -169,6 +201,23 @@ impl ModuleCtx {
 
     pub fn func_linkage(&self, func_ref: FuncRef) -> Linkage {
         self.func_sig(func_ref, |sig| sig.linkage())
+    }
+
+    pub fn func_attrs(&self, func_ref: FuncRef) -> FuncAttrs {
+        self.func_attrs
+            .read()
+            .unwrap()
+            .get(func_ref)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn set_all_func_attrs(&self, new: SecondaryMap<FuncRef, FuncAttrs>) {
+        *self.func_attrs.write().unwrap() = new;
+    }
+
+    pub fn set_func_attrs(&self, func_ref: FuncRef, attrs: FuncAttrs) {
+        self.func_attrs.write().unwrap()[func_ref] = attrs;
     }
 
     /// Updated the function signature with the given linkage.
