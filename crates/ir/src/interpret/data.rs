@@ -133,7 +133,22 @@ impl Interpret for InsertValue {
             }
         };
 
-        let idx = state.lookup_val(*self.idx()).as_imm().unwrap().as_usize();
+        let idx_val = state.lookup_val(*self.idx());
+        let Some(idx) = idx_val.as_imm().map(Immediate::as_usize) else {
+            debug_assert!(
+                idx_val.is_undef(),
+                "insert_value index must be an immediate"
+            );
+            return EvalValue::Undef;
+        };
+        if idx >= fields.len() {
+            debug_assert!(
+                false,
+                "insert_value index out of bounds: idx={idx} len={}",
+                fields.len()
+            );
+            return EvalValue::Undef;
+        }
         fields[idx] = state.lookup_val(*self.value());
 
         EvalValue::Aggregate { fields, ty }
@@ -157,8 +172,22 @@ impl Interpret for ExtractValue {
             }
         };
 
-        let idx = state.lookup_val(*self.idx()).as_imm().unwrap().as_usize();
-        dest.into_iter().nth(idx).unwrap()
+        let idx_val = state.lookup_val(*self.idx());
+        let Some(idx) = idx_val.as_imm().map(Immediate::as_usize) else {
+            debug_assert!(
+                idx_val.is_undef(),
+                "extract_value index must be an immediate"
+            );
+            return EvalValue::Undef;
+        };
+        dest.get(idx).cloned().unwrap_or_else(|| {
+            debug_assert!(
+                false,
+                "extract_value index out of bounds: idx={idx} len={}",
+                dest.len()
+            );
+            EvalValue::Undef
+        })
     }
 }
 
