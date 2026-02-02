@@ -102,6 +102,27 @@ impl Interpret for Gep {
     }
 }
 
+impl Interpret for GetFunctionPtr {
+    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+        state.set_action(Action::Continue);
+        EvalValue::Undef
+    }
+}
+
+impl Interpret for SymAddr {
+    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+        state.set_action(Action::Continue);
+        EvalValue::Undef
+    }
+}
+
+impl Interpret for SymSize {
+    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+        state.set_action(Action::Continue);
+        EvalValue::Undef
+    }
+}
+
 impl Interpret for Alloca {
     fn interpret(&self, state: &mut dyn State) -> EvalValue {
         state.alloca(*self.ty())
