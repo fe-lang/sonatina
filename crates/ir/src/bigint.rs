@@ -204,14 +204,22 @@ impl ops::BitXor for I256 {
 impl ops::Shl for I256 {
     type Output = Self;
     fn shl(self, rhs: Self) -> Self::Output {
-        Self::from_u256(self.to_u256() << rhs.to_u256())
+        let shift = rhs.to_u256();
+        if shift >= U256::from(256u16) {
+            return Self::zero();
+        }
+        Self::from_u256(self.to_u256() << shift.as_usize())
     }
 }
 
 impl ops::Shr for I256 {
     type Output = Self;
     fn shr(self, rhs: Self) -> Self::Output {
-        Self::from_u256(self.to_u256() >> rhs.to_u256())
+        let shift = rhs.to_u256();
+        if shift >= U256::from(256u16) {
+            return Self::zero();
+        }
+        Self::from_u256(self.to_u256() >> shift.as_usize())
     }
 }
 
