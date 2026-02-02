@@ -1,0 +1,40 @@
+#! Regression: SCCP constant evaluation must not panic on div/mod by zero.
+#! EVM semantics: divisor==0 => 0.
+
+target = "evm-ethereum-london"
+
+# sameln: func public %evm_udiv_by_zero() -> i256 {
+# nextln:     block0:
+# nextln:         return 0.i256;
+func public %evm_udiv_by_zero() -> i256 {
+    block0:
+        v0.i256 = evm_udiv 1.i256 0.i256;
+        return v0;
+}
+
+# sameln: func public %evm_sdiv_by_zero() -> i256 {
+# nextln:     block0:
+# nextln:         return 0.i256;
+func public %evm_sdiv_by_zero() -> i256 {
+    block0:
+        v0.i256 = evm_sdiv 1.i256 0.i256;
+        return v0;
+}
+
+# sameln: func public %evm_umod_by_zero() -> i256 {
+# nextln:     block0:
+# nextln:         return 0.i256;
+func public %evm_umod_by_zero() -> i256 {
+    block0:
+        v0.i256 = evm_umod 1.i256 0.i256;
+        return v0;
+}
+
+# sameln: func public %evm_smod_by_zero() -> i256 {
+# nextln:     block0:
+# nextln:         return 0.i256;
+func public %evm_smod_by_zero() -> i256 {
+    block0:
+        v0.i256 = evm_smod 1.i256 0.i256;
+        return v0;
+}
