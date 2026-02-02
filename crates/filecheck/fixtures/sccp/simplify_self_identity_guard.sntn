@@ -3,18 +3,8 @@
 target = "evm-ethereum-london"
 
 # sameln: func public %self_identity_bot(v0.i1) -> i1 {
-# nextln:     block0:
-# nextln:         br v0 block1 block2;
-# nextln: 
-# nextln:     block1:
-# nextln:         jump block3;
-# nextln: 
-# nextln:     block2:
-# nextln:         jump block3;
-# nextln: 
 # nextln:     block3:
-# nextln:         v1.i8 = phi (undef.i8 block1) (undef.i8 block2);
-# nextln:         v2.i1 = eq v1 v1;
+# nextln:         v2.i1 = eq undef.i8 undef.i8;
 # nextln:         return v2;
 func public %self_identity_bot(v0.i1) -> i1 {
     block0:

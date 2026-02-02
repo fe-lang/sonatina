@@ -22,7 +22,6 @@ func public %simplify_shr_zero(v0.i32) -> i32 {
 
 # sameln: func public %simplify_not_not(v0.i8) -> i8 {
 # nextln:     block0:
-# nextln:         v1.i8 = not v0;
 # nextln:         return v0;
 func public %simplify_not_not(v0.i8) -> i8 {
     block0:
@@ -33,7 +32,6 @@ func public %simplify_not_not(v0.i8) -> i8 {
 
 # sameln: func public %simplify_neg_neg(v0.i8) -> i8 {
 # nextln:     block0:
-# nextln:         v1.i8 = neg v0;
 # nextln:         return v0;
 func public %simplify_neg_neg(v0.i8) -> i8 {
     block0:

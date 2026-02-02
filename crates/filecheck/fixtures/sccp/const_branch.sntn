@@ -2,13 +2,7 @@
 
 target = "evm-ethereum-london"
 
-# check:  block0:
-# nextln:     jump block2;
-# nextln: 
-# nextln: block2:
-# nextln:     jump block3;
-# nextln: 
-# nextln: block3:
+# check:  block3:
 # nextln:     return 12.i8;
 func public %const_branch() -> i8 {
     block0:
@@ -25,10 +19,7 @@ func public %const_branch() -> i8 {
         return 12.i8;
 }
 
-# check:  block0:
-# nextln:     jump block2;
-# nextln: 
-# nextln: block2:
+# check:  block2:
 # nextln:     return 2.i32;
 func public %const_branch2() -> i32 {
     block0:

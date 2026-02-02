@@ -15,8 +15,12 @@ use sonatina_ir::{
     prelude::*,
 };
 
-use super::sccp_simplify::{SimplifyResult, simplify_inst};
-use crate::cfg_edit::{remove_phi_incoming_from, simplify_trivial_phis_in_block};
+use super::{
+    adce::AdceSolver,
+    cfg_cleanup::CfgCleanup,
+    sccp_simplify::{SimplifyResult, simplify_inst},
+};
+use crate::cfg_edit::{CleanupMode, remove_phi_incoming_from, simplify_trivial_phis_in_block};
 
 #[derive(Debug)]
 pub struct SccpSolver {
@@ -43,9 +47,15 @@ impl SccpSolver {
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) {
         self.clear();
 
-        let entry_block = match func.layout.entry_block() {
-            Some(block) => block,
-            _ => return,
+        let cleanup_mode = if cfg!(debug_assertions) {
+            CleanupMode::Strict
+        } else {
+            CleanupMode::RepairWithUndef
+        };
+        CfgCleanup::new(cleanup_mode).run(func);
+
+        let Some(entry_block) = func.layout.entry_block() else {
+            return;
         };
 
         // Function arguments must be `LatticeCell::Top`
@@ -82,6 +92,12 @@ impl SccpSolver {
         self.remove_unreachable_edges(func);
         cfg.compute(func);
         self.fold_insts(func, cfg);
+
+        CfgCleanup::new(cleanup_mode).run(func);
+        cfg.compute(func);
+
+        AdceSolver::new().run(func);
+        cfg.compute(func);
     }
 
     pub fn clear(&mut self) {
@@ -219,10 +235,11 @@ impl SccpSolver {
                     LatticeCell::Const(_) => {
                         self.flow_work.push(FlowEdge::new(inst, *br.nz_dest()));
                     }
-                    LatticeCell::Top | LatticeCell::Bot => {
+                    LatticeCell::Top => {
                         self.flow_work.push(FlowEdge::new(inst, *br.z_dest()));
                         self.flow_work.push(FlowEdge::new(inst, *br.nz_dest()));
                     }
+                    LatticeCell::Bot => {}
                 }
             }
 
@@ -249,7 +266,7 @@ impl SccpSolver {
                             self.flow_work.push(FlowEdge::new(inst, *default));
                         }
                     }
-                    LatticeCell::Top | LatticeCell::Bot => {
+                    LatticeCell::Top => {
                         if let Some(default) = brt.default() {
                             self.flow_work.push(FlowEdge::new(inst, *default));
                         }
@@ -257,6 +274,7 @@ impl SccpSolver {
                             self.flow_work.push(FlowEdge::new(inst, *dest));
                         }
                     }
+                    LatticeCell::Bot => {}
                 }
             }
         }
@@ -308,7 +326,6 @@ impl SccpSolver {
         if let Some(bi) = func.dfg.branch_info(term) {
             for succ in bi.dests() {
                 let inserted = func.layout.is_block_inserted(succ);
-                assert!(inserted || !self.reachable_blocks.contains(&succ));
                 if inserted {
                     remove_phi_incoming_from(func, succ, block);
                     simplify_trivial_phis_in_block(func, succ);
