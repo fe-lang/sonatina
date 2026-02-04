@@ -11,7 +11,7 @@ use sonatina_ir::{
     inst::data::Mstore,
 };
 
-use super::func_to_egglog;
+use super::{EggTerm, Elaborator, func_to_egglog};
 
 const TYPES: &str = include_str!("types.egg");
 const EXPRS: &str = include_str!("expr.egg");
@@ -141,6 +141,35 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
                 && can_alias(func, &dom, original_val, alloca_val)
             {
                 func.dfg.change_to_alias(original_val, alloca_val);
+                changed = true;
+            }
+        }
+        // Otherwise, try to elaborate the extracted expression back into IR.
+        else if let Some(term) = EggTerm::parse(result, func) {
+            let is = func.inst_set();
+            if term.node_count() > 32 || !term.is_supported(is) || term.contains_value(original_val)
+            {
+                continue;
+            }
+
+            let Some(original_inst) = func.dfg.value_inst(original_val) else {
+                continue;
+            };
+            if func.dfg.is_phi(original_inst) {
+                continue;
+            }
+
+            let mut dominates = true;
+            term.for_each_value(&mut |value| {
+                dominates &= value_dominates_inst(func, &dom, value, original_inst);
+            });
+            if !dominates {
+                continue;
+            }
+
+            let mut elaborator = Elaborator::new(func, original_inst);
+            if let Some(inst) = elaborator.build_inst(&term) {
+                func.dfg.replace_inst(original_inst, inst);
                 changed = true;
             }
         }
