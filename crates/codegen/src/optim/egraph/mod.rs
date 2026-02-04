@@ -382,17 +382,17 @@ fn value_to_egglog(func: &Function, v: ValueId) -> String {
     }
 }
 
-fn type_to_egglog(ty: Type) -> &'static str {
+fn type_to_egglog(ty: Type) -> String {
     match ty {
-        Type::I1 => "(I1)",
-        Type::I8 => "(I8)",
-        Type::I16 => "(I16)",
-        Type::I32 => "(I32)",
-        Type::I64 => "(I64)",
-        Type::I128 => "(I128)",
-        Type::I256 => "(I256)",
-        Type::Unit => "(UnitTy)",
-        Type::Compound(_) => "(CompoundRef 0)",
+        Type::I1 => "(I1)".to_string(),
+        Type::I8 => "(I8)".to_string(),
+        Type::I16 => "(I16)".to_string(),
+        Type::I32 => "(I32)".to_string(),
+        Type::I64 => "(I64)".to_string(),
+        Type::I128 => "(I128)".to_string(),
+        Type::I256 => "(I256)".to_string(),
+        Type::Unit => "(UnitTy)".to_string(),
+        Type::Compound(ty) => format!("(CompoundRef {})", ty.as_u32()),
     }
 }
 

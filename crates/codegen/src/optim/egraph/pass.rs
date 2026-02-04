@@ -603,6 +603,7 @@ mod tests {
         use sonatina_ir::{
             builder::test_util::*,
             inst::{control_flow::Return, data::Alloca},
+            isa::Isa,
         };
 
         let mb = test_module_builder();
