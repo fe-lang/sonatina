@@ -8,6 +8,7 @@ use std::fmt::Write;
 
 use cranelift_entity::SecondaryMap;
 use egglog::EGraph;
+use rustc_hash::FxHashSet;
 use sonatina_ir::{
     BlockId, Function, InstDowncast, InstId, Type, Value, ValueId,
     cfg::ControlFlowGraph,
@@ -29,6 +30,7 @@ pub fn run_egglog(program: &str) -> egglog::EGraph {
 
 pub fn func_to_egglog(func: &Function) -> String {
     let mut out = String::new();
+    let mut body = String::new();
     let mut mem_state_counter: u32 = 0;
 
     // Compute CFG for predecessor information
@@ -37,6 +39,8 @@ pub fn func_to_egglog(func: &Function) -> String {
 
     // Track exit memory state per block
     let mut block_exit_mem: SecondaryMap<BlockId, u32> = SecondaryMap::new();
+    let mut memphis: Vec<(u32, Vec<BlockId>)> = Vec::new();
+    let mut processed: FxHashSet<BlockId> = FxHashSet::default();
 
     // Define function arguments
     for (idx, &arg_val) in func.arg_values.iter().enumerate() {
@@ -60,41 +64,21 @@ pub fn func_to_egglog(func: &Function) -> String {
         .collect();
 
     for block in rpo {
-        writeln!(&mut out, "; block{}", block.as_u32()).unwrap();
+        writeln!(&mut body, "; block{}", block.as_u32()).unwrap();
 
         // Determine entry memory state for this block
         let preds: Vec<BlockId> = cfg.preds_of(block).copied().collect();
         let entry_mem_id = if preds.is_empty() {
             // Entry block: use initial memory state 0
             0
-        } else if preds.len() == 1 {
-            // Single predecessor: use its exit memory state
+        } else if preds.len() == 1 && processed.contains(&preds[0]) {
+            // Single predecessor: use its exit memory state.
             block_exit_mem[preds[0]]
         } else {
-            // Multiple predecessors: create a MemPhi
+            // Multiple predecessors or a backedge: create a MemPhi.
             mem_state_counter += 1;
             let memphi_id = mem_state_counter;
-
-            // Mark as MemPhi and record predecessors
-            writeln!(&mut out, "(is-memphi {})", memphi_id).unwrap();
-            writeln!(
-                &mut out,
-                "(set (memphi-num-preds {}) {})",
-                memphi_id,
-                preds.len()
-            )
-            .unwrap();
-
-            for (pred_idx, &pred_block) in preds.iter().enumerate() {
-                let pred_mem = block_exit_mem[pred_block];
-                writeln!(
-                    &mut out,
-                    "(set (memphi-pred {} {}) {})",
-                    memphi_id, pred_idx, pred_mem
-                )
-                .unwrap();
-            }
-
+            memphis.push((memphi_id, preds));
             memphi_id
         };
 
@@ -105,7 +89,7 @@ pub fn func_to_egglog(func: &Function) -> String {
             if let Some((s, new_mem)) =
                 inst_to_egglog_with_mem(func, inst_id, &current_mem, &mut mem_state_counter)
             {
-                writeln!(&mut out, "{}", s).unwrap();
+                writeln!(&mut body, "{}", s).unwrap();
                 if let Some(m) = new_mem {
                     current_mem = m;
                 }
@@ -118,7 +102,31 @@ pub fn func_to_egglog(func: &Function) -> String {
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
         block_exit_mem[block] = exit_mem_id;
+        processed.insert(block);
     }
+
+    for (memphi_id, preds) in memphis {
+        writeln!(&mut out, "(is-memphi {})", memphi_id).unwrap();
+        writeln!(
+            &mut out,
+            "(set (memphi-num-preds {}) {})",
+            memphi_id,
+            preds.len()
+        )
+        .unwrap();
+
+        for (pred_idx, pred_block) in preds.into_iter().enumerate() {
+            let pred_mem = block_exit_mem[pred_block];
+            writeln!(
+                &mut out,
+                "(set (memphi-pred {} {}) {})",
+                memphi_id, pred_idx, pred_mem
+            )
+            .unwrap();
+        }
+    }
+
+    out.push_str(&body);
     out
 }
 
