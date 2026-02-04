@@ -257,25 +257,30 @@ fn inst_to_egglog(func: &Function, inst_id: InstId) -> Option<String> {
     if let Some(gep) = <&Gep>::downcast(is, inst) {
         let result = result?;
         let values = gep.values();
-        if values.is_empty() {
-            return None;
-        }
+        if !values.is_empty() {
+            // Build nested GEP expression: GepBase -> GepOffset -> GepOffset -> ...
+            let mut gep_expr = format!("(GepBase {})", value_to_egglog(func, values[0]));
+            for (i, &idx) in values[1..].iter().enumerate() {
+                gep_expr = format!(
+                    "(GepOffset {} {} {})",
+                    gep_expr,
+                    value_to_egglog(func, idx),
+                    i
+                );
+            }
 
-        // Build nested GEP expression: GepBase -> GepOffset -> GepOffset -> ...
-        let mut gep_expr = format!("(GepBase {})", value_to_egglog(func, values[0]));
-        for (i, &idx) in values[1..].iter().enumerate() {
-            gep_expr = format!(
-                "(GepOffset {} {} {})",
-                gep_expr,
-                value_to_egglog(func, idx),
-                i
-            );
+            return Some(format!("(let {} {})", value_name(result), gep_expr));
         }
-
-        return Some(format!("(let {} {})", value_name(result), gep_expr));
     }
 
-    None
+    let result = result?;
+    let ty = func.dfg.value_ty(result);
+    Some(format!(
+        "(let {} (SideEffectResult {} {}))",
+        value_name(result),
+        result.as_u32(),
+        type_to_egglog(ty)
+    ))
 }
 
 /// Convert instruction to egglog with memory state tracking.
@@ -358,6 +363,12 @@ fn value_to_egglog(func: &Function, v: ValueId) -> String {
                 imm.as_i256().trunc_to_i64(),
                 type_to_egglog(*ty)
             )
+        }
+        Value::Global { gv, ty } => {
+            format!("(Global {} {})", gv.as_u32(), type_to_egglog(*ty))
+        }
+        Value::Undef { ty } => {
+            format!("(Undef {})", type_to_egglog(*ty))
         }
         _ => value_name(v),
     }

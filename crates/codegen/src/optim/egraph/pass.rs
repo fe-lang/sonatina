@@ -1,10 +1,15 @@
 //! E-graph optimization pass for sonatina IR.
 
+use crate::domtree::DomTree;
+
 use egglog::EGraph;
 use rustc_hash::FxHashMap;
 
 use sonatina_ir::{Function, InstDowncast, InstId, Type, ValueId, inst::data::Mstore};
-use sonatina_ir::{Function, I256, InstDowncast, Type, U256, ValueId, inst::data::Mstore};
+use sonatina_ir::{
+    ControlFlowGraph, Function, I256, InstDowncast, InstId, Type, U256, Value, ValueId,
+    inst::data::Mstore,
+};
 
 use super::func_to_egglog;
 
@@ -36,6 +41,11 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
         }
     }
 
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(func);
+    let mut dom = DomTree::new();
+    dom.compute(&cfg);
+
     // Convert to egglog
     let program = func_to_egglog(func);
 
@@ -65,7 +75,12 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
 
     let results = match egraph.parse_and_run_program(None, &full_with_rules) {
         Ok(r) => r,
-        Err(_) => return false,
+        Err(err) => {
+            if std::env::var_os("SONATINA_EGRAPH_DEBUG").is_some() {
+                eprintln!("{err}");
+            }
+            return false;
+        }
     };
 
     // Check results for simplifications
@@ -93,7 +108,7 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
         // Check if result is just another variable like "v0"
         else if let Some(alias_name) = parse_var_result(result) {
             if let Some(&alias_val) = value_map.get(&alias_name)
-                && alias_val != original_val
+                && can_alias(func, &dom, original_val, alias_val)
             {
                 func.dfg.change_to_alias(original_val, alias_val);
                 changed = true;
@@ -103,7 +118,7 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
         else if let Some(arg_idx) = parse_arg_result(result) {
             if arg_idx < func.arg_values.len() {
                 let arg_val = func.arg_values[arg_idx];
-                if arg_val != original_val {
+                if can_alias(func, &dom, original_val, arg_val) {
                     func.dfg.change_to_alias(original_val, arg_val);
                     changed = true;
                 }
@@ -111,11 +126,9 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
         }
         // Check if result is a side-effect result like "(SideEffectResult N (Type))"
         else if let Some(side_effect_id) = parse_side_effect_result(result) {
-            // Find the value with this ID
-            if let Some(&side_effect_val) = value_map
-                .values()
-                .find(|&&v| v.as_u32() == side_effect_id as u32)
-                && side_effect_val != original_val
+            let alias_name = format!("v{side_effect_id}");
+            if let Some(&side_effect_val) = value_map.get(&alias_name)
+                && can_alias(func, &dom, original_val, side_effect_val)
             {
                 func.dfg.change_to_alias(original_val, side_effect_val);
                 changed = true;
@@ -123,11 +136,9 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
         }
         // Check if result is an alloca result like "(AllocaResult N (Type))"
         else if let Some(alloca_id) = parse_alloca_result(result) {
-            // Find the value with this ID (the alloca instruction result)
-            if let Some(&alloca_val) = value_map
-                .values()
-                .find(|&&v| v.as_u32() == alloca_id as u32)
-                && alloca_val != original_val
+            let alias_name = format!("v{alloca_id}");
+            if let Some(&alloca_val) = value_map.get(&alias_name)
+                && can_alias(func, &dom, original_val, alloca_val)
             {
                 func.dfg.change_to_alias(original_val, alloca_val);
                 changed = true;
@@ -140,6 +151,72 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
     }
 
     changed
+}
+
+fn can_alias(func: &Function, dom: &DomTree, original_val: ValueId, alias_val: ValueId) -> bool {
+    if original_val == alias_val {
+        return false;
+    }
+
+    let Some(original_inst) = func.dfg.value_inst(original_val) else {
+        return false;
+    };
+
+    value_dominates_inst(func, dom, alias_val, original_inst)
+        && !inst_uses_value_directly(func, alias_val, original_val)
+}
+
+fn value_dominates_inst(func: &Function, dom: &DomTree, value: ValueId, inst: InstId) -> bool {
+    match func.dfg.value(value) {
+        Value::Arg { .. }
+        | Value::Immediate { .. }
+        | Value::Global { .. }
+        | Value::Undef { .. } => true,
+        Value::Inst { inst: def_inst, .. } => {
+            if !func.layout.is_inst_inserted(*def_inst) {
+                return false;
+            }
+
+            let def_block = func.layout.inst_block(*def_inst);
+            let use_block = func.layout.inst_block(inst);
+            if def_block != use_block {
+                dom.dominates(def_block, use_block)
+            } else {
+                inst_precedes_or_equal(func, *def_inst, inst)
+            }
+        }
+    }
+}
+
+fn inst_precedes_or_equal(func: &Function, earlier: InstId, later: InstId) -> bool {
+    if earlier == later {
+        return true;
+    }
+
+    let mut inst = Some(earlier);
+    while let Some(id) = inst {
+        if id == later {
+            return true;
+        }
+        inst = func.layout.next_inst_of(id);
+    }
+
+    false
+}
+
+fn inst_uses_value_directly(func: &Function, inst_value: ValueId, value: ValueId) -> bool {
+    let Some(inst_id) = func.dfg.value_inst(inst_value) else {
+        return false;
+    };
+
+    let mut used = false;
+    func.dfg.inst(inst_id).for_each_value(&mut |inst_value| {
+        if inst_value == value {
+            used = true;
+        }
+    });
+
+    used
 }
 
 fn eliminate_adjacent_dead_stores(func: &mut Function) -> bool {
