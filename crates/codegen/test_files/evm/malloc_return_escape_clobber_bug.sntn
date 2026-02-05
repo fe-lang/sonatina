@@ -1,11 +1,11 @@
 #! evm.config: { emit_mem_plan: true }
 #! evm.case: bug_demo
 #!   calldata: u32be(11) u32be(22)
-#!   expect: return u256(999)
+#!   expect: return u256(111)
 
-# BUG DEMO: `mk` returns a malloc pointer containing 111.
+# Regression: `mk` returns a malloc pointer containing 111.
 # Caller invokes `big` (static arena clobber) before reading it.
-# Correct result would be 111, but currently we observe 999.
+# Must still return 111 (previously miscompiled to 999).
 
 target = "evm-ethereum-osaka"
 

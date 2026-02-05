@@ -1,11 +1,11 @@
 #! evm.config: { emit_mem_plan: true }
 #! evm.case: bug_demo
 #!   calldata: u32be(11) u32be(22)
-#!   expect: return u256(222)
+#!   expect: return u256(111)
 
-# BUG DEMO: malloc ptr escapes via integer path
+# Regression: malloc ptr escapes via integer path
 # `ptr_to_int -> evm_udiv -> non-local mstore`.
-# Correct result would be 111, but currently we observe 222.
+# Must still return 111 (previously miscompiled to 222).
 
 target = "evm-ethereum-osaka"
 

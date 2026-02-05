@@ -6,12 +6,12 @@ input_file: test_files/evm/malloc_int_escape_arith_bug.sntn
 evm.config: stack_reach=16 emit_debug_trace=false emit_mem_plan=true
 
 object: Contract
-  section runtime: 112 bytes
-  total: 112 bytes
+  section runtime: 124 bytes
+  total: 124 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
-  main: ir_blocks=1 ir_insts=14 vcode_ops=80 fixups=8 imm_bytes=11
+  main: ir_blocks=1 ir_insts=14 vcode_ops=89 fixups=8 imm_bytes=14
     mem: scheme=StaticArena need_words=0 locals_words=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -25,4 +25,4 @@ evm mem plan: entry scheme=StaticArena need_words=0 locals_words=0
   detail locals_words=0 direct_callee_need_max_words=0 need_words=0
 
 evm:
-  case bug_demo: calldata_len=8 success reason=Return gas_used=21330 gas_refunded=0 logs=0 output=call len=32
+  case bug_demo: calldata_len=8 success reason=Return gas_used=21368 gas_refunded=0 logs=0 output=call len=32

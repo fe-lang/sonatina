@@ -269,6 +269,15 @@ pub(crate) fn compute_provenance(
                                 let _ = next.union_with(&prov[arg]);
                             }
                         }
+                        if function.dfg.value_ty(def).is_pointer(module)
+                            && next.bases.is_empty()
+                            && !next.unknown_ptr
+                        {
+                            // Calls that return pointers with no tracked base still produce
+                            // pointer-typed results; treat these as unknown to avoid
+                            // unsoundly classifying overlapping mallocs as transient.
+                            next.unknown_ptr = true;
+                        }
                     }
                     EvmInstKind::Add(_)
                     | EvmInstKind::Sub(_)
@@ -282,7 +291,16 @@ pub(crate) fn compute_provenance(
                     | EvmInstKind::Not(_)
                     | EvmInstKind::Sext(_)
                     | EvmInstKind::Zext(_)
-                    | EvmInstKind::Trunc(_) => {
+                    | EvmInstKind::Trunc(_)
+                    | EvmInstKind::EvmSdiv(_)
+                    | EvmInstKind::EvmUdiv(_)
+                    | EvmInstKind::EvmUmod(_)
+                    | EvmInstKind::EvmSmod(_)
+                    | EvmInstKind::EvmAddMod(_)
+                    | EvmInstKind::EvmMulMod(_)
+                    | EvmInstKind::EvmExp(_)
+                    | EvmInstKind::EvmByte(_)
+                    | EvmInstKind::EvmClz(_) => {
                         function.dfg.inst(inst).for_each_value(&mut |v| {
                             let _ = next.union_with(&prov[v]);
                         });

@@ -1,11 +1,10 @@
 #! evm.config: { emit_mem_plan: true }
 #! evm.case: bug_demo
 #!   calldata: u32be(11) u32be(22)
-#!   expect: return u256(222)
+#!   expect: return u256(111)
 
-# BUG DEMO: live pointer value from call result is kept across a later malloc,
-# but transient classification still allows overlap/reuse.
-# Correct result would be 111, but currently we observe 222.
+# Regression: live pointer value from call result is kept across a later malloc.
+# Must still return 111 (previously miscompiled to 222 due overlap/reuse).
 
 target = "evm-ethereum-osaka"
 
