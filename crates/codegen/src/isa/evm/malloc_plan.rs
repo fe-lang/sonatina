@@ -226,6 +226,23 @@ pub(crate) fn compute_transient_mallocs(
     mallocs
 }
 
+pub(crate) fn compute_escaping_mallocs_for_function(
+    function: &Function,
+    module: &ModuleCtx,
+    isa: &Evm,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+) -> FxHashSet<InstId> {
+    let prov = compute_value_provenance(function, module, isa, |callee| {
+        ptr_escape
+            .get(&callee)
+            .cloned()
+            .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee))
+            .arg_may_be_returned
+    });
+    let block_malloc_in = compute_block_malloc_in(function, isa);
+    compute_escaping_mallocs(function, module, isa, ptr_escape, &prov, &block_malloc_in)
+}
+
 fn remove_live_mallocs(
     mallocs: &mut FxHashSet<InstId>,
     live: &BitSet<ValueId>,
