@@ -122,11 +122,20 @@ pub enum SideEffect {
     None,
     Read,
     Write,
+    Control,
 }
 
 impl SideEffect {
     pub fn has_effect(&self) -> bool {
         !matches!(self, Self::None)
+    }
+
+    pub fn has_memory_effect(self) -> bool {
+        matches!(self, Self::Read | Self::Write)
+    }
+
+    pub fn has_write_effect(self) -> bool {
+        matches!(self, Self::Write)
     }
 }
 

@@ -28,12 +28,12 @@ pub struct EvmSmod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(side_effect(crate::inst::SideEffect::Write))]
+#[inst(side_effect(crate::inst::SideEffect::Control))]
 #[inst(terminator)]
 pub struct EvmStop {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(side_effect(crate::inst::SideEffect::Write))]
+#[inst(side_effect(crate::inst::SideEffect::Control))]
 #[inst(terminator)]
 pub struct EvmInvalid {}
 
@@ -339,7 +339,7 @@ pub struct EvmCallCode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(side_effect(crate::inst::SideEffect::Write))]
+#[inst(side_effect(crate::inst::SideEffect::Control))]
 #[inst(terminator)]
 pub struct EvmReturn {
     addr: ValueId,
@@ -378,7 +378,7 @@ pub struct EvmStaticCall {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(side_effect(crate::inst::SideEffect::Write))]
+#[inst(side_effect(crate::inst::SideEffect::Control))]
 #[inst(terminator)]
 pub struct EvmRevert {
     addr: ValueId,

@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex, RwLock};
 
-use cranelift_entity::entity_impl;
+use bitflags::bitflags;
+use cranelift_entity::{SecondaryMap, entity_impl};
 use dashmap::{DashMap, ReadOnlyView};
 use rayon::{iter::IntoParallelIterator, prelude::ParallelIterator};
 use rustc_hash::FxHashMap;
@@ -14,6 +15,17 @@ use crate::{
     object::Object,
     types::TypeStore,
 };
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct FuncAttrs: u8 {
+        const MEM_READ = 1 << 0;
+        const MEM_WRITE = 1 << 1;
+        const NORETURN = 1 << 2;
+        const WILLRETURN = 1 << 3;
+        const WILLTERMINATE = 1 << 4;
+    }
+}
 
 pub struct Module {
     pub func_store: FuncStore,
@@ -121,6 +133,7 @@ pub struct ModuleCtx {
     pub inst_set: &'static dyn InstSetBase,
     pub type_layout: &'static dyn TypeLayout,
     pub declared_funcs: Arc<DashMap<FuncRef, Signature>>,
+    func_attrs: Arc<RwLock<SecondaryMap<FuncRef, FuncAttrs>>>,
     type_store: Arc<RwLock<TypeStore>>,
     gv_store: Arc<RwLock<GlobalVariableStore>>,
 }
@@ -138,6 +151,7 @@ impl ModuleCtx {
             type_layout: isa.type_layout(),
             type_store: Arc::new(RwLock::new(TypeStore::default())),
             declared_funcs: Arc::new(DashMap::new()),
+            func_attrs: Arc::new(RwLock::new(SecondaryMap::new())),
             gv_store: Arc::new(RwLock::new(GlobalVariableStore::default())),
         }
     }
@@ -169,6 +183,23 @@ impl ModuleCtx {
 
     pub fn func_linkage(&self, func_ref: FuncRef) -> Linkage {
         self.func_sig(func_ref, |sig| sig.linkage())
+    }
+
+    pub fn func_attrs(&self, func_ref: FuncRef) -> FuncAttrs {
+        self.func_attrs
+            .read()
+            .unwrap()
+            .get(func_ref)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn set_all_func_attrs(&self, new: SecondaryMap<FuncRef, FuncAttrs>) {
+        *self.func_attrs.write().unwrap() = new;
+    }
+
+    pub fn set_func_attrs(&self, func_ref: FuncRef, attrs: FuncAttrs) {
+        self.func_attrs.write().unwrap()[func_ref] = attrs;
     }
 
     /// Updated the function signature with the given linkage.

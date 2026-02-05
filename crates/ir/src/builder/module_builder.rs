@@ -97,6 +97,7 @@ impl ModuleBuilder {
         let func_ref = self.func_store.insert(func);
         self.declared_funcs.insert(sig.name().to_string(), func_ref);
         self.ctx.declared_funcs.insert(func_ref, sig);
+        self.ctx.set_func_attrs(func_ref, Default::default());
         Ok(func_ref)
     }
 

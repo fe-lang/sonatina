@@ -63,14 +63,14 @@ pub struct Call {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
-#[inst(side_effect(super::SideEffect::Write))]
+#[inst(side_effect(super::SideEffect::Control))]
 #[inst(terminator)]
 pub struct Return {
     arg: Option<ValueId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(side_effect(super::SideEffect::Write))]
+#[inst(side_effect(super::SideEffect::Control))]
 #[inst(terminator)]
 pub struct Unreachable {}
 

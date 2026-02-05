@@ -12,7 +12,7 @@ use crate::{
         control_flow::{self, BranchInfo, CallInfo, Jump, Phi},
     },
     ir_writer::{FuncWriteCtx, IrWrite},
-    module::ModuleCtx,
+    module::{FuncAttrs, ModuleCtx},
 };
 
 pub struct DataFlowGraph {
@@ -271,7 +271,24 @@ impl DataFlowGraph {
     }
 
     pub fn side_effect(&self, inst_id: InstId) -> SideEffect {
-        self.inst(inst_id).side_effect()
+        if let Some(call_info) = self.call_info(inst_id) {
+            let callee = call_info.callee();
+            let attrs = self.ctx.func_attrs(callee);
+
+            if attrs.contains(FuncAttrs::NORETURN) || !attrs.contains(FuncAttrs::WILLRETURN) {
+                return SideEffect::Control;
+            }
+
+            if attrs.contains(FuncAttrs::MEM_WRITE) {
+                SideEffect::Write
+            } else if attrs.contains(FuncAttrs::MEM_READ) {
+                SideEffect::Read
+            } else {
+                SideEffect::None
+            }
+        } else {
+            self.inst(inst_id).side_effect()
+        }
     }
 
     pub fn is_branch(&self, inst_id: InstId) -> bool {

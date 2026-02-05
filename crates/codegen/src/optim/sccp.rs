@@ -183,7 +183,7 @@ impl SccpSolver {
         };
 
         let inst = func.dfg.inst(inst_id);
-        if inst.side_effect().has_effect() {
+        if func.dfg.side_effect(inst_id).has_effect() {
             self.set_lattice_cell(inst_result, LatticeCell::Top);
             return;
         }

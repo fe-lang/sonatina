@@ -83,7 +83,8 @@ impl LicmSolver {
     fn is_safe_to_hoist(&self, func: &Function, inst_id: InstId) -> bool {
         !(func.dfg.side_effect(inst_id).has_effect()
             || func.dfg.is_branch(inst_id)
-            || func.dfg.is_phi(inst_id))
+            || func.dfg.is_phi(inst_id)
+            || func.dfg.is_terminator(inst_id))
     }
 
     /// Returns preheader of the loop, if one can be used/created.

@@ -1,0 +1,46 @@
+#! ADCE call-effect behavior tests.
+
+target = "evm-ethereum-london"
+
+#! Assert ADCE removes unused calls when the callee is proven pure and will-return.
+# sameln: func private %pure_add(v0.i8, v1.i8) -> i8 {
+# nextln:     block0:
+# nextln:         v2.i8 = add 1.i8 2.i8;
+# nextln:         return v2;
+# nextln: }
+func private %pure_add(v0.i8, v1.i8) -> i8 {
+    block0:
+        v2.i8 = add 1.i8 2.i8;
+        return v2;
+}
+
+# sameln: func public %remove_unused_pure_call() -> i8 {
+# nextln:     block0:
+# nextln:         return 1.i8;
+# nextln: }
+func public %remove_unused_pure_call() -> i8 {
+    block0:
+        v0.i8 = call %pure_add 1.i8 2.i8;
+        return 1.i8;
+}
+
+#! Assert ADCE never removes calls that do not return to the caller.
+# sameln: func private %spin() {
+# nextln:     block0:
+# nextln:         jump block0;
+# nextln: }
+func private %spin() {
+    block0:
+        jump block0;
+}
+
+# sameln: func public %keep_noreturn_call() {
+# nextln:     block0:
+# nextln:         call %spin;
+# nextln:         unreachable;
+# nextln: }
+func public %keep_noreturn_call() {
+    block0:
+        call %spin;
+        return;
+}
