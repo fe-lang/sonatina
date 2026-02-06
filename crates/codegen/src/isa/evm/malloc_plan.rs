@@ -64,7 +64,7 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
                     let Some(ret_val) = *ret.arg() else {
                         continue;
                     };
-                    if value_may_be_heap_derived(function, module, ret_val, &prov) {
+                    if value_may_be_heap_derived(function, module, ret_val, prov) {
                         return false;
                     }
                 }
@@ -202,8 +202,15 @@ pub(crate) fn compute_transient_mallocs(
     let local_mem = &prov_info.local_mem;
 
     let block_malloc_in = compute_block_malloc_in(function, isa);
-    let escaping =
-        compute_escaping_mallocs(function, module, isa, ptr_escape, prov, local_mem, &block_malloc_in);
+    let escaping = compute_escaping_mallocs(
+        function,
+        module,
+        isa,
+        ptr_escape,
+        prov,
+        local_mem,
+        &block_malloc_in,
+    );
 
     for base in escaping {
         mallocs.remove(&base);
@@ -220,16 +227,16 @@ pub(crate) fn compute_transient_mallocs(
                     live.remove(def);
                 }
 
-                remove_live_mallocs(&mut mallocs, &live, prov, &seen_mallocs);
+                remove_live_mallocs(&mut mallocs, &live, prov, local_mem, &seen_mallocs);
                 seen_mallocs.insert(inst);
                 continue;
             }
 
-            let Some(call) = function.dfg.call_info(inst) else {
+            let Some(call_info) = function.dfg.call_info(inst) else {
                 continue;
             };
 
-            let callee = call.callee();
+            let callee = call_info.callee();
             let is_barrier = mem_effects.is_none_or(|effects| {
                 let eff = effects.get(&callee).copied().unwrap_or_else(|| {
                     panic!(
@@ -243,8 +250,19 @@ pub(crate) fn compute_transient_mallocs(
                 continue;
             }
 
-            let live = inst_liveness.live_out(inst);
-            remove_live_mallocs(&mut mallocs, live, prov, &seen_mallocs);
+            // If a call can allocate or shift the dynamic stack pointer, then any malloc-derived
+            // pointer passed *to* the call must be treated as non-transient, even if it is not
+            // live after the call returns: the callee may allocate (or enter a frame) before it
+            // dereferences the pointer argument, clobbering the pointed-to memory.
+            let mut live = inst_liveness.live_out(inst).clone();
+            let call = function
+                .dfg
+                .cast_call(inst)
+                .expect("call_info must correspond to Call");
+            for &arg in call.args() {
+                live.insert(arg);
+            }
+            remove_live_mallocs(&mut mallocs, &live, prov, local_mem, &seen_mallocs);
         }
     }
 
@@ -267,13 +285,22 @@ pub(crate) fn compute_escaping_mallocs_for_function(
     let prov = &prov_info.value;
     let local_mem = &prov_info.local_mem;
     let block_malloc_in = compute_block_malloc_in(function, isa);
-    compute_escaping_mallocs(function, module, isa, ptr_escape, prov, local_mem, &block_malloc_in)
+    compute_escaping_mallocs(
+        function,
+        module,
+        isa,
+        ptr_escape,
+        prov,
+        local_mem,
+        &block_malloc_in,
+    )
 }
 
 fn remove_live_mallocs(
     mallocs: &mut FxHashSet<InstId>,
     live: &BitSet<ValueId>,
     prov: &SecondaryMap<ValueId, Provenance>,
+    local_mem: &FxHashMap<InstId, Provenance>,
     seen_mallocs: &BitSet<InstId>,
 ) {
     let mut has_unknown_ptr = false;
@@ -284,6 +311,23 @@ fn remove_live_mallocs(
         }
         for base in v_prov.malloc_insts() {
             mallocs.remove(&base);
+        }
+
+        // A malloc-derived pointer can be saved into local memory and reloaded later, without
+        // remaining live as an SSA value. If the *address* of such local memory is live here,
+        // conservatively treat any malloc pointers that may be stored there as live too.
+        if v_prov.is_local_addr() {
+            for alloca_base in v_prov.alloca_insts() {
+                let Some(stored) = local_mem.get(&alloca_base) else {
+                    continue;
+                };
+                if stored.is_unknown_ptr() {
+                    has_unknown_ptr = true;
+                }
+                for base in stored.malloc_insts() {
+                    mallocs.remove(&base);
+                }
+            }
         }
     }
 
@@ -374,10 +418,10 @@ fn local_copy_source_may_be_heap_derived(
     let mut any = false;
     for base in src_prov.alloca_insts() {
         any = true;
-        if let Some(stored) = local_mem.get(&base) {
-            if stored.is_unknown_ptr() || stored.malloc_insts().next().is_some() {
-                return true;
-            }
+        if let Some(stored) = local_mem.get(&base)
+            && (stored.is_unknown_ptr() || stored.malloc_insts().next().is_some())
+        {
+            return true;
         }
     }
 

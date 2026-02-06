@@ -1,0 +1,22 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/malloc_call_arg_barrier.sntn
+---
+evm.config: stack_reach=16 emit_debug_trace=false
+
+object: Contract
+  section runtime: 139 bytes
+  total: 139 bytes
+
+functions:
+  mem: dyn_base=0xc0 static_base=0xc0
+  clobber_then_read: ir_blocks=1 ir_insts=5 vcode_ops=38 fixups=4 imm_bytes=5
+    mem: scheme=StaticArena need_words=0 locals_words=0
+  main: ir_blocks=1 ir_insts=7 vcode_ops=56 fixups=6 imm_bytes=10
+    mem: scheme=StaticArena need_words=0 locals_words=0
+  entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
+    mem: scheme=StaticArena need_words=0 locals_words=0
+
+evm:
+  case ok: calldata_len=8 success reason=Return gas_used=21404 gas_refunded=0 logs=0 output=call len=32
