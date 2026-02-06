@@ -57,7 +57,17 @@ impl SsaBuilder {
         } else {
             self.use_var_recursive(func, var, block)
         };
-        *self.aliases.get(&value).unwrap_or(&value)
+        self.resolve_alias(value)
+    }
+
+    pub(super) fn resolve_alias(&self, mut value: ValueId) -> ValueId {
+        while let Some(alias) = self.aliases.get(&value) {
+            if *alias == value {
+                break;
+            }
+            value = *alias;
+        }
+        value
     }
 
     pub(super) fn var_ty(&mut self, var: Variable) -> Type {
@@ -134,18 +144,38 @@ impl SsaBuilder {
             panic!("variable is undefined or used in unreachable block");
         }
 
-        let first_value = phi_args[0].0;
+        // Trivial phis are those whose arguments are all the same value, ignoring
+        // self-references (common in loops while sealing), e.g.:
+        // - `v = phi [x, x]`
+        // - `v = phi [v, x, v]`
+        //
+        // IMPORTANT: Do not treat `v = phi [v, v, ...]` as trivial; that represents an undefined
+        // value.
+        let mut same_value: Option<ValueId> = None;
+        for (arg_value, _) in phi_args.iter() {
+            if *arg_value == phi_value {
+                continue;
+            }
+            match same_value {
+                None => same_value = Some(*arg_value),
+                Some(existing) if existing == *arg_value => {}
+                Some(_) => return,
+            }
+        }
 
-        if phi_args.iter().any(|arg| arg.0 != first_value) {
+        let Some(alias) = same_value else {
+            return;
+        };
+
+        if alias == phi_value {
             return;
         }
 
-        self.change_to_alias(func, phi_value, first_value);
+        let modified = self.change_to_alias(func, phi_value, alias);
         self.trivial_phis.insert(inst_id);
         InstInserter::at_location(CursorLocation::At(inst_id)).remove_inst(func);
 
-        for i in 0..func.dfg.users_num(phi_value) {
-            let user = *func.dfg.users(phi_value).nth(i).unwrap();
+        for user in modified {
             if func.dfg.cast_phi(user).is_some() && !self.trivial_phis.contains_key(user) {
                 self.remove_trivial_phi(func, user);
             }
@@ -169,9 +199,47 @@ impl SsaBuilder {
         (inst, value)
     }
 
-    fn change_to_alias(&mut self, func: &mut Function, value: ValueId, alias: ValueId) {
-        func.dfg.change_to_alias(value, alias);
+    fn change_to_alias(
+        &mut self,
+        func: &mut Function,
+        value: ValueId,
+        alias: ValueId,
+    ) -> Vec<InstId> {
         self.aliases.insert(value, alias);
+
+        // Rewrite all uses of `value` in the current function layout.
+        //
+        // This intentionally avoids `dfg.users[value]`: during SSA construction we may mutate
+        // instructions (e.g. while adding phi arguments) in ways that temporarily leave the users
+        // set stale. A full scan keeps SSA construction correct and ensures we never remove a phi
+        // while leaving dangling operands.
+        let mut modified = Vec::new();
+        let blocks: Vec<_> = func.layout.iter_block().collect();
+        for block in blocks {
+            let insts: Vec<_> = func.layout.iter_inst(block).collect();
+            for inst in insts {
+                let mut used = false;
+                func.dfg.inst(inst).for_each_value(&mut |v| {
+                    if v == value {
+                        used = true;
+                    }
+                });
+                if !used {
+                    continue;
+                }
+
+                func.dfg.untrack_inst(inst);
+                func.dfg.inst_mut(inst).for_each_value_mut(&mut |v| {
+                    if *v == value {
+                        *v = alias;
+                    }
+                });
+                func.dfg.attach_user(inst);
+                modified.push(inst);
+            }
+        }
+
+        modified
     }
 }
 
