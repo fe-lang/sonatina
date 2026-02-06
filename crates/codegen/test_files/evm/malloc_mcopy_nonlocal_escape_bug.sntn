@@ -1,0 +1,59 @@
+#! evm.config: { emit_mem_plan: true }
+#! evm.case: bug_demo
+#!   calldata: u32be(11) u32be(22)
+#!   expect: return u256(111)
+
+# Regression: malloc pointer escapes via local->non-local evm_mcopy.
+# Must remain valid across a later static-arena clobbering call
+# (previously miscompiled to 999).
+
+target = "evm-ethereum-osaka"
+
+type @big = { i256, i256, i256, i256, i256, i256, i256, i256 };
+
+func public %big() -> i256 {
+    block0:
+        v0.*@big = alloca @big;
+        v1.*i256 = gep v0 0.i8 1.i8;
+        mstore v1 999.i256 i256;
+        v2.i256 = mload v1 i256;
+        return v2;
+}
+
+func public %esc() -> i256 {
+    block0:
+        v0.*i8 = evm_malloc 32.i256;
+        v1.*i256 = bitcast v0 *i256;
+        mstore v1 111.i256 i256;
+
+        v2.*i256 = alloca i256;
+        v3.i256 = ptr_to_int v0 i256;
+        mstore v2 v3 i256;
+
+        evm_mcopy 0.i8 v2 32.i256;
+        return 0.i256;
+}
+
+func public %main() -> i256 {
+    block0:
+        v9.i256 = call %esc;
+        v10.i256 = call %big;
+        v0.i256 = mload 0.i32 i256;
+        v1.*i8 = int_to_ptr v0 *i8;
+        v2.*i256 = bitcast v1 *i256;
+        v3.i256 = mload v2 i256;
+        return v3;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = call %main;
+        mstore 0.i32 v0 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
