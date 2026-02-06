@@ -181,9 +181,10 @@ pub(crate) fn compute_provenance(
     }
 
     for (idx, &arg) in function.arg_values.iter().enumerate() {
-        if function.dfg.value_ty(arg).is_pointer(module) {
-            prov[arg].bases.push(PtrBase::Arg(idx as u32));
-        }
+        // Always track argument provenance regardless of type.
+        // On EVM all values are i256 (no pointer types), so is_pointer() would miss
+        // arguments that are semantically pointers, making escape analysis unsound.
+        prov[arg].bases.push(PtrBase::Arg(idx as u32));
     }
 
     for block in function.layout.iter_block() {
