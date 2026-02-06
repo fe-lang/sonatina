@@ -81,6 +81,7 @@ where
             .value_inst(phi_res)
             .expect("`phi_res` should be a result of phi inst");
 
+        let value = self.ssa_builder.resolve_alias(value);
         self.func.dfg.append_phi_arg(phi_inst, value, block);
     }
 
@@ -130,6 +131,11 @@ where
     /// - `ValueId`: The ID of the result value associated with the inserted
     ///   instruction.
     pub fn insert_inst<I: Inst>(&mut self, inst: I, ret_ty: Type) -> ValueId {
+        let mut inst = inst;
+        inst.for_each_value_mut(&mut |v| {
+            *v = self.ssa_builder.resolve_alias(*v);
+        });
+
         let inst_id = self.cursor.insert_inst_data(&mut self.func, inst);
         self.append_pred(inst_id);
 
@@ -145,6 +151,11 @@ where
     }
 
     pub fn insert_inst_dyn(&mut self, inst: Box<dyn Inst>, ret_ty: Type) -> ValueId {
+        let mut inst = inst;
+        inst.for_each_value_mut(&mut |v| {
+            *v = self.ssa_builder.resolve_alias(*v);
+        });
+
         let inst_id = self.cursor.insert_inst_data_dyn(&mut self.func, inst);
         self.append_pred(inst_id);
 
@@ -177,12 +188,22 @@ where
     /// - `inst`: The instruction to insert, which must implement the `Inst`
     ///   trait.
     pub fn insert_inst_no_result<I: Inst>(&mut self, inst: I) {
+        let mut inst = inst;
+        inst.for_each_value_mut(&mut |v| {
+            *v = self.ssa_builder.resolve_alias(*v);
+        });
+
         let inst_id = self.cursor.insert_inst_data(&mut self.func, inst);
         self.append_pred(inst_id);
         self.cursor.set_location(CursorLocation::At(inst_id));
     }
 
     pub fn insert_inst_no_result_dyn(&mut self, inst: Box<dyn Inst>) {
+        let mut inst = inst;
+        inst.for_each_value_mut(&mut |v| {
+            *v = self.ssa_builder.resolve_alias(*v);
+        });
+
         let inst_id = self.cursor.insert_inst_data_dyn(&mut self.func, inst);
         self.append_pred(inst_id);
         self.cursor.set_location(CursorLocation::At(inst_id));
