@@ -13,9 +13,11 @@ use super::{
     ptr_escape::PtrEscapeSummary,
     static_arena_alloc::{
         FuncObjectLayout, FuncStackObjects, StackObjId, StaticArenaAllocCtx,
-        build_func_object_layout, pack_objects_with_min_offsets, verify_object_packing,
+        build_func_object_layout, pack_objects_with_min_offsets,
     },
 };
+#[cfg(debug_assertions)]
+use super::static_arena_alloc::verify_object_packing;
 use sonatina_ir::isa::evm::Evm;
 
 pub const WORD_BYTES: u32 = 32;
@@ -815,6 +817,7 @@ fn verify_static_arena_plan(
         module.func_store.view(func, |function| {
             let stack = alloc_ctx.compute_func_stack_objects(func, function, analysis);
 
+            #[cfg(debug_assertions)]
             verify_object_packing(
                 func,
                 &stack,
