@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef};
 
-use super::provenance::compute_value_provenance;
+use super::provenance::compute_provenance;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PtrEscapeSummary {
@@ -164,13 +164,15 @@ fn compute_summary_for_func(
             arg_is_ptr.push(function.dfg.value_ty(arg).is_pointer(&module.ctx));
         }
 
-        let prov = compute_value_provenance(function, &module.ctx, isa, |callee| {
+        let prov_info = compute_provenance(function, &module.ctx, isa, |callee| {
             summaries
                 .get(&callee)
                 .cloned()
                 .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown(module, callee))
                 .arg_may_be_returned
         });
+        let prov = &prov_info.value;
+        let local_mem = &prov_info.local_mem;
 
         for block in function.layout.iter_block() {
             for inst in function.layout.iter_inst(block) {
@@ -216,6 +218,56 @@ fn compute_summary_for_func(
                                 summary.arg_may_escape[idx] = true;
                             }
                         }
+                        if val_prov.is_unknown_ptr() {
+                            mark_all_ptr_args_escape(&mut summary, &arg_is_ptr);
+                        }
+                    }
+                    EvmInstKind::EvmMstore8(mstore8) => {
+                        let addr_prov = &prov[*mstore8.addr()];
+                        if addr_prov.is_local_addr() {
+                            continue;
+                        }
+
+                        let val_prov = &prov[*mstore8.val()];
+                        for idx in val_prov.arg_indices() {
+                            let idx = idx as usize;
+                            if idx < summary.arg_may_escape.len() {
+                                summary.arg_may_escape[idx] = true;
+                            }
+                        }
+                        if val_prov.is_unknown_ptr() {
+                            mark_all_ptr_args_escape(&mut summary, &arg_is_ptr);
+                        }
+                    }
+                    EvmInstKind::EvmMcopy(mcopy) => {
+                        let dest_prov = &prov[*mcopy.dest()];
+                        if dest_prov.is_local_addr() {
+                            continue;
+                        }
+
+                        let src_prov = &prov[*mcopy.addr()];
+                        if src_prov.is_local_addr() {
+                            let mut any = false;
+                            for base in src_prov.alloca_insts() {
+                                any = true;
+                                if let Some(stored) = local_mem.get(&base) {
+                                    for idx in stored.arg_indices() {
+                                        let idx = idx as usize;
+                                        if idx < summary.arg_may_escape.len() {
+                                            summary.arg_may_escape[idx] = true;
+                                        }
+                                    }
+                                    if stored.is_unknown_ptr() {
+                                        mark_all_ptr_args_escape(&mut summary, &arg_is_ptr);
+                                    }
+                                }
+                            }
+                            if !any {
+                                mark_all_ptr_args_escape(&mut summary, &arg_is_ptr);
+                            }
+                        } else {
+                            mark_all_ptr_args_escape(&mut summary, &arg_is_ptr);
+                        }
                     }
                     EvmInstKind::Call(call) => {
                         let callee = *call.callee();
@@ -245,6 +297,14 @@ fn compute_summary_for_func(
 
         summary
     })
+}
+
+fn mark_all_ptr_args_escape(summary: &mut PtrEscapeSummary, arg_is_ptr: &[bool]) {
+    for (idx, is_ptr) in arg_is_ptr.iter().copied().enumerate() {
+        if is_ptr {
+            summary.arg_may_escape[idx] = true;
+        }
+    }
 }
 
 #[cfg(test)]

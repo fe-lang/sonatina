@@ -16,7 +16,7 @@ use crate::{bitset::BitSet, liveness::InstLiveness};
 
 use super::{
     mem_effects::FuncMemEffects,
-    provenance::{Provenance, compute_value_provenance},
+    provenance::{Provenance, compute_provenance},
     ptr_escape::PtrEscapeSummary,
 };
 
@@ -46,13 +46,15 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
         return false;
     }
 
-    let prov = compute_value_provenance(function, module, isa, |callee| {
+    let prov_info = compute_provenance(function, module, isa, |callee| {
         ptr_escape
             .get(&callee)
             .cloned()
             .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee))
             .arg_may_be_returned
     });
+    let prov = &prov_info.value;
+    let local_mem = &prov_info.local_mem;
 
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
@@ -62,7 +64,7 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
                     let Some(ret_val) = *ret.arg() else {
                         continue;
                     };
-                    if value_may_be_heap_derived(function, module, ret_val, &prov) {
+                    if value_may_be_heap_derived(function, module, ret_val, prov) {
                         return false;
                     }
                 }
@@ -73,7 +75,28 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
                     }
 
                     let val = *mstore.value();
-                    if value_may_be_heap_derived(function, module, val, &prov) {
+                    if value_may_be_heap_derived(function, module, val, prov) {
+                        return false;
+                    }
+                }
+                EvmInstKind::EvmMstore8(mstore8) => {
+                    let addr = *mstore8.addr();
+                    if prov[addr].is_local_addr() {
+                        continue;
+                    }
+
+                    let val = *mstore8.val();
+                    if value_may_be_heap_derived(function, module, val, prov) {
+                        return false;
+                    }
+                }
+                EvmInstKind::EvmMcopy(mcopy) => {
+                    let dest = *mcopy.dest();
+                    if prov[dest].is_local_addr() {
+                        continue;
+                    }
+                    let src = *mcopy.addr();
+                    if local_copy_source_may_be_heap_derived(src, prov, local_mem) {
                         return false;
                     }
                 }
@@ -86,7 +109,7 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
                     for (idx, &arg) in call.args().iter().enumerate() {
                         if idx < callee_sum.arg_may_escape.len()
                             && callee_sum.arg_may_escape[idx]
-                            && value_may_be_heap_derived(function, module, arg, &prov)
+                            && value_may_be_heap_derived(function, module, arg, prov)
                         {
                             return false;
                         }
@@ -168,17 +191,26 @@ pub(crate) fn compute_transient_mallocs(
         return FxHashSet::default();
     }
 
-    let prov = compute_value_provenance(function, module, isa, |callee| {
+    let prov_info = compute_provenance(function, module, isa, |callee| {
         ptr_escape
             .get(&callee)
             .cloned()
             .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee))
             .arg_may_be_returned
     });
+    let prov = &prov_info.value;
+    let local_mem = &prov_info.local_mem;
 
     let block_malloc_in = compute_block_malloc_in(function, isa);
-    let escaping =
-        compute_escaping_mallocs(function, module, isa, ptr_escape, &prov, &block_malloc_in);
+    let escaping = compute_escaping_mallocs(
+        function,
+        module,
+        isa,
+        ptr_escape,
+        prov,
+        local_mem,
+        &block_malloc_in,
+    );
 
     for base in escaping {
         mallocs.remove(&base);
@@ -195,16 +227,16 @@ pub(crate) fn compute_transient_mallocs(
                     live.remove(def);
                 }
 
-                remove_live_mallocs(&mut mallocs, &live, &prov, &seen_mallocs);
+                remove_live_mallocs(&mut mallocs, &live, prov, local_mem, &seen_mallocs);
                 seen_mallocs.insert(inst);
                 continue;
             }
 
-            let Some(call) = function.dfg.call_info(inst) else {
+            let Some(call_info) = function.dfg.call_info(inst) else {
                 continue;
             };
 
-            let callee = call.callee();
+            let callee = call_info.callee();
             let is_barrier = mem_effects.is_none_or(|effects| {
                 let eff = effects.get(&callee).copied().unwrap_or_else(|| {
                     panic!(
@@ -218,18 +250,57 @@ pub(crate) fn compute_transient_mallocs(
                 continue;
             }
 
-            let live = inst_liveness.live_out(inst);
-            remove_live_mallocs(&mut mallocs, live, &prov, &seen_mallocs);
+            // If a call can allocate or shift the dynamic stack pointer, then any malloc-derived
+            // pointer passed *to* the call must be treated as non-transient, even if it is not
+            // live after the call returns: the callee may allocate (or enter a frame) before it
+            // dereferences the pointer argument, clobbering the pointed-to memory.
+            let mut live = inst_liveness.live_out(inst).clone();
+            let call = function
+                .dfg
+                .cast_call(inst)
+                .expect("call_info must correspond to Call");
+            for &arg in call.args() {
+                live.insert(arg);
+            }
+            remove_live_mallocs(&mut mallocs, &live, prov, local_mem, &seen_mallocs);
         }
     }
 
     mallocs
 }
 
+pub(crate) fn compute_escaping_mallocs_for_function(
+    function: &Function,
+    module: &ModuleCtx,
+    isa: &Evm,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+) -> FxHashSet<InstId> {
+    let prov_info = compute_provenance(function, module, isa, |callee| {
+        ptr_escape
+            .get(&callee)
+            .cloned()
+            .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee))
+            .arg_may_be_returned
+    });
+    let prov = &prov_info.value;
+    let local_mem = &prov_info.local_mem;
+    let block_malloc_in = compute_block_malloc_in(function, isa);
+    compute_escaping_mallocs(
+        function,
+        module,
+        isa,
+        ptr_escape,
+        prov,
+        local_mem,
+        &block_malloc_in,
+    )
+}
+
 fn remove_live_mallocs(
     mallocs: &mut FxHashSet<InstId>,
     live: &BitSet<ValueId>,
     prov: &SecondaryMap<ValueId, Provenance>,
+    local_mem: &FxHashMap<InstId, Provenance>,
     seen_mallocs: &BitSet<InstId>,
 ) {
     let mut has_unknown_ptr = false;
@@ -240,6 +311,23 @@ fn remove_live_mallocs(
         }
         for base in v_prov.malloc_insts() {
             mallocs.remove(&base);
+        }
+
+        // A malloc-derived pointer can be saved into local memory and reloaded later, without
+        // remaining live as an SSA value. If the *address* of such local memory is live here,
+        // conservatively treat any malloc pointers that may be stored there as live too.
+        if v_prov.is_local_addr() {
+            for alloca_base in v_prov.alloca_insts() {
+                let Some(stored) = local_mem.get(&alloca_base) else {
+                    continue;
+                };
+                if stored.is_unknown_ptr() {
+                    has_unknown_ptr = true;
+                }
+                for base in stored.malloc_insts() {
+                    mallocs.remove(&base);
+                }
+            }
         }
     }
 
@@ -303,10 +391,41 @@ fn record_escaping_mallocs(
     seen_mallocs: &BitSet<InstId>,
 ) {
     let p = &prov[value];
+    record_escaping_provenance(escaping, p, seen_mallocs);
+}
+
+fn record_escaping_provenance(
+    escaping: &mut FxHashSet<InstId>,
+    p: &Provenance,
+    seen_mallocs: &BitSet<InstId>,
+) {
     if p.is_unknown_ptr() {
         escaping.extend(seen_mallocs.iter());
     }
     escaping.extend(p.malloc_insts());
+}
+
+fn local_copy_source_may_be_heap_derived(
+    src: ValueId,
+    prov: &SecondaryMap<ValueId, Provenance>,
+    local_mem: &FxHashMap<InstId, Provenance>,
+) -> bool {
+    let src_prov = &prov[src];
+    if !src_prov.is_local_addr() {
+        return true;
+    }
+
+    let mut any = false;
+    for base in src_prov.alloca_insts() {
+        any = true;
+        if let Some(stored) = local_mem.get(&base)
+            && (stored.is_unknown_ptr() || stored.malloc_insts().next().is_some())
+        {
+            return true;
+        }
+    }
+
+    !any
 }
 
 fn compute_escaping_mallocs(
@@ -315,6 +434,7 @@ fn compute_escaping_mallocs(
     isa: &Evm,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
     prov: &SecondaryMap<ValueId, Provenance>,
+    local_mem: &FxHashMap<InstId, Provenance>,
     block_malloc_in: &SecondaryMap<BlockId, BitSet<InstId>>,
 ) -> FxHashSet<InstId> {
     let mut escaping: FxHashSet<InstId> = FxHashSet::default();
@@ -338,6 +458,40 @@ fn compute_escaping_mallocs(
 
                     let val = *mstore.value();
                     record_escaping_mallocs(&mut escaping, val, prov, &seen_mallocs);
+                }
+                EvmInstKind::EvmMstore8(mstore8) => {
+                    let addr = *mstore8.addr();
+                    if prov[addr].is_local_addr() {
+                        continue;
+                    }
+
+                    let val = *mstore8.val();
+                    record_escaping_mallocs(&mut escaping, val, prov, &seen_mallocs);
+                }
+                EvmInstKind::EvmMcopy(mcopy) => {
+                    let dest = *mcopy.dest();
+                    if prov[dest].is_local_addr() {
+                        continue;
+                    }
+
+                    let src = *mcopy.addr();
+                    let src_prov = &prov[src];
+                    if src_prov.is_local_addr() {
+                        let mut any = false;
+                        for base in src_prov.alloca_insts() {
+                            any = true;
+                            if let Some(stored) = local_mem.get(&base) {
+                                record_escaping_provenance(&mut escaping, stored, &seen_mallocs);
+                            }
+                        }
+                        if !any {
+                            escaping.extend(seen_mallocs.iter());
+                        }
+                    } else {
+                        // Unknown source bytes copied to non-local memory may include malloc-derived
+                        // pointers from this function.
+                        escaping.extend(seen_mallocs.iter());
+                    }
                 }
                 EvmInstKind::Call(call) => {
                     let callee = *call.callee();

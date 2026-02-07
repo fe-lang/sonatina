@@ -1,0 +1,50 @@
+#! evm.config: { emit_mem_plan: true }
+#! evm.case: bug_demo
+#!   calldata: u32be(11) u32be(22)
+#!   expect: return u256(111)
+
+# Regression: `mk` returns a malloc pointer containing 111.
+# Caller invokes `big` (static arena clobber) before reading it.
+# Must still return 111 (previously miscompiled to 999).
+
+target = "evm-ethereum-osaka"
+
+type @big = { i256, i256, i256, i256, i256, i256, i256, i256 };
+
+func public %big() -> i256 {
+    block0:
+        v0.*@big = alloca @big;
+        v1.*i256 = gep v0 0.i8 0.i8;
+        mstore v1 999.i256 i256;
+        v2.i256 = mload v1 i256;
+        return v2;
+}
+
+func public %mk() -> *i256 {
+    block0:
+        v0.*i8 = evm_malloc 32.i256;
+        v1.*i256 = bitcast v0 *i256;
+        mstore v1 111.i256 i256;
+        return v1;
+}
+
+func public %main() -> i256 {
+    block0:
+        v0.*i256 = call %mk;
+        v1.i256 = call %big;
+        v2.i256 = mload v0 i256;
+        return v2;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = call %main;
+        mstore 0.i32 v0 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

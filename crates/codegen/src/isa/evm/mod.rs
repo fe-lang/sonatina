@@ -510,17 +510,25 @@ impl LowerBackend for EvmBackend {
 
         for &func in funcs {
             let analysis = analyses.get(&func).expect("missing analysis");
-            let transient_mallocs = module.func_store.view(func, |function| {
-                malloc_plan::compute_transient_mallocs(
+            let (escaping_mallocs, transient_mallocs) = module.func_store.view(func, |function| {
+                let escaping = malloc_plan::compute_escaping_mallocs_for_function(
+                    function,
+                    &module.ctx,
+                    &self.isa,
+                    &ptr_escape,
+                );
+                let transient = malloc_plan::compute_transient_mallocs(
                     function,
                     &module.ctx,
                     &self.isa,
                     &ptr_escape,
                     Some(&mem_effects),
                     &analysis.inst_liveness,
-                )
+                );
+                (escaping, transient)
             });
             if let Some(mem_plan) = plan.funcs.get_mut(&func) {
+                mem_plan.escaping_mallocs = escaping_mallocs;
                 mem_plan.transient_mallocs = transient_mallocs;
             }
         }
@@ -593,6 +601,7 @@ impl LowerBackend for EvmBackend {
                 locals_words: layout.locals_words,
                 malloc_future_static_words: FxHashMap::default(),
                 transient_mallocs: FxHashSet::default(),
+                escaping_mallocs: FxHashSet::default(),
             },
         };
         self.lower_prepared_function(module, func, lowering)
@@ -1093,11 +1102,17 @@ impl LowerBackend for EvmBackend {
                     .checked_sub(STATIC_BASE)
                     .expect("dyn base below static base")
                     / WORD_BYTES;
-                let future_words = mem_plan
+                let escapes_func = mem_plan.escaping_mallocs.contains(&insn);
+                let mut future_words = mem_plan
                     .malloc_future_static_words
                     .get(&insn)
                     .copied()
                     .unwrap_or(dyn_base_words);
+                if escapes_func {
+                    // Escaping allocations must survive future callers that may clobber any
+                    // per-function static arena prefix up to the global dynamic base.
+                    future_words = future_words.max(dyn_base_words);
+                }
 
                 let min_base_bytes = STATIC_BASE
                     .checked_add(

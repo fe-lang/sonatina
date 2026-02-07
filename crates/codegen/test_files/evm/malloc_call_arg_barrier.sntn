@@ -1,0 +1,38 @@
+#! evm.case: ok
+#!   calldata: u32be(11) u32be(22)
+#!   expect: return u256(111)
+
+target = "evm-ethereum-osaka"
+
+func public %clobber_then_read(v0.*i256) -> i256 {
+    block0:
+        v1.*i8 = evm_malloc 32.i256;
+        v2.*i256 = bitcast v1 *i256;
+        mstore v2 222.i256 i256;
+
+        v3.i256 = mload v0 i256;
+        return v3;
+}
+
+func public %main() -> i256 {
+    block0:
+        v0.*i8 = evm_malloc 32.i256;
+        v1.*i256 = bitcast v0 *i256;
+        mstore v1 111.i256 i256;
+
+        v2.i256 = call %clobber_then_read v1;
+        return v2;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = call %main;
+        mstore 0.i32 v0 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

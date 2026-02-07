@@ -1,0 +1,39 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/malloc_return_escape_clobber_bug.sntn
+---
+evm.config: stack_reach=16 emit_debug_trace=false emit_mem_plan=true
+
+object: Contract
+  section runtime: 108 bytes
+  total: 108 bytes
+
+functions:
+  mem: dyn_base=0x1c0 static_base=0xc0
+  big: ir_blocks=1 ir_insts=5 vcode_ops=16 fixups=0 imm_bytes=2
+    mem: scheme=StaticArena need_words=8 locals_words=8
+  mk: ir_blocks=1 ir_insts=4 vcode_ops=46 fixups=4 imm_bytes=8
+    mem: scheme=StaticArena need_words=0 locals_words=0
+  main: ir_blocks=1 ir_insts=4 vcode_ops=13 fixups=4 imm_bytes=0
+    mem: scheme=StaticArena need_words=8 locals_words=0
+  entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
+    mem: scheme=StaticArena need_words=8 locals_words=0
+
+--------------- MEM PLAN ---------------
+
+evm mem plan: dyn_base=0x1c0 static_base=0xc0
+evm mem plan: big scheme=StaticArena need_words=8 locals_words=8
+  detail locals_words=8 direct_callee_need_max_words=0 need_words=8
+  alloca v0 offset_words=0 size_words=8 addr=0xc0
+evm mem plan: mk scheme=StaticArena need_words=0 locals_words=0
+  detail locals_words=0 direct_callee_need_max_words=0 need_words=0
+evm mem plan: main scheme=StaticArena need_words=8 locals_words=0
+  detail locals_words=0 direct_callee_need_max_words=8 need_words=8
+  call inst1 callee=%big callee_need_words=8 choice=Save has_return=true save_words=0
+evm mem plan: entry scheme=StaticArena need_words=8 locals_words=0
+  detail locals_words=0 direct_callee_need_max_words=8 need_words=8
+  call inst0 callee=%main callee_need_words=8 choice=Save has_return=true save_words=0
+
+evm:
+  case bug_demo: calldata_len=8 success reason=Return gas_used=21355 gas_refunded=0 logs=0 output=call len=32

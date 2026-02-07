@@ -1,0 +1,45 @@
+#! evm.config: { emit_mem_plan: true }
+#! evm.case: bug_demo
+#!   calldata: u32be(11) u32be(22)
+#!   expect: return u256(111)
+
+# Regression: live pointer value from call result is kept across a later malloc.
+# Must still return 111 (previously miscompiled to 222 due overlap/reuse).
+
+target = "evm-ethereum-osaka"
+
+func public %const_ptr() -> *i8 {
+    block0:
+        v0.*i8 = int_to_ptr 192.i256 *i8;
+        return v0;
+}
+
+func public %main() -> i256 {
+    block0:
+        v0.*i8 = evm_malloc 32.i256;
+        v1.*i256 = bitcast v0 *i256;
+        mstore v1 111.i256 i256;
+
+        v2.*i8 = call %const_ptr;
+
+        v3.*i8 = evm_malloc 32.i256;
+        v4.*i256 = bitcast v3 *i256;
+        mstore v4 222.i256 i256;
+
+        v5.*i256 = bitcast v2 *i256;
+        v6.i256 = mload v5 i256;
+        return v6;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = call %main;
+        mstore 0.i32 v0 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

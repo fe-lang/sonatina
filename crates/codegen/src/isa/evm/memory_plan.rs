@@ -58,6 +58,7 @@ pub struct FuncMemPlan {
 
     pub malloc_future_static_words: FxHashMap<InstId, u32>,
     pub transient_mallocs: FxHashSet<InstId>,
+    pub escaping_mallocs: FxHashSet<InstId>,
 }
 
 #[derive(Clone, Debug)]
@@ -266,6 +267,7 @@ pub(crate) fn compute_program_memory_plan(
                         locals_words: layout.locals_words,
                         malloc_future_static_words: FxHashMap::default(),
                         transient_mallocs: FxHashSet::default(),
+                        escaping_mallocs: FxHashSet::default(),
                     },
                 );
             }
@@ -307,6 +309,7 @@ pub(crate) fn compute_program_memory_plan(
                     locals_words: planned_func.layout.locals_words,
                     malloc_future_static_words: FxHashMap::default(),
                     transient_mallocs: FxHashSet::default(),
+                    escaping_mallocs: FxHashSet::default(),
                 },
             );
         }
