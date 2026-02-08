@@ -5,7 +5,7 @@
 
 (datatype Expr
     ; --- Values ---
-    (Const i64 Type)    ; immediate value
+    (Const i256 Type)   ; immediate value (full-width integer)
     (Arg i64 Type)      ; function argument (index, type)
     (Global i64 Type)   ; global variable ref
     (Undef Type)        ; undefined value

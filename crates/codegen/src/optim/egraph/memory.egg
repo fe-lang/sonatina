@@ -134,3 +134,13 @@
        (= ty (store-ty pred_mem))
        (= val (store-val pred_mem)))
       ((union result val)))
+
+; === Adjacent Dead Store Detection ===
+; If a store immediately overwrites a previous store to the same address,
+; the previous store is dead.
+(relation dead-store (i64))
+(rule ((= mem_id (store-prev next_mem_id))
+       (!= mem_id 0)
+       (= addr (store-addr next_mem_id))
+       (= addr (store-addr mem_id)))
+      ((dead-store mem_id)))

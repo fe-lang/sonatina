@@ -217,12 +217,8 @@ impl EggTerm {
                 match head.as_str() {
                     "Const" => {
                         let [value, ty] = rest else { return None };
-                        let value = match value {
-                            Sexp::Str(s) | Sexp::Atom(s) => s.as_str(),
-                            _ => return None,
-                        };
                         let ty = parse_type(ty)?;
-                        let value = parse_i256_decimal(value)?;
+                        let value = parse_i256(value)?;
                         Some(EggTerm::Const(value, ty))
                     }
                     "Arg" => {
@@ -334,17 +330,173 @@ fn parse_type(sexp: &Sexp) -> Option<Type> {
     }
 }
 
-fn parse_i256_decimal(token: &str) -> Option<I256> {
-    let abs = token.strip_prefix('-');
-    let is_negative = abs.is_some();
-    let abs = abs.unwrap_or(token);
+fn parse_i256(sexp: &Sexp) -> Option<I256> {
+    match sexp {
+        Sexp::Atom(token) | Sexp::Str(token) => parse_i256_string(token),
+        Sexp::List(list) => {
+            let (head, rest) = list.split_first()?;
+            let Sexp::Atom(head) = head else {
+                return None;
+            };
 
-    let mut i256: I256 = U256::from_dec_str(abs).ok()?.into();
+            match head.as_str() {
+                "i256" => {
+                    let [n] = rest else { return None };
+                    let n: i64 = parse_i64(n)?;
+                    Some(n.into())
+                }
+                "i256-from-string" => {
+                    let [s] = rest else { return None };
+                    let s = match s {
+                        Sexp::Atom(s) | Sexp::Str(s) => s.as_str(),
+                        _ => return None,
+                    };
+                    parse_i256_string(s)
+                }
+                _ => None,
+            }
+        }
+    }
+}
+
+fn parse_i256_string(token: &str) -> Option<I256> {
+    let abs = token.trim().strip_prefix('-');
+    let is_negative = abs.is_some();
+    let abs = abs.unwrap_or(token).trim();
+
+    let mut i256: I256 = parse_u256_string(abs)?.into();
     if is_negative {
         i256 = I256::zero().overflowing_sub(i256).0;
     }
 
     Some(i256)
+}
+
+fn parse_u256_string(token: &str) -> Option<U256> {
+    let token = token.replace('_', "");
+
+    if let Some(rest) = token
+        .strip_prefix("0x")
+        .or_else(|| token.strip_prefix("0X"))
+    {
+        return parse_u256_hex(rest);
+    }
+    if let Some(rest) = token
+        .strip_prefix("0b")
+        .or_else(|| token.strip_prefix("0B"))
+    {
+        return parse_u256_binary(rest);
+    }
+    if let Some(rest) = token
+        .strip_prefix("0o")
+        .or_else(|| token.strip_prefix("0O"))
+    {
+        return parse_u256_octal(rest);
+    }
+
+    U256::from_dec_str(&token).ok()
+}
+
+fn parse_u256_hex(hex: &str) -> Option<U256> {
+    fn nibble(hex: u8) -> Option<u8> {
+        match hex {
+            b'0'..=b'9' => Some(hex - b'0'),
+            b'a'..=b'f' => Some(hex - b'a' + 10),
+            b'A'..=b'F' => Some(hex - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let mut bytes = [0u8; 32];
+    let mut idx = bytes.len();
+    let mut low_nibble: Option<u8> = None;
+
+    for &b in hex.as_bytes().iter().rev() {
+        let n = nibble(b)?;
+        if let Some(low) = low_nibble {
+            idx = idx.checked_sub(1)?;
+            bytes[idx] = (n << 4) | low;
+            low_nibble = None;
+        } else {
+            low_nibble = Some(n);
+        }
+    }
+
+    if let Some(low) = low_nibble {
+        idx = idx.checked_sub(1)?;
+        bytes[idx] = low;
+    }
+
+    Some(U256::from_big_endian(&bytes))
+}
+
+fn parse_u256_binary(bin: &str) -> Option<U256> {
+    let bin = bin.trim();
+    if bin.len() > 256 {
+        return None;
+    }
+
+    let mut value = U256::zero();
+    for b in bin.bytes() {
+        let bit = match b {
+            b'0' => 0u8,
+            b'1' => 1u8,
+            _ => return None,
+        };
+        value = (value << 1) | U256::from(bit);
+    }
+    Some(value)
+}
+
+fn parse_u256_octal(oct: &str) -> Option<U256> {
+    let mut value = U256::zero();
+    for b in oct.trim().bytes() {
+        let digit = match b {
+            b'0'..=b'7' => b - b'0',
+            _ => return None,
+        };
+
+        let (mul, overflow_mul) = value.overflowing_mul(U256::from(8u8));
+        if overflow_mul {
+            return None;
+        }
+
+        let (next, overflow_add) = mul.overflowing_add(U256::from(digit));
+        if overflow_add {
+            return None;
+        }
+
+        value = next;
+    }
+    Some(value)
+}
+
+fn parse_i64(sexp: &Sexp) -> Option<i64> {
+    let Sexp::Atom(atom) = sexp else { return None };
+    atom.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_u256_octal_accepts_boundary_power() {
+        let input = format!("1{}", "0".repeat(85));
+        let parsed = parse_u256_octal(&input).expect("2^255 should fit in u256");
+        assert_eq!(parsed, U256::one() << 255);
+    }
+
+    #[test]
+    fn parse_u256_octal_rejects_overflow() {
+        let input = format!("1{}", "0".repeat(86));
+        assert!(parse_u256_octal(&input).is_none());
+    }
+
+    #[test]
+    fn parse_u256_octal_rejects_invalid_digit() {
+        assert!(parse_u256_octal("128").is_none());
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -2,13 +2,11 @@
 
 use crate::domtree::DomTree;
 
-use egglog::EGraph;
+use egglog::{CommandOutput, EGraph};
 use rustc_hash::FxHashMap;
 
-use sonatina_ir::{Function, InstDowncast, InstId, Type, ValueId, inst::data::Mstore};
 use sonatina_ir::{
-    ControlFlowGraph, Function, I256, InstDowncast, InstId, Type, U256, Value, ValueId,
-    inst::data::Mstore,
+    ControlFlowGraph, Function, InstDowncast, InstId, Type, Value, ValueId, inst::data::Mstore,
 };
 
 use super::{EggTerm, Elaborator, func_to_egglog};
@@ -86,91 +84,65 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
     // Check results for simplifications
     let mut changed = false;
 
-    for (idx, name) in extract_names.iter().enumerate() {
-        if idx >= results.len() {
-            break;
-        }
+    let mut extract_results = results.iter().filter_map(extract_output_to_string);
 
-        let result = &results[idx];
+    for name in &extract_names {
+        let Some(result) = extract_results.next() else {
+            break;
+        };
+        let result = result.trim();
         let original_val = value_map[name];
         let ty = type_map[name];
 
-        // Check if result is a constant like "(Const 0 (I32))"
-        if let Some(const_val) = parse_const_result(result) {
-            let imm_id = func
-                .dfg
-                .make_imm_value(sonatina_ir::Immediate::from_i256(const_val.into(), ty));
-            if imm_id != original_val {
-                func.dfg.change_to_alias(original_val, imm_id);
-                changed = true;
-            }
-        }
-        // Check if result is just another variable like "v0"
-        else if let Some(alias_name) = parse_var_result(result) {
-            if let Some(&alias_val) = value_map.get(&alias_name)
-                && can_alias(func, &dom, original_val, alias_val)
-            {
-                func.dfg.change_to_alias(original_val, alias_val);
-                changed = true;
-            }
-        }
-        // Check if result is a function argument like "(Arg 0 (I32))"
-        else if let Some(arg_idx) = parse_arg_result(result) {
-            if arg_idx < func.arg_values.len() {
-                let arg_val = func.arg_values[arg_idx];
-                if can_alias(func, &dom, original_val, arg_val) {
-                    func.dfg.change_to_alias(original_val, arg_val);
+        let Some(term) = EggTerm::parse(result, func) else {
+            continue;
+        };
+
+        match term {
+            EggTerm::Const(const_val, _term_ty) => {
+                let imm_id = func
+                    .dfg
+                    .make_imm_value(sonatina_ir::Immediate::from_i256(const_val, ty));
+                if imm_id != original_val {
+                    func.dfg.change_to_alias(original_val, imm_id);
                     changed = true;
                 }
             }
-        }
-        // Check if result is a side-effect result like "(SideEffectResult N (Type))"
-        else if let Some(side_effect_id) = parse_side_effect_result(result) {
-            let alias_name = format!("v{side_effect_id}");
-            if let Some(&side_effect_val) = value_map.get(&alias_name)
-                && can_alias(func, &dom, original_val, side_effect_val)
-            {
-                func.dfg.change_to_alias(original_val, side_effect_val);
-                changed = true;
+            EggTerm::Value(alias_val) => {
+                if can_alias(func, &dom, original_val, alias_val) {
+                    func.dfg.change_to_alias(original_val, alias_val);
+                    changed = true;
+                }
             }
-        }
-        // Check if result is an alloca result like "(AllocaResult N (Type))"
-        else if let Some(alloca_id) = parse_alloca_result(result) {
-            let alias_name = format!("v{alloca_id}");
-            if let Some(&alloca_val) = value_map.get(&alias_name)
-                && can_alias(func, &dom, original_val, alloca_val)
-            {
-                func.dfg.change_to_alias(original_val, alloca_val);
-                changed = true;
-            }
-        }
-        // Otherwise, try to elaborate the extracted expression back into IR.
-        else if let Some(term) = EggTerm::parse(result, func) {
-            let is = func.inst_set();
-            if term.node_count() > 32 || !term.is_supported(is) || term.contains_value(original_val)
-            {
-                continue;
-            }
+            term => {
+                let is = func.inst_set();
+                if term.node_count() > 32
+                    || !term.is_supported(is)
+                    || term.contains_value(original_val)
+                {
+                    continue;
+                }
 
-            let Some(original_inst) = func.dfg.value_inst(original_val) else {
-                continue;
-            };
-            if func.dfg.is_phi(original_inst) {
-                continue;
-            }
+                let Some(original_inst) = func.dfg.value_inst(original_val) else {
+                    continue;
+                };
+                if func.dfg.is_phi(original_inst) {
+                    continue;
+                }
 
-            let mut dominates = true;
-            term.for_each_value(&mut |value| {
-                dominates &= value_dominates_inst(func, &dom, value, original_inst);
-            });
-            if !dominates {
-                continue;
-            }
+                let mut dominates = true;
+                term.for_each_value(&mut |value| {
+                    dominates &= value_dominates_inst(func, &dom, value, original_inst);
+                });
+                if !dominates {
+                    continue;
+                }
 
-            let mut elaborator = Elaborator::new(func, original_inst);
-            if let Some(inst) = elaborator.build_inst(&term) {
-                func.dfg.replace_inst(original_inst, inst);
-                changed = true;
+                let mut elaborator = Elaborator::new(func, original_inst);
+                if let Some(inst) = elaborator.build_inst(&term) {
+                    func.dfg.replace_inst(original_inst, inst);
+                    changed = true;
+                }
             }
         }
     }
@@ -180,6 +152,16 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
     }
 
     changed
+}
+
+fn extract_output_to_string(output: &CommandOutput) -> Option<String> {
+    match output {
+        CommandOutput::ExtractBest(termdag, _cost, term) => Some(termdag.to_string(*term)),
+        CommandOutput::ExtractVariants(termdag, terms) => {
+            terms.first().copied().map(|term| termdag.to_string(term))
+        }
+        _ => None,
+    }
 }
 
 fn can_alias(func: &Function, dom: &DomTree, original_val: ValueId, alias_val: ValueId) -> bool {
@@ -278,125 +260,9 @@ fn eliminate_adjacent_dead_stores(func: &mut Function) -> bool {
     changed
 }
 
-fn parse_const_result(s: &str) -> Option<i64> {
-    // Parse "(Const N (TY))" format
-    let s = s.trim();
-    if !s.starts_with("(Const ") {
-        return None;
-    }
-
-    let inner = s.strip_prefix("(Const ")?.strip_suffix(')')?;
-    let parts: Vec<_> = inner.splitn(2, ' ').collect();
-    if parts.is_empty() {
-        return None;
-    }
-
-    parts[0].parse().ok()
-}
-
-fn parse_var_result(s: &str) -> Option<String> {
-    // Parse "vN" format or "(Arg N (Type))" format
-    let s = s.trim();
-    if s.starts_with('v') && s[1..].chars().all(|c| c.is_ascii_digit()) {
-        Some(s.to_string())
-    } else if s.starts_with("(Arg ") {
-        // Parse "(Arg N (Type))" format - return "vN" where N is the arg index
-        // Note: This is a simplification - in reality we'd need to map arg index to value
-        None
-    } else {
-        None
-    }
-}
-
-fn parse_arg_result(s: &str) -> Option<usize> {
-    // Parse "(Arg N (Type))" format, return the argument index
-    let s = s.trim();
-    if !s.starts_with("(Arg ") {
-        return None;
-    }
-    let inner = s.strip_prefix("(Arg ")?.strip_suffix(')')?;
-    let parts: Vec<_> = inner.splitn(2, ' ').collect();
-    if parts.is_empty() {
-        return None;
-    }
-    parts[0].parse().ok()
-}
-
-fn parse_side_effect_result(s: &str) -> Option<usize> {
-    // Parse "(SideEffectResult N (Type))" format, return the value ID
-    let s = s.trim();
-    if !s.starts_with("(SideEffectResult ") {
-        return None;
-    }
-    let inner = s.strip_prefix("(SideEffectResult ")?.strip_suffix(')')?;
-    let parts: Vec<_> = inner.splitn(2, ' ').collect();
-    if parts.is_empty() {
-        return None;
-    }
-    parts[0].parse().ok()
-}
-
-fn parse_alloca_result(s: &str) -> Option<usize> {
-    // Parse "(AllocaResult N (Type))" format, return the value ID
-    let s = s.trim();
-    if !s.starts_with("(AllocaResult ") {
-        return None;
-    }
-    let inner = s.strip_prefix("(AllocaResult ")?.strip_suffix(')')?;
-    let parts: Vec<_> = inner.splitn(2, ' ').collect();
-    if parts.is_empty() {
-        return None;
-    }
-    parts[0].parse().ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_const() {
-        assert_eq!(parse_const_result("(Const 0 (I32))"), Some(0));
-        assert_eq!(parse_const_result("(Const 42 (I64))"), Some(42));
-        assert_eq!(parse_const_result("v0"), None);
-    }
-
-    #[test]
-    fn test_parse_var() {
-        assert_eq!(parse_var_result("v0"), Some("v0".to_string()));
-        assert_eq!(parse_var_result("v123"), Some("v123".to_string()));
-        assert_eq!(parse_var_result("(Const 0 (I32))"), None);
-    }
-
-    #[test]
-    fn test_parse_arg() {
-        assert_eq!(parse_arg_result("(Arg 0 (I32))"), Some(0));
-        assert_eq!(parse_arg_result("(Arg 2 (I64))"), Some(2));
-        assert_eq!(parse_arg_result("v0"), None);
-        assert_eq!(parse_arg_result("(Const 0 (I32))"), None);
-    }
-
-    #[test]
-    fn test_parse_side_effect() {
-        assert_eq!(
-            parse_side_effect_result("(SideEffectResult 3 (I32))"),
-            Some(3)
-        );
-        assert_eq!(
-            parse_side_effect_result("(SideEffectResult 42 (I64))"),
-            Some(42)
-        );
-        assert_eq!(parse_side_effect_result("v0"), None);
-        assert_eq!(parse_side_effect_result("(Const 0 (I32))"), None);
-    }
-
-    #[test]
-    fn test_parse_alloca() {
-        assert_eq!(parse_alloca_result("(AllocaResult 1 (I32))"), Some(1));
-        assert_eq!(parse_alloca_result("(AllocaResult 99 (I64))"), Some(99));
-        assert_eq!(parse_alloca_result("v0"), None);
-        assert_eq!(parse_alloca_result("(Const 0 (I32))"), None);
-    }
 
     #[test]
     fn test_egglog_parses() {
@@ -416,7 +282,7 @@ mod tests {
 ; Store 42 to v1, creating memory state 1
 (set (store-prev 1) 0)
 (set (store-addr 1) v1)
-(set (store-val 1) (Const 42 (I32)))
+(set (store-val 1) (Const (i256 42) (I32)))
 (set (store-ty 1) (I32))
 ; Load from memory state 1 at address v1
 (let v2 (LoadResult 2 1 (I32)))
@@ -431,10 +297,10 @@ mod tests {
             .parse_and_run_program(None, &full)
             .expect("egglog should run");
         // v2 should be unified with (Const 42 (I32))
-        assert_eq!(results.len(), 1);
-        let result = &results[0];
-        eprintln!("Result: {}", result);
-        assert!(result.contains("Const 42") || result == "(Const 42 (I32))");
+        let mut extracted = results.iter().filter_map(extract_output_to_string);
+        let result = extracted.next().expect("extract should return a result");
+        assert!(result.contains("0x2a"), "Expected 0x2a, got: {result}");
+        assert!(extracted.next().is_none());
     }
 
     #[test]
@@ -451,12 +317,12 @@ mod tests {
 ; Store 10 to v1, creating memory state 1
 (set (store-prev 1) 0)
 (set (store-addr 1) v1)
-(set (store-val 1) (Const 10 (I32)))
+(set (store-val 1) (Const (i256 10) (I32)))
 (set (store-ty 1) (I32))
 ; Store 20 to v3, creating memory state 2
 (set (store-prev 2) 1)
 (set (store-addr 2) v3)
-(set (store-val 2) (Const 20 (I32)))
+(set (store-val 2) (Const (i256 20) (I32)))
 (set (store-ty 2) (I32))
 ; Load from v1 at memory state 2
 (let v5 (LoadResult 5 2 (I32)))
@@ -470,15 +336,11 @@ mod tests {
         let results = egraph
             .parse_and_run_program(None, &full)
             .expect("egglog should run");
-        assert_eq!(results.len(), 1);
-        let result = &results[0];
-        eprintln!("Load pass-through result: {}", result);
+        let mut extracted = results.iter().filter_map(extract_output_to_string);
+        let result = extracted.next().expect("extract should return a result");
         // v5 should be unified with (Const 10 (I32)) via pass-through
-        assert!(
-            result.contains("Const 10") || result == "(Const 10 (I32))",
-            "Expected Const 10, got: {}",
-            result
-        );
+        assert!(result.contains("0xa"), "Expected 0xa, got: {result}");
+        assert!(extracted.next().is_none());
     }
 
     #[test]
@@ -495,7 +357,7 @@ mod tests {
 ; Store 10 to v1, creating memory state 1
 (set (store-prev 1) 0)
 (set (store-addr 1) v1)
-(set (store-val 1) (Const 10 (I32)))
+(set (store-val 1) (Const (i256 10) (I32)))
 (set (store-ty 1) (I32))
 ; Load from v1 at memory state 1 -> should be 10
 (let v4 (LoadResult 4 1 (I32)))
@@ -503,7 +365,7 @@ mod tests {
 ; Store 20 to v1, creating memory state 2
 (set (store-prev 2) 1)
 (set (store-addr 2) v1)
-(set (store-val 2) (Const 20 (I32)))
+(set (store-val 2) (Const (i256 20) (I32)))
 (set (store-ty 2) (I32))
 ; Load from v1 at memory state 2 -> should be 20
 (let v6 (LoadResult 6 2 (I32)))
@@ -518,23 +380,24 @@ mod tests {
         let results = egraph
             .parse_and_run_program(None, &full)
             .expect("egglog should run");
-        assert_eq!(results.len(), 2);
-        let v4_result = &results[0];
-        let v6_result = &results[1];
-        eprintln!("v4 result: {}", v4_result);
-        eprintln!("v6 result: {}", v6_result);
+        let mut extracted = results.iter().filter_map(extract_output_to_string);
+        let v4_result = extracted
+            .next()
+            .expect("first extract should return a result");
+        let v6_result = extracted
+            .next()
+            .expect("second extract should return a result");
         // v4 should be 10
         assert!(
-            v4_result.contains("Const 10"),
-            "v4 should be 10, got: {}",
-            v4_result
+            v4_result.contains("0xa"),
+            "v4 should be 0xa, got: {v4_result}"
         );
         // v6 should be 20, NOT 10
         assert!(
-            v6_result.contains("Const 20"),
-            "v6 should be 20, got: {}",
-            v6_result
+            v6_result.contains("0x14"),
+            "v6 should be 0x14, got: {v6_result}"
         );
+        assert!(extracted.next().is_none());
     }
 
     #[test]
@@ -548,12 +411,12 @@ mod tests {
 ; Store 10 to v1, creating memory state 1
 (set (store-prev 1) 0)
 (set (store-addr 1) v1)
-(set (store-val 1) (Const 10 (I32)))
+(set (store-val 1) (Const (i256 10) (I32)))
 (set (store-ty 1) (I32))
 ; Store 20 to v1, creating memory state 2 (overwrites mem1)
 (set (store-prev 2) 1)
 (set (store-addr 2) v1)
-(set (store-val 2) (Const 20 (I32)))
+(set (store-val 2) (Const (i256 20) (I32)))
 (set (store-ty 2) (I32))
 
 (run 10)
@@ -579,12 +442,12 @@ mod tests {
 ; Store 10 to v1, creating memory state 1
 (set (store-prev 1) 0)
 (set (store-addr 1) v1)
-(set (store-val 1) (Const 10 (I32)))
+(set (store-val 1) (Const (i256 10) (I32)))
 (set (store-ty 1) (I32))
 ; Store 20 to v3, creating memory state 2 (different address)
 (set (store-prev 2) 1)
 (set (store-addr 2) v3)
-(set (store-val 2) (Const 20 (I32)))
+(set (store-val 2) (Const (i256 20) (I32)))
 (set (store-ty 2) (I32))
 
 (run 10)

@@ -1,0 +1,6 @@
+---
+source: crates/codegen/tests/egraph.rs
+input_file: test_files/egraph/const_i256.sntn
+---
+; block0
+(let v0 (Add (Const 0x10000000000000000 (I256)) (Const 0x1 (I256))))

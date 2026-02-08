@@ -10,7 +10,7 @@ use cranelift_entity::SecondaryMap;
 use egglog::EGraph;
 use rustc_hash::FxHashSet;
 use sonatina_ir::{
-    BlockId, Function, InstDowncast, InstId, Type, Value, ValueId,
+    BlockId, Function, InstDowncast, InstId, Type, U256, Value, ValueId,
     cfg::ControlFlowGraph,
     inst::{arith::*, cmp::*, control_flow::Phi, data::*, evm::*, logic::*},
 };
@@ -366,11 +366,22 @@ fn value_name(v: ValueId) -> String {
 fn value_to_egglog(func: &Function, v: ValueId) -> String {
     match func.dfg.value(v) {
         Value::Immediate { imm, ty } => {
-            format!(
-                "(Const {} {})",
-                imm.as_i256().trunc_to_i64(),
-                type_to_egglog(*ty)
-            )
+            let mut bits = imm.as_i256().to_u256();
+            let bit_width: usize = match ty {
+                Type::I1 => 1,
+                Type::I8 => 8,
+                Type::I16 => 16,
+                Type::I32 => 32,
+                Type::I64 => 64,
+                Type::I128 => 128,
+                Type::I256 => 256,
+                _ => unreachable!("immediates are always integers"),
+            };
+            if bit_width < 256 {
+                let mask = (U256::one() << bit_width) - U256::one();
+                bits &= mask;
+            }
+            format!("(Const {bits:#x} {})", type_to_egglog(*ty))
         }
         Value::Global { gv, ty } => {
             format!("(Global {} {})", gv.as_u32(), type_to_egglog(*ty))

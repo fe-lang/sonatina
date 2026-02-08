@@ -1,0 +1,7 @@
+target = "evm-ethereum-london"
+
+func public %const_i256() -> i256 {
+    block0:
+        v0.i256 = add 18446744073709551616.i256 1.i256;
+        return v0;
+}

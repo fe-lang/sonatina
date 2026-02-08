@@ -1,0 +1,48 @@
+target = "evm-ethereum-london"
+
+# Test: large i256 + 0 rewrites to itself.
+# This guards against truncation to i64 when exporting to egglog.
+# sameln: func public %large_add_zero() -> i256 {
+# check:         return 18446744073709551616.i256;
+func public %large_add_zero() -> i256 {
+    block0:
+        v0.i256 = add 18446744073709551616.i256 0.i256;
+        return v0;
+}
+
+# Test: large i256 * 1 rewrites to itself.
+# sameln: func public %large_mul_one() -> i256 {
+# check:         return 18446744073709551617.i256;
+func public %large_mul_one() -> i256 {
+    block0:
+        v0.i256 = mul 18446744073709551617.i256 1.i256;
+        return v0;
+}
+
+# Test: large i256 subtraction by itself rewrites to zero.
+# sameln: func public %large_sub_self() -> i256 {
+# check:         return 0.i256;
+func public %large_sub_self() -> i256 {
+    block0:
+        v0.i256 = sub 18446744073709551616.i256 18446744073709551616.i256;
+        return v0;
+}
+
+# Test: non-identity expressions preserve large constants.
+# sameln: func public %large_add_preserve() -> i256 {
+# check:         v0.i256 = add 18446744073709551616.i256 1.i256;
+# check:         return v0;
+func public %large_add_preserve() -> i256 {
+    block0:
+        v0.i256 = add 18446744073709551616.i256 1.i256;
+        return v0;
+}
+
+# Test: negative large i256 + 0 rewrites to itself.
+# sameln: func public %large_negative_add_zero() -> i256 {
+# check:         return -18446744073709551616.i256;
+func public %large_negative_add_zero() -> i256 {
+    block0:
+        v0.i256 = add -18446744073709551616.i256 0.i256;
+        return v0;
+}
