@@ -25,7 +25,7 @@ use super::{
     cfg_cleanup::CfgCleanup,
     sccp_simplify::{SimplifyResult, simplify_inst},
 };
-use crate::cfg_edit::{CleanupMode, remove_phi_incoming_from, simplify_trivial_phis_in_block};
+use crate::cfg_edit::{CfgEditor, CleanupMode};
 
 #[derive(Debug)]
 pub struct SccpSolver {
@@ -101,7 +101,7 @@ impl SccpSolver {
         #[cfg(debug_assertions)]
         self.assert_no_executable_inst_results_are_bot(func);
 
-        self.remove_unreachable_edges(func);
+        self.remove_unreachable_edges(func, cleanup_mode);
         cfg.compute(func);
         self.fold_insts(func, cfg);
 
@@ -330,54 +330,32 @@ impl SccpSolver {
     }
 
     /// Remove unreachable edges and blocks.
-    fn remove_unreachable_edges(&self, func: &mut Function) {
-        let entry_block = func.layout.entry_block().unwrap();
-        let mut inserter = InstInserter::at_location(CursorLocation::BlockTop(entry_block));
+    fn remove_unreachable_edges(&self, func: &mut Function, mode: CleanupMode) {
+        let mut editor = CfgEditor::new(func, mode);
 
-        loop {
-            match inserter.loc() {
-                CursorLocation::BlockTop(block) => {
-                    if !self.reachable_blocks[block] {
-                        self.prune_phi_incoming_from_removed_block(func, block);
-                        inserter.remove_block(func);
-                    } else {
-                        inserter.proceed(func);
-                    }
-                }
-
-                CursorLocation::BlockBottom(..) => inserter.proceed(func),
-
-                CursorLocation::At(inst) => {
-                    if let Some(bi) = func.dfg.branch_info(inst) {
-                        let from = func.layout.inst_block(inst);
-                        for dest in bi.dests() {
-                            if !self.is_reachable_edge(inst, dest) {
-                                func.dfg.remove_branch_dest(inst, dest);
-                                if func.layout.is_block_inserted(dest) {
-                                    remove_phi_incoming_from(func, dest, from);
-                                    simplify_trivial_phis_in_block(func, dest);
-                                }
-                            }
-                        }
-                    }
-                    inserter.proceed(func);
-                }
-
-                CursorLocation::NoWhere => break,
+        let blocks: Vec<_> = editor.func().layout.iter_block().collect();
+        for block in blocks {
+            if !self.reachable_blocks[block] {
+                editor.delete_block_unreachable(block);
             }
         }
-    }
 
-    fn prune_phi_incoming_from_removed_block(&self, func: &mut Function, block: BlockId) {
-        assert!(func.layout.is_block_inserted(block));
-        let term = func.layout.last_inst_of(block).expect("empty block");
-        assert!(func.dfg.is_terminator(term));
-        if let Some(bi) = func.dfg.branch_info(term) {
-            for succ in bi.dests() {
-                let inserted = func.layout.is_block_inserted(succ);
-                if inserted {
-                    remove_phi_incoming_from(func, succ, block);
-                    simplify_trivial_phis_in_block(func, succ);
+        let blocks: Vec<_> = editor.func().layout.iter_block().collect();
+        for block in blocks {
+            if !self.reachable_blocks[block] {
+                continue;
+            }
+
+            let Some(term) = editor.func().layout.last_inst_of(block) else {
+                continue;
+            };
+            let Some(branch_info) = editor.func().dfg.branch_info(term) else {
+                continue;
+            };
+
+            for dest in branch_info.dests() {
+                if !self.is_reachable_edge(term, dest) {
+                    editor.remove_succ(block, dest);
                 }
             }
         }
