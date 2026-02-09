@@ -204,6 +204,118 @@ impl EggTerm {
         }
     }
 
+    pub fn canonicalize(self) -> Self {
+        self.canonicalize_with_key().0
+    }
+
+    fn canonicalize_with_key(self) -> (Self, String) {
+        match self {
+            EggTerm::Value(value) => (EggTerm::Value(value), format!("v{}", value.as_u32())),
+            EggTerm::Const(value, ty) => (EggTerm::Const(value, ty), format!("c{value:?}:{ty:?}")),
+
+            EggTerm::Neg(arg) => Self::canonicalize_unary(*arg, EggTerm::Neg, "neg"),
+            EggTerm::Not(arg) => Self::canonicalize_unary(*arg, EggTerm::Not, "not"),
+            EggTerm::IsZero(arg) => Self::canonicalize_unary(*arg, EggTerm::IsZero, "is_zero"),
+
+            EggTerm::Add(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Add, "add", true)
+            }
+            EggTerm::Sub(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Sub, "sub", false)
+            }
+            EggTerm::Mul(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Mul, "mul", true)
+            }
+            EggTerm::Udiv(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Udiv, "udiv", false)
+            }
+            EggTerm::Sdiv(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Sdiv, "sdiv", false)
+            }
+            EggTerm::Umod(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Umod, "umod", false)
+            }
+            EggTerm::Smod(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Smod, "smod", false)
+            }
+
+            EggTerm::Shl(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Shl, "shl", false)
+            }
+            EggTerm::Shr(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Shr, "shr", false)
+            }
+            EggTerm::Sar(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Sar, "sar", false)
+            }
+
+            EggTerm::And(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::And, "and", true)
+            }
+            EggTerm::Or(lhs, rhs) => Self::canonicalize_binary(*lhs, *rhs, EggTerm::Or, "or", true),
+            EggTerm::Xor(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Xor, "xor", true)
+            }
+
+            EggTerm::Lt(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Lt, "lt", false)
+            }
+            EggTerm::Gt(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Gt, "gt", false)
+            }
+            EggTerm::Le(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Le, "le", false)
+            }
+            EggTerm::Ge(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Ge, "ge", false)
+            }
+            EggTerm::Slt(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Slt, "slt", false)
+            }
+            EggTerm::Sgt(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Sgt, "sgt", false)
+            }
+            EggTerm::Sle(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Sle, "sle", false)
+            }
+            EggTerm::Sge(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::Sge, "sge", false)
+            }
+            EggTerm::Eq(lhs, rhs) => Self::canonicalize_binary(*lhs, *rhs, EggTerm::Eq, "eq", true),
+            EggTerm::Ne(lhs, rhs) => Self::canonicalize_binary(*lhs, *rhs, EggTerm::Ne, "ne", true),
+        }
+    }
+
+    fn canonicalize_unary(
+        arg: EggTerm,
+        ctor: fn(Box<EggTerm>) -> EggTerm,
+        op_name: &str,
+    ) -> (Self, String) {
+        let (arg, arg_key) = arg.canonicalize_with_key();
+        (ctor(Box::new(arg)), format!("{op_name}({arg_key})"))
+    }
+
+    fn canonicalize_binary(
+        lhs: EggTerm,
+        rhs: EggTerm,
+        ctor: fn(Box<EggTerm>, Box<EggTerm>) -> EggTerm,
+        op_name: &str,
+        commutative: bool,
+    ) -> (Self, String) {
+        let (mut lhs, mut lhs_key) = lhs.canonicalize_with_key();
+        let (mut rhs, mut rhs_key) = rhs.canonicalize_with_key();
+
+        if commutative && lhs_key > rhs_key {
+            std::mem::swap(&mut lhs, &mut rhs);
+            std::mem::swap(&mut lhs_key, &mut rhs_key);
+        }
+
+        (
+            ctor(Box::new(lhs), Box::new(rhs)),
+            format!("{op_name}({lhs_key},{rhs_key})"),
+        )
+    }
+
     fn from_sexp(func: &Function, sexp: &Sexp) -> Option<Self> {
         match sexp {
             Sexp::Atom(atom) => parse_value_atom(atom).map(EggTerm::Value),
@@ -480,6 +592,10 @@ fn parse_i64(sexp: &Sexp) -> Option<i64> {
 mod tests {
     use super::*;
 
+    fn const_i32(value: i64) -> EggTerm {
+        EggTerm::Const(value.into(), Type::I32)
+    }
+
     #[test]
     fn parse_u256_octal_accepts_boundary_power() {
         let input = format!("1{}", "0".repeat(85));
@@ -496,6 +612,42 @@ mod tests {
     #[test]
     fn parse_u256_octal_rejects_invalid_digit() {
         assert!(parse_u256_octal("128").is_none());
+    }
+
+    #[test]
+    fn canonicalize_commutative_binary_reorders_operands() {
+        let term = EggTerm::Add(Box::new(const_i32(20)), Box::new(const_i32(10)));
+        let canonical = term.canonicalize();
+        assert_eq!(
+            canonical,
+            EggTerm::Add(Box::new(const_i32(10)), Box::new(const_i32(20)))
+        );
+    }
+
+    #[test]
+    fn canonicalize_recurses_into_nested_commutative_terms() {
+        let term = EggTerm::Add(
+            Box::new(EggTerm::Mul(Box::new(const_i32(3)), Box::new(const_i32(2)))),
+            Box::new(EggTerm::Add(Box::new(const_i32(9)), Box::new(const_i32(1)))),
+        );
+        let canonical = term.canonicalize();
+        assert_eq!(
+            canonical,
+            EggTerm::Add(
+                Box::new(EggTerm::Add(Box::new(const_i32(1)), Box::new(const_i32(9)))),
+                Box::new(EggTerm::Mul(Box::new(const_i32(2)), Box::new(const_i32(3))))
+            )
+        );
+    }
+
+    #[test]
+    fn canonicalize_keeps_non_commutative_order() {
+        let term = EggTerm::Sub(Box::new(const_i32(20)), Box::new(const_i32(10)));
+        let canonical = term.canonicalize();
+        assert_eq!(
+            canonical,
+            EggTerm::Sub(Box::new(const_i32(20)), Box::new(const_i32(10)))
+        );
     }
 }
 

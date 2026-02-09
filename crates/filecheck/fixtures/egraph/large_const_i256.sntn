@@ -30,7 +30,7 @@ func public %large_sub_self() -> i256 {
 
 # Test: non-identity expressions preserve large constants.
 # sameln: func public %large_add_preserve() -> i256 {
-# check:         v0.i256 = add 18446744073709551616.i256 1.i256;
+# check:         v0.i256 = add 1.i256 18446744073709551616.i256;
 # check:         return v0;
 func public %large_add_preserve() -> i256 {
     block0:

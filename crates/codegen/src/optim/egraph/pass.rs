@@ -94,7 +94,7 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
         let original_val = value_map[name];
         let ty = type_map[name];
 
-        let Some(term) = EggTerm::parse(result, func) else {
+        let Some(term) = EggTerm::parse(result, func).map(EggTerm::canonicalize) else {
             continue;
         };
 
