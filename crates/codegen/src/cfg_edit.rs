@@ -222,6 +222,9 @@ impl<'f> CfgEditor<'f> {
             .layout
             .first_inst_of(lp_header)
             .is_some_and(|inst| self.func.dfg.is_phi(inst));
+        // Entry headers with no leading phi are allowed even when `outside_preds` is empty.
+        // Inserting a block before the entry updates function entry to that block, so the
+        // preheader is reachable and suitable for hoisting.
         if outside_preds.is_empty() && (!is_entry_header || header_starts_with_phi) {
             return None;
         }
@@ -808,5 +811,87 @@ mod tests {
 
         let output = dump_func(&module, func_ref);
         assert!(output.contains("phi"));
+    }
+
+    #[test]
+    fn create_or_reuse_loop_preheader_entry_header_without_phi_becomes_entry() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I1, Type::I32], Type::I32);
+        let is = evm.inst_set();
+
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+        let cond = builder.args()[0];
+        let seed = builder.args()[1];
+
+        builder.switch_to_block(b0);
+        let one = builder.make_imm_value(1i32);
+        let v0 = builder.insert_inst_with(|| Add::new(is, seed, one), Type::I32);
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, b0, b1));
+
+        builder.switch_to_block(b1);
+        builder.insert_inst_no_result_with(|| Return::new(is, Some(v0)));
+
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let preheader = editor
+                .create_or_reuse_loop_preheader(b0, &[])
+                .expect("entry-only loop should create a reachable preheader");
+
+            assert_eq!(editor.func().layout.entry_block(), Some(preheader));
+            let pre_term = editor.func().layout.last_inst_of(preheader).unwrap();
+            let pre_jump = editor.func().dfg.cast_jump(pre_term).unwrap();
+            assert_eq!(*pre_jump.dest(), b0);
+            assert_eq!(
+                editor.func().layout.first_inst_of(preheader),
+                Some(pre_term)
+            );
+
+            let header_preds: BTreeSet<_> = editor.cfg().preds_of(b0).copied().collect();
+            assert_eq!(header_preds, BTreeSet::from([b0, preheader]));
+        });
+    }
+
+    #[test]
+    fn create_or_reuse_loop_preheader_rejects_entry_header_with_leading_phi() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+        let b2 = builder.append_block();
+
+        builder.switch_to_block(b0);
+        let phi = builder.insert_inst_with(|| Phi::new(is, vec![]), Type::I32);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b1));
+
+        builder.switch_to_block(b1);
+        let one = builder.make_imm_value(1i32);
+        let v1 = builder.insert_inst_with(|| Add::new(is, phi, one), Type::I32);
+        let ten = builder.make_imm_value(10i32);
+        let cond = builder.insert_inst_with(|| Slt::new(is, v1, ten), Type::I1);
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, b0, b2));
+        builder.append_phi_arg(phi, v1, b1);
+
+        builder.switch_to_block(b2);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
+
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            assert!(editor.create_or_reuse_loop_preheader(b0, &[]).is_none());
+            assert_eq!(editor.func().layout.entry_block(), Some(b0));
+            assert_eq!(editor.func().layout.iter_block().count(), 3);
+        });
     }
 }
