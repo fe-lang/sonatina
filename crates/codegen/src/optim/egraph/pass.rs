@@ -237,20 +237,22 @@ fn eliminate_adjacent_dead_stores(func: &mut Function) -> bool {
     let blocks: Vec<_> = func.layout.iter_block().collect();
     for block in blocks {
         let insts: Vec<_> = func.layout.iter_inst(block).collect();
-        let mut prev_store: Option<(sonatina_ir::InstId, ValueId)> = None;
+        let mut prev_store: Option<(sonatina_ir::InstId, ValueId, Type)> = None;
 
         for inst_id in insts {
             let inst = func.dfg.inst(inst_id);
             if let Some(store) = <&Mstore>::downcast(is, inst) {
                 let addr = *store.addr();
-                if let Some((prev_id, prev_addr)) = prev_store
+                let ty = *store.ty();
+                if let Some((prev_id, prev_addr, prev_ty)) = prev_store
                     && prev_addr == addr
+                    && prev_ty == ty
                 {
                     func.layout.remove_inst(prev_id);
                     changed = true;
                 }
 
-                prev_store = Some((inst_id, addr));
+                prev_store = Some((inst_id, addr, ty));
             } else {
                 prev_store = None;
             }
@@ -499,5 +501,45 @@ mod tests {
             .filter(|&inst_id| <&Mstore>::downcast(is, builder.func.dfg.inst(inst_id)).is_some())
             .count();
         assert_eq!(store_count, 1);
+    }
+
+    #[test]
+    fn test_adjacent_dead_store_elimination_preserves_mixed_width() {
+        use sonatina_ir::{
+            builder::test_util::*,
+            inst::{control_flow::Return, data::Alloca},
+            isa::Isa,
+        };
+
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let b0 = builder.append_block();
+        builder.switch_to_block(b0);
+
+        let ptr_ty = builder.ptr_type(Type::I64);
+        let addr = builder.insert_inst_with(|| Alloca::new(is, Type::I64), ptr_ty);
+
+        let v64 = builder.make_imm_value(10i64);
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v64, Type::I64));
+
+        let v8 = builder.make_imm_value(20i8);
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v8, Type::I8));
+
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.seal_all();
+
+        assert!(!eliminate_adjacent_dead_stores(&mut builder.func));
+
+        let is = builder.func.inst_set();
+        let store_count = builder
+            .func
+            .layout
+            .iter_block()
+            .flat_map(|block| builder.func.layout.iter_inst(block))
+            .filter(|&inst_id| <&Mstore>::downcast(is, builder.func.dfg.inst(inst_id)).is_some())
+            .count();
+        assert_eq!(store_count, 2);
     }
 }
