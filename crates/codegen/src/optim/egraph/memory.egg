@@ -71,18 +71,16 @@
 
 ; === Load Pass-Through ===
 
-; Load from a memory state after a store to a different address
-; Check if the previous store was to the same address as the load
+; Transitively walk through a chain of non-aliasing stores.
+; If the current store cannot alias the load address, loading from this memory
+; state is equivalent to loading from the previous memory state.
 (rule ((= result (LoadResult load_id mem_id ty))
        (= load_addr (load-addr load_id))
        (= store_addr (store-addr mem_id))
        (must-not-alias store_addr load_addr)
        (= prev_mem_id (store-prev mem_id))
-       (= prev_store_addr (store-addr prev_mem_id))
-       (= prev_store_addr load_addr)
-       (= ty (store-ty prev_mem_id))
-       (= val (store-val prev_mem_id)))
-      ((union result val)))
+       )
+      ((union result (LoadResult load_id prev_mem_id ty))))
 
 ; === Redundant Load Elimination ===
 
@@ -97,43 +95,87 @@
 
 ; === MemPhi Rules ===
 
-; Load through MemPhi: if both predecessors (2-pred case) forward the same value
-; This handles the common if-then-else pattern where both branches store the same value
+; Generic load merge through MemPhi.
+; If every predecessor yields the same load result in the egraph, the MemPhi load
+; is equivalent to that shared result.
+(rule ((= result (LoadResult load_id memphi_id ty))
+       (is-memphi memphi_id)
+       (= 1 (memphi-num-preds memphi_id))
+       (= pred_mem (memphi-pred memphi_id 0))
+       )
+      ((union result (LoadResult load_id pred_mem ty))))
+
 (rule ((= result (LoadResult load_id memphi_id ty))
        (is-memphi memphi_id)
        (= 2 (memphi-num-preds memphi_id))
-       (= load_addr (load-addr load_id))
-       ; Get predecessor memory states
        (= pred0_mem (memphi-pred memphi_id 0))
        (= pred1_mem (memphi-pred memphi_id 1))
-       ; Both predecessors have stores to the same address
-       (= store_addr0 (store-addr pred0_mem))
-       (= store_addr1 (store-addr pred1_mem))
-       (= store_addr0 load_addr)
-       (= store_addr1 load_addr)
-       ; Both store the same type
-       (= ty (store-ty pred0_mem))
-       (= ty (store-ty pred1_mem))
-       ; Both store the same value
-       (= val (store-val pred0_mem))
-       (= val (store-val pred1_mem)))
-      ((union result val)))
+       )
+      ((union (LoadResult load_id pred0_mem ty) (LoadResult load_id pred0_mem ty))
+       (union (LoadResult load_id pred1_mem ty) (LoadResult load_id pred1_mem ty))))
 
-; Load through MemPhi: if both predecessors have the same memory state
-; (no stores on either branch)
 (rule ((= result (LoadResult load_id memphi_id ty))
        (is-memphi memphi_id)
        (= 2 (memphi-num-preds memphi_id))
-       (= load_addr (load-addr load_id))
-       ; Get predecessor memory states
-       (= pred_mem (memphi-pred memphi_id 0))
-       (= pred_mem (memphi-pred memphi_id 1))
-       ; Look up store at the common predecessor
-       (= store_addr (store-addr pred_mem))
-       (= store_addr load_addr)
-       (= ty (store-ty pred_mem))
-       (= val (store-val pred_mem)))
-      ((union result val)))
+       (= pred0_mem (memphi-pred memphi_id 0))
+       (= pred1_mem (memphi-pred memphi_id 1))
+       (= r0 (LoadResult load_id pred0_mem ty))
+       (= r1 (LoadResult load_id pred1_mem ty))
+       (= r0 r1))
+      ((union result r0)))
+
+(rule ((= result (LoadResult load_id memphi_id ty))
+       (is-memphi memphi_id)
+       (= 3 (memphi-num-preds memphi_id))
+       (= pred0_mem (memphi-pred memphi_id 0))
+       (= pred1_mem (memphi-pred memphi_id 1))
+       (= pred2_mem (memphi-pred memphi_id 2))
+       )
+      ((union (LoadResult load_id pred0_mem ty) (LoadResult load_id pred0_mem ty))
+       (union (LoadResult load_id pred1_mem ty) (LoadResult load_id pred1_mem ty))
+       (union (LoadResult load_id pred2_mem ty) (LoadResult load_id pred2_mem ty))))
+
+(rule ((= result (LoadResult load_id memphi_id ty))
+       (is-memphi memphi_id)
+       (= 3 (memphi-num-preds memphi_id))
+       (= pred0_mem (memphi-pred memphi_id 0))
+       (= pred1_mem (memphi-pred memphi_id 1))
+       (= pred2_mem (memphi-pred memphi_id 2))
+       (= r0 (LoadResult load_id pred0_mem ty))
+       (= r1 (LoadResult load_id pred1_mem ty))
+       (= r2 (LoadResult load_id pred2_mem ty))
+       (= r0 r1)
+       (= r0 r2))
+      ((union result r0)))
+
+(rule ((= result (LoadResult load_id memphi_id ty))
+       (is-memphi memphi_id)
+       (= 4 (memphi-num-preds memphi_id))
+       (= pred0_mem (memphi-pred memphi_id 0))
+       (= pred1_mem (memphi-pred memphi_id 1))
+       (= pred2_mem (memphi-pred memphi_id 2))
+       (= pred3_mem (memphi-pred memphi_id 3))
+       )
+      ((union (LoadResult load_id pred0_mem ty) (LoadResult load_id pred0_mem ty))
+       (union (LoadResult load_id pred1_mem ty) (LoadResult load_id pred1_mem ty))
+       (union (LoadResult load_id pred2_mem ty) (LoadResult load_id pred2_mem ty))
+       (union (LoadResult load_id pred3_mem ty) (LoadResult load_id pred3_mem ty))))
+
+(rule ((= result (LoadResult load_id memphi_id ty))
+       (is-memphi memphi_id)
+       (= 4 (memphi-num-preds memphi_id))
+       (= pred0_mem (memphi-pred memphi_id 0))
+       (= pred1_mem (memphi-pred memphi_id 1))
+       (= pred2_mem (memphi-pred memphi_id 2))
+       (= pred3_mem (memphi-pred memphi_id 3))
+       (= r0 (LoadResult load_id pred0_mem ty))
+       (= r1 (LoadResult load_id pred1_mem ty))
+       (= r2 (LoadResult load_id pred2_mem ty))
+       (= r3 (LoadResult load_id pred3_mem ty))
+       (= r0 r1)
+       (= r0 r2)
+       (= r0 r3))
+      ((union result r0)))
 
 ; === Adjacent Dead Store Detection ===
 ; If a store immediately overwrites a previous store to the same address,
