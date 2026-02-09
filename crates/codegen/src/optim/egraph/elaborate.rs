@@ -1,16 +1,24 @@
 //! Elaboration: Convert extracted egglog terms back to sonatina IR.
 
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 use sonatina_ir::{
-    Function, I256, Inst, InstId, InstSetBase, Type, U256, Value, ValueId,
-    inst::{arith::*, cmp::*, evm::*, logic::*},
+    Function, GlobalVariableRef, I256, Inst, InstId, InstSetBase, Type, U256, Value, ValueId,
+    inst::{arith::*, cast::*, cmp::*, data::Gep, evm::*, logic::*},
+    types::CompoundTypeRef,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EggTerm {
     Value(ValueId),
+    Global(GlobalVariableRef, Type),
+    Undef(Type),
     Const(I256, Type),
+    Gep {
+        base: Box<EggTerm>,
+        indices: Vec<EggTerm>,
+    },
     // Binary ops
     Add(Box<EggTerm>, Box<EggTerm>),
     Sub(Box<EggTerm>, Box<EggTerm>),
@@ -23,6 +31,11 @@ pub enum EggTerm {
     Shl(Box<EggTerm>, Box<EggTerm>),
     Shr(Box<EggTerm>, Box<EggTerm>),
     Sar(Box<EggTerm>, Box<EggTerm>),
+    EvmAddMod(Box<EggTerm>, Box<EggTerm>, Box<EggTerm>),
+    EvmMulMod(Box<EggTerm>, Box<EggTerm>, Box<EggTerm>),
+    EvmExp(Box<EggTerm>, Box<EggTerm>),
+    EvmByte(Box<EggTerm>, Box<EggTerm>),
+    EvmClz(Box<EggTerm>),
     // Unary
     Neg(Box<EggTerm>),
     Not(Box<EggTerm>),
@@ -42,6 +55,10 @@ pub enum EggTerm {
     Eq(Box<EggTerm>, Box<EggTerm>),
     Ne(Box<EggTerm>, Box<EggTerm>),
     IsZero(Box<EggTerm>),
+    Sext(Box<EggTerm>, Type),
+    Zext(Box<EggTerm>, Type),
+    Trunc(Box<EggTerm>, Type),
+    Bitcast(Box<EggTerm>, Type),
 }
 
 impl EggTerm {
@@ -58,8 +75,18 @@ impl EggTerm {
 
     pub fn node_count(&self) -> usize {
         match self {
-            EggTerm::Value(_) | EggTerm::Const(..) => 1,
-            EggTerm::Neg(x) | EggTerm::Not(x) | EggTerm::IsZero(x) => 1 + x.node_count(),
+            EggTerm::Value(_) | EggTerm::Global(..) | EggTerm::Undef(..) | EggTerm::Const(..) => 1,
+            EggTerm::Neg(x)
+            | EggTerm::Not(x)
+            | EggTerm::IsZero(x)
+            | EggTerm::EvmClz(x)
+            | EggTerm::Sext(x, _)
+            | EggTerm::Zext(x, _)
+            | EggTerm::Trunc(x, _)
+            | EggTerm::Bitcast(x, _) => 1 + x.node_count(),
+            EggTerm::Gep { base, indices } => {
+                1 + base.node_count() + indices.iter().map(EggTerm::node_count).sum::<usize>()
+            }
             EggTerm::Add(a, b)
             | EggTerm::Sub(a, b)
             | EggTerm::Mul(a, b)
@@ -82,7 +109,12 @@ impl EggTerm {
             | EggTerm::Sle(a, b)
             | EggTerm::Sge(a, b)
             | EggTerm::Eq(a, b)
-            | EggTerm::Ne(a, b) => 1 + a.node_count() + b.node_count(),
+            | EggTerm::Ne(a, b)
+            | EggTerm::EvmExp(a, b)
+            | EggTerm::EvmByte(a, b) => 1 + a.node_count() + b.node_count(),
+            EggTerm::EvmAddMod(a, b, c) | EggTerm::EvmMulMod(a, b, c) => {
+                1 + a.node_count() + b.node_count() + c.node_count()
+            }
         }
     }
 
@@ -95,8 +127,21 @@ impl EggTerm {
     pub fn for_each_value(&self, f: &mut impl FnMut(ValueId)) {
         match self {
             EggTerm::Value(value) => f(*value),
-            EggTerm::Const(..) => {}
-            EggTerm::Neg(x) | EggTerm::Not(x) | EggTerm::IsZero(x) => x.for_each_value(f),
+            EggTerm::Global(..) | EggTerm::Undef(..) | EggTerm::Const(..) => {}
+            EggTerm::Neg(x)
+            | EggTerm::Not(x)
+            | EggTerm::IsZero(x)
+            | EggTerm::EvmClz(x)
+            | EggTerm::Sext(x, _)
+            | EggTerm::Zext(x, _)
+            | EggTerm::Trunc(x, _)
+            | EggTerm::Bitcast(x, _) => x.for_each_value(f),
+            EggTerm::Gep { base, indices } => {
+                base.for_each_value(f);
+                for index in indices {
+                    index.for_each_value(f);
+                }
+            }
             EggTerm::Add(a, b)
             | EggTerm::Sub(a, b)
             | EggTerm::Mul(a, b)
@@ -119,19 +164,34 @@ impl EggTerm {
             | EggTerm::Sle(a, b)
             | EggTerm::Sge(a, b)
             | EggTerm::Eq(a, b)
-            | EggTerm::Ne(a, b) => {
+            | EggTerm::Ne(a, b)
+            | EggTerm::EvmExp(a, b)
+            | EggTerm::EvmByte(a, b) => {
                 a.for_each_value(f);
                 b.for_each_value(f);
+            }
+            EggTerm::EvmAddMod(a, b, c) | EggTerm::EvmMulMod(a, b, c) => {
+                a.for_each_value(f);
+                b.for_each_value(f);
+                c.for_each_value(f);
             }
         }
     }
 
     pub fn is_supported(&self, is: &dyn InstSetBase) -> bool {
         match self {
-            EggTerm::Value(_) | EggTerm::Const(..) => true,
+            EggTerm::Value(_) | EggTerm::Global(..) | EggTerm::Undef(..) | EggTerm::Const(..) => {
+                true
+            }
+            EggTerm::Gep { base, indices } => {
+                is.has_gep().is_some()
+                    && base.is_supported(is)
+                    && indices.iter().all(|index| index.is_supported(is))
+            }
 
             EggTerm::Neg(x) => is.has_neg().is_some() && x.is_supported(is),
             EggTerm::Not(x) => is.has_not().is_some() && x.is_supported(is),
+            EggTerm::EvmClz(x) => is.has_evm_clz().is_some() && x.is_supported(is),
 
             EggTerm::Add(a, b) => {
                 is.has_add().is_some() && a.is_supported(is) && b.is_supported(is)
@@ -173,6 +233,24 @@ impl EggTerm {
             EggTerm::Sar(a, b) => {
                 is.has_sar().is_some() && a.is_supported(is) && b.is_supported(is)
             }
+            EggTerm::EvmExp(a, b) => {
+                is.has_evm_exp().is_some() && a.is_supported(is) && b.is_supported(is)
+            }
+            EggTerm::EvmByte(a, b) => {
+                is.has_evm_byte().is_some() && a.is_supported(is) && b.is_supported(is)
+            }
+            EggTerm::EvmAddMod(a, b, c) => {
+                is.has_evm_add_mod().is_some()
+                    && a.is_supported(is)
+                    && b.is_supported(is)
+                    && c.is_supported(is)
+            }
+            EggTerm::EvmMulMod(a, b, c) => {
+                is.has_evm_mul_mod().is_some()
+                    && a.is_supported(is)
+                    && b.is_supported(is)
+                    && c.is_supported(is)
+            }
 
             EggTerm::And(a, b) => {
                 is.has_and().is_some() && a.is_supported(is) && b.is_supported(is)
@@ -201,6 +279,10 @@ impl EggTerm {
             EggTerm::Eq(a, b) => is.has_eq().is_some() && a.is_supported(is) && b.is_supported(is),
             EggTerm::Ne(a, b) => is.has_ne().is_some() && a.is_supported(is) && b.is_supported(is),
             EggTerm::IsZero(x) => is.has_is_zero().is_some() && x.is_supported(is),
+            EggTerm::Sext(x, _) => is.has_sext().is_some() && x.is_supported(is),
+            EggTerm::Zext(x, _) => is.has_zext().is_some() && x.is_supported(is),
+            EggTerm::Trunc(x, _) => is.has_trunc().is_some() && x.is_supported(is),
+            EggTerm::Bitcast(x, _) => is.has_bitcast().is_some() && x.is_supported(is),
         }
     }
 
@@ -211,11 +293,45 @@ impl EggTerm {
     fn canonicalize_with_key(self) -> (Self, String) {
         match self {
             EggTerm::Value(value) => (EggTerm::Value(value), format!("v{}", value.as_u32())),
+            EggTerm::Global(gv, ty) => {
+                (EggTerm::Global(gv, ty), format!("g{}:{ty:?}", gv.as_u32()))
+            }
+            EggTerm::Undef(ty) => (EggTerm::Undef(ty), format!("undef:{ty:?}")),
             EggTerm::Const(value, ty) => (EggTerm::Const(value, ty), format!("c{value:?}:{ty:?}")),
+            EggTerm::Gep { base, indices } => {
+                let (base, base_key) = base.canonicalize_with_key();
+                let mut canonical_indices = Vec::with_capacity(indices.len());
+                let mut index_keys = Vec::with_capacity(indices.len());
+                for index in indices {
+                    let (index, index_key) = index.canonicalize_with_key();
+                    canonical_indices.push(index);
+                    index_keys.push(index_key);
+                }
+                (
+                    EggTerm::Gep {
+                        base: Box::new(base),
+                        indices: canonical_indices,
+                    },
+                    format!("gep({base_key};{})", index_keys.join(",")),
+                )
+            }
 
             EggTerm::Neg(arg) => Self::canonicalize_unary(*arg, EggTerm::Neg, "neg"),
             EggTerm::Not(arg) => Self::canonicalize_unary(*arg, EggTerm::Not, "not"),
             EggTerm::IsZero(arg) => Self::canonicalize_unary(*arg, EggTerm::IsZero, "is_zero"),
+            EggTerm::EvmClz(arg) => Self::canonicalize_unary(*arg, EggTerm::EvmClz, "evm_clz"),
+            EggTerm::Sext(arg, ty) => {
+                Self::canonicalize_unary_with_ty(*arg, ty, EggTerm::Sext, "sext")
+            }
+            EggTerm::Zext(arg, ty) => {
+                Self::canonicalize_unary_with_ty(*arg, ty, EggTerm::Zext, "zext")
+            }
+            EggTerm::Trunc(arg, ty) => {
+                Self::canonicalize_unary_with_ty(*arg, ty, EggTerm::Trunc, "trunc")
+            }
+            EggTerm::Bitcast(arg, ty) => {
+                Self::canonicalize_unary_with_ty(*arg, ty, EggTerm::Bitcast, "bitcast")
+            }
 
             EggTerm::Add(lhs, rhs) => {
                 Self::canonicalize_binary(*lhs, *rhs, EggTerm::Add, "add", true)
@@ -248,6 +364,28 @@ impl EggTerm {
             EggTerm::Sar(lhs, rhs) => {
                 Self::canonicalize_binary(*lhs, *rhs, EggTerm::Sar, "sar", false)
             }
+            EggTerm::EvmExp(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::EvmExp, "evm_exp", false)
+            }
+            EggTerm::EvmByte(lhs, rhs) => {
+                Self::canonicalize_binary(*lhs, *rhs, EggTerm::EvmByte, "evm_byte", false)
+            }
+            EggTerm::EvmAddMod(lhs, rhs, modulus) => Self::canonicalize_ternary(
+                *lhs,
+                *rhs,
+                *modulus,
+                EggTerm::EvmAddMod,
+                "evm_add_mod",
+                true,
+            ),
+            EggTerm::EvmMulMod(lhs, rhs, modulus) => Self::canonicalize_ternary(
+                *lhs,
+                *rhs,
+                *modulus,
+                EggTerm::EvmMulMod,
+                "evm_mul_mod",
+                true,
+            ),
 
             EggTerm::And(lhs, rhs) => {
                 Self::canonicalize_binary(*lhs, *rhs, EggTerm::And, "and", true)
@@ -316,6 +454,42 @@ impl EggTerm {
         )
     }
 
+    fn canonicalize_unary_with_ty(
+        arg: EggTerm,
+        ty: Type,
+        ctor: fn(Box<EggTerm>, Type) -> EggTerm,
+        op_name: &str,
+    ) -> (Self, String) {
+        let (arg, arg_key) = arg.canonicalize_with_key();
+        (
+            ctor(Box::new(arg), ty),
+            format!("{op_name}({arg_key},{ty:?})"),
+        )
+    }
+
+    fn canonicalize_ternary(
+        lhs: EggTerm,
+        rhs: EggTerm,
+        third: EggTerm,
+        ctor: fn(Box<EggTerm>, Box<EggTerm>, Box<EggTerm>) -> EggTerm,
+        op_name: &str,
+        commutative_prefix: bool,
+    ) -> (Self, String) {
+        let (mut lhs, mut lhs_key) = lhs.canonicalize_with_key();
+        let (mut rhs, mut rhs_key) = rhs.canonicalize_with_key();
+        let (third, third_key) = third.canonicalize_with_key();
+
+        if commutative_prefix && lhs_key > rhs_key {
+            std::mem::swap(&mut lhs, &mut rhs);
+            std::mem::swap(&mut lhs_key, &mut rhs_key);
+        }
+
+        (
+            ctor(Box::new(lhs), Box::new(rhs), Box::new(third)),
+            format!("{op_name}({lhs_key},{rhs_key},{third_key})"),
+        )
+    }
+
     fn from_sexp(func: &Function, sexp: &Sexp) -> Option<Self> {
         match sexp {
             Sexp::Atom(atom) => parse_value_atom(atom).map(EggTerm::Value),
@@ -333,12 +507,22 @@ impl EggTerm {
                         let value = parse_i256(value)?;
                         Some(EggTerm::Const(value, ty))
                     }
+                    "Global" => {
+                        let [id, ty] = rest else { return None };
+                        let id = parse_u32(id)?;
+                        let ty = parse_type(ty)?;
+                        Some(EggTerm::Global(GlobalVariableRef::from_u32(id), ty))
+                    }
+                    "Undef" => {
+                        let [ty] = rest else { return None };
+                        Some(EggTerm::Undef(parse_type(ty)?))
+                    }
                     "Arg" => {
                         let [idx, _ty] = rest else { return None };
                         let idx: usize = parse_usize(idx)?;
                         Some(EggTerm::Value(*func.arg_values.get(idx)?))
                     }
-                    "AllocaResult" | "SideEffectResult" => {
+                    "AllocaResult" | "SideEffectResult" | "PhiResult" => {
                         let [id, _ty] = rest else { return None };
                         let id = parse_u32(id)?;
                         Some(EggTerm::Value(ValueId::from_u32(id)))
@@ -348,10 +532,12 @@ impl EggTerm {
                         let id = parse_u32(id)?;
                         Some(EggTerm::Value(ValueId::from_u32(id)))
                     }
+                    "GepBase" | "GepOffset" => parse_gep(func, sexp),
 
                     "Neg" => parse_unary(func, rest, EggTerm::Neg),
                     "Not" => parse_unary(func, rest, EggTerm::Not),
                     "IsZero" => parse_unary(func, rest, EggTerm::IsZero),
+                    "EvmClz" => parse_unary(func, rest, EggTerm::EvmClz),
 
                     "Add" => parse_binary(func, rest, EggTerm::Add),
                     "Sub" => parse_binary(func, rest, EggTerm::Sub),
@@ -363,6 +549,10 @@ impl EggTerm {
                     "Shl" => parse_binary(func, rest, EggTerm::Shl),
                     "Shr" => parse_binary(func, rest, EggTerm::Shr),
                     "Sar" => parse_binary(func, rest, EggTerm::Sar),
+                    "EvmExp" => parse_binary(func, rest, EggTerm::EvmExp),
+                    "EvmByte" => parse_binary(func, rest, EggTerm::EvmByte),
+                    "EvmAddMod" => parse_ternary(func, rest, EggTerm::EvmAddMod),
+                    "EvmMulMod" => parse_ternary(func, rest, EggTerm::EvmMulMod),
 
                     "And" => parse_binary(func, rest, EggTerm::And),
                     "Or" => parse_binary(func, rest, EggTerm::Or),
@@ -378,6 +568,10 @@ impl EggTerm {
                     "Sge" => parse_binary(func, rest, EggTerm::Sge),
                     "Eq" => parse_binary(func, rest, EggTerm::Eq),
                     "Ne" => parse_binary(func, rest, EggTerm::Ne),
+                    "Sext" => parse_unary_with_type(func, rest, EggTerm::Sext),
+                    "Zext" => parse_unary_with_type(func, rest, EggTerm::Zext),
+                    "Trunc" => parse_unary_with_type(func, rest, EggTerm::Trunc),
+                    "Bitcast" => parse_unary_with_type(func, rest, EggTerm::Bitcast),
 
                     _ => None,
                 }
@@ -407,6 +601,61 @@ fn parse_binary(
     ))
 }
 
+fn parse_unary_with_type(
+    func: &Function,
+    args: &[Sexp],
+    ctor: fn(Box<EggTerm>, Type) -> EggTerm,
+) -> Option<EggTerm> {
+    let [arg, ty] = args else { return None };
+    Some(ctor(
+        Box::new(EggTerm::from_sexp(func, arg)?),
+        parse_type(ty)?,
+    ))
+}
+
+fn parse_ternary(
+    func: &Function,
+    args: &[Sexp],
+    ctor: fn(Box<EggTerm>, Box<EggTerm>, Box<EggTerm>) -> EggTerm,
+) -> Option<EggTerm> {
+    let [a, b, c] = args else { return None };
+    Some(ctor(
+        Box::new(EggTerm::from_sexp(func, a)?),
+        Box::new(EggTerm::from_sexp(func, b)?),
+        Box::new(EggTerm::from_sexp(func, c)?),
+    ))
+}
+
+fn parse_gep(func: &Function, sexp: &Sexp) -> Option<EggTerm> {
+    let (base, indices) = parse_gep_chain(func, sexp)?;
+    Some(EggTerm::Gep {
+        base: Box::new(base),
+        indices,
+    })
+}
+
+fn parse_gep_chain(func: &Function, sexp: &Sexp) -> Option<(EggTerm, Vec<EggTerm>)> {
+    let Sexp::List(list) = sexp else { return None };
+    let (head, rest) = list.split_first()?;
+    let Sexp::Atom(head) = head else { return None };
+
+    match head.as_str() {
+        "GepBase" => {
+            let [base] = rest else { return None };
+            Some((EggTerm::from_sexp(func, base)?, Vec::new()))
+        }
+        "GepOffset" => {
+            let [prev, index, _field_idx] = rest else {
+                return None;
+            };
+            let (base, mut indices) = parse_gep_chain(func, prev)?;
+            indices.push(EggTerm::from_sexp(func, index)?);
+            Some((base, indices))
+        }
+        _ => None,
+    }
+}
+
 fn parse_value_atom(atom: &str) -> Option<ValueId> {
     let rest = atom.strip_prefix('v')?;
     let id: u32 = rest.parse().ok()?;
@@ -425,9 +674,8 @@ fn parse_usize(sexp: &Sexp) -> Option<usize> {
 
 fn parse_type(sexp: &Sexp) -> Option<Type> {
     let Sexp::List(list) = sexp else { return None };
-    let [Sexp::Atom(head)] = list.as_slice() else {
-        return None;
-    };
+    let (head, rest) = list.split_first()?;
+    let Sexp::Atom(head) = head else { return None };
 
     match head.as_str() {
         "I1" => Some(Type::I1),
@@ -438,6 +686,10 @@ fn parse_type(sexp: &Sexp) -> Option<Type> {
         "I128" => Some(Type::I128),
         "I256" => Some(Type::I256),
         "UnitTy" => Some(Type::Unit),
+        "CompoundRef" => {
+            let [id] = rest else { return None };
+            Some(Type::Compound(CompoundTypeRef::from_u32(parse_u32(id)?)))
+        }
         _ => None,
     }
 }
@@ -762,10 +1014,13 @@ impl<'a> Elaborator<'a> {
 
         let value = match term {
             EggTerm::Value(value) => *value,
+            EggTerm::Global(gv, _ty) => self.func.dfg.make_global_value(*gv),
+            EggTerm::Undef(ty) => self.func.dfg.make_undef_value(*ty),
             EggTerm::Const(val, ty) => self
                 .func
                 .dfg
                 .make_imm_value(sonatina_ir::Immediate::from_i256(*val, *ty)),
+            EggTerm::Gep { base, indices } => self.gep(base, indices)?,
             EggTerm::Add(lhs, rhs) => self.binary::<Add>(lhs, rhs),
             EggTerm::Sub(lhs, rhs) => self.binary::<Sub>(lhs, rhs),
             EggTerm::Mul(lhs, rhs) => self.binary::<Mul>(lhs, rhs),
@@ -776,6 +1031,15 @@ impl<'a> Elaborator<'a> {
             EggTerm::Shl(bits, value) => self.binary::<Shl>(bits, value),
             EggTerm::Shr(bits, value) => self.binary::<Shr>(bits, value),
             EggTerm::Sar(bits, value) => self.binary::<Sar>(bits, value),
+            EggTerm::EvmAddMod(lhs, rhs, modulus) => {
+                self.evm_mod(lhs, rhs, modulus, EvmMod::AddMod)?
+            }
+            EggTerm::EvmMulMod(lhs, rhs, modulus) => {
+                self.evm_mod(lhs, rhs, modulus, EvmMod::MulMod)?
+            }
+            EggTerm::EvmExp(base, exponent) => self.evm_exp(base, exponent)?,
+            EggTerm::EvmByte(pos, value) => self.evm_byte(pos, value)?,
+            EggTerm::EvmClz(word) => self.unary::<EvmClz>(word),
             EggTerm::Neg(arg) => self.unary::<Neg>(arg),
             EggTerm::Not(arg) => self.unary::<Not>(arg),
             EggTerm::And(lhs, rhs) => self.binary::<And>(lhs, rhs),
@@ -792,6 +1056,10 @@ impl<'a> Elaborator<'a> {
             EggTerm::Eq(lhs, rhs) => self.cmp::<Eq>(lhs, rhs),
             EggTerm::Ne(lhs, rhs) => self.cmp::<Ne>(lhs, rhs),
             EggTerm::IsZero(arg) => self.is_zero(arg)?,
+            EggTerm::Sext(arg, ty) => self.cast(arg, *ty, CastOp::Sext)?,
+            EggTerm::Zext(arg, ty) => self.cast(arg, *ty, CastOp::Zext)?,
+            EggTerm::Trunc(arg, ty) => self.cast(arg, *ty, CastOp::Trunc)?,
+            EggTerm::Bitcast(arg, ty) => self.cast(arg, *ty, CastOp::Bitcast)?,
         };
 
         self.memo.insert(term.clone(), value);
@@ -802,6 +1070,7 @@ impl<'a> Elaborator<'a> {
         let is = self.func.inst_set();
 
         Some(match term {
+            EggTerm::Gep { base, indices } => self.gep_inst(base, indices)?,
             EggTerm::Add(lhs, rhs) => {
                 Box::new(Add::new(is.has_add()?, self.val(lhs)?, self.val(rhs)?))
             }
@@ -824,6 +1093,29 @@ impl<'a> Elaborator<'a> {
             EggTerm::Sar(bits, value) => {
                 Box::new(Sar::new(is.has_sar()?, self.val(bits)?, self.val(value)?))
             }
+            EggTerm::EvmAddMod(lhs, rhs, modulus) => Box::new(EvmAddMod::new(
+                is.has_evm_add_mod()?,
+                self.val(lhs)?,
+                self.val(rhs)?,
+                self.val(modulus)?,
+            )),
+            EggTerm::EvmMulMod(lhs, rhs, modulus) => Box::new(EvmMulMod::new(
+                is.has_evm_mul_mod()?,
+                self.val(lhs)?,
+                self.val(rhs)?,
+                self.val(modulus)?,
+            )),
+            EggTerm::EvmExp(base, exponent) => Box::new(EvmExp::new(
+                is.has_evm_exp()?,
+                self.val(base)?,
+                self.val(exponent)?,
+            )),
+            EggTerm::EvmByte(pos, value) => Box::new(EvmByte::new(
+                is.has_evm_byte()?,
+                self.val(pos)?,
+                self.val(value)?,
+            )),
+            EggTerm::EvmClz(word) => Box::new(EvmClz::new(is.has_evm_clz()?, self.val(word)?)),
             EggTerm::Neg(arg) => Box::new(Neg::new(is.has_neg()?, self.val(arg)?)),
             EggTerm::Not(arg) => Box::new(Not::new(is.has_not()?, self.val(arg)?)),
             EggTerm::And(lhs, rhs) => {
@@ -866,7 +1158,15 @@ impl<'a> Elaborator<'a> {
                 Box::new(Ne::new(is.has_ne()?, self.val(lhs)?, self.val(rhs)?))
             }
             EggTerm::IsZero(arg) => Box::new(IsZero::new(is.has_is_zero()?, self.val(arg)?)),
-            EggTerm::Value(_) | EggTerm::Const(..) => return None,
+            EggTerm::Sext(arg, ty) => Box::new(Sext::new(is.has_sext()?, self.val(arg)?, *ty)),
+            EggTerm::Zext(arg, ty) => Box::new(Zext::new(is.has_zext()?, self.val(arg)?, *ty)),
+            EggTerm::Trunc(arg, ty) => Box::new(Trunc::new(is.has_trunc()?, self.val(arg)?, *ty)),
+            EggTerm::Bitcast(arg, ty) => {
+                Box::new(Bitcast::new(is.has_bitcast()?, self.val(arg)?, *ty))
+            }
+            EggTerm::Value(_) | EggTerm::Global(..) | EggTerm::Undef(..) | EggTerm::Const(..) => {
+                return None;
+            }
         })
     }
 
@@ -919,6 +1219,94 @@ impl<'a> Elaborator<'a> {
         let arg_val = self.elaborate_value(arg)?;
         let inst = IsZero::new(self.func.inst_set().has_is_zero()?, arg_val);
         Some(self.make_inst_value(inst, Type::I1))
+    }
+
+    fn cast(&mut self, arg: &EggTerm, ty: Type, op: CastOp) -> Option<ValueId> {
+        let arg_val = self.elaborate_value(arg)?;
+        let inst = self.cast_inst(arg_val, ty, op)?;
+        Some(self.make_inst_value_dyn(inst, ty))
+    }
+
+    fn cast_inst(&self, arg: ValueId, ty: Type, op: CastOp) -> Option<Box<dyn Inst>> {
+        let is = self.func.inst_set();
+        Some(match op {
+            CastOp::Sext => Box::new(Sext::new(is.has_sext()?, arg, ty)),
+            CastOp::Zext => Box::new(Zext::new(is.has_zext()?, arg, ty)),
+            CastOp::Trunc => Box::new(Trunc::new(is.has_trunc()?, arg, ty)),
+            CastOp::Bitcast => Box::new(Bitcast::new(is.has_bitcast()?, arg, ty)),
+        })
+    }
+
+    fn gep(&mut self, base: &EggTerm, indices: &[EggTerm]) -> Option<ValueId> {
+        let base_val = self.elaborate_value(base)?;
+        let inst = self.gep_inst(base, indices)?;
+        let ty = self.func.dfg.value_ty(base_val);
+        Some(self.make_inst_value_dyn(inst, ty))
+    }
+
+    fn gep_inst(&mut self, base: &EggTerm, indices: &[EggTerm]) -> Option<Box<dyn Inst>> {
+        let mut values: SmallVec<[ValueId; 8]> = SmallVec::with_capacity(indices.len() + 1);
+        values.push(self.elaborate_value(base)?);
+        for index in indices {
+            values.push(self.elaborate_value(index)?);
+        }
+        Some(Box::new(Gep::new(self.func.inst_set().has_gep()?, values)))
+    }
+
+    fn evm_mod(
+        &mut self,
+        lhs: &EggTerm,
+        rhs: &EggTerm,
+        modulus: &EggTerm,
+        op: EvmMod,
+    ) -> Option<ValueId> {
+        let lhs_val = self.elaborate_value(lhs)?;
+        let inst = self.evm_mod_inst(lhs, rhs, modulus, op)?;
+        let ty = self.func.dfg.value_ty(lhs_val);
+        Some(self.make_inst_value_dyn(inst, ty))
+    }
+
+    fn evm_mod_inst(
+        &mut self,
+        lhs: &EggTerm,
+        rhs: &EggTerm,
+        modulus: &EggTerm,
+        op: EvmMod,
+    ) -> Option<Box<dyn Inst>> {
+        let lhs_val = self.elaborate_value(lhs)?;
+        let rhs_val = self.elaborate_value(rhs)?;
+        let modulus_val = self.elaborate_value(modulus)?;
+        let is = self.func.inst_set();
+        Some(match op {
+            EvmMod::AddMod => Box::new(EvmAddMod::new(
+                is.has_evm_add_mod()?,
+                lhs_val,
+                rhs_val,
+                modulus_val,
+            )),
+            EvmMod::MulMod => Box::new(EvmMulMod::new(
+                is.has_evm_mul_mod()?,
+                lhs_val,
+                rhs_val,
+                modulus_val,
+            )),
+        })
+    }
+
+    fn evm_exp(&mut self, base: &EggTerm, exponent: &EggTerm) -> Option<ValueId> {
+        let base_val = self.elaborate_value(base)?;
+        let exponent_val = self.elaborate_value(exponent)?;
+        let ty = self.func.dfg.value_ty(base_val);
+        let inst = EvmExp::new(self.func.inst_set().has_evm_exp()?, base_val, exponent_val);
+        Some(self.make_inst_value(inst, ty))
+    }
+
+    fn evm_byte(&mut self, pos: &EggTerm, value: &EggTerm) -> Option<ValueId> {
+        let pos_val = self.elaborate_value(pos)?;
+        let value_val = self.elaborate_value(value)?;
+        let ty = self.func.dfg.value_ty(value_val);
+        let inst = EvmByte::new(self.func.inst_set().has_evm_byte()?, pos_val, value_val);
+        Some(self.make_inst_value(inst, ty))
     }
 
     fn make_inst_value<I: sonatina_ir::Inst>(&mut self, inst: I, ty: Type) -> ValueId {
@@ -992,6 +1380,20 @@ enum DivMod {
     Smod,
 }
 
+#[derive(Clone, Copy)]
+enum CastOp {
+    Sext,
+    Zext,
+    Trunc,
+    Bitcast,
+}
+
+#[derive(Clone, Copy)]
+enum EvmMod {
+    AddMod,
+    MulMod,
+}
+
 trait BinaryInst: sonatina_ir::Inst + Sized {
     fn new(is: &dyn InstSetBase, lhs: ValueId, rhs: ValueId) -> Self;
 }
@@ -1042,3 +1444,4 @@ impl_binary!(Ne, has_ne);
 
 impl_unary!(Neg, has_neg);
 impl_unary!(Not, has_not);
+impl_unary!(EvmClz, has_evm_clz);

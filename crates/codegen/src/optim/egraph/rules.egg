@@ -10,6 +10,35 @@
 (rewrite (Eq x y) (Eq y x))
 (rewrite (Ne x y) (Ne y x))
 
+; --- Value Phi ---
+; Single-input phi is the input itself.
+(rule ((= e (PhiResult phi_id _))
+       (= 1 (phi-num-preds phi_id))
+       (= val (phi-val phi_id 0)))
+      ((union e val)))
+
+; If all phi inputs are equal in the egraph, the phi collapses.
+(rule ((= e (PhiResult phi_id _))
+       (= 2 (phi-num-preds phi_id))
+       (= val (phi-val phi_id 0))
+       (= val (phi-val phi_id 1)))
+      ((union e val)))
+
+(rule ((= e (PhiResult phi_id _))
+       (= 3 (phi-num-preds phi_id))
+       (= val (phi-val phi_id 0))
+       (= val (phi-val phi_id 1))
+       (= val (phi-val phi_id 2)))
+      ((union e val)))
+
+(rule ((= e (PhiResult phi_id _))
+       (= 4 (phi-num-preds phi_id))
+       (= val (phi-val phi_id 0))
+       (= val (phi-val phi_id 1))
+       (= val (phi-val phi_id 2))
+       (= val (phi-val phi_id 3)))
+      ((union e val)))
+
 ; --- Addition ---
 ; x + 0 = x
 (rewrite (Add x (Const (i256 0) ty)) x)
@@ -95,6 +124,81 @@
 ; --- IsZero ---
 ; is_zero(0) = true
 (rewrite (IsZero (Const (i256 0) ty)) (Const (i256 1) (I1)))
+; is_zero(nonzero) = false
+(rule ((= e (IsZero (Const c ty)))
+       (!= c (i256 0)))
+      ((union e (Const (i256 0) (I1)))))
+
+; eq/ne with zero canonically map to is_zero forms.
+(rule ((= e (Eq x (Const (i256 0) ty)))
+       (= ty (expr-type x)))
+      ((union e (IsZero x))))
+
+(rule ((= e (Ne x (Const (i256 0) ty)))
+       (= ty (expr-type x)))
+      ((union e (Not (IsZero x)))))
+
+; --- Cast Simplification ---
+; Collapse nested same casts.
+(rewrite (Zext (Zext x t1) t2) (Zext x t2))
+(rewrite (Sext (Sext x t1) t2) (Sext x t2))
+(rewrite (Trunc (Trunc x t1) t2) (Trunc x t2))
+
+; Casting to the existing type is redundant.
+(rule ((= e (Zext x t))
+       (= t (expr-type x)))
+      ((union e x)))
+(rule ((= e (Sext x t))
+       (= t (expr-type x)))
+      ((union e x)))
+(rule ((= e (Trunc x t))
+       (= t (expr-type x)))
+      ((union e x)))
+(rule ((= e (Bitcast x t))
+       (= t (expr-type x)))
+      ((union e x)))
+
+; Trunc after extension back to the original type is a no-op.
+(rule ((= e (Trunc (Zext x _t_big) t_small))
+       (= t_small (expr-type x)))
+      ((union e x)))
+
+(rule ((= e (Trunc (Sext x _t_big) t_small))
+       (= t_small (expr-type x)))
+      ((union e x)))
+
+; Width-aware simplifications enabled by int-le in types.egg.
+(rule ((= e (Trunc (Zext x t_big) t_mid))
+       (= t_small (expr-type x))
+       (int-le t_small t_mid)
+       (int-le t_mid t_big))
+      ((union e (Zext x t_mid))))
+
+(rule ((= e (Trunc (Sext x t_big) t_mid))
+       (= t_small (expr-type x))
+       (int-le t_small t_mid)
+       (int-le t_mid t_big))
+      ((union e (Sext x t_mid))))
+
+; --- EVM Peepholes ---
+(rewrite (EvmAddMod x y (Const (i256 0) ty)) (Const (i256 0) ty))
+(rewrite (EvmMulMod x y (Const (i256 0) ty)) (Const (i256 0) ty))
+(rewrite (EvmExp x (Const (i256 0) ty)) (Const (i256 1) ty))
+(rewrite (EvmExp (Const (i256 0) ty) (Const (i256 0) ty)) (Const (i256 1) ty))
+
+(rule ((= e (EvmExp (Const (i256 0) ty) (Const exp ty)))
+       (!= exp (i256 0)))
+      ((union e (Const (i256 0) ty))))
+
+(rewrite (EvmByte pos (Const (i256 0) ty)) (Const (i256 0) ty))
+
+(rewrite (EvmClz (Const (i256 0) (I1))) (Const (i256 1) (I1)))
+(rewrite (EvmClz (Const (i256 0) (I8))) (Const (i256 8) (I8)))
+(rewrite (EvmClz (Const (i256 0) (I16))) (Const (i256 16) (I16)))
+(rewrite (EvmClz (Const (i256 0) (I32))) (Const (i256 32) (I32)))
+(rewrite (EvmClz (Const (i256 0) (I64))) (Const (i256 64) (I64)))
+(rewrite (EvmClz (Const (i256 0) (I128))) (Const (i256 128) (I128)))
+(rewrite (EvmClz (Const (i256 0) (I256))) (Const (i256 256) (I256)))
 
 ; --- Negation + Arithmetic ---
 ; x + (-y) = x - y
