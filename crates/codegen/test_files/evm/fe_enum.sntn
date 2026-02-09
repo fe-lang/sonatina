@@ -17,7 +17,7 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
         v1.i256 = evm_calldata_load 0.i256;
         v3.i256 = shr 224.i256 v1;
-        v5.i256 = eq v3 1817627404.i256;
+        v5.i1 = eq v3 1817627404.i256;
         br v5 block1 block2;
 
     block1:
@@ -46,14 +46,14 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
 
     block6:
         v18.i256 = mload v9 i256;
-        v19.i256 = eq v18 1.i256;
+        v19.i1 = eq v18 1.i256;
         br v19 block3 block8;
 
     block7:
         evm_invalid;
 
     block8:
-        v20.i256 = eq v18 0.i256;
+        v20.i1 = eq v18 0.i256;
         br v20 block5 block7;
 }
 

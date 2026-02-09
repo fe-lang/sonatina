@@ -6,6 +6,7 @@ use crate::{
     BlockId, Function, GlobalVariableRef, Immediate, Inst, InstId, InstSetBase, Type, Value,
     ValueId,
     func_cursor::{CursorLocation, FuncCursor},
+    inst::{cmp, downcast},
     module::{FuncRef, ModuleCtx},
 };
 
@@ -135,6 +136,7 @@ where
         inst.for_each_value_mut(&mut |v| {
             *v = self.ssa_builder.resolve_alias(*v);
         });
+        self.validate_result_type(&inst, ret_ty);
 
         let inst_id = self.cursor.insert_inst_data(&mut self.func, inst);
         self.append_pred(inst_id);
@@ -155,6 +157,7 @@ where
         inst.for_each_value_mut(&mut |v| {
             *v = self.ssa_builder.resolve_alias(*v);
         });
+        self.validate_result_type(inst.as_ref(), ret_ty);
 
         let inst_id = self.cursor.insert_inst_data_dyn(&mut self.func, inst);
         self.append_pred(inst_id);
@@ -290,6 +293,32 @@ where
             self.ssa_builder.append_pred(dest, current_block)
         }
     }
+
+    fn validate_result_type(&self, inst: &dyn Inst, ret_ty: Type) {
+        if self.is_cmp_inst(inst) {
+            assert_eq!(
+                ret_ty,
+                Type::I1,
+                "comparison instruction results must be i1, got {:?}",
+                ret_ty
+            );
+        }
+    }
+
+    fn is_cmp_inst(&self, inst: &dyn Inst) -> bool {
+        let is = self.inst_set();
+        downcast::<&cmp::Lt>(is, inst).is_some()
+            || downcast::<&cmp::Gt>(is, inst).is_some()
+            || downcast::<&cmp::Slt>(is, inst).is_some()
+            || downcast::<&cmp::Sgt>(is, inst).is_some()
+            || downcast::<&cmp::Le>(is, inst).is_some()
+            || downcast::<&cmp::Ge>(is, inst).is_some()
+            || downcast::<&cmp::Sle>(is, inst).is_some()
+            || downcast::<&cmp::Sge>(is, inst).is_some()
+            || downcast::<&cmp::Eq>(is, inst).is_some()
+            || downcast::<&cmp::Ne>(is, inst).is_some()
+            || downcast::<&cmp::IsZero>(is, inst).is_some()
+    }
 }
 
 #[cfg(test)]
@@ -299,6 +328,7 @@ mod tests {
         inst::{
             arith::{Add, Mul, Sub},
             cast::Sext,
+            cmp::{Eq, Lt},
             control_flow::{Br, Jump, Phi, Return},
         },
         isa::Isa,
@@ -457,6 +487,76 @@ mod tests {
         v3.i64 = phi (1.i64 block1) (2.i64 block2);
         v4.i64 = add v3 v0;
         return;
+}
+"
+        );
+    }
+
+    #[test]
+    fn cmp_result_type_i1_allowed() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I1);
+        let is = evm.inst_set();
+
+        let b0 = builder.append_block();
+        builder.switch_to_block(b0);
+        let one = builder.make_imm_value(1i32);
+        let two = builder.make_imm_value(2i32);
+        let cond = builder.insert_inst_with(|| Lt::new(is, one, two), Type::I1);
+        builder.insert_inst_no_result(Return::new(is, Some(cond)));
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        assert_eq!(
+            dump_func(&module, func_ref),
+            "func public %test_func() -> i1 {
+    block0:
+        v2.i1 = lt 1.i32 2.i32;
+        return v2;
+}
+"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "comparison instruction results must be i1")]
+    fn cmp_result_type_non_i1_panics() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let b0 = builder.append_block();
+        builder.switch_to_block(b0);
+        let one = builder.make_imm_value(1i32);
+        let two = builder.make_imm_value(2i32);
+        builder.insert_inst_with(|| Eq::new(is, one, two), Type::I256);
+    }
+
+    #[test]
+    fn non_cmp_result_type_unchanged() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I32);
+        let is = evm.inst_set();
+
+        let b0 = builder.append_block();
+        builder.switch_to_block(b0);
+        let one = builder.make_imm_value(1i32);
+        let two = builder.make_imm_value(2i32);
+        let sum = builder.insert_inst_with(|| Add::new(is, one, two), Type::I32);
+        builder.insert_inst_no_result(Return::new(is, Some(sum)));
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        assert_eq!(
+            dump_func(&module, func_ref),
+            "func public %test_func() -> i32 {
+    block0:
+        v2.i32 = add 1.i32 2.i32;
+        return v2;
 }
 "
         );

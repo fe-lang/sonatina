@@ -209,16 +209,18 @@ impl BuildCtx {
             for stmt in &block.stmts {
                 let inst_id = match &stmt.kind {
                     ast::StmtKind::Assign(ValueDeclaration(name, type_), ast_inst) => {
-                        let inst = match InstBuild::build(self, &mut fb, ast_inst) {
-                            Ok(inst) => inst,
-                            Err(err) => {
-                                self.errors.push(*err);
-                                continue;
-                            }
-                        };
+                        let inst: Box<dyn ir::Inst> =
+                            match InstBuild::build(self, &mut fb, ast_inst) {
+                                Ok(inst) => inst,
+                                Err(err) => {
+                                    self.errors.push(*err);
+                                    continue;
+                                }
+                            };
 
-                        // xxx cleanup
-                        let ty = self.type_(&fb.module_builder, type_);
+                        let declared_ty = self.type_(&fb.module_builder, type_);
+                        let ty =
+                            self.check_cmp_result_type(&fb, inst.as_ref(), declared_ty, type_.span);
                         let value = *self.func_value_names.get_by_right(&name.string).unwrap();
                         let inst_id = fb.cursor.insert_inst_data_dyn(&mut fb.func, inst);
                         fb.func.dfg.values[value] = ir::Value::Inst { inst: inst_id, ty };
@@ -365,6 +367,39 @@ impl BuildCtx {
         } else {
             true
         }
+    }
+
+    fn check_cmp_result_type(
+        &mut self,
+        fb: &FunctionBuilder<InstInserter>,
+        inst: &dyn ir::Inst,
+        declared_ty: ir::Type,
+        span: Span,
+    ) -> ir::Type {
+        if !self.is_cmp_inst(fb, inst) || declared_ty == ir::Type::I1 {
+            return declared_ty;
+        }
+
+        self.errors.push(Error::TypeError {
+            expected: "i1 result type for comparison instruction".to_string(),
+            span,
+        });
+        ir::Type::I1
+    }
+
+    fn is_cmp_inst(&self, fb: &FunctionBuilder<InstInserter>, inst: &dyn ir::Inst) -> bool {
+        let is = fb.inst_set();
+        ir::inst::downcast::<&ir::inst::cmp::Lt>(is, inst).is_some()
+            || ir::inst::downcast::<&ir::inst::cmp::Gt>(is, inst).is_some()
+            || ir::inst::downcast::<&ir::inst::cmp::Slt>(is, inst).is_some()
+            || ir::inst::downcast::<&ir::inst::cmp::Sgt>(is, inst).is_some()
+            || ir::inst::downcast::<&ir::inst::cmp::Le>(is, inst).is_some()
+            || ir::inst::downcast::<&ir::inst::cmp::Ge>(is, inst).is_some()
+            || ir::inst::downcast::<&ir::inst::cmp::Sle>(is, inst).is_some()
+            || ir::inst::downcast::<&ir::inst::cmp::Sge>(is, inst).is_some()
+            || ir::inst::downcast::<&ir::inst::cmp::Eq>(is, inst).is_some()
+            || ir::inst::downcast::<&ir::inst::cmp::Ne>(is, inst).is_some()
+            || ir::inst::downcast::<&ir::inst::cmp::IsZero>(is, inst).is_some()
     }
 
     fn declare_gv(
