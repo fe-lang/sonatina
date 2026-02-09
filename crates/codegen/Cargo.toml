@@ -22,7 +22,7 @@ sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
 sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
 sonatina-macros = { path = "../macros", version = "0.0.3-alpha" }
 dashmap = { version = "6.1", features = ["rayon"] }
-egglog = "0.5"
+egglog = { git = "https://github.com/sbillig/egglog", rev = "1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef" }
 bit-set = "0.8.0"
 indexmap = { version = "2.12" }
 

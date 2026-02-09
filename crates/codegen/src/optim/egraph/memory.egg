@@ -95,19 +95,6 @@
        (= addr1 addr2))
       ((union r1 r2)))
 
-; === Dead Store Elimination ===
-
-; Relation to mark stores as dead (can be eliminated)
-(relation dead-store (i64))
-
-; A store is dead if the immediately following store is to the same address
-; (and no load can observe the first store's value)
-(rule ((= prev_mem_id (store-prev mem_id))
-       (= store_addr (store-addr mem_id))
-       (= prev_store_addr (store-addr prev_mem_id))
-       (= store_addr prev_store_addr))
-      ((dead-store prev_mem_id)))
-
 ; === MemPhi Rules ===
 
 ; Load through MemPhi: if both predecessors (2-pred case) forward the same value
@@ -147,3 +134,13 @@
        (= ty (store-ty pred_mem))
        (= val (store-val pred_mem)))
       ((union result val)))
+
+; === Adjacent Dead Store Detection ===
+; If a store immediately overwrites a previous store to the same address,
+; the previous store is dead.
+(relation dead-store (i64))
+(rule ((= mem_id (store-prev next_mem_id))
+       (!= mem_id 0)
+       (= addr (store-addr next_mem_id))
+       (= addr (store-addr mem_id)))
+      ((dead-store mem_id)))
