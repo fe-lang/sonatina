@@ -3,12 +3,6 @@
 target = "evm-ethereum-london"
 
 # sameln: func public %const_loop() -> i8 {
-# nextln:     block1:
-# nextln:         jump block2;
-# nextln: 
-# nextln:     block2:
-# nextln:         jump block3;
-# nextln: 
 # nextln:     block3:
 # nextln:         return 11.i8;
 func public %const_loop() -> i8 {

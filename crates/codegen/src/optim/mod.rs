@@ -3,3 +3,4 @@ pub mod cfg_cleanup;
 pub mod egraph;
 pub mod licm;
 pub mod sccp;
+mod sccp_simplify;

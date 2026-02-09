@@ -1,0 +1,35 @@
+#! SCCP companion simplifier: absorbing constants.
+
+target = "evm-ethereum-london"
+
+# and x, 0 => 0
+# check: return 0.i8;
+func public %simplify_and_zero(v0.i8) -> i8 {
+    block0:
+        v1.i8 = and v0 0.i8;
+        return v1;
+}
+
+# mul 0, x => 0 (commutative)
+# check: return 0.i8;
+func public %simplify_mul_zero(v0.i8) -> i8 {
+    block0:
+        v1.i8 = mul 0.i8 v0;
+        return v1;
+}
+
+# or x, -1 => -1
+# check: return -1.i8;
+func public %simplify_or_all_one(v0.i8) -> i8 {
+    block0:
+        v1.i8 = or v0 -1.i8;
+        return v1;
+}
+
+# shl bits, 0 => 0
+# check: return 0.i8;
+func public %simplify_shl_value_zero(v0.i8) -> i8 {
+    block0:
+        v1.i8 = shl v0 0.i8;
+        return v1;
+}

@@ -10,7 +10,7 @@ use sonatina_ir::{
 };
 
 use crate::{
-    cfg_edit::CleanupMode,
+    cfg_edit::{CfgEditor, CleanupMode},
     optim::cfg_cleanup::CfgCleanup,
     post_domtree::{PDFSet, PDTIdom, PostDomTree},
 };
@@ -169,12 +169,12 @@ impl AdceSolver {
             }
         }
 
-        // Modify branch insts to remove unreachable edges.
-        inserter.set_to_entry(func);
+        // Modify branch insts to remove unreachable edges via CfgEditor.
+        let mut editor = CfgEditor::new(func, CleanupMode::RepairWithUndef);
+        let blocks: Vec<_> = editor.func().layout.iter_block().collect();
         let mut br_inst_modified = false;
-        while let Some(block) = inserter.block(func) {
-            br_inst_modified |= self.modify_branch(func, &mut inserter, block);
-            inserter.proceed_block(func);
+        for block in blocks {
+            br_inst_modified |= self.modify_branch(&mut editor, block);
         }
 
         br_inst_modified
@@ -192,19 +192,13 @@ impl AdceSolver {
     }
 
     /// Returns `true` if branch inst is modified.
-    fn modify_branch(
-        &self,
-        func: &mut Function,
-        inserter: &mut InstInserter,
-        block: BlockId,
-    ) -> bool {
-        let last_inst = match func.layout.last_inst_of(block) {
+    fn modify_branch(&self, editor: &mut CfgEditor, block: BlockId) -> bool {
+        let last_inst = match editor.func().layout.last_inst_of(block) {
             Some(inst) => inst,
             None => return false,
         };
-        inserter.set_location(CursorLocation::At(last_inst));
-
-        let dests = func
+        let dests = editor
+            .func()
             .dfg
             .branch_info(last_inst)
             .map(|bi| bi.dests())
@@ -218,40 +212,26 @@ impl AdceSolver {
 
             let mut rewrote = false;
             if let Some(postdom) = self.living_post_dom(dest) {
-                let safe_succ = func
+                let safe_succ = editor
+                    .func()
                     .dfg
                     .branch_info(last_inst)
                     .is_some_and(|bi| bi.dests().contains(&postdom));
-                let safe_no_phi = !func
+                let safe_no_phi = !editor
+                    .func()
                     .layout
                     .iter_inst(postdom)
-                    .any(|inst| func.dfg.is_phi(inst));
+                    .any(|inst| editor.func().dfg.is_phi(inst));
                 if safe_succ || safe_no_phi {
-                    func.dfg.rewrite_branch_dest(last_inst, dest, postdom);
-                    rewrote = true;
+                    rewrote = editor.replace_succ_allow_existing_pred(block, dest, postdom, &[]);
                 }
             }
 
             if !rewrote {
-                func.dfg.remove_branch_dest(last_inst, dest);
+                rewrote = editor.remove_succ(block, dest);
             }
 
-            changed = true;
-        }
-
-        // Turn branch inst to `jump` if all dests is the same.
-        let Some(branch_info) = func.dfg.branch_info(last_inst) else {
-            return changed;
-        };
-        if branch_info.num_dests() > 1 {
-            let branch_dests = branch_info.dests();
-            let first_dest = branch_dests[0];
-            if branch_dests.iter().all(|dest| *dest == first_dest) {
-                changed = true;
-                let jump = func.dfg.make_jump(first_dest);
-                drop(branch_dests);
-                inserter.replace(func, jump);
-            }
+            changed |= rewrote;
         }
 
         changed

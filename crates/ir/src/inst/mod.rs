@@ -96,6 +96,10 @@ pub trait InstDowncast<'a>: Sized {
     }
 }
 
+pub fn downcast<'a, Op: InstDowncast<'a>>(is: &dyn InstSetBase, inst: &'a dyn Inst) -> Option<Op> {
+    <Op as InstDowncast>::downcast(is, inst)
+}
+
 impl<'a, T> InstDowncastMut<'a> for T
 where
     T: InstDowncast<'a>,

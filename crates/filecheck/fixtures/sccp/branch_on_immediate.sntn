@@ -1,0 +1,16 @@
+#! Regression: SCCP must treat immediates as constants without lattice seeding.
+
+target = "evm-ethereum-london"
+
+# check: block2:
+# nextln:     return 2.i32;
+func public %branch_on_immediate() -> i32 {
+    block0:
+        br 0.i1 block1 block2;
+
+    block1:
+        return 1.i32;
+
+    block2:
+        return 2.i32;
+}

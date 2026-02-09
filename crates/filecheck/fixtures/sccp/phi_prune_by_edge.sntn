@@ -1,0 +1,21 @@
+#! Regression: phi pruning must use edge reachability, not just block reachability.
+
+target = "evm-ethereum-london"
+
+# sameln: func public %phi_prune_by_edge(v0.i32) -> i32 {
+# nextln:     block3:
+# nextln:         return v0;
+func public %phi_prune_by_edge(v0.i32) -> i32 {
+    block0:
+        jump block1;
+
+    block1:
+        br 0.i1 block3 block2;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i32 = phi (v0 block1) (v0 block2);
+        return v1;
+}

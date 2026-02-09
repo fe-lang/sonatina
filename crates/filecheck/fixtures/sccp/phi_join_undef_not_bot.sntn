@@ -1,0 +1,20 @@
+#! Regression: `Value::Undef` must not be treated as `Bot` (phi join identity).
+
+target = "evm-ethereum-london"
+
+# check: block3:
+# nextln:     return undef.i8;
+func public %phi_join_undef_not_bot(v0.i1) -> i8 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i8 = phi (undef.i8 block1) (0.i8 block2);
+        return v1;
+}
