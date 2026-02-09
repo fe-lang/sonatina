@@ -1,0 +1,37 @@
+target = "evm-ethereum-london"
+
+# Test: eq x, 0 canonicalizes to is_zero x.
+# sameln: func public %eq_zero(v0.i32) -> i1 {
+# nextln:     block0:
+# nextln:         v1.i1 = is_zero v0;
+# nextln:         return v1;
+# nextln: }
+func public %eq_zero(v0.i32) -> i1 {
+    block0:
+        v1.i1 = eq v0 0.i32;
+        return v1;
+}
+
+# Test: ne x, 0 canonicalizes to not(is_zero x).
+# sameln: func public %ne_zero(v0.i32) -> i1 {
+# nextln:     block0:
+# nextln:         v3.i1 = is_zero v0;
+# nextln:         v1.i1 = not v3;
+# nextln:         return v1;
+# nextln: }
+func public %ne_zero(v0.i32) -> i1 {
+    block0:
+        v1.i1 = ne v0 0.i32;
+        return v1;
+}
+
+# Test: is_zero(nonzero const) folds to false.
+# sameln: func public %is_zero_nonzero_const() -> i1 {
+# nextln:     block0:
+# nextln:         return 0.i1;
+# nextln: }
+func public %is_zero_nonzero_const() -> i1 {
+    block0:
+        v0.i1 = is_zero 5.i32;
+        return v0;
+}

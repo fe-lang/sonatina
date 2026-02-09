@@ -1,0 +1,30 @@
+target = "evm-ethereum-london"
+
+type @triple = { i32, i32, i32 };
+
+# Test: generic MemPhi load merge when each predecessor has a different
+# non-aliasing tail store but the same value for the loaded address.
+# sameln: func public %memphi_load_through_nonalias_last_store(v0.i1) -> i32 {
+# check:         return 10.i32;
+func public %memphi_load_through_nonalias_last_store(v0.i1) -> i32 {
+    block0:
+        v1.*@triple = alloca @triple;
+        v2.*i32 = gep v1 0.i8;
+        v3.*i32 = gep v1 1.i8;
+        v4.*i32 = gep v1 2.i8;
+        br v0 block1 block2;
+
+    block1:
+        mstore v2 10.i32 i32;
+        mstore v3 99.i32 i32;
+        jump block3;
+
+    block2:
+        mstore v2 10.i32 i32;
+        mstore v4 77.i32 i32;
+        jump block3;
+
+    block3:
+        v5.i32 = mload v2 i32;
+        return v5;
+}

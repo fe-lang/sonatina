@@ -1,0 +1,40 @@
+target = "evm-ethereum-london"
+
+type @pair = { i32, i32 };
+
+global private *i32 $G = 0;
+
+# Test: global operands can participate in egraph simplification.
+# sameln: func public %global_eq_self() -> i1 {
+# nextln:     block0:
+# nextln:         return 1.i1;
+# nextln: }
+func public %global_eq_self() -> i1 {
+    block0:
+        v0.i1 = eq $G $G;
+        return v0;
+}
+
+# Test: undef term can be propagated when expression simplifies to undef.
+# sameln: func public %undef_add_zero() -> i32 {
+# nextln:     block0:
+# nextln:         return undef.i32;
+# nextln: }
+func public %undef_add_zero() -> i32 {
+    block0:
+        v0.i32 = add undef.i32 0.i32;
+        return v0;
+}
+
+# Test: repeated GEP computations remain optimizable through memory forwarding.
+# sameln: func public %gep_cse_forwarding() -> i32 {
+# check:         return 9.i32;
+func public %gep_cse_forwarding() -> i32 {
+    block0:
+        v0.*@pair = alloca @pair;
+        v1.*i32 = gep v0 0.i8;
+        v2.*i32 = gep v0 0.i8;
+        mstore v1 9.i32 i32;
+        v3.i32 = mload v2 i32;
+        return v3;
+}

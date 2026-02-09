@@ -177,6 +177,9 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
     if eliminate_adjacent_dead_stores(func) {
         changed = true;
     }
+    if eliminate_dead_pure_insts(func) {
+        changed = true;
+    }
 
     changed
 }
@@ -275,6 +278,7 @@ fn eliminate_adjacent_dead_stores(func: &mut Function) -> bool {
                     && prev_addr == addr
                     && prev_ty == ty
                 {
+                    func.dfg.untrack_inst(prev_id);
                     func.layout.remove_inst(prev_id);
                     changed = true;
                 }
@@ -287,6 +291,52 @@ fn eliminate_adjacent_dead_stores(func: &mut Function) -> bool {
     }
 
     changed
+}
+
+fn eliminate_dead_pure_insts(func: &mut Function) -> bool {
+    let mut worklist = Vec::new();
+    for block in func.layout.iter_block() {
+        for inst in func.layout.iter_inst(block) {
+            if is_trivially_dead_pure_inst(func, inst) {
+                worklist.push(inst);
+            }
+        }
+    }
+
+    let mut changed = false;
+    while let Some(inst) = worklist.pop() {
+        if !func.layout.is_inst_inserted(inst) || !is_trivially_dead_pure_inst(func, inst) {
+            continue;
+        }
+
+        let operands = func.dfg.inst(inst).collect_values();
+        func.dfg.untrack_inst(inst);
+        func.layout.remove_inst(inst);
+        changed = true;
+
+        for operand in operands {
+            if let Some(def_inst) = func.dfg.value_inst(operand)
+                && func.layout.is_inst_inserted(def_inst)
+                && is_trivially_dead_pure_inst(func, def_inst)
+            {
+                worklist.push(def_inst);
+            }
+        }
+    }
+
+    changed
+}
+
+fn is_trivially_dead_pure_inst(func: &Function, inst: InstId) -> bool {
+    if func.dfg.side_effect(inst).has_effect() || func.dfg.is_terminator(inst) {
+        return false;
+    }
+
+    let Some(result) = func.dfg.inst_result(inst) else {
+        return false;
+    };
+
+    func.dfg.users_num(result) == 0
 }
 
 #[cfg(test)]
