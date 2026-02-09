@@ -9,6 +9,8 @@ use crate::{
     stackalloc::StackifyAlloc,
 };
 
+#[cfg(debug_assertions)]
+use super::static_arena_alloc::verify_object_packing;
 use super::{
     ptr_escape::PtrEscapeSummary,
     static_arena_alloc::{
@@ -16,8 +18,6 @@ use super::{
         build_func_object_layout, pack_objects_with_min_offsets,
     },
 };
-#[cfg(debug_assertions)]
-use super::static_arena_alloc::verify_object_packing;
 use sonatina_ir::isa::evm::Evm;
 
 pub const WORD_BYTES: u32 = 32;
