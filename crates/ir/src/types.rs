@@ -181,6 +181,10 @@ impl TypeStore {
     pub fn resolve_compound(&self, cmpd_ref: CompoundTypeRef) -> &CompoundType {
         &self.compounds[cmpd_ref]
     }
+
+    pub fn get_compound(&self, cmpd_ref: CompoundTypeRef) -> Option<&CompoundType> {
+        self.compounds.get(cmpd_ref)
+    }
 }
 
 /// Sonatina IR types definition.

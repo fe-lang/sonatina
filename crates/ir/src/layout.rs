@@ -32,6 +32,22 @@ impl Layout {
         self.entry_block
     }
 
+    pub fn block_slots_len(&self) -> usize {
+        self.blocks.keys().count()
+    }
+
+    pub fn inst_slots_len(&self) -> usize {
+        self.insts.keys().count()
+    }
+
+    pub fn has_block_slot(&self, block: BlockId) -> bool {
+        self.blocks.get(block).is_some()
+    }
+
+    pub fn has_inst_slot(&self, inst: InstId) -> bool {
+        self.insts.get(inst).is_some()
+    }
+
     pub fn last_block(&self) -> Option<BlockId> {
         self.last_block
     }
@@ -49,8 +65,24 @@ impl Layout {
         self.blocks[block].prev
     }
 
+    pub fn try_prev_block(&self, block: BlockId) -> Option<BlockId> {
+        if !self.has_block_slot(block) || !self.is_block_inserted(block) {
+            return None;
+        }
+
+        self.blocks[block].prev
+    }
+
     pub fn next_block_of(&self, block: BlockId) -> Option<BlockId> {
         debug_assert!(self.is_block_inserted(block));
+        self.blocks[block].next
+    }
+
+    pub fn try_next_block(&self, block: BlockId) -> Option<BlockId> {
+        if !self.has_block_slot(block) || !self.is_block_inserted(block) {
+            return None;
+        }
+
         self.blocks[block].next
     }
 
@@ -58,9 +90,28 @@ impl Layout {
         Some(block) == self.entry_block || self.blocks[block] != BlockNode::default()
     }
 
+    pub fn try_is_block_inserted(&self, block: BlockId) -> Option<bool> {
+        if !self.has_block_slot(block) {
+            return None;
+        }
+
+        Some(self.is_block_inserted(block))
+    }
+
     pub fn first_inst_of(&self, block: BlockId) -> Option<InstId> {
         debug_assert!(self.is_block_inserted(block));
         self.blocks[block].first_inst
+    }
+
+    pub fn try_first_inst_of(&self, block: BlockId) -> Option<Option<InstId>> {
+        if !self.has_block_slot(block) {
+            return None;
+        }
+        if !self.is_block_inserted(block) {
+            return Some(None);
+        }
+
+        Some(self.blocks[block].first_inst)
     }
 
     pub fn is_first_inst(&self, inst: InstId) -> bool {
@@ -73,8 +124,27 @@ impl Layout {
         self.blocks[block].last_inst
     }
 
+    pub fn try_last_inst_of(&self, block: BlockId) -> Option<Option<InstId>> {
+        if !self.has_block_slot(block) {
+            return None;
+        }
+        if !self.is_block_inserted(block) {
+            return Some(None);
+        }
+
+        Some(self.blocks[block].last_inst)
+    }
+
     pub fn prev_inst_of(&self, inst: InstId) -> Option<InstId> {
         debug_assert!(self.is_inst_inserted(inst));
+        self.insts[inst].prev
+    }
+
+    pub fn try_prev_inst(&self, inst: InstId) -> Option<InstId> {
+        if !self.has_inst_slot(inst) || !self.is_inst_inserted(inst) {
+            return None;
+        }
+
         self.insts[inst].prev
     }
 
@@ -83,13 +153,37 @@ impl Layout {
         self.insts[inst].next
     }
 
+    pub fn try_next_inst(&self, inst: InstId) -> Option<InstId> {
+        if !self.has_inst_slot(inst) || !self.is_inst_inserted(inst) {
+            return None;
+        }
+
+        self.insts[inst].next
+    }
+
     pub fn inst_block(&self, inst: InstId) -> BlockId {
         debug_assert!(self.is_inst_inserted(inst));
         self.insts[inst].block.unwrap()
     }
 
+    pub fn try_inst_block(&self, inst: InstId) -> Option<BlockId> {
+        if !self.has_inst_slot(inst) || !self.is_inst_inserted(inst) {
+            return None;
+        }
+
+        self.insts[inst].block
+    }
+
     pub fn is_inst_inserted(&self, inst: InstId) -> bool {
         self.insts[inst] != InstNode::default()
+    }
+
+    pub fn try_is_inst_inserted(&self, inst: InstId) -> Option<bool> {
+        if !self.has_inst_slot(inst) {
+            return None;
+        }
+
+        Some(self.is_inst_inserted(inst))
     }
 
     pub fn iter_block(&self) -> impl Iterator<Item = BlockId> + '_ {

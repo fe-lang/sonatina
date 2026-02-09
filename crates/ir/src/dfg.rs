@@ -26,6 +26,8 @@ pub struct DataFlowGraph {
     inst_results: SecondaryMap<InstId, PackedOption<ValueId>>,
     #[doc(hidden)]
     pub immediates: FxHashMap<Immediate, ValueId>,
+    #[doc(hidden)]
+    pub globals: FxHashMap<GlobalVariableRef, ValueId>,
     users: SecondaryMap<ValueId, BTreeSet<InstId>>,
 }
 
@@ -38,6 +40,7 @@ impl DataFlowGraph {
             insts: PrimaryMap::default(),
             inst_results: SecondaryMap::default(),
             immediates: FxHashMap::default(),
+            globals: FxHashMap::default(),
             users: SecondaryMap::default(),
         }
     }
@@ -98,10 +101,16 @@ impl DataFlowGraph {
     }
 
     pub fn make_global_value(&mut self, gv: GlobalVariableRef) -> ValueId {
+        if let Some(&value) = self.globals.get(&gv) {
+            return value;
+        }
+
         let gv_ty = self.ctx.with_gv_store(|s| s.ty(gv));
         let ty = self.ctx.with_ty_store_mut(|s| s.make_ptr(gv_ty));
         let value_data = Value::Global { gv, ty };
-        self.make_value(value_data)
+        let value = self.make_value(value_data);
+        self.globals.insert(gv, value);
+        value
     }
 
     pub fn replace_inst(&mut self, inst_id: InstId, new: Box<dyn Inst>) {
@@ -126,12 +135,36 @@ impl DataFlowGraph {
         Value::Arg { ty, idx }
     }
 
+    pub fn has_block(&self, block: BlockId) -> bool {
+        (block.as_u32() as usize) < self.blocks.len()
+    }
+
+    pub fn has_value(&self, value: ValueId) -> bool {
+        (value.as_u32() as usize) < self.values.len()
+    }
+
+    pub fn has_inst(&self, inst: InstId) -> bool {
+        (inst.as_u32() as usize) < self.insts.len()
+    }
+
+    pub fn get_inst(&self, inst_id: InstId) -> Option<&dyn Inst> {
+        self.insts.get(inst_id).map(|inst| inst.as_ref())
+    }
+
     pub fn inst(&self, inst_id: InstId) -> &dyn Inst {
         self.insts[inst_id].as_ref()
     }
 
     pub fn inst_mut(&mut self, inst_id: InstId) -> &mut dyn Inst {
         self.insts[inst_id].as_mut()
+    }
+
+    pub fn get_inst_mut(&mut self, inst_id: InstId) -> Option<&mut dyn Inst> {
+        self.insts.get_mut(inst_id).map(|inst| inst.as_mut())
+    }
+
+    pub fn get_value(&self, value_id: ValueId) -> Option<&Value> {
+        self.values.get(value_id)
     }
 
     pub fn value(&self, value_id: ValueId) -> &Value {
@@ -180,8 +213,16 @@ impl DataFlowGraph {
         self.users[value_id].len()
     }
 
+    pub fn users_set(&self, value_id: ValueId) -> Option<&BTreeSet<InstId>> {
+        self.users.get(value_id)
+    }
+
     pub fn inst_result(&self, inst_id: InstId) -> Option<ValueId> {
         self.inst_results[inst_id].expand()
+    }
+
+    pub fn try_inst_result(&self, inst_id: InstId) -> Option<Option<ValueId>> {
+        self.inst_results.get(inst_id).map(|result| result.expand())
     }
 
     pub fn branch_info(&self, inst_id: InstId) -> Option<&dyn BranchInfo> {
@@ -268,6 +309,34 @@ impl DataFlowGraph {
             });
         }
         self.users[alias].append(&mut users);
+    }
+
+    pub fn num_blocks(&self) -> usize {
+        self.blocks.len()
+    }
+
+    pub fn num_values(&self) -> usize {
+        self.values.len()
+    }
+
+    pub fn num_insts(&self) -> usize {
+        self.insts.len()
+    }
+
+    pub fn rebuild_value_caches(&mut self) {
+        self.immediates.clear();
+        self.globals.clear();
+        for (value_id, value) in self.values.iter() {
+            match value {
+                Value::Immediate { imm, .. } => {
+                    self.immediates.insert(*imm, value_id);
+                }
+                Value::Global { gv, .. } => {
+                    self.globals.insert(*gv, value_id);
+                }
+                _ => {}
+            }
+        }
     }
 
     pub fn side_effect(&self, inst_id: InstId) -> SideEffect {
