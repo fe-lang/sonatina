@@ -1,0 +1,9 @@
+target = "evm-ethereum-london"
+
+type @foo = { i32 };
+type @bar = { i64 };
+
+func public %compound_ref_types(v0.*@foo, v1.*@bar) -> *@bar {
+    block0:
+        return v1;
+}

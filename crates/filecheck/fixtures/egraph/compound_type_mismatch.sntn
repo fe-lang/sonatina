@@ -1,0 +1,38 @@
+target = "evm-ethereum-london"
+
+type @a = { i32 };
+type @b = { i64 };
+
+# Test: Store-to-load forwarding must not fire when compound pointee types differ.
+# If compound refs collapse to one egglog type, this can incorrectly alias v3 -> v1.
+# sameln: func public %no_forward_mismatched_compound_types() -> *@b {
+# nextln:     block0:
+# nextln:         v0.**i256 = alloca *i256;
+# nextln:         v1.*@a = alloca @a;
+# nextln:         mstore v0 v1 *@a;
+# nextln:         v3.*@b = mload v0 *@b;
+# nextln:         return v3;
+func public %no_forward_mismatched_compound_types() -> *@b {
+    block0:
+        v0.**i256 = alloca *i256;
+        v1.*@a = alloca @a;
+        mstore v0 v1 *@a;
+        v3.*@b = mload v0 *@b;
+        return v3;
+}
+
+# Test: Redundant-load elimination must not unify loads with different compound types.
+# If compound refs collapse, this can incorrectly alias v2 -> v1.
+# sameln: func public %no_cse_mismatched_compound_load_types() -> *@b {
+# nextln:     block0:
+# nextln:         v0.**i256 = alloca *i256;
+# nextln:         v1.*@a = mload v0 *@a;
+# nextln:         v2.*@b = mload v0 *@b;
+# nextln:         return v2;
+func public %no_cse_mismatched_compound_load_types() -> *@b {
+    block0:
+        v0.**i256 = alloca *i256;
+        v1.*@a = mload v0 *@a;
+        v2.*@b = mload v0 *@b;
+        return v2;
+}
