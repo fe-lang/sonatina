@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 use sonatina_ir::{
     Function, GlobalVariableRef, I256, Inst, InstId, InstSetBase, Type, U256, Value, ValueId,
     inst::{arith::*, cast::*, cmp::*, data::Gep, evm::*, logic::*},
-    types::CompoundTypeRef,
+    types::{CompoundType, CompoundTypeRef},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -843,6 +843,11 @@ fn parse_i64(sexp: &Sexp) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sonatina_ir::{
+        builder::test_util::*,
+        inst::{control_flow::Return, data::Alloca},
+        isa::Isa,
+    };
 
     fn const_i32(value: i64) -> EggTerm {
         EggTerm::Const(value.into(), Type::I32)
@@ -900,6 +905,48 @@ mod tests {
             canonical,
             EggTerm::Sub(Box::new(const_i32(20)), Box::new(const_i32(10)))
         );
+    }
+
+    #[test]
+    fn elaborate_nested_gep_derives_type_from_indices() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let array_ty = builder.declare_array_type(Type::I32, 4);
+        let ptr_array_ty = builder.ptr_type(array_ty);
+        let base_ptr = builder.insert_inst_with(|| Alloca::new(is, array_ty), ptr_array_ty);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.seal_all();
+
+        let insert_before = builder
+            .func
+            .layout
+            .last_inst_of(block)
+            .expect("return should be inserted");
+
+        let first_gep = EggTerm::Gep {
+            base: Box::new(EggTerm::Value(base_ptr)),
+            indices: vec![
+                EggTerm::Const(0.into(), Type::I32),
+                EggTerm::Const(2.into(), Type::I32),
+            ],
+        };
+        let nested_gep = EggTerm::Gep {
+            base: Box::new(first_gep),
+            indices: vec![EggTerm::Const(1.into(), Type::I32)],
+        };
+
+        let mut elaborator = Elaborator::new(&mut builder.func, insert_before);
+        let result = elaborator
+            .elaborate_value(&nested_gep)
+            .expect("nested gep should elaborate");
+        let result_ty = elaborator.func.dfg.value_ty(result);
+
+        assert_eq!(result_ty, Type::I32.to_ptr(&elaborator.func.dfg.ctx));
     }
 }
 
@@ -1238,19 +1285,49 @@ impl<'a> Elaborator<'a> {
     }
 
     fn gep(&mut self, base: &EggTerm, indices: &[EggTerm]) -> Option<ValueId> {
-        let base_val = self.elaborate_value(base)?;
-        let inst = self.gep_inst(base, indices)?;
-        let ty = self.func.dfg.value_ty(base_val);
+        let values = self.gep_values(base, indices)?;
+        let mut current_ty = self.func.dfg.value_ty(values[0]);
+        if !current_ty.is_pointer(&self.func.dfg.ctx) {
+            return None;
+        }
+
+        for &index in &values[1..] {
+            let compound = current_ty.resolve_compound(&self.func.dfg.ctx)?;
+            current_ty = match compound {
+                CompoundType::Ptr(elem) | CompoundType::Array { elem, .. } => elem,
+                CompoundType::Struct(data) => {
+                    let field_idx = self.func.dfg.value_imm(index)?.as_usize();
+                    *data.fields.get(field_idx)?
+                }
+                CompoundType::Func { .. } => return None,
+            };
+        }
+
+        let ty = if values.len() == 1 {
+            current_ty
+        } else {
+            current_ty.to_ptr(&self.func.dfg.ctx)
+        };
+        let inst = Box::new(Gep::new(self.func.inst_set().has_gep()?, values));
         Some(self.make_inst_value_dyn(inst, ty))
     }
 
     fn gep_inst(&mut self, base: &EggTerm, indices: &[EggTerm]) -> Option<Box<dyn Inst>> {
+        let values = self.gep_values(base, indices)?;
+        Some(Box::new(Gep::new(self.func.inst_set().has_gep()?, values)))
+    }
+
+    fn gep_values(
+        &mut self,
+        base: &EggTerm,
+        indices: &[EggTerm],
+    ) -> Option<SmallVec<[ValueId; 8]>> {
         let mut values: SmallVec<[ValueId; 8]> = SmallVec::with_capacity(indices.len() + 1);
         values.push(self.elaborate_value(base)?);
         for index in indices {
             values.push(self.elaborate_value(index)?);
         }
-        Some(Box::new(Gep::new(self.func.inst_set().has_gep()?, values)))
+        Some(values)
     }
 
     fn evm_mod(
