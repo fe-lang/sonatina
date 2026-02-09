@@ -24,7 +24,7 @@ impl<'a> ModuleWriter<'a> {
 
     pub fn write(&mut self, w: &mut impl io::Write) -> io::Result<()> {
         // Write target.
-        writeln!(w, "target = {}", self.module.ctx.triple)?;
+        writeln!(w, "target = \"{}\"", self.module.ctx.triple)?;
         writeln!(w)?;
 
         // Write struct types defined in the module.
