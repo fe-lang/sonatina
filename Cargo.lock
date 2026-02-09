@@ -2647,9 +2647,14 @@ name = "sonatina-verifier"
 version = "0.0.3-alpha"
 dependencies = [
  "cranelift-entity",
+ "rayon",
  "rustc-hash",
+ "serde",
+ "serde_json",
  "smallvec",
  "sonatina-ir",
+ "sonatina-parser",
+ "sonatina-triple",
 ]
 
 [[package]]
