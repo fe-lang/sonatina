@@ -1,8 +1,8 @@
 ---
 source: crates/ir/tests/linker.rs
-input_file: tests/linker/fixtures/link_ok/module.snap
+input_file: test_files/linker/link_ok/module.snap
 ---
-target = evm-ethereum-cancun
+target = "evm-ethereum-cancun"
 
 type @foo = {i8, i16, *i64};
 type @bar = {i8, [i8; 31]};

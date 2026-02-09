@@ -2,7 +2,7 @@
 source: crates/parser/tests/syntax.rs
 input_file: test_files/syntax/module/global_variable.sntn
 ---
-target = evm-ethereum-cancun
+target = "evm-ethereum-cancun"
 
 type @foo = {i8, i16, *i64};
 
