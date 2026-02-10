@@ -13,8 +13,9 @@ use sonatina_ir::{
         arith, cast, cmp,
         control_flow::{self, BranchInfo},
         data::{self, SymbolRef},
-        logic,
+        evm, logic,
     },
+    isa::TypeLayoutError,
     module::{FuncRef, ModuleCtx},
     object::{Directive, SectionRef},
     types::{CompoundType, CompoundTypeRef},
@@ -178,8 +179,23 @@ fn verify_module_invariants(
                 }
             }
 
+            if !is_type_valid(&module.ctx, ty) {
+                report.push(
+                    Diagnostic::error(
+                        DiagnosticCode::InvalidTypeRef,
+                        "type is not representable (contains a by-value recursive cycle)",
+                        location.clone(),
+                    ),
+                    cfg.max_diagnostics,
+                );
+                continue;
+            }
+
             let size_res = catch_unwind(AssertUnwindSafe(|| module.ctx.size_of(ty)));
-            if !matches!(size_res, Ok(Ok(_))) {
+            if !matches!(
+                size_res,
+                Ok(Ok(_)) | Ok(Err(TypeLayoutError::UnrepresentableType(_)))
+            ) {
                 report.push(
                     Diagnostic::error(
                         DiagnosticCode::InvalidTypeRef,
@@ -191,7 +207,10 @@ fn verify_module_invariants(
             }
 
             let align_res = catch_unwind(AssertUnwindSafe(|| module.ctx.align_of(ty)));
-            if !matches!(align_res, Ok(Ok(_))) {
+            if !matches!(
+                align_res,
+                Ok(Ok(_)) | Ok(Err(TypeLayoutError::UnrepresentableType(_)))
+            ) {
                 report.push(
                     Diagnostic::error(
                         DiagnosticCode::InvalidTypeRef,
@@ -236,7 +255,7 @@ fn verify_module_invariants(
             if gv_data.linkage.is_external() && gv_data.initializer.is_some() {
                 report.push(
                     Diagnostic::error(
-                        DiagnosticCode::ValueTypeMismatch,
+                        DiagnosticCode::StructuralInvariantViolation,
                         "external global must not define an initializer",
                         Location::Global(gv_ref),
                     ),
@@ -264,7 +283,7 @@ fn verify_module_invariants(
             if !section_names.insert(section_name.clone()) {
                 report.push(
                     Diagnostic::error(
-                        DiagnosticCode::ValueTypeMismatch,
+                        DiagnosticCode::StructuralInvariantViolation,
                         "object contains duplicate section name",
                         Location::Object {
                             name: object_name.clone(),
@@ -334,7 +353,7 @@ fn verify_module_invariants(
                         if !local_embed_symbols.insert(symbol.clone()) {
                             report.push(
                                 Diagnostic::error(
-                                    DiagnosticCode::ValueTypeMismatch,
+                                    DiagnosticCode::StructuralInvariantViolation,
                                     "duplicate embed symbol in section",
                                     Location::Object {
                                         name: object_name.clone(),
@@ -411,7 +430,7 @@ fn verify_module_invariants(
             if entry_count == 0 {
                 report.push(
                     Diagnostic::error(
-                        DiagnosticCode::ValueTypeMismatch,
+                        DiagnosticCode::StructuralInvariantViolation,
                         "section is missing an entry directive",
                         Location::Object {
                             name: object_name.clone(),
@@ -424,7 +443,7 @@ fn verify_module_invariants(
             if entry_count > 1 {
                 report.push(
                     Diagnostic::error(
-                        DiagnosticCode::ValueTypeMismatch,
+                        DiagnosticCode::StructuralInvariantViolation,
                         "section has multiple entry directives",
                         Location::Object {
                             name: object_name.clone(),
@@ -1435,19 +1454,6 @@ impl<'a> FuncVerifier<'a> {
             }
 
             let branch = <&dyn BranchInfo as InstDowncast>::downcast(self.ctx.inst_set, last_data);
-            if branch.is_none() && !last_data.is_terminator() {
-                self.emit(Diagnostic::error(
-                    DiagnosticCode::NonTerminatorAtEnd,
-                    "last instruction is not a terminator",
-                    Location::Inst {
-                        func: self.func_ref,
-                        block: Some(block),
-                        inst: last_inst,
-                    },
-                ));
-                continue;
-            }
-
             if let Some(branch) = branch {
                 let dests = branch.dests();
                 if branch.num_dests() != dests.len() {
@@ -2341,36 +2347,17 @@ impl<'a> FuncVerifier<'a> {
             return;
         }
 
-        if inst.as_text().starts_with("evm_") {
-            self.verify_evm_inst(inst_id, inst);
-        }
+        self.verify_evm_inst(inst_id, inst);
     }
 
     fn verify_evm_inst(&mut self, inst_id: InstId, inst: &dyn Inst) {
+        if !self.is_evm_inst(inst) {
+            return;
+        }
+
         let location = self.inst_location(inst_id);
         let operands = inst.collect_values();
-
-        let no_result = matches!(
-            inst.as_text(),
-            "evm_stop"
-                | "evm_invalid"
-                | "evm_calldata_copy"
-                | "evm_code_copy"
-                | "evm_ext_code_copy"
-                | "evm_return_data_copy"
-                | "evm_mstore8"
-                | "evm_sstore"
-                | "evm_tstore"
-                | "evm_mcopy"
-                | "evm_log0"
-                | "evm_log1"
-                | "evm_log2"
-                | "evm_log3"
-                | "evm_log4"
-                | "evm_return"
-                | "evm_revert"
-                | "evm_self_destruct"
-        );
+        let no_result = self.evm_inst_has_no_result(inst);
 
         if no_result {
             self.expect_no_result(inst_id, location.clone());
@@ -2398,52 +2385,48 @@ impl<'a> FuncVerifier<'a> {
             }
         }
 
-        match inst.as_text() {
-            "evm_udiv" | "evm_sdiv" | "evm_umod" | "evm_smod" | "evm_exp" | "evm_byte" => {
-                self.verify_evm_same_integral(inst_id, &operands, location.clone(), 2)
-            }
-            "evm_add_mod" | "evm_mul_mod" => {
-                self.verify_evm_same_integral(inst_id, &operands, location.clone(), 3)
-            }
-            "evm_clz" => self.verify_evm_same_integral(inst_id, &operands, location.clone(), 1),
-            "evm_malloc" => {
-                if operands.len() != 1 {
-                    self.emit(Diagnostic::error(
-                        DiagnosticCode::InstOperandTypeMismatch,
-                        "evm_malloc expects one size operand",
-                        location.clone(),
-                    ));
-                }
+        if let Some(arity) = self.evm_integral_arity(inst) {
+            self.verify_evm_same_integral(inst_id, &operands, location.clone(), arity);
+            return;
+        }
 
-                if let Some(result_ty) = self.inst_result_ty(inst_id)
-                    && !is_pointer_ty(self.ctx, result_ty)
-                {
-                    self.emit(
-                        Diagnostic::error(
-                            DiagnosticCode::InstResultTypeMismatch,
-                            "evm_malloc result must be a pointer type",
-                            location,
-                        )
-                        .with_note(format!("found result type {:?}", result_ty)),
-                    );
-                }
+        if self.is_evm_malloc_inst(inst) {
+            if operands.len() != 1 {
+                self.emit(Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    "evm_malloc expects one size operand",
+                    location.clone(),
+                ));
             }
-            _ => {
-                if !no_result
-                    && let Some(result_ty) = self.inst_result_ty(inst_id)
-                    && !result_ty.is_integral()
-                    && !is_pointer_ty(self.ctx, result_ty)
-                {
-                    self.emit(
-                        Diagnostic::error(
-                            DiagnosticCode::InstResultTypeMismatch,
-                            "EVM instruction result must be integral or pointer",
-                            location,
-                        )
-                        .with_note(format!("found result type {:?}", result_ty)),
-                    );
-                }
+
+            if let Some(result_ty) = self.inst_result_ty(inst_id)
+                && !is_pointer_ty(self.ctx, result_ty)
+            {
+                self.emit(
+                    Diagnostic::error(
+                        DiagnosticCode::InstResultTypeMismatch,
+                        "evm_malloc result must be a pointer type",
+                        location,
+                    )
+                    .with_note(format!("found result type {:?}", result_ty)),
+                );
             }
+            return;
+        }
+
+        if !no_result
+            && let Some(result_ty) = self.inst_result_ty(inst_id)
+            && !result_ty.is_integral()
+            && !is_pointer_ty(self.ctx, result_ty)
+        {
+            self.emit(
+                Diagnostic::error(
+                    DiagnosticCode::InstResultTypeMismatch,
+                    "EVM instruction result must be integral or pointer",
+                    location,
+                )
+                .with_note(format!("found result type {:?}", result_ty)),
+            );
         }
     }
 
@@ -2516,6 +2499,141 @@ impl<'a> FuncVerifier<'a> {
                 .with_note(format!("expected {:?}, found {:?}", expected, result_ty)),
             );
         }
+    }
+
+    fn is_evm_inst(&self, inst: &dyn Inst) -> bool {
+        macro_rules! is_one_of {
+            ($($ty:ty),+ $(,)?) => {
+                false $(|| <&$ty as InstDowncast>::downcast(self.ctx.inst_set, inst).is_some())+
+            };
+        }
+
+        is_one_of!(
+            evm::EvmUdiv,
+            evm::EvmSdiv,
+            evm::EvmUmod,
+            evm::EvmSmod,
+            evm::EvmStop,
+            evm::EvmInvalid,
+            evm::EvmAddMod,
+            evm::EvmMulMod,
+            evm::EvmExp,
+            evm::EvmByte,
+            evm::EvmClz,
+            evm::EvmKeccak256,
+            evm::EvmAddress,
+            evm::EvmBalance,
+            evm::EvmOrigin,
+            evm::EvmCaller,
+            evm::EvmCallValue,
+            evm::EvmCalldataLoad,
+            evm::EvmCalldataCopy,
+            evm::EvmCalldataSize,
+            evm::EvmCodeSize,
+            evm::EvmCodeCopy,
+            evm::EvmGasPrice,
+            evm::EvmExtCodeSize,
+            evm::EvmExtCodeCopy,
+            evm::EvmReturnDataSize,
+            evm::EvmReturnDataCopy,
+            evm::EvmExtCodeHash,
+            evm::EvmBlockHash,
+            evm::EvmCoinBase,
+            evm::EvmTimestamp,
+            evm::EvmNumber,
+            evm::EvmPrevRandao,
+            evm::EvmGasLimit,
+            evm::EvmChainId,
+            evm::EvmSelfBalance,
+            evm::EvmBaseFee,
+            evm::EvmBlobHash,
+            evm::EvmBlobBaseFee,
+            evm::EvmMstore8,
+            evm::EvmSload,
+            evm::EvmSstore,
+            evm::EvmMsize,
+            evm::EvmGas,
+            evm::EvmTload,
+            evm::EvmTstore,
+            evm::EvmMcopy,
+            evm::EvmLog0,
+            evm::EvmLog1,
+            evm::EvmLog2,
+            evm::EvmLog3,
+            evm::EvmLog4,
+            evm::EvmCreate,
+            evm::EvmCall,
+            evm::EvmCallCode,
+            evm::EvmReturn,
+            evm::EvmDelegateCall,
+            evm::EvmCreate2,
+            evm::EvmStaticCall,
+            evm::EvmRevert,
+            evm::EvmSelfDestruct,
+            evm::EvmMalloc,
+        )
+    }
+
+    fn evm_inst_has_no_result(&self, inst: &dyn Inst) -> bool {
+        macro_rules! is_one_of {
+            ($($ty:ty),+ $(,)?) => {
+                false $(|| <&$ty as InstDowncast>::downcast(self.ctx.inst_set, inst).is_some())+
+            };
+        }
+
+        is_one_of!(
+            evm::EvmStop,
+            evm::EvmInvalid,
+            evm::EvmCalldataCopy,
+            evm::EvmCodeCopy,
+            evm::EvmExtCodeCopy,
+            evm::EvmReturnDataCopy,
+            evm::EvmMstore8,
+            evm::EvmSstore,
+            evm::EvmTstore,
+            evm::EvmMcopy,
+            evm::EvmLog0,
+            evm::EvmLog1,
+            evm::EvmLog2,
+            evm::EvmLog3,
+            evm::EvmLog4,
+            evm::EvmReturn,
+            evm::EvmRevert,
+            evm::EvmSelfDestruct,
+        )
+    }
+
+    fn evm_integral_arity(&self, inst: &dyn Inst) -> Option<usize> {
+        macro_rules! is_one_of {
+            ($($ty:ty),+ $(,)?) => {
+                false $(|| <&$ty as InstDowncast>::downcast(self.ctx.inst_set, inst).is_some())+
+            };
+        }
+
+        if is_one_of!(
+            evm::EvmUdiv,
+            evm::EvmSdiv,
+            evm::EvmUmod,
+            evm::EvmSmod,
+            evm::EvmExp,
+            evm::EvmByte,
+        ) {
+            return Some(2);
+        }
+
+        if is_one_of!(evm::EvmAddMod, evm::EvmMulMod,) {
+            return Some(3);
+        }
+
+        if is_one_of!(evm::EvmClz,) {
+            return Some(1);
+        }
+
+        None
+    }
+
+    fn is_evm_malloc_inst(&self, inst: &dyn Inst) -> bool {
+        <&evm::EvmMalloc as InstDowncast>::downcast(self.ctx.inst_set, inst).is_some()
     }
 
     fn verify_unary_integral_same(&mut self, inst_id: InstId, arg: ValueId, opname: &str) {
@@ -2591,6 +2709,16 @@ impl<'a> FuncVerifier<'a> {
                 Diagnostic::error(
                     DiagnosticCode::InstOperandTypeMismatch,
                     format!("{opname} operands must be integral"),
+                    location.clone(),
+                )
+                .with_note(format!("bits {:?}, value {:?}", bits_ty, value_ty)),
+            );
+        }
+        if bits_ty != value_ty {
+            self.emit(
+                Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    format!("{opname} operands must have identical types"),
                     location.clone(),
                 )
                 .with_note(format!("bits {:?}, value {:?}", bits_ty, value_ty)),
@@ -2691,7 +2819,7 @@ impl<'a> FuncVerifier<'a> {
         let Some(base_ty) = self.value_ty(base) else {
             return None;
         };
-        let Some(mut current_ty) = self.pointee_ty(base_ty) else {
+        let Some(_) = self.pointee_ty(base_ty) else {
             self.emit(
                 Diagnostic::error(
                     DiagnosticCode::GepTypeComputationFailed,
@@ -2702,6 +2830,7 @@ impl<'a> FuncVerifier<'a> {
             );
             return None;
         };
+        let mut current_ty = base_ty;
 
         for &idx_value in values.iter().skip(1) {
             let Some(idx_ty) = self.value_ty(idx_value) else {
@@ -2747,12 +2876,12 @@ impl<'a> FuncVerifier<'a> {
                 CompoundType::Ptr(elem) => elem,
                 CompoundType::Array { elem, .. } => elem,
                 CompoundType::Struct(s) => {
-                    let Some(index) = self.value_imm(idx_value).map(Immediate::as_usize) else {
-                        self.emit(Diagnostic::error(
-                            DiagnosticCode::GepTypeComputationFailed,
-                            "struct gep indices must be immediate values",
-                            location.clone(),
-                        ));
+                    let Some(index) = self.imm_to_nonneg_usize(
+                        idx_value,
+                        DiagnosticCode::GepTypeComputationFailed,
+                        "struct gep indices must be non-negative immediate values",
+                        location.clone(),
+                    ) else {
                         return None;
                     };
                     let Some(field_ty) = s.fields.get(index).copied() else {
@@ -2783,6 +2912,29 @@ impl<'a> FuncVerifier<'a> {
         Some(current_ty)
     }
 
+    fn imm_to_nonneg_usize(
+        &mut self,
+        value: ValueId,
+        code: DiagnosticCode,
+        message: &str,
+        location: Location,
+    ) -> Option<usize> {
+        let Some(imm) = self.value_imm(value) else {
+            self.emit(Diagnostic::error(code, message, location));
+            return None;
+        };
+
+        if imm.is_negative() {
+            self.emit(
+                Diagnostic::error(code, message, location)
+                    .with_note(format!("index immediate {:?} is negative", imm)),
+            );
+            return None;
+        }
+
+        Some(imm.as_usize())
+    }
+
     fn aggregate_field_ty(
         &mut self,
         dest_ty: Type,
@@ -2811,17 +2963,28 @@ impl<'a> FuncVerifier<'a> {
             return None;
         };
 
-        let idx_imm = self.value_imm(idx).map(Immediate::as_usize);
+        let code = if insert_mode {
+            DiagnosticCode::InsertIndexOutOfBounds
+        } else {
+            DiagnosticCode::ExtractIndexOutOfBounds
+        };
+        let idx_imm = self.value_imm(idx);
+        if let Some(imm) = idx_imm
+            && imm.is_negative()
+        {
+            self.emit(
+                Diagnostic::error(code, "aggregate index must be non-negative", location)
+                    .with_note(format!("index immediate {:?}", imm)),
+            );
+            return None;
+        }
+        let idx_imm = idx_imm.map(Immediate::as_usize);
+
         match cmpd {
             CompoundType::Array { elem, len } => {
                 if let Some(index) = idx_imm
                     && index >= len
                 {
-                    let code = if insert_mode {
-                        DiagnosticCode::InsertIndexOutOfBounds
-                    } else {
-                        DiagnosticCode::ExtractIndexOutOfBounds
-                    };
                     self.emit(
                         Diagnostic::error(code, "aggregate index is out of bounds", location)
                             .with_note(format!("index {index}, length {len}")),
@@ -2833,7 +2996,7 @@ impl<'a> FuncVerifier<'a> {
             CompoundType::Struct(s) => {
                 let Some(index) = idx_imm else {
                     self.emit(Diagnostic::error(
-                        DiagnosticCode::GepTypeComputationFailed,
+                        code,
                         "struct aggregate index must be an immediate value",
                         location,
                     ));
@@ -2841,11 +3004,6 @@ impl<'a> FuncVerifier<'a> {
                 };
 
                 let Some(field_ty) = s.fields.get(index).copied() else {
-                    let code = if insert_mode {
-                        DiagnosticCode::InsertIndexOutOfBounds
-                    } else {
-                        DiagnosticCode::ExtractIndexOutOfBounds
-                    };
                     self.emit(
                         Diagnostic::error(code, "aggregate index is out of bounds", location)
                             .with_note(format!("index {index}, fields {}", s.fields.len())),
@@ -3233,8 +3391,22 @@ impl<'a> FuncVerifier<'a> {
         }
 
         if self.cfg.should_check_value_caches() {
-            for (imm, value_id) in &self.func.dfg.immediates {
-                let Some(value_data) = self.func.dfg.get_value(*value_id) else {
+            let mut immediate_entries: Vec<_> = self
+                .func
+                .dfg
+                .immediates
+                .iter()
+                .map(|(imm, value_id)| (*imm, *value_id))
+                .collect();
+            immediate_entries.sort_by(|(lhs_imm, lhs_value), (rhs_imm, rhs_value)| {
+                lhs_value
+                    .as_u32()
+                    .cmp(&rhs_value.as_u32())
+                    .then_with(|| format!("{lhs_imm:?}").cmp(&format!("{rhs_imm:?}")))
+            });
+
+            for (imm, value_id) in immediate_entries {
+                let Some(value_data) = self.func.dfg.get_value(value_id) else {
                     self.emit(
                         Diagnostic::error(
                             DiagnosticCode::ImmediateCacheMismatch,
@@ -3251,7 +3423,7 @@ impl<'a> FuncVerifier<'a> {
                 };
 
                 match value_data {
-                    Value::Immediate { imm: actual, ty } if actual == imm && *ty == imm.ty() => {}
+                    Value::Immediate { imm: actual, ty } if *actual == imm && *ty == imm.ty() => {}
                     Value::Immediate { imm: actual, ty } => {
                         self.emit(
                             Diagnostic::error(
@@ -3259,7 +3431,7 @@ impl<'a> FuncVerifier<'a> {
                                 "immediate cache entry does not match value payload",
                                 Location::Value {
                                     func: self.func_ref,
-                                    value: *value_id,
+                                    value: value_id,
                                 },
                             )
                             .with_note(format!(
@@ -3275,7 +3447,7 @@ impl<'a> FuncVerifier<'a> {
                                 "immediate cache entry points to non-immediate value",
                                 Location::Value {
                                     func: self.func_ref,
-                                    value: *value_id,
+                                    value: value_id,
                                 },
                             )
                             .with_note(format!("cache immediate {:?}", imm)),
@@ -3302,8 +3474,22 @@ impl<'a> FuncVerifier<'a> {
                 }
             }
 
-            for (gv, value_id) in &self.func.dfg.globals {
-                let Some(value_data) = self.func.dfg.get_value(*value_id) else {
+            let mut global_entries: Vec<_> = self
+                .func
+                .dfg
+                .globals
+                .iter()
+                .map(|(gv, value_id)| (*gv, *value_id))
+                .collect();
+            global_entries.sort_by(|(lhs_gv, lhs_value), (rhs_gv, rhs_value)| {
+                lhs_gv
+                    .as_u32()
+                    .cmp(&rhs_gv.as_u32())
+                    .then_with(|| lhs_value.as_u32().cmp(&rhs_value.as_u32()))
+            });
+
+            for (gv, value_id) in global_entries {
+                let Some(value_data) = self.func.dfg.get_value(value_id) else {
                     self.emit(
                         Diagnostic::error(
                             DiagnosticCode::GlobalCacheMismatch,
@@ -3319,14 +3505,14 @@ impl<'a> FuncVerifier<'a> {
                     continue;
                 };
 
-                if !matches!(value_data, Value::Global { gv: actual, .. } if actual == gv) {
+                if !matches!(value_data, Value::Global { gv: actual, .. } if *actual == gv) {
                     self.emit(
                         Diagnostic::error(
                             DiagnosticCode::GlobalCacheMismatch,
                             "global cache entry does not match global value payload",
                             Location::Value {
                                 func: self.func_ref,
-                                value: *value_id,
+                                value: value_id,
                             },
                         )
                         .with_note(format!("cache global {}", gv.as_u32())),
@@ -3459,6 +3645,10 @@ impl<'a> FuncVerifier<'a> {
     }
 
     fn type_size(&self, ty: Type) -> Option<usize> {
+        if !self.is_type_valid(ty) {
+            return None;
+        }
+
         let result = catch_unwind(AssertUnwindSafe(|| self.ctx.size_of(ty)));
         match result {
             Ok(Ok(size)) => Some(size),
@@ -3566,29 +3756,87 @@ fn iter_nested_types(cmpd: &CompoundType) -> Vec<Type> {
 }
 
 fn is_type_valid(ctx: &ModuleCtx, ty: Type) -> bool {
-    fn recurse(ctx: &ModuleCtx, ty: Type, seen: &mut FxHashSet<CompoundTypeRef>) -> bool {
-        let Type::Compound(cmpd_ref) = ty else {
-            return true;
-        };
+    let Type::Compound(root) = ty else {
+        return true;
+    };
 
-        if !seen.insert(cmpd_ref) {
-            return true;
+    let mut reachable = FxHashSet::default();
+    let mut stack = vec![root];
+    let mut by_value_edges: FxHashMap<CompoundTypeRef, Vec<CompoundTypeRef>> = FxHashMap::default();
+
+    while let Some(cmpd_ref) = stack.pop() {
+        if !reachable.insert(cmpd_ref) {
+            continue;
         }
 
-        let valid = ctx.with_ty_store(|store| {
-            let Some(cmpd) = store.get_compound(cmpd_ref) else {
-                return false;
-            };
-            iter_nested_types(cmpd)
-                .into_iter()
-                .all(|nested| recurse(ctx, nested, seen))
-        });
+        let Some(cmpd) = ctx.with_ty_store(|store| store.get_compound(cmpd_ref).cloned()) else {
+            return false;
+        };
 
-        seen.remove(&cmpd_ref);
-        valid
+        let mut push_nested = |nested: Type, by_value: bool| {
+            let Type::Compound(nested_ref) = nested else {
+                return;
+            };
+            stack.push(nested_ref);
+            if by_value {
+                by_value_edges.entry(cmpd_ref).or_default().push(nested_ref);
+            }
+        };
+
+        match cmpd {
+            CompoundType::Array { elem, .. } => push_nested(elem, true),
+            CompoundType::Ptr(elem) => push_nested(elem, false),
+            CompoundType::Struct(data) => {
+                for field in data.fields {
+                    push_nested(field, true);
+                }
+            }
+            CompoundType::Func { args, ret_ty } => {
+                for arg in args {
+                    push_nested(arg, true);
+                }
+                push_nested(ret_ty, true);
+            }
+        }
     }
 
-    recurse(ctx, ty, &mut FxHashSet::default())
+    #[derive(Clone, Copy)]
+    enum VisitState {
+        Visiting,
+        Done,
+    }
+
+    let mut states: FxHashMap<CompoundTypeRef, VisitState> = FxHashMap::default();
+    for start in reachable.iter().copied() {
+        if states.contains_key(&start) {
+            continue;
+        }
+
+        states.insert(start, VisitState::Visiting);
+        let mut dfs_stack = vec![(start, 0usize)];
+        while let Some((node, next_index)) = dfs_stack.last_mut() {
+            let successors = by_value_edges.get(node).map(Vec::as_slice).unwrap_or(&[]);
+            if *next_index >= successors.len() {
+                states.insert(*node, VisitState::Done);
+                dfs_stack.pop();
+                continue;
+            }
+
+            let successor = successors[*next_index];
+            *next_index += 1;
+
+            match states.get(&successor) {
+                Some(VisitState::Visiting) => return false,
+                Some(VisitState::Done) => {}
+                None => {
+                    states.insert(successor, VisitState::Visiting);
+                    dfs_stack.push((successor, 0));
+                }
+            }
+        }
+    }
+
+    true
 }
 
 fn is_pointer_ty(ctx: &ModuleCtx, ty: Type) -> bool {

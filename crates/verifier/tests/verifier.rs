@@ -1,4 +1,4 @@
-use sonatina_ir::{InstDowncastMut, inst::arith::Add};
+use sonatina_ir::{InstDowncastMut, Type, ValueId, inst::arith::Add};
 use sonatina_parser::parse_module;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
@@ -7,6 +7,28 @@ fn has_code(report: &sonatina_verifier::VerificationReport, code: &str) -> bool 
         .diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code.as_str() == code)
+}
+
+fn diagnostic_fingerprint(report: &sonatina_verifier::VerificationReport) -> Vec<String> {
+    report
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let notes = diagnostic
+                .notes
+                .iter()
+                .map(|note| note.message.as_str())
+                .collect::<Vec<_>>()
+                .join("|");
+            format!(
+                "{}|{}|{}|{}",
+                diagnostic.code.as_str(),
+                diagnostic.primary,
+                diagnostic.message,
+                notes
+            )
+        })
+        .collect()
 }
 
 #[test]
@@ -197,4 +219,253 @@ func public %missing_term() -> unit {
         "expected diagnostics with max=0"
     );
     assert!(has_code(&report, "IR0201"), "expected IR0201, got {report}");
+}
+
+#[test]
+fn interpreter_gep_fixture_verifies() {
+    let src = include_str!("../../interpreter/test_files/gep.sntn");
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn gep_type_computation_matches_codegen_semantics() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+type @s = {i32, i64};
+
+func public %ptr_scalar(v0.*i32) -> *i32 {
+    block0:
+        v1.*i32 = gep v0 3.i32;
+        return v1;
+}
+
+func public %ptr_struct(v0.*@s) -> *i64 {
+    block0:
+        v1.*i64 = gep v0 0.i32 1.i32;
+        return v1;
+}
+
+func public %ptr_array(v0.*[i16; 4]) -> *i16 {
+    block0:
+        v1.*i16 = gep v0 0.i32 2.i32;
+        return v1;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn gep_missing_leading_zero_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+type @s = {i32, i64};
+
+func public %bad_gep(v0.*@s) -> *i64 {
+    block0:
+        v1.*i64 = gep v0 1.i32;
+        return v1;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}
+
+#[test]
+fn negative_aggregate_indices_are_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+type @s = {i32, i64};
+
+func public %bad_gep(v0.*@s) -> unit {
+    block0:
+        v1.*i64 = gep v0 0.i32 -1.i32;
+        return;
+}
+
+func public %bad_insert() -> unit {
+    block0:
+        v0.@s = insert_value undef.@s -1.i32 1.i32;
+        return;
+}
+
+func public %bad_extract() -> unit {
+    block0:
+        v0.i32 = extract_value undef.@s -1.i32;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0606"), "expected IR0606, got {report}");
+    assert!(has_code(&report, "IR0608"), "expected IR0608, got {report}");
+    assert!(has_code(&report, "IR0607"), "expected IR0607, got {report}");
+}
+
+#[test]
+fn function_pointer_types_and_get_function_ptr_verify() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %callee(v0.i32) -> i32 {
+    block0:
+        return v0;
+}
+
+func public %caller(v0.*(i32, i32) -> i32) -> unit {
+    block0:
+        v1.*(i32) -> i32 = get_function_ptr %callee;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn shift_operand_width_mismatch_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_shift() -> i32 {
+    block0:
+        v0.i32 = shl 1.i8 1.i32;
+        return v0;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0600"), "expected IR0600, got {report}");
+}
+
+#[test]
+fn by_value_recursive_types_are_rejected_without_layout_recursion() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+type @node = {i32};
+
+func public %ok() -> unit {
+    block0:
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let module = parsed.module;
+
+    module.ctx.with_ty_store_mut(|store| {
+        let node_ref = store.lookup_struct("node").expect("node type must exist");
+        let node_ty = Type::Compound(node_ref);
+        store.update_struct_fields("node", &[node_ty]);
+    });
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&module, &cfg);
+
+    assert!(has_code(&report, "IR0004"), "expected IR0004, got {report}");
+}
+
+#[test]
+fn cache_diagnostics_order_is_deterministic() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+global private i32 $G0 = 0;
+global private i32 $G1 = 1;
+
+func public %cache() -> i32 {
+    block0:
+        v0.i32 = add 10.i32 20.i32;
+        v1.i32 = ptr_to_int $G0 i32;
+        v2.i32 = ptr_to_int $G1 i32;
+        v3.i32 = add v0 v1;
+        v4.i32 = add v3 v2;
+        return v4;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let module = parsed.module;
+    let func_ref = module.funcs()[0];
+
+    module.func_store.modify(func_ref, |func| {
+        let imm10 = 10i32.into();
+        let imm20 = 20i32.into();
+        let val10 = *func
+            .dfg
+            .immediates
+            .get(&imm10)
+            .expect("10 immediate value must exist");
+        let val20 = *func
+            .dfg
+            .immediates
+            .get(&imm20)
+            .expect("20 immediate value must exist");
+        func.dfg.immediates.insert(imm10, val20);
+        func.dfg.immediates.insert(imm20, val10);
+        let missing_value = ValueId::from_u32(func.dfg.values.len() as u32 + 1000);
+        func.dfg.immediates.insert(123i32.into(), missing_value);
+
+        let mut globals: Vec<_> = func
+            .dfg
+            .globals
+            .iter()
+            .map(|(gv, value_id)| (*gv, *value_id))
+            .collect();
+        globals.sort_by_key(|(gv, _)| gv.as_u32());
+        let (gv0, val0) = globals[0];
+        let (gv1, val1) = globals[1];
+        func.dfg.globals.insert(gv0, val1);
+        func.dfg.globals.insert(gv1, val0);
+        let missing_global = sonatina_ir::GlobalVariableRef::from_u32(900_000);
+        let missing_global_value = ValueId::from_u32(func.dfg.values.len() as u32 + 1001);
+        func.dfg
+            .globals
+            .insert(missing_global, missing_global_value);
+    });
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report1 = verify_module(&module, &cfg);
+    let report2 = verify_module(&module, &cfg);
+
+    assert!(
+        has_code(&report1, "IR0702"),
+        "expected IR0702, got {report1}"
+    );
+    assert!(
+        has_code(&report1, "IR0703"),
+        "expected IR0703, got {report1}"
+    );
+    assert_eq!(
+        diagnostic_fingerprint(&report1),
+        diagnostic_fingerprint(&report2),
+        "diagnostic ordering should be deterministic"
+    );
 }
