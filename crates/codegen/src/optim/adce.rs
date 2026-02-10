@@ -127,6 +127,16 @@ impl AdceSolver {
             }
         });
 
+        // A live phi semantically depends on predecessor edges.
+        // Keep predecessor terminators live so we do not erase incoming values.
+        if let Some(phi) = func.dfg.cast_phi(inst_id) {
+            for &(_, pred) in phi.args() {
+                if let Some(term) = func.layout.last_inst_of(pred) {
+                    self.mark_inst(func, term);
+                }
+            }
+        }
+
         let inst_block = func.layout.inst_block(inst_id);
         for &block in pdf_set.frontiers(inst_block) {
             if let Some(last_inst) = func.layout.last_inst_of(block) {
@@ -241,5 +251,62 @@ impl AdceSolver {
 impl Default for AdceSolver {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sonatina_ir::{Module, ir_writer::FuncWriter};
+
+    use super::AdceSolver;
+
+    fn parse_module(input: &str) -> sonatina_parser::ParsedModule {
+        sonatina_parser::parse_module(input).unwrap_or_else(|errs| panic!("parse failed: {errs:?}"))
+    }
+
+    fn only_func_ref(module: &Module) -> sonatina_ir::module::FuncRef {
+        let funcs = module.funcs();
+        assert_eq!(funcs.len(), 1);
+        funcs[0]
+    }
+
+    #[test]
+    fn keeps_phi_entry_pred_edge_live() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (v0 block0) (v2 block2);
+        v3.i1 = lt v1 10.i256;
+        br v3 block2 block3;
+
+    block2:
+        v2.i256 = add v1 1.i256;
+        jump block1;
+
+    block3:
+        return v1;
+}
+"#;
+
+        let parsed = parse_module(source);
+        let func_ref = only_func_ref(&parsed.module);
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            AdceSolver::new().run(func);
+        });
+
+        parsed.module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("phi (v0 block0)")
+                    && dumped.contains("block0:\n        jump block1;"),
+                "ADCE must keep the entry predecessor for live phi values:\n{dumped}"
+            );
+        });
     }
 }
