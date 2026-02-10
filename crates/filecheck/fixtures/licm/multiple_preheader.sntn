@@ -15,10 +15,7 @@ target = "evm-ethereum-london"
 # nextln:       jump block3;
 # nextln: 
 # nextln:   block3:
-# nextln:       v4.i32 = phi (v6 block4) ($var block6);
-# nextln:       jump block4;
-# nextln: 
-# nextln:   block4:
+# nextln:       v4.i32 = phi (v6 block3) ($var block6);
 # nextln:       v6.i32 = add v4 v3;
 # nextln:       v7.i1 = slt v6 10.i32;
 # nextln:       br v7 block3 block5;
@@ -66,11 +63,8 @@ func public %multiple_preheader(v0.i1, v1.i32) -> unit {
 # nextln:       jump block3;
 # nextln: 
 # nextln:   block3:
-# nextln:       v4.i32 = phi (v7 block4) ($var block6);
-# nextln:       v5.i32 = phi (v8 block4) ($var block6);
-# nextln:       jump block4;
-# nextln: 
-# nextln:   block4:
+# nextln:       v4.i32 = phi (v7 block3) ($var block6);
+# nextln:       v5.i32 = phi (v8 block3) ($var block6);
 # nextln:       v7.i32 = add v4 v3;
 # nextln:       v9.i1 = slt v7 10.i32;
 # nextln:       br v9 block3 block5;

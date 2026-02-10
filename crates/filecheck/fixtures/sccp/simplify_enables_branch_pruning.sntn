@@ -3,8 +3,7 @@
 target = "evm-ethereum-london"
 
 # sameln: func public %simplify_prune_branch(v0.i32) -> i32 {
-# nextln:     block0:
-# nextln:         return 2.i32;
+# check:         return 2.i32;
 func public %simplify_prune_branch(v0.i32) -> i32 {
     block0:
         v1.i32 = xor v0 v0;
@@ -19,8 +18,7 @@ func public %simplify_prune_branch(v0.i32) -> i32 {
 }
 
 # sameln: func public %simplify_prune_branch_and_zero(v0.i32) -> i32 {
-# nextln:     block0:
-# nextln:         return 2.i32;
+# check:         return 2.i32;
 func public %simplify_prune_branch_and_zero(v0.i32) -> i32 {
     block0:
         v1.i32 = and v0 0.i32;
@@ -35,8 +33,7 @@ func public %simplify_prune_branch_and_zero(v0.i32) -> i32 {
 }
 
 # sameln: func public %simplify_prune_branch_mul_zero(v0.i32) -> i32 {
-# nextln:     block0:
-# nextln:         return 2.i32;
+# check:         return 2.i32;
 func public %simplify_prune_branch_mul_zero(v0.i32) -> i32 {
     block0:
         v1.i32 = mul v0 0.i32;
@@ -51,8 +48,7 @@ func public %simplify_prune_branch_mul_zero(v0.i32) -> i32 {
 }
 
 # sameln: func public %simplify_prune_branch_or_all_one(v0.i32) -> i32 {
-# nextln:     block0:
-# nextln:         return 1.i32;
+# check:         return 1.i32;
 func public %simplify_prune_branch_or_all_one(v0.i32) -> i32 {
     block0:
         v1.i32 = or v0 -1.i32;
