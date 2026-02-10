@@ -61,9 +61,19 @@ impl FuncStore {
     pub fn insert(&self, func: Function) -> FuncRef {
         let _guard = self._guard.lock().unwrap();
 
-        let func_ref = FuncRef::from_u32(self.funcs.len() as u32);
+        let mut next = self.funcs.len() as u32;
+        while self.funcs.contains_key(&FuncRef::from_u32(next)) {
+            next += 1;
+        }
+
+        let func_ref = FuncRef::from_u32(next);
         self.funcs.insert(func_ref, func);
         func_ref
+    }
+
+    pub fn remove(&self, func_ref: FuncRef) -> Option<Function> {
+        let _guard = self._guard.lock().unwrap();
+        self.funcs.remove(&func_ref).map(|(_, func)| func)
     }
 
     pub fn view<F, R>(&self, func_ref: FuncRef, f: F) -> R
@@ -121,8 +131,9 @@ impl FuncStore {
 
     pub fn funcs(&self) -> Vec<FuncRef> {
         let _guard = self._guard.lock().unwrap();
-        let len = self.funcs.len();
-        (0..len).map(|n| FuncRef::from_u32(n as u32)).collect()
+        let mut funcs: Vec<_> = self.funcs.iter().map(|entry| *entry.key()).collect();
+        funcs.sort_unstable();
+        funcs
     }
 
     pub fn into_read_only(self) -> RoFuncStore {
