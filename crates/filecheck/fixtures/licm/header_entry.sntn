@@ -6,9 +6,6 @@ target = "evm-ethereum-london"
 # nextln:     jump block0;
 # nextln: 
 # nextln: block0:
-# nextln:     jump block1;
-# nextln: 
-# nextln: block1:
 # nextln:     br v1 block0 block2;
 # nextln: 
 # nextln: block2:

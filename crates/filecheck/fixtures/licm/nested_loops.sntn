@@ -11,10 +11,7 @@ target = "evm-ethereum-london"
 # nextln:     jump block2;
 # nextln: 
 # nextln: block2:
-# nextln:     v3.i32 = phi (0.i32 block1) (v7 block3);
-# nextln:     jump block3;
-# nextln: 
-# nextln: block3:
+# nextln:     v3.i32 = phi (0.i32 block1) (v7 block2);
 # nextln:     v7.i32 = sub v6 v3;
 # nextln:     v8.i1 = slt v7 10.i32;
 # nextln:     br v8 block4 block2;
