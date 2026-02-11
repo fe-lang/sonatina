@@ -29,9 +29,7 @@ use crate::{
 };
 
 pub fn verify_module(module: &Module, cfg: &VerifierConfig) -> VerificationReport {
-    let mut report = VerificationReport::default();
-
-    verify_module_invariants(module, cfg, &mut report);
+    let mut report = verify_module_invariants(module, cfg);
 
     let mut func_reports: Vec<_> = module
         .func_store
@@ -68,6 +66,12 @@ pub fn verify_module(module: &Module, cfg: &VerifierConfig) -> VerificationRepor
     report
 }
 
+pub fn verify_module_invariants(module: &Module, cfg: &VerifierConfig) -> VerificationReport {
+    let mut report = VerificationReport::default();
+    collect_module_invariants(module, cfg, &mut report);
+    report
+}
+
 pub fn verify_function(
     ctx: &ModuleCtx,
     func_ref: FuncRef,
@@ -100,7 +104,7 @@ pub fn verify_function_or_panic(
     }
 }
 
-fn verify_module_invariants(
+fn collect_module_invariants(
     module: &Module,
     cfg: &VerifierConfig,
     report: &mut VerificationReport,

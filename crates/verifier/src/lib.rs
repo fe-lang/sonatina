@@ -1,13 +1,18 @@
 mod config;
 mod diagnostic;
+mod pipeline;
 mod report;
 mod verify;
 
 pub use config::{VerificationLevel, VerifierConfig};
 pub use diagnostic::{Diagnostic, DiagnosticCode, Location, Note, Severity};
+pub use pipeline::{
+    ModuleBuilderVerifyExt, ParseVerifyError, build_and_verify, parse_and_verify_module,
+};
 pub use report::VerificationReport;
 pub use verify::{
-    verify_function, verify_function_or_panic, verify_module, verify_module_or_panic,
+    verify_function, verify_function_or_panic, verify_module, verify_module_invariants,
+    verify_module_or_panic,
 };
 
 #[macro_export]

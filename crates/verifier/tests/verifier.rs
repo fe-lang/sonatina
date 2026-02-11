@@ -1,6 +1,13 @@
-use sonatina_ir::{InstDowncastMut, Type, ValueId, inst::arith::Add};
+use sonatina_ir::{
+    InstDowncastMut, Linkage, Signature, Type, ValueId, builder::ModuleBuilder, inst::arith::Add,
+    isa::evm::Evm, module::ModuleCtx,
+};
 use sonatina_parser::parse_module;
-use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
+use sonatina_triple::TargetTriple;
+use sonatina_verifier::{
+    ModuleBuilderVerifyExt, ParseVerifyError, VerificationLevel, VerifierConfig, build_and_verify,
+    parse_and_verify_module, verify_module,
+};
 
 fn has_code(report: &sonatina_verifier::VerificationReport, code: &str) -> bool {
     report
@@ -29,6 +36,79 @@ fn diagnostic_fingerprint(report: &sonatina_verifier::VerificationReport) -> Vec
             )
         })
         .collect()
+}
+
+#[test]
+fn parse_and_verify_module_reports_parse_errors() {
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let err = match parse_and_verify_module("this is not valid sonatina ir", &cfg) {
+        Ok(_) => panic!("invalid source should fail parse"),
+        Err(err) => err,
+    };
+    assert!(matches!(err, ParseVerifyError::Parse(_)));
+}
+
+#[test]
+fn parse_and_verify_module_reports_verification_errors() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+declare external %callee(i32, i32) -> i32;
+
+func public %caller() -> unit {
+    block0:
+        v0.i32 = call %callee 1.i32;
+        return;
+}
+"#;
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let err = match parse_and_verify_module(src, &cfg) {
+        Ok(_) => panic!("source should fail verifier"),
+        Err(err) => err,
+    };
+    let ParseVerifyError::Verify(report) = err else {
+        panic!("expected verifier error");
+    };
+    assert!(has_code(&report, "IR0603"), "expected IR0603, got {report}");
+}
+
+#[test]
+fn build_and_verify_reports_invalid_builder_module() {
+    let triple = TargetTriple::parse("evm-ethereum-london").expect("valid target triple");
+    let isa = Evm::new(triple);
+    let builder = ModuleBuilder::new(ModuleCtx::new(&isa));
+    builder
+        .declare_function(Signature::new("main", Linkage::Public, &[], Type::Unit))
+        .expect("declaration should succeed");
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = match build_and_verify(builder, &cfg) {
+        Ok(_) => panic!("module should fail verification"),
+        Err(report) => report,
+    };
+    assert!(has_code(&report, "IR0105"), "expected IR0105, got {report}");
+}
+
+#[test]
+fn build_verified_extension_accepts_valid_builder_module() {
+    let triple = TargetTriple::parse("evm-ethereum-london").expect("valid target triple");
+    let isa = Evm::new(triple);
+    let builder = ModuleBuilder::new(ModuleCtx::new(&isa));
+    builder
+        .declare_function(Signature::new(
+            "decl",
+            Linkage::External,
+            &[Type::I32],
+            Type::I32,
+        ))
+        .expect("declaration should succeed");
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let module = builder
+        .build_verified(&cfg)
+        .expect("external declaration should verify");
+    assert_eq!(module.funcs().len(), 1);
 }
 
 #[test]
