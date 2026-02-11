@@ -469,3 +469,240 @@ func public %cache() -> i32 {
         "diagnostic ordering should be deterministic"
     );
 }
+
+#[test]
+fn object_data_directive_rejects_non_const_global() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+global private i32 $G = 1;
+
+func public %entry() -> unit {
+    block0:
+        return;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+    data $G;
+  }
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0611"), "expected IR0611, got {report}");
+}
+
+#[test]
+fn object_data_directive_requires_initializer() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+global private const i32 $G;
+
+func public %entry() -> unit {
+    block0:
+        return;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+    data $G;
+  }
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0611"), "expected IR0611, got {report}");
+}
+
+#[test]
+fn object_data_directive_rejects_pointer_type() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+global private const *i32 $G = 0;
+
+func public %entry() -> unit {
+    block0:
+        return;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+    data $G;
+  }
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0611"), "expected IR0611, got {report}");
+}
+
+#[test]
+fn embed_symbols_must_be_declared_in_same_section() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %init() -> unit {
+    block0:
+        v0.i256 = sym_addr &runtime;
+        return;
+}
+
+func public %runtime() -> unit {
+    block0:
+        return;
+}
+
+object @Contract {
+  section init {
+    entry %init;
+  }
+  section runtime {
+    entry %runtime;
+    embed .init as &runtime;
+  }
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0611"), "expected IR0611, got {report}");
+}
+
+#[test]
+fn embed_symbols_declared_in_same_section_are_accepted() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %entry() -> unit {
+    block0:
+        return;
+}
+
+func public %init() -> unit {
+    block0:
+        v0.i256 = sym_addr &runtime;
+        v1.i256 = sym_size &runtime;
+        return;
+}
+
+object @Contract {
+  section init {
+    entry %init;
+    embed .runtime as &runtime;
+  }
+  section runtime {
+    entry %entry;
+  }
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn by_value_function_type_in_signature_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+declare external %bad((i32) -> i32) -> unit;
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0610"), "expected IR0610, got {report}");
+}
+
+#[test]
+fn invalid_declared_signature_type_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+type @node = {i32};
+declare external %takes(@node) -> unit;
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let module = parsed.module;
+
+    module.ctx.with_ty_store_mut(|store| {
+        let node_ref = store.lookup_struct("node").expect("node type must exist");
+        let node_ty = Type::Compound(node_ref);
+        store.update_struct_fields("node", &[node_ty]);
+    });
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&module, &cfg);
+
+    assert!(has_code(&report, "IR0004"), "expected IR0004, got {report}");
+}
+
+#[test]
+fn detached_dfg_block_is_reported_when_disallowed() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %entry() -> unit {
+    block0:
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let module = parsed.module;
+    let func_ref = module.funcs()[0];
+    module.func_store.modify(func_ref, |func| {
+        let _ = func.dfg.make_block();
+    });
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&module, &cfg);
+
+    assert!(has_code(&report, "IR0103"), "expected IR0103, got {report}");
+}
+
+#[test]
+fn detached_dfg_block_is_allowed_when_enabled() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %entry() -> unit {
+    block0:
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let module = parsed.module;
+    let func_ref = module.funcs()[0];
+    module.func_store.modify(func_ref, |func| {
+        let _ = func.dfg.make_block();
+    });
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Fast);
+    let report = verify_module(&module, &cfg);
+
+    assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}

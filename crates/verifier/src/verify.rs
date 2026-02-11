@@ -31,7 +31,7 @@ use crate::{
 pub fn verify_module(module: &Module, cfg: &VerifierConfig) -> VerificationReport {
     let mut report = VerificationReport::default();
 
-    let embed_symbols = verify_module_invariants(module, cfg, &mut report);
+    verify_module_invariants(module, cfg, &mut report);
 
     let mut func_reports: Vec<_> = module
         .func_store
@@ -39,7 +39,7 @@ pub fn verify_module(module: &Module, cfg: &VerifierConfig) -> VerificationRepor
         .into_par_iter()
         .map(|func_ref| {
             let Some(func_report) = module.func_store.try_view(func_ref, |func| {
-                verify_function_with_symbols(&module.ctx, func_ref, func, cfg, Some(&embed_symbols))
+                verify_function_with_symbols(&module.ctx, func_ref, func, cfg)
             }) else {
                 let mut report = VerificationReport::default();
                 report.push(
@@ -74,7 +74,7 @@ pub fn verify_function(
     func: &Function,
     cfg: &VerifierConfig,
 ) -> VerificationReport {
-    verify_function_with_symbols(ctx, func_ref, func, cfg, None)
+    verify_function_with_symbols(ctx, func_ref, func, cfg)
 }
 
 pub fn verify_module_or_panic(module: &Module, cfg: &VerifierConfig) {
@@ -104,9 +104,7 @@ fn verify_module_invariants(
     module: &Module,
     cfg: &VerifierConfig,
     report: &mut VerificationReport,
-) -> FxHashSet<String> {
-    let mut embed_symbols = FxHashSet::default();
-
+) {
     let mut declared_refs: Vec<_> = module
         .ctx
         .declared_funcs
@@ -126,6 +124,30 @@ fn verify_module_invariants(
                 cfg.max_diagnostics,
             );
         }
+
+        let Some(sig) = module.ctx.get_sig(*func_ref) else {
+            continue;
+        };
+
+        for (index, arg_ty) in sig.args().iter().enumerate() {
+            verify_signature_type(
+                &module.ctx,
+                *func_ref,
+                *arg_ty,
+                format!("signature arg {index}"),
+                cfg,
+                report,
+            );
+        }
+
+        verify_signature_type(
+            &module.ctx,
+            *func_ref,
+            sig.ret_ty(),
+            "signature return".to_string(),
+            cfg,
+            report,
+        );
     }
 
     let mut store_refs = module.func_store.funcs();
@@ -295,6 +317,9 @@ fn verify_module_invariants(
             }
 
             let mut entry_count = 0usize;
+            let mut entry = None;
+            let mut include_funcs = Vec::new();
+            let mut include_set = FxHashSet::default();
             let mut local_embed_symbols = FxHashSet::default();
             for directive in &section.directives {
                 match directive {
@@ -313,6 +338,8 @@ fn verify_module_invariants(
                                 .with_note(format!("missing function ref: {}", func.as_u32())),
                                 cfg.max_diagnostics,
                             );
+                        } else if entry.is_none() {
+                            entry = Some(*func);
                         }
                     }
                     Directive::Include(func) => {
@@ -329,11 +356,14 @@ fn verify_module_invariants(
                                 .with_note(format!("missing function ref: {}", func.as_u32())),
                                 cfg.max_diagnostics,
                             );
+                        } else if include_set.insert(*func) {
+                            include_funcs.push(*func);
                         }
                     }
                     Directive::Data(gv) => {
-                        let has_global = module.ctx.with_gv_store(|store| store.get(*gv).is_some());
-                        if !has_global {
+                        let Some(gv_data) =
+                            module.ctx.with_gv_store(|store| store.get(*gv).cloned())
+                        else {
                             report.push(
                                 Diagnostic::error(
                                     DiagnosticCode::InvalidGlobalRef,
@@ -344,6 +374,28 @@ fn verify_module_invariants(
                                     },
                                 )
                                 .with_note(format!("missing global ref: {}", gv.as_u32())),
+                                cfg.max_diagnostics,
+                            );
+                            continue;
+                        };
+
+                        if let Err(reason) = validate_global_for_object_data(
+                            &module.ctx,
+                            gv_data.ty,
+                            gv_data.is_const,
+                            gv_data.initializer.as_ref(),
+                        ) {
+                            report.push(
+                                Diagnostic::error(
+                                    DiagnosticCode::StructuralInvariantViolation,
+                                    "object data directive references non-encodable global data",
+                                    Location::Object {
+                                        name: object_name.clone(),
+                                        section: Some(section_name.clone()),
+                                    },
+                                )
+                                .with_note(format!("global ref: {}", gv.as_u32()))
+                                .with_note(reason),
                                 cfg.max_diagnostics,
                             );
                         }
@@ -364,7 +416,6 @@ fn verify_module_invariants(
                                 cfg.max_diagnostics,
                             );
                         }
-                        embed_symbols.insert(symbol);
 
                         match &embed.source {
                             SectionRef::Local(local) => {
@@ -447,16 +498,299 @@ fn verify_module_invariants(
                         "section has multiple entry directives",
                         Location::Object {
                             name: object_name.clone(),
-                            section: Some(section_name),
+                            section: Some(section_name.clone()),
                         },
                     ),
                     cfg.max_diagnostics,
                 );
             }
+
+            if let Some(entry_func) = entry {
+                let used_embed_symbols =
+                    collect_section_used_embed_symbols(module, entry_func, &include_funcs);
+                let mut missing_symbols: Vec<_> = used_embed_symbols
+                    .into_iter()
+                    .filter(|symbol| !local_embed_symbols.contains(symbol))
+                    .collect();
+                missing_symbols.sort();
+
+                for symbol in missing_symbols {
+                    report.push(
+                        Diagnostic::error(
+                            DiagnosticCode::StructuralInvariantViolation,
+                            "section uses an embed symbol that is not declared in that section",
+                            Location::Object {
+                                name: object_name.clone(),
+                                section: Some(section_name.clone()),
+                            },
+                        )
+                        .with_note(format!("missing embed symbol: &{symbol}")),
+                        cfg.max_diagnostics,
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn verify_signature_type(
+    ctx: &ModuleCtx,
+    func_ref: FuncRef,
+    ty: Type,
+    usage: String,
+    cfg: &VerifierConfig,
+    report: &mut VerificationReport,
+) {
+    let location = Location::Type {
+        func: Some(func_ref),
+        ty,
+    };
+
+    if !is_type_valid(ctx, ty) {
+        report.push(
+            Diagnostic::error(
+                DiagnosticCode::InvalidTypeRef,
+                "function signature contains an invalid type",
+                location,
+            )
+            .with_note(usage),
+            cfg.max_diagnostics,
+        );
+        return;
+    }
+
+    if has_by_value_function_type_in_signature(ctx, ty) {
+        report.push(
+            Diagnostic::error(
+                DiagnosticCode::InvalidSignature,
+                "function signature contains a by-value function type",
+                location,
+            )
+            .with_note(usage),
+            cfg.max_diagnostics,
+        );
+    }
+}
+
+fn has_by_value_function_type_in_signature(ctx: &ModuleCtx, ty: Type) -> bool {
+    let mut visited = FxHashSet::default();
+    let mut stack = vec![(ty, false)];
+
+    while let Some((current_ty, behind_pointer)) = stack.pop() {
+        let Type::Compound(cmpd_ref) = current_ty else {
+            continue;
+        };
+        if !visited.insert((cmpd_ref, behind_pointer)) {
+            continue;
+        }
+
+        let Some(cmpd) = ctx.with_ty_store(|store| store.get_compound(cmpd_ref).cloned()) else {
+            continue;
+        };
+
+        match cmpd {
+            CompoundType::Array { elem, .. } => {
+                stack.push((elem, behind_pointer));
+            }
+            CompoundType::Ptr(elem) => {
+                stack.push((elem, true));
+            }
+            CompoundType::Struct(s) => {
+                for field in s.fields {
+                    stack.push((field, behind_pointer));
+                }
+            }
+            CompoundType::Func { args, ret_ty } => {
+                if !behind_pointer {
+                    return true;
+                }
+                for arg in args {
+                    stack.push((arg, false));
+                }
+                stack.push((ret_ty, false));
+            }
         }
     }
 
-    embed_symbols
+    false
+}
+
+fn validate_global_for_object_data(
+    ctx: &ModuleCtx,
+    ty: Type,
+    is_const: bool,
+    initializer: Option<&GvInitializer>,
+) -> Result<(), String> {
+    if !is_const {
+        return Err("global must be declared const for object data emission".to_string());
+    }
+    let Some(initializer) = initializer else {
+        return Err("global must define an initializer for object data emission".to_string());
+    };
+
+    validate_data_initializer_shape(ctx, ty, initializer)
+}
+
+fn validate_data_initializer_shape(
+    ctx: &ModuleCtx,
+    ty: Type,
+    initializer: &GvInitializer,
+) -> Result<(), String> {
+    if ty.is_pointer(ctx) {
+        return Err(format!(
+            "type {ty:?} is unsupported for object data (pointer type)"
+        ));
+    }
+
+    if ty.is_integral() {
+        return match initializer {
+            GvInitializer::Immediate(imm) if imm.ty() == ty => Ok(()),
+            GvInitializer::Immediate(imm) => Err(format!(
+                "integral initializer type mismatch: expected {ty:?}, found {:?}",
+                imm.ty()
+            )),
+            _ => Err(format!(
+                "integral type {ty:?} requires an immediate initializer"
+            )),
+        };
+    }
+
+    let Type::Compound(cmpd_ref) = ty else {
+        return Err(format!("type {ty:?} is unsupported for object data"));
+    };
+    let Some(cmpd) = ctx.with_ty_store(|store| store.get_compound(cmpd_ref).cloned()) else {
+        return Err(format!("type ref {} does not exist", cmpd_ref.as_u32()));
+    };
+
+    match cmpd {
+        CompoundType::Array { elem, len } => {
+            let GvInitializer::Array(items) = initializer else {
+                return Err("array type requires array initializer".to_string());
+            };
+            if items.len() != len {
+                return Err(format!(
+                    "array initializer length mismatch: expected {len}, found {}",
+                    items.len()
+                ));
+            }
+
+            for item in items {
+                validate_data_initializer_shape(ctx, elem, item)?;
+            }
+            Ok(())
+        }
+        CompoundType::Struct(s) => {
+            if s.packed {
+                return Err(format!(
+                    "type {ty:?} is unsupported for object data (packed struct)"
+                ));
+            }
+
+            let GvInitializer::Struct(fields) = initializer else {
+                return Err("struct type requires struct initializer".to_string());
+            };
+            if fields.len() != s.fields.len() {
+                return Err(format!(
+                    "struct initializer field count mismatch: expected {}, found {}",
+                    s.fields.len(),
+                    fields.len()
+                ));
+            }
+
+            for (field, field_ty) in fields.iter().zip(s.fields) {
+                validate_data_initializer_shape(ctx, field_ty, field)?;
+            }
+            Ok(())
+        }
+        CompoundType::Ptr(_) => Err(format!(
+            "type {ty:?} is unsupported for object data (pointer type)"
+        )),
+        CompoundType::Func { .. } => Err(format!(
+            "type {ty:?} is unsupported for object data (function type)"
+        )),
+    }
+}
+
+fn collect_section_used_embed_symbols(
+    module: &Module,
+    entry: FuncRef,
+    includes: &[FuncRef],
+) -> FxHashSet<String> {
+    let mut seen_funcs = FxHashSet::default();
+    let mut worklist = VecDeque::new();
+    let mut used_embed_symbols = FxHashSet::default();
+
+    for func in std::iter::once(entry).chain(includes.iter().copied()) {
+        if seen_funcs.insert(func) {
+            worklist.push_back(func);
+        }
+    }
+
+    while let Some(func_ref) = worklist.pop_front() {
+        let _ = module.func_store.try_view(func_ref, |func| {
+            let inst_set = func.inst_set();
+            for block in func.layout.iter_block() {
+                for inst_id in func.layout.iter_inst(block) {
+                    if let Some(call) = func.dfg.call_info(inst_id) {
+                        let callee = call.callee();
+                        if module.ctx.get_sig(callee).is_some() && seen_funcs.insert(callee) {
+                            worklist.push_back(callee);
+                        }
+                    }
+
+                    let inst = func.dfg.inst(inst_id);
+                    if let Some(ptr) =
+                        <&data::GetFunctionPtr as InstDowncast>::downcast(inst_set, inst)
+                    {
+                        let callee = *ptr.func();
+                        if module.ctx.get_sig(callee).is_some() && seen_funcs.insert(callee) {
+                            worklist.push_back(callee);
+                        }
+                    }
+                    if let Some(sym) = <&data::SymAddr as InstDowncast>::downcast(inst_set, inst) {
+                        record_symbol_membership(
+                            &module.ctx,
+                            sym.sym(),
+                            &mut seen_funcs,
+                            &mut worklist,
+                            &mut used_embed_symbols,
+                        );
+                    }
+                    if let Some(sym) = <&data::SymSize as InstDowncast>::downcast(inst_set, inst) {
+                        record_symbol_membership(
+                            &module.ctx,
+                            sym.sym(),
+                            &mut seen_funcs,
+                            &mut worklist,
+                            &mut used_embed_symbols,
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    used_embed_symbols
+}
+
+fn record_symbol_membership(
+    ctx: &ModuleCtx,
+    sym: &SymbolRef,
+    seen_funcs: &mut FxHashSet<FuncRef>,
+    worklist: &mut VecDeque<FuncRef>,
+    used_embed_symbols: &mut FxHashSet<String>,
+) {
+    match sym {
+        SymbolRef::Func(func) => {
+            if ctx.get_sig(*func).is_some() && seen_funcs.insert(*func) {
+                worklist.push_back(*func);
+            }
+        }
+        SymbolRef::Global(_) => {}
+        SymbolRef::Embed(embed) => {
+            used_embed_symbols.insert(embed.0.to_string());
+        }
+    }
 }
 
 fn verify_gv_initializer(
@@ -586,8 +920,6 @@ struct FuncVerifier<'a> {
     succs: FxHashMap<BlockId, Vec<BlockId>>,
     preds: FxHashMap<BlockId, Vec<BlockId>>,
     reachable: FxHashSet<BlockId>,
-
-    embed_symbols: Option<&'a FxHashSet<String>>,
 }
 
 fn verify_function_with_symbols<'a>(
@@ -595,9 +927,8 @@ fn verify_function_with_symbols<'a>(
     func_ref: FuncRef,
     func: &'a Function,
     cfg: &'a VerifierConfig,
-    embed_symbols: Option<&'a FxHashSet<String>>,
 ) -> VerificationReport {
-    let mut verifier = FuncVerifier::new(ctx, func_ref, func, cfg, embed_symbols);
+    let mut verifier = FuncVerifier::new(ctx, func_ref, func, cfg);
     verifier.run();
     verifier.report
 }
@@ -608,7 +939,6 @@ impl<'a> FuncVerifier<'a> {
         func_ref: FuncRef,
         func: &'a Function,
         cfg: &'a VerifierConfig,
-        embed_symbols: Option<&'a FxHashSet<String>>,
     ) -> Self {
         Self {
             ctx,
@@ -624,7 +954,6 @@ impl<'a> FuncVerifier<'a> {
             succs: FxHashMap::default(),
             preds: FxHashMap::default(),
             reachable: FxHashSet::default(),
-            embed_symbols,
         }
     }
 
@@ -693,6 +1022,33 @@ impl<'a> FuncVerifier<'a> {
 
             match value_data {
                 Value::Arg { ty, idx } => {
+                    if !self.is_type_valid(*ty) {
+                        self.emit(
+                            Diagnostic::error(
+                                DiagnosticCode::InvalidTypeRef,
+                                "argument value has an invalid type",
+                                Location::Value {
+                                    func: self.func_ref,
+                                    value: *value,
+                                },
+                            )
+                            .with_note(format!("arg index {index}")),
+                        );
+                    }
+                    if has_by_value_function_type_in_signature(self.ctx, *ty) {
+                        self.emit(
+                            Diagnostic::error(
+                                DiagnosticCode::InvalidSignature,
+                                "argument value type contains a by-value function type",
+                                Location::Value {
+                                    func: self.func_ref,
+                                    value: *value,
+                                },
+                            )
+                            .with_note(format!("arg index {index}")),
+                        );
+                    }
+
                     if *idx != index {
                         self.emit(
                             Diagnostic::error(
@@ -758,6 +1114,33 @@ impl<'a> FuncVerifier<'a> {
                     }
                 }
                 Value::Arg { ty, idx } => {
+                    if !self.is_type_valid(*ty) {
+                        self.emit(
+                            Diagnostic::error(
+                                DiagnosticCode::InvalidTypeRef,
+                                "argument value has an invalid type",
+                                Location::Value {
+                                    func: self.func_ref,
+                                    value: value_id,
+                                },
+                            )
+                            .with_note(format!("arg index {}", idx)),
+                        );
+                    }
+                    if has_by_value_function_type_in_signature(self.ctx, *ty) {
+                        self.emit(
+                            Diagnostic::error(
+                                DiagnosticCode::InvalidSignature,
+                                "argument value type contains a by-value function type",
+                                Location::Value {
+                                    func: self.func_ref,
+                                    value: value_id,
+                                },
+                            )
+                            .with_note(format!("arg index {}", idx)),
+                        );
+                    }
+
                     let expected = sig.args().get(*idx);
                     if expected.is_none() {
                         self.emit(
@@ -1005,6 +1388,16 @@ impl<'a> FuncVerifier<'a> {
                 self.emit(Diagnostic::error(
                     DiagnosticCode::UnlistedButInserted,
                     "block is listed in layout chain but not marked inserted",
+                    Location::Block {
+                        func: self.func_ref,
+                        block,
+                    },
+                ));
+            }
+            if !self.cfg.allow_detached_entities && self.func.dfg.has_block(block) && !listed {
+                self.emit(Diagnostic::error(
+                    DiagnosticCode::InsertedButUnlisted,
+                    "DFG block is detached from layout",
                     Location::Block {
                         func: self.func_ref,
                         block,
@@ -3051,18 +3444,7 @@ impl<'a> FuncVerifier<'a> {
                 }
             }
             SymbolRef::Embed(embed) => {
-                if let Some(embed_symbols) = self.embed_symbols
-                    && !embed_symbols.contains(embed.0.as_str())
-                {
-                    self.emit(
-                        Diagnostic::error(
-                            DiagnosticCode::ValueTypeMismatch,
-                            "embed symbol is not declared in any object section",
-                            location,
-                        )
-                        .with_note(format!("unknown embed symbol &{}", embed.0.as_str())),
-                    );
-                }
+                let _ = (embed, location);
             }
         }
     }
