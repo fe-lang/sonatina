@@ -14,7 +14,10 @@ use std::{
 };
 
 use sonatina_ir::{Function, ir_writer::FuncWriter, module::FuncRef};
-use sonatina_parser::{ParsedModule, parse_module};
+use sonatina_parser::ParsedModule;
+use sonatina_verifier::{
+    ParseVerifyError, VerificationLevel, VerifierConfig, parse_and_verify_module,
+};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use walkdir::WalkDir;
 
@@ -171,10 +174,11 @@ impl<'a> FileChecker<'a> {
 
     fn parse_file(&self) -> Result<ParsedModule, String> {
         let input = fs::read_to_string(self.file_path).unwrap();
+        let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
 
-        match parse_module(&input) {
+        match parse_and_verify_module(&input, &cfg) {
             Ok(module) => Ok(module),
-            Err(errs) => {
+            Err(ParseVerifyError::Parse(errs)) => {
                 let mut v = vec![];
                 for e in errs {
                     e.print(&mut v, self.file_path.to_str().unwrap(), &input, true)
@@ -182,6 +186,7 @@ impl<'a> FileChecker<'a> {
                 }
                 Err(String::from_utf8(v).unwrap())
             }
+            Err(ParseVerifyError::Verify(report)) => Err(report.to_string()),
         }
     }
 
