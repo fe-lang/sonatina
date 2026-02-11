@@ -12,6 +12,7 @@
     ; Opaque result from side-effecting instruction (phi, call, etc.)
     ; The i64 is a unique ID (e.g., ValueId) to distinguish different results
     (SideEffectResult i64 Type)
+    (PhiResult i64 Type)
 
     ; --- Memory Addresses (data.rs) ---
     ; Alloca result - represents a unique stack allocation
@@ -39,6 +40,11 @@
     (Shl Expr Expr)     ; bits, value
     (Shr Expr Expr)
     (Sar Expr Expr)
+    (EvmAddMod Expr Expr Expr)
+    (EvmMulMod Expr Expr Expr)
+    (EvmExp Expr Expr)
+    (EvmByte Expr Expr)
+    (EvmClz Expr)
 
     ; --- Logic (logic.rs) ---
     (Not Expr)
@@ -105,6 +111,12 @@
 ; memphi-num-preds: memphi_id -> number of predecessors
 (function memphi-num-preds (i64) i64 :merge old)
 
+; === Value Phi ===
+; phi-val: (phi_inst_id, pred_idx) -> incoming value expression
+(function phi-val (i64 i64) Expr :merge old)
+; phi-num-preds: phi_inst_id -> number of predecessors
+(function phi-num-preds (i64) i64 :merge old)
+
 ; Type inference for expressions
 (function expr-type (Expr) Type :merge old)
 
@@ -114,11 +126,17 @@
 (rule ((= e (Global i ty)))((set (expr-type e) ty)))
 (rule ((= e (Undef ty)))   ((set (expr-type e) ty)))
 (rule ((= e (SideEffectResult i ty))) ((set (expr-type e) ty)))
+(rule ((= e (PhiResult i ty))) ((set (expr-type e) ty)))
 (rule ((= e (LoadResult _ _ ty))) ((set (expr-type e) ty)))
 
 ; Unary ops preserve type
 (rule ((= e (Neg x)) (= ty (expr-type x))) ((set (expr-type e) ty)))
 (rule ((= e (Not x)) (= ty (expr-type x))) ((set (expr-type e) ty)))
+(rule ((= e (EvmClz x)) (= ty (expr-type x))) ((set (expr-type e) ty)))
+(rule ((= e (EvmExp x _)) (= ty (expr-type x))) ((set (expr-type e) ty)))
+(rule ((= e (EvmByte _ value)) (= ty (expr-type value))) ((set (expr-type e) ty)))
+(rule ((= e (EvmAddMod x _ _)) (= ty (expr-type x))) ((set (expr-type e) ty)))
+(rule ((= e (EvmMulMod x _ _)) (= ty (expr-type x))) ((set (expr-type e) ty)))
 
 ; Comparisons return i1
 (rule ((= e (Lt _ _)))   ((set (expr-type e) (I1))))

@@ -1,0 +1,67 @@
+target = "evm-ethereum-london"
+
+# Test: addmod with modulus zero folds to zero.
+# sameln: func public %evm_addmod_modulus_zero(v0.i32, v1.i32) -> i32 {
+# nextln:     block0:
+# nextln:         return 0.i32;
+# nextln: }
+func public %evm_addmod_modulus_zero(v0.i32, v1.i32) -> i32 {
+    block0:
+        v2.i32 = evm_add_mod v0 v1 0.i32;
+        return v2;
+}
+
+# Test: mulmod with modulus zero folds to zero.
+# sameln: func public %evm_mulmod_modulus_zero(v0.i32, v1.i32) -> i32 {
+# nextln:     block0:
+# nextln:         return 0.i32;
+# nextln: }
+func public %evm_mulmod_modulus_zero(v0.i32, v1.i32) -> i32 {
+    block0:
+        v2.i32 = evm_mul_mod v0 v1 0.i32;
+        return v2;
+}
+
+# Test: exp(x, 0) folds to one.
+# sameln: func public %evm_exp_zero_exponent(v0.i32) -> i32 {
+# nextln:     block0:
+# nextln:         return 1.i32;
+# nextln: }
+func public %evm_exp_zero_exponent(v0.i32) -> i32 {
+    block0:
+        v1.i32 = evm_exp v0 0.i32;
+        return v1;
+}
+
+# Test: exp(0, y!=0) folds to zero.
+# sameln: func public %evm_exp_zero_base_nonzero_exponent() -> i32 {
+# nextln:     block0:
+# nextln:         return 0.i32;
+# nextln: }
+func public %evm_exp_zero_base_nonzero_exponent() -> i32 {
+    block0:
+        v0.i32 = evm_exp 0.i32 3.i32;
+        return v0;
+}
+
+# Test: byte(pos, 0) folds to zero.
+# sameln: func public %evm_byte_zero_value(v0.i32) -> i32 {
+# nextln:     block0:
+# nextln:         return 0.i32;
+# nextln: }
+func public %evm_byte_zero_value(v0.i32) -> i32 {
+    block0:
+        v1.i32 = evm_byte v0 0.i32;
+        return v1;
+}
+
+# Test: clz(0) folds to bitwidth.
+# sameln: func public %evm_clz_zero_i32() -> i32 {
+# nextln:     block0:
+# nextln:         return 32.i32;
+# nextln: }
+func public %evm_clz_zero_i32() -> i32 {
+    block0:
+        v0.i32 = evm_clz 0.i32;
+        return v0;
+}

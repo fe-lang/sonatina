@@ -114,6 +114,33 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
                     changed = true;
                 }
             }
+            EggTerm::Global(gv, _term_ty) => {
+                let Some(original_inst) = func.dfg.value_inst(original_val) else {
+                    continue;
+                };
+                if func.dfg.is_phi(original_inst) {
+                    continue;
+                }
+
+                let global_val = func.dfg.make_global_value(gv);
+                if can_alias(func, &dom, original_val, global_val) {
+                    func.dfg.change_to_alias(original_val, global_val);
+                    changed = true;
+                }
+            }
+            EggTerm::Undef(term_ty) => {
+                let Some(original_inst) = func.dfg.value_inst(original_val) else {
+                    continue;
+                };
+                if func.dfg.is_phi(original_inst) {
+                    continue;
+                }
+                let undef = func.dfg.make_undef_value(term_ty);
+                if can_alias(func, &dom, original_val, undef) {
+                    func.dfg.change_to_alias(original_val, undef);
+                    changed = true;
+                }
+            }
             term => {
                 let is = func.inst_set();
                 if term.node_count() > 32
@@ -148,6 +175,9 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
     }
 
     if eliminate_adjacent_dead_stores(func) {
+        changed = true;
+    }
+    if eliminate_dead_pure_insts(func) {
         changed = true;
     }
 
@@ -248,6 +278,7 @@ fn eliminate_adjacent_dead_stores(func: &mut Function) -> bool {
                     && prev_addr == addr
                     && prev_ty == ty
                 {
+                    func.dfg.untrack_inst(prev_id);
                     func.layout.remove_inst(prev_id);
                     changed = true;
                 }
@@ -260,6 +291,52 @@ fn eliminate_adjacent_dead_stores(func: &mut Function) -> bool {
     }
 
     changed
+}
+
+fn eliminate_dead_pure_insts(func: &mut Function) -> bool {
+    let mut worklist = Vec::new();
+    for block in func.layout.iter_block() {
+        for inst in func.layout.iter_inst(block) {
+            if is_trivially_dead_pure_inst(func, inst) {
+                worklist.push(inst);
+            }
+        }
+    }
+
+    let mut changed = false;
+    while let Some(inst) = worklist.pop() {
+        if !func.layout.is_inst_inserted(inst) || !is_trivially_dead_pure_inst(func, inst) {
+            continue;
+        }
+
+        let operands = func.dfg.inst(inst).collect_values();
+        func.dfg.untrack_inst(inst);
+        func.layout.remove_inst(inst);
+        changed = true;
+
+        for operand in operands {
+            if let Some(def_inst) = func.dfg.value_inst(operand)
+                && func.layout.is_inst_inserted(def_inst)
+                && is_trivially_dead_pure_inst(func, def_inst)
+            {
+                worklist.push(def_inst);
+            }
+        }
+    }
+
+    changed
+}
+
+fn is_trivially_dead_pure_inst(func: &Function, inst: InstId) -> bool {
+    if func.dfg.side_effect(inst).has_effect() || func.dfg.is_terminator(inst) {
+        return false;
+    }
+
+    let Some(result) = func.dfg.inst_result(inst) else {
+        return false;
+    };
+
+    func.dfg.users_num(result) == 0
 }
 
 #[cfg(test)]
@@ -341,6 +418,101 @@ mod tests {
         let mut extracted = results.iter().filter_map(extract_output_to_string);
         let result = extracted.next().expect("extract should return a result");
         // v5 should be unified with (Const 10 (I32)) via pass-through
+        assert!(result.contains("0xa"), "Expected 0xa, got: {result}");
+        assert!(extracted.next().is_none());
+    }
+
+    #[test]
+    fn test_load_pass_through_multiple_non_aliasing_stores_egglog() {
+        // mem1: store A=10
+        // mem2: store B=20
+        // mem3: store C=30
+        // load A from mem3 should walk through mem2 and mem3 and still return 10.
+        let program = r#"
+(let a (AllocaResult 1 (I32)))
+(let b (AllocaResult 2 (I32)))
+(let c (AllocaResult 3 (I32)))
+
+(set (store-prev 1) 0)
+(set (store-addr 1) a)
+(set (store-val 1) (Const (i256 10) (I32)))
+(set (store-ty 1) (I32))
+
+(set (store-prev 2) 1)
+(set (store-addr 2) b)
+(set (store-val 2) (Const (i256 20) (I32)))
+(set (store-ty 2) (I32))
+
+(set (store-prev 3) 2)
+(set (store-addr 3) c)
+(set (store-val 3) (Const (i256 30) (I32)))
+(set (store-ty 3) (I32))
+
+(let v4 (LoadResult 4 3 (I32)))
+(set (load-addr 4) a)
+
+(run 10)
+(extract v4)
+"#;
+        let full = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, program);
+        let mut egraph = EGraph::default();
+        let results = egraph
+            .parse_and_run_program(None, &full)
+            .expect("egglog should run");
+        let mut extracted = results.iter().filter_map(extract_output_to_string);
+        let result = extracted.next().expect("extract should return a result");
+        assert!(result.contains("0xa"), "Expected 0xa, got: {result}");
+        assert!(extracted.next().is_none());
+    }
+
+    #[test]
+    fn test_memphi_load_merge_after_non_aliasing_tail_stores_egglog() {
+        // Branch 1: store A=10; store B=99
+        // Branch 2: store A=10; store C=77
+        // Merge memory with MemPhi and load A -> 10.
+        let program = r#"
+(let a (AllocaResult 1 (I32)))
+(let b (AllocaResult 2 (I32)))
+(let c (AllocaResult 3 (I32)))
+
+(set (store-prev 1) 0)
+(set (store-addr 1) a)
+(set (store-val 1) (Const (i256 10) (I32)))
+(set (store-ty 1) (I32))
+
+(set (store-prev 2) 1)
+(set (store-addr 2) b)
+(set (store-val 2) (Const (i256 99) (I32)))
+(set (store-ty 2) (I32))
+
+(set (store-prev 3) 0)
+(set (store-addr 3) a)
+(set (store-val 3) (Const (i256 10) (I32)))
+(set (store-ty 3) (I32))
+
+(set (store-prev 4) 3)
+(set (store-addr 4) c)
+(set (store-val 4) (Const (i256 77) (I32)))
+(set (store-ty 4) (I32))
+
+(is-memphi 5)
+(set (memphi-num-preds 5) 2)
+(set (memphi-pred 5 0) 2)
+(set (memphi-pred 5 1) 4)
+
+(let v6 (LoadResult 6 5 (I32)))
+(set (load-addr 6) a)
+
+(run 10)
+(extract v6)
+"#;
+        let full = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, program);
+        let mut egraph = EGraph::default();
+        let results = egraph
+            .parse_and_run_program(None, &full)
+            .expect("egglog should run");
+        let mut extracted = results.iter().filter_map(extract_output_to_string);
+        let result = extracted.next().expect("extract should return a result");
         assert!(result.contains("0xa"), "Expected 0xa, got: {result}");
         assert!(extracted.next().is_none());
     }

@@ -12,7 +12,7 @@ use rustc_hash::FxHashSet;
 use sonatina_ir::{
     BlockId, Function, InstDowncast, InstId, Type, U256, Value, ValueId,
     cfg::ControlFlowGraph,
-    inst::{arith::*, cmp::*, control_flow::Phi, data::*, evm::*, logic::*},
+    inst::{arith::*, cast::*, cmp::*, control_flow::Phi, data::*, evm::*, logic::*},
 };
 
 const TYPES: &str = include_str!("types.egg");
@@ -39,12 +39,15 @@ pub fn func_to_egglog(func: &Function) -> String {
 
     // Track exit memory state per block
     let mut block_exit_mem: SecondaryMap<BlockId, u32> = SecondaryMap::new();
-    let mut memphis: Vec<(u32, Vec<BlockId>)> = Vec::new();
+    let mut memphis: Vec<(u32, usize)> = Vec::new();
+    let mut pending_memphi_preds: Vec<(u32, usize, BlockId)> = Vec::new();
     let mut processed: FxHashSet<BlockId> = FxHashSet::default();
+    let mut known_values: FxHashSet<ValueId> = FxHashSet::default();
 
     // Define function arguments
     for (idx, &arg_val) in func.arg_values.iter().enumerate() {
         let ty = func.dfg.value_ty(arg_val);
+        known_values.insert(arg_val);
         writeln!(
             &mut out,
             "(let {} (Arg {} {}))",
@@ -78,7 +81,10 @@ pub fn func_to_egglog(func: &Function) -> String {
             // Multiple predecessors or a backedge: create a MemPhi.
             mem_state_counter += 1;
             let memphi_id = mem_state_counter;
-            memphis.push((memphi_id, preds));
+            memphis.push((memphi_id, preds.len()));
+            for (pred_idx, pred_block) in preds.into_iter().enumerate() {
+                pending_memphi_preds.push((memphi_id, pred_idx, pred_block));
+            }
             memphi_id
         };
 
@@ -86,10 +92,17 @@ pub fn func_to_egglog(func: &Function) -> String {
 
         // Process instructions in this block
         for inst_id in func.layout.iter_inst(block) {
-            if let Some((s, new_mem)) =
-                inst_to_egglog_with_mem(func, inst_id, &current_mem, &mut mem_state_counter)
-            {
+            if let Some((s, new_mem)) = inst_to_egglog_with_mem(
+                func,
+                inst_id,
+                &current_mem,
+                &mut mem_state_counter,
+                &known_values,
+            ) {
                 writeln!(&mut body, "{}", s).unwrap();
+                if let Some(result) = func.dfg.inst_result(inst_id) {
+                    known_values.insert(result);
+                }
                 if let Some(m) = new_mem {
                     current_mem = m;
                 }
@@ -105,32 +118,39 @@ pub fn func_to_egglog(func: &Function) -> String {
         processed.insert(block);
     }
 
-    for (memphi_id, preds) in memphis {
+    for (memphi_id, num_preds) in memphis {
         writeln!(&mut out, "(is-memphi {})", memphi_id).unwrap();
         writeln!(
             &mut out,
             "(set (memphi-num-preds {}) {})",
-            memphi_id,
-            preds.len()
+            memphi_id, num_preds
         )
         .unwrap();
+    }
 
-        for (pred_idx, pred_block) in preds.into_iter().enumerate() {
-            let pred_mem = block_exit_mem[pred_block];
-            writeln!(
-                &mut out,
-                "(set (memphi-pred {} {}) {})",
-                memphi_id, pred_idx, pred_mem
-            )
-            .unwrap();
+    for (memphi_id, pred_idx, pred_block) in pending_memphi_preds {
+        if !processed.contains(&pred_block) {
+            continue;
         }
+
+        let pred_mem = block_exit_mem[pred_block];
+        writeln!(
+            &mut out,
+            "(set (memphi-pred {} {}) {})",
+            memphi_id, pred_idx, pred_mem
+        )
+        .unwrap();
     }
 
     out.push_str(&body);
     out
 }
 
-fn inst_to_egglog(func: &Function, inst_id: InstId) -> Option<String> {
+fn inst_to_egglog(
+    func: &Function,
+    inst_id: InstId,
+    known_values: &FxHashSet<ValueId>,
+) -> Option<String> {
     let inst = func.dfg.inst(inst_id);
     let is = func.inst_set();
     let result = func.dfg.inst_result(inst_id);
@@ -164,6 +184,37 @@ fn inst_to_egglog(func: &Function, inst_id: InstId) -> Option<String> {
         };
     }
 
+    macro_rules! try_cast {
+        ($inst_ty:ty, $op:literal) => {
+            if let Some(i) = <&$inst_ty>::downcast(is, inst) {
+                let result = result?;
+                return Some(format!(
+                    "(let {} ({} {} {}))",
+                    value_name(result),
+                    $op,
+                    value_to_egglog(func, *i.from()),
+                    type_to_egglog(*i.ty())
+                ));
+            }
+        };
+    }
+
+    macro_rules! try_ternary {
+        ($inst_ty:ty, $op:literal, $a:ident, $b:ident, $c:ident) => {
+            if let Some(i) = <&$inst_ty>::downcast(is, inst) {
+                let result = result?;
+                return Some(format!(
+                    "(let {} ({} {} {} {}))",
+                    value_name(result),
+                    $op,
+                    value_to_egglog(func, *i.$a()),
+                    value_to_egglog(func, *i.$b()),
+                    value_to_egglog(func, *i.$c())
+                ));
+            }
+        };
+    }
+
     // Arithmetic
     try_binary!(Add, "Add");
     try_binary!(Sub, "Sub");
@@ -179,6 +230,37 @@ fn inst_to_egglog(func: &Function, inst_id: InstId) -> Option<String> {
     try_binary!(EvmSdiv, "Sdiv");
     try_binary!(EvmUmod, "Umod");
     try_binary!(EvmSmod, "Smod");
+    try_ternary!(EvmAddMod, "EvmAddMod", lhs, rhs, modulus);
+    try_ternary!(EvmMulMod, "EvmMulMod", lhs, rhs, modulus);
+
+    if let Some(i) = <&EvmExp>::downcast(is, inst) {
+        let result = result?;
+        return Some(format!(
+            "(let {} (EvmExp {} {}))",
+            value_name(result),
+            value_to_egglog(func, *i.base()),
+            value_to_egglog(func, *i.exponent())
+        ));
+    }
+
+    if let Some(i) = <&EvmByte>::downcast(is, inst) {
+        let result = result?;
+        return Some(format!(
+            "(let {} (EvmByte {} {}))",
+            value_name(result),
+            value_to_egglog(func, *i.pos()),
+            value_to_egglog(func, *i.value())
+        ));
+    }
+
+    if let Some(i) = <&EvmClz>::downcast(is, inst) {
+        let result = result?;
+        return Some(format!(
+            "(let {} (EvmClz {}))",
+            value_name(result),
+            value_to_egglog(func, *i.word())
+        ));
+    }
 
     // Shifts have different field names (bits, value)
     if let Some(i) = <&Shl>::downcast(is, inst) {
@@ -236,17 +318,20 @@ fn inst_to_egglog(func: &Function, inst_id: InstId) -> Option<String> {
         ));
     }
 
-    // Phi instructions produce opaque values in the egraph
-    // The phi result can be used by other expressions, but the phi itself is not optimized
-    if <&Phi>::downcast(is, inst).is_some() {
+    // Casts
+    try_cast!(Sext, "Sext");
+    try_cast!(Zext, "Zext");
+    try_cast!(Trunc, "Trunc");
+    try_cast!(Bitcast, "Bitcast");
+
+    // Model phi conservatively when all incoming values are already representable.
+    // Loop-header phis with forward references still fall back to SideEffectResult.
+    if let Some(phi) = <&Phi>::downcast(is, inst) {
         let result = result?;
-        let ty = func.dfg.value_ty(result);
-        return Some(format!(
-            "(let {} (SideEffectResult {} {}))",
-            value_name(result),
-            result.as_u32(),
-            type_to_egglog(ty)
-        ));
+        if let Some(phi_stmt) = phi_to_egglog(func, result, phi, known_values) {
+            return Some(phi_stmt);
+        }
+        return Some(side_effect_result_to_egglog(func, result));
     }
 
     // Alloca - creates a unique stack allocation
@@ -282,13 +367,65 @@ fn inst_to_egglog(func: &Function, inst_id: InstId) -> Option<String> {
     }
 
     let result = result?;
-    let ty = func.dfg.value_ty(result);
-    Some(format!(
+    Some(side_effect_result_to_egglog(func, result))
+}
+
+fn phi_to_egglog(
+    func: &Function,
+    result: ValueId,
+    phi: &Phi,
+    known_values: &FxHashSet<ValueId>,
+) -> Option<String> {
+    let mut out = format!(
+        "(let {} (PhiResult {} {}))",
+        value_name(result),
+        result.as_u32(),
+        type_to_egglog(func.dfg.value_ty(result))
+    );
+    write!(
+        &mut out,
+        "\n(set (phi-num-preds {}) {})",
+        result.as_u32(),
+        phi.args().len()
+    )
+    .unwrap();
+
+    for (idx, (incoming, _pred)) in phi.args().iter().enumerate() {
+        let incoming = value_to_egglog_if_known(func, *incoming, known_values)?;
+        write!(
+            &mut out,
+            "\n(set (phi-val {} {}) {})",
+            result.as_u32(),
+            idx,
+            incoming
+        )
+        .unwrap();
+    }
+
+    Some(out)
+}
+
+fn side_effect_result_to_egglog(func: &Function, result: ValueId) -> String {
+    format!(
         "(let {} (SideEffectResult {} {}))",
         value_name(result),
         result.as_u32(),
-        type_to_egglog(ty)
-    ))
+        type_to_egglog(func.dfg.value_ty(result))
+    )
+}
+
+fn value_to_egglog_if_known(
+    func: &Function,
+    value: ValueId,
+    known_values: &FxHashSet<ValueId>,
+) -> Option<String> {
+    match func.dfg.value(value) {
+        Value::Immediate { .. } | Value::Global { .. } | Value::Undef { .. } => {
+            Some(value_to_egglog(func, value))
+        }
+        _ if known_values.contains(&value) => Some(value_name(value)),
+        _ => None,
+    }
 }
 
 /// Convert instruction to egglog with memory state tracking.
@@ -298,6 +435,7 @@ fn inst_to_egglog_with_mem(
     inst_id: InstId,
     current_mem: &str,
     mem_counter: &mut u32,
+    known_values: &FxHashSet<ValueId>,
 ) -> Option<(String, Option<String>)> {
     let inst = func.dfg.inst(inst_id);
     let is = func.inst_set();
@@ -356,7 +494,7 @@ fn inst_to_egglog_with_mem(
     }
 
     // Fall back to non-memory instruction conversion
-    inst_to_egglog(func, inst_id).map(|s| (s, None))
+    inst_to_egglog(func, inst_id, known_values).map(|s| (s, None))
 }
 
 fn value_name(v: ValueId) -> String {

@@ -1,0 +1,28 @@
+target = "evm-ethereum-london"
+
+type @val = { i32 };
+
+# Test: loop-carried memory should not be folded to a constant unsoundly.
+# sameln: func public %loop_memphi_no_unsound_fold(v0.i1) -> i32 {
+# check:     block3:
+# check:         v4.i32 = mload v2 i32;
+# check:         return v4;
+func public %loop_memphi_no_unsound_fold(v0.i1) -> i32 {
+    block0:
+        v1.*@val = alloca @val;
+        v2.*i32 = gep v1 0.i8;
+        mstore v2 1.i32 i32;
+        jump block1;
+
+    block1:
+        v3.i1 = phi (v0 block0) (0.i1 block2);
+        br v3 block2 block3;
+
+    block2:
+        mstore v2 2.i32 i32;
+        jump block1;
+
+    block3:
+        v4.i32 = mload v2 i32;
+        return v4;
+}

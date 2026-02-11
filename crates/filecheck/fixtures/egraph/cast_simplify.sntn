@@ -1,0 +1,37 @@
+target = "evm-ethereum-london"
+
+# Test: collapse nested zext chains.
+# sameln: func public %zext_chain(v0.i8) -> i256 {
+# nextln:     block0:
+# nextln:         v2.i256 = zext v0 i256;
+# nextln:         return v2;
+# nextln: }
+func public %zext_chain(v0.i8) -> i256 {
+    block0:
+        v1.i64 = zext v0 i64;
+        v2.i256 = zext v1 i256;
+        return v2;
+}
+
+# Test: trunc(zext(x)) to x's type folds back to x.
+# sameln: func public %trunc_zext_roundtrip(v0.i8) -> i8 {
+# nextln:     block0:
+# nextln:         return v0;
+# nextln: }
+func public %trunc_zext_roundtrip(v0.i8) -> i8 {
+    block0:
+        v1.i256 = zext v0 i256;
+        v2.i8 = trunc v1 i8;
+        return v2;
+}
+
+# Test: trunc to same type is redundant.
+# sameln: func public %trunc_same_type(v0.i32) -> i32 {
+# nextln:     block0:
+# nextln:         return v0;
+# nextln: }
+func public %trunc_same_type(v0.i32) -> i32 {
+    block0:
+        v1.i32 = trunc v0 i32;
+        return v1;
+}
