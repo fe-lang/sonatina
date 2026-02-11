@@ -1,0 +1,14 @@
+---
+source: crates/codegen/tests/inliner.rs
+input_file: test_files/inliner/const_return.sntn
+---
+func private %const() -> i32 {
+    block0:
+        return 42.i32;
+}
+
+
+func public %caller() -> i32 {
+    block0:
+        return 42.i32;
+}

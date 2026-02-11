@@ -1,0 +1,15 @@
+---
+source: crates/codegen/tests/inliner.rs
+input_file: test_files/inliner/inline_evm_revert.sntn
+---
+func private %revert() {
+    block0:
+        evm_revert 0.i32 0.i32;
+}
+
+
+func public %caller() {
+    block0:
+        evm_revert 0.i32 0.i32;
+}
+

@@ -2,6 +2,7 @@
 use std::{collections::BTreeSet, io};
 
 use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption};
+use dyn_clone::clone_box;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{Immediate, Type, Value, ValueId};
@@ -58,6 +59,10 @@ impl DataFlowGraph {
         let inst_id = self.insts.push(inst);
         self.attach_user(inst_id);
         inst_id
+    }
+
+    pub fn clone_inst(&self, inst_id: InstId) -> Box<dyn Inst> {
+        clone_box(self.inst(inst_id))
     }
 
     pub fn make_imm_value<Imm>(&mut self, imm: Imm) -> ValueId

@@ -1,0 +1,20 @@
+---
+source: crates/codegen/tests/inliner.rs
+assertion_line: 29
+input_file: test_files/inliner/splice_return_const_only.sntn
+---
+func private %const_after_work(v0.i32) -> i32 {
+    block0:
+        v1.i32 = add v0 1.i32;
+        v2.i32 = mul v1 3.i32;
+        return 9.i32;
+}
+
+
+func public %caller(v0.i32) -> i32 {
+    block0:
+        v6.i32 = add v0 1.i32;
+        v7.i32 = mul v6 3.i32;
+        v2.i32 = sub 9.i32 1.i32;
+        return v2;
+}

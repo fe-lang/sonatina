@@ -1,0 +1,16 @@
+target = "evm-ethereum-london"
+
+func private %revert(v0.i32) {
+    block0:
+        v1.i32 = add v0 4.i32;
+        evm_revert v0 v1;
+}
+
+func public %caller() {
+    block0:
+        v0.i32 = add 1.i32 2.i32;
+        call %revert v0;
+        v1.i32 = mul v0 7.i32;
+        v2.i32 = sub v1 3.i32;
+        return;
+}

@@ -1,0 +1,13 @@
+target = "evm-ethereum-london"
+
+func private %const() -> i32 {
+    block0:
+        return 42.i32;
+}
+
+func public %caller() -> i32 {
+    block0:
+        v0.i32 = call %const;
+        return v0;
+}
+

@@ -1,0 +1,20 @@
+---
+source: crates/codegen/tests/inliner.rs
+input_file: test_files/inliner/wrapper_rewrite.sntn
+---
+func external %ext_add(v0.i32, v1.i32) -> i32 {
+}
+
+
+func private %wrapper(v0.i32, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %ext_add v0 1.i32;
+        return v2;
+}
+
+
+func public %caller(v0.i32, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %ext_add v0 1.i32;
+        return v2;
+}

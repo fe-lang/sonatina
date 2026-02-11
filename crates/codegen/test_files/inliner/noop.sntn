@@ -1,0 +1,13 @@
+target = "evm-ethereum-london"
+
+func private %noop() {
+    block0:
+        return;
+}
+
+func public %caller() {
+    block0:
+        call %noop;
+        return;
+}
+

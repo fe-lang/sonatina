@@ -1,0 +1,16 @@
+---
+source: crates/codegen/tests/inliner.rs
+assertion_line: 29
+input_file: test_files/inliner/malformed_call_result_void_callee.sntn
+---
+func private %noop() {
+    block0:
+        return;
+}
+
+
+func public %caller() -> i32 {
+    block0:
+        v0.i32 = call %noop;
+        return v0;
+}

@@ -1,0 +1,16 @@
+target = "evm-ethereum-london"
+
+func private %effectful() -> i32 {
+    block0:
+        v0.*i32 = alloca i32;
+        mstore v0 1.i32 i32;
+        v1.i32 = mload v0 i32;
+        return v1;
+}
+
+func public %caller() -> i32 {
+    block0:
+        v0.i32 = call %effectful;
+        return v0;
+}
+

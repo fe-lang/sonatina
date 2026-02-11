@@ -1,0 +1,16 @@
+target = "evm-ethereum-london"
+
+func private %add_mul(v0.i32, v1.i32) -> i32 {
+    block0:
+        v2.i32 = add v0 v1;
+        v3.i32 = mul v2 v0;
+        return v3;
+}
+
+func public %caller(v0.i32, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %add_mul v0 v1;
+        v3.i32 = sub v2 1.i32;
+        return v3;
+}
+
