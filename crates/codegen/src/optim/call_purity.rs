@@ -6,7 +6,7 @@ pub(crate) fn is_proven_pure_call(func: &Function, inst_id: InstId) -> bool {
     };
 
     let attrs = func.ctx().func_attrs(call.callee());
-    let impure_attrs = FuncAttrs::NORETURN | FuncAttrs::MEM_READ | FuncAttrs::MEM_WRITE;
+    let impure_attrs = FuncAttrs::NORETURN | FuncAttrs::MEM_WRITE;
     attrs.contains(FuncAttrs::WILLRETURN) && !attrs.intersects(impure_attrs)
 }
 

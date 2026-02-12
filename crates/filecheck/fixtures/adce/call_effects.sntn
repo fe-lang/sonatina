@@ -24,7 +24,7 @@ func public %remove_unused_pure_call() -> i8 {
         return 1.i8;
 }
 
-#! Assert ADCE keeps calls that read memory, even when the result is unused.
+#! Assert ADCE removes read-only calls when the result is unused.
 # sameln: func private %read_mem(v0.*i8) -> i8 {
 # nextln:     block0:
 # nextln:         v1.i8 = mload v0 i8;
@@ -36,12 +36,11 @@ func private %read_mem(v0.*i8) -> i8 {
         return v1;
 }
 
-# sameln: func public %keep_unused_read_call(v0.*i8) -> i8 {
+# sameln: func public %remove_unused_read_call(v0.*i8) -> i8 {
 # nextln:     block0:
-# nextln:         v1.i8 = call %read_mem v0;
 # nextln:         return 1.i8;
 # nextln: }
-func public %keep_unused_read_call(v0.*i8) -> i8 {
+func public %remove_unused_read_call(v0.*i8) -> i8 {
     block0:
         v1.i8 = call %read_mem v0;
         return 1.i8;

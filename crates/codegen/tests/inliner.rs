@@ -109,7 +109,7 @@ func public %caller(v0.i32) -> i32 {
 }
 
 #[test]
-fn splice_require_pure_rejects_mem_read_calls() {
+fn splice_require_pure_allows_mem_read_calls() {
     let source = r#"
 target = "evm-ethereum-london"
 
@@ -144,15 +144,14 @@ func public %caller(v0.*i32) -> i32 {
     let stats = inliner.run(module);
 
     let dumped = dump_module(module);
-    assert_eq!(
-        stats.calls_spliced, 0,
-        "unexpected splice in pure mode:\n{dumped}"
+    assert!(
+        stats.calls_spliced > 0,
+        "mem-read call body should be spliceable in pure mode:\n{dumped}"
     );
     assert!(
-        dumped.contains("call %wrapper"),
-        "wrapper call should remain when body contains mem-read call:\n{dumped}"
+        !dumped.contains("call %wrapper"),
+        "wrapper call should be eliminated when body contains mem-read call:\n{dumped}"
     );
-    assert!(stats.skipped_not_pure > 0);
 }
 
 #[test]
