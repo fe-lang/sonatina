@@ -297,7 +297,10 @@ impl EggTerm {
                 (EggTerm::Global(gv, ty), format!("g{}:{ty:?}", gv.as_u32()))
             }
             EggTerm::Undef(ty) => (EggTerm::Undef(ty), format!("undef:{ty:?}")),
-            EggTerm::Const(value, ty) => (EggTerm::Const(value, ty), format!("c{value:?}:{ty:?}")),
+            EggTerm::Const(value, ty) => (
+                EggTerm::Const(value, ty),
+                format!("c{:064x}:{ty:?}", value.to_u256()),
+            ),
             EggTerm::Gep { base, indices } => {
                 let (base, base_key) = base.canonicalize_with_key();
                 let mut canonical_indices = Vec::with_capacity(indices.len());
@@ -323,9 +326,12 @@ impl EggTerm {
             EggTerm::Sext(arg, ty) => {
                 Self::canonicalize_unary_with_ty(*arg, ty, EggTerm::Sext, "sext")
             }
-            EggTerm::Zext(arg, ty) => {
-                Self::canonicalize_unary_with_ty(*arg, ty, EggTerm::Zext, "zext")
-            }
+            EggTerm::Zext(arg, ty) => match *arg {
+                EggTerm::Zext(inner, _) => {
+                    Self::canonicalize_unary_with_ty(*inner, ty, EggTerm::Zext, "zext")
+                }
+                other => Self::canonicalize_unary_with_ty(other, ty, EggTerm::Zext, "zext"),
+            },
             EggTerm::Trunc(arg, ty) => {
                 Self::canonicalize_unary_with_ty(*arg, ty, EggTerm::Trunc, "trunc")
             }
@@ -419,9 +425,35 @@ impl EggTerm {
             EggTerm::Sge(lhs, rhs) => {
                 Self::canonicalize_binary(*lhs, *rhs, EggTerm::Sge, "sge", false)
             }
-            EggTerm::Eq(lhs, rhs) => Self::canonicalize_binary(*lhs, *rhs, EggTerm::Eq, "eq", true),
-            EggTerm::Ne(lhs, rhs) => Self::canonicalize_binary(*lhs, *rhs, EggTerm::Ne, "ne", true),
+            EggTerm::Eq(lhs, rhs) => Self::canonicalize_eq(*lhs, *rhs),
+            EggTerm::Ne(lhs, rhs) => Self::canonicalize_ne(*lhs, *rhs),
         }
+    }
+
+    fn is_zero_const(term: &EggTerm) -> bool {
+        matches!(term, EggTerm::Const(value, _) if *value == I256::from(0))
+    }
+
+    fn canonicalize_eq(lhs: EggTerm, rhs: EggTerm) -> (Self, String) {
+        if Self::is_zero_const(&lhs) {
+            return Self::canonicalize_unary(rhs, EggTerm::IsZero, "is_zero");
+        }
+        if Self::is_zero_const(&rhs) {
+            return Self::canonicalize_unary(lhs, EggTerm::IsZero, "is_zero");
+        }
+
+        Self::canonicalize_binary(lhs, rhs, EggTerm::Eq, "eq", true)
+    }
+
+    fn canonicalize_ne(lhs: EggTerm, rhs: EggTerm) -> (Self, String) {
+        if Self::is_zero_const(&lhs) {
+            return Self::canonicalize_unary(EggTerm::IsZero(Box::new(rhs)), EggTerm::Not, "not");
+        }
+        if Self::is_zero_const(&rhs) {
+            return Self::canonicalize_unary(EggTerm::IsZero(Box::new(lhs)), EggTerm::Not, "not");
+        }
+
+        Self::canonicalize_binary(lhs, rhs, EggTerm::Ne, "ne", true)
     }
 
     fn canonicalize_unary(
@@ -904,6 +936,50 @@ mod tests {
         assert_eq!(
             canonical,
             EggTerm::Sub(Box::new(const_i32(20)), Box::new(const_i32(10)))
+        );
+    }
+
+    #[test]
+    fn canonicalize_eq_zero_to_is_zero() {
+        let term = EggTerm::Eq(
+            Box::new(EggTerm::Value(ValueId::from_u32(7))),
+            Box::new(const_i32(0)),
+        );
+        let canonical = term.canonicalize();
+        assert_eq!(
+            canonical,
+            EggTerm::IsZero(Box::new(EggTerm::Value(ValueId::from_u32(7))))
+        );
+    }
+
+    #[test]
+    fn canonicalize_ne_zero_to_not_is_zero() {
+        let term = EggTerm::Ne(
+            Box::new(EggTerm::Value(ValueId::from_u32(9))),
+            Box::new(const_i32(0)),
+        );
+        let canonical = term.canonicalize();
+        assert_eq!(
+            canonical,
+            EggTerm::Not(Box::new(EggTerm::IsZero(Box::new(EggTerm::Value(
+                ValueId::from_u32(9),
+            )))))
+        );
+    }
+
+    #[test]
+    fn canonicalize_zext_chain_collapses_inner_cast() {
+        let term = EggTerm::Zext(
+            Box::new(EggTerm::Zext(
+                Box::new(EggTerm::Value(ValueId::from_u32(3))),
+                Type::I64,
+            )),
+            Type::I256,
+        );
+        let canonical = term.canonicalize();
+        assert_eq!(
+            canonical,
+            EggTerm::Zext(Box::new(EggTerm::Value(ValueId::from_u32(3))), Type::I256)
         );
     }
 

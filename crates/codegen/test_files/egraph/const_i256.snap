@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/egraph.rs
+assertion_line: 24
 input_file: test_files/egraph/const_i256.sntn
 ---
 ; block0

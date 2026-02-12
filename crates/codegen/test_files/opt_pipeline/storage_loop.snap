@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/opt_pipeline.rs
+assertion_line: 46
 input_file: test_files/opt_pipeline/storage_loop.sntn
 ---
 target = "evm-ethereum-osaka"
@@ -17,7 +18,7 @@ func private %update_count__StorPtr_u256___64779554cfbf0358(v0.i256) {
         v9.i256 = evm_sload v0;
         v11.i256 = add 1.i256 v9;
         evm_sstore v0 v11;
-        v13.i256 = add 1.i256 v3;
+        v13.i256 = add v3 1.i256;
         jump block1;
 
     block4:

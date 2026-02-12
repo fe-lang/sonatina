@@ -33,6 +33,7 @@ pub fn func_to_egglog(func: &Function) -> String {
     let mut out = String::new();
     let mut body = String::new();
     let mut mem_state_counter: u32 = 0;
+    let predeclared_values = collect_forward_decl_values(func);
 
     // Compute CFG for predecessor information
     let mut cfg = ControlFlowGraph::new();
@@ -43,12 +44,10 @@ pub fn func_to_egglog(func: &Function) -> String {
     let mut memphis: Vec<(u32, usize)> = Vec::new();
     let mut pending_memphi_preds: Vec<(u32, usize, BlockId)> = Vec::new();
     let mut processed: FxHashSet<BlockId> = FxHashSet::default();
-    let mut known_values: FxHashSet<ValueId> = FxHashSet::default();
 
     // Define function arguments
     for (idx, &arg_val) in func.arg_values.iter().enumerate() {
         let ty = func.dfg.value_ty(arg_val);
-        known_values.insert(arg_val);
         writeln!(
             &mut out,
             "(let {} (Arg {} {}))",
@@ -57,6 +56,17 @@ pub fn func_to_egglog(func: &Function) -> String {
             type_to_egglog(ty)
         )
         .unwrap();
+    }
+
+    // Predeclare values that may be referenced before their defining instruction is emitted.
+    for block in func.layout.iter_block() {
+        for inst_id in func.layout.iter_inst(block) {
+            if let Some(result) = func.dfg.inst_result(inst_id) {
+                if predeclared_values.contains(&result) {
+                    writeln!(&mut out, "{}", side_effect_result_to_egglog(func, result)).unwrap();
+                }
+            }
+        }
     }
 
     // Process blocks in RPO (reverse post-order) for proper dataflow
@@ -98,12 +108,9 @@ pub fn func_to_egglog(func: &Function) -> String {
                 inst_id,
                 &current_mem,
                 &mut mem_state_counter,
-                &known_values,
+                &predeclared_values,
             ) {
                 writeln!(&mut body, "{}", s).unwrap();
-                if let Some(result) = func.dfg.inst_result(inst_id) {
-                    known_values.insert(result);
-                }
                 if let Some(m) = new_mem {
                     current_mem = m;
                 }
@@ -150,7 +157,7 @@ pub fn func_to_egglog(func: &Function) -> String {
 fn inst_to_egglog(
     func: &Function,
     inst_id: InstId,
-    known_values: &FxHashSet<ValueId>,
+    predeclared_values: &FxHashSet<ValueId>,
 ) -> Option<String> {
     let inst = func.dfg.inst(inst_id);
     let is = func.inst_set();
@@ -160,12 +167,15 @@ fn inst_to_egglog(
         ($inst_ty:ty, $op:literal) => {
             if let Some(i) = <&$inst_ty>::downcast(is, inst) {
                 let result = result?;
-                return Some(format!(
-                    "(let {} ({} {} {}))",
-                    value_name(result),
-                    $op,
-                    value_to_egglog(func, *i.lhs()),
-                    value_to_egglog(func, *i.rhs())
+                return Some(bind_result_expr(
+                    result,
+                    format!(
+                        "({} {} {})",
+                        $op,
+                        value_to_egglog(func, *i.lhs()),
+                        value_to_egglog(func, *i.rhs())
+                    ),
+                    predeclared_values,
                 ));
             }
         };
@@ -175,11 +185,10 @@ fn inst_to_egglog(
         ($inst_ty:ty, $op:literal) => {
             if let Some(i) = <&$inst_ty>::downcast(is, inst) {
                 let result = result?;
-                return Some(format!(
-                    "(let {} ({} {}))",
-                    value_name(result),
-                    $op,
-                    value_to_egglog(func, *i.arg())
+                return Some(bind_result_expr(
+                    result,
+                    format!("({} {})", $op, value_to_egglog(func, *i.arg())),
+                    predeclared_values,
                 ));
             }
         };
@@ -189,12 +198,15 @@ fn inst_to_egglog(
         ($inst_ty:ty, $op:literal) => {
             if let Some(i) = <&$inst_ty>::downcast(is, inst) {
                 let result = result?;
-                return Some(format!(
-                    "(let {} ({} {} {}))",
-                    value_name(result),
-                    $op,
-                    value_to_egglog(func, *i.from()),
-                    type_to_egglog(*i.ty())
+                return Some(bind_result_expr(
+                    result,
+                    format!(
+                        "({} {} {})",
+                        $op,
+                        value_to_egglog(func, *i.from()),
+                        type_to_egglog(*i.ty())
+                    ),
+                    predeclared_values,
                 ));
             }
         };
@@ -204,13 +216,16 @@ fn inst_to_egglog(
         ($inst_ty:ty, $op:literal, $a:ident, $b:ident, $c:ident) => {
             if let Some(i) = <&$inst_ty>::downcast(is, inst) {
                 let result = result?;
-                return Some(format!(
-                    "(let {} ({} {} {} {}))",
-                    value_name(result),
-                    $op,
-                    value_to_egglog(func, *i.$a()),
-                    value_to_egglog(func, *i.$b()),
-                    value_to_egglog(func, *i.$c())
+                return Some(bind_result_expr(
+                    result,
+                    format!(
+                        "({} {} {} {})",
+                        $op,
+                        value_to_egglog(func, *i.$a()),
+                        value_to_egglog(func, *i.$b()),
+                        value_to_egglog(func, *i.$c())
+                    ),
+                    predeclared_values,
                 ));
             }
         };
@@ -236,59 +251,74 @@ fn inst_to_egglog(
 
     if let Some(i) = <&EvmExp>::downcast(is, inst) {
         let result = result?;
-        return Some(format!(
-            "(let {} (EvmExp {} {}))",
-            value_name(result),
-            value_to_egglog(func, *i.base()),
-            value_to_egglog(func, *i.exponent())
+        return Some(bind_result_expr(
+            result,
+            format!(
+                "(EvmExp {} {})",
+                value_to_egglog(func, *i.base()),
+                value_to_egglog(func, *i.exponent())
+            ),
+            predeclared_values,
         ));
     }
 
     if let Some(i) = <&EvmByte>::downcast(is, inst) {
         let result = result?;
-        return Some(format!(
-            "(let {} (EvmByte {} {}))",
-            value_name(result),
-            value_to_egglog(func, *i.pos()),
-            value_to_egglog(func, *i.value())
+        return Some(bind_result_expr(
+            result,
+            format!(
+                "(EvmByte {} {})",
+                value_to_egglog(func, *i.pos()),
+                value_to_egglog(func, *i.value())
+            ),
+            predeclared_values,
         ));
     }
 
     if let Some(i) = <&EvmClz>::downcast(is, inst) {
         let result = result?;
-        return Some(format!(
-            "(let {} (EvmClz {}))",
-            value_name(result),
-            value_to_egglog(func, *i.word())
+        return Some(bind_result_expr(
+            result,
+            format!("(EvmClz {})", value_to_egglog(func, *i.word())),
+            predeclared_values,
         ));
     }
 
     // Shifts have different field names (bits, value)
     if let Some(i) = <&Shl>::downcast(is, inst) {
         let result = result?;
-        return Some(format!(
-            "(let {} (Shl {} {}))",
-            value_name(result),
-            value_to_egglog(func, *i.bits()),
-            value_to_egglog(func, *i.value())
+        return Some(bind_result_expr(
+            result,
+            format!(
+                "(Shl {} {})",
+                value_to_egglog(func, *i.bits()),
+                value_to_egglog(func, *i.value())
+            ),
+            predeclared_values,
         ));
     }
     if let Some(i) = <&Shr>::downcast(is, inst) {
         let result = result?;
-        return Some(format!(
-            "(let {} (Shr {} {}))",
-            value_name(result),
-            value_to_egglog(func, *i.bits()),
-            value_to_egglog(func, *i.value())
+        return Some(bind_result_expr(
+            result,
+            format!(
+                "(Shr {} {})",
+                value_to_egglog(func, *i.bits()),
+                value_to_egglog(func, *i.value())
+            ),
+            predeclared_values,
         ));
     }
     if let Some(i) = <&Sar>::downcast(is, inst) {
         let result = result?;
-        return Some(format!(
-            "(let {} (Sar {} {}))",
-            value_name(result),
-            value_to_egglog(func, *i.bits()),
-            value_to_egglog(func, *i.value())
+        return Some(bind_result_expr(
+            result,
+            format!(
+                "(Sar {} {})",
+                value_to_egglog(func, *i.bits()),
+                value_to_egglog(func, *i.value())
+            ),
+            predeclared_values,
         ));
     }
 
@@ -312,10 +342,10 @@ fn inst_to_egglog(
 
     if let Some(i) = <&IsZero>::downcast(is, inst) {
         let result = result?;
-        return Some(format!(
-            "(let {} (IsZero {}))",
-            value_name(result),
-            value_to_egglog(func, *i.lhs())
+        return Some(bind_result_expr(
+            result,
+            format!("(IsZero {})", value_to_egglog(func, *i.lhs())),
+            predeclared_values,
         ));
     }
 
@@ -325,25 +355,19 @@ fn inst_to_egglog(
     try_cast!(Trunc, "Trunc");
     try_cast!(Bitcast, "Bitcast");
 
-    // Model phi conservatively when all incoming values are already representable.
-    // Loop-header phis with forward references still fall back to SideEffectResult.
     if let Some(phi) = <&Phi>::downcast(is, inst) {
         let result = result?;
-        if let Some(phi_stmt) = phi_to_egglog(func, result, phi, known_values) {
-            return Some(phi_stmt);
-        }
-        return Some(side_effect_result_to_egglog(func, result));
+        return Some(phi_to_egglog(func, result, phi, predeclared_values));
     }
 
     // Alloca - creates a unique stack allocation
     if <&Alloca>::downcast(is, inst).is_some() {
         let result = result?;
         let ty = func.dfg.value_ty(result);
-        return Some(format!(
-            "(let {} (AllocaResult {} {}))",
-            value_name(result),
-            result.as_u32(),
-            type_to_egglog(ty)
+        return Some(bind_result_expr(
+            result,
+            format!("(AllocaResult {} {})", result.as_u32(), type_to_egglog(ty)),
+            predeclared_values,
         ));
     }
 
@@ -363,25 +387,32 @@ fn inst_to_egglog(
                 );
             }
 
-            return Some(format!("(let {} {})", value_name(result), gep_expr));
+            return Some(bind_result_expr(result, gep_expr, predeclared_values));
         }
     }
 
     let result = result?;
-    Some(side_effect_result_to_egglog(func, result))
+    if predeclared_values.contains(&result) {
+        None
+    } else {
+        Some(side_effect_result_to_egglog(func, result))
+    }
 }
 
 fn phi_to_egglog(
     func: &Function,
     result: ValueId,
     phi: &Phi,
-    known_values: &FxHashSet<ValueId>,
-) -> Option<String> {
-    let mut out = format!(
-        "(let {} (PhiResult {} {}))",
-        value_name(result),
-        result.as_u32(),
-        type_to_egglog(func.dfg.value_ty(result))
+    predeclared_values: &FxHashSet<ValueId>,
+) -> String {
+    let mut out = bind_result_expr(
+        result,
+        format!(
+            "(PhiResult {} {})",
+            result.as_u32(),
+            type_to_egglog(func.dfg.value_ty(result))
+        ),
+        predeclared_values,
     );
     write!(
         &mut out,
@@ -392,18 +423,17 @@ fn phi_to_egglog(
     .unwrap();
 
     for (idx, (incoming, _pred)) in phi.args().iter().enumerate() {
-        let incoming = value_to_egglog_if_known(func, *incoming, known_values)?;
         write!(
             &mut out,
             "\n(set (phi-val {} {}) {})",
             result.as_u32(),
             idx,
-            incoming
+            value_to_egglog(func, *incoming)
         )
         .unwrap();
     }
 
-    Some(out)
+    out
 }
 
 fn side_effect_result_to_egglog(func: &Function, result: ValueId) -> String {
@@ -415,20 +445,6 @@ fn side_effect_result_to_egglog(func: &Function, result: ValueId) -> String {
     )
 }
 
-fn value_to_egglog_if_known(
-    func: &Function,
-    value: ValueId,
-    known_values: &FxHashSet<ValueId>,
-) -> Option<String> {
-    match func.dfg.value(value) {
-        Value::Immediate { .. } | Value::Global { .. } | Value::Undef { .. } => {
-            Some(value_to_egglog(func, value))
-        }
-        _ if known_values.contains(&value) => Some(value_name(value)),
-        _ => None,
-    }
-}
-
 /// Convert instruction to egglog with memory state tracking.
 /// Returns (egglog_string, new_memory_state_name) if instruction can be converted.
 fn inst_to_egglog_with_mem(
@@ -436,7 +452,7 @@ fn inst_to_egglog_with_mem(
     inst_id: InstId,
     current_mem: &str,
     mem_counter: &mut u32,
-    known_values: &FxHashSet<ValueId>,
+    predeclared_values: &FxHashSet<ValueId>,
 ) -> Option<(String, Option<String>)> {
     let inst = func.dfg.inst(inst_id);
     let is = func.inst_set();
@@ -455,11 +471,12 @@ fn inst_to_egglog_with_mem(
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
         let egglog = format!(
-            "(let {} (LoadResult {} {} {}))\n(set (load-addr {}) {})",
-            value_name(result),
-            load_id,
-            mem_id,
-            type_to_egglog(ty),
+            "{}\n(set (load-addr {}) {})",
+            bind_result_expr(
+                result,
+                format!("(LoadResult {} {} {})", load_id, mem_id, type_to_egglog(ty)),
+                predeclared_values,
+            ),
             load_id,
             addr
         );
@@ -503,7 +520,7 @@ fn inst_to_egglog_with_mem(
 
     // Fall back to non-memory instruction conversion.
     // Some write-barrier instructions (e.g. no-result calls) have no egglog term.
-    if let Some(stmt) = inst_to_egglog(func, inst_id, known_values) {
+    if let Some(stmt) = inst_to_egglog(func, inst_id, predeclared_values) {
         return Some((stmt, new_mem));
     }
 
@@ -524,6 +541,41 @@ fn inst_writes_memory(func: &Function, inst_id: InstId) -> bool {
     }
 
     matches!(func.dfg.inst(inst_id).side_effect(), SideEffect::Write)
+}
+
+fn bind_result_expr(
+    result: ValueId,
+    expr: String,
+    predeclared_values: &FxHashSet<ValueId>,
+) -> String {
+    if predeclared_values.contains(&result) {
+        format!("(union {} {})", value_name(result), expr)
+    } else {
+        format!("(let {} {})", value_name(result), expr)
+    }
+}
+
+fn collect_forward_decl_values(func: &Function) -> FxHashSet<ValueId> {
+    let mut values = FxHashSet::default();
+    let is = func.inst_set();
+
+    for block in func.layout.iter_block() {
+        for inst_id in func.layout.iter_inst(block) {
+            if let Some(phi) = <&Phi>::downcast(is, func.dfg.inst(inst_id)) {
+                if let Some(result) = func.dfg.inst_result(inst_id) {
+                    values.insert(result);
+                }
+
+                for (incoming, _pred) in phi.args() {
+                    if matches!(func.dfg.value(*incoming), Value::Inst { .. }) {
+                        values.insert(*incoming);
+                    }
+                }
+            }
+        }
+    }
+
+    values
 }
 
 fn value_name(v: ValueId) -> String {
@@ -581,7 +633,8 @@ mod tests {
         InstSetBase, Linkage, Signature,
         builder::test_util::{test_func_builder, test_module_builder},
         inst::{
-            control_flow::{Call, Return},
+            arith::Add,
+            control_flow::{Br, Call, Jump, Phi, Return},
             data::{Mload, Mstore},
         },
         isa::Isa,
@@ -651,5 +704,44 @@ mod tests {
     fn test_noreturn_mem_write_call_still_advances_memory() {
         let mem_id = call_load_mem_id(FuncAttrs::MEM_WRITE | FuncAttrs::NORETURN);
         assert_eq!(mem_id, 2);
+    }
+
+    #[test]
+    fn test_forward_phi_is_fully_modeled() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I32, Type::I1], Type::I32);
+        let is = evm.inst_set();
+
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+        let b2 = builder.append_block();
+        let b3 = builder.append_block();
+
+        let seed = builder.func.arg_values[0];
+        let cond = builder.func.arg_values[1];
+
+        builder.switch_to_block(b0);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b1));
+
+        builder.switch_to_block(b1);
+        let loop_phi = builder.insert_inst_with(|| Phi::new(is, vec![(seed, b0)]), Type::I32);
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, b2, b3));
+
+        builder.switch_to_block(b2);
+        let zero = builder.make_imm_value(0i32);
+        let backedge = builder.insert_inst_with(|| Add::new(is, seed, zero), Type::I32);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b1));
+
+        builder.switch_to_block(b3);
+        builder.insert_inst_no_result_with(|| Return::new(is, Some(loop_phi)));
+        builder.append_phi_arg(loop_phi, backedge, b2);
+        builder.seal_all();
+
+        let program = func_to_egglog(&builder.func);
+        let phi_id = loop_phi.as_u32();
+        let backedge_id = backedge.as_u32();
+        assert!(program.contains(&format!("(union v{phi_id} (PhiResult {phi_id} (I32)))")));
+        assert!(program.contains(&format!("(set (phi-num-preds {phi_id}) 2)")));
+        assert!(program.contains(&format!("(set (phi-val {phi_id} 1) v{backedge_id})")));
     }
 }

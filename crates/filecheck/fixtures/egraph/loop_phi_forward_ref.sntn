@@ -1,0 +1,32 @@
+target = "evm-ethereum-london"
+
+# Test: loop-header phi should be modeled even when a backedge input is a forward reference.
+# After add-zero simplification on the backedge value, phi-of-same should collapse.
+# check: func public %loop_phi_forward_ref(v0.i32, v1.i1) -> i32 {
+# nextln:     block0:
+# nextln:         jump block1;
+# nextln: 
+# nextln:     block1:
+# nextln:         br v1 block2 block3;
+# nextln: 
+# nextln:     block2:
+# nextln:         jump block1;
+# nextln: 
+# nextln:     block3:
+# nextln:         return v0;
+# nextln: }
+func public %loop_phi_forward_ref(v0.i32, v1.i1) -> i32 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i32 = phi (v0 block0) (v3 block2);
+        br v1 block2 block3;
+
+    block2:
+        v3.i32 = add v0 0.i32;
+        jump block1;
+
+    block3:
+        return v2;
+}
