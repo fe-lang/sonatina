@@ -725,6 +725,20 @@ func public %main() {
     }
 
     #[test]
+    fn test_br_table_requires_at_least_one_destination() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %main() {
+    block0:
+        br_table 0.i32;
+}
+"#;
+
+        assert!(parse_module(s).is_err());
+    }
+
+    #[test]
     fn test_parse_module_includes_objects() {
         let s = r#"
 target = "evm-ethereum-london"

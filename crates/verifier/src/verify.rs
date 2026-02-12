@@ -17,7 +17,7 @@ use sonatina_ir::{
     },
     isa::TypeLayoutError,
     module::{FuncRef, ModuleCtx},
-    object::{Directive, SectionRef},
+    object::{Directive, EmbedSymbol, SectionRef},
     types::{CompoundType, CompoundTypeRef},
     visitor::Visitor,
 };
@@ -30,6 +30,7 @@ use crate::{
 
 pub fn verify_module(module: &Module, cfg: &VerifierConfig) -> VerificationReport {
     let mut report = verify_module_invariants(module, cfg);
+    let declared_embed_symbols = collect_declared_embed_symbols(module);
 
     let mut func_reports: Vec<_> = module
         .func_store
@@ -37,7 +38,13 @@ pub fn verify_module(module: &Module, cfg: &VerifierConfig) -> VerificationRepor
         .into_par_iter()
         .map(|func_ref| {
             let Some(func_report) = module.func_store.try_view(func_ref, |func| {
-                verify_function_with_symbols(&module.ctx, func_ref, func, cfg)
+                verify_function_with_symbols(
+                    &module.ctx,
+                    func_ref,
+                    func,
+                    cfg,
+                    Some(&declared_embed_symbols),
+                )
             }) else {
                 let mut report = VerificationReport::default();
                 report.push(
@@ -78,7 +85,7 @@ pub fn verify_function(
     func: &Function,
     cfg: &VerifierConfig,
 ) -> VerificationReport {
-    verify_function_with_symbols(ctx, func_ref, func, cfg)
+    verify_function_with_symbols(ctx, func_ref, func, cfg, None)
 }
 
 pub fn verify_module_or_panic(module: &Module, cfg: &VerifierConfig) {
@@ -537,6 +544,22 @@ fn collect_module_invariants(
     }
 }
 
+fn collect_declared_embed_symbols(module: &Module) -> FxHashSet<EmbedSymbol> {
+    let mut symbols = FxHashSet::default();
+
+    for object in module.objects.values() {
+        for section in &object.sections {
+            for directive in &section.directives {
+                if let Directive::Embed(embed) = directive {
+                    symbols.insert(embed.as_symbol.clone());
+                }
+            }
+        }
+    }
+
+    symbols
+}
+
 fn verify_signature_type(
     ctx: &ModuleCtx,
     func_ref: FuncRef,
@@ -913,6 +936,7 @@ struct FuncVerifier<'a> {
     func_ref: FuncRef,
     func: &'a Function,
     sig: Option<Signature>,
+    declared_embed_symbols: Option<&'a FxHashSet<EmbedSymbol>>,
     cfg: &'a VerifierConfig,
     report: VerificationReport,
 
@@ -931,8 +955,9 @@ fn verify_function_with_symbols<'a>(
     func_ref: FuncRef,
     func: &'a Function,
     cfg: &'a VerifierConfig,
+    declared_embed_symbols: Option<&'a FxHashSet<EmbedSymbol>>,
 ) -> VerificationReport {
-    let mut verifier = FuncVerifier::new(ctx, func_ref, func, cfg);
+    let mut verifier = FuncVerifier::new(ctx, func_ref, func, cfg, declared_embed_symbols);
     verifier.run();
     verifier.report
 }
@@ -943,12 +968,14 @@ impl<'a> FuncVerifier<'a> {
         func_ref: FuncRef,
         func: &'a Function,
         cfg: &'a VerifierConfig,
+        declared_embed_symbols: Option<&'a FxHashSet<EmbedSymbol>>,
     ) -> Self {
         Self {
             ctx,
             func_ref,
             func,
             sig: ctx.get_sig(func_ref),
+            declared_embed_symbols,
             cfg,
             report: VerificationReport::default(),
             block_order: Vec::new(),
@@ -1853,6 +1880,21 @@ impl<'a> FuncVerifier<'a> {
             let branch = <&dyn BranchInfo as InstDowncast>::downcast(self.ctx.inst_set, last_data);
             if let Some(branch) = branch {
                 let dests = branch.dests();
+                if dests.is_empty() {
+                    self.emit(
+                        Diagnostic::error(
+                            DiagnosticCode::BranchInfoMismatch,
+                            "branch terminator must target at least one destination",
+                            Location::Inst {
+                                func: self.func_ref,
+                                block: Some(block),
+                                inst: last_inst,
+                            },
+                        )
+                        .with_snippet(self.snippet_for_inst(last_inst)),
+                    );
+                }
+
                 if branch.num_dests() != dests.len() {
                     self.emit(Diagnostic::error(
                         DiagnosticCode::BranchInfoMismatch,
@@ -3448,7 +3490,18 @@ impl<'a> FuncVerifier<'a> {
                 }
             }
             SymbolRef::Embed(embed) => {
-                let _ = (embed, location);
+                if let Some(declared_embed_symbols) = self.declared_embed_symbols
+                    && !declared_embed_symbols.contains(embed)
+                {
+                    self.emit(
+                        Diagnostic::error(
+                            DiagnosticCode::StructuralInvariantViolation,
+                            "symbol reference points to undeclared embed symbol",
+                            location,
+                        )
+                        .with_note(format!("missing embed symbol: &{}", embed.0.as_str())),
+                    );
+                }
             }
         }
     }

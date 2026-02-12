@@ -1,6 +1,9 @@
 use sonatina_ir::{
-    InstDowncastMut, Linkage, Signature, Type, ValueId, builder::ModuleBuilder, inst::arith::Add,
-    isa::evm::Evm, module::ModuleCtx,
+    InstDowncastMut, Linkage, Signature, Type, ValueId,
+    builder::ModuleBuilder,
+    inst::{arith::Add, control_flow::BrTable},
+    isa::evm::Evm,
+    module::ModuleCtx,
 };
 use sonatina_parser::parse_module;
 use sonatina_triple::TargetTriple;
@@ -167,6 +170,45 @@ func public %bad_br() -> unit {
     let report = verify_module(&parsed.module, &cfg);
 
     assert!(has_code(&report, "IR0600"), "expected IR0600, got {report}");
+}
+
+#[test]
+fn branch_table_without_destinations_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_brt(v0.i32) -> unit {
+    block0:
+        br_table v0 block1;
+
+    block1:
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let module = parsed.module;
+    let func_ref = module.funcs()[0];
+
+    module.func_store.modify(func_ref, |func| {
+        let entry = func.layout.entry_block().expect("entry block must exist");
+        let term = func
+            .layout
+            .last_inst_of(entry)
+            .expect("entry terminator must exist");
+        let inst_set = func.inst_set();
+        let inst = func.dfg.inst_mut(term);
+        let br_table =
+            <&mut BrTable as InstDowncastMut>::downcast_mut(inst_set, inst).expect("br_table");
+
+        *br_table.default_mut() = None;
+        br_table.table_mut().clear();
+    });
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&module, &cfg);
+
+    assert!(has_code(&report, "IR0302"), "expected IR0302, got {report}");
 }
 
 #[test]
@@ -698,6 +740,25 @@ object @Contract {
     let report = verify_module(&parsed.module, &cfg);
 
     assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn undeclared_embed_symbols_are_rejected_even_without_objects() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %entry() -> unit {
+    block0:
+        v0.i256 = sym_addr &missing_embed;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0611"), "expected IR0611, got {report}");
 }
 
 #[test]
