@@ -15,7 +15,10 @@ use sonatina_ir::{
     module::{FuncRef, ModuleCtx},
 };
 
-use crate::cfg_edit::{CfgEditor, CleanupMode};
+use crate::{
+    cfg_edit::{CfgEditor, CleanupMode},
+    optim::call_purity::is_removable_pure_call,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ValueTemplate {
@@ -467,7 +470,6 @@ fn collect_splice_body(
 
     let mut const_values: BTreeMap<ValueId, ValueTemplate> = BTreeMap::new();
     let mut body: Vec<TemplateInstSummary> = Vec::with_capacity(body_insts.len());
-    let is = callee.inst_set();
     for &inst_id in body_insts {
         if callee.dfg.is_phi(inst_id)
             || callee.dfg.is_branch(inst_id)
@@ -478,11 +480,7 @@ fn collect_splice_body(
             return None;
         }
 
-        if config.splice_require_pure
-            && (callee.dfg.side_effect(inst_id) != SideEffect::None
-                || <&control_flow::Call as InstDowncast>::downcast(is, callee.dfg.inst(inst_id))
-                    .is_some())
-        {
+        if config.splice_require_pure && !is_pure_splice_inst(callee, inst_id) {
             stats.skipped_not_pure += 1;
             stats.skipped_effectful += 1;
             return None;
@@ -499,6 +497,14 @@ fn collect_splice_body(
     }
 
     Some(CollectedSpliceBody { const_values, body })
+}
+
+fn is_pure_splice_inst(callee: &Function, inst_id: InstId) -> bool {
+    if callee.dfg.call_info(inst_id).is_some() {
+        return is_removable_pure_call(callee, inst_id);
+    }
+
+    callee.dfg.side_effect(inst_id) == SideEffect::None
 }
 
 fn materialize_plan(callee: &Function, summary: &InlinePlanSummary) -> InlinePlan {

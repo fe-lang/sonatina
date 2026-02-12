@@ -11,7 +11,7 @@ use sonatina_ir::{
 
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
-    optim::cfg_cleanup::CfgCleanup,
+    optim::{call_purity::is_removable_pure_call, cfg_cleanup::CfgCleanup},
     post_domtree::{PDFSet, PDTIdom, PostDomTree},
 };
 
@@ -72,10 +72,7 @@ impl AdceSolver {
 
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                if matches!(
-                    func.dfg.side_effect(inst),
-                    SideEffect::Write | SideEffect::Control
-                ) {
+                if is_live_root_inst(func, inst) {
                     self.mark_inst(func, inst);
                 }
             }
@@ -273,6 +270,17 @@ impl Default for AdceSolver {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn is_live_root_inst(func: &Function, inst_id: InstId) -> bool {
+    if func.dfg.call_info(inst_id).is_some() {
+        return !is_removable_pure_call(func, inst_id);
+    }
+
+    matches!(
+        func.dfg.side_effect(inst_id),
+        SideEffect::Write | SideEffect::Control
+    )
 }
 
 #[cfg(test)]
