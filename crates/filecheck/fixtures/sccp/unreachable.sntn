@@ -8,7 +8,8 @@ target = "evm-ethereum-london"
 func public %unreachable_blocks() -> i8 {
     block0:
         v0.i8 = add 1.i8 2.i8;
-        br v0 block1 block2;
+        v1.i1 = ne v0 0.i8;
+        br v1 block1 block2;
 
     block1:
         jump block3;

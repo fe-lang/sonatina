@@ -1,38 +1,38 @@
 target = "evm-ethereum-london"
 
 # sameln: func public %complex_loop() -> i8 {
-# nextln:     block4:
+# nextln:     block3:
 # nextln:         return 1.i8;
 func public %complex_loop() -> i8 {
-    block1:
+    block0:
         v0.i8 = add 1.i8 0.i8;
         v1.i8 = add v0 0.i8;
         v2.i8 = sub v0 1.i8;
-        jump block2;
+        jump block1;
+
+    block1:
+        v3.i8 = phi (v9 block6) (v0 block0);
+        v4.i8 = phi (v10 block6) (v2 block0);
+        v5.i1 = lt v4 100.i8;
+        br v5 block2 block3;
 
     block2:
-        v3.i8 = phi (v9 block7) (v0 block1);
-        v4.i8 = phi (v10 block7) (v2 block1);
-        v5.i1 = lt v4 100.i8;
-        br v5 block3 block4;
+        v6.i1 = lt v3 20.i8;
+        br v6 block4 block5;
 
     block3:
-        v6.i1 = lt v3 20.i8;
-        br v6 block5 block6;
-
-    block4:
         return v3;
 
-    block5:
+    block4:
         v7.i8 = add 1.i8 v4;
-        jump block7;
+        jump block6;
+
+    block5:
+        v8.i8 = add v4 2.i8;
+        jump block6;
 
     block6:
-        v8.i8 = add v4 2.i8;
-        jump block7;
-
-    block7:
-        v9.i8 = phi (v0 block5) (v4 block6);
-        v10.i8 = phi (v7 block5) (v8 block6);
-        jump block2;
+        v9.i8 = phi (v0 block4) (v4 block5);
+        v10.i8 = phi (v7 block4) (v8 block5);
+        jump block1;
 }

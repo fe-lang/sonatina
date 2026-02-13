@@ -5,7 +5,8 @@ target = "evm-ethereum-london"
 # sameln: func public %branch_on_evm_keccak256() -> i32 {
 # nextln:     block0:
 # nextln:         v0.i32 = evm_keccak256 0.i32 0.i32;
-# nextln:         br v0 block1 block2;
+# nextln:         v1.i1 = ne v0 0.i32;
+# nextln:         br v1 block1 block2;
 # nextln: 
 # nextln:     block1:
 # nextln:         return 1.i32;
@@ -15,7 +16,8 @@ target = "evm-ethereum-london"
 func public %branch_on_evm_keccak256() -> i32 {
     block0:
         v0.i32 = evm_keccak256 0.i32 0.i32;
-        br v0 block1 block2;
+        v1.i1 = ne v0 0.i32;
+        br v1 block1 block2;
 
     block1:
         return 1.i32;

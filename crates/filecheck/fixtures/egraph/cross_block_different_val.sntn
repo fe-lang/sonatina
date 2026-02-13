@@ -11,7 +11,7 @@ type @val = { i32 };
 func public %cross_block_different_val(v0.i1) -> i32 {
     block0:
         v1.*@val = alloca @val;
-        v2.*i32 = gep v1 0.i8;
+        v2.*i32 = gep v1 0.i8 0.i8;
         br v0 block1 block2;
 
     block1:

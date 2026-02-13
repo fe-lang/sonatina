@@ -5,7 +5,8 @@ target = "evm-ethereum-london"
 # sameln: func public %branch_on_mload(v0.*i64) -> i32 {
 # nextln:     block0:
 # nextln:         v1.i64 = mload v0 i64;
-# nextln:         br v1 block1 block2;
+# nextln:         v2.i1 = ne v1 0.i64;
+# nextln:         br v2 block1 block2;
 # nextln: 
 # nextln:     block1:
 # nextln:         return 1.i32;
@@ -15,7 +16,8 @@ target = "evm-ethereum-london"
 func public %branch_on_mload(v0.*i64) -> i32 {
     block0:
         v1.i64 = mload v0 i64;
-        br v1 block1 block2;
+        v2.i1 = ne v1 0.i64;
+        br v2 block1 block2;
 
     block1:
         return 1.i32;

@@ -10,7 +10,7 @@ type @val = { i32 };
 func public %load_pass_through() -> i32 {
     block0:
         v1.*@val = alloca @val;
-        v2.*i32 = gep v1 0.i8;
+        v2.*i32 = gep v1 0.i8 0.i8;
         mstore v2 10.i32 i32;
         mstore v2 20.i32 i32;
         v5.i32 = mload v2 i32;

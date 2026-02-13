@@ -6,8 +6,8 @@ target = "evm-ethereum-london"
 func public %whole_loop_removed() -> i8 {
     block0:
         v0.i8 = or 1.i8 0.i8;
-        v1.i8 = sext v0 i8;
-        jump block2;
+        v1.i8 = add v0 0.i8;
+        jump block1;
 
     block1:
         v2.i8 = phi (v1 block0) (v5 block2);
