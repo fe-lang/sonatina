@@ -129,7 +129,9 @@ define_inst_set_base! {
 }
 
 /// This trait provides the concrete mapping from `Inst` to corresponding enum
-/// variant. All instruction set that are defined by `sonatina_macros::inst_set`
+/// variant.
+///
+/// All instruction set that are defined by `sonatina_macros::inst_set`
 /// automatically defines an enum which represents all instructions in the set.
 /// e.g.
 ///
