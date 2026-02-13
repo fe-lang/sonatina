@@ -2655,6 +2655,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "sonatina-ir",
+ "sonatina-macros",
  "sonatina-parser",
  "sonatina-triple",
 ]

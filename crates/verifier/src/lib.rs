@@ -5,7 +5,7 @@ mod report;
 mod verify;
 
 pub use config::{VerificationLevel, VerifierConfig};
-pub use diagnostic::{Diagnostic, DiagnosticCode, Location, Note, Severity};
+pub use diagnostic::{Diagnostic, DiagnosticCode, DiagnosticContext, Location, Note, Severity};
 pub use pipeline::{
     ModuleBuilderVerifyExt, ParseVerifyError, build_and_verify, parse_and_verify_module,
 };

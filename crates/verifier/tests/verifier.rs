@@ -881,3 +881,70 @@ func public %entry() -> unit {
 
     assert!(report.is_ok(), "expected no verifier errors, got {report}");
 }
+
+#[test]
+fn inst_diagnostic_includes_function_name_and_opcode_context() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_malloc() -> unit {
+    block0:
+        v0.i256 = evm_malloc 32.i256;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code.as_str() == "IR0601")
+        .expect("IR0601 diagnostic must exist");
+    let context = diagnostic
+        .context
+        .as_ref()
+        .expect("instruction diagnostic should include context");
+
+    assert_eq!(context.function_name.as_deref(), Some("%bad_malloc"));
+    assert!(
+        context
+            .inst_text
+            .as_deref()
+            .is_some_and(|inst_text| inst_text.contains("evm_malloc")),
+        "expected inst text to mention evm_malloc, got {:?}",
+        context.inst_text
+    );
+
+    let rendered = format!("{report}");
+    assert!(
+        rendered.contains("%bad_malloc"),
+        "expected rendered diagnostic to include function name, got {rendered}"
+    );
+    assert!(
+        rendered.contains("evm_malloc"),
+        "expected rendered diagnostic to include opcode text, got {rendered}"
+    );
+}
+
+#[test]
+fn evm_no_result_instruction_rejects_result_value() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_evm_return_result() -> unit {
+    block0:
+        v0.i256 = evm_return 0.i256 0.i256;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}

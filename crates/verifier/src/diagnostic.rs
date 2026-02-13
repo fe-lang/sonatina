@@ -58,56 +58,60 @@ pub enum DiagnosticCode {
 }
 
 impl DiagnosticCode {
-    pub const fn as_str(self) -> &'static str {
+    pub const fn as_u16(self) -> u16 {
         match self {
-            Self::InvalidValueRef => "IR0001",
-            Self::InvalidBlockRef => "IR0002",
-            Self::InvalidFuncRef => "IR0003",
-            Self::InvalidTypeRef => "IR0004",
-            Self::InvalidInstRef => "IR0005",
-            Self::InvalidGlobalRef => "IR0006",
-            Self::LayoutBlockCycle => "IR0100",
-            Self::LayoutInstCycle => "IR0101",
-            Self::InstInMultipleBlocks => "IR0102",
-            Self::InsertedButUnlisted => "IR0103",
-            Self::UnlistedButInserted => "IR0104",
-            Self::MissingEntryBlock => "IR0105",
-            Self::EmptyBlock => "IR0200",
-            Self::MissingTerminator => "IR0201",
-            Self::TerminatorNotLast => "IR0202",
-            Self::NonTerminatorAtEnd => "IR0203",
-            Self::BranchToMissingBlock => "IR0300",
-            Self::BranchToNonInsertedBlock => "IR0301",
-            Self::BranchInfoMismatch => "IR0302",
-            Self::BranchToEntryDisallowed => "IR0303",
-            Self::UnreachableBlock => "IR0304",
-            Self::PhiNotAtBlockTop => "IR0400",
-            Self::PhiInEntryBlock => "IR0401",
-            Self::PhiArgCountMismatchPreds => "IR0402",
-            Self::PhiHasNonPredIncoming => "IR0403",
-            Self::PhiDuplicateIncomingBlock => "IR0404",
-            Self::PhiIncomingTypeMismatch => "IR0405",
-            Self::UseBeforeDefInBlock => "IR0500",
-            Self::DefDoesNotDominateUse => "IR0501",
-            Self::PhiIncomingNotAvailableOnEdge => "IR0502",
-            Self::SelfReferentialPhiNotInLoop => "IR0503",
-            Self::InstOperandTypeMismatch => "IR0600",
-            Self::InstResultTypeMismatch => "IR0601",
-            Self::CallArgTypeMismatch => "IR0602",
-            Self::CallArityMismatch => "IR0603",
-            Self::ReturnTypeMismatch => "IR0604",
-            Self::UnstorableTypeInMemoryOp => "IR0605",
-            Self::GepTypeComputationFailed => "IR0606",
-            Self::ExtractIndexOutOfBounds => "IR0607",
-            Self::InsertIndexOutOfBounds => "IR0608",
-            Self::ValueTypeMismatch => "IR0609",
-            Self::InvalidSignature => "IR0610",
-            Self::StructuralInvariantViolation => "IR0611",
-            Self::UsersSetMismatch => "IR0700",
-            Self::InstResultMapBroken => "IR0701",
-            Self::ImmediateCacheMismatch => "IR0702",
-            Self::GlobalCacheMismatch => "IR0703",
+            Self::InvalidValueRef => 1,
+            Self::InvalidBlockRef => 2,
+            Self::InvalidFuncRef => 3,
+            Self::InvalidTypeRef => 4,
+            Self::InvalidInstRef => 5,
+            Self::InvalidGlobalRef => 6,
+            Self::LayoutBlockCycle => 100,
+            Self::LayoutInstCycle => 101,
+            Self::InstInMultipleBlocks => 102,
+            Self::InsertedButUnlisted => 103,
+            Self::UnlistedButInserted => 104,
+            Self::MissingEntryBlock => 105,
+            Self::EmptyBlock => 200,
+            Self::MissingTerminator => 201,
+            Self::TerminatorNotLast => 202,
+            Self::NonTerminatorAtEnd => 203,
+            Self::BranchToMissingBlock => 300,
+            Self::BranchToNonInsertedBlock => 301,
+            Self::BranchInfoMismatch => 302,
+            Self::BranchToEntryDisallowed => 303,
+            Self::UnreachableBlock => 304,
+            Self::PhiNotAtBlockTop => 400,
+            Self::PhiInEntryBlock => 401,
+            Self::PhiArgCountMismatchPreds => 402,
+            Self::PhiHasNonPredIncoming => 403,
+            Self::PhiDuplicateIncomingBlock => 404,
+            Self::PhiIncomingTypeMismatch => 405,
+            Self::UseBeforeDefInBlock => 500,
+            Self::DefDoesNotDominateUse => 501,
+            Self::PhiIncomingNotAvailableOnEdge => 502,
+            Self::SelfReferentialPhiNotInLoop => 503,
+            Self::InstOperandTypeMismatch => 600,
+            Self::InstResultTypeMismatch => 601,
+            Self::CallArgTypeMismatch => 602,
+            Self::CallArityMismatch => 603,
+            Self::ReturnTypeMismatch => 604,
+            Self::UnstorableTypeInMemoryOp => 605,
+            Self::GepTypeComputationFailed => 606,
+            Self::ExtractIndexOutOfBounds => 607,
+            Self::InsertIndexOutOfBounds => 608,
+            Self::ValueTypeMismatch => 609,
+            Self::InvalidSignature => 610,
+            Self::StructuralInvariantViolation => 611,
+            Self::UsersSetMismatch => 700,
+            Self::InstResultMapBroken => 701,
+            Self::ImmediateCacheMismatch => 702,
+            Self::GlobalCacheMismatch => 703,
         }
+    }
+
+    pub fn as_str(self) -> String {
+        format!("IR{:04}", self.as_u16())
     }
 }
 
@@ -203,12 +207,20 @@ pub struct Note {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct DiagnosticContext {
+    pub function_name: Option<String>,
+    pub inst_text: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Diagnostic {
     pub code: DiagnosticCode,
     pub severity: Severity,
     pub message: String,
     pub primary: Location,
     pub notes: Vec<Note>,
+    pub context: Option<DiagnosticContext>,
     pub snippet: Option<String>,
 }
 
@@ -225,6 +237,7 @@ impl Diagnostic {
             message: message.into(),
             primary,
             notes: Vec::new(),
+            context: None,
             snippet: None,
         }
     }
@@ -244,6 +257,11 @@ impl Diagnostic {
         self
     }
 
+    pub fn with_context(mut self, context: DiagnosticContext) -> Self {
+        self.context = Some(context);
+        self
+    }
+
     pub fn with_snippet(mut self, snippet: Option<String>) -> Self {
         self.snippet = snippet;
         self
@@ -256,11 +274,28 @@ impl Diagnostic {
 
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(
+        write!(
             f,
             "{} [{}] {} @ {}",
             self.severity, self.code, self.message, self.primary
         )?;
+
+        if let Some(context) = &self.context {
+            match (&context.function_name, &context.inst_text) {
+                (Some(function_name), Some(inst_text)) => {
+                    write!(f, " ({function_name}, {inst_text})")?;
+                }
+                (Some(function_name), None) => {
+                    write!(f, " ({function_name})")?;
+                }
+                (None, Some(inst_text)) => {
+                    write!(f, " ({inst_text})")?;
+                }
+                (None, None) => {}
+            }
+        }
+
+        writeln!(f)?;
 
         for note in &self.notes {
             writeln!(f, "  note: {}", note.message)?;
