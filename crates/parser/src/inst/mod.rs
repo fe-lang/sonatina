@@ -50,10 +50,9 @@ macro_rules! impl_inst_build {
     ($ty:ty, ($($arg_name:ident: $arg_kind:ident ),*)) => {
         crate::inst::impl_inst_build_common!(
             $ty,
-            crate::error::ArityBound::Exact(crate::inst::__count_args!($( $arg_kind ),*)),
             |ctx: &mut crate::BuildCtx,
             fb: &mut ir::builder::FunctionBuilder<ir::func_cursor::InstInserter>,
-            args: &Vec<crate::ast::InstArg>,
+            args: &[crate::ast::InstArg],
             has_inst| {
                 let mut arg_iter = args.iter();
                 $(
@@ -66,7 +65,7 @@ macro_rules! impl_inst_build {
 }
 
 macro_rules! impl_inst_build_common {
-    ($ty:ty, $expected_args:expr, $build_expr:expr) => {
+    ($ty:ty, $build_expr:expr) => {
         impl crate::inst::InstBuild for $ty {
             #[allow(unused)]
             fn build(
@@ -86,7 +85,14 @@ macro_rules! impl_inst_build_common {
 
                 let args = &ast_inst.args;
                 let arg_num = args.len();
-                $expected_args.verify_arity(arg_num, ast_inst.span)?;
+                let expected = <$ty>::inst_arity();
+                if !expected.accepts(arg_num) {
+                    return Err(Box::new(crate::Error::InstArgNumMismatch {
+                        expected,
+                        actual: arg_num,
+                        span: ast_inst.span,
+                    }));
+                }
 
                 $build_expr(ctx, fb, args, has_inst)
             }
@@ -118,12 +124,6 @@ macro_rules! process_arg {
     };
 }
 
-macro_rules! __count_args {
-    () => { 0 };
-    ($first:tt $(, $rest:tt)*) => { 1 + crate::inst::__count_args!($($rest),*) };
-}
-
-use __count_args;
 use impl_inst_build;
 use impl_inst_build_common;
 use process_arg;

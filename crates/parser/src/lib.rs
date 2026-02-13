@@ -549,6 +549,22 @@ fn module_ctx_from_triple(triple: TargetTriple) -> ModuleCtx {
 mod tests {
     use super::*;
 
+    fn inst_arity_error(input: &str) -> (ir::InstArity, usize) {
+        let errors = match parse_module(input) {
+            Ok(_) => panic!("expected parser error"),
+            Err(errors) => errors,
+        };
+        errors
+            .into_iter()
+            .find_map(|err| match err {
+                Error::InstArgNumMismatch {
+                    expected, actual, ..
+                } => Some((expected, actual)),
+                _ => None,
+            })
+            .expect("expected arity mismatch error")
+    }
+
     #[test]
     fn test_duplicate_name_identical_signature_should_fail() {
         let s = r#"
@@ -736,6 +752,39 @@ func public %main() {
 "#;
 
         assert!(parse_module(s).is_err());
+    }
+
+    #[test]
+    fn test_call_requires_callee_argument() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %main() {
+    block0:
+        call;
+        return;
+}
+"#;
+
+        let (expected, actual) = inst_arity_error(s);
+        assert_eq!(expected, ir::InstArity::AtLeast(1));
+        assert_eq!(actual, 0);
+    }
+
+    #[test]
+    fn test_return_rejects_multiple_arguments() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %main() {
+    block0:
+        return 0.i8 1.i8;
+}
+"#;
+
+        let (expected, actual) = inst_arity_error(s);
+        assert_eq!(expected, ir::InstArity::AtMost(1));
+        assert_eq!(actual, 2);
     }
 
     #[test]

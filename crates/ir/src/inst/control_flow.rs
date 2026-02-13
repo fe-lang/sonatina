@@ -19,6 +19,7 @@ pub struct Br {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(terminator)]
+#[inst(arity(at_least(2)))]
 pub struct BrTable {
     scrutinee: ValueId,
 
@@ -27,6 +28,7 @@ pub struct BrTable {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(arity(at_least(1)))]
 pub struct Phi {
     args: Vec<(ValueId, BlockId)>,
 }
@@ -56,6 +58,7 @@ impl Phi {
 // * the function call is terminator
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Write))]
+#[inst(arity(at_least(1)))]
 pub struct Call {
     callee: FuncRef,
 
@@ -65,6 +68,7 @@ pub struct Call {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Control))]
 #[inst(terminator)]
+#[inst(arity(at_most(1)))]
 pub struct Return {
     arg: Option<ValueId>,
 }

@@ -174,11 +174,12 @@ pub trait InstSetExt: InstSetBase {
 mod tests {
     use arith::*;
     use control_flow::*;
+    use data::Gep;
     use logic::*;
     use macros::inst_set;
 
     use super::*;
-    use crate::{InstDowncast, InstDowncastMut, ValueId};
+    use crate::{InstArity, InstDowncast, InstDowncastMut, ValueId};
 
     #[inst_set(InstKind = "TestInstKind")]
     struct TestInstSet(Add, Sub, Not, Phi, Jump);
@@ -267,6 +268,25 @@ mod tests {
         assert!(matches!(resolved, TestInstKindMut::Sub(_)));
         let resolved = inst_set.resolve_inst_mut(insts[2].as_mut());
         assert!(matches!(resolved, TestInstKindMut::Not(_)));
+    }
+
+    #[test]
+    fn inst_arity_metadata() {
+        assert_eq!(Add::inst_arity(), InstArity::Exact(2));
+        assert_eq!(Call::inst_arity(), InstArity::AtLeast(1));
+        assert_eq!(BrTable::inst_arity(), InstArity::AtLeast(2));
+        assert_eq!(Phi::inst_arity(), InstArity::AtLeast(1));
+        assert_eq!(Return::inst_arity(), InstArity::AtMost(1));
+        assert_eq!(Gep::inst_arity(), InstArity::AtLeast(2));
+    }
+
+    #[test]
+    fn inst_arity_trait_dispatch() {
+        let inst_set = TestInstSet::new();
+        let value = ValueId::from_u32(1);
+        let add = Add::new(&inst_set, value, value);
+        let inst: &dyn Inst = &add;
+        assert_eq!(inst.arity(), InstArity::Exact(2));
     }
 }
 

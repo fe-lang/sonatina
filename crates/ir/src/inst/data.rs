@@ -71,6 +71,7 @@ pub struct Mstore {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(arity(at_least(2)))]
 pub struct Gep {
     values: SmallVec<[ValueId; 8]>,
 }
