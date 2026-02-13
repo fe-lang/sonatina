@@ -188,7 +188,8 @@ impl<'a> FunctionVerifier<'a> {
             inst_text: None,
         });
 
-        if context.function_name.is_none() && self.location_in_current_function(&diagnostic.primary) {
+        if context.function_name.is_none() && self.location_in_current_function(&diagnostic.primary)
+        {
             context.function_name = self
                 .sig
                 .as_ref()

@@ -7,7 +7,10 @@ use rustc_hash::FxHashSet;
 use sonatina_ir::{
     GlobalVariableRef, Module, Type,
     global_variable::GvInitializer,
-    inst::{downcast, data::{self, SymbolRef}},
+    inst::{
+        data::{self, SymbolRef},
+        downcast,
+    },
     isa::TypeLayoutError,
     module::{FuncRef, ModuleCtx},
     object::{Directive, EmbedSymbol, SectionRef},
@@ -677,9 +680,7 @@ fn collect_section_used_embed_symbols(
                     }
 
                     let inst = func.dfg.inst(inst_id);
-                    if let Some(ptr) =
-                        downcast::<&data::GetFunctionPtr>(inst_set, inst)
-                    {
+                    if let Some(ptr) = downcast::<&data::GetFunctionPtr>(inst_set, inst) {
                         let callee = *ptr.func();
                         if module.ctx.get_sig(callee).is_some() && seen_funcs.insert(callee) {
                             worklist.push_back(callee);

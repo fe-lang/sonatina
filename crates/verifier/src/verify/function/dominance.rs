@@ -1,5 +1,8 @@
 use rustc_hash::{FxHashMap, FxHashSet};
-use sonatina_ir::{BlockId, InstId, Value, inst::{control_flow, downcast}};
+use sonatina_ir::{
+    BlockId, InstId, Value,
+    inst::{control_flow, downcast},
+};
 
 use crate::diagnostic::{Diagnostic, DiagnosticCode, Location};
 
@@ -57,9 +60,7 @@ impl FunctionVerifier<'_> {
                     continue;
                 };
 
-                if downcast::<&control_flow::Phi>(self.ctx.inst_set, inst_data)
-                    .is_some()
-                {
+                if downcast::<&control_flow::Phi>(self.ctx.inst_set, inst_data).is_some() {
                     self.check_phi_edge_availability(*inst, &idom, &block_order_index);
                     continue;
                 }
@@ -161,9 +162,7 @@ impl FunctionVerifier<'_> {
         let Some(inst_data) = self.func.dfg.get_inst(phi_inst) else {
             return;
         };
-        let Some(phi) =
-            downcast::<&control_flow::Phi>(self.ctx.inst_set, inst_data)
-        else {
+        let Some(phi) = downcast::<&control_flow::Phi>(self.ctx.inst_set, inst_data) else {
             return;
         };
 

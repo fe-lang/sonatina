@@ -1,5 +1,5 @@
 use rustc_hash::FxHashSet;
-use sonatina_ir::{inst::{control_flow, downcast}};
+use sonatina_ir::inst::{control_flow, downcast};
 
 use crate::diagnostic::{Diagnostic, DiagnosticCode, Location};
 
@@ -21,9 +21,7 @@ impl FunctionVerifier<'_> {
                     continue;
                 };
 
-                let Some(phi) =
-                    downcast::<&control_flow::Phi>(self.ctx.inst_set, inst_data)
-                else {
+                let Some(phi) = downcast::<&control_flow::Phi>(self.ctx.inst_set, inst_data) else {
                     seen_non_phi = true;
                     continue;
                 };

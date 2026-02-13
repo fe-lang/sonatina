@@ -1,5 +1,8 @@
 use rustc_hash::FxHashSet;
-use sonatina_ir::{BlockId, InstId, inst::{control_flow::BranchInfo, downcast}};
+use sonatina_ir::{
+    BlockId, InstId,
+    inst::{control_flow::BranchInfo, downcast},
+};
 
 use crate::diagnostic::{Diagnostic, DiagnosticCode, Location};
 

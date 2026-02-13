@@ -2,11 +2,7 @@ use std::fmt;
 
 use sonatina_ir::{BlockId, GlobalVariableRef, InstId, Type, ValueId, module::FuncRef};
 
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum DiagnosticCode {
     InvalidValueRef,
     InvalidBlockRef,
@@ -122,7 +118,6 @@ impl fmt::Display for DiagnosticCode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Severity {
     Error,
     Warning,
@@ -138,7 +133,6 @@ impl fmt::Display for Severity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Location {
     Module,
     Function(FuncRef),
@@ -200,20 +194,17 @@ impl fmt::Display for Location {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Note {
     pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct DiagnosticContext {
     pub function_name: Option<String>,
     pub inst_text: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Diagnostic {
     pub code: DiagnosticCode,
     pub severity: Severity,
