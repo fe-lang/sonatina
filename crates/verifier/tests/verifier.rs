@@ -1,7 +1,7 @@
 use sonatina_ir::{
     InstDowncastMut, Linkage, Signature, Type, ValueId,
     builder::ModuleBuilder,
-    inst::{arith::Add, control_flow::BrTable},
+    inst::{arith::Add, control_flow::BrTable, data::Gep},
     isa::evm::Evm,
     module::ModuleCtx,
 };
@@ -230,6 +230,40 @@ func public %caller() -> unit {
     let report = verify_module(&parsed.module, &cfg);
 
     assert!(has_code(&report, "IR0603"), "expected IR0603, got {report}");
+}
+
+#[test]
+fn declared_inst_arity_is_checked() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_gep(v0.*i32) -> *i32 {
+    block0:
+        v1.*i32 = gep v0 0.i32;
+        return v1;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let module = parsed.module;
+    let func_ref = module.funcs()[0];
+
+    module.func_store.modify(func_ref, |func| {
+        let block = func.layout.entry_block().expect("entry block must exist");
+        let inst = func
+            .layout
+            .first_inst_of(block)
+            .expect("first instruction must exist");
+        let inst_set = func.inst_set();
+        let inst_data = func.dfg.inst_mut(inst);
+        let gep = <&mut Gep as InstDowncastMut>::downcast_mut(inst_set, inst_data).expect("gep");
+        gep.values_mut().truncate(1);
+    });
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&module, &cfg);
+
+    assert!(has_code(&report, "IR0600"), "expected IR0600, got {report}");
 }
 
 #[test]

@@ -6,8 +6,8 @@ use std::{
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    BlockId, Function, GlobalVariableRef, Immediate, Inst, InstDowncast, InstId, Module, Signature,
-    Type, Value, ValueId,
+    BlockId, Function, GlobalVariableRef, Immediate, Inst, InstArity, InstDowncast, InstId, Module,
+    Signature, Type, Value, ValueId,
     global_variable::GvInitializer,
     inst::{
         arith, cast, cmp,
@@ -2127,6 +2127,10 @@ impl<'a> FuncVerifier<'a> {
     }
 
     fn verify_inst_type(&mut self, inst_id: InstId, inst: &dyn Inst) {
+        if !self.verify_inst_arity(inst_id, inst) {
+            return;
+        }
+
         if let Some(op) = <&arith::Neg as InstDowncast>::downcast(self.ctx.inst_set, inst) {
             self.verify_unary_integral_same(inst_id, *op.arg(), "neg");
             return;
@@ -2824,20 +2828,12 @@ impl<'a> FuncVerifier<'a> {
             }
         }
 
-        if let Some(arity) = self.evm_integral_arity(inst) {
-            self.verify_evm_same_integral(inst_id, &operands, location.clone(), arity);
+        if self.is_evm_same_integral_inst(inst) {
+            self.verify_evm_same_integral(inst_id, &operands, location.clone());
             return;
         }
 
         if self.is_evm_malloc_inst(inst) {
-            if operands.len() != 1 {
-                self.emit(Diagnostic::error(
-                    DiagnosticCode::InstOperandTypeMismatch,
-                    "evm_malloc expects one size operand",
-                    location.clone(),
-                ));
-            }
-
             if let Some(result_ty) = self.inst_result_ty(inst_id)
                 && !is_pointer_ty(self.ctx, result_ty)
             {
@@ -2874,22 +2870,7 @@ impl<'a> FuncVerifier<'a> {
         inst_id: InstId,
         operands: &[ValueId],
         location: Location,
-        expected_arity: usize,
     ) {
-        if operands.len() != expected_arity {
-            self.emit(
-                Diagnostic::error(
-                    DiagnosticCode::InstOperandTypeMismatch,
-                    "EVM instruction has invalid operand count",
-                    location.clone(),
-                )
-                .with_note(format!(
-                    "expected {expected_arity}, found {}",
-                    operands.len()
-                )),
-            );
-        }
-
         let mut operand_ty = None;
         for value in operands {
             let Some(ty) = self.value_ty(*value) else {
@@ -3042,33 +3023,24 @@ impl<'a> FuncVerifier<'a> {
         )
     }
 
-    fn evm_integral_arity(&self, inst: &dyn Inst) -> Option<usize> {
+    fn is_evm_same_integral_inst(&self, inst: &dyn Inst) -> bool {
         macro_rules! is_one_of {
             ($($ty:ty),+ $(,)?) => {
                 false $(|| <&$ty as InstDowncast>::downcast(self.ctx.inst_set, inst).is_some())+
             };
         }
 
-        if is_one_of!(
+        is_one_of!(
             evm::EvmUdiv,
             evm::EvmSdiv,
             evm::EvmUmod,
             evm::EvmSmod,
             evm::EvmExp,
             evm::EvmByte,
-        ) {
-            return Some(2);
-        }
-
-        if is_one_of!(evm::EvmAddMod, evm::EvmMulMod,) {
-            return Some(3);
-        }
-
-        if is_one_of!(evm::EvmClz,) {
-            return Some(1);
-        }
-
-        None
+            evm::EvmAddMod,
+            evm::EvmMulMod,
+            evm::EvmClz,
+        )
     }
 
     fn is_evm_malloc_inst(&self, inst: &dyn Inst) -> bool {
@@ -3245,19 +3217,89 @@ impl<'a> FuncVerifier<'a> {
         self.expect_result_ty(inst_id, to_ty, location);
     }
 
+    fn verify_inst_arity(&mut self, inst_id: InstId, inst: &dyn Inst) -> bool {
+        let expected = inst.arity();
+        let actual = self.inst_arity(inst);
+        if expected.accepts(actual) {
+            return true;
+        }
+
+        self.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "instruction argument count does not match declared arity",
+                self.inst_location(inst_id),
+            )
+            .with_note(format!(
+                "expected {}, found {}",
+                Self::format_inst_arity(expected),
+                actual
+            )),
+        );
+        false
+    }
+
+    fn inst_arity(&self, inst: &dyn Inst) -> usize {
+        if let Some(op) =
+            <&control_flow::BrTable as InstDowncast>::downcast(self.ctx.inst_set, inst)
+        {
+            return 1 + usize::from(op.default().is_some()) + op.table().len();
+        }
+        if let Some(op) = <&control_flow::Phi as InstDowncast>::downcast(self.ctx.inst_set, inst) {
+            return op.args().len();
+        }
+        if <&data::SymAddr as InstDowncast>::downcast(self.ctx.inst_set, inst).is_some()
+            || <&data::SymSize as InstDowncast>::downcast(self.ctx.inst_set, inst).is_some()
+        {
+            return 1;
+        }
+
+        struct ArityCounter {
+            count: usize,
+        }
+
+        impl Visitor for ArityCounter {
+            fn visit_ty(&mut self, _item: &Type) {
+                self.count += 1;
+            }
+
+            fn visit_value_id(&mut self, _item: ValueId) {
+                self.count += 1;
+            }
+
+            fn visit_block_id(&mut self, _item: BlockId) {
+                self.count += 1;
+            }
+
+            fn visit_func_ref(&mut self, _item: FuncRef) {
+                self.count += 1;
+            }
+
+            fn visit_gv_ref(&mut self, _item: GlobalVariableRef) {
+                self.count += 1;
+            }
+        }
+
+        let mut counter = ArityCounter { count: 0 };
+        inst.accept(&mut counter);
+        counter.count
+    }
+
+    fn format_inst_arity(arity: InstArity) -> String {
+        match arity {
+            InstArity::Exact(n) => n.to_string(),
+            InstArity::AtLeast(n) => format!("at least {n}"),
+            InstArity::AtMost(n) => format!("at most {n}"),
+            InstArity::Range { min, max } => format!("{min}..={max}"),
+        }
+    }
+
     fn gep_result_pointee(&mut self, values: &[ValueId], location: Location) -> Option<Type> {
         let Some(base) = values.first().copied() else {
-            self.emit(Diagnostic::error(
-                DiagnosticCode::GepTypeComputationFailed,
-                "gep requires at least one operand",
-                location,
-            ));
             return None;
         };
 
-        let Some(base_ty) = self.value_ty(base) else {
-            return None;
-        };
+        let base_ty = self.value_ty(base)?;
         let Some(_) = self.pointee_ty(base_ty) else {
             self.emit(
                 Diagnostic::error(
@@ -3272,9 +3314,7 @@ impl<'a> FuncVerifier<'a> {
         let mut current_ty = base_ty;
 
         for &idx_value in values.iter().skip(1) {
-            let Some(idx_ty) = self.value_ty(idx_value) else {
-                return None;
-            };
+            let idx_ty = self.value_ty(idx_value)?;
             if !idx_ty.is_integral() {
                 self.emit(
                     Diagnostic::error(
@@ -3315,14 +3355,12 @@ impl<'a> FuncVerifier<'a> {
                 CompoundType::Ptr(elem) => elem,
                 CompoundType::Array { elem, .. } => elem,
                 CompoundType::Struct(s) => {
-                    let Some(index) = self.imm_to_nonneg_usize(
+                    let index = self.imm_to_nonneg_usize(
                         idx_value,
                         DiagnosticCode::GepTypeComputationFailed,
                         "struct gep indices must be non-negative immediate values",
                         location.clone(),
-                    ) else {
-                        return None;
-                    };
+                    )?;
                     let Some(field_ty) = s.fields.get(index).copied() else {
                         self.emit(
                             Diagnostic::error(
@@ -3896,20 +3934,20 @@ impl<'a> FuncVerifier<'a> {
             }
 
             for (value_id, value_data) in self.func.dfg.values.iter() {
-                if let Value::Immediate { imm, .. } = value_data {
-                    if self.func.dfg.immediates.get(imm) != Some(&value_id) {
-                        self.emit(
-                            Diagnostic::error(
-                                DiagnosticCode::ImmediateCacheMismatch,
-                                "immediate value does not round-trip through immediate cache",
-                                Location::Value {
-                                    func: self.func_ref,
-                                    value: value_id,
-                                },
-                            )
-                            .with_note(format!("immediate {:?}", imm)),
-                        );
-                    }
+                if let Value::Immediate { imm, .. } = value_data
+                    && self.func.dfg.immediates.get(imm) != Some(&value_id)
+                {
+                    self.emit(
+                        Diagnostic::error(
+                            DiagnosticCode::ImmediateCacheMismatch,
+                            "immediate value does not round-trip through immediate cache",
+                            Location::Value {
+                                func: self.func_ref,
+                                value: value_id,
+                            },
+                        )
+                        .with_note(format!("immediate {:?}", imm)),
+                    );
                 }
             }
 
