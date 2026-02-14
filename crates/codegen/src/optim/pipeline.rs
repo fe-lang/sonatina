@@ -39,6 +39,11 @@ pub enum Pass {
     Licm,
     /// E-graph based algebraic simplification and memory forwarding.
     Egraph,
+    /// Recompute `dfg.users` from layout-inserted instructions only.
+    ///
+    /// Use after passes (like Egraph) that can leave stale user entries
+    /// due to `change_to_alias` + layout removal interactions.
+    RebuildUsers,
 }
 
 /// A step in the module-level optimization pipeline.
@@ -90,10 +95,9 @@ impl Pipeline {
     ///    - `Licm` — loop invariant code motion
     ///    - `CfgCleanup` — clean up after LICM structural changes
     ///    - `Egraph` — algebraic simplification, memory forwarding
-    ///
-    /// A second SCCP round after Egraph is intentionally omitted: the egraph
-    /// pass currently uses raw layout removal which can leave stale `dfg.users`
-    /// entries, and SCCP assumes user instructions are layout-inserted.
+    ///    - `RebuildUsers` — fix stale `dfg.users` after egraph
+    ///    - `Sccp` — second round catches constants exposed by egraph
+    ///    - `CfgCleanup` — final cleanup
     pub fn default_pipeline() -> Self {
         let mut p = Self::new();
         p.add_step(Step::Inline);
@@ -103,6 +107,9 @@ impl Pipeline {
             Pass::Licm,
             Pass::CfgCleanup,
             Pass::Egraph,
+            Pass::RebuildUsers,
+            Pass::Sccp,
+            Pass::CfgCleanup,
         ]));
         p
     }
@@ -193,6 +200,9 @@ fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
         }
         Pass::Egraph => {
             run_egraph_pass(func);
+        }
+        Pass::RebuildUsers => {
+            func.rebuild_users();
         }
     }
 }
