@@ -129,7 +129,7 @@ impl Default for InlinerConfig {
             enable_wrapper_rewrite: true,
             enable_single_block_splice: true,
 
-            splice_max_insts: 24,
+            splice_max_insts: 12,
             splice_require_pure: false,
 
             max_inlinee_blocks: 0,
