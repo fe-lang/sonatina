@@ -485,6 +485,7 @@ fn is_push_opcode(op: OpCode) -> bool {
 #[derive(Clone, Copy)]
 enum StackPeepholeOp {
     Push,
+    Dup(u8),
     Swap(u8),
     Pop,
 }
@@ -517,6 +518,9 @@ fn classify_stack_peephole_op(
     if byte == OpCode::POP as u8 {
         return Some(StackPeepholeOp::Pop);
     }
+    if (OpCode::DUP1 as u8..=OpCode::DUP16 as u8).contains(&byte) {
+        return Some(StackPeepholeOp::Dup(byte - OpCode::DUP1 as u8 + 1));
+    }
     if (OpCode::SWAP1 as u8..=OpCode::SWAP16 as u8).contains(&byte) {
         return Some(StackPeepholeOp::Swap(byte - OpCode::SWAP1 as u8 + 1));
     }
@@ -540,6 +544,15 @@ fn is_noop_stack_peephole_sequence(
             StackPeepholeOp::Push => {
                 stack.push(next_push_token);
                 next_push_token = next_push_token.wrapping_add(1);
+            }
+            StackPeepholeOp::Dup(depth) => {
+                let depth = depth as usize;
+                let len = stack.len();
+                if len < depth {
+                    return false;
+                }
+                let value = stack[len - depth];
+                stack.push(value);
             }
             StackPeepholeOp::Swap(depth) => {
                 let depth = depth as usize;
