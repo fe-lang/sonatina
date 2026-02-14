@@ -27,6 +27,7 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, Immediate, InstId, InstSetExt, Module, Type, U256, ValueId,
     cfg::ControlFlowGraph,
+    inst::control_flow::BranchKind,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
@@ -66,6 +67,7 @@ pub struct EvmBackend {
     arena_cost_model: ArenaCostModel,
     section_state: RefCell<Option<PreparedSection>>,
     current_mem_plan: RefCell<Option<FuncMemPlan>>,
+    current_jump_targets: RefCell<Option<FxHashSet<BlockId>>>,
 }
 impl EvmBackend {
     pub fn new(isa: Evm) -> Self {
@@ -83,6 +85,7 @@ impl EvmBackend {
             arena_cost_model: ArenaCostModel::default(),
             section_state: RefCell::new(None),
             current_mem_plan: RefCell::new(None),
+            current_jump_targets: RefCell::new(None),
         }
     }
 
@@ -401,18 +404,75 @@ impl EvmBackend {
     ) -> Result<LoweredFunction<OpCode>, String> {
         let mem_plan = prepared.mem_plan;
 
+        let block_order = prepared.block_order;
         let vcode = module.func_store.view(func, |function| {
             let _plan_guard = CurrentMemPlanGuard::new(&self.current_mem_plan, mem_plan.clone());
+            let jump_targets = compute_explicit_jump_targets(function, &block_order);
+            let _jump_targets_guard =
+                CurrentJumpTargetsGuard::new(&self.current_jump_targets, jump_targets);
             let mut alloc = FinalAlloc::new(prepared.alloc, mem_plan);
-            let lower = Lower::new(&module.ctx, function, &prepared.block_order);
+            let lower = Lower::new(&module.ctx, function, &block_order);
             lower.lower(self, &mut alloc).map_err(|e| format!("{e:?}"))
         })?;
 
-        Ok(LoweredFunction {
-            vcode,
-            block_order: prepared.block_order,
-        })
+        Ok(LoweredFunction { vcode, block_order })
     }
+}
+
+fn compute_explicit_jump_targets(
+    function: &Function,
+    block_order: &[BlockId],
+) -> FxHashSet<BlockId> {
+    let mut next_in_layout: FxHashMap<BlockId, BlockId> = FxHashMap::default();
+    for window in block_order.windows(2) {
+        next_in_layout.insert(window[0], window[1]);
+    }
+
+    let mut targets: FxHashSet<BlockId> = FxHashSet::default();
+
+    for block in function.layout.iter_block() {
+        let Some(term) = function.layout.last_inst_of(block) else {
+            continue;
+        };
+        let Some(branch) = function.dfg.branch_info(term) else {
+            continue;
+        };
+
+        let next = next_in_layout.get(&block).copied();
+        match branch.branch_kind() {
+            BranchKind::Jump(jump) => {
+                let dest = *jump.dest();
+                if Some(dest) != next {
+                    targets.insert(dest);
+                }
+            }
+            BranchKind::Br(br) => {
+                let nz_dest = *br.nz_dest();
+                let z_dest = *br.z_dest();
+
+                if Some(nz_dest) == next {
+                    targets.insert(z_dest);
+                } else {
+                    targets.insert(nz_dest);
+                    if Some(z_dest) != next {
+                        targets.insert(z_dest);
+                    }
+                }
+            }
+            BranchKind::BrTable(table) => {
+                for &(_, dest) in table.table().iter() {
+                    targets.insert(dest);
+                }
+                if let Some(default) = table.default()
+                    && Some(*default) != next
+                {
+                    targets.insert(*default);
+                }
+            }
+        }
+    }
+
+    targets
 }
 
 struct CurrentMemPlanGuard<'a> {
@@ -427,6 +487,23 @@ impl<'a> CurrentMemPlanGuard<'a> {
 }
 
 impl Drop for CurrentMemPlanGuard<'_> {
+    fn drop(&mut self) {
+        *self.slot.borrow_mut() = None;
+    }
+}
+
+struct CurrentJumpTargetsGuard<'a> {
+    slot: &'a RefCell<Option<FxHashSet<BlockId>>>,
+}
+
+impl<'a> CurrentJumpTargetsGuard<'a> {
+    fn new(slot: &'a RefCell<Option<FxHashSet<BlockId>>>, targets: FxHashSet<BlockId>) -> Self {
+        *slot.borrow_mut() = Some(targets);
+        Self { slot }
+    }
+}
+
+impl Drop for CurrentJumpTargetsGuard<'_> {
     fn drop(&mut self) {
         *self.slot.borrow_mut() = None;
     }
@@ -654,12 +731,18 @@ impl LowerBackend for EvmBackend {
         &self,
         ctx: &mut Lower<Self::MInst>,
         _alloc: &mut dyn Allocator,
-        _block: BlockId,
+        block: BlockId,
     ) {
-        // Every block start is a jumpdest unless
-        //  - all incoming edges are fallthroughs (TODO)
-        //  - it's the entry block of the main fn (TODO)
-        ctx.push(OpCode::JUMPDEST);
+        // Entry blocks and explicit jump targets need a `JUMPDEST`.
+        // Blocks reached purely by fallthrough do not.
+        let is_jump_target = self
+            .current_jump_targets
+            .borrow()
+            .as_ref()
+            .is_none_or(|targets| targets.contains(&block));
+        if ctx.is_entry(block) || is_jump_target {
+            ctx.push(OpCode::JUMPDEST);
+        }
     }
 
     fn lower(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, insn: InstId) {
@@ -1515,23 +1598,44 @@ fn align_to(offset: u32, align: u32) -> u32 {
     offset.checked_add(align - 1).expect("align overflow") & !(align - 1)
 }
 
+fn fold_stack_actions(actions: &[Action]) -> SmallVec<[Action; 8]> {
+    let mut out: SmallVec<[Action; 8]> = SmallVec::new();
+    for &action in actions {
+        if let Some(&prev) = out.last() {
+            let cancels = matches!(
+                (prev, action),
+                (Action::StackSwap(1), Action::StackSwap(1))
+                    | (Action::StackDup(_), Action::Pop)
+                    | (Action::Push(_), Action::Pop)
+            );
+            if cancels {
+                out.pop();
+                continue;
+            }
+        }
+        out.push(action);
+    }
+    out
+}
+
 fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
-    for action in actions {
+    let folded = fold_stack_actions(actions);
+    for action in folded {
         match action {
             Action::StackDup(slot) => {
-                debug_assert!(*slot < 16, "DUP out of range: {slot}");
-                ctx.push(dup_op(*slot));
+                debug_assert!(slot < 16, "DUP out of range: {slot}");
+                ctx.push(dup_op(slot));
             }
             Action::StackSwap(n) => {
-                debug_assert!((1..=16).contains(n), "SWAP out of range: {n}");
-                ctx.push(swap_op(*n));
+                debug_assert!((1..=16).contains(&n), "SWAP out of range: {n}");
+                ctx.push(swap_op(n));
             }
             Action::Push(imm) => {
                 if imm.is_zero() {
                     ctx.push(OpCode::PUSH0);
                 } else {
                     let bytes = match imm {
-                        Immediate::I1(v) => smallvec![*v as u8],
+                        Immediate::I1(v) => smallvec![v as u8],
                         Immediate::I8(v) => SmallVec::from_slice(&v.to_be_bytes()),
                         Immediate::I16(v) => shrink_bytes(&v.to_be_bytes()),
                         Immediate::I32(v) => shrink_bytes(&v.to_be_bytes()),
@@ -1553,7 +1657,7 @@ fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
                 ctx.push(OpCode::POP);
             }
             Action::MemLoadAbs(offset) => {
-                let bytes = u32_to_be(*offset);
+                let bytes = u32_to_be(offset);
                 push_bytes(ctx, &bytes);
                 ctx.push(OpCode::MLOAD);
             }
@@ -1571,7 +1675,7 @@ fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
                 ctx.push(OpCode::MLOAD);
             }
             Action::MemStoreAbs(offset) => {
-                let bytes = u32_to_be(*offset);
+                let bytes = u32_to_be(offset);
                 push_bytes(ctx, &bytes);
                 ctx.push(OpCode::MSTORE);
             }
