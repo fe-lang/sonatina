@@ -16,9 +16,27 @@ const EXPRS: &str = include_str!("expr.egg");
 const RULES: &str = include_str!("rules.egg");
 const MEMORY: &str = include_str!("memory.egg");
 
+fn has_unknown_call_attrs(func: &Function) -> bool {
+    for block in func.layout.iter_block() {
+        for inst_id in func.layout.iter_inst(block) {
+            if let Some(call) = func.dfg.call_info(inst_id)
+                && func.ctx().func_attrs(call.callee()).is_empty()
+            {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Run e-graph optimization pass on a function.
 /// Returns true if the function was modified.
 pub fn run_egraph_pass(func: &mut Function) -> bool {
+    if has_unknown_call_attrs(func) {
+        panic!("run func_behavior::analyze_module");
+    }
+
     // Build value map
     let mut value_map: FxHashMap<String, ValueId> = FxHashMap::default();
     let mut type_map: FxHashMap<String, Type> = FxHashMap::default();
