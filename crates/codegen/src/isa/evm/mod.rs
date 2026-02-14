@@ -35,6 +35,7 @@ use sonatina_ir::{
 };
 use sonatina_triple::{EvmVersion, OperatingSystem};
 
+use cranelift_entity::EntityList;
 use mem_effects::compute_func_mem_effects;
 use memory_plan::{
     ArenaCostModel, CallPreserveChoice, DYN_FP_SLOT, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan,
@@ -405,7 +406,7 @@ impl EvmBackend {
         let mem_plan = prepared.mem_plan;
 
         let block_order = prepared.block_order;
-        let vcode = module.func_store.view(func, |function| {
+        let mut vcode = module.func_store.view(func, |function| {
             let _plan_guard = CurrentMemPlanGuard::new(&self.current_mem_plan, mem_plan.clone());
             let jump_targets = compute_explicit_jump_targets(function, &block_order);
             let _jump_targets_guard =
@@ -414,6 +415,7 @@ impl EvmBackend {
             let lower = Lower::new(&module.ctx, function, &block_order);
             lower.lower(self, &mut alloc).map_err(|e| format!("{e:?}"))
         })?;
+        prune_redundant_opcode_sequences(&mut vcode, &block_order);
 
         Ok(LoweredFunction { vcode, block_order })
     }
@@ -473,6 +475,103 @@ fn compute_explicit_jump_targets(
     }
 
     targets
+}
+
+fn is_push_opcode(op: OpCode) -> bool {
+    let byte = op as u8;
+    byte == OpCode::PUSH0 as u8 || (OpCode::PUSH1 as u8..=OpCode::PUSH32 as u8).contains(&byte)
+}
+
+fn is_plain_push_inst(
+    vcode: &VCode<OpCode>,
+    label_targets: &FxHashSet<VCodeInst>,
+    inst: VCodeInst,
+) -> bool {
+    if label_targets.contains(&inst) || vcode.fixups.get(inst).is_some() {
+        return false;
+    }
+    let op = vcode.insts[inst];
+    if !is_push_opcode(op) {
+        return false;
+    }
+    if (op as u8) == (OpCode::PUSH0 as u8) {
+        vcode.inst_imm_bytes.get(inst).is_none()
+    } else {
+        vcode.inst_imm_bytes.get(inst).is_some()
+    }
+}
+
+fn is_plain_opcode_inst(
+    vcode: &VCode<OpCode>,
+    label_targets: &FxHashSet<VCodeInst>,
+    inst: VCodeInst,
+    expected: OpCode,
+) -> bool {
+    !label_targets.contains(&inst)
+        && vcode.fixups.get(inst).is_none()
+        && vcode.inst_imm_bytes.get(inst).is_none()
+        && (vcode.insts[inst] as u8) == (expected as u8)
+}
+
+fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_order: &[BlockId]) {
+    let mut label_targets: FxHashSet<VCodeInst> = FxHashSet::default();
+    for label in vcode.labels.values() {
+        if let Label::Insn(inst) = *label {
+            label_targets.insert(inst);
+        }
+    }
+
+    for block in block_order.iter().copied() {
+        let insts: Vec<VCodeInst> = vcode.block_insns(block).collect();
+        if insts.len() < 3 {
+            continue;
+        }
+
+        let mut kept: Vec<VCodeInst> = Vec::with_capacity(insts.len());
+        let mut changed = false;
+        let mut i = 0usize;
+        while i < insts.len() {
+            if i + 8 <= insts.len() {
+                let p = &insts[i..i + 8];
+                if is_plain_push_inst(vcode, &label_targets, p[0])
+                    && is_plain_push_inst(vcode, &label_targets, p[1])
+                    && is_plain_opcode_inst(vcode, &label_targets, p[2], OpCode::SWAP1)
+                    && is_plain_opcode_inst(vcode, &label_targets, p[3], OpCode::SWAP2)
+                    && is_plain_opcode_inst(vcode, &label_targets, p[4], OpCode::SWAP1)
+                    && is_plain_opcode_inst(vcode, &label_targets, p[5], OpCode::POP)
+                    && is_plain_opcode_inst(vcode, &label_targets, p[6], OpCode::SWAP1)
+                    && is_plain_opcode_inst(vcode, &label_targets, p[7], OpCode::POP)
+                {
+                    changed = true;
+                    i += 8;
+                    continue;
+                }
+            }
+
+            if i + 3 <= insts.len() {
+                let p = &insts[i..i + 3];
+                if is_plain_push_inst(vcode, &label_targets, p[0])
+                    && is_plain_opcode_inst(vcode, &label_targets, p[1], OpCode::SWAP1)
+                    && is_plain_opcode_inst(vcode, &label_targets, p[2], OpCode::POP)
+                {
+                    changed = true;
+                    i += 3;
+                    continue;
+                }
+            }
+
+            kept.push(insts[i]);
+            i += 1;
+        }
+
+        if changed {
+            let mut list: EntityList<VCodeInst> = Default::default();
+            for inst in kept {
+                list.push(inst, &mut vcode.insts_pool);
+            }
+            vcode.blocks[block] = list;
+        }
+    }
 }
 
 struct CurrentMemPlanGuard<'a> {
@@ -1601,19 +1700,59 @@ fn align_to(offset: u32, align: u32) -> u32 {
 fn fold_stack_actions(actions: &[Action]) -> SmallVec<[Action; 8]> {
     let mut out: SmallVec<[Action; 8]> = SmallVec::new();
     for &action in actions {
-        if let Some(&prev) = out.last() {
-            let cancels = match (prev, action) {
-                // SWAPn is its own inverse.
-                (Action::StackSwap(a), Action::StackSwap(b)) => a == b,
-                (Action::StackDup(_), Action::Pop) | (Action::Push(_), Action::Pop) => true,
-                _ => false,
-            };
-            if cancels {
-                out.pop();
-                continue;
+        out.push(action);
+        loop {
+            let len = out.len();
+
+            let mut changed = false;
+            if len >= 2 {
+                let prev = out[len - 2];
+                let last = out[len - 1];
+                let cancels = match (prev, last) {
+                    // SWAPn is its own inverse.
+                    (Action::StackSwap(a), Action::StackSwap(b)) => a == b,
+                    (Action::StackDup(_), Action::Pop) | (Action::Push(_), Action::Pop) => true,
+                    _ => false,
+                };
+                if cancels {
+                    out.truncate(len - 2);
+                    changed = true;
+                }
+            }
+
+            if !changed && len >= 3 {
+                let a = out[len - 3];
+                let b = out[len - 2];
+                let c = out[len - 1];
+                // For any existing top stack word x: PUSH a; SWAP1; POP transforms x -> x.
+                if matches!(a, Action::Push(_)) && b == Action::StackSwap(1) && c == Action::Pop {
+                    out.truncate(len - 3);
+                    changed = true;
+                }
+            }
+
+            if !changed && len >= 8 {
+                let i = len - 8;
+                // For any existing top stack word x and immediates a/b:
+                // PUSH a; PUSH b; SWAP1; SWAP2; SWAP1; POP; SWAP1; POP transforms x -> x.
+                if matches!(out[i], Action::Push(_))
+                    && matches!(out[i + 1], Action::Push(_))
+                    && out[i + 2] == Action::StackSwap(1)
+                    && out[i + 3] == Action::StackSwap(2)
+                    && out[i + 4] == Action::StackSwap(1)
+                    && out[i + 5] == Action::Pop
+                    && out[i + 6] == Action::StackSwap(1)
+                    && out[i + 7] == Action::Pop
+                {
+                    out.truncate(len - 8);
+                    changed = true;
+                }
+            }
+
+            if !changed {
+                break;
             }
         }
-        out.push(action);
     }
     out
 }
@@ -2167,6 +2306,38 @@ mod tests {
         let actions = [Action::StackDup(3), Action::StackSwap(3)];
         let folded = fold_stack_actions(&actions);
         assert_eq!(folded.as_slice(), actions.as_slice());
+    }
+
+    #[test]
+    fn fold_stack_actions_cancels_push_swap1_pop_noop() {
+        let actions = [
+            Action::Push(Immediate::I8(7)),
+            Action::StackSwap(1),
+            Action::Pop,
+        ];
+        let folded = fold_stack_actions(&actions);
+        assert!(folded.is_empty());
+    }
+
+    #[test]
+    fn fold_stack_actions_cancels_double_push_swap_pop_shuffle_noop() {
+        let actions = [
+            Action::StackSwap(3),
+            Action::Push(Immediate::I1(false)),
+            Action::Push(Immediate::I1(true)),
+            Action::StackSwap(1),
+            Action::StackSwap(2),
+            Action::StackSwap(1),
+            Action::Pop,
+            Action::StackSwap(1),
+            Action::Pop,
+            Action::StackSwap(4),
+        ];
+        let folded = fold_stack_actions(&actions);
+        assert_eq!(
+            folded.as_slice(),
+            [Action::StackSwap(3), Action::StackSwap(4)].as_slice()
+        );
     }
 
     #[test]
