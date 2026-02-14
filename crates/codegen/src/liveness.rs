@@ -89,7 +89,11 @@ impl Liveness {
 
     /// Propagate liveness of `val` "upward" from its use in `block`
     fn up_and_mark(&mut self, cfg: &ControlFlowGraph, block: BlockId, val: ValueId) {
-        let def = self.defs[val].unwrap();
+        let Some(def) = self.defs[val] else {
+            // Value has no definition in this function (e.g. stale reference
+            // left by an optimization pass). Skip rather than panic.
+            return;
+        };
 
         self.val_live_blocks[val].insert(block);
 
