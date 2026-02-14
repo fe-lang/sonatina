@@ -85,6 +85,58 @@ impl Pipeline {
         }
     }
 
+    /// No optimization pipeline.
+    ///
+    /// This is equivalent to [`Pipeline::new`].
+    pub fn none() -> Self {
+        Self::new()
+    }
+
+    /// Conservative optimization pipeline preset.
+    ///
+    /// This is the recommended baseline (O1-style) pipeline.
+    pub fn balanced() -> Self {
+        let mut p = Self::new();
+        p.add_step(Step::Inline);
+        p.add_step(Step::FuncPasses(vec![
+            Pass::CfgCleanup,
+            Pass::Sccp,
+            Pass::Licm,
+            Pass::CfgCleanup,
+            Pass::Egraph,
+            Pass::RebuildUsers,
+            Pass::Sccp,
+            Pass::CfgCleanup,
+        ]));
+        p
+    }
+
+    /// Aggressive optimization pipeline preset.
+    ///
+    /// Uses a larger inliner budget and a second inline+SCCP round.
+    pub fn aggressive() -> Self {
+        let mut p = Self::new();
+        p.inliner_config.splice_max_insts = 48;
+        p.add_step(Step::Inline);
+        p.add_step(Step::FuncPasses(vec![
+            Pass::CfgCleanup,
+            Pass::Sccp,
+            Pass::Licm,
+            Pass::CfgCleanup,
+            Pass::Egraph,
+            Pass::RebuildUsers,
+            Pass::Sccp,
+            Pass::CfgCleanup,
+        ]));
+        p.add_step(Step::Inline);
+        p.add_step(Step::FuncPasses(vec![
+            Pass::CfgCleanup,
+            Pass::Sccp,
+            Pass::CfgCleanup,
+        ]));
+        p
+    }
+
     /// Default optimization pipeline with a conservative ordering.
     ///
     /// Current sequence:
@@ -99,19 +151,7 @@ impl Pipeline {
     ///    - `Sccp` — second round catches constants exposed by egraph
     ///    - `CfgCleanup` — final cleanup
     pub fn default_pipeline() -> Self {
-        let mut p = Self::new();
-        p.add_step(Step::Inline);
-        p.add_step(Step::FuncPasses(vec![
-            Pass::CfgCleanup,
-            Pass::Sccp,
-            Pass::Licm,
-            Pass::CfgCleanup,
-            Pass::Egraph,
-            Pass::RebuildUsers,
-            Pass::Sccp,
-            Pass::CfgCleanup,
-        ]));
-        p
+        Self::balanced()
     }
 
     /// Append a step to the pipeline. Returns `&mut Self` for chaining.
@@ -145,7 +185,7 @@ impl Pipeline {
 impl Default for Pipeline {
     /// Returns [`Pipeline::default_pipeline`], not an empty pipeline.
     fn default() -> Self {
-        Self::default_pipeline()
+        Self::balanced()
     }
 }
 
