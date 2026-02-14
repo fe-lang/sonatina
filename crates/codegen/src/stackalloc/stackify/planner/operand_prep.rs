@@ -74,7 +74,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         // For small arities, solve operand preparation via a bounded exact search over
         // `DUP*`/`SWAP*`/`PUSH*`. This models "consume in place" correctly and avoids redundant
         // swap chains (common with greedy per-operand preparation), especially around calls.
-        if (2..=4).contains(&args.len()) {
+        if (2..=5).contains(&args.len()) {
             let commutative = self.inst_is_commutative(inst);
             if self.try_prepare_operands_small_via_search(args, consume_last_use, commutative) {
                 return;
@@ -118,7 +118,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         consume_last_use: &BitSet<ValueId>,
         commutative: bool,
     ) -> bool {
-        debug_assert!((2..=4).contains(&args.len()));
+        debug_assert!((2..=5).contains(&args.len()));
 
         let order: SmallVec<[ValueId; 4]> = args.iter().copied().collect();
         let mut best: Option<(SearchOperandPrepPlan, bool)> = self
@@ -161,6 +161,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             2 => 12,
             3 => 14,
             4 => 16,
+            5 => 18,
             _ => return None,
         };
 
