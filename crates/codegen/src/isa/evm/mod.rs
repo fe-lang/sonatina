@@ -1602,12 +1602,12 @@ fn fold_stack_actions(actions: &[Action]) -> SmallVec<[Action; 8]> {
     let mut out: SmallVec<[Action; 8]> = SmallVec::new();
     for &action in actions {
         if let Some(&prev) = out.last() {
-            let cancels = matches!(
-                (prev, action),
-                (Action::StackSwap(1), Action::StackSwap(1))
-                    | (Action::StackDup(_), Action::Pop)
-                    | (Action::Push(_), Action::Pop)
-            );
+            let cancels = match (prev, action) {
+                // SWAPn is its own inverse.
+                (Action::StackSwap(a), Action::StackSwap(b)) => a == b,
+                (Action::StackDup(_), Action::Pop) | (Action::Push(_), Action::Pop) => true,
+                _ => false,
+            };
             if cancels {
                 out.pop();
                 continue;
@@ -2154,6 +2154,20 @@ mod tests {
     use sonatina_ir::cfg::ControlFlowGraph;
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, TargetTriple, Vendor};
+
+    #[test]
+    fn fold_stack_actions_cancels_swap_self_inverse() {
+        let actions = [Action::StackSwap(7), Action::StackSwap(7)];
+        let folded = fold_stack_actions(&actions);
+        assert!(folded.is_empty());
+    }
+
+    #[test]
+    fn fold_stack_actions_keeps_nonmatching_dup_swap() {
+        let actions = [Action::StackDup(3), Action::StackSwap(3)];
+        let folded = fold_stack_actions(&actions);
+        assert_eq!(folded.as_slice(), actions.as_slice());
+    }
 
     #[test]
     fn call_save_pre_tucks_saved_words_below_operands() {
