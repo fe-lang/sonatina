@@ -105,8 +105,9 @@ impl Pipeline {
 }
 
 impl Default for Pipeline {
+    /// Returns [`Pipeline::default_pipeline`], not an empty pipeline.
     fn default() -> Self {
-        Self::new()
+        Self::default_pipeline()
     }
 }
 
