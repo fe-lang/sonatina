@@ -61,10 +61,10 @@ pub fn func_to_egglog(func: &Function) -> String {
     // Predeclare values that may be referenced before their defining instruction is emitted.
     for block in func.layout.iter_block() {
         for inst_id in func.layout.iter_inst(block) {
-            if let Some(result) = func.dfg.inst_result(inst_id) {
-                if predeclared_values.contains(&result) {
-                    writeln!(&mut out, "{}", side_effect_result_to_egglog(func, result)).unwrap();
-                }
+            if let Some(result) = func.dfg.inst_result(inst_id)
+                && predeclared_values.contains(&result)
+            {
+                writeln!(&mut out, "{}", side_effect_result_to_egglog(func, result)).unwrap();
             }
         }
     }
