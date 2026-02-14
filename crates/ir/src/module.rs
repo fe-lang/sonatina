@@ -73,12 +73,31 @@ impl FuncStore {
         self.funcs.view(&func_ref, |_, func| f(func)).unwrap()
     }
 
+    pub fn try_view<F, R>(&self, func_ref: FuncRef, f: F) -> Option<R>
+    where
+        F: FnOnce(&Function) -> R,
+    {
+        self.funcs.view(&func_ref, |_, func| f(func))
+    }
+
     pub fn modify<F, R>(&self, func_ref: FuncRef, f: F) -> R
     where
         F: FnOnce(&mut Function) -> R,
     {
         let mut entry = self.funcs.get_mut(&func_ref).unwrap();
         f(entry.value_mut())
+    }
+
+    pub fn try_modify<F, R>(&self, func_ref: FuncRef, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut Function) -> R,
+    {
+        let mut entry = self.funcs.get_mut(&func_ref)?;
+        Some(f(entry.value_mut()))
+    }
+
+    pub fn contains(&self, func_ref: FuncRef) -> bool {
+        self.funcs.contains_key(&func_ref)
     }
 
     pub fn par_for_each<F>(&self, f: F)
@@ -179,6 +198,10 @@ impl ModuleCtx {
         self.declared_funcs
             .view(&func_ref, |_, sig| f(sig))
             .unwrap()
+    }
+
+    pub fn get_sig(&self, func_ref: FuncRef) -> Option<Signature> {
+        self.declared_funcs.view(&func_ref, |_, sig| sig.clone())
     }
 
     pub fn func_linkage(&self, func_ref: FuncRef) -> Linkage {

@@ -29,6 +29,10 @@ impl GlobalVariableStore {
         &self.gv_data[gv]
     }
 
+    pub fn get(&self, gv: GlobalVariableRef) -> Option<&GlobalVariableData> {
+        self.gv_data.get(gv)
+    }
+
     pub fn lookup_gv(&self, symbol: &str) -> Option<GlobalVariableRef> {
         self.symbols.get(symbol).copied()
     }

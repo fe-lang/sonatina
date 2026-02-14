@@ -20,6 +20,7 @@ struct InstStruct {
     struct_name: syn::Ident,
     side_effect: Option<syn::Path>,
     is_terminator: bool,
+    arity: InstAritySpec,
     fields: Vec<InstField>,
 }
 
@@ -28,13 +29,137 @@ struct InstField {
     ty: syn::Type,
 }
 
+enum InstAritySpec {
+    Exact(usize),
+    AtLeast(usize),
+    AtMost(usize),
+    Range { min: usize, max: usize },
+}
+
+impl InstAritySpec {
+    fn parse_usize_expr(expr: &syn::Expr, usage: &str) -> syn::Result<usize> {
+        let syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Int(int),
+            ..
+        }) = expr
+        else {
+            return Err(syn::Error::new_spanned(expr, usage));
+        };
+
+        int.base10_parse()
+            .map_err(|_| syn::Error::new_spanned(expr, usage))
+    }
+
+    fn parse_call_args(
+        call: &syn::ExprCall,
+        expected: usize,
+        usage: &str,
+    ) -> syn::Result<Vec<usize>> {
+        if call.args.len() != expected {
+            return Err(syn::Error::new_spanned(call, usage));
+        }
+
+        call.args
+            .iter()
+            .map(|arg| Self::parse_usize_expr(arg, usage))
+            .collect()
+    }
+
+    fn parse(expr: syn::Expr) -> syn::Result<Self> {
+        if let syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Int(int),
+            ..
+        }) = &expr
+        {
+            return Ok(Self::Exact(int.base10_parse().map_err(|_| {
+                syn::Error::new_spanned(&expr, "expected integer literal")
+            })?));
+        }
+
+        let syn::Expr::Call(call) = expr else {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "expected `arity(N)`, `arity(exact(N))`, `arity(at_least(N))`, `arity(at_most(N))`, or `arity(range(M, N))`",
+            ));
+        };
+
+        let syn::Expr::Path(path) = &*call.func else {
+            return Err(syn::Error::new_spanned(
+                &call.func,
+                "expected `exact`, `at_least`, `at_most`, or `range`",
+            ));
+        };
+        let Some(kind) = path.path.get_ident().map(|ident| ident.to_string()) else {
+            return Err(syn::Error::new_spanned(
+                path,
+                "expected `exact`, `at_least`, `at_most`, or `range`",
+            ));
+        };
+
+        match kind.as_str() {
+            "exact" => {
+                let args = Self::parse_call_args(
+                    &call,
+                    1,
+                    "expected `arity(exact(N))` where `N` is an integer literal",
+                )?;
+                Ok(Self::Exact(args[0]))
+            }
+            "at_least" => {
+                let args = Self::parse_call_args(
+                    &call,
+                    1,
+                    "expected `arity(at_least(N))` where `N` is an integer literal",
+                )?;
+                Ok(Self::AtLeast(args[0]))
+            }
+            "at_most" => {
+                let args = Self::parse_call_args(
+                    &call,
+                    1,
+                    "expected `arity(at_most(N))` where `N` is an integer literal",
+                )?;
+                Ok(Self::AtMost(args[0]))
+            }
+            "range" => {
+                let usage = "expected `arity(range(M, N))` where `M` and `N` are integer literals";
+                let args = Self::parse_call_args(&call, 2, usage)?;
+                let [min, max] = [args[0], args[1]];
+                if min > max {
+                    return Err(syn::Error::new_spanned(
+                        call,
+                        "invalid range: min must be <= max",
+                    ));
+                }
+                Ok(Self::Range { min, max })
+            }
+            _ => Err(syn::Error::new_spanned(
+                path,
+                "expected `exact`, `at_least`, `at_most`, or `range`",
+            )),
+        }
+    }
+
+    fn to_tokens(&self) -> proc_macro2::TokenStream {
+        match self {
+            Self::Exact(n) => quote!(crate::inst::InstArity::Exact(#n)),
+            Self::AtLeast(n) => quote!(crate::inst::InstArity::AtLeast(#n)),
+            Self::AtMost(n) => quote!(crate::inst::InstArity::AtMost(#n)),
+            Self::Range { min, max } => {
+                quote!(crate::inst::InstArity::Range { min: #min, max: #max })
+            }
+        }
+    }
+}
+
 impl InstStruct {
     fn new(item_struct: syn::ItemStruct) -> syn::Result<Self> {
-        let (side_effect, is_terminator) = Self::check_attr(&item_struct)?;
+        let (side_effect, is_terminator, arity) = Self::check_attr(&item_struct)?;
 
         let struct_ident = item_struct.ident;
 
         let fields = Self::parse_fields(&item_struct.fields)?;
+        let arity = arity.unwrap_or(InstAritySpec::Exact(fields.len()));
 
         if item_struct.generics.lt_token.is_some() {
             return Err(syn::Error::new_spanned(
@@ -47,6 +172,7 @@ impl InstStruct {
             struct_name: struct_ident,
             side_effect,
             is_terminator,
+            arity,
             fields,
         })
     }
@@ -68,9 +194,12 @@ impl InstStruct {
         })
     }
 
-    fn check_attr(item_struct: &syn::ItemStruct) -> syn::Result<(Option<syn::Path>, bool)> {
+    fn check_attr(
+        item_struct: &syn::ItemStruct,
+    ) -> syn::Result<(Option<syn::Path>, bool, Option<InstAritySpec>)> {
         let mut side_effect = None;
         let mut is_terminator = false;
+        let mut arity = None;
 
         for attr in &item_struct.attrs {
             if attr.path().is_ident("inst") {
@@ -89,10 +218,23 @@ impl InstStruct {
                 {
                     is_terminator = true;
                 }
+                if let syn::Meta::List(ml) = &meta
+                    && ml.path.is_ident("arity")
+                {
+                    if arity.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            ml,
+                            "duplicate `arity(...)` attribute",
+                        ));
+                    }
+
+                    let expr = syn::parse2(ml.tokens.clone())?;
+                    arity = Some(InstAritySpec::parse(expr)?);
+                }
             }
         }
 
-        Ok((side_effect, is_terminator))
+        Ok((side_effect, is_terminator, arity))
     }
 
     fn parse_fields(fields: &syn::Fields) -> syn::Result<Vec<InstField>> {
@@ -206,6 +348,7 @@ impl InstStruct {
     fn impl_method(&self) -> proc_macro2::TokenStream {
         let struct_name = &self.struct_name;
         let text_form = convert_to_snake(&self.struct_name.to_string());
+        let arity = self.arity.to_tokens();
         let ctor = self.make_ctor();
         let accessors = self.make_accessors();
 
@@ -214,6 +357,10 @@ impl InstStruct {
                 pub const fn inst_name() -> &'static str {
                     #text_form
 
+                }
+
+                pub const fn inst_arity() -> crate::inst::InstArity {
+                    #arity
                 }
 
                 #ctor
@@ -234,6 +381,10 @@ impl InstStruct {
             impl crate::Inst for #struct_name {
                 fn side_effect(&self) -> crate::inst::SideEffect {
                     #side_effect
+                }
+
+                fn arity(&self) -> crate::inst::InstArity {
+                    Self::inst_arity()
                 }
 
                 fn is_terminator(&self) -> bool {

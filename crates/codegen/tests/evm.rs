@@ -29,6 +29,7 @@ use sonatina_ir::{
 };
 use sonatina_parser::{ParsedModule, parse_module};
 use sonatina_triple::{Architecture, OperatingSystem, Vendor};
+use sonatina_verifier::{VerificationLevel, VerifierConfig};
 use std::{
     collections::HashMap,
     io::{Write, stderr},
@@ -184,6 +185,7 @@ fn test_evm(fixture: Fixture<&str>) {
     let opts = CompileOptions {
         fixup_policy: PushWidthPolicy::MinimalRelax,
         emit_symtab: false,
+        verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
     };
 
     let artifact = compile_object(&parsed.module, &backend, "Contract", &opts)

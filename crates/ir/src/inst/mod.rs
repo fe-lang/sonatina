@@ -33,6 +33,7 @@ pub trait Inst:
     inst_set::sealed::Registered + DynClone + Any + Send + Sync + Visitable + VisitableMut
 {
     fn side_effect(&self) -> SideEffect;
+    fn arity(&self) -> InstArity;
     fn as_text(&self) -> &'static str;
     fn is_terminator(&self) -> bool;
 
@@ -50,6 +51,25 @@ pub trait Inst:
             vs.insert(v);
         });
         vs
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InstArity {
+    Exact(usize),
+    AtLeast(usize),
+    AtMost(usize),
+    Range { min: usize, max: usize },
+}
+
+impl InstArity {
+    pub const fn accepts(self, arity: usize) -> bool {
+        match self {
+            Self::Exact(n) => arity == n,
+            Self::AtLeast(n) => arity >= n,
+            Self::AtMost(n) => arity <= n,
+            Self::Range { min, max } => arity >= min && arity <= max,
+        }
     }
 }
 

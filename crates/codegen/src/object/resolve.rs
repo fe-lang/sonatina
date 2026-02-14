@@ -52,7 +52,7 @@ struct UnvalidatedObject {
 #[derive(Debug)]
 struct UnvalidatedSection {
     name: SectionName,
-    entry: Option<FuncRef>,
+    entry: FuncRef,
     includes: Vec<FuncRef>,
     data: FxHashSet<GlobalVariableRef>,
     embeds: Vec<ResolvedEmbed>,
@@ -60,8 +60,6 @@ struct UnvalidatedSection {
 
 impl<'m> ResolvedProgram<'m> {
     pub fn resolve(module: &'m Module) -> Result<Self, Vec<ObjectCompileError>> {
-        let mut errors = Vec::new();
-
         let mut raw_objects: Vec<&Object> = module.objects.values().collect();
         raw_objects.sort_by(|a, b| a.name.0.as_str().cmp(b.name.0.as_str()));
 
@@ -74,12 +72,12 @@ impl<'m> ResolvedProgram<'m> {
         for obj in &raw_objects {
             let mut map = FxHashMap::default();
             for (idx, section) in obj.sections.iter().enumerate() {
-                let is_dup = map.insert(section.name.clone(), idx as u32).is_some();
-                if is_dup {
-                    errors.push(ObjectCompileError::DuplicateSectionName {
-                        object: obj.name.clone(),
-                        section: section.name.clone(),
-                    });
+                if map.insert(section.name.clone(), idx as u32).is_some() {
+                    panic!(
+                        "verifier invariant violated: duplicate section name @{}.{}",
+                        obj.name.0.as_str(),
+                        section.name.0.as_str()
+                    );
                 }
             }
             section_index.push(map);
@@ -105,83 +103,54 @@ impl<'m> ResolvedProgram<'m> {
                     match directive {
                         Directive::Entry(func) => {
                             entry_count += 1;
-                            if entry.is_some() {
-                                continue;
-                            }
-                            if module.ctx.declared_funcs.contains_key(func) {
+                            if entry.is_none() {
                                 entry = Some(*func);
-                            } else {
-                                errors.push(ObjectCompileError::InvalidFunctionRef {
-                                    object: obj.name.clone(),
-                                    section: section_name.clone(),
-                                    func: *func,
-                                });
                             }
                         }
                         Directive::Include(func) => {
-                            if !module.ctx.declared_funcs.contains_key(func) {
-                                errors.push(ObjectCompileError::InvalidFunctionRef {
-                                    object: obj.name.clone(),
-                                    section: section_name.clone(),
-                                    func: *func,
-                                });
-                            } else if include_set.insert(*func) {
+                            if include_set.insert(*func) {
                                 includes.push(*func);
                             }
                         }
                         Directive::Data(gv) => {
-                            let is_valid = module.ctx.with_gv_store(|s| (gv.0 as usize) < s.len());
-                            if !is_valid {
-                                errors.push(ObjectCompileError::InvalidGlobalRef {
-                                    object: obj.name.clone(),
-                                    section: section_name.clone(),
-                                    gv: *gv,
-                                });
-                            } else {
-                                data.insert(*gv);
-                            }
+                            data.insert(*gv);
                         }
                         Directive::Embed(embed) => {
                             if !embed_syms.insert(embed.as_symbol.clone()) {
-                                errors.push(ObjectCompileError::DuplicateEmbedSymbol {
-                                    object: obj.name.clone(),
-                                    section: section_name.clone(),
-                                    symbol: embed.as_symbol.clone(),
-                                });
+                                panic!(
+                                    "verifier invariant violated: duplicate embed symbol &{} in @{}.{}",
+                                    embed.as_symbol.0.as_str(),
+                                    obj.name.0.as_str(),
+                                    section_name.0.as_str()
+                                );
                             }
-                            if let Some(source) = resolve_section_ref(
+                            let source = resolve_section_ref(
                                 &object_index,
                                 &section_index,
                                 object_id,
                                 &embed.source,
-                                obj.name.clone(),
-                                section_name.clone(),
-                                &mut errors,
-                            ) {
-                                embeds.push(ResolvedEmbed {
-                                    source,
-                                    as_symbol: embed.as_symbol.clone(),
-                                });
-                            }
+                                &obj.name,
+                                &section_name,
+                            );
+                            embeds.push(ResolvedEmbed {
+                                source,
+                                as_symbol: embed.as_symbol.clone(),
+                            });
                         }
                     }
                 }
 
-                if entry_count == 0 {
-                    errors.push(ObjectCompileError::MissingEntry {
-                        object: obj.name.clone(),
-                        section: section_name.clone(),
-                    });
-                } else if entry_count > 1 {
-                    errors.push(ObjectCompileError::MultipleEntries {
-                        object: obj.name.clone(),
-                        section: section_name.clone(),
-                    });
+                if entry_count != 1 || entry.is_none() {
+                    panic!(
+                        "verifier invariant violated: section @{}.{} must have exactly one entry",
+                        obj.name.0.as_str(),
+                        section_name.0.as_str()
+                    );
                 }
 
                 resolved_sections.push(UnvalidatedSection {
                     name: section_name,
-                    entry,
+                    entry: entry.expect("entry_count checked"),
                     includes,
                     data,
                     embeds,
@@ -195,10 +164,6 @@ impl<'m> ResolvedProgram<'m> {
             });
         }
 
-        if !errors.is_empty() {
-            return Err(errors);
-        }
-
         let objects: Vec<ResolvedObject> = objects
             .into_iter()
             .map(|obj| ResolvedObject {
@@ -208,9 +173,7 @@ impl<'m> ResolvedProgram<'m> {
                     .into_iter()
                     .map(|section| ResolvedSection {
                         name: section.name,
-                        entry: section
-                            .entry
-                            .expect("entry validated in ResolvedProgram::resolve"),
+                        entry: section.entry,
                         includes: section.includes,
                         data: section.data,
                         embeds: section.embeds,
@@ -271,42 +234,44 @@ fn resolve_section_ref(
     section_index: &[FxHashMap<SectionName, u32>],
     this_object: ObjectId,
     ref_: &SectionRef,
-    object: ObjectName,
-    section: SectionName,
-    errors: &mut Vec<ObjectCompileError>,
-) -> Option<SectionId> {
+    object: &ObjectName,
+    section: &SectionName,
+) -> SectionId {
     let (target_object, target_section_name) = match ref_ {
         SectionRef::Local(name) => (this_object, name.clone()),
         SectionRef::External {
             object: obj,
             section: name,
         } => {
-            let Some(object_id) = object_index.get(obj).copied() else {
-                errors.push(ObjectCompileError::UndefinedSectionRef {
-                    object,
-                    section,
-                    ref_: ref_.clone(),
-                });
-                return None;
-            };
+            let object_id = object_index.get(obj).copied().unwrap_or_else(|| {
+                panic!(
+                    "verifier invariant violated: missing external object @{} referenced from @{}.{}",
+                    obj.0.as_str(),
+                    object.0.as_str(),
+                    section.0.as_str()
+                )
+            });
             (object_id, name.clone())
         }
     };
 
     let section_map = &section_index[target_object.0 as usize];
-    let Some(section_idx) = section_map.get(&target_section_name).copied() else {
-        errors.push(ObjectCompileError::UndefinedSectionRef {
-            object,
-            section,
-            ref_: ref_.clone(),
+    let section_idx = section_map
+        .get(&target_section_name)
+        .copied()
+        .unwrap_or_else(|| {
+            panic!(
+                "verifier invariant violated: missing section {} referenced from @{}.{}",
+                target_section_name.0.as_str(),
+                object.0.as_str(),
+                section.0.as_str()
+            )
         });
-        return None;
-    };
 
-    Some(SectionId {
+    SectionId {
         object: target_object,
         section: section_idx,
-    })
+    }
 }
 
 fn detect_embed_cycle(program: &ResolvedProgram<'_>) -> Option<Vec<SectionId>> {
@@ -390,7 +355,8 @@ object @A {
     }
 
     #[test]
-    fn reject_duplicate_embed_symbols() {
+    #[should_panic(expected = "duplicate embed symbol")]
+    fn duplicate_embed_symbol_invariant_panics() {
         let s = r#"
 target = "evm-ethereum-london"
 
@@ -409,10 +375,6 @@ object @A {
 "#;
 
         let parsed = parse_module(s).unwrap();
-        let err = ResolvedProgram::resolve(&parsed.module).err().unwrap();
-        assert!(
-            err.iter()
-                .any(|e| matches!(e, ObjectCompileError::DuplicateEmbedSymbol { .. }))
-        );
+        let _ = ResolvedProgram::resolve(&parsed.module);
     }
 }

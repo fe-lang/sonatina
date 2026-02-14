@@ -1,14 +1,14 @@
 use ir::{HasInst, builder::FunctionBuilder, inst::control_flow::*};
 use smallvec::SmallVec;
 
-use crate::{BuildCtx, Error, ast, error::ArityBound};
+use crate::{BuildCtx, Error, ast};
 
 super::impl_inst_build! {Jump, (dest: BlockId)}
 super::impl_inst_build! {Br, (cond: ValueId, nz_dest: BlockId, z_dest: BlockId)}
-super::impl_inst_build_common! {BrTable, ArityBound::AtLeast(1), build_br_table}
-super::impl_inst_build_common! {Phi, ArityBound::AtLeast(1), build_phi}
-super::impl_inst_build_common! {Call, ArityBound::AtLeast(1), build_call}
-super::impl_inst_build_common! {Return, ArityBound::AtMost(1), build_return}
+super::impl_inst_build_common! {BrTable, build_br_table}
+super::impl_inst_build_common! {Phi, build_phi}
+super::impl_inst_build_common! {Call, build_call}
+super::impl_inst_build_common! {Return, build_return}
 super::impl_inst_build! {Unreachable, ()}
 
 fn build_br_table(

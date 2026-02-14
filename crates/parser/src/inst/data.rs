@@ -1,14 +1,14 @@
 use ir::{HasInst, builder::FunctionBuilder, inst::data::*};
 use smallvec::SmallVec;
 
-use crate::{BuildCtx, Error, ast, error::ArityBound};
+use crate::{BuildCtx, Error, ast};
 
 super::impl_inst_build! {Mload, (addr: ValueId, ty: Type)}
 super::impl_inst_build! {Mstore, (addr: ValueId, value: ValueId, ty: Type)}
-super::impl_inst_build_common! {Gep, ArityBound::AtLeast(2), build_gep}
+super::impl_inst_build_common! {Gep, build_gep}
 super::impl_inst_build! {GetFunctionPtr, (func: FuncRef)}
-super::impl_inst_build_common! {SymAddr, ArityBound::Exact(1), build_sym_addr}
-super::impl_inst_build_common! {SymSize, ArityBound::Exact(1), build_sym_size}
+super::impl_inst_build_common! {SymAddr, build_sym_addr}
+super::impl_inst_build_common! {SymSize, build_sym_size}
 super::impl_inst_build! {Alloca, (ty: Type)}
 super::impl_inst_build! {InsertValue, (dest: ValueId, idx: ValueId, value: ValueId)}
 super::impl_inst_build! {ExtractValue, (dest: ValueId, idx: ValueId)}

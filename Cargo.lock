@@ -2554,6 +2554,7 @@ dependencies = [
  "sonatina-macros",
  "sonatina-parser",
  "sonatina-triple",
+ "sonatina-verifier",
 ]
 
 [[package]]
@@ -2564,6 +2565,7 @@ dependencies = [
  "sonatina-codegen",
  "sonatina-ir",
  "sonatina-parser",
+ "sonatina-verifier",
  "termcolor",
  "walkdir",
 ]
@@ -2647,9 +2649,13 @@ name = "sonatina-verifier"
 version = "0.0.3-alpha"
 dependencies = [
  "cranelift-entity",
+ "rayon",
  "rustc-hash",
  "smallvec",
  "sonatina-ir",
+ "sonatina-macros",
+ "sonatina-parser",
+ "sonatina-triple",
 ]
 
 [[package]]

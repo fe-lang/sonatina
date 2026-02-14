@@ -5,7 +5,7 @@ target = "evm-ethereum-london"
 # sameln: func public %brtable_unknown_case(v0.*i32) -> i32 {
 # nextln:     block0:
 # nextln:         v1.i32 = mload v0 i32;
-# nextln:         br_table 1.i32 block2 (v1 block1);
+# nextln:         br_table v1 block2 (1.i32 block1);
 # nextln: 
 # nextln:     block1:
 # nextln:         return 11.i32;
@@ -15,7 +15,7 @@ target = "evm-ethereum-london"
 func public %brtable_unknown_case(v0.*i32) -> i32 {
     block0:
         v1.i32 = mload v0 i32;
-        br_table 1.i32 block2 (v1 block1);
+        br_table v1 block2 (1.i32 block1);
 
     block1:
         return 11.i32;

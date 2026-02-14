@@ -337,6 +337,7 @@ impl ModuleLinker {
                     .insts
                     .values_mut()
                     .for_each(|inst| inst.accept_mut(&mut visitor));
+                func.dfg.rebuild_value_caches();
 
                 let linked_func_ref = ref_map.lookup_func(func_ref);
                 self.builder.func_store.update(linked_func_ref, func);

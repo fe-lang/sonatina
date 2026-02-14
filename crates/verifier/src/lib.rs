@@ -1,8 +1,49 @@
-pub mod ctx;
-pub mod error;
-pub mod error_stack;
-pub mod pass;
+mod config;
+mod diagnostic;
+mod pipeline;
+mod report;
+mod verify;
 
-pub use ctx::VerificationCtx;
-pub use error_stack::ErrorStack;
-pub use pass::VerificationPass;
+pub use config::{VerificationLevel, VerifierConfig};
+pub use diagnostic::{Diagnostic, DiagnosticCode, DiagnosticContext, Location, Note, Severity};
+pub use pipeline::{
+    ModuleBuilderVerifyExt, ParseVerifyError, build_and_verify, parse_and_verify_module,
+};
+pub use report::VerificationReport;
+pub use verify::{
+    verify_function, verify_function_or_panic, verify_module, verify_module_invariants,
+    verify_module_or_panic,
+};
+
+#[macro_export]
+macro_rules! debug_verify_module {
+    ($module:expr) => {{
+        if cfg!(debug_assertions) || cfg!(feature = "verify-ir") {
+            let cfg = $crate::VerifierConfig::for_level($crate::VerificationLevel::Full);
+            let report = $crate::verify_module($module, &cfg);
+            if report.has_errors() {
+                eprintln!("SONATINA_IR_VERIFY_FAILURE: module");
+                eprintln!("{report}");
+                panic!("SONATINA_IR_VERIFY_FAILURE");
+            }
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! debug_verify_func {
+    ($ctx:expr, $func_ref:expr, $func:expr) => {{
+        if cfg!(debug_assertions) || cfg!(feature = "verify-ir") {
+            let cfg = $crate::VerifierConfig::for_level($crate::VerificationLevel::Full);
+            let report = $crate::verify_function($ctx, $func_ref, $func, &cfg);
+            if report.has_errors() {
+                eprintln!(
+                    "SONATINA_IR_VERIFY_FAILURE: function {}",
+                    ($func_ref).as_u32()
+                );
+                eprintln!("{report}");
+                panic!("SONATINA_IR_VERIFY_FAILURE");
+            }
+        }
+    }};
+}

@@ -6,6 +6,9 @@ use sonatina_ir::{
     module::FuncRef,
     object::EmbedSymbol,
 };
+use sonatina_verifier::{
+    VerificationLevel, VerifierConfig, verify_module, verify_module_invariants,
+};
 
 use super::{
     CompileOptions,
@@ -34,11 +37,31 @@ fn compile_required_sections_into_cache<B: LowerBackend>(
     Ok(cache)
 }
 
+fn verify_module_for_codegen(
+    module: &Module,
+    cfg: &VerifierConfig,
+) -> Result<(), Vec<ObjectCompileError>> {
+    let fast_invariants_only = matches!(cfg.level, VerificationLevel::Fast)
+        && !cfg.should_check_dominance()
+        && !cfg.should_check_users()
+        && !cfg.should_check_value_caches();
+    let report = if fast_invariants_only {
+        verify_module_invariants(module, cfg)
+    } else {
+        verify_module(module, cfg)
+    };
+    if report.has_errors() {
+        return Err(vec![ObjectCompileError::VerifierFailed { report }]);
+    }
+    Ok(())
+}
+
 pub fn compile_all_objects<B: LowerBackend>(
     module: &Module,
     backend: &B,
     opts: &CompileOptions<B::FixupPolicy>,
 ) -> Result<Vec<ObjectArtifact>, Vec<ObjectCompileError>> {
+    verify_module_for_codegen(module, &opts.verifier_cfg)?;
     let program = ResolvedProgram::resolve(module)?;
     let mut cache = compile_required_sections_into_cache(&program, backend, None, opts)?;
 
@@ -75,6 +98,7 @@ pub fn compile_object<B: LowerBackend>(
     object: &str,
     opts: &CompileOptions<B::FixupPolicy>,
 ) -> Result<ObjectArtifact, Vec<ObjectCompileError>> {
+    verify_module_for_codegen(module, &opts.verifier_cfg)?;
     let program = ResolvedProgram::resolve(module)?;
 
     let Some((object_idx, obj)) = program
@@ -439,11 +463,15 @@ mod tests {
     };
     use smallvec::SmallVec;
     use sonatina_ir::{
-        InstDowncast, Module,
-        inst::data::{SymAddr, SymSize},
+        InstDowncast, InstDowncastMut, Module,
+        inst::{
+            arith::Add,
+            data::{SymAddr, SymSize},
+        },
         module::FuncRef,
     };
     use sonatina_parser::parse_module;
+    use sonatina_verifier::{VerificationLevel, VerifierConfig};
     use std::sync::{Arc, Mutex};
 
     struct FakeBackend;
@@ -651,6 +679,7 @@ object @Contract {
         let opts = CompileOptions {
             fixup_policy: PushWidthPolicy::Push4,
             emit_symtab: true,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
         };
 
         let artifact = compile_object(&parsed.module, &backend, "Contract", &opts).unwrap();
@@ -684,6 +713,98 @@ object @Contract {
         assert_eq!(init[5], 0x63);
         assert_eq!(&init[6..10], &13u32.to_be_bytes());
         assert_eq!(&init[10..], runtime.as_slice());
+    }
+
+    #[test]
+    fn compile_object_reports_verifier_failures_before_codegen() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %main() {
+    block0:
+        v0.i32 = add 1.i32 2.i32;
+}
+
+object @O {
+  section runtime {
+    entry %main;
+  }
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let backend = FakeBackend;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
+        };
+
+        let errs = compile_object(&parsed.module, &backend, "O", &opts)
+            .expect_err("invalid IR should fail verifier preflight");
+        assert!(matches!(
+            errs.as_slice(),
+            [ObjectCompileError::VerifierFailed { .. }]
+        ));
+    }
+
+    #[test]
+    fn compile_object_fast_respects_custom_users_check() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %main() {
+    block0:
+        v0.i32 = add 1.i32 2.i32;
+        return;
+}
+
+object @O {
+  section runtime {
+    entry %main;
+  }
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let module = parsed.module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let block = func.layout.entry_block().expect("entry block must exist");
+            let inst = func
+                .layout
+                .first_inst_of(block)
+                .expect("first instruction must exist");
+
+            let replacement = func.dfg.make_imm_value(99i32);
+            let inst_set = func.inst_set();
+            let inst_data = func.dfg.inst_mut(inst);
+            let add =
+                <&mut Add as InstDowncastMut>::downcast_mut(inst_set, inst_data).expect("add");
+            *add.lhs_mut() = replacement;
+        });
+
+        let backend = FakeBackend;
+        let mut verifier_cfg = VerifierConfig::for_level(VerificationLevel::Fast);
+        verifier_cfg.check_users = true;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: false,
+            verifier_cfg,
+        };
+
+        let errs = compile_object(&module, &backend, "O", &opts)
+            .expect_err("fast preflight should run requested users check");
+        let [ObjectCompileError::VerifierFailed { report }] = errs.as_slice() else {
+            panic!("expected verifier failure, got {errs:?}");
+        };
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code.as_str() == "IR0700"),
+            "expected IR0700 users mismatch diagnostic, got {report}"
+        );
     }
 
     #[test]
@@ -838,6 +959,7 @@ object @O {
         let opts = CompileOptions {
             fixup_policy: PushWidthPolicy::Push4,
             emit_symtab: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
         };
 
         compile_object(&parsed.module, &backend, "O", &opts).unwrap();

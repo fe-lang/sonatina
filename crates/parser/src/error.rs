@@ -23,7 +23,7 @@ pub enum Error {
     },
 
     InstArgNumMismatch {
-        expected: ArityBound,
+        expected: ir::InstArity,
         actual: usize,
         span: Span,
     },
@@ -109,14 +109,19 @@ impl Error {
             Error::InstArgNumMismatch {
                 expected, actual, ..
             } => match expected {
-                ArityBound::Exact(n) => {
+                ir::InstArity::Exact(n) => {
                     format!("expected `{n}` number of arguments, but given `{actual}")
                 }
-                ArityBound::AtLeast(n) => {
+                ir::InstArity::AtLeast(n) => {
                     format!("expected at least `{n}` number of arguments, but given `{actual}")
                 }
-                ArityBound::AtMost(n) => {
+                ir::InstArity::AtMost(n) => {
                     format!("expected at most `{n}` number of arguments, but given `{actual}")
+                }
+                ir::InstArity::Range { min, max } => {
+                    format!(
+                        "expected between `{min}` and `{max}` number of arguments, but given `{actual}"
+                    )
                 }
             },
 
@@ -152,34 +157,5 @@ impl Error {
         let mut v = vec![];
         self.print(&mut v, path, content, colors).unwrap();
         String::from_utf8(v).unwrap()
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum ArityBound {
-    Exact(usize),
-    AtLeast(usize),
-    AtMost(usize),
-}
-
-impl ArityBound {
-    pub fn verify_arity(&self, arity: usize, span: Span) -> Result<(), Box<Error>> {
-        let is_ok = match self {
-            Self::Exact(n) => *n == arity,
-
-            Self::AtLeast(n) => *n <= arity,
-
-            Self::AtMost(n) => *n >= arity,
-        };
-
-        if is_ok {
-            Ok(())
-        } else {
-            Err(Box::new(Error::InstArgNumMismatch {
-                expected: *self,
-                actual: arity,
-                span,
-            }))
-        }
     }
 }
