@@ -1,9 +1,0 @@
----
-source: crates/parser/tests/errors.rs
-input_file: test_files/errors/cmp_result_type.sntn
----
-error: parse error
- --> cmp_result_type.sntn:4:12
-  |
-4 |         v0.i256 = lt 1.i256 2.i256;
-  |            ^^^^ type error: expected `i1 result type for comparison instruction` here

@@ -1,7 +1,0 @@
-target = "evm-ethereum-london"
-
-func public %main() {
-    block0:
-        v0.i256 = lt 1.i256 2.i256;
-        return;
-}

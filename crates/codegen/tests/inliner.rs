@@ -92,8 +92,10 @@ func public %caller(v0.i32) -> i32 {
     let module = &mut parsed.module;
     func_behavior::analyze_module(module);
 
-    let mut cfg = InlinerConfig::default();
-    cfg.splice_require_pure = true;
+    let cfg = InlinerConfig {
+        splice_require_pure: true,
+        ..Default::default()
+    };
     let mut inliner = Inliner::new(cfg);
     let stats = inliner.run(module);
 
@@ -138,8 +140,10 @@ func public %caller(v0.*i32) -> i32 {
     let module = &mut parsed.module;
     func_behavior::analyze_module(module);
 
-    let mut cfg = InlinerConfig::default();
-    cfg.splice_require_pure = true;
+    let cfg = InlinerConfig {
+        splice_require_pure: true,
+        ..Default::default()
+    };
     let mut inliner = Inliner::new(cfg);
     let stats = inliner.run(module);
 
@@ -200,8 +204,10 @@ func public %caller_noreturn() {
     let module = &mut parsed.module;
     func_behavior::analyze_module(module);
 
-    let mut cfg = InlinerConfig::default();
-    cfg.splice_require_pure = true;
+    let cfg = InlinerConfig {
+        splice_require_pure: true,
+        ..Default::default()
+    };
     let mut inliner = Inliner::new(cfg);
     let stats = inliner.run(module);
 
