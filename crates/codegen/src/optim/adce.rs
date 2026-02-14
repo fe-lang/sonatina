@@ -60,6 +60,16 @@ impl AdceSolver {
             return false;
         }
 
+        // The entry block must always be live — removing it would shift
+        // the layout so a different block becomes the entry, breaking
+        // the function's control flow.
+        if let Some(entry) = func.layout.entry_block() {
+            self.mark_block(entry);
+            if let Some(term) = func.layout.last_inst_of(entry) {
+                self.mark_inst(func, term);
+            }
+        }
+
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
                 if matches!(
@@ -126,6 +136,17 @@ impl AdceSolver {
                 self.mark_inst(func, value_inst);
             }
         });
+
+        // A live phi depends on the branches that select its input.
+        // Mark predecessor terminators so the control flow choosing
+        // which phi operand is taken stays alive.
+        if let Some(phi) = func.dfg.cast_phi(inst_id) {
+            for &(_, pred) in phi.args() {
+                if let Some(term) = func.layout.last_inst_of(pred) {
+                    self.mark_inst(func, term);
+                }
+            }
+        }
 
         let inst_block = func.layout.inst_block(inst_id);
         for &block in pdf_set.frontiers(inst_block) {
