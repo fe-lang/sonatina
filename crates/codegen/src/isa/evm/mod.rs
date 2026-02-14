@@ -983,11 +983,9 @@ impl LowerBackend for EvmBackend {
 
                 perform_actions(ctx, &alloc.read(insn, &args));
 
-                // `i1` is treated as a boolean; sext is equivalent to zext.
-                if src_bits == 1 {
-                    push_bytes(ctx, &[1]);
-                    ctx.push(OpCode::AND);
-                } else if (8..256).contains(&src_bits) {
+                // `i1` values are already canonicalized to 0/1 by their producers.
+                // Avoid emitting a redundant `AND 0x01` mask for `sext i1`.
+                if (8..256).contains(&src_bits) {
                     let src_bytes = (src_bits / 8) as u8;
                     debug_assert!(src_bytes > 0 && src_bytes <= 32);
                     // `SIGNEXTEND` takes (byte_index, value) with `byte_index` at top of stack.
@@ -1003,7 +1001,11 @@ impl LowerBackend for EvmBackend {
                 let src_bits = scalar_bit_width(src_ty, ctx.module).unwrap_or(256);
 
                 perform_actions(ctx, &alloc.read(insn, &args));
-                if let Some(mask) = low_bits_mask(src_bits) {
+                // `zext i1` is a representation no-op on the EVM stack:
+                // i1-producing ops already produce canonical 0/1.
+                if src_bits != 1
+                    && let Some(mask) = low_bits_mask(src_bits)
+                {
                     let bytes = u256_to_be(&mask);
                     push_bytes(ctx, &bytes);
                     ctx.push(OpCode::AND);
@@ -1035,7 +1037,10 @@ impl LowerBackend for EvmBackend {
                 let src_bits = scalar_bit_width(src_ty, ctx.module).unwrap_or(256);
 
                 perform_actions(ctx, &alloc.read(insn, &args));
-                if let Some(mask) = low_bits_mask(src_bits) {
+                // `i1` values are already 0/1; masking before int_to_ptr is redundant.
+                if src_bits != 1
+                    && let Some(mask) = low_bits_mask(src_bits)
+                {
                     let bytes = u256_to_be(&mask);
                     push_bytes(ctx, &bytes);
                     ctx.push(OpCode::AND);
