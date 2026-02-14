@@ -1,18 +1,28 @@
 //! Optimization pipeline for composing and running optimization passes.
 //!
-//! Provides [`Pipeline`] for running a sequence of passes on functions or
-//! modules, with both a conservative default preset and custom composition.
+//! The pipeline sequences two kinds of work:
+//!
+//! - **Module-level passes** like inlining that need cross-function access
+//! - **Per-function passes** (SCCP, LICM, etc.) that run independently and
+//!   in parallel across all functions
+//!
+//! [`Step`] represents one unit of work in the pipeline. [`Pipeline`] holds
+//! an ordered sequence of steps and executes them against a module.
 
 use sonatina_ir::{ControlFlowGraph, Function, module::Module};
 
 use crate::{cfg_edit::CleanupMode, domtree::DomTree, loop_analysis::LoopTree};
 
 use super::{
-    adce::AdceSolver, cfg_cleanup::CfgCleanup, egraph::run_egraph_pass, licm::LicmSolver,
+    adce::AdceSolver,
+    cfg_cleanup::CfgCleanup,
+    egraph::run_egraph_pass,
+    inliner::{Inliner, InlinerConfig},
+    licm::LicmSolver,
     sccp::SccpSolver,
 };
 
-/// An individual optimization pass.
+/// A per-function optimization pass.
 ///
 /// [`Pass::Sccp`] is a composite pass that internally runs CfgCleanup, SCCP
 /// solving, CfgCleanup, and ADCE. Use [`Pass::Adce`] only in custom pipelines
@@ -31,76 +41,97 @@ pub enum Pass {
     Egraph,
 }
 
-/// An ordered sequence of optimization passes.
+/// A step in the module-level optimization pipeline.
+///
+/// Steps execute sequentially. [`Step::Inline`] operates on the whole module;
+/// [`Step::FuncPasses`] runs per-function passes in parallel across all
+/// functions.
+#[derive(Debug, Clone)]
+pub enum Step {
+    /// Run the inliner across the whole module (cross-function).
+    Inline,
+    /// Run per-function optimization passes in parallel across all functions.
+    FuncPasses(Vec<Pass>),
+}
+
+/// An ordered sequence of optimization steps.
 ///
 /// Use [`Pipeline::default_pipeline`] for a conservative preset, or build a
-/// custom sequence with [`Pipeline::new`] and [`Pipeline::add_pass`].
+/// custom sequence with [`Pipeline::new`] and [`Pipeline::add_step`].
 ///
 /// # Analysis lifecycle
 ///
-/// Each pass that requires analyses (CFG, dominator tree, loop tree) recomputes
-/// them from the current IR state. The [`PassContext`] reuses allocated storage
-/// across passes to avoid repeated allocation, but the data is always fresh.
+/// Each per-function pass that requires analyses (CFG, dominator tree, loop
+/// tree) recomputes them from the current IR state. Allocated storage is
+/// reused within a function's pass sequence to avoid repeated allocation,
+/// but the data is always fresh.
 pub struct Pipeline {
-    passes: Vec<Pass>,
+    steps: Vec<Step>,
+    /// Configuration for all [`Step::Inline`] steps in this pipeline.
+    pub inliner_config: InlinerConfig,
 }
 
 impl Pipeline {
-    /// Create an empty pipeline.
+    /// Create an empty pipeline with default inliner configuration.
     pub fn new() -> Self {
-        Self { passes: Vec::new() }
+        Self {
+            steps: Vec::new(),
+            inliner_config: InlinerConfig::default(),
+        }
     }
 
-    /// Default optimization pipeline with a conservative pass ordering.
+    /// Default optimization pipeline with a conservative ordering.
     ///
     /// Current sequence:
-    /// 1. `CfgCleanup` — normalize CFG before analysis-heavy passes
-    /// 2. `Sccp` — constant propagation + dead code elimination (composite)
-    /// 3. `Licm` — loop invariant code motion
-    /// 4. `CfgCleanup` — clean up after LICM structural changes
-    /// 5. `Egraph` — algebraic simplification, memory forwarding
+    /// 1. `Inline` — single-block inlining (module-level)
+    /// 2. Per-function passes (parallel):
+    ///    - `CfgCleanup` — normalize CFG before analysis-heavy passes
+    ///    - `Sccp` — constant propagation + dead code elimination (composite)
+    ///    - `Licm` — loop invariant code motion
+    ///    - `CfgCleanup` — clean up after LICM structural changes
+    ///    - `Egraph` — algebraic simplification, memory forwarding
     ///
     /// A second SCCP round after Egraph is intentionally omitted: the egraph
     /// pass currently uses raw layout removal which can leave stale `dfg.users`
     /// entries, and SCCP assumes user instructions are layout-inserted.
     pub fn default_pipeline() -> Self {
         let mut p = Self::new();
-        p.add_pass(Pass::CfgCleanup);
-        p.add_pass(Pass::Sccp);
-        p.add_pass(Pass::Licm);
-        p.add_pass(Pass::CfgCleanup);
-        p.add_pass(Pass::Egraph);
+        p.add_step(Step::Inline);
+        p.add_step(Step::FuncPasses(vec![
+            Pass::CfgCleanup,
+            Pass::Sccp,
+            Pass::Licm,
+            Pass::CfgCleanup,
+            Pass::Egraph,
+        ]));
         p
     }
 
-    /// Append a pass to the pipeline. Returns `&mut Self` for chaining.
-    pub fn add_pass(&mut self, pass: Pass) -> &mut Self {
-        self.passes.push(pass);
+    /// Append a step to the pipeline. Returns `&mut Self` for chaining.
+    pub fn add_step(&mut self, step: Step) -> &mut Self {
+        self.steps.push(step);
         self
     }
 
-    /// Run the pipeline on a single function.
+    /// Run the full pipeline on a module.
     ///
-    /// Allocates a fresh analysis context internally; all analyses are
-    /// recomputed before each pass that requires them.
-    pub fn run_on_function(&self, func: &mut Function) {
-        let mut ctx = PassContext::default();
-        for &pass in &self.passes {
-            run_pass(pass, func, &mut ctx);
+    /// Steps execute sequentially. [`Step::Inline`] mutates the module
+    /// directly; [`Step::FuncPasses`] parallelizes across functions via
+    /// `FuncStore::par_for_each`.
+    pub fn run(&self, module: &mut Module) {
+        for step in &self.steps {
+            match step {
+                Step::Inline => {
+                    let mut inliner = Inliner::new(self.inliner_config);
+                    inliner.run(module);
+                }
+                Step::FuncPasses(passes) => {
+                    module.func_store.par_for_each(|_func_ref, func| {
+                        run_func_passes(passes, func);
+                    });
+                }
+            }
         }
-    }
-
-    /// Run the pipeline on all functions in a module.
-    ///
-    /// Functions are optimized independently and in parallel (via rayon through
-    /// `FuncStore::par_for_each`). Each thread allocates its own analysis context.
-    ///
-    /// Note: this mutates functions through `FuncStore`'s interior mutability
-    /// (`DashMap`-backed). Iteration order across functions is non-deterministic.
-    pub fn run_on_module(&self, module: &Module) {
-        module.func_store.par_for_each(|_func_ref, func| {
-            self.run_on_function(func);
-        });
     }
 }
 
@@ -111,7 +142,18 @@ impl Default for Pipeline {
     }
 }
 
-/// Reusable analysis allocations for a single pipeline run on one function.
+/// Run a sequence of per-function passes on a single function.
+///
+/// This is the building block for [`Step::FuncPasses`] and is also useful
+/// for testing individual pass sequences without a full module.
+pub fn run_func_passes(passes: &[Pass], func: &mut Function) {
+    let mut ctx = PassContext::default();
+    for &pass in passes {
+        run_pass(pass, func, &mut ctx);
+    }
+}
+
+/// Reusable analysis allocations for a single pass sequence on one function.
 ///
 /// Analyses are recomputed fresh before each pass that needs them;
 /// the allocated storage is reused across passes to avoid repeated heap
@@ -187,42 +229,54 @@ mod tests {
     #[test]
     fn default_pipeline_runs() {
         let pipeline = Pipeline::default_pipeline();
-        let module = build_test_module();
-        let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            pipeline.run_on_function(func);
-        });
+        let mut module = build_test_module();
+        pipeline.run(&mut module);
     }
 
     #[test]
     fn custom_pipeline_runs() {
         let mut pipeline = Pipeline::new();
         pipeline
-            .add_pass(Pass::CfgCleanup)
-            .add_pass(Pass::Adce)
-            .add_pass(Pass::CfgCleanup);
+            .add_step(Step::FuncPasses(vec![
+                Pass::CfgCleanup,
+                Pass::Adce,
+                Pass::CfgCleanup,
+            ]));
 
-        let module = build_test_module();
-        let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            pipeline.run_on_function(func);
-        });
+        let mut module = build_test_module();
+        pipeline.run(&mut module);
+    }
+
+    #[test]
+    fn inline_then_optimize() {
+        let mut pipeline = Pipeline::new();
+        pipeline
+            .add_step(Step::Inline)
+            .add_step(Step::FuncPasses(vec![
+                Pass::CfgCleanup,
+                Pass::Sccp,
+            ]));
+
+        let mut module = build_test_module();
+        pipeline.run(&mut module);
     }
 
     #[test]
     fn empty_pipeline_is_identity() {
         let pipeline = Pipeline::new();
-        let module = build_test_module();
-        let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            pipeline.run_on_function(func);
-        });
+        let mut module = build_test_module();
+        pipeline.run(&mut module);
     }
 
     #[test]
-    fn module_level_pipeline_runs() {
-        let pipeline = Pipeline::default_pipeline();
+    fn func_passes_standalone() {
         let module = build_test_module();
-        pipeline.run_on_module(&module);
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(
+                &[Pass::CfgCleanup, Pass::Sccp, Pass::Egraph],
+                func,
+            );
+        });
     }
 }

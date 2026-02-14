@@ -104,6 +104,7 @@ struct CallSite {
     callee: FuncRef,
 }
 
+#[derive(Clone, Copy)]
 pub struct InlinerConfig {
     pub enable_noop: bool,
     pub enable_return_alias: bool,
