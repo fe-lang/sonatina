@@ -527,6 +527,22 @@ fn classify_stack_peephole_op(
     None
 }
 
+fn is_bool_producer_opcode(op: OpCode) -> bool {
+    matches!(
+        op,
+        OpCode::LT
+            | OpCode::GT
+            | OpCode::SLT
+            | OpCode::SGT
+            | OpCode::EQ
+            | OpCode::ISZERO
+            | OpCode::CALL
+            | OpCode::CALLCODE
+            | OpCode::DELEGATECALL
+            | OpCode::STATICCALL
+    )
+}
+
 fn is_noop_stack_peephole_sequence(
     vcode: &VCode<OpCode>,
     label_targets: &FxHashSet<VCodeInst>,
@@ -591,6 +607,46 @@ fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_order: &[Bl
         let mut changed = false;
         let mut i = 0usize;
         while i < insts.len() {
+            // Collapse redundant ISZERO chains after known boolean producers.
+            //
+            // If `op` produces a 0/1 value:
+            // - `op; iszero; iszero` is equivalent to `op`
+            // - more trailing `iszero`s reduce by parity.
+            if i + 2 < insts.len() {
+                let inst = insts[i];
+                if !label_targets.contains(&inst)
+                    && vcode.fixups.get(inst).is_none()
+                    && vcode.inst_imm_bytes.get(inst).is_none()
+                {
+                    let op = vcode.insts[inst];
+                    if is_bool_producer_opcode(op) {
+                        let mut j = i + 1;
+                        while j < insts.len() {
+                            let z = insts[j];
+                            if label_targets.contains(&z)
+                                || vcode.fixups.get(z).is_some()
+                                || vcode.inst_imm_bytes.get(z).is_some()
+                                || (vcode.insts[z] as u8) != (OpCode::ISZERO as u8)
+                            {
+                                break;
+                            }
+                            j += 1;
+                        }
+
+                        let run = j - (i + 1);
+                        if run >= 2 {
+                            kept.push(inst);
+                            if run % 2 == 1 {
+                                kept.push(insts[i + 1]);
+                            }
+                            changed = true;
+                            i = j;
+                            continue;
+                        }
+                    }
+                }
+            }
+
             const MAX_WINDOW: usize = 24;
             let run_limit = (i + MAX_WINDOW).min(insts.len());
             let mut run_end = i;
