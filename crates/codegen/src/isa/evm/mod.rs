@@ -482,35 +482,82 @@ fn is_push_opcode(op: OpCode) -> bool {
     byte == OpCode::PUSH0 as u8 || (OpCode::PUSH1 as u8..=OpCode::PUSH32 as u8).contains(&byte)
 }
 
-fn is_plain_push_inst(
-    vcode: &VCode<OpCode>,
-    label_targets: &FxHashSet<VCodeInst>,
-    inst: VCodeInst,
-) -> bool {
-    if label_targets.contains(&inst) || vcode.fixups.get(inst).is_some() {
-        return false;
-    }
-    let op = vcode.insts[inst];
-    if !is_push_opcode(op) {
-        return false;
-    }
-    if (op as u8) == (OpCode::PUSH0 as u8) {
-        vcode.inst_imm_bytes.get(inst).is_none()
-    } else {
-        vcode.inst_imm_bytes.get(inst).is_some()
-    }
+#[derive(Clone, Copy)]
+enum StackPeepholeOp {
+    Push,
+    Swap(u8),
+    Pop,
 }
 
-fn is_plain_opcode_inst(
+fn classify_stack_peephole_op(
     vcode: &VCode<OpCode>,
     label_targets: &FxHashSet<VCodeInst>,
     inst: VCodeInst,
-    expected: OpCode,
+) -> Option<StackPeepholeOp> {
+    if label_targets.contains(&inst) || vcode.fixups.get(inst).is_some() {
+        return None;
+    }
+    let op = vcode.insts[inst];
+    if is_push_opcode(op) {
+        if (op as u8) == (OpCode::PUSH0 as u8) {
+            if vcode.inst_imm_bytes.get(inst).is_none() {
+                return Some(StackPeepholeOp::Push);
+            }
+            return None;
+        }
+        if vcode.inst_imm_bytes.get(inst).is_some() {
+            return Some(StackPeepholeOp::Push);
+        }
+        return None;
+    }
+    if vcode.inst_imm_bytes.get(inst).is_some() {
+        return None;
+    }
+    let byte = op as u8;
+    if byte == OpCode::POP as u8 {
+        return Some(StackPeepholeOp::Pop);
+    }
+    if (OpCode::SWAP1 as u8..=OpCode::SWAP16 as u8).contains(&byte) {
+        return Some(StackPeepholeOp::Swap(byte - OpCode::SWAP1 as u8 + 1));
+    }
+    None
+}
+
+fn is_noop_stack_peephole_sequence(
+    vcode: &VCode<OpCode>,
+    label_targets: &FxHashSet<VCodeInst>,
+    insts: &[VCodeInst],
 ) -> bool {
-    !label_targets.contains(&inst)
-        && vcode.fixups.get(inst).is_none()
-        && vcode.inst_imm_bytes.get(inst).is_none()
-        && (vcode.insts[inst] as u8) == (expected as u8)
+    let mut stack: SmallVec<[u16; 64]> = (0..32).collect();
+    let initial = stack.clone();
+    let mut next_push_token: u16 = 1000;
+
+    for &inst in insts {
+        let Some(op) = classify_stack_peephole_op(vcode, label_targets, inst) else {
+            return false;
+        };
+        match op {
+            StackPeepholeOp::Push => {
+                stack.push(next_push_token);
+                next_push_token = next_push_token.wrapping_add(1);
+            }
+            StackPeepholeOp::Swap(depth) => {
+                let depth = depth as usize;
+                let len = stack.len();
+                if len <= depth {
+                    return false;
+                }
+                stack.swap(len - 1, len - 1 - depth);
+            }
+            StackPeepholeOp::Pop => {
+                if stack.pop().is_none() {
+                    return false;
+                }
+            }
+        }
+    }
+
+    stack == initial
 }
 
 fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_order: &[BlockId]) {
@@ -531,33 +578,28 @@ fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_order: &[Bl
         let mut changed = false;
         let mut i = 0usize;
         while i < insts.len() {
-            if i + 8 <= insts.len() {
-                let p = &insts[i..i + 8];
-                if is_plain_push_inst(vcode, &label_targets, p[0])
-                    && is_plain_push_inst(vcode, &label_targets, p[1])
-                    && is_plain_opcode_inst(vcode, &label_targets, p[2], OpCode::SWAP1)
-                    && is_plain_opcode_inst(vcode, &label_targets, p[3], OpCode::SWAP2)
-                    && is_plain_opcode_inst(vcode, &label_targets, p[4], OpCode::SWAP1)
-                    && is_plain_opcode_inst(vcode, &label_targets, p[5], OpCode::POP)
-                    && is_plain_opcode_inst(vcode, &label_targets, p[6], OpCode::SWAP1)
-                    && is_plain_opcode_inst(vcode, &label_targets, p[7], OpCode::POP)
-                {
-                    changed = true;
-                    i += 8;
-                    continue;
-                }
+            const MAX_WINDOW: usize = 24;
+            let run_limit = (i + MAX_WINDOW).min(insts.len());
+            let mut run_end = i;
+            while run_end < run_limit
+                && classify_stack_peephole_op(vcode, &label_targets, insts[run_end]).is_some()
+            {
+                run_end += 1;
             }
 
-            if i + 3 <= insts.len() {
-                let p = &insts[i..i + 3];
-                if is_plain_push_inst(vcode, &label_targets, p[0])
-                    && is_plain_opcode_inst(vcode, &label_targets, p[1], OpCode::SWAP1)
-                    && is_plain_opcode_inst(vcode, &label_targets, p[2], OpCode::POP)
-                {
-                    changed = true;
-                    i += 3;
-                    continue;
+            let mut removed = false;
+            if run_end >= i + 3 {
+                for end in (i + 3..=run_end).rev() {
+                    if is_noop_stack_peephole_sequence(vcode, &label_targets, &insts[i..end]) {
+                        changed = true;
+                        removed = true;
+                        i = end;
+                        break;
+                    }
                 }
+            }
+            if removed {
+                continue;
             }
 
             kept.push(insts[i]);
