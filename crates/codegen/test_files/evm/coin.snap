@@ -6,19 +6,19 @@ input_file: test_files/evm/coin.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 1187 bytes
-  section runtime: 911 bytes
-  total: 2098 bytes
+  section init: 1170 bytes
+  section runtime: 902 bytes
+  total: 2072 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
-  __Coin_recv_0_0: ir_blocks=3 ir_insts=33 vcode_ops=73 fixups=1 imm_bytes=11
+  __Coin_recv_0_0: ir_blocks=3 ir_insts=29 vcode_ops=72 fixups=1 imm_bytes=7
     mem: scheme=StaticArena need_words=0 locals_words=0
-  __Coin_recv_0_1: ir_blocks=7 ir_insts=43 vcode_ops=107 fixups=3 imm_bytes=13
+  __Coin_recv_0_1: ir_blocks=7 ir_insts=40 vcode_ops=106 fixups=3 imm_bytes=10
     mem: scheme=StaticArena need_words=0 locals_words=0
   __Coin_recv_0_2: ir_blocks=3 ir_insts=9 vcode_ops=18 fixups=1 imm_bytes=3
     mem: scheme=StaticArena need_words=0 locals_words=0
-  __Coin_init: ir_blocks=3 ir_insts=34 vcode_ops=142 fixups=9 imm_bytes=18
+  __Coin_init: ir_blocks=3 ir_insts=30 vcode_ops=134 fixups=9 imm_bytes=18
     mem: scheme=StaticArena need_words=0 locals_words=0
   __Coin_runtime: ir_blocks=9 ir_insts=79 vcode_ops=389 fixups=40 imm_bytes=39
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -50,7 +50,7 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  deploy: success reason=Return gas_used=261686 gas_refunded=0 logs=0 output=create len=911 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=259585 gas_refunded=0 logs=0 output=create len=902 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   <no evm.case directives>
 
 
@@ -83,12 +83,13 @@ __Coin_recv_0_0:
     DUP2  // v19.i256 = add 2.i256 v1;
     PUSH1 0x2 (2)
     ADD
-    SLOAD  // v20.i256 = evm_sload v19;
-    ADD  // v21.i256 = add v20 v9;
-    DUP2  // v22.i256 = add 2.i256 v1;
-    PUSH1 0x2 (2)
+    DUP1  // v20.i256 = evm_sload v19;
+    SLOAD
+    SWAP1  // v21.i256 = add v20 v9;
+    SWAP2
     ADD
-    SSTORE  // evm_sstore v22 v21;
+    SWAP1  // evm_sstore v19 v21;
+    SSTORE
     SLOAD  // v23.i256 = evm_sload v1;
     SWAP1  // return v23;
     JUMP
@@ -97,25 +98,23 @@ __Coin_recv_0_0:
     DUP2  // v25.i256 = add 1.i256 v1;
     PUSH1 0x1 (1)
     ADD
-    SLOAD  // v26.i256 = evm_sload v25;
-    DUP2  // v28.i256 = add v26 v9;
+    DUP1  // v26.i256 = evm_sload v25;
+    SLOAD
+    DUP3  // v28.i256 = add v26 v9;
     ADD
-    DUP3  // v29.i256 = add 1.i256 v1;
-    PUSH1 0x1 (1)
-    ADD
-    SSTORE  // evm_sstore v29 v28;
-    DUP2  // v30.i256 = add 2.i256 v1;
+    DUP2  // evm_sstore v25 v28;
+    SSTORE
+    SWAP2  // v30.i256 = add 2.i256 v1;
     PUSH1 0x2 (2)
     ADD
-    SLOAD  // v31.i256 = evm_sload v30;
-    ADD  // v32.i256 = add v31 v9;
-    DUP2  // v33.i256 = add 2.i256 v1;
-    PUSH1 0x2 (2)
+    DUP1  // v31.i256 = evm_sload v30;
+    SLOAD
+    SWAP1  // v32.i256 = add v31 v9;
+    SWAP2
     ADD
-    SSTORE  // evm_sstore v33 v32;
-    PUSH1 0x1 (1)  // v34.i256 = add 1.i256 v1;
-    ADD
-    SLOAD  // v35.i256 = evm_sload v34;
+    SWAP1  // evm_sstore v30 v32;
+    SSTORE
+    SLOAD  // v35.i256 = evm_sload v25;
     SWAP1  // return v35;
     JUMP
 
@@ -150,8 +149,9 @@ __Coin_recv_0_1:
     DUP2  // v21.i256 = add 1.i256 v1;
     PUSH1 0x1 (1)
     ADD
-    SLOAD  // v22.i256 = evm_sload v21;
-    DUP2  // v43.i1 = lt v22 v9;
+    DUP1  // v22.i256 = evm_sload v21;
+    SLOAD
+    DUP3  // v43.i1 = lt v22 v9;
     SWAP1
     LT
     ISZERO  // v45.i1 = is_zero v44;
@@ -172,37 +172,35 @@ __Coin_recv_0_1:
     SUB
     DUP3  // evm_sstore v1 v30;
     SSTORE
-    DUP2  // v31.i256 = add 1.i256 v1;
+    SWAP1  // v31.i256 = add 1.i256 v1;
     PUSH1 0x1 (1)
     ADD
-    SLOAD  // v32.i256 = evm_sload v31;
-    ADD  // v33.i256 = add v32 v9;
-    SWAP1  // v34.i256 = add 1.i256 v1;
-    PUSH1 0x1 (1)
+    DUP1  // v32.i256 = evm_sload v31;
+    SLOAD
+    SWAP1  // v33.i256 = add v32 v9;
+    SWAP2
     ADD
-    SSTORE  // evm_sstore v34 v33;
+    SWAP1  // evm_sstore v31 v33;
+    SSTORE
     PUSH0  // return 0.i256;
     SWAP1
     JUMP
   block5:
     POP  // return 1.i256;
     POP
+    POP
     PUSH1 0x1 (1)
     SWAP1
     JUMP
   block6:
     JUMPDEST
-    DUP2  // v36.i256 = add 1.i256 v1;
-    PUSH1 0x1 (1)
-    ADD
-    SLOAD  // v37.i256 = evm_sload v36;
-    DUP2  // v39.i256 = sub v37 v9;
+    DUP1  // v37.i256 = evm_sload v21;
+    SLOAD
+    DUP3  // v39.i256 = sub v37 v9;
     SWAP1
     SUB
-    DUP3  // v40.i256 = add 1.i256 v1;
-    PUSH1 0x1 (1)
-    ADD
-    SSTORE  // evm_sstore v40 v39;
+    SWAP1  // evm_sstore v21 v39;
+    SSTORE
     DUP2  // v41.i256 = evm_sload v1;
     SLOAD
     ADD  // v42.i256 = add v41 v9;
@@ -241,10 +239,13 @@ __Coin_init:
     PUSH0 0x0 (0)  // v2.i256 = sym_addr &__Coin_runtime;
     PUSH0 0x0 (0)  // v3.i256 = sym_size &__Coin_runtime;
     CODESIZE  // v4.i256 = evm_code_size;
-    DUP2  // v37.i256 = add v2 v3;
+    DUP2  // v6.i256 = add v2 v3;
     DUP4
     ADD
-    DUP2  // v38.i1 = lt v4 v37;
+    DUP3  // v37.i256 = add v2 v3;
+    DUP5
+    ADD
+    DUP3  // v38.i1 = lt v4 v37;
     LT
     ISZERO  // v40.i1 = is_zero v39;
     PUSH1 block2  // br v9 block1 block2;
@@ -253,17 +254,20 @@ __Coin_init:
     POP  // evm_revert 0.i256 0.i256;
     POP
     POP
+    POP
     PUSH0
     PUSH0
     REVERT
   block2:
     JUMPDEST
-    DUP2  // v41.i256 = add v2 v3;
-    DUP4
+    DUP3  // v41.i256 = add v2 v3;
+    DUP5
     ADD
-    DUP2  // v17.i256 = sub v4 v41;
+    SWAP1  // v17.i256 = sub v4 v41;
+    SWAP2
     SUB
-    PUSH1 0x1f (31)  // v18.*i8 = evm_malloc v17;
+    DUP1  // v18.*i8 = evm_malloc v17;
+    PUSH1 0x1f (31)
     ADD
     PUSH1 0x1f (31)
     NOT
@@ -288,16 +292,10 @@ __Coin_init:
     ADD
     PUSH1 0x40 (64)
     MSTORE
-    DUP3  // v20.i256 = add v2 v3;
-    DUP5
-    ADD
-    DUP4  // v42.i256 = add v2 v3;
-    DUP6
-    ADD
-    DUP4  // v22.i256 = sub v4 v42;
-    SUB
-    SWAP1  // evm_code_copy v19 v20 v22;
+    DUP1  // evm_code_copy v19 v6 v17;
+    SWAP3
     DUP3
+    SWAP2
     CODECOPY
     PUSH1 0x40 (64)  // v24.*i8 = evm_malloc 64.i256;
     PUSH1 0x1f (31)
@@ -326,22 +324,14 @@ __Coin_init:
     PUSH1 0x40 (64)
     MSTORE
     DUP1  // v25.i256 = ptr_to_int v24 i256;
-    DUP2  // v43.*@__fe_MemoryBytes_2 = bitcast v24 *@__fe_MemoryBytes_2;
+    DUP2  // v42.*@__fe_MemoryBytes_2 = bitcast v24 *@__fe_MemoryBytes_2;
     SWAP1  // mstore v27 v19 i256;
-    SWAP3
+    SWAP4
     SWAP1
     MSTORE
-    DUP4  // v44.i256 = add v2 v3;
-    DUP6
+    PUSH1 0x20 (32)  // v32.*i256 = gep v43 0.i256 1.i256;
     ADD
-    SWAP1  // v29.i256 = sub v4 v44;
-    SWAP3
-    SUB
-    SWAP1  // v45.*@__fe_MemoryBytes_2 = bitcast v24 *@__fe_MemoryBytes_2;
-    SWAP2
-    PUSH1 0x20 (32)  // v32.*i256 = gep v45 0.i256 1.i256;
-    ADD
-    MSTORE  // mstore v32 v29 i256;
+    MSTORE  // mstore v32 v17 i256;
     PUSH1 `pc + (4)`  // v33.i256 = call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v25;
     SWAP1
     PUSH1 FuncRef(35)
