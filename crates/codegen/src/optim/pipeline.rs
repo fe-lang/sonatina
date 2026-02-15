@@ -11,7 +11,9 @@
 
 use sonatina_ir::{ControlFlowGraph, Function, module::Module};
 
-use crate::{cfg_edit::CleanupMode, domtree::DomTree, loop_analysis::LoopTree};
+use crate::{
+    analysis::func_behavior, cfg_edit::CleanupMode, domtree::DomTree, loop_analysis::LoopTree,
+};
 
 use super::{
     adce::AdceSolver,
@@ -74,6 +76,31 @@ pub struct Pipeline {
     steps: Vec<Step>,
     /// Configuration for all [`Step::Inline`] steps in this pipeline.
     pub inliner_config: InlinerConfig,
+}
+
+fn pass_needs_func_behavior(pass: Pass) -> bool {
+    matches!(
+        pass,
+        Pass::CfgCleanup | Pass::Sccp | Pass::Adce | Pass::Egraph
+    )
+}
+
+fn step_needs_func_behavior(passes: &[Pass]) -> bool {
+    passes.iter().copied().any(pass_needs_func_behavior)
+}
+
+fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
+    matches!(
+        pass,
+        Pass::CfgCleanup | Pass::Sccp | Pass::Adce | Pass::Licm | Pass::Egraph
+    )
+}
+
+fn step_may_invalidate_func_behavior(passes: &[Pass]) -> bool {
+    passes
+        .iter()
+        .copied()
+        .any(pass_may_invalidate_func_behavior)
 }
 
 impl Pipeline {
@@ -165,17 +192,34 @@ impl Pipeline {
     /// Steps execute sequentially. [`Step::Inline`] mutates the module
     /// directly; [`Step::FuncPasses`] parallelizes across functions via
     /// `FuncStore::par_for_each`.
+    ///
+    /// Function behavior analysis runs lazily before each pass round that
+    /// needs call attributes, and is marked dirty again after mutating rounds.
+    /// This keeps attrs fresh without recomputing before every step.
+    ///
+    /// The invalidation boundary is per [`Step::FuncPasses`], because function
+    /// rounds execute function-major in parallel.
     pub fn run(&self, module: &mut Module) {
+        let mut func_behavior_dirty = true;
+
         for step in &self.steps {
             match step {
                 Step::Inline => {
                     let mut inliner = Inliner::new(self.inliner_config);
                     inliner.run(module);
+                    func_behavior_dirty = true;
                 }
                 Step::FuncPasses(passes) => {
+                    if func_behavior_dirty && step_needs_func_behavior(passes) {
+                        func_behavior::analyze_module(module);
+                        func_behavior_dirty = false;
+                    }
                     module.func_store.par_for_each(|_func_ref, func| {
                         run_func_passes(passes, func);
                     });
+                    if step_may_invalidate_func_behavior(passes) {
+                        func_behavior_dirty = true;
+                    }
                 }
             }
         }
@@ -193,6 +237,9 @@ impl Default for Pipeline {
 ///
 /// This is the building block for [`Step::FuncPasses`] and is also useful
 /// for testing individual pass sequences without a full module.
+///
+/// This helper cannot run module-level analyses. Callers that include
+/// attribute-dependent passes must ensure function attrs are computed first.
 pub fn run_func_passes(passes: &[Pass], func: &mut Function) {
     let mut ctx = PassContext::default();
     for &pass in passes {
