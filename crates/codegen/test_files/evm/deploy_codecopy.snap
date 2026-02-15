@@ -13,9 +13,9 @@ object: Contract
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
   entry: ir_blocks=1 ir_insts=7 vcode_ops=17 fixups=0 imm_bytes=4
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: sa{n:0,l:0}
   init: ir_blocks=1 ir_insts=4 vcode_ops=9 fixups=2 imm_bytes=2
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: sa{n:0,l:0}
 
 evm:
   deploy: success reason=Return gas_used=57740 gas_refunded=0 logs=0 output=create len=21 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
@@ -25,8 +25,8 @@ evm:
 --------------- DEBUG ---------------
 
 evm mem plan: dyn_base=0xc0 static_base=0xc0
-evm mem plan: entry scheme=StaticArena need_words=0 locals_words=0
-evm mem plan: init scheme=StaticArena need_words=0 locals_words=0
+evm mem plan: entry sa{n:0,l:0}
+evm mem plan: init sa{n:0,l:0}
 
 // func public %entry()
   block0 P=[] T=[]

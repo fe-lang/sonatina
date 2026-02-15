@@ -6,6 +6,7 @@ struct EvmConfig {
     pub stack_reach: Option<u8>,
     pub emit_debug_trace: Option<bool>,
     pub emit_mem_plan: Option<bool>,
+    pub opt_pipeline: Option<EvmOptPipeline>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,6 +20,23 @@ pub(crate) struct EvmCase {
 pub(crate) enum EvmExpect {
     Return(Vec<u8>),
     Revert(Vec<u8>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EvmOptPipeline {
+    None,
+    Balanced,
+    Aggressive,
+}
+
+impl EvmOptPipeline {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Balanced => "balanced",
+            Self::Aggressive => "aggressive",
+        }
+    }
 }
 
 fn parse_evm_config(module_comments: &[String]) -> Result<EvmConfig, String> {
@@ -56,6 +74,12 @@ pub(crate) fn emit_mem_plan(module_comments: &[String]) -> Result<bool, String> 
     Ok(parse_evm_config(module_comments)?
         .emit_mem_plan
         .unwrap_or(false))
+}
+
+pub(crate) fn opt_pipeline(module_comments: &[String]) -> Result<EvmOptPipeline, String> {
+    Ok(parse_evm_config(module_comments)?
+        .opt_pipeline
+        .unwrap_or(EvmOptPipeline::None))
 }
 
 pub(crate) fn parse_evm_cases(module_comments: &[String]) -> Result<Vec<EvmCase>, String> {
@@ -197,6 +221,13 @@ fn parse_evm_config_object(spec: &str, cfg: &mut EvmConfig) -> Result<(), String
                 cfg.emit_mem_plan =
                     Some(parse_bool_literal(value).map_err(|e| format!("{key}: {e}"))?);
             }
+            "opt_pipeline" => {
+                if cfg.opt_pipeline.is_some() {
+                    return Err("duplicate `opt_pipeline`".to_string());
+                }
+                cfg.opt_pipeline =
+                    Some(parse_opt_pipeline(value).map_err(|e| format!("{key}: {e}"))?);
+            }
             _ => {
                 // Ignore unknown keys for forward compatibility.
             }
@@ -277,6 +308,15 @@ fn parse_bool_literal(lit: &str) -> Result<bool, String> {
     }
 }
 
+fn parse_opt_pipeline(lit: &str) -> Result<EvmOptPipeline, String> {
+    match lit.trim() {
+        "none" => Ok(EvmOptPipeline::None),
+        "balanced" => Ok(EvmOptPipeline::Balanced),
+        "aggressive" => Ok(EvmOptPipeline::Aggressive),
+        _ => Err("expected `none`, `balanced`, or `aggressive`".to_string()),
+    }
+}
+
 fn parse_u256_be_32(lit: &str) -> Result<[u8; 32], String> {
     let lit = lit.trim();
 
@@ -301,4 +341,30 @@ fn parse_u256_be_32(lit: &str) -> Result<[u8; 32], String> {
     let mut be = [0u8; 32];
     be[32 - bytes.len()..].copy_from_slice(bytes);
     Ok(be)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EvmOptPipeline, opt_pipeline};
+
+    #[test]
+    fn opt_pipeline_defaults_to_none() {
+        let comments = vec!["#! evm.config: { stack_reach: 8 }".to_string()];
+        let pipeline = opt_pipeline(&comments).unwrap();
+        assert_eq!(pipeline, EvmOptPipeline::None);
+    }
+
+    #[test]
+    fn opt_pipeline_parses_aggressive() {
+        let comments = vec!["#! evm.config: { opt_pipeline: aggressive }".to_string()];
+        let pipeline = opt_pipeline(&comments).unwrap();
+        assert_eq!(pipeline, EvmOptPipeline::Aggressive);
+    }
+
+    #[test]
+    fn opt_pipeline_rejects_invalid_value() {
+        let comments = vec!["#! evm.config: { opt_pipeline: turbo }".to_string()];
+        let err = opt_pipeline(&comments).unwrap_err();
+        assert!(err.contains("opt_pipeline: expected `none`, `balanced`, or `aggressive`"));
+    }
 }

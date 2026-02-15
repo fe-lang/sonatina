@@ -18,24 +18,26 @@ use sonatina_codegen::{
     liveness::Liveness,
     machinst::lower::{LowerBackend, SectionLoweringCtx},
     object::{CompileOptions, compile_object},
+    optim::Pipeline,
     stackalloc::StackifyAlloc,
 };
 use sonatina_ir::{
     Function,
     cfg::ControlFlowGraph,
-    ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite},
+    ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite, ModuleWriter},
     isa::evm::Evm,
+    module::FuncRef,
     object::{EmbedSymbol, ObjectName, SectionName},
 };
 use sonatina_parser::{ParsedModule, parse_module};
 use sonatina_triple::{Architecture, OperatingSystem, Vendor};
 use sonatina_verifier::{VerificationLevel, VerifierConfig};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{Write, stderr},
 };
 
-use evm_directives::{EvmCase, EvmExpect};
+use evm_directives::{EvmCase, EvmExpect, EvmOptPipeline};
 
 fn fmt_stackify_trace(trace: &str) -> String {
     let mut out = String::new();
@@ -74,6 +76,37 @@ macro_rules! snap_test {
             .unwrap()
         })
     };
+
+    ($value:expr, $fixture_path: expr, $suffix: expr) => {
+        let mut settings = insta::Settings::new();
+        let fixture_path = ::std::path::Path::new($fixture_path);
+        let fixture_dir = fixture_path.parent().unwrap();
+        let fixture_name = fixture_path.file_stem().unwrap().to_str().unwrap();
+
+        settings.set_snapshot_path(fixture_dir);
+        settings.set_input_file($fixture_path);
+        settings.set_prepend_module_to_snapshot(false);
+
+        let suffix: Option<&str> = $suffix;
+        let name = if let Some(suffix) = suffix {
+            format!("{fixture_name}.{suffix}")
+        } else {
+            fixture_name.into()
+        };
+
+        settings.bind(|| {
+            insta::_macro_support::assert_snapshot(
+                (name, $value.as_str()).into(),
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+                fixture_name,
+                module_path!(),
+                file!(),
+                line!(),
+                stringify!($value),
+            )
+            .unwrap()
+        })
+    };
 }
 
 fn parse_sona(content: &str) -> ParsedModule {
@@ -94,13 +127,29 @@ fn parse_sona(content: &str) -> ParsedModule {
     glob: "*.sntn"
 )]
 fn test_evm(fixture: Fixture<&str>) {
-    let parsed = parse_sona(fixture.content());
+    let mut parsed = parse_sona(fixture.content());
     let stackify_reach_depth = stackify_reach_depth_for_fixture(fixture.path(), &parsed);
     let emit_debug_trace = emit_debug_trace_for_fixture(fixture.path(), &parsed);
     let emit_mem_plan = emit_mem_plan_for_fixture(fixture.path(), &parsed);
+    let opt_pipeline = opt_pipeline_for_fixture(fixture.path(), &parsed);
 
     let cases = evm_directives::parse_evm_cases(&parsed.debug.module_comments)
         .unwrap_or_else(|e| panic!("{}: {e}", fixture.path()));
+
+    match opt_pipeline {
+        EvmOptPipeline::None => {}
+        EvmOptPipeline::Balanced => Pipeline::balanced().run(&mut parsed.module),
+        EvmOptPipeline::Aggressive => Pipeline::aggressive().run(&mut parsed.module),
+    }
+
+    if opt_pipeline != EvmOptPipeline::None {
+        let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
+        let opt_ir = writer.dump_string();
+        let opt_snapshot = format!("opt_pipeline: {}\n\n{}", opt_pipeline.as_str(), opt_ir);
+        snap_test!(opt_snapshot, fixture.path(), Some("opt"));
+    }
+
+    let func_order = lowering_func_order(&parsed);
 
     let backend = EvmBackend::new(Evm::new(sonatina_triple::TargetTriple {
         architecture: Architecture::Evm,
@@ -118,18 +167,18 @@ fn test_evm(fixture: Fixture<&str>) {
         embed_symbols: &embed_symbols,
     };
 
-    backend.prepare_section(&parsed.module, &parsed.debug.func_order, &section_ctx);
+    backend.prepare_section(&parsed.module, &func_order, &section_ctx);
 
-    let mem_plan = backend.snapshot_mem_plan(&parsed.module, &parsed.debug.func_order);
-    let mem_plan_detail = emit_mem_plan
-        .then(|| backend.snapshot_mem_plan_detail(&parsed.module, &parsed.debug.func_order));
+    let mem_plan = backend.snapshot_mem_plan(&parsed.module, &func_order);
+    let mem_plan_detail =
+        emit_mem_plan.then(|| backend.snapshot_mem_plan_detail(&parsed.module, &func_order));
     let (mem_plan_header, mem_plan_funcs) = parse_mem_plan_summary(&mem_plan);
 
     let mut func_stats: Vec<FuncStats> = Vec::new();
     let mut stackify_out = Vec::new();
     let mut lowered_out = Vec::new();
 
-    for fref in parsed.debug.func_order.iter() {
+    for fref in &func_order {
         let lowered = backend
             .lower_function(&parsed.module, *fref, &section_ctx)
             .unwrap();
@@ -192,16 +241,30 @@ fn test_evm(fixture: Fixture<&str>) {
         .unwrap_or_else(|errs| panic!("{}: object compile failed: {errs:?}", fixture.path()));
 
     let mut out = Vec::new();
-    if emit_mem_plan {
+    if emit_mem_plan && opt_pipeline == EvmOptPipeline::None {
         writeln!(
             &mut out,
             "evm.config: stack_reach={stackify_reach_depth} emit_debug_trace={emit_debug_trace} emit_mem_plan=true"
         )
         .unwrap();
-    } else {
+    } else if emit_mem_plan {
+        writeln!(
+            &mut out,
+            "evm.config: stack_reach={stackify_reach_depth} emit_debug_trace={emit_debug_trace} emit_mem_plan=true opt_pipeline={}",
+            opt_pipeline.as_str()
+        )
+        .unwrap();
+    } else if opt_pipeline == EvmOptPipeline::None {
         writeln!(
             &mut out,
             "evm.config: stack_reach={stackify_reach_depth} emit_debug_trace={emit_debug_trace}"
+        )
+        .unwrap();
+    } else {
+        writeln!(
+            &mut out,
+            "evm.config: stack_reach={stackify_reach_depth} emit_debug_trace={emit_debug_trace} opt_pipeline={}",
+            opt_pipeline.as_str()
         )
         .unwrap();
     }
@@ -617,6 +680,31 @@ fn emit_mem_plan_for_fixture(path: &str, parsed: &ParsedModule) -> bool {
         Ok(v) => v,
         Err(e) => panic!("{path}: {e}"),
     }
+}
+
+fn opt_pipeline_for_fixture(path: &str, parsed: &ParsedModule) -> EvmOptPipeline {
+    match evm_directives::opt_pipeline(&parsed.debug.module_comments) {
+        Ok(v) => v,
+        Err(e) => panic!("{path}: {e}"),
+    }
+}
+
+fn lowering_func_order(parsed: &ParsedModule) -> Vec<FuncRef> {
+    let mut funcs: Vec<FuncRef> = parsed
+        .debug
+        .func_order
+        .iter()
+        .copied()
+        .filter(|func| parsed.module.func_store.contains(*func))
+        .collect();
+
+    let mut seen: HashSet<FuncRef> = funcs.iter().copied().collect();
+    for func in parsed.module.func_store.funcs() {
+        if seen.insert(func) {
+            funcs.push(func);
+        }
+    }
+    funcs
 }
 
 fn fmt_evm_stack(stack: &[U256]) -> String {
