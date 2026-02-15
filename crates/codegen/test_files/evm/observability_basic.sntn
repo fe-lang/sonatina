@@ -1,0 +1,24 @@
+#! evm.config: { emit_observability: true }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(7)
+
+target = "evm-ethereum-osaka"
+
+func public %main() -> i256 {
+    block0:
+        return 7.i256;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = call %main;
+        mstore 0.i32 v0 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

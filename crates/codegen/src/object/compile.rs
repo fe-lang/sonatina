@@ -1046,6 +1046,7 @@ object @O {
 
                     let _synthetic = vcode.add_inst_to_block(0x5b, None, block);
                     let mapped = vcode.add_inst_to_block(0x01, Some(mapped_ir), block);
+                    let _mapped_again = vcode.add_inst_to_block(0x02, Some(mapped_ir), block);
                     let label_only = vcode.add_inst_to_block(0x60, None, block);
                     let label = vcode.labels.push(Label::Insn(mapped));
                     vcode.fixups.insert((label_only, VCodeFixup::Label(label)));
@@ -1169,6 +1170,18 @@ object @O {
         assert!(obs.unmapped_reason_coverage.synthetic > 0);
         assert!(obs.unmapped_reason_coverage.label_or_fixup_only > 0);
         assert!(obs.unmapped_reason_coverage.no_ir_inst > 0);
+
+        let mut ir_counts: std::collections::HashMap<sonatina_ir::InstId, usize> =
+            std::collections::HashMap::new();
+        for entry in &obs.pc_map {
+            if let Some(ir_inst) = entry.ir_inst {
+                *ir_counts.entry(ir_inst).or_default() += 1;
+            }
+        }
+        assert!(
+            ir_counts.values().any(|count| *count > 1),
+            "expected at least one many-to-one mapping from vcode instructions to the same ir instruction"
+        );
 
         for pair in obs.pc_map.windows(2) {
             assert!(pair[0].pc_end <= pair[1].pc_start);
