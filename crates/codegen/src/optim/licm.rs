@@ -105,9 +105,8 @@ impl LicmSolver {
             .copied()
             .filter(|block| !lpt.is_in_loop(*block, lp))
             .collect();
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        let mut editor = CfgEditor::new(func, cfg, CleanupMode::Strict);
         let preheader = editor.create_or_reuse_loop_preheader(lp_header, &original_preheaders)?;
-        *cfg = editor.cfg().clone();
 
         if !original_preheaders.contains(&preheader)
             && let Some(parent_lp) = lpt.parent_loop(lp)

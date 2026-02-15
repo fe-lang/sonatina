@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
-    BlockId, Function, InstId,
+    BlockId, ControlFlowGraph, Function, InstId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::SideEffect,
 };
@@ -187,7 +187,8 @@ impl AdceSolver {
         }
 
         // Modify branch insts to remove unreachable edges via CfgEditor.
-        let mut editor = CfgEditor::new(func, CleanupMode::RepairWithUndef);
+        let mut cfg = ControlFlowGraph::default();
+        let mut editor = CfgEditor::new(func, &mut cfg, CleanupMode::RepairWithUndef);
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();
         let mut br_inst_modified = false;
         for block in blocks {

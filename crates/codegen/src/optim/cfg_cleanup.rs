@@ -23,7 +23,8 @@ impl CfgCleanup {
             return false;
         };
 
-        let mut editor = CfgEditor::new(func, self.mode);
+        let mut cfg = ControlFlowGraph::default();
+        let mut editor = CfgEditor::new(func, &mut cfg, self.mode);
 
         let mut changed = editor.trim_after_terminator();
         changed |= ensure_blocks_terminated(editor.func_mut(), self.mode);

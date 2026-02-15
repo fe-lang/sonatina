@@ -101,8 +101,7 @@ impl SccpSolver {
         #[cfg(debug_assertions)]
         self.assert_no_executable_inst_results_are_bot(func);
 
-        self.remove_unreachable_edges(func, cleanup_mode);
-        cfg.compute(func);
+        self.remove_unreachable_edges(func, cfg, cleanup_mode);
         self.fold_insts(func, cfg);
 
         CfgCleanup::new(cleanup_mode).run(func);
@@ -345,8 +344,13 @@ impl SccpSolver {
     }
 
     /// Remove unreachable edges and blocks.
-    fn remove_unreachable_edges(&self, func: &mut Function, mode: CleanupMode) {
-        let mut editor = CfgEditor::new(func, mode);
+    fn remove_unreachable_edges(
+        &self,
+        func: &mut Function,
+        cfg: &mut ControlFlowGraph,
+        mode: CleanupMode,
+    ) {
+        let mut editor = CfgEditor::new(func, cfg, mode);
 
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();
         for block in blocks {
