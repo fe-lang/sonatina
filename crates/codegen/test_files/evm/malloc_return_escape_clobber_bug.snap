@@ -12,26 +12,26 @@ object: Contract
 functions:
   mem: dyn_base=0x1c0 static_base=0xc0
   big: ir_blocks=1 ir_insts=5 vcode_ops=15 fixups=0 imm_bytes=2
-    mem: scheme=StaticArena need_words=8 locals_words=8
+    mem: sa{n:8,l:8}
   mk: ir_blocks=1 ir_insts=4 vcode_ops=46 fixups=4 imm_bytes=8
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: sa{n:0,l:0} malloc{n:1,fsb:0,t:0,e:1,const_wrds:1,dyn_cnt:0}
   main: ir_blocks=1 ir_insts=4 vcode_ops=13 fixups=4 imm_bytes=0
-    mem: scheme=StaticArena need_words=8 locals_words=0
+    mem: sa{n:8,l:0}
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
-    mem: scheme=StaticArena need_words=8 locals_words=0
+    mem: sa{n:8,l:0}
 
 --------------- MEM PLAN ---------------
 
 evm mem plan: dyn_base=0x1c0 static_base=0xc0
-evm mem plan: big scheme=StaticArena need_words=8 locals_words=8
+evm mem plan: big sa{n:8,l:8}
   detail locals_words=8 direct_callee_need_max_words=0 need_words=8
   alloca v0 offset_words=0 size_words=8 addr=0xc0
-evm mem plan: mk scheme=StaticArena need_words=0 locals_words=0
+evm mem plan: mk sa{n:0,l:0} malloc{n:1,fsb:0,t:0,e:1,const_wrds:1,dyn_cnt:0}
   detail locals_words=0 direct_callee_need_max_words=0 need_words=0
-evm mem plan: main scheme=StaticArena need_words=8 locals_words=0
+evm mem plan: main sa{n:8,l:0}
   detail locals_words=0 direct_callee_need_max_words=8 need_words=8
   call inst1 callee=%big callee_need_words=8 choice=Save has_return=true save_words=0
-evm mem plan: entry scheme=StaticArena need_words=8 locals_words=0
+evm mem plan: entry sa{n:8,l:0}
   detail locals_words=0 direct_callee_need_max_words=8 need_words=8
   call inst0 callee=%main callee_need_words=8 choice=Save has_return=true save_words=0
 

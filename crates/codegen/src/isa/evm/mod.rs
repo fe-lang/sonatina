@@ -141,25 +141,68 @@ impl EvmBackend {
             };
 
             let name = module.ctx.func_sig(func, |sig| sig.name().to_string());
-
-            match &func_plan.scheme {
+            let scheme = match &func_plan.scheme {
                 MemScheme::StaticArena(st) => {
-                    writeln!(
-                        &mut out,
-                        "evm mem plan: {name} scheme=StaticArena need_words={} locals_words={}",
-                        st.need_words, func_plan.locals_words
-                    )
-                    .expect("mem plan write failed");
+                    format!("sa{{n:{},l:{}}}", st.need_words, func_plan.locals_words)
                 }
-                MemScheme::DynamicFrame => {
-                    writeln!(
-                        &mut out,
-                        "evm mem plan: {name} scheme=DynamicFrame locals_words={}",
-                        func_plan.locals_words
-                    )
-                    .expect("mem plan write failed");
+                MemScheme::DynamicFrame => format!("df{{l:{}}}", func_plan.locals_words),
+            };
+            let malloc = if func_plan.malloc_future_static_words.is_empty() {
+                String::new()
+            } else {
+                let mut min = u32::MAX;
+                let mut max = 0;
+                for &words in func_plan.malloc_future_static_words.values() {
+                    min = min.min(words);
+                    max = max.max(words);
                 }
-            }
+                let (const_wrds, dyn_cnt) = module.func_store.view(func, |function| {
+                    let mut const_wrds: u32 = 0;
+                    let mut dyn_cnt: usize = 0;
+
+                    for &malloc_inst in func_plan.malloc_future_static_words.keys() {
+                        let data = self
+                            .isa
+                            .inst_set()
+                            .resolve_inst(function.dfg.inst(malloc_inst));
+                        let EvmInstKind::EvmMalloc(malloc) = data else {
+                            panic!(
+                                "non-malloc instruction {} in malloc future bounds map for {}",
+                                malloc_inst.as_u32(),
+                                name
+                            );
+                        };
+
+                        if let Some(size_bytes) = function
+                            .dfg
+                            .value_imm(*malloc.size())
+                            .and_then(immediate_u32)
+                        {
+                            const_wrds = const_wrds
+                                .checked_add(size_bytes.div_ceil(WORD_BYTES))
+                                .expect("const malloc words overflow");
+                        } else {
+                            dyn_cnt += 1;
+                        }
+                    }
+
+                    (const_wrds, dyn_cnt)
+                });
+                let fsb = if min == max {
+                    format!("{min}")
+                } else {
+                    format!("{min}..{max}")
+                };
+                format!(
+                    " malloc{{n:{},fsb:{fsb},t:{},e:{},const_wrds:{const_wrds},dyn_cnt:{dyn_cnt}}}",
+                    func_plan.malloc_future_static_words.len(),
+                    func_plan.transient_mallocs.len(),
+                    func_plan.escaping_mallocs.len(),
+                )
+            };
+
+            writeln!(&mut out, "evm mem plan: {name} {scheme}{malloc}")
+                .expect("mem plan write failed");
 
             let addr_of = |offset_words: u32| match &func_plan.scheme {
                 MemScheme::StaticArena(_) => {
