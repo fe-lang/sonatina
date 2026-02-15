@@ -27,8 +27,7 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, Immediate, InstId, InstSetExt, Module, Type, U256, ValueId,
     cfg::ControlFlowGraph,
-    inst::control_flow::BranchKind,
-    inst::evm::inst_set::EvmInstKind,
+    inst::{control_flow::BranchKind, evm::inst_set::EvmInstKind},
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
     types::CompoundType,

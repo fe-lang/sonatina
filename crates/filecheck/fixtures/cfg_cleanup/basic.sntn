@@ -19,9 +19,6 @@ func public %trim_after_terminator() {
 #! Assert unreachable blocks are removed.
 # sameln: func public %prune_unreachable_blocks() {
 # nextln:     block0:
-# nextln:         jump block1;
-# nextln: 
-# nextln:     block1:
 # nextln:         return;
 # nextln: }
 func public %prune_unreachable_blocks() {
@@ -33,6 +30,57 @@ func public %prune_unreachable_blocks() {
 
     block2:
         return;
+}
+
+#! Assert entry trampoline blocks are folded when safe.
+# sameln: func public %fold_entry_trampoline() -> i8 {
+# nextln:     block0:
+# nextln:         return 11.i8;
+# nextln: }
+func public %fold_entry_trampoline() -> i8 {
+    block0:
+        jump block1;
+
+    block1:
+        return 11.i8;
+}
+
+#! Assert non-entry trampoline blocks are folded.
+# sameln: func public %fold_non_entry_trampoline(v0.i1) -> i8 {
+# nextln:     block0:
+# nextln:         return 7.i8;
+# nextln: }
+func public %fold_non_entry_trampoline(v0.i1) -> i8 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block2;
+
+    block2:
+        return 7.i8;
+}
+
+#! Assert trampoline folding is skipped when it would duplicate a phi predecessor.
+# sameln: func public %preserve_trampoline_into_phi(v0.i1) -> i8 {
+# nextln:     block0:
+# nextln:         br v0 block1 block3;
+# check: block1:
+# nextln:         jump block3;
+# check: block3:
+# nextln:         v1.i8 = phi (1.i8 block0) (2.i8 block1);
+# nextln:         return v1;
+# nextln: }
+func public %preserve_trampoline_into_phi(v0.i1) -> i8 {
+    block0:
+        br v0 block1 block3;
+
+    block1:
+        jump block3;
+
+    block3:
+        v1.i8 = phi (1.i8 block0) (2.i8 block1);
+        return v1;
 }
 
 #! Assert phi incomings are pruned and trivial phis are folded.

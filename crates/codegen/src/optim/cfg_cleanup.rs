@@ -43,6 +43,8 @@ impl CfgCleanup {
             changed |= crate::cfg_edit::simplify_trivial_phis_in_block(editor.func_mut(), block);
         }
 
+        changed |= fold_trampoline_blocks(&mut editor);
+
         if matches!(self.mode, CleanupMode::Strict) {
             assert_ir_invariants(editor.func(), editor.cfg());
         }
@@ -143,6 +145,24 @@ fn ensure_blocks_terminated(func: &mut Function, mode: CleanupMode) -> bool {
     }
 
     changed
+}
+
+fn fold_trampoline_blocks(editor: &mut CfgEditor<'_>) -> bool {
+    let mut changed = false;
+
+    loop {
+        let mut local_changed = editor.fold_entry_trampoline_block();
+
+        let blocks: Vec<_> = editor.func().layout.iter_block().collect();
+        for block in blocks {
+            local_changed |= editor.fold_trampoline_block(block);
+        }
+
+        if !local_changed {
+            return changed;
+        }
+        changed = true;
+    }
 }
 
 fn assert_phis_leading(func: &Function, block: BlockId) {

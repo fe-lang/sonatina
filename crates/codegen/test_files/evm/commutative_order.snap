@@ -6,15 +6,15 @@ input_file: test_files/evm/commutative_order.sntn
 evm.config: stack_reach=16 emit_debug_trace=false
 
 object: Contract
-  section runtime: 72 bytes
-  total: 72 bytes
+  section runtime: 71 bytes
+  total: 71 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=27 fixups=2 imm_bytes=16
     mem: scheme=StaticArena need_words=0 locals_words=0
-  comm_add16: ir_blocks=2 ir_insts=4 vcode_ops=26 fixups=0 imm_bytes=1
+  comm_add16: ir_blocks=2 ir_insts=4 vcode_ops=25 fixups=0 imm_bytes=1
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21200 gas_refunded=0 logs=0 output=call len=32
+  case ok: calldata_len=8 success reason=Return gas_used=21199 gas_refunded=0 logs=0 output=call len=32

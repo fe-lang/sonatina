@@ -12,11 +12,11 @@ func public %eq_zero(v0.i32) -> i1 {
         return v1;
 }
 
-# Test: ne x, 0 canonicalizes to not(is_zero x).
+# Test: ne x, 0 canonicalizes to is_zero(is_zero x).
 # sameln: func public %ne_zero(v0.i32) -> i1 {
 # nextln:     block0:
 # nextln:         v3.i1 = is_zero v0;
-# nextln:         v1.i1 = not v3;
+# nextln:         v1.i1 = is_zero v3;
 # nextln:         return v1;
 # nextln: }
 func public %ne_zero(v0.i32) -> i1 {

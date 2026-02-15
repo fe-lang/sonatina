@@ -6,19 +6,19 @@ input_file: test_files/evm/deploy_codecopy.sntn
 evm.config: stack_reach=16 emit_debug_trace=true
 
 object: Contract
-  section init: 33 bytes
+  section init: 32 bytes
   section runtime: 21 bytes
-  total: 54 bytes
+  total: 53 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
   entry: ir_blocks=1 ir_insts=7 vcode_ops=17 fixups=0 imm_bytes=4
     mem: scheme=StaticArena need_words=0 locals_words=0
-  init: ir_blocks=1 ir_insts=4 vcode_ops=10 fixups=2 imm_bytes=2
+  init: ir_blocks=1 ir_insts=4 vcode_ops=9 fixups=2 imm_bytes=2
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  deploy: success reason=Return gas_used=57761 gas_refunded=0 logs=0 output=create len=21 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=57740 gas_refunded=0 logs=0 output=create len=21 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   case ok: calldata_len=8 success reason=Return gas_used=21102 gas_refunded=0 logs=0 output=call len=32
 
 
@@ -58,7 +58,7 @@ evm mem plan: init scheme=StaticArena need_words=0 locals_words=0
     - stack=[v0]
       sym_size [] -> v1
     - stack=[v1, v0], last_use=[v0]
-      pre: [DUP1, SWAP1, SWAP2, PUSH(I256 { is_negative: false, abs: 0 })]
+      pre: [DUP1, SWAP2, PUSH(I256 { is_negative: false, abs: 0 })]
       evm_code_copy [I256 { is_negative: false, abs: 0 }, v0, v1]
     - stack=[v1], last_use=[v1]
       pre: [PUSH(I256 { is_negative: false, abs: 0 })]
@@ -92,7 +92,6 @@ init:
     PUSH0 0x0 (0)  // v0.i256 = sym_addr &runtime;
     PUSH0 0x0 (0)  // v1.i256 = sym_size &runtime;
     DUP1  // evm_code_copy 0.i256 v0 v1;
-    SWAP1
     SWAP2
     PUSH0
     CODECOPY
@@ -104,7 +103,7 @@ init:
 --------------- BYTECODE ---------------
 
 // section init
-0x5b600c60158090915f395ff35b5f358060e01c9060201b60e01c015f5260205ff3
+0x5b600b601580915f395ff35b5f358060e01c9060201b60e01c015f5260205ff3
 
 // section runtime
 0x5b5f358060e01c9060201b60e01c015f5260205ff3
@@ -114,19 +113,18 @@ init:
 --------------- EVM TRACE ---------------
 
 
-Success { reason: Return, gas_used: 57761, gas_refunded: 0, logs: [], output: Create(0x5b5f358060e01c9060201b60e01c015f5260205ff3, Some(0xbd770416a3345f91e4b34576cb804a576fa48eb1)) }
+Success { reason: Return, gas_used: 57740, gas_refunded: 0, logs: [], output: Create(0x5b5f358060e01c9060201b60e01c015f5260205ff3, Some(0xbd770416a3345f91e4b34576cb804a576fa48eb1)) }
 
     pc  opcode            input (stack grows to the right)
      0  5b  JUMPDEST      []
-     1  60  PUSH1         0x0c  []
-     3  60  PUSH1         0x15  [0xc]
-     5  80  DUP1          [0xc, 0x15]
-     6  90  SWAP1         [0xc, 0x15, 0x15]
-     7  91  SWAP2         [0xc, 0x15, 0x15]
-     8  5f  PUSH0         [0x15, 0x15, 0xc]
-     9  39  CODECOPY      [0x15, 0x15, 0xc, 0x0]
-    10  5f  PUSH0         [0x15]
-    11  f3  RETURN        [0x15, 0x0]
+     1  60  PUSH1         0x0b  []
+     3  60  PUSH1         0x15  [0xb]
+     5  80  DUP1          [0xb, 0x15]
+     6  91  SWAP2         [0xb, 0x15, 0x15]
+     7  5f  PUSH0         [0x15, 0x15, 0xb]
+     8  39  CODECOPY      [0x15, 0x15, 0xb, 0x0]
+     9  5f  PUSH0         [0x15]
+    10  f3  RETURN        [0x15, 0x0]
 
 
 Success { reason: Return, gas_used: 21102, gas_refunded: 0, logs: [], output: Call(0x0000000000000000000000000000000000000000000000000000000000000021) }

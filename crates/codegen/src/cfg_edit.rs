@@ -310,6 +310,65 @@ impl<'f> CfgEditor<'f> {
         Some(new_preheader)
     }
 
+    pub fn fold_entry_trampoline_block(&mut self) -> bool {
+        let Some(entry) = self.func.layout.entry_block() else {
+            return false;
+        };
+
+        let Some(entry_term) = self.func.layout.last_inst_of(entry) else {
+            return false;
+        };
+        if self.func.layout.first_inst_of(entry) != Some(entry_term) {
+            return false;
+        }
+
+        let Some(entry_jump) = self.func.dfg.cast_jump(entry_term) else {
+            return false;
+        };
+        let succ = *entry_jump.dest();
+        if !self.func.layout.is_block_inserted(succ) || succ == entry {
+            return false;
+        }
+
+        let preds: Vec<_> = self.cfg.preds_of(succ).copied().collect();
+        if preds.as_slice() != [entry] {
+            return false;
+        }
+
+        if self
+            .func
+            .layout
+            .first_inst_of(succ)
+            .is_some_and(|inst| self.func.dfg.is_phi(inst))
+        {
+            return false;
+        }
+
+        let succ_insts: Vec<_> = self.func.layout.iter_inst(succ).collect();
+        if succ_insts.is_empty() {
+            return false;
+        }
+        let succ_succs: Vec<_> = self.cfg.succs_of(succ).copied().collect();
+
+        InstInserter::at_location(CursorLocation::At(entry_term)).remove_inst(self.func);
+
+        for inst in succ_insts {
+            self.func.layout.remove_inst(inst);
+            self.func.layout.append_inst(inst, entry);
+        }
+
+        for succ_succ in succ_succs {
+            if self.func.layout.is_block_inserted(succ_succ) {
+                replace_phi_incoming_block(self.func, succ_succ, succ, entry);
+                simplify_trivial_phis_in_block(self.func, succ_succ);
+            }
+        }
+
+        InstInserter::at_location(CursorLocation::BlockTop(succ)).remove_block(self.func);
+        self.recompute_cfg();
+        true
+    }
+
     pub fn fold_trampoline_block(&mut self, block: BlockId) -> bool {
         if !self.func.layout.is_block_inserted(block)
             || self.func.layout.entry_block() == Some(block)

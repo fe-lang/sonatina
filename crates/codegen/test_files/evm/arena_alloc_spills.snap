@@ -1,43 +1,44 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 351
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/arena_alloc_spills.sntn
 ---
 evm.config: stack_reach=16 emit_debug_trace=false emit_mem_plan=true
 
 object: Contract
-  section runtime: 379 bytes
-  total: 379 bytes
+  section runtime: 393 bytes
+  total: 393 bytes
 
 functions:
-  mem: dyn_base=0x220 static_base=0xc0
+  mem: dyn_base=0x240 static_base=0xc0
   entry: ir_blocks=1 ir_insts=7 vcode_ops=31 fixups=2 imm_bytes=10
-    mem: scheme=StaticArena need_words=11 locals_words=0
-  caller: ir_blocks=1 ir_insts=40 vcode_ops=165 fixups=2 imm_bytes=34
-    mem: scheme=StaticArena need_words=11 locals_words=11
+    mem: scheme=StaticArena need_words=12 locals_words=0
+  caller: ir_blocks=1 ir_insts=40 vcode_ops=164 fixups=2 imm_bytes=39
+    mem: scheme=StaticArena need_words=12 locals_words=12
   mid: ir_blocks=1 ir_insts=6 vcode_ops=31 fixups=2 imm_bytes=1
     mem: scheme=StaticArena need_words=9 locals_words=9
-  callee: ir_blocks=1 ir_insts=33 vcode_ops=74 fixups=0 imm_bytes=8
+  callee: ir_blocks=1 ir_insts=33 vcode_ops=78 fixups=0 imm_bytes=8
     mem: scheme=StaticArena need_words=8 locals_words=8
 
 --------------- MEM PLAN ---------------
 
-evm mem plan: dyn_base=0x220 static_base=0xc0
-evm mem plan: entry scheme=StaticArena need_words=11 locals_words=0
-  detail locals_words=0 direct_callee_need_max_words=11 need_words=11
-  call inst4 callee=%caller callee_need_words=11 choice=Save has_return=true save_words=0
-evm mem plan: caller scheme=StaticArena need_words=11 locals_words=11
-  detail locals_words=11 direct_callee_need_max_words=9 need_words=11
+evm mem plan: dyn_base=0x240 static_base=0xc0
+evm mem plan: entry scheme=StaticArena need_words=12 locals_words=0
+  detail locals_words=0 direct_callee_need_max_words=12 need_words=12
+  call inst4 callee=%caller callee_need_words=12 choice=Save has_return=true save_words=0
+evm mem plan: caller scheme=StaticArena need_words=12 locals_words=12
+  detail locals_words=12 direct_callee_need_max_words=9 need_words=12
   call inst19 callee=%mid callee_need_words=9 choice=Layout has_return=true save_words=0
   scratch_spill v0 slot=0 addr=0x0
-  scratch_spill v2 slot=1 addr=0x20
-  spill v3 offset_words=0 addr=0xc0
-  spill v4 offset_words=1 addr=0xe0
-  spill v5 offset_words=2 addr=0x100
-  spill v6 offset_words=3 addr=0x120
-  spill v7 offset_words=4 addr=0x140
+  scratch_spill v1 slot=1 addr=0x20
+  spill v2 offset_words=0 addr=0xc0
+  spill v3 offset_words=1 addr=0xe0
+  spill v4 offset_words=2 addr=0x100
+  spill v5 offset_words=3 addr=0x120
+  spill v6 offset_words=4 addr=0x140
+  spill v7 offset_words=5 addr=0x160
   spill v8 offset_words=9 addr=0x1e0
+  spill v9 offset_words=11 addr=0x220
   alloca v8 offset_words=10 size_words=1 addr=0x200
 evm mem plan: mid scheme=StaticArena need_words=9 locals_words=9
   detail locals_words=9 direct_callee_need_max_words=8 need_words=9
@@ -55,4 +56,4 @@ evm mem plan: callee scheme=StaticArena need_words=8 locals_words=8
   alloca v15 offset_words=7 size_words=1 addr=0x1a0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21991 gas_refunded=0 logs=0 output=call len=32
+  case ok: calldata_len=8 success reason=Return gas_used=22004 gas_refunded=0 logs=0 output=call len=32

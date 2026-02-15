@@ -286,12 +286,11 @@ mod tests {
     #[test]
     fn custom_pipeline_runs() {
         let mut pipeline = Pipeline::new();
-        pipeline
-            .add_step(Step::FuncPasses(vec![
-                Pass::CfgCleanup,
-                Pass::Adce,
-                Pass::CfgCleanup,
-            ]));
+        pipeline.add_step(Step::FuncPasses(vec![
+            Pass::CfgCleanup,
+            Pass::Adce,
+            Pass::CfgCleanup,
+        ]));
 
         let mut module = build_test_module();
         pipeline.run(&mut module);
@@ -302,10 +301,7 @@ mod tests {
         let mut pipeline = Pipeline::new();
         pipeline
             .add_step(Step::Inline)
-            .add_step(Step::FuncPasses(vec![
-                Pass::CfgCleanup,
-                Pass::Sccp,
-            ]));
+            .add_step(Step::FuncPasses(vec![Pass::CfgCleanup, Pass::Sccp]));
 
         let mut module = build_test_module();
         pipeline.run(&mut module);
@@ -323,10 +319,7 @@ mod tests {
         let module = build_test_module();
         let func_ref = module.funcs()[0];
         module.func_store.modify(func_ref, |func| {
-            run_func_passes(
-                &[Pass::CfgCleanup, Pass::Sccp, Pass::Egraph],
-                func,
-            );
+            run_func_passes(&[Pass::CfgCleanup, Pass::Sccp, Pass::Egraph], func);
         });
     }
 }

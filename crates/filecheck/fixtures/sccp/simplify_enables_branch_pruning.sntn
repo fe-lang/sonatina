@@ -3,7 +3,7 @@
 target = "evm-ethereum-london"
 
 # sameln: func public %simplify_prune_branch(v0.i32) -> i32 {
-# nextln:     block2:
+# nextln:     block0:
 # nextln:         return 2.i32;
 func public %simplify_prune_branch(v0.i32) -> i32 {
     block0:
@@ -19,7 +19,7 @@ func public %simplify_prune_branch(v0.i32) -> i32 {
 }
 
 # sameln: func public %simplify_prune_branch_and_zero(v0.i32) -> i32 {
-# nextln:     block2:
+# nextln:     block0:
 # nextln:         return 2.i32;
 func public %simplify_prune_branch_and_zero(v0.i32) -> i32 {
     block0:
@@ -35,7 +35,7 @@ func public %simplify_prune_branch_and_zero(v0.i32) -> i32 {
 }
 
 # sameln: func public %simplify_prune_branch_mul_zero(v0.i32) -> i32 {
-# nextln:     block2:
+# nextln:     block0:
 # nextln:         return 2.i32;
 func public %simplify_prune_branch_mul_zero(v0.i32) -> i32 {
     block0:
@@ -51,7 +51,7 @@ func public %simplify_prune_branch_mul_zero(v0.i32) -> i32 {
 }
 
 # sameln: func public %simplify_prune_branch_or_all_one(v0.i32) -> i32 {
-# nextln:     block1:
+# nextln:     block0:
 # nextln:         return 1.i32;
 func public %simplify_prune_branch_or_all_one(v0.i32) -> i32 {
     block0:

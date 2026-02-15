@@ -6,15 +6,15 @@ input_file: test_files/evm/casts.sntn
 evm.config: stack_reach=16 emit_debug_trace=false
 
 object: Contract
-  section runtime: 100 bytes
-  total: 100 bytes
+  section runtime: 97 bytes
+  total: 97 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
     mem: scheme=StaticArena need_words=0 locals_words=0
-  main: ir_blocks=1 ir_insts=11 vcode_ops=27 fixups=0 imm_bytes=9
+  main: ir_blocks=1 ir_insts=11 vcode_ops=25 fixups=0 imm_bytes=8
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21172 gas_refunded=0 logs=0 output=call len=32
+  case ok: calldata_len=8 success reason=Return gas_used=21166 gas_refunded=0 logs=0 output=call len=32
