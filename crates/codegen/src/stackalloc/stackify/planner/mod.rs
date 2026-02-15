@@ -1,5 +1,6 @@
 mod control_flow;
 mod normalize;
+mod normalize_search;
 mod operand_prep;
 
 use crate::{
