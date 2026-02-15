@@ -1,19 +1,20 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 353
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/mixed_frame_recursion_reach4.sntn
 ---
 evm.config: stack_reach=4 emit_debug_trace=false
 
 object: Contract
-  section runtime: 116 bytes
-  total: 116 bytes
+  section runtime: 114 bytes
+  total: 114 bytes
 
 functions:
   mem: dyn_base=0xe0 static_base=0xc0
   b: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=0 imm_bytes=1
     mem: scheme=StaticArena need_words=1 locals_words=1
-  d: ir_blocks=3 ir_insts=23 vcode_ops=69 fixups=5 imm_bytes=8
+  d: ir_blocks=3 ir_insts=23 vcode_ops=67 fixups=5 imm_bytes=8
     mem: scheme=StaticArena need_words=1 locals_words=1
   a: ir_blocks=1 ir_insts=2 vcode_ops=9 fixups=2 imm_bytes=1
     mem: scheme=StaticArena need_words=1 locals_words=0
@@ -21,4 +22,4 @@ functions:
     mem: scheme=StaticArena need_words=1 locals_words=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21613 gas_refunded=0 logs=0 output=call len=32
+  case ok: calldata_len=8 success reason=Return gas_used=21612 gas_refunded=0 logs=0 output=call len=32
