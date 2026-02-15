@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/opt_pipeline.rs
+assertion_line: 38
 input_file: test_files/opt_pipeline/storage_loop.sntn
 ---
 target = "evm-ethereum-osaka"
@@ -75,7 +76,7 @@ func private %__Foo_init_code_len() -> i256 {
 }
 
 func private %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_20__54453bb2a5c6e6e2() -> i256 {
-    block3:
+    block0:
         return 20.i256;
 }
 
