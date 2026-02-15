@@ -811,6 +811,100 @@ object @Contract {
     }
 
     #[test]
+    fn compile_object_omits_observability_when_disabled() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+global public const [i8; 3] $blob = [1, 2, 3];
+
+func public %runtime() {
+    block0:
+        v0.i256 = sym_addr $blob;
+        v1.i256 = sym_size $blob;
+        return;
+}
+
+object @Contract {
+  section runtime {
+    entry %runtime;
+    data $blob;
+  }
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let backend = FakeBackend;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: false,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
+        };
+
+        let artifact = compile_object(&parsed.module, &backend, "Contract", &opts).unwrap();
+        assert!(
+            artifact
+                .sections
+                .values()
+                .all(|section| section.observability.is_none()),
+            "observability must be absent when disabled"
+        );
+        assert!(artifact.observability().is_none());
+    }
+
+    #[test]
+    fn observability_serialization_is_deterministic_across_repeated_builds() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+global public const [i8; 3] $blob = [1, 2, 3];
+
+func public %runtime() {
+    block0:
+        v0.i256 = sym_addr $blob;
+        v1.i256 = sym_size $blob;
+        return;
+}
+
+func public %init() {
+    block0:
+        v0.i256 = sym_addr &runtime;
+        v1.i256 = sym_size &runtime;
+        return;
+}
+
+object @Contract {
+  section init {
+    entry %init;
+    embed .runtime as &runtime;
+  }
+  section runtime {
+    entry %runtime;
+    data $blob;
+  }
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let backend = FakeBackend;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: false,
+            emit_observability: true,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
+        };
+
+        let a = compile_object(&parsed.module, &backend, "Contract", &opts).unwrap();
+        let b = compile_object(&parsed.module, &backend, "Contract", &opts).unwrap();
+
+        let a_obs = a.observability().expect("observability expected");
+        let b_obs = b.observability().expect("observability expected");
+
+        assert_eq!(a_obs.to_text(), b_obs.to_text());
+        assert_eq!(a_obs.to_json(), b_obs.to_json());
+    }
+
+    #[test]
     fn compile_object_reports_verifier_failures_before_codegen() {
         let s = r#"
 target = "evm-ethereum-london"
