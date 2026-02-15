@@ -106,7 +106,6 @@ impl SccpSolver {
         self.fold_insts(func, cfg);
 
         CfgCleanup::new(cleanup_mode).run(func);
-        cfg.compute(func);
 
         AdceSolver::new().run(func);
         cfg.compute(func);
