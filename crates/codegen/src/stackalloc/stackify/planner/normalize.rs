@@ -106,8 +106,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         }
 
         // Rename immediate slots to desired ValueIds (restore exact contract).
-        for depth in 0..desired.len() {
-            let want = desired[depth];
+        for (depth, &want) in desired.iter().enumerate() {
             if self.ctx.func.dfg.value_is_imm(want) {
                 let want_imm = self
                     .ctx

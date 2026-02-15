@@ -669,6 +669,19 @@ pub(super) fn solve_optimal_normalize_plan(
             }
         }
 
+        let mut consider_ctx = ConsiderCtx {
+            goal_counts: &goal_counts,
+            pop_gas,
+            dup_gas: dup_gas_lb,
+            key_infos: &key_infos,
+            cost,
+            upper_bound,
+            have_incumbent: incumbent_steps.is_some(),
+            best: &mut best,
+            parent: &mut parent,
+            open: &mut open,
+        };
+
         // POP
         if cur_len != 0 {
             consider_succ(
@@ -676,43 +689,24 @@ pub(super) fn solve_optimal_normalize_plan(
                 g.saturating_add(cost.cost_pop()),
                 entry.state,
                 Step::Pop,
-                &goal_counts,
-                pop_gas,
-                dup_gas_lb,
-                &key_infos,
-                cost,
-                upper_bound,
-                incumbent_steps.is_some(),
-                &mut best,
-                &mut parent,
-                &mut open,
+                &mut consider_ctx,
             );
         }
 
         // PUSH0 (if present in the goal) before the 3-gas moves.
-        if cur_len < cfg.max_len {
-            if let (Some(kid), Some(push0_cost)) = (push0_kid, push0_cost) {
-                let bit = 1u64 << kid;
-                let dominated =
-                    (duplicable & bit) != 0 && push0_cost >= dup_cost_for_kid[kid as usize];
-                if !dominated {
-                    consider_succ(
-                        entry.state.push(kid),
-                        g.saturating_add(push0_cost),
-                        entry.state,
-                        Step::PushImm(kid),
-                        &goal_counts,
-                        pop_gas,
-                        dup_gas_lb,
-                        &key_infos,
-                        cost,
-                        upper_bound,
-                        incumbent_steps.is_some(),
-                        &mut best,
-                        &mut parent,
-                        &mut open,
-                    );
-                }
+        if cur_len < cfg.max_len
+            && let (Some(kid), Some(push0_cost)) = (push0_kid, push0_cost)
+        {
+            let bit = 1u64 << kid;
+            let dominated = (duplicable & bit) != 0 && push0_cost >= dup_cost_for_kid[kid as usize];
+            if !dominated {
+                consider_succ(
+                    entry.state.push(kid),
+                    g.saturating_add(push0_cost),
+                    entry.state,
+                    Step::PushImm(kid),
+                    &mut consider_ctx,
+                );
             }
         }
 
@@ -736,16 +730,7 @@ pub(super) fn solve_optimal_normalize_plan(
                     g.saturating_add(cost.cost_swap(depth as u8)),
                     entry.state,
                     Step::Swap(depth as u8),
-                    &goal_counts,
-                    pop_gas,
-                    dup_gas_lb,
-                    &key_infos,
-                    cost,
-                    upper_bound,
-                    incumbent_steps.is_some(),
-                    &mut best,
-                    &mut parent,
-                    &mut open,
+                    &mut consider_ctx,
                 );
             }
         }
@@ -773,16 +758,7 @@ pub(super) fn solve_optimal_normalize_plan(
                     g.saturating_add(cost.cost_dup(pos as u8)),
                     entry.state,
                     Step::Dup(pos as u8),
-                    &goal_counts,
-                    pop_gas,
-                    dup_gas_lb,
-                    &key_infos,
-                    cost,
-                    upper_bound,
-                    incumbent_steps.is_some(),
-                    &mut best,
-                    &mut parent,
-                    &mut open,
+                    &mut consider_ctx,
                 );
             }
         }
@@ -809,16 +785,7 @@ pub(super) fn solve_optimal_normalize_plan(
                     g.saturating_add(push_cost),
                     entry.state,
                     Step::PushImm(kid),
-                    &goal_counts,
-                    pop_gas,
-                    dup_gas_lb,
-                    &key_infos,
-                    cost,
-                    upper_bound,
-                    incumbent_steps.is_some(),
-                    &mut best,
-                    &mut parent,
-                    &mut open,
+                    &mut consider_ctx,
                 );
             }
 
@@ -835,16 +802,7 @@ pub(super) fn solve_optimal_normalize_plan(
                     g.saturating_add(cost.cost_load(vid)),
                     entry.state,
                     Step::LoadVal(kid),
-                    &goal_counts,
-                    pop_gas,
-                    dup_gas_lb,
-                    &key_infos,
-                    cost,
-                    upper_bound,
-                    incumbent_steps.is_some(),
-                    &mut best,
-                    &mut parent,
-                    &mut open,
+                    &mut consider_ctx,
                 );
             }
         }
@@ -962,9 +920,7 @@ fn reconstruct_steps(
     let mut steps: Vec<Step> = Vec::new();
     let mut cur = goal;
     while cur != start {
-        let Some(&(prev, step)) = parent.get(&cur) else {
-            return None;
-        };
+        let &(prev, step) = parent.get(&cur)?;
         steps.push(step);
         cur = prev;
     }
@@ -1285,29 +1241,40 @@ fn heuristic(
     Cost { gas, bytes: 0 }
 }
 
-fn consider_succ(
+struct ConsiderCtx<'a, C: CostModel> {
+    goal_counts: &'a [u8; 64],
+    pop_gas: u32,
+    dup_gas: u32,
+    key_infos: &'a [KeyInfo],
+    cost: &'a C,
+    upper_bound: Cost,
+    have_incumbent: bool,
+    best: &'a mut FxHashMap<PackedState, Cost>,
+    parent: &'a mut FxHashMap<PackedState, (PackedState, Step)>,
+    open: &'a mut BinaryHeap<QueueEntry>,
+}
+
+fn consider_succ<C: CostModel>(
     state: PackedState,
     g: Cost,
     parent_state: PackedState,
     step: Step,
-    goal_counts: &[u8; 64],
-    pop_gas: u32,
-    dup_gas: u32,
-    key_infos: &[KeyInfo],
-    cost: &impl CostModel,
-    upper_bound: Cost,
-    have_incumbent: bool,
-    best: &mut FxHashMap<PackedState, Cost>,
-    parent: &mut FxHashMap<PackedState, (PackedState, Step)>,
-    open: &mut BinaryHeap<QueueEntry>,
+    ctx: &mut ConsiderCtx<'_, C>,
 ) {
-    let h = heuristic(state, goal_counts, pop_gas, dup_gas, key_infos, cost);
+    let h = heuristic(
+        state,
+        ctx.goal_counts,
+        ctx.pop_gas,
+        ctx.dup_gas,
+        ctx.key_infos,
+        ctx.cost,
+    );
     let f = g.saturating_add(h);
-    if should_prune(f, upper_bound, have_incumbent) {
+    if should_prune(f, ctx.upper_bound, ctx.have_incumbent) {
         return;
     }
 
-    let should_update = match best.get(&state) {
+    let should_update = match ctx.best.get(&state) {
         None => true,
         Some(&prev) => g < prev,
     };
@@ -1315,9 +1282,9 @@ fn consider_succ(
         return;
     }
 
-    best.insert(state, g);
-    parent.insert(state, (parent_state, step));
-    open.push(QueueEntry { f, g, state });
+    ctx.best.insert(state, g);
+    ctx.parent.insert(state, (parent_state, step));
+    ctx.open.push(QueueEntry { f, g, state });
 }
 
 fn minimal_push_bytes(val: I256) -> usize {
@@ -1577,8 +1544,7 @@ func public %f() {
             );
 
             let mut replayed = stack.clone();
-            for depth in 0..desired.len() {
-                let want = desired[depth];
+            for (depth, &want) in desired.iter().enumerate() {
                 if ctx.func.dfg.value_is_imm(want) {
                     let want_imm = ctx.func.dfg.value_imm(want).unwrap().as_i256();
                     let StackItem::Value(cur) = *replayed.item_at(depth).unwrap() else {
@@ -1752,8 +1718,7 @@ func public %f() {
                 }
             }
 
-            for depth in 0..desired.len() {
-                let want = desired[depth];
+            for (depth, &want) in desired.iter().enumerate() {
                 if ctx.func.dfg.value_is_imm(want) {
                     let want_imm = ctx.func.dfg.value_imm(want).unwrap().as_i256();
                     let StackItem::Value(cur) = *replayed.item_at(depth).unwrap() else {
