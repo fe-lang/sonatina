@@ -73,6 +73,10 @@ impl<Op> ObjectLayout<Op> {
             .get_mut(&func)
             .map(|layout| &mut layout.vcode)
     }
+
+    pub(crate) fn func_layout(&self, func: FuncRef) -> Option<&FuncLayout<Op>> {
+        self.functions.get(&func)
+    }
 }
 
 pub struct FuncLayout<Op> {
@@ -176,6 +180,22 @@ impl<Op> FuncLayout<Op> {
                 }
             }
         }
+    }
+
+    pub(crate) fn block_order(&self) -> &[BlockId] {
+        &self.block_order
+    }
+
+    pub(crate) fn block_insns(&self, block: BlockId) -> impl Iterator<Item = VCodeInst> + '_ {
+        self.vcode.block_insns(block)
+    }
+
+    pub(crate) fn insn_offset(&self, insn: VCodeInst) -> u32 {
+        self.insn_offsets[insn]
+    }
+
+    pub(crate) fn vcode(&self) -> &VCode<Op> {
+        &self.vcode
     }
 }
 

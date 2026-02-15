@@ -185,6 +185,7 @@ fn test_evm(fixture: Fixture<&str>) {
     let opts = CompileOptions {
         fixup_policy: PushWidthPolicy::MinimalRelax,
         emit_symtab: false,
+        emit_observability: false,
         verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
     };
 
