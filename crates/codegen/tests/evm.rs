@@ -4,8 +4,7 @@ use dir_test::{Fixture, dir_test};
 
 use hex::ToHex;
 use revm::{
-    Context, EvmContext, Handler, inspector_handle_register,
-    interpreter::Interpreter,
+    Context, EvmContext, Handler,
     primitives::{
         AccountInfo, Address, Bytecode, Bytes, Env, ExecutionResult, OsakaSpec, Output, TransactTo,
         U256,
@@ -319,33 +318,15 @@ fn test_evm(fixture: Fixture<&str>) {
         .map(|(_, s)| s.bytes.clone())
         .unwrap_or_else(|| panic!("{}: missing `runtime` section", fixture.path()));
 
-    let mut deploy_res_dbg: Option<String> = None;
-    let mut deploy_trace: Option<String> = None;
-    let mut first_call_res_dbg: Option<String> = None;
-    let mut first_call_trace: Option<String> = None;
-
     let mut harness = if let Some(init) = init {
-        if emit_debug_trace {
-            let (res, trace, harness) = EvmHarness::deploy_with_trace(&init);
-            deploy_res_dbg = Some(format!("{res:?}"));
-            deploy_trace = Some(trace);
-            writeln!(&mut out, "evm:").unwrap();
-            writeln!(&mut out, "  deploy: {}", summarize_execution_result(&res)).unwrap();
-            match res {
-                ExecutionResult::Success { .. } => {}
-                _ => panic!("{}: deployment failed: {res:?}", fixture.path()),
-            }
-            harness
-        } else {
-            let (res, harness) = EvmHarness::deploy(&init);
-            writeln!(&mut out, "evm:").unwrap();
-            writeln!(&mut out, "  deploy: {}", summarize_execution_result(&res)).unwrap();
-            match res {
-                ExecutionResult::Success { .. } => {}
-                _ => panic!("{}: deployment failed: {res:?}", fixture.path()),
-            }
-            harness
+        let (res, harness) = EvmHarness::deploy(&init);
+        writeln!(&mut out, "evm:").unwrap();
+        writeln!(&mut out, "  deploy: {}", summarize_execution_result(&res)).unwrap();
+        match res {
+            ExecutionResult::Success { .. } => {}
+            _ => panic!("{}: deployment failed: {res:?}", fixture.path()),
         }
+        harness
     } else {
         writeln!(&mut out, "evm:").unwrap();
         EvmHarness::from_runtime(&runtime)
@@ -355,20 +336,8 @@ fn test_evm(fixture: Fixture<&str>) {
         writeln!(&mut out, "  <no evm.case directives>").unwrap();
     }
 
-    for (idx, case) in cases.iter().enumerate() {
-        let (res, trace) = if emit_debug_trace && idx == 0 {
-            let (res, trace) = harness.call_with_trace(&case.calldata);
-            (res, Some(trace))
-        } else {
-            (harness.call(&case.calldata), None)
-        };
-
-        if emit_debug_trace && idx == 0 {
-            first_call_res_dbg = Some(format!("{res:?}"));
-        }
-        if let Some(trace) = trace {
-            first_call_trace = Some(trace);
-        }
+    for case in &cases {
+        let res = harness.call(&case.calldata);
 
         assert_case(case, &res, fixture.path());
         writeln!(
@@ -396,20 +365,6 @@ fn test_evm(fixture: Fixture<&str>) {
             writeln!(&mut out, "// section {}", name.0.as_str()).unwrap();
             let hex = section.bytes.encode_hex::<String>();
             writeln!(&mut out, "0x{hex}\n").unwrap();
-        }
-
-        writeln!(&mut out, "\n\n--------------- EVM TRACE ---------------\n").unwrap();
-        if let Some(res) = deploy_res_dbg {
-            writeln!(&mut out, "\n{res}").unwrap();
-        }
-        if let Some(trace) = deploy_trace {
-            writeln!(&mut out, "\n{trace}").unwrap();
-        }
-        if let Some(res) = first_call_res_dbg {
-            writeln!(&mut out, "\n{res}").unwrap();
-        }
-        if let Some(trace) = first_call_trace {
-            writeln!(&mut out, "\n{trace}").unwrap();
         }
     }
 
@@ -501,31 +456,6 @@ impl EvmHarness {
         )
     }
 
-    fn deploy_with_trace(init_code: &[u8]) -> (ExecutionResult, String, Self) {
-        let mut env = Env::default();
-        env.tx.clear();
-        env.tx.transact_to = TransactTo::Create;
-        env.tx.data = Bytes::copy_from_slice(init_code);
-
-        let (res, trace, db) = Self::run_tx_with_trace(revm::InMemoryDB::default(), env);
-        let deployed = match &res {
-            ExecutionResult::Success {
-                output: Output::Create(_, Some(addr)),
-                ..
-            } => *addr,
-            _ => panic!("unexpected deployment result: {res:?}"),
-        };
-
-        (
-            res,
-            trace,
-            Self {
-                db,
-                contract: deployed,
-            },
-        )
-    }
-
     fn call(&mut self, calldata: &[u8]) -> ExecutionResult {
         let mut env = Env::default();
         env.tx.clear();
@@ -536,18 +466,6 @@ impl EvmHarness {
         let (res, db) = Self::run_tx(db, env);
         self.db = db;
         res
-    }
-
-    fn call_with_trace(&mut self, calldata: &[u8]) -> (ExecutionResult, String) {
-        let mut env = Env::default();
-        env.tx.clear();
-        env.tx.transact_to = TransactTo::Call(self.contract);
-        env.tx.data = Bytes::copy_from_slice(calldata);
-
-        let db = std::mem::take(&mut self.db);
-        let (res, trace, db) = Self::run_tx_with_trace(db, env);
-        self.db = db;
-        (res, trace)
     }
 
     fn run_tx(mut db: revm::InMemoryDB, env: Env) -> (ExecutionResult, revm::InMemoryDB) {
@@ -564,82 +482,6 @@ impl EvmHarness {
             Ok(r) => (r, db),
             Err(e) => panic!("evm failure: {e}"),
         }
-    }
-
-    fn run_tx_with_trace(
-        mut db: revm::InMemoryDB,
-        env: Env,
-    ) -> (ExecutionResult, String, revm::InMemoryDB) {
-        let context = Context::new(
-            EvmContext::new_with_env(db, Box::new(env)),
-            TestInspector::new(vec![]),
-        );
-
-        let mut evm = revm::Evm::new(context, Handler::mainnet::<OsakaSpec>());
-        evm = evm
-            .modify()
-            .append_handler_register(inspector_handle_register)
-            .build();
-
-        let res = evm.transact_commit();
-        let trace = String::from_utf8(evm.context.external.w).unwrap();
-        db = std::mem::take(&mut evm.context.evm.inner.db);
-
-        match res {
-            Ok(r) => (r, trace, db),
-            Err(e) => panic!("evm failure: {e}"),
-        }
-    }
-}
-
-struct TestInspector<W: Write> {
-    w: W,
-}
-
-impl<W: Write> TestInspector<W> {
-    fn new(w: W) -> TestInspector<W> {
-        Self { w }
-    }
-}
-
-impl<W: Write, DB: revm::Database> revm::Inspector<DB> for TestInspector<W> {
-    fn initialize_interp(&mut self, _interp: &mut Interpreter, _context: &mut EvmContext<DB>) {
-        writeln!(
-            self.w,
-            "{:>6}  {:<17} input (stack grows to the right)",
-            "pc", "opcode"
-        )
-        .unwrap();
-    }
-
-    fn step(&mut self, interp: &mut Interpreter, _context: &mut EvmContext<DB>) {
-        // xxx tentatively writing input stack; clean up
-        let pc = interp.program_counter();
-
-        let op = interp.current_opcode();
-        let code = unsafe { std::mem::transmute::<u8, revm::interpreter::OpCode>(op) };
-
-        let stack = interp.stack().data();
-
-        write!(
-            self.w,
-            "{:>6}  {:0>2}  {:<12}  ",
-            pc,
-            format!("{op:x}"),
-            code.info().name(),
-        )
-        .unwrap();
-        let imm_size = code.info().immediate_size() as usize;
-        if imm_size > 0 {
-            let imm_bytes = interp.bytecode.slice((pc + 1)..(pc + 1 + imm_size));
-            writeln!(self.w, "{}  {}", imm_bytes, fmt_evm_stack(stack)).unwrap();
-        } else {
-            writeln!(self.w, "{}", fmt_evm_stack(stack)).unwrap();
-        }
-    }
-
-    fn step_end(&mut self, _interp: &mut Interpreter, _context: &mut EvmContext<DB>) {
-        // NOTE: annoying revm behavior: `interp.current_opcode()` now returns the next opcode.
     }
 }
 
@@ -705,28 +547,6 @@ fn lowering_func_order(parsed: &ParsedModule) -> Vec<FuncRef> {
         }
     }
     funcs
-}
-
-fn fmt_evm_stack(stack: &[U256]) -> String {
-    const SHOW: usize = 6;
-
-    fn fmt_u256(v: &U256) -> String {
-        format!("{v:#x}")
-    }
-
-    let len = stack.len();
-    if len == 0 {
-        return "[]".to_string();
-    }
-
-    if len <= SHOW {
-        let elems: Vec<String> = stack.iter().map(fmt_u256).collect();
-        return format!("[{}]", elems.join(", "));
-    }
-
-    let head: Vec<String> = stack.iter().take(2).map(fmt_u256).collect();
-    let tail: Vec<String> = stack.iter().skip(len - 3).map(fmt_u256).collect();
-    format!("[{}, …, {}] (len={len})", head.join(", "), tail.join(", "))
 }
 
 struct FuncStats {
