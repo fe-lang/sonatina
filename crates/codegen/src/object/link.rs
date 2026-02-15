@@ -261,6 +261,7 @@ fn build_section_observability<Op>(
         let func_def = symtab
             .get(&SymbolId::Func(func))
             .ok_or_else(|| format!("missing function symbol for {:?}", func))?;
+        let func_name = module.ctx.func_sig(func, |sig| sig.name().to_string());
         let func_end = func_def
             .offset
             .checked_add(func_def.size)
@@ -310,6 +311,7 @@ fn build_section_observability<Op>(
                 pc_start,
                 pc_end,
                 func,
+                func_name: func_name.clone(),
                 block,
                 vcode_inst: insn,
                 ir_inst,

@@ -77,11 +77,12 @@ impl UnmappedReasonCoverage {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PcMapEntry {
     pub pc_start: u32,
     pub pc_end: u32,
     pub func: FuncRef,
+    pub func_name: String,
     pub block: BlockId,
     pub vcode_inst: VCodeInst,
     pub ir_inst: Option<InstId>,
@@ -157,7 +158,7 @@ impl SectionObservability {
                 "pc [{}, {}) func={} block={} vcode={} ir={} reason={}",
                 entry.pc_start,
                 entry.pc_end,
-                entry.func.index(),
+                entry.func_name,
                 entry.block.index(),
                 entry.vcode_inst.index(),
                 ir,
@@ -242,6 +243,12 @@ impl SectionObservability {
                 entry.func.index(),
                 entry.block.index(),
                 entry.vcode_inst.index()
+            )
+            .expect("in-memory write should not fail");
+            write!(
+                &mut out,
+                ",\"func_name\":\"{}\"",
+                json_escape(&entry.func_name)
             )
             .expect("in-memory write should not fail");
 
