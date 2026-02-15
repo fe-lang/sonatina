@@ -159,11 +159,7 @@ impl Pipeline {
             Pass::CfgCleanup,
         ]));
         p.add_step(Step::Inline);
-        p.add_step(Step::FuncPasses(vec![
-            Pass::CfgCleanup,
-            Pass::Sccp,
-            Pass::CfgCleanup,
-        ]));
+        p.add_step(Step::FuncPasses(vec![Pass::CfgCleanup, Pass::Sccp]));
         p.add_step(Step::DeadFuncElim);
         p
     }

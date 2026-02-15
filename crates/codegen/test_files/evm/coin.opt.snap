@@ -21,9 +21,9 @@ type @__fe_SolDecoder_9 = {@__fe_Cursor_8, i256};
 func private %test_coin__StorPtr_Evm___207f35a85ac4062e() {
     block0:
         v2.i256 = call %create2__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e 0.i256 0.i256;
-        v69.i1 = is_zero v2;
-        v70.i1 = is_zero v69;
-        v5.i256 = zext v70 i256;
+        v3.i1 = is_zero v2;
+        v4.i1 = is_zero v3;
+        v5.i256 = zext v4 i256;
         call %assert v5;
         v8.*i8 = evm_malloc 64.i256;
         v9.i256 = ptr_to_int v8 i256;
@@ -36,8 +36,8 @@ func private %test_coin__StorPtr_Evm___207f35a85ac4062e() {
         v16.i256 = ptr_to_int v15 i256;
         mstore v16 10.i256 i256;
         v18.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call__Credit_h1b40c7da4bcceeac__9489dcd0a297a0c v2 100000.i256 0.i256 v9;
-        v71.i1 = eq 10.i256 v18;
-        v20.i256 = zext v71 i256;
+        v19.i1 = eq 10.i256 v18;
+        v20.i256 = zext v19 i256;
         call %assert v20;
         v21.*i8 = evm_malloc 64.i256;
         v22.i256 = ptr_to_int v21 i256;
@@ -50,8 +50,8 @@ func private %test_coin__StorPtr_Evm___207f35a85ac4062e() {
         v29.i256 = ptr_to_int v28 i256;
         mstore v29 5.i256 i256;
         v30.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call__Credit_h1b40c7da4bcceeac__9489dcd0a297a0c v2 100000.i256 0.i256 v22;
-        v72.i1 = eq 5.i256 v30;
-        v32.i256 = zext v72 i256;
+        v31.i1 = eq 5.i256 v30;
+        v32.i256 = zext v31 i256;
         call %assert v32;
         v33.*i8 = evm_malloc 64.i256;
         v34.i256 = ptr_to_int v33 i256;
@@ -64,16 +64,16 @@ func private %test_coin__StorPtr_Evm___207f35a85ac4062e() {
         v41.i256 = ptr_to_int v40 i256;
         mstore v41 3.i256 i256;
         v42.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call__Transfer_hbe7d801e15d910f6__66cc42efa72ff9b1 v2 100000.i256 0.i256 v34;
-        v73.i1 = is_zero v42;
-        v44.i256 = zext v73 i256;
+        v43.i1 = is_zero v42;
+        v44.i256 = zext v43 i256;
         call %assert v44;
         v45.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call__BalanceOf_h891837b06b5610d4__9cd8cdf578aad9be v2 100000.i256 0.i256 0.i256;
-        v74.i1 = eq 7.i256 v45;
-        v48.i256 = zext v74 i256;
+        v47.i1 = eq 7.i256 v45;
+        v48.i256 = zext v47 i256;
         call %assert v48;
         v49.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call__BalanceOf_h891837b06b5610d4__9cd8cdf578aad9be v2 100000.i256 0.i256 1.i256;
-        v75.i1 = eq 8.i256 v49;
-        v52.i256 = zext v75 i256;
+        v51.i1 = eq 8.i256 v49;
+        v52.i256 = zext v51 i256;
         call %assert v52;
         v53.*i8 = evm_malloc 64.i256;
         v54.i256 = ptr_to_int v53 i256;
@@ -86,12 +86,12 @@ func private %test_coin__StorPtr_Evm___207f35a85ac4062e() {
         v61.i256 = ptr_to_int v60 i256;
         mstore v61 20.i256 i256;
         v62.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call__Transfer_hbe7d801e15d910f6__66cc42efa72ff9b1 v2 100000.i256 0.i256 v54;
-        v76.i1 = eq 1.i256 v62;
-        v64.i256 = zext v76 i256;
+        v63.i1 = eq 1.i256 v62;
+        v64.i256 = zext v63 i256;
         call %assert v64;
         v65.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call__TotalSupply_h7bb395110a25abc2__8d4065b5d6bedb33 v2 100000.i256 0.i256;
-        v77.i1 = eq 15.i256 v65;
-        v68.i256 = zext v77 i256;
+        v67.i1 = eq 15.i256 v65;
+        v68.i256 = zext v67 i256;
         call %assert v68;
         evm_return 0.i256 0.i256;
 }
@@ -106,9 +106,9 @@ func private %__Coin_recv_0_0(v0.i256, v1.i256) -> i256 {
         v9.*i256 = gep v7 0.i256 1.i256;
         v10.i256 = ptr_to_int v9 i256;
         v11.i256 = mload v10 i256;
-        v35.i1 = is_zero v6;
-        v36.i256 = zext v35 i256;
-        v14.i1 = eq 1.i256 v36;
+        v12.i1 = is_zero v6;
+        v13.i256 = zext v12 i256;
+        v14.i1 = eq 1.i256 v13;
         br v14 block1 block2;
 
     block1:
@@ -145,25 +145,25 @@ func private %__Coin_recv_0_1(v0.i256, v1.i256) -> i256 {
         v9.*i256 = gep v7 0.i256 1.i256;
         v10.i256 = ptr_to_int v9 i256;
         v11.i256 = mload v10 i256;
-        v38.i1 = is_zero v6;
-        v39.i256 = zext v38 i256;
-        v14.i1 = eq 1.i256 v39;
+        v12.i1 = is_zero v6;
+        v13.i256 = zext v12 i256;
+        v14.i1 = eq 1.i256 v13;
         br v14 block1 block2;
 
     block1:
         v17.i256 = evm_sload v1;
-        v41.i1 = lt v17 v11;
-        v42.i256 = zext v41 i256;
-        v43.i1 = is_zero v42;
+        v19.i1 = lt v17 v11;
+        v20.i256 = zext v19 i256;
+        v43.i1 = is_zero v20;
         v21.i1 = is_zero v43;
         br v21 block3 block4;
 
     block2:
         v23.i256 = add 1.i256 v1;
         v24.i256 = evm_sload v23;
-        v45.i1 = lt v24 v11;
-        v46.i256 = zext v45 i256;
-        v47.i1 = is_zero v46;
+        v26.i1 = lt v24 v11;
+        v27.i256 = zext v26 i256;
+        v47.i1 = is_zero v27;
         v28.i1 = is_zero v47;
         br v28 block5 block6;
 
@@ -195,9 +195,9 @@ func private %__Coin_recv_0_1(v0.i256, v1.i256) -> i256 {
 
 func private %__Coin_recv_0_2(v0.i256, v1.i256) -> i256 {
     block0:
-        v12.i1 = is_zero v0;
-        v13.i256 = zext v12 i256;
-        v6.i1 = eq 1.i256 v13;
+        v3.i1 = is_zero v0;
+        v4.i256 = zext v3 i256;
+        v6.i1 = eq 1.i256 v4;
         br v6 block1 block2;
 
     block1:
@@ -216,10 +216,9 @@ func private %__Coin_init() {
         v3.i256 = sym_size &__Coin_runtime;
         v4.i256 = evm_code_size;
         v6.i256 = add v2 v3;
-        v39.i256 = add v2 v3;
-        v40.i1 = lt v4 v39;
-        v41.i256 = zext v40 i256;
-        v42.i1 = is_zero v41;
+        v7.i1 = lt v4 v6;
+        v8.i256 = zext v7 i256;
+        v42.i1 = is_zero v8;
         v9.i1 = is_zero v42;
         br v9 block1 block2;
 
@@ -227,8 +226,7 @@ func private %__Coin_init() {
         evm_revert 0.i256 0.i256;
 
     block2:
-        v43.i256 = add v2 v3;
-        v17.i256 = sub v4 v43;
+        v17.i256 = sub v4 v6;
         v18.*i8 = evm_malloc v17;
         v19.i256 = ptr_to_int v18 i256;
         evm_code_copy v19 v6 v17;
@@ -386,9 +384,9 @@ func private %create2__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab
         v23.i256 = ptr_to_int v22 i256;
         mstore v23 v8 i256;
         v33.i256 = evm_create2 v0 v7 v31 v1;
-        v35.i1 = is_zero v33;
-        v36.i256 = zext v35 i256;
-        v37.i1 = is_zero v36;
+        v25.i1 = is_zero v33;
+        v26.i256 = zext v25 i256;
+        v37.i1 = is_zero v26;
         v27.i1 = is_zero v37;
         br v27 block1 block2;
 
@@ -405,9 +403,9 @@ func private %create2__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab
 
 func public %assert(v0.i256) {
     block0:
-        v6.i1 = is_zero v0;
-        v7.i256 = zext v6 i256;
-        v8.i1 = is_zero v7;
+        v2.i1 = is_zero v0;
+        v3.i256 = zext v2 i256;
+        v8.i1 = is_zero v3;
         v4.i1 = is_zero v8;
         br v4 block1 block2;
 
@@ -456,9 +454,9 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call__Credit_h1b40c7d
         v18.*i8 = evm_malloc v17;
         v19.i256 = ptr_to_int v18 i256;
         evm_return_data_copy v19 0.i256 v17;
-        v51.i1 = is_zero v16;
-        v52.i256 = zext v51 i256;
-        v53.i1 = is_zero v52;
+        v20.i1 = is_zero v16;
+        v21.i256 = zext v20 i256;
+        v53.i1 = is_zero v21;
         v22.i1 = is_zero v53;
         br v22 block1 block2;
 
@@ -508,9 +506,9 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call__Transfer_hbe7d8
         v18.*i8 = evm_malloc v17;
         v19.i256 = ptr_to_int v18 i256;
         evm_return_data_copy v19 0.i256 v17;
-        v51.i1 = is_zero v16;
-        v52.i256 = zext v51 i256;
-        v53.i1 = is_zero v52;
+        v20.i1 = is_zero v16;
+        v21.i256 = zext v20 i256;
+        v53.i1 = is_zero v21;
         v22.i1 = is_zero v53;
         br v22 block1 block2;
 
@@ -551,9 +549,9 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call__BalanceOf_h8918
         v18.*i8 = evm_malloc v17;
         v19.i256 = ptr_to_int v18 i256;
         evm_return_data_copy v19 0.i256 v17;
-        v43.i1 = is_zero v16;
-        v44.i256 = zext v43 i256;
-        v45.i1 = is_zero v44;
+        v20.i1 = is_zero v16;
+        v21.i256 = zext v20 i256;
+        v45.i1 = is_zero v21;
         v22.i1 = is_zero v45;
         br v22 block1 block2;
 
@@ -593,9 +591,9 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call__TotalSupply_h7b
         v17.*i8 = evm_malloc v16;
         v18.i256 = ptr_to_int v17 i256;
         evm_return_data_copy v18 0.i256 v16;
-        v40.i1 = is_zero v15;
-        v41.i256 = zext v40 i256;
-        v42.i1 = is_zero v41;
+        v19.i1 = is_zero v15;
+        v20.i256 = zext v19 i256;
+        v42.i1 = is_zero v20;
         v21.i1 = is_zero v42;
         br v21 block1 block2;
 
@@ -611,9 +609,9 @@ func public %alloc(v0.i256) -> i256 {
     block0:
         v3.i256 = mload 64.i256 i256;
         v5.i256 = mload 128.i256 i256;
-        v22.i1 = gt v5 v3;
-        v23.i256 = zext v22 i256;
-        v24.i1 = is_zero v23;
+        v6.i1 = gt v5 v3;
+        v7.i256 = zext v6 i256;
+        v24.i1 = is_zero v7;
         v8.i1 = is_zero v24;
         br v8 block1 block2;
 
@@ -622,9 +620,9 @@ func public %alloc(v0.i256) -> i256 {
 
     block2:
         v10.i256 = phi (v3 block0) (v5 block1);
-        v26.i1 = is_zero v10;
-        v27.i256 = zext v26 i256;
-        v28.i1 = is_zero v27;
+        v11.i1 = is_zero v10;
+        v12.i256 = zext v11 i256;
+        v28.i1 = is_zero v12;
         v13.i1 = is_zero v28;
         br v13 block3 block4;
 
@@ -634,9 +632,9 @@ func public %alloc(v0.i256) -> i256 {
 
     block4:
         v15.i256 = phi (v10 block2) (v14 block3);
-        v30.i1 = lt v15 8192.i256;
-        v31.i256 = zext v30 i256;
-        v32.i1 = is_zero v31;
+        v17.i1 = lt v15 8192.i256;
+        v18.i256 = zext v17 i256;
+        v32.i1 = is_zero v18;
         v19.i1 = is_zero v32;
         br v19 block5 block6;
 
@@ -653,9 +651,9 @@ func public %alloc(v0.i256) -> i256 {
 func private %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> i256 {
     block0:
         v9.i256 = evm_calldata_size;
-        v17.i1 = lt v9 4.i256;
-        v18.i256 = zext v17 i256;
-        v19.i1 = is_zero v18;
+        v4.i1 = lt v9 4.i256;
+        v5.i256 = zext v4 i256;
+        v19.i1 = is_zero v5;
         v6.i1 = is_zero v19;
         br v6 block1 block2;
 
@@ -696,9 +694,9 @@ func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4
 
 func private %decode_returndata__u256__3271ca15373d4483(v0.i256, v1.i256) -> i256 {
     block0:
-        v20.i1 = lt v1 32.i256;
-        v21.i256 = zext v20 i256;
-        v22.i1 = is_zero v21;
+        v4.i1 = lt v1 32.i256;
+        v5.i256 = zext v4 i256;
+        v22.i1 = is_zero v5;
         v6.i1 = is_zero v22;
         br v6 block1 block2;
 
@@ -924,6 +922,7 @@ func private %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_
         v7.i256 = ptr_to_int v6 i256;
         v8.i256 = mload v7 i256;
         v54.i256 = evm_calldata_size;
+        v55.i256 = sub v54 v8;
         v10.*@__fe_SolDecoder_9 = int_to_ptr v0 *@__fe_SolDecoder_9;
         v11.*@__fe_Cursor_8 = gep v10 0.i256 0.i256;
         v12.i256 = ptr_to_int v11 i256;
@@ -939,14 +938,12 @@ func private %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_
         v24.*i256 = gep v23 0.i256 1.i256;
         v25.i256 = ptr_to_int v24 i256;
         v26.i256 = mload v25 i256;
-        v72.i256 = add 32.i256 v17;
-        v73.i256 = sub v54 v8;
-        v74.i1 = gt v72 v73;
-        v75.i256 = zext v74 i256;
-        v76.i1 = lt v72 v26;
-        v77.i256 = zext v76 i256;
-        v78.i256 = or v75 v77;
-        v32.i1 = ne 0.i256 v78;
+        v27.i1 = lt v19 v26;
+        v28.i256 = zext v27 i256;
+        v29.i1 = gt v19 v55;
+        v30.i256 = zext v29 i256;
+        v31.i256 = or v30 v28;
+        v32.i1 = ne 0.i256 v31;
         br v32 block1 block2;
 
     block1:
@@ -985,9 +982,9 @@ func private %solencoder_h1b9228b90dad6928_ensure_init(v0.i256, v1.i256) {
         v4.*i256 = gep v3 0.i256 0.i256;
         v5.i256 = ptr_to_int v4 i256;
         v6.i256 = mload v5 i256;
-        v25.i1 = is_zero v6;
-        v26.i256 = zext v25 i256;
-        v27.i1 = is_zero v26;
+        v7.i1 = is_zero v6;
+        v8.i256 = zext v7 i256;
+        v27.i1 = is_zero v8;
         v9.i1 = is_zero v27;
         br v9 block1 block2;
 
@@ -1040,13 +1037,12 @@ func private %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_
         v23.*i256 = gep v22 0.i256 1.i256;
         v24.i256 = ptr_to_int v23 i256;
         v25.i256 = mload v24 i256;
-        v73.i256 = add 32.i256 v16;
-        v74.i1 = gt v73 v55;
-        v75.i256 = zext v74 i256;
-        v76.i1 = lt v73 v25;
-        v77.i256 = zext v76 i256;
-        v78.i256 = or v75 v77;
-        v31.i1 = ne 0.i256 v78;
+        v26.i1 = lt v18 v25;
+        v27.i256 = zext v26 i256;
+        v28.i1 = gt v18 v55;
+        v29.i256 = zext v28 i256;
+        v30.i256 = or v29 v27;
+        v31.i1 = ne 0.i256 v30;
         br v31 block1 block2;
 
     block1:

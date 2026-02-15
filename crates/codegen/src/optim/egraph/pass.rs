@@ -3,10 +3,11 @@
 use crate::domtree::DomTree;
 
 use egglog::{CommandOutput, EGraph};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use sonatina_ir::{
-    ControlFlowGraph, Function, InstDowncast, InstId, Type, Value, ValueId, inst::data::Mstore,
+    ControlFlowGraph, Function, InstDowncast, InstId, Type, Value, ValueId,
+    inst::{arith::*, cast::*, cmp::*, data::*, evm::*, logic::*},
 };
 
 use super::{EggTerm, Elaborator, func_to_egglog};
@@ -41,26 +42,6 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
         return false;
     }
 
-    // Build value map
-    let mut value_map: FxHashMap<String, ValueId> = FxHashMap::default();
-    let mut type_map: FxHashMap<String, Type> = FxHashMap::default();
-
-    for &arg_val in &func.arg_values {
-        let name = format!("v{}", arg_val.as_u32());
-        value_map.insert(name.clone(), arg_val);
-        type_map.insert(name, func.dfg.value_ty(arg_val));
-    }
-
-    for block in func.layout.iter_block() {
-        for inst_id in func.layout.iter_inst(block) {
-            if let Some(result) = func.dfg.inst_result(inst_id) {
-                let name = format!("v{}", result.as_u32());
-                value_map.insert(name.clone(), result);
-                type_map.insert(name, func.dfg.value_ty(result));
-            }
-        }
-    }
-
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(func);
     let mut dom = DomTree::new();
@@ -68,10 +49,11 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
 
     // Convert to egglog
     let program = func_to_egglog(func);
+    let source_terms = collect_source_terms(func);
 
     // Build extraction queries for all instruction result values
     let mut full_program = program.clone();
-    let mut extract_names = Vec::new();
+    let mut extract_values = Vec::new();
 
     // Run rules to apply rewrites
     full_program.push_str("\n(run 10)");
@@ -81,7 +63,7 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
             if let Some(result) = func.dfg.inst_result(inst_id) {
                 let name = format!("v{}", result.as_u32());
                 full_program.push_str(&format!("\n(extract {})", name));
-                extract_names.push(name);
+                extract_values.push(result);
             }
         }
     }
@@ -103,23 +85,37 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
         }
     };
 
-    // Check results for simplifications
-    let mut changed = false;
-    let mut term_value_candidates: FxHashMap<EggTerm, Vec<ValueId>> = FxHashMap::default();
-
+    let mut parsed_terms: FxHashMap<ValueId, EggTerm> = FxHashMap::default();
     let mut extract_results = results.iter().filter_map(extract_output_to_string);
-
-    for name in &extract_names {
+    for &original_val in &extract_values {
         let Some(result) = extract_results.next() else {
             break;
         };
         let result = result.trim();
-        let original_val = value_map[name];
-        let ty = type_map[name];
 
         let Some(term) = EggTerm::parse(result, func).map(EggTerm::canonicalize) else {
             continue;
         };
+        parsed_terms.insert(original_val, term);
+    }
+
+    // Check results for simplifications
+    let mut changed = false;
+    let mut term_value_candidates: FxHashMap<EggTerm, Vec<ValueId>> = FxHashMap::default();
+    let mut resolved_terms: FxHashMap<ValueId, EggTerm> = FxHashMap::default();
+    let mut resolving_terms: FxHashSet<ValueId> = FxHashSet::default();
+
+    for &original_val in &extract_values {
+        let Some(term) = resolve_extracted_term(
+            original_val,
+            &parsed_terms,
+            &source_terms,
+            &mut resolved_terms,
+            &mut resolving_terms,
+        ) else {
+            continue;
+        };
+        let ty = func.dfg.value_ty(original_val);
 
         match term {
             EggTerm::Const(const_val, _term_ty) => {
@@ -135,7 +131,45 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
                 if can_alias(func, &dom, original_val, alias_val) {
                     func.dfg.change_to_alias(original_val, alias_val);
                     changed = true;
+                    continue;
                 }
+
+                let value_term = EggTerm::Value(alias_val);
+                if let Some(existing_value) = find_dominating_term_value(
+                    func,
+                    &dom,
+                    &term_value_candidates,
+                    &value_term,
+                    original_val,
+                ) {
+                    func.dfg.change_to_alias(original_val, existing_value);
+                    changed = true;
+                    continue;
+                }
+
+                if let Some(source_term) = source_terms.get(&original_val).cloned()
+                    && !matches!(source_term, EggTerm::Value(value) if value == original_val)
+                {
+                    if let Some(existing_value) = find_dominating_term_value(
+                        func,
+                        &dom,
+                        &term_value_candidates,
+                        &source_term,
+                        original_val,
+                    ) {
+                        func.dfg.change_to_alias(original_val, existing_value);
+                        changed = true;
+                        continue;
+                    }
+
+                    record_term_value_candidate(
+                        &mut term_value_candidates,
+                        source_term,
+                        original_val,
+                    );
+                }
+
+                record_term_value_candidate(&mut term_value_candidates, value_term, original_val);
             }
             EggTerm::Global(gv, _term_ty) => {
                 let Some(original_inst) = func.dfg.value_inst(original_val) else {
@@ -210,11 +244,51 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
         }
     }
 
+    if apply_term_cse(func, &dom, &mut term_value_candidates) {
+        changed = true;
+    }
+
     if eliminate_adjacent_dead_stores(func) {
         changed = true;
     }
     if eliminate_dead_pure_insts(func) {
         changed = true;
+    }
+
+    changed
+}
+
+fn apply_term_cse(
+    func: &mut Function,
+    dom: &DomTree,
+    term_value_candidates: &mut FxHashMap<EggTerm, Vec<ValueId>>,
+) -> bool {
+    let mut changed = false;
+
+    let blocks: Vec<_> = func.layout.iter_block().collect();
+    for block in blocks {
+        let insts: Vec<_> = func.layout.iter_inst(block).collect();
+        for inst_id in insts {
+            let Some(result) = func.dfg.inst_result(inst_id) else {
+                continue;
+            };
+            let Some(term) = source_term_for_inst(func, inst_id).map(EggTerm::canonicalize) else {
+                continue;
+            };
+            if term.contains_value(result) {
+                continue;
+            }
+
+            if let Some(existing_value) =
+                find_dominating_term_value(func, dom, term_value_candidates, &term, result)
+            {
+                func.dfg.change_to_alias(result, existing_value);
+                changed = true;
+                continue;
+            }
+
+            record_term_value_candidate(term_value_candidates, term, result);
+        }
     }
 
     changed
@@ -242,6 +316,244 @@ fn record_term_value_candidate(
     value: ValueId,
 ) {
     term_value_candidates.entry(term).or_default().push(value);
+}
+
+fn resolve_extracted_term(
+    value: ValueId,
+    parsed_terms: &FxHashMap<ValueId, EggTerm>,
+    source_terms: &FxHashMap<ValueId, EggTerm>,
+    resolved_terms: &mut FxHashMap<ValueId, EggTerm>,
+    resolving_terms: &mut FxHashSet<ValueId>,
+) -> Option<EggTerm> {
+    if let Some(term) = resolved_terms.get(&value) {
+        return Some(term.clone());
+    }
+    let term = parsed_terms
+        .get(&value)
+        .cloned()
+        .or_else(|| source_terms.get(&value).cloned())?;
+    if !resolving_terms.insert(value) {
+        return Some(term);
+    }
+
+    let resolved = match term {
+        EggTerm::Value(alias_val) => resolve_value_term(
+            value,
+            alias_val,
+            parsed_terms,
+            source_terms,
+            resolved_terms,
+            resolving_terms,
+        ),
+        other => other,
+    }
+    .canonicalize();
+
+    resolving_terms.remove(&value);
+    resolved_terms.insert(value, resolved.clone());
+    Some(resolved)
+}
+
+fn resolve_value_term(
+    current_value: ValueId,
+    alias_value: ValueId,
+    parsed_terms: &FxHashMap<ValueId, EggTerm>,
+    source_terms: &FxHashMap<ValueId, EggTerm>,
+    resolved_terms: &mut FxHashMap<ValueId, EggTerm>,
+    resolving_terms: &mut FxHashSet<ValueId>,
+) -> EggTerm {
+    if alias_value != current_value {
+        if let Some(alias_term) = resolve_extracted_term(
+            alias_value,
+            parsed_terms,
+            source_terms,
+            resolved_terms,
+            resolving_terms,
+        ) && !matches!(alias_term, EggTerm::Value(value) if value == alias_value)
+        {
+            return alias_term;
+        }
+
+        return EggTerm::Value(alias_value);
+    }
+
+    if let Some(source_term) = source_terms.get(&current_value)
+        && !matches!(source_term, EggTerm::Value(value) if *value == current_value)
+    {
+        return source_term.clone();
+    }
+
+    EggTerm::Value(alias_value)
+}
+
+fn collect_source_terms(func: &Function) -> FxHashMap<ValueId, EggTerm> {
+    let mut terms = FxHashMap::default();
+    for block in func.layout.iter_block() {
+        for inst_id in func.layout.iter_inst(block) {
+            let Some(result) = func.dfg.inst_result(inst_id) else {
+                continue;
+            };
+            let Some(term) = source_term_for_inst(func, inst_id).map(EggTerm::canonicalize) else {
+                continue;
+            };
+            terms.insert(result, term);
+        }
+    }
+    terms
+}
+
+fn source_term_for_inst(func: &Function, inst_id: InstId) -> Option<EggTerm> {
+    let inst = func.dfg.inst(inst_id);
+    let is = func.inst_set();
+
+    macro_rules! binary {
+        ($inst_ty:ty, $ctor:expr) => {
+            if let Some(inst_data) = <&$inst_ty>::downcast(is, inst) {
+                return Some($ctor(
+                    Box::new(value_to_source_term(func, *inst_data.lhs())),
+                    Box::new(value_to_source_term(func, *inst_data.rhs())),
+                ));
+            }
+        };
+    }
+
+    macro_rules! unary {
+        ($inst_ty:ty, $ctor:expr) => {
+            if let Some(inst_data) = <&$inst_ty>::downcast(is, inst) {
+                return Some($ctor(Box::new(value_to_source_term(
+                    func,
+                    *inst_data.arg(),
+                ))));
+            }
+        };
+    }
+
+    macro_rules! cast {
+        ($inst_ty:ty, $ctor:expr) => {
+            if let Some(inst_data) = <&$inst_ty>::downcast(is, inst) {
+                return Some($ctor(
+                    Box::new(value_to_source_term(func, *inst_data.from())),
+                    *inst_data.ty(),
+                ));
+            }
+        };
+    }
+
+    macro_rules! ternary {
+        ($inst_ty:ty, $ctor:expr, $a:ident, $b:ident, $c:ident) => {
+            if let Some(inst_data) = <&$inst_ty>::downcast(is, inst) {
+                return Some($ctor(
+                    Box::new(value_to_source_term(func, *inst_data.$a())),
+                    Box::new(value_to_source_term(func, *inst_data.$b())),
+                    Box::new(value_to_source_term(func, *inst_data.$c())),
+                ));
+            }
+        };
+    }
+
+    binary!(Add, EggTerm::Add);
+    binary!(Sub, EggTerm::Sub);
+    binary!(Mul, EggTerm::Mul);
+    binary!(Udiv, EggTerm::Udiv);
+    binary!(Sdiv, EggTerm::Sdiv);
+    binary!(Umod, EggTerm::Umod);
+    binary!(Smod, EggTerm::Smod);
+    unary!(Neg, EggTerm::Neg);
+
+    binary!(EvmUdiv, EggTerm::Udiv);
+    binary!(EvmSdiv, EggTerm::Sdiv);
+    binary!(EvmUmod, EggTerm::Umod);
+    binary!(EvmSmod, EggTerm::Smod);
+    ternary!(EvmAddMod, EggTerm::EvmAddMod, lhs, rhs, modulus);
+    ternary!(EvmMulMod, EggTerm::EvmMulMod, lhs, rhs, modulus);
+
+    binary!(And, EggTerm::And);
+    binary!(Or, EggTerm::Or);
+    binary!(Xor, EggTerm::Xor);
+    unary!(Not, EggTerm::Not);
+
+    binary!(Lt, EggTerm::Lt);
+    binary!(Gt, EggTerm::Gt);
+    binary!(Le, EggTerm::Le);
+    binary!(Ge, EggTerm::Ge);
+    binary!(Slt, EggTerm::Slt);
+    binary!(Sgt, EggTerm::Sgt);
+    binary!(Sle, EggTerm::Sle);
+    binary!(Sge, EggTerm::Sge);
+    binary!(Eq, EggTerm::Eq);
+    binary!(Ne, EggTerm::Ne);
+
+    cast!(Sext, EggTerm::Sext);
+    cast!(Zext, EggTerm::Zext);
+    cast!(Trunc, EggTerm::Trunc);
+    cast!(Bitcast, EggTerm::Bitcast);
+
+    if let Some(inst_data) = <&Shl>::downcast(is, inst) {
+        return Some(EggTerm::Shl(
+            Box::new(value_to_source_term(func, *inst_data.bits())),
+            Box::new(value_to_source_term(func, *inst_data.value())),
+        ));
+    }
+    if let Some(inst_data) = <&Shr>::downcast(is, inst) {
+        return Some(EggTerm::Shr(
+            Box::new(value_to_source_term(func, *inst_data.bits())),
+            Box::new(value_to_source_term(func, *inst_data.value())),
+        ));
+    }
+    if let Some(inst_data) = <&Sar>::downcast(is, inst) {
+        return Some(EggTerm::Sar(
+            Box::new(value_to_source_term(func, *inst_data.bits())),
+            Box::new(value_to_source_term(func, *inst_data.value())),
+        ));
+    }
+    if let Some(inst_data) = <&EvmExp>::downcast(is, inst) {
+        return Some(EggTerm::EvmExp(
+            Box::new(value_to_source_term(func, *inst_data.base())),
+            Box::new(value_to_source_term(func, *inst_data.exponent())),
+        ));
+    }
+    if let Some(inst_data) = <&EvmByte>::downcast(is, inst) {
+        return Some(EggTerm::EvmByte(
+            Box::new(value_to_source_term(func, *inst_data.pos())),
+            Box::new(value_to_source_term(func, *inst_data.value())),
+        ));
+    }
+    if let Some(inst_data) = <&EvmClz>::downcast(is, inst) {
+        return Some(EggTerm::EvmClz(Box::new(value_to_source_term(
+            func,
+            *inst_data.word(),
+        ))));
+    }
+    if let Some(inst_data) = <&IsZero>::downcast(is, inst) {
+        return Some(EggTerm::IsZero(Box::new(value_to_source_term(
+            func,
+            *inst_data.lhs(),
+        ))));
+    }
+    if let Some(inst_data) = <&Gep>::downcast(is, inst) {
+        let values = inst_data.values();
+        if !values.is_empty() {
+            let indices = values[1..]
+                .iter()
+                .map(|&value| value_to_source_term(func, value))
+                .collect();
+            return Some(EggTerm::Gep {
+                base: Box::new(value_to_source_term(func, values[0])),
+                indices,
+            });
+        }
+    }
+
+    None
+}
+
+fn value_to_source_term(func: &Function, value: ValueId) -> EggTerm {
+    match func.dfg.value(value) {
+        Value::Immediate { imm, ty } => EggTerm::Const(imm.as_i256(), *ty),
+        Value::Global { gv, ty } => EggTerm::Global(*gv, *ty),
+        Value::Undef { ty } => EggTerm::Undef(*ty),
+        Value::Arg { .. } | Value::Inst { .. } => EggTerm::Value(value),
+    }
 }
 
 fn extract_output_to_string(output: &CommandOutput) -> Option<String> {

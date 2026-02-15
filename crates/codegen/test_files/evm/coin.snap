@@ -6,10 +6,10 @@ input_file: test_files/evm/coin.sntn
 evm.config: stack_reach=16 emit_debug_trace=true opt_pipeline=aggressive
 
 object: Contract
-  section runtime: 3573 bytes
-  section coin_init: 1396 bytes
-  section coin_runtime: 1057 bytes
-  total: 6026 bytes
+  section runtime: 3556 bytes
+  section coin_init: 1384 bytes
+  section coin_runtime: 1050 bytes
+  total: 5990 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
@@ -21,7 +21,7 @@ functions:
     mem: sa{n:0,l:0}
   __Coin_recv_0_2: ir_blocks=3 ir_insts=9 vcode_ops=18 fixups=1 imm_bytes=3
     mem: sa{n:0,l:0}
-  __Coin_init: ir_blocks=3 ir_insts=32 vcode_ops=162 fixups=13 imm_bytes=20
+  __Coin_init: ir_blocks=3 ir_insts=30 vcode_ops=157 fixups=13 imm_bytes=20
     mem: sa{n:0,l:0} malloc{n:2,fsb:0,t:0,e:1,const_wrds:2,dyn_cnt:1}
   __Coin_runtime: ir_blocks=9 ir_insts=93 vcode_ops=446 fixups=50 imm_bytes=44
     mem: sa{n:0,l:0} malloc{n:5,fsb:0,t:4,e:0,const_wrds:11,dyn_cnt:0}
@@ -57,11 +57,11 @@ functions:
     mem: sa{n:0,l:0} malloc{n:1,fsb:0,t:0,e:1,const_wrds:3,dyn_cnt:0}
   soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=47 vcode_ops=238 fixups=12 imm_bytes=28
     mem: sa{n:0,l:0} malloc{n:3,fsb:0,t:1,e:1,const_wrds:7,dyn_cnt:0}
-  soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=3 ir_insts=57 vcode_ops=147 fixups=1 imm_bytes=12
+  soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=3 ir_insts=56 vcode_ops=141 fixups=1 imm_bytes=11
     mem: sa{n:0,l:0}
   solencoder_h1b9228b90dad6928_ensure_init: ir_blocks=4 ir_insts=27 vcode_ops=103 fixups=6 imm_bytes=11
     mem: sa{n:0,l:0} malloc{n:1,fsb:0,t:0,e:1,const_wrds:0,dyn_cnt:1}
-  soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=3 ir_insts=61 vcode_ops=159 fixups=1 imm_bytes=14
+  soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=3 ir_insts=60 vcode_ops=155 fixups=1 imm_bytes=13
     mem: sa{n:0,l:0}
   cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=11 vcode_ops=68 fixups=4 imm_bytes=9
     mem: sa{n:0,l:0} malloc{n:1,fsb:0,t:0,e:1,const_wrds:2,dyn_cnt:0}
@@ -69,7 +69,7 @@ functions:
     mem: sa{n:0,l:0} malloc{n:1,fsb:0,t:0,e:1,const_wrds:2,dyn_cnt:0}
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=362146 gas_refunded=0 logs=0 output=call len=0
+  case ok: calldata_len=0 success reason=Return gas_used=360461 gas_refunded=0 logs=0 output=call len=0
 
 
 --------------- DEBUG ---------------
@@ -110,11 +110,11 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       call [I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v0
     - stack=[v0]
       pre: [DUP1]
-      is_zero [v0] -> v69
-    - stack=[v69, v0], last_use=[v69]
-      is_zero [v69] -> v70
-    - stack=[v70, v0], last_use=[v70]
-      zext [v70] -> v3
+      is_zero [v0] -> v1
+    - stack=[v1, v0], last_use=[v1]
+      is_zero [v1] -> v2
+    - stack=[v2, v0], last_use=[v2]
+      zext [v2] -> v3
     - stack=[v3, v0], last_use=[v3]
       pre: [PUSH_CONT, SWAP1]
       call [v3]
@@ -150,9 +150,9 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       call [I256 { is_negative: false, abs: 100000 }, I256 { is_negative: false, abs: 0 }, v5, v0] -> v12
     - stack=[v12, v0], last_use=[v12]
       pre: [PUSH(I256 { is_negative: false, abs: 10 })]
-      eq [I256 { is_negative: false, abs: 10 }, v12] -> v71
-    - stack=[v71, v0], last_use=[v71]
-      zext [v71] -> v14
+      eq [I256 { is_negative: false, abs: 10 }, v12] -> v13
+    - stack=[v13, v0], last_use=[v13]
+      zext [v13] -> v14
     - stack=[v14, v0], last_use=[v14]
       pre: [PUSH_CONT, SWAP1]
       call [v14]
@@ -188,9 +188,9 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       call [I256 { is_negative: false, abs: 100000 }, I256 { is_negative: false, abs: 0 }, v16, v0] -> v23
     - stack=[v23, v0], last_use=[v23]
       pre: [PUSH(I256 { is_negative: false, abs: 5 })]
-      eq [I256 { is_negative: false, abs: 5 }, v23] -> v72
-    - stack=[v72, v0], last_use=[v72]
-      zext [v72] -> v25
+      eq [I256 { is_negative: false, abs: 5 }, v23] -> v24
+    - stack=[v24, v0], last_use=[v24]
+      zext [v24] -> v25
     - stack=[v25, v0], last_use=[v25]
       pre: [PUSH_CONT, SWAP1]
       call [v25]
@@ -225,9 +225,9 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       pre: [DUP2, SWAP1, PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 100000 }), PUSH_CONT, SWAP4]
       call [I256 { is_negative: false, abs: 100000 }, I256 { is_negative: false, abs: 0 }, v27, v0] -> v34
     - stack=[v34, v0], last_use=[v34]
-      is_zero [v34] -> v73
-    - stack=[v73, v0], last_use=[v73]
-      zext [v73] -> v36
+      is_zero [v34] -> v35
+    - stack=[v35, v0], last_use=[v35]
+      zext [v35] -> v36
     - stack=[v36, v0], last_use=[v36]
       pre: [PUSH_CONT, SWAP1]
       call [v36]
@@ -236,9 +236,9 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       call [I256 { is_negative: false, abs: 100000 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, v0] -> v37
     - stack=[v37, v0], last_use=[v37]
       pre: [PUSH(I256 { is_negative: false, abs: 7 })]
-      eq [I256 { is_negative: false, abs: 7 }, v37] -> v74
-    - stack=[v74, v0], last_use=[v74]
-      zext [v74] -> v39
+      eq [I256 { is_negative: false, abs: 7 }, v37] -> v38
+    - stack=[v38, v0], last_use=[v38]
+      zext [v38] -> v39
     - stack=[v39, v0], last_use=[v39]
       pre: [PUSH_CONT, SWAP1]
       call [v39]
@@ -247,9 +247,9 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       call [I256 { is_negative: false, abs: 100000 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }, v0] -> v40
     - stack=[v40, v0], last_use=[v40]
       pre: [PUSH(I256 { is_negative: false, abs: 8 })]
-      eq [I256 { is_negative: false, abs: 8 }, v40] -> v75
-    - stack=[v75, v0], last_use=[v75]
-      zext [v75] -> v42
+      eq [I256 { is_negative: false, abs: 8 }, v40] -> v41
+    - stack=[v41, v0], last_use=[v41]
+      zext [v41] -> v42
     - stack=[v42, v0], last_use=[v42]
       pre: [PUSH_CONT, SWAP1]
       call [v42]
@@ -285,9 +285,9 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       call [I256 { is_negative: false, abs: 100000 }, I256 { is_negative: false, abs: 0 }, v44, v0] -> v51
     - stack=[v51, v0], last_use=[v51]
       pre: [PUSH(I256 { is_negative: false, abs: 1 })]
-      eq [I256 { is_negative: false, abs: 1 }, v51] -> v76
-    - stack=[v76, v0], last_use=[v76]
-      zext [v76] -> v53
+      eq [I256 { is_negative: false, abs: 1 }, v51] -> v52
+    - stack=[v52, v0], last_use=[v52]
+      zext [v52] -> v53
     - stack=[v53, v0], last_use=[v53]
       pre: [PUSH_CONT, SWAP1]
       call [v53]
@@ -296,9 +296,9 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       call [I256 { is_negative: false, abs: 100000 }, I256 { is_negative: false, abs: 0 }, v0] -> v54
     - stack=[v54], last_use=[v54]
       pre: [PUSH(I256 { is_negative: false, abs: 15 })]
-      eq [I256 { is_negative: false, abs: 15 }, v54] -> v77
-    - stack=[v77], last_use=[v77]
-      zext [v77] -> v56
+      eq [I256 { is_negative: false, abs: 15 }, v54] -> v55
+    - stack=[v55], last_use=[v55]
+      zext [v55] -> v56
     - stack=[v56], last_use=[v56]
       pre: [PUSH_CONT, SWAP1]
       call [v56]
@@ -330,12 +330,12 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       mload [v8] -> v9
     - stack=[v9, v5, v1, <RET>], last_use=[v5]
       pre: [SWAP1]
-      is_zero [v5] -> v35
-    - stack=[v35, v9, v1, <RET>], last_use=[v35]
-      zext [v35] -> v36
-    - stack=[v36, v9, v1, <RET>], last_use=[v36]
+      is_zero [v5] -> v10
+    - stack=[v10, v9, v1, <RET>], last_use=[v10]
+      zext [v10] -> v11
+    - stack=[v11, v9, v1, <RET>], last_use=[v11]
       pre: [PUSH(I256 { is_negative: false, abs: 1 })]
-      eq [I256 { is_negative: false, abs: 1 }, v36] -> v12
+      eq [I256 { is_negative: false, abs: 1 }, v11] -> v12
     - stack=[v12, v9, v1, <RET>]
       br [v12] -> [block1, block2]
   block1 P=[] T=[v9, v1]
@@ -420,12 +420,12 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       mload [v8] -> v9
     - stack=[v9, v5, v1, <RET>], last_use=[v5]
       pre: [SWAP1]
-      is_zero [v5] -> v38
-    - stack=[v38, v9, v1, <RET>], last_use=[v38]
-      zext [v38] -> v39
-    - stack=[v39, v9, v1, <RET>], last_use=[v39]
+      is_zero [v5] -> v10
+    - stack=[v10, v9, v1, <RET>], last_use=[v10]
+      zext [v10] -> v11
+    - stack=[v11, v9, v1, <RET>], last_use=[v11]
       pre: [PUSH(I256 { is_negative: false, abs: 1 })]
-      eq [I256 { is_negative: false, abs: 1 }, v39] -> v12
+      eq [I256 { is_negative: false, abs: 1 }, v11] -> v12
     - stack=[v12, v9, v1, <RET>]
       br [v12] -> [block1, block2]
   block1 P=[] T=[v9, v1]
@@ -435,11 +435,11 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       evm_sload [v1] -> v13
     - stack=[v13, v9, v1, <RET>], last_use=[v13]
       pre: [DUP2, SWAP1]
-      lt [v13, v9] -> v41
-    - stack=[v41, v9, v1, <RET>], last_use=[v41]
-      zext [v41] -> v42
-    - stack=[v42, v9, v1, <RET>], last_use=[v42]
-      is_zero [v42] -> v43
+      lt [v13, v9] -> v14
+    - stack=[v14, v9, v1, <RET>], last_use=[v14]
+      zext [v14] -> v15
+    - stack=[v15, v9, v1, <RET>], last_use=[v15]
+      is_zero [v15] -> v43
     - stack=[v43, v9, v1, <RET>], last_use=[v43]
       is_zero [v43] -> v16
     - stack=[v16, v9, v1, <RET>]
@@ -486,11 +486,11 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       evm_sload [v17] -> v18
     - stack=[v18, v17, v9, v1, <RET>], last_use=[v18]
       pre: [DUP3, SWAP1]
-      lt [v18, v9] -> v45
-    - stack=[v45, v17, v9, v1, <RET>], last_use=[v45]
-      zext [v45] -> v46
-    - stack=[v46, v17, v9, v1, <RET>], last_use=[v46]
-      is_zero [v46] -> v47
+      lt [v18, v9] -> v19
+    - stack=[v19, v17, v9, v1, <RET>], last_use=[v19]
+      zext [v19] -> v20
+    - stack=[v20, v17, v9, v1, <RET>], last_use=[v20]
+      is_zero [v20] -> v47
     - stack=[v47, v17, v9, v1, <RET>], last_use=[v47]
       is_zero [v47] -> v21
     - stack=[v21, v17, v9, v1, <RET>]
@@ -527,12 +527,12 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
 // func private %__Coin_recv_0_2(v0.i256, v1.i256) -> i256
   block0 P=[v0, v1] T=[]
     - stack=[v0, v1, <RET>], last_use=[v0]
-      is_zero [v0] -> v12
-    - stack=[v12, v1, <RET>], last_use=[v12]
-      zext [v12] -> v13
-    - stack=[v13, v1, <RET>], last_use=[v13]
+      is_zero [v0] -> v2
+    - stack=[v2, v1, <RET>], last_use=[v2]
+      zext [v2] -> v3
+    - stack=[v3, v1, <RET>], last_use=[v3]
       pre: [PUSH(I256 { is_negative: false, abs: 1 })]
-      eq [I256 { is_negative: false, abs: 1 }, v13] -> v4
+      eq [I256 { is_negative: false, abs: 1 }, v3] -> v4
     - stack=[v4, v1, <RET>]
       br [v4] -> [block1, block2]
   block1 P=[] T=[v1]
@@ -563,15 +563,12 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       pre: [DUP2, DUP4]
       add [v1, v2] -> v5
     - stack=[v5, v3, v2, v1]
-      pre: [DUP3, DUP5]
-      add [v1, v2] -> v39
-    - stack=[v39, v5, v3, v2, v1], last_use=[v39]
-      pre: [DUP3]
-      lt [v3, v39] -> v40
-    - stack=[v40, v5, v3, v2, v1], last_use=[v40]
-      zext [v40] -> v41
-    - stack=[v41, v5, v3, v2, v1], last_use=[v41]
-      is_zero [v41] -> v42
+      pre: [DUP1, DUP3]
+      lt [v3, v5] -> v6
+    - stack=[v6, v5, v3, v2, v1], last_use=[v6]
+      zext [v6] -> v7
+    - stack=[v7, v5, v3, v2, v1], last_use=[v7]
+      is_zero [v7] -> v42
     - stack=[v42, v5, v3, v2, v1], last_use=[v42]
       is_zero [v42] -> v8
     - stack=[v8, v5, v3, v2, v1]
@@ -584,12 +581,9 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       evm_revert [I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }]
   block2 P=[] T=[v5, v3, v2, v1]
     inherited from block0: [v5, v3, v2, v1]
-    - stack=[v5, v3, v2, v1]
-      pre: [DUP3, DUP5]
-      add [v1, v2] -> v43
-    - stack=[v43, v5, v3, v2, v1], last_use=[v3, v43]
-      pre: [SWAP1, SWAP2]
-      sub [v3, v43] -> v13
+    - stack=[v5, v3, v2, v1], last_use=[v3]
+      pre: [DUP1, SWAP2]
+      sub [v3, v5] -> v13
     - stack=[v13, v5, v2, v1]
       pre: [DUP1]
       evm_malloc [v13] -> v14
@@ -969,11 +963,11 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       evm_create2 [v0, v6, v31, v1] -> v33
     - stack=[v33, <RET>]
       pre: [DUP1]
-      is_zero [v33] -> v35
-    - stack=[v35, v33, <RET>], last_use=[v35]
-      zext [v35] -> v36
-    - stack=[v36, v33, <RET>], last_use=[v36]
-      is_zero [v36] -> v37
+      is_zero [v33] -> v21
+    - stack=[v21, v33, <RET>], last_use=[v21]
+      zext [v21] -> v22
+    - stack=[v22, v33, <RET>], last_use=[v22]
+      is_zero [v22] -> v37
     - stack=[v37, v33, <RET>], last_use=[v37]
       is_zero [v37] -> v23
     - stack=[v23, v33, <RET>]
@@ -1001,11 +995,11 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
 // func public %assert(v0.i256)
   block0 P=[v0] T=[]
     - stack=[v0, <RET>], last_use=[v0]
-      is_zero [v0] -> v6
-    - stack=[v6, <RET>], last_use=[v6]
-      zext [v6] -> v7
-    - stack=[v7, <RET>], last_use=[v7]
-      is_zero [v7] -> v8
+      is_zero [v0] -> v1
+    - stack=[v1, <RET>], last_use=[v1]
+      zext [v1] -> v2
+    - stack=[v2, <RET>], last_use=[v2]
+      is_zero [v2] -> v8
     - stack=[v8, <RET>], last_use=[v8]
       is_zero [v8] -> v3
     - stack=[v3, <RET>]
@@ -1121,11 +1115,11 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       evm_return_data_copy [v16, I256 { is_negative: false, abs: 0 }, v14]
     - stack=[v16, v14, v13, v55, v0x, v1x, v2x, v3x, <RET>], last_use=[v13]
       pre: [SWAP1, SWAP2]
-      is_zero [v13] -> v51
-    - stack=[v51, v16, v14, v55, v0x, v1x, v2x, v3x, <RET>], last_use=[v51]
-      zext [v51] -> v52
-    - stack=[v52, v16, v14, v55, v0x, v1x, v2x, v3x, <RET>], last_use=[v52]
-      is_zero [v52] -> v53
+      is_zero [v13] -> v17
+    - stack=[v17, v16, v14, v55, v0x, v1x, v2x, v3x, <RET>], last_use=[v17]
+      zext [v17] -> v18
+    - stack=[v18, v16, v14, v55, v0x, v1x, v2x, v3x, <RET>], last_use=[v18]
+      is_zero [v18] -> v53
     - stack=[v53, v16, v14, v55, v0x, v1x, v2x, v3x, <RET>], last_use=[v53]
       is_zero [v53] -> v19
     - stack=[v19, v16, v14, v55, v0x, v1x, v2x, v3x, <RET>]
@@ -1247,11 +1241,11 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       evm_return_data_copy [v16, I256 { is_negative: false, abs: 0 }, v14]
     - stack=[v16, v14, v13, v55, v0x, v1x, v2x, v3x, <RET>], last_use=[v13]
       pre: [SWAP1, SWAP2]
-      is_zero [v13] -> v51
-    - stack=[v51, v16, v14, v55, v0x, v1x, v2x, v3x, <RET>], last_use=[v51]
-      zext [v51] -> v52
-    - stack=[v52, v16, v14, v55, v0x, v1x, v2x, v3x, <RET>], last_use=[v52]
-      is_zero [v52] -> v53
+      is_zero [v13] -> v17
+    - stack=[v17, v16, v14, v55, v0x, v1x, v2x, v3x, <RET>], last_use=[v17]
+      zext [v17] -> v18
+    - stack=[v18, v16, v14, v55, v0x, v1x, v2x, v3x, <RET>], last_use=[v18]
+      is_zero [v18] -> v53
     - stack=[v53, v16, v14, v55, v0x, v1x, v2x, v3x, <RET>], last_use=[v53]
       is_zero [v53] -> v19
     - stack=[v19, v16, v14, v55, v0x, v1x, v2x, v3x, <RET>]
@@ -1350,11 +1344,11 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       evm_return_data_copy [v16, I256 { is_negative: false, abs: 0 }, v14]
     - stack=[v16, v14, v13, v47, v0x, v1x, v2x, <RET>], last_use=[v13]
       pre: [SWAP1, SWAP2]
-      is_zero [v13] -> v43
-    - stack=[v43, v16, v14, v47, v0x, v1x, v2x, <RET>], last_use=[v43]
-      zext [v43] -> v44
-    - stack=[v44, v16, v14, v47, v0x, v1x, v2x, <RET>], last_use=[v44]
-      is_zero [v44] -> v45
+      is_zero [v13] -> v17
+    - stack=[v17, v16, v14, v47, v0x, v1x, v2x, <RET>], last_use=[v17]
+      zext [v17] -> v18
+    - stack=[v18, v16, v14, v47, v0x, v1x, v2x, <RET>], last_use=[v18]
+      is_zero [v18] -> v45
     - stack=[v45, v16, v14, v47, v0x, v1x, v2x, <RET>], last_use=[v45]
       is_zero [v45] -> v19
     - stack=[v19, v16, v14, v47, v0x, v1x, v2x, <RET>]
@@ -1450,11 +1444,11 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       evm_return_data_copy [v15, I256 { is_negative: false, abs: 0 }, v13]
     - stack=[v15, v13, v12, v44, v0x, v1x, v2x, <RET>], last_use=[v12]
       pre: [SWAP1, SWAP2]
-      is_zero [v12] -> v40
-    - stack=[v40, v15, v13, v44, v0x, v1x, v2x, <RET>], last_use=[v40]
-      zext [v40] -> v41
-    - stack=[v41, v15, v13, v44, v0x, v1x, v2x, <RET>], last_use=[v41]
-      is_zero [v41] -> v42
+      is_zero [v12] -> v16
+    - stack=[v16, v15, v13, v44, v0x, v1x, v2x, <RET>], last_use=[v16]
+      zext [v16] -> v17
+    - stack=[v17, v15, v13, v44, v0x, v1x, v2x, <RET>], last_use=[v17]
+      is_zero [v17] -> v42
     - stack=[v42, v15, v13, v44, v0x, v1x, v2x, <RET>], last_use=[v42]
       is_zero [v42] -> v18
     - stack=[v18, v15, v13, v44, v0x, v1x, v2x, <RET>]
@@ -1485,11 +1479,11 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       mload [I256 { is_negative: false, abs: 128 }] -> v2
     - stack=[v2, v1, v0, <RET>]
       pre: [DUP2, DUP2]
-      gt [v2, v1] -> v22
-    - stack=[v22, v2, v1, v0, <RET>], last_use=[v22]
-      zext [v22] -> v23
-    - stack=[v23, v2, v1, v0, <RET>], last_use=[v23]
-      is_zero [v23] -> v24
+      gt [v2, v1] -> v3
+    - stack=[v3, v2, v1, v0, <RET>], last_use=[v3]
+      zext [v3] -> v4
+    - stack=[v4, v2, v1, v0, <RET>], last_use=[v4]
+      is_zero [v4] -> v24
     - stack=[v24, v2, v1, v0, <RET>], last_use=[v24]
       is_zero [v24] -> v5
     - stack=[v5, v2, v1, v0, <RET>]
@@ -1507,11 +1501,11 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
   block2 P=[v6] T=[v0]
     - stack=[v6, v0, <RET>]
       pre: [DUP1]
-      is_zero [v6] -> v26
-    - stack=[v26, v6, v0, <RET>], last_use=[v26]
-      zext [v26] -> v27
-    - stack=[v27, v6, v0, <RET>], last_use=[v27]
-      is_zero [v27] -> v28
+      is_zero [v6] -> v7
+    - stack=[v7, v6, v0, <RET>], last_use=[v7]
+      zext [v7] -> v8
+    - stack=[v8, v6, v0, <RET>], last_use=[v8]
+      is_zero [v8] -> v28
     - stack=[v28, v6, v0, <RET>], last_use=[v28]
       is_zero [v28] -> v9
     - stack=[v9, v6, v0, <RET>]
@@ -1530,11 +1524,11 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
   block4 P=[v11] T=[v0]
     - stack=[v11, v0, <RET>]
       pre: [PUSH(I256 { is_negative: false, abs: 8192 }), DUP2]
-      lt [v11, I256 { is_negative: false, abs: 8192 }] -> v30
-    - stack=[v30, v11, v0, <RET>], last_use=[v30]
-      zext [v30] -> v31
-    - stack=[v31, v11, v0, <RET>], last_use=[v31]
-      is_zero [v31] -> v32
+      lt [v11, I256 { is_negative: false, abs: 8192 }] -> v12
+    - stack=[v12, v11, v0, <RET>], last_use=[v12]
+      zext [v12] -> v13
+    - stack=[v13, v11, v0, <RET>], last_use=[v13]
+      is_zero [v13] -> v32
     - stack=[v32, v11, v0, <RET>], last_use=[v32]
       is_zero [v32] -> v14
     - stack=[v14, v11, v0, <RET>]
@@ -1565,11 +1559,11 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       evm_calldata_size [] -> v9
     - stack=[v9, <RET>], last_use=[v9]
       pre: [PUSH(I256 { is_negative: false, abs: 4 }), SWAP1]
-      lt [v9, I256 { is_negative: false, abs: 4 }] -> v17
-    - stack=[v17, <RET>], last_use=[v17]
-      zext [v17] -> v18
-    - stack=[v18, <RET>], last_use=[v18]
-      is_zero [v18] -> v19
+      lt [v9, I256 { is_negative: false, abs: 4 }] -> v2
+    - stack=[v2, <RET>], last_use=[v2]
+      zext [v2] -> v3
+    - stack=[v3, <RET>], last_use=[v3]
+      is_zero [v3] -> v19
     - stack=[v19, <RET>], last_use=[v19]
       is_zero [v19] -> v4
     - stack=[v4, <RET>]
@@ -1658,11 +1652,11 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       mload [64] -> v24
     - stack=[v24, v0, v1, <RET>]
       pre: [PUSH(I256 { is_negative: false, abs: 32 }), DUP4]
-      lt [v1, I256 { is_negative: false, abs: 32 }] -> v20
-    - stack=[v20, v24, v0, v1, <RET>], last_use=[v20]
-      zext [v20] -> v21
-    - stack=[v21, v24, v0, v1, <RET>], last_use=[v21]
-      is_zero [v21] -> v22
+      lt [v1, I256 { is_negative: false, abs: 32 }] -> v2
+    - stack=[v2, v24, v0, v1, <RET>], last_use=[v2]
+      zext [v2] -> v3
+    - stack=[v3, v24, v0, v1, <RET>], last_use=[v3]
+      is_zero [v3] -> v22
     - stack=[v22, v24, v0, v1, <RET>], last_use=[v22]
       is_zero [v22] -> v4
     - stack=[v4, v24, v0, v1, <RET>]
@@ -2185,65 +2179,61 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       mload [v6] -> v7
     - stack=[v7, v0, <RET>]
       evm_calldata_size [] -> v54
-    - stack=[v54, v7, v0, <RET>]
-      pre: [DUP3]
+    - stack=[v54, v7, v0, <RET>], last_use=[v7, v54]
+      sub [v54, v7] -> v55
+    - stack=[v55, v0, <RET>]
+      pre: [DUP2]
       int_to_ptr [v0] -> v9
-    - stack=[v9, v54, v7, v0, <RET>], last_use=[v9]
+    - stack=[v9, v55, v0, <RET>], last_use=[v9]
       pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
       gep [v9, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v10
-    - stack=[v10, v54, v7, v0, <RET>], last_use=[v10]
+    - stack=[v10, v55, v0, <RET>], last_use=[v10]
       ptr_to_int [v10] -> v11
-    - stack=[v11, v54, v7, v0, <RET>], last_use=[v11]
+    - stack=[v11, v55, v0, <RET>], last_use=[v11]
       int_to_ptr [v11] -> v12
-    - stack=[v12, v54, v7, v0, <RET>], last_use=[v12]
+    - stack=[v12, v55, v0, <RET>], last_use=[v12]
       pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
       gep [v12, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v13
-    - stack=[v13, v54, v7, v0, <RET>], last_use=[v13]
+    - stack=[v13, v55, v0, <RET>], last_use=[v13]
       ptr_to_int [v13] -> v14
-    - stack=[v14, v54, v7, v0, <RET>], last_use=[v14]
+    - stack=[v14, v55, v0, <RET>], last_use=[v14]
       mload [v14] -> v15
-    - stack=[v15, v54, v7, v0, <RET>]
-      pre: [DUP1, PUSH(I256 { is_negative: false, abs: 32 })]
+    - stack=[v15, v55, v0, <RET>], last_use=[v15]
+      pre: [PUSH(I256 { is_negative: false, abs: 32 })]
       add [I256 { is_negative: false, abs: 32 }, v15] -> v16
-    - stack=[v16, v15, v54, v7, v0, <RET>]
-      pre: [DUP5]
+    - stack=[v16, v55, v0, <RET>]
+      pre: [DUP3]
       int_to_ptr [v0] -> v17
-    - stack=[v17, v16, v15, v54, v7, v0, <RET>], last_use=[v17]
+    - stack=[v17, v16, v55, v0, <RET>], last_use=[v17]
       pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
       gep [v17, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v18
-    - stack=[v18, v16, v15, v54, v7, v0, <RET>], last_use=[v18]
+    - stack=[v18, v16, v55, v0, <RET>], last_use=[v18]
       ptr_to_int [v18] -> v19
-    - stack=[v19, v16, v15, v54, v7, v0, <RET>], last_use=[v19]
+    - stack=[v19, v16, v55, v0, <RET>], last_use=[v19]
       int_to_ptr [v19] -> v20
-    - stack=[v20, v16, v15, v54, v7, v0, <RET>], last_use=[v20]
+    - stack=[v20, v16, v55, v0, <RET>], last_use=[v20]
       pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
       gep [v20, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v21
-    - stack=[v21, v16, v15, v54, v7, v0, <RET>], last_use=[v21]
+    - stack=[v21, v16, v55, v0, <RET>], last_use=[v21]
       ptr_to_int [v21] -> v22
-    - stack=[v22, v16, v15, v54, v7, v0, <RET>], last_use=[v22]
+    - stack=[v22, v16, v55, v0, <RET>], last_use=[v22]
       mload [v22] -> v23
-    - stack=[v23, v16, v15, v54, v7, v0, <RET>], last_use=[v15]
-      pre: [SWAP2, PUSH(I256 { is_negative: false, abs: 32 })]
-      add [I256 { is_negative: false, abs: 32 }, v15] -> v72
-    - stack=[v72, v16, v23, v54, v7, v0, <RET>], last_use=[v7, v54]
-      pre: [SWAP4, SWAP1, SWAP3]
-      sub [v54, v7] -> v73
-    - stack=[v73, v23, v16, v72, v0, <RET>], last_use=[v73]
-      pre: [DUP4]
-      gt [v72, v73] -> v74
-    - stack=[v74, v23, v16, v72, v0, <RET>], last_use=[v74]
-      zext [v74] -> v75
-    - stack=[v75, v23, v16, v72, v0, <RET>], last_use=[v23, v72]
-      pre: [SWAP3]
-      lt [v72, v23] -> v76
-    - stack=[v76, v16, v75, v0, <RET>], last_use=[v76]
-      zext [v76] -> v77
-    - stack=[v77, v16, v75, v0, <RET>], last_use=[v75, v77]
+    - stack=[v23, v16, v55, v0, <RET>], last_use=[v23]
+      pre: [DUP2]
+      lt [v16, v23] -> v24
+    - stack=[v24, v16, v55, v0, <RET>], last_use=[v24]
+      zext [v24] -> v25
+    - stack=[v25, v16, v55, v0, <RET>], last_use=[v55]
+      pre: [SWAP2, DUP2]
+      gt [v16, v55] -> v26
+    - stack=[v26, v16, v25, v0, <RET>], last_use=[v26]
+      zext [v26] -> v27
+    - stack=[v27, v16, v25, v0, <RET>], last_use=[v25, v27]
       pre: [SWAP1, SWAP2]
-      or [v75, v77] -> v78
-    - stack=[v78, v16, v0, <RET>], last_use=[v78]
+      or [v25, v27] -> v28
+    - stack=[v28, v16, v0, <RET>], last_use=[v28]
       pre: [PUSH(I256 { is_negative: false, abs: 0 })]
-      ne [I256 { is_negative: false, abs: 0 }, v78] -> v29
+      ne [I256 { is_negative: false, abs: 0 }, v28] -> v29
     - stack=[v29, v16, v0, <RET>]
       br [v29] -> [block1, block2]
   block1 P=[] T=[]
@@ -2326,11 +2316,11 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
     - stack=[v4, v0, v1, <RET>], last_use=[v4]
       mload [v4] -> v5
     - stack=[v5, v0, v1, <RET>], last_use=[v5]
-      is_zero [v5] -> v25
-    - stack=[v25, v0, v1, <RET>], last_use=[v25]
-      zext [v25] -> v26
-    - stack=[v26, v0, v1, <RET>], last_use=[v26]
-      is_zero [v26] -> v27
+      is_zero [v5] -> v6
+    - stack=[v6, v0, v1, <RET>], last_use=[v6]
+      zext [v6] -> v7
+    - stack=[v7, v0, v1, <RET>], last_use=[v7]
+      is_zero [v7] -> v27
     - stack=[v27, v0, v1, <RET>], last_use=[v27]
       is_zero [v27] -> v8
     - stack=[v8, v0, v1, <RET>]
@@ -2431,44 +2421,42 @@ evm mem plan: cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5
       ptr_to_int [v12] -> v13
     - stack=[v13, v55, v0, <RET>], last_use=[v13]
       mload [v13] -> v14
-    - stack=[v14, v55, v0, <RET>]
-      pre: [DUP1, PUSH(I256 { is_negative: false, abs: 32 })]
+    - stack=[v14, v55, v0, <RET>], last_use=[v14]
+      pre: [PUSH(I256 { is_negative: false, abs: 32 })]
       add [I256 { is_negative: false, abs: 32 }, v14] -> v15
-    - stack=[v15, v14, v55, v0, <RET>]
-      pre: [DUP4]
+    - stack=[v15, v55, v0, <RET>]
+      pre: [DUP3]
       int_to_ptr [v0] -> v16
-    - stack=[v16, v15, v14, v55, v0, <RET>], last_use=[v16]
+    - stack=[v16, v15, v55, v0, <RET>], last_use=[v16]
       pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
       gep [v16, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v17
-    - stack=[v17, v15, v14, v55, v0, <RET>], last_use=[v17]
+    - stack=[v17, v15, v55, v0, <RET>], last_use=[v17]
       ptr_to_int [v17] -> v18
-    - stack=[v18, v15, v14, v55, v0, <RET>], last_use=[v18]
+    - stack=[v18, v15, v55, v0, <RET>], last_use=[v18]
       int_to_ptr [v18] -> v19
-    - stack=[v19, v15, v14, v55, v0, <RET>], last_use=[v19]
+    - stack=[v19, v15, v55, v0, <RET>], last_use=[v19]
       pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
       gep [v19, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v20
-    - stack=[v20, v15, v14, v55, v0, <RET>], last_use=[v20]
+    - stack=[v20, v15, v55, v0, <RET>], last_use=[v20]
       ptr_to_int [v20] -> v21
-    - stack=[v21, v15, v14, v55, v0, <RET>], last_use=[v21]
+    - stack=[v21, v15, v55, v0, <RET>], last_use=[v21]
       mload [v21] -> v22
-    - stack=[v22, v15, v14, v55, v0, <RET>], last_use=[v14]
-      pre: [SWAP2, PUSH(I256 { is_negative: false, abs: 32 })]
-      add [I256 { is_negative: false, abs: 32 }, v14] -> v73
-    - stack=[v73, v15, v22, v55, v0, <RET>], last_use=[v55]
-      pre: [SWAP3, DUP4]
-      gt [v73, v55] -> v74
-    - stack=[v74, v15, v22, v73, v0, <RET>], last_use=[v74]
-      zext [v74] -> v75
-    - stack=[v75, v15, v22, v73, v0, <RET>], last_use=[v22, v73]
-      pre: [SWAP2, SWAP1, SWAP3]
-      lt [v73, v22] -> v76
-    - stack=[v76, v75, v15, v0, <RET>], last_use=[v76]
-      zext [v76] -> v77
-    - stack=[v77, v75, v15, v0, <RET>], last_use=[v75, v77]
-      or [v77, v75] -> v78
-    - stack=[v78, v15, v0, <RET>], last_use=[v78]
+    - stack=[v22, v15, v55, v0, <RET>], last_use=[v22]
+      pre: [DUP2]
+      lt [v15, v22] -> v23
+    - stack=[v23, v15, v55, v0, <RET>], last_use=[v23]
+      zext [v23] -> v24
+    - stack=[v24, v15, v55, v0, <RET>], last_use=[v55]
+      pre: [SWAP2, DUP2]
+      gt [v15, v55] -> v25
+    - stack=[v25, v15, v24, v0, <RET>], last_use=[v25]
+      zext [v25] -> v26
+    - stack=[v26, v15, v24, v0, <RET>], last_use=[v24, v26]
+      pre: [SWAP1, SWAP2]
+      or [v24, v26] -> v27
+    - stack=[v27, v15, v0, <RET>], last_use=[v27]
       pre: [PUSH(I256 { is_negative: false, abs: 0 })]
-      ne [I256 { is_negative: false, abs: 0 }, v78] -> v28
+      ne [I256 { is_negative: false, abs: 0 }, v27] -> v28
     - stack=[v28, v15, v0, <RET>]
       br [v28] -> [block1, block2]
   block1 P=[] T=[]
@@ -2629,10 +2617,10 @@ test_coin__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(10)
     JUMP
     JUMPDEST
-    DUP1  // v69.i1 = is_zero v2;
+    DUP1  // v3.i1 = is_zero v2;
     ISZERO
-    ISZERO  // v70.i1 = is_zero v69;
-    PUSH1 0x1 (1)  // v5.i256 = zext v70 i256;
+    ISZERO  // v4.i1 = is_zero v3;
+    PUSH1 0x1 (1)  // v5.i256 = zext v4 i256;
     AND
     PUSH1 `pc + (4)`  // call %assert v5;
     SWAP1
@@ -2698,9 +2686,9 @@ test_coin__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(12)
     JUMP
     JUMPDEST
-    PUSH1 0xa (10)  // v71.i1 = eq 10.i256 v18;
+    PUSH1 0xa (10)  // v19.i1 = eq 10.i256 v18;
     EQ
-    PUSH1 0x1 (1)  // v20.i256 = zext v71 i256;
+    PUSH1 0x1 (1)  // v20.i256 = zext v19 i256;
     AND
     PUSH1 `pc + (4)`  // call %assert v20;
     SWAP1
@@ -2766,9 +2754,9 @@ test_coin__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(12)
     JUMP
     JUMPDEST
-    PUSH1 0x5 (5)  // v72.i1 = eq 5.i256 v30;
+    PUSH1 0x5 (5)  // v31.i1 = eq 5.i256 v30;
     EQ
-    PUSH1 0x1 (1)  // v32.i256 = zext v72 i256;
+    PUSH1 0x1 (1)  // v32.i256 = zext v31 i256;
     AND
     PUSH1 `pc + (4)`  // call %assert v32;
     SWAP1
@@ -2834,8 +2822,8 @@ test_coin__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(13)
     JUMP
     JUMPDEST
-    ISZERO  // v73.i1 = is_zero v42;
-    PUSH1 0x1 (1)  // v44.i256 = zext v73 i256;
+    ISZERO  // v43.i1 = is_zero v42;
+    PUSH1 0x1 (1)  // v44.i256 = zext v43 i256;
     AND
     PUSH1 `pc + (4)`  // call %assert v44;
     SWAP1
@@ -2851,9 +2839,9 @@ test_coin__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(14)
     JUMP
     JUMPDEST
-    PUSH1 0x7 (7)  // v74.i1 = eq 7.i256 v45;
+    PUSH1 0x7 (7)  // v47.i1 = eq 7.i256 v45;
     EQ
-    PUSH1 0x1 (1)  // v48.i256 = zext v74 i256;
+    PUSH1 0x1 (1)  // v48.i256 = zext v47 i256;
     AND
     PUSH1 `pc + (4)`  // call %assert v48;
     SWAP1
@@ -2869,9 +2857,9 @@ test_coin__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(14)
     JUMP
     JUMPDEST
-    PUSH1 0x8 (8)  // v75.i1 = eq 8.i256 v49;
+    PUSH1 0x8 (8)  // v51.i1 = eq 8.i256 v49;
     EQ
-    PUSH1 0x1 (1)  // v52.i256 = zext v75 i256;
+    PUSH1 0x1 (1)  // v52.i256 = zext v51 i256;
     AND
     PUSH1 `pc + (4)`  // call %assert v52;
     SWAP1
@@ -2937,9 +2925,9 @@ test_coin__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(13)
     JUMP
     JUMPDEST
-    PUSH1 0x1 (1)  // v76.i1 = eq 1.i256 v62;
+    PUSH1 0x1 (1)  // v63.i1 = eq 1.i256 v62;
     EQ
-    PUSH1 0x1 (1)  // v64.i256 = zext v76 i256;
+    PUSH1 0x1 (1)  // v64.i256 = zext v63 i256;
     AND
     PUSH1 `pc + (4)`  // call %assert v64;
     SWAP1
@@ -2953,9 +2941,9 @@ test_coin__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(15)
     JUMP
     JUMPDEST
-    PUSH1 0xf (15)  // v77.i1 = eq 15.i256 v65;
+    PUSH1 0xf (15)  // v67.i1 = eq 15.i256 v65;
     EQ
-    PUSH1 0x1 (1)  // v68.i256 = zext v77 i256;
+    PUSH1 0x1 (1)  // v68.i256 = zext v67 i256;
     AND
     PUSH1 `pc + (4)`  // call %assert v68;
     SWAP1
@@ -2976,11 +2964,11 @@ __Coin_recv_0_0:
     PUSH1 0x20 (32)  // v9.*i256 = gep v7 0.i256 1.i256;
     ADD
     MLOAD  // v11.i256 = mload v10 i256;
-    SWAP1  // v35.i1 = is_zero v6;
+    SWAP1  // v12.i1 = is_zero v6;
     ISZERO
-    PUSH1 0x1 (1)  // v36.i256 = zext v35 i256;
+    PUSH1 0x1 (1)  // v13.i256 = zext v12 i256;
     AND
-    PUSH1 0x1 (1)  // v14.i1 = eq 1.i256 v36;
+    PUSH1 0x1 (1)  // v14.i1 = eq 1.i256 v13;
     EQ
     ISZERO  // br v14 block1 block2;
     PUSH1 block2
@@ -3040,11 +3028,11 @@ __Coin_recv_0_1:
     PUSH1 0x20 (32)  // v9.*i256 = gep v7 0.i256 1.i256;
     ADD
     MLOAD  // v11.i256 = mload v10 i256;
-    SWAP1  // v38.i1 = is_zero v6;
+    SWAP1  // v12.i1 = is_zero v6;
     ISZERO
-    PUSH1 0x1 (1)  // v39.i256 = zext v38 i256;
+    PUSH1 0x1 (1)  // v13.i256 = zext v12 i256;
     AND
-    PUSH1 0x1 (1)  // v14.i1 = eq 1.i256 v39;
+    PUSH1 0x1 (1)  // v14.i1 = eq 1.i256 v13;
     EQ
     ISZERO  // br v14 block1 block2;
     PUSH1 block2
@@ -3052,12 +3040,12 @@ __Coin_recv_0_1:
   block1:
     DUP2  // v17.i256 = evm_sload v1;
     SLOAD
-    DUP2  // v41.i1 = lt v17 v11;
+    DUP2  // v19.i1 = lt v17 v11;
     SWAP1
     LT
-    PUSH1 0x1 (1)  // v42.i256 = zext v41 i256;
+    PUSH1 0x1 (1)  // v20.i256 = zext v19 i256;
     AND
-    ISZERO  // v43.i1 = is_zero v42;
+    ISZERO  // v43.i1 = is_zero v20;
     PUSH1 block4  // br v21 block3 block4;
     JUMPI
   block2:
@@ -3067,12 +3055,12 @@ __Coin_recv_0_1:
     ADD
     DUP1  // v24.i256 = evm_sload v23;
     SLOAD
-    DUP3  // v45.i1 = lt v24 v11;
+    DUP3  // v26.i1 = lt v24 v11;
     SWAP1
     LT
-    PUSH1 0x1 (1)  // v46.i256 = zext v45 i256;
+    PUSH1 0x1 (1)  // v27.i256 = zext v26 i256;
     AND
-    ISZERO  // v47.i1 = is_zero v46;
+    ISZERO  // v47.i1 = is_zero v27;
     PUSH1 block6  // br v28 block5 block6;
     JUMPI
   block3:
@@ -3132,10 +3120,10 @@ __Coin_recv_0_1:
 __Coin_recv_0_2:
   block0:
     JUMPDEST
-    ISZERO  // v12.i1 = is_zero v0;
-    PUSH1 0x1 (1)  // v13.i256 = zext v12 i256;
+    ISZERO  // v3.i1 = is_zero v0;
+    PUSH1 0x1 (1)  // v4.i256 = zext v3 i256;
     AND
-    PUSH1 0x1 (1)  // v6.i1 = eq 1.i256 v13;
+    PUSH1 0x1 (1)  // v6.i1 = eq 1.i256 v4;
     EQ
     ISZERO  // br v6 block1 block2;
     PUSH1 block2
@@ -3162,14 +3150,12 @@ __Coin_init:
     DUP2  // v6.i256 = add v2 v3;
     DUP4
     ADD
-    DUP3  // v39.i256 = add v2 v3;
-    DUP5
-    ADD
-    DUP3  // v40.i1 = lt v4 v39;
+    DUP1  // v7.i1 = lt v4 v6;
+    DUP3
     LT
-    PUSH1 0x1 (1)  // v41.i256 = zext v40 i256;
+    PUSH1 0x1 (1)  // v8.i256 = zext v7 i256;
     AND
-    ISZERO  // v42.i1 = is_zero v41;
+    ISZERO  // v42.i1 = is_zero v8;
     PUSH1 block2  // br v9 block1 block2;
     JUMPI
   block1:
@@ -3182,10 +3168,7 @@ __Coin_init:
     REVERT
   block2:
     JUMPDEST
-    DUP3  // v43.i256 = add v2 v3;
-    DUP5
-    ADD
-    SWAP1  // v17.i256 = sub v4 v43;
+    DUP1  // v17.i256 = sub v4 v6;
     SWAP2
     SUB
     DUP1  // v18.*i8 = evm_malloc v17;
@@ -3753,11 +3736,11 @@ create2__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e:
     SWAP1  // v33.i256 = evm_create2 v0 v7 v31 v1;
     SWAP2
     CREATE2
-    DUP1  // v35.i1 = is_zero v33;
+    DUP1  // v25.i1 = is_zero v33;
     ISZERO
-    PUSH1 0x1 (1)  // v36.i256 = zext v35 i256;
+    PUSH1 0x1 (1)  // v26.i256 = zext v25 i256;
     AND
-    ISZERO  // v37.i1 = is_zero v36;
+    ISZERO  // v37.i1 = is_zero v26;
     PUSH1 block2  // br v27 block1 block2;
     JUMPI
   block1:
@@ -3808,10 +3791,10 @@ create2__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e:
 assert:
   block0:
     JUMPDEST
-    ISZERO  // v6.i1 = is_zero v0;
-    PUSH1 0x1 (1)  // v7.i256 = zext v6 i256;
+    ISZERO  // v2.i1 = is_zero v0;
+    PUSH1 0x1 (1)  // v3.i256 = zext v2 i256;
     AND
-    ISZERO  // v8.i1 = is_zero v7;
+    ISZERO  // v8.i1 = is_zero v3;
     PUSH1 block2  // br v4 block1 block2;
     JUMPI
   block1:
@@ -3936,12 +3919,12 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call__Credit_h1b40c7da4bcceeac__948
     PUSH0
     DUP3
     RETURNDATACOPY
-    SWAP1  // v51.i1 = is_zero v16;
+    SWAP1  // v20.i1 = is_zero v16;
     SWAP2
     ISZERO
-    PUSH1 0x1 (1)  // v52.i256 = zext v51 i256;
+    PUSH1 0x1 (1)  // v21.i256 = zext v20 i256;
     AND
-    ISZERO  // v53.i1 = is_zero v52;
+    ISZERO  // v53.i1 = is_zero v21;
     PUSH1 block2  // br v22 block1 block2;
     JUMPI
   block1:
@@ -4079,12 +4062,12 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call__Transfer_hbe7d801e15d910f6__6
     PUSH0
     DUP3
     RETURNDATACOPY
-    SWAP1  // v51.i1 = is_zero v16;
+    SWAP1  // v20.i1 = is_zero v16;
     SWAP2
     ISZERO
-    PUSH1 0x1 (1)  // v52.i256 = zext v51 i256;
+    PUSH1 0x1 (1)  // v21.i256 = zext v20 i256;
     AND
-    ISZERO  // v53.i1 = is_zero v52;
+    ISZERO  // v53.i1 = is_zero v21;
     PUSH1 block2  // br v22 block1 block2;
     JUMPI
   block1:
@@ -4214,12 +4197,12 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call__BalanceOf_h891837b06b5610d4__
     PUSH0
     DUP3
     RETURNDATACOPY
-    SWAP1  // v43.i1 = is_zero v16;
+    SWAP1  // v20.i1 = is_zero v16;
     SWAP2
     ISZERO
-    PUSH1 0x1 (1)  // v44.i256 = zext v43 i256;
+    PUSH1 0x1 (1)  // v21.i256 = zext v20 i256;
     AND
-    ISZERO  // v45.i1 = is_zero v44;
+    ISZERO  // v45.i1 = is_zero v21;
     PUSH1 block2  // br v22 block1 block2;
     JUMPI
   block1:
@@ -4337,12 +4320,12 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call__TotalSupply_h7bb395110a25abc2
     PUSH0
     DUP3
     RETURNDATACOPY
-    SWAP1  // v40.i1 = is_zero v15;
+    SWAP1  // v19.i1 = is_zero v15;
     SWAP2
     ISZERO
-    PUSH1 0x1 (1)  // v41.i256 = zext v40 i256;
+    PUSH1 0x1 (1)  // v20.i256 = zext v19 i256;
     AND
-    ISZERO  // v42.i1 = is_zero v41;
+    ISZERO  // v42.i1 = is_zero v20;
     PUSH1 block2  // br v21 block1 block2;
     JUMPI
   block1:
@@ -4373,12 +4356,12 @@ alloc:
     MLOAD
     PUSH1 0x80 (128)  // v5.i256 = mload 128.i256 i256;
     MLOAD
-    DUP2  // v22.i1 = gt v5 v3;
+    DUP2  // v6.i1 = gt v5 v3;
     DUP2
     GT
-    PUSH1 0x1 (1)  // v23.i256 = zext v22 i256;
+    PUSH1 0x1 (1)  // v7.i256 = zext v6 i256;
     AND
-    ISZERO  // v24.i1 = is_zero v23;
+    ISZERO  // v24.i1 = is_zero v7;
     PUSH1 block7  // br v8 block1 block7;
     JUMPI
   block1:
@@ -4388,11 +4371,11 @@ alloc:
     JUMP
   block2:
     JUMPDEST
-    DUP1  // v26.i1 = is_zero v10;
+    DUP1  // v11.i1 = is_zero v10;
     ISZERO
-    PUSH1 0x1 (1)  // v27.i256 = zext v26 i256;
+    PUSH1 0x1 (1)  // v12.i256 = zext v11 i256;
     AND
-    ISZERO  // v28.i1 = is_zero v27;
+    ISZERO  // v28.i1 = is_zero v12;
     PUSH1 block8  // br v13 block3 block8;
     JUMPI
   block3:
@@ -4402,12 +4385,12 @@ alloc:
     JUMP
   block4:
     JUMPDEST
-    PUSH2 0x2000 (8192)  // v30.i1 = lt v15 8192.i256;
+    PUSH2 0x2000 (8192)  // v17.i1 = lt v15 8192.i256;
     DUP2
     LT
-    PUSH1 0x1 (1)  // v31.i256 = zext v30 i256;
+    PUSH1 0x1 (1)  // v18.i256 = zext v17 i256;
     AND
-    ISZERO  // v32.i1 = is_zero v31;
+    ISZERO  // v32.i1 = is_zero v18;
     PUSH1 block9  // br v19 block5 block9;
     JUMPI
   block5:
@@ -4437,12 +4420,12 @@ runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2:
   block0:
     JUMPDEST
     CALLDATASIZE  // v9.i256 = evm_calldata_size;
-    PUSH1 0x4 (4)  // v17.i1 = lt v9 4.i256;
+    PUSH1 0x4 (4)  // v4.i1 = lt v9 4.i256;
     SWAP1
     LT
-    PUSH1 0x1 (1)  // v18.i256 = zext v17 i256;
+    PUSH1 0x1 (1)  // v5.i256 = zext v4 i256;
     AND
-    ISZERO  // v19.i1 = is_zero v18;
+    ISZERO  // v19.i1 = is_zero v5;
     PUSH1 block2  // br v6 block1 block2;
     JUMPI
   block1:
@@ -4507,12 +4490,12 @@ decode_returndata__u256__3271ca15373d4483:
     JUMPDEST
     PUSH1 0x40 (64)  // v24.i256 = mload 64.i32 i256;
     MLOAD
-    PUSH1 0x20 (32)  // v20.i1 = lt v1 32.i256;
+    PUSH1 0x20 (32)  // v4.i1 = lt v1 32.i256;
     DUP4
     LT
-    PUSH1 0x1 (1)  // v21.i256 = zext v20 i256;
+    PUSH1 0x1 (1)  // v5.i256 = zext v4 i256;
     AND
-    ISZERO  // v22.i1 = is_zero v21;
+    ISZERO  // v22.i1 = is_zero v5;
     PUSH1 block2  // br v6 block1 block2;
     JUMPI
   block1:
@@ -5101,36 +5084,30 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData
     DUP1  // v2.*@__fe_SolDecoder_9 = int_to_ptr v0 *@__fe_SolDecoder_9;
     MLOAD  // v8.i256 = mload v7 i256;
     CALLDATASIZE  // v54.i256 = evm_calldata_size;
-    DUP3  // v10.*@__fe_SolDecoder_9 = int_to_ptr v0 *@__fe_SolDecoder_9;
+    SUB  // v55.i256 = sub v54 v8;
+    DUP2  // v10.*@__fe_SolDecoder_9 = int_to_ptr v0 *@__fe_SolDecoder_9;
     PUSH1 0x20 (32)  // v15.*i256 = gep v13 0.i256 1.i256;
     ADD
     MLOAD  // v17.i256 = mload v16 i256;
-    DUP1  // v19.i256 = add 32.i256 v17;
-    PUSH1 0x20 (32)
+    PUSH1 0x20 (32)  // v19.i256 = add 32.i256 v17;
     ADD
-    DUP5  // v20.*@__fe_SolDecoder_9 = int_to_ptr v0 *@__fe_SolDecoder_9;
+    DUP3  // v20.*@__fe_SolDecoder_9 = int_to_ptr v0 *@__fe_SolDecoder_9;
     PUSH1 0x20 (32)  // v24.*i256 = gep v23 0.i256 1.i256;
     ADD
     MLOAD  // v26.i256 = mload v25 i256;
-    SWAP2  // v72.i256 = add 32.i256 v17;
-    PUSH1 0x20 (32)
-    ADD
-    SWAP4  // v73.i256 = sub v54 v8;
-    SWAP1
-    SWAP3
-    SUB
-    DUP4  // v74.i1 = gt v72 v73;
-    GT
-    PUSH1 0x1 (1)  // v75.i256 = zext v74 i256;
-    AND
-    SWAP3  // v76.i1 = lt v72 v26;
+    DUP2  // v27.i1 = lt v19 v26;
     LT
-    PUSH1 0x1 (1)  // v77.i256 = zext v76 i256;
+    PUSH1 0x1 (1)  // v28.i256 = zext v27 i256;
     AND
-    SWAP1  // v78.i256 = or v75 v77;
+    SWAP2  // v29.i1 = gt v19 v55;
+    DUP2
+    GT
+    PUSH1 0x1 (1)  // v30.i256 = zext v29 i256;
+    AND
+    SWAP1  // v31.i256 = or v30 v28;
     SWAP2
     OR
-    PUSH0  // v32.i1 = ne 0.i256 v78;
+    PUSH0  // v32.i1 = ne 0.i256 v31;
     EQ
     PUSH1 block2  // br v32 block1 block2;
     JUMPI
@@ -5167,10 +5144,10 @@ solencoder_h1b9228b90dad6928_ensure_init:
     JUMPDEST
     DUP1  // v3.*@__fe_SolEncoder_3 = int_to_ptr v0 *@__fe_SolEncoder_3;
     MLOAD  // v6.i256 = mload v5 i256;
-    ISZERO  // v25.i1 = is_zero v6;
-    PUSH1 0x1 (1)  // v26.i256 = zext v25 i256;
+    ISZERO  // v7.i1 = is_zero v6;
+    PUSH1 0x1 (1)  // v8.i256 = zext v7 i256;
     AND
-    ISZERO  // v27.i1 = is_zero v26;
+    ISZERO  // v27.i1 = is_zero v8;
     PUSH1 block3  // br v9 block1 block3;
     JUMPI
   block1:
@@ -5253,29 +5230,25 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBy
     PUSH1 0x40 (64)  // v14.*i256 = gep v12 0.i256 1.i256;
     ADD
     MLOAD  // v16.i256 = mload v15 i256;
-    DUP1  // v18.i256 = add 32.i256 v16;
-    PUSH1 0x20 (32)
+    PUSH1 0x20 (32)  // v18.i256 = add 32.i256 v16;
     ADD
-    DUP4  // v19.*@__fe_SolDecoder_6 = int_to_ptr v0 *@__fe_SolDecoder_6;
+    DUP3  // v19.*@__fe_SolDecoder_6 = int_to_ptr v0 *@__fe_SolDecoder_6;
     PUSH1 0x40 (64)  // v23.*i256 = gep v22 0.i256 1.i256;
     ADD
     MLOAD  // v25.i256 = mload v24 i256;
-    SWAP2  // v73.i256 = add 32.i256 v16;
-    PUSH1 0x20 (32)
-    ADD
-    SWAP3  // v74.i1 = gt v73 v55;
-    DUP4
-    GT
-    PUSH1 0x1 (1)  // v75.i256 = zext v74 i256;
-    AND
-    SWAP2  // v76.i1 = lt v73 v25;
-    SWAP1
-    SWAP3
+    DUP2  // v26.i1 = lt v18 v25;
     LT
-    PUSH1 0x1 (1)  // v77.i256 = zext v76 i256;
+    PUSH1 0x1 (1)  // v27.i256 = zext v26 i256;
     AND
-    OR  // v78.i256 = or v75 v77;
-    PUSH0  // v31.i1 = ne 0.i256 v78;
+    SWAP2  // v28.i1 = gt v18 v55;
+    DUP2
+    GT
+    PUSH1 0x1 (1)  // v29.i256 = zext v28 i256;
+    AND
+    SWAP1  // v30.i256 = or v29 v27;
+    SWAP2
+    OR
+    PUSH0  // v31.i1 = ne 0.i256 v30;
     EQ
     PUSH1 block2  // br v31 block1 block2;
     JUMPI
@@ -5429,10 +5402,10 @@ cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563:
 --------------- BYTECODE ---------------
 
 // section runtime
-0x5b5f5f600a916101ff565b8015156001166018906101f0565b6040601f01601f1916604051608051818111603257506035565b90505b60c0818111604257506045565b90505b809101604052805f905280602001600a905281905f620186a06066936105fe565b600a146001166074906101f0565b6040601f01601f1916604051608051818111608e57506091565b90505b60c0818111609e575060a1565b90505b8091016040528060019052806020016005905281905f620186a060c3936105fe565b60051460011660d1906101f0565b6040601f01601f191660405160805181811160eb575060ee565b90505b60c081811160fb575060fe565b90505b809101604052805f9052806020016003905281905f620186a0610120936107a1565b1560011661012d906101f0565b805f5f620186a061013d936102bf565b60071460011661014c906101f0565b8060015f620186a061015d936102bf565b60081460011661016c906101f0565b6040601f01601f1916604051608051818111610188575061018b565b90505b60c081811161019a575061019d565b90505b8091016040528060019052806020016014905281905f620186a06101c0936107a1565b6001146001166101cf906101f0565b5f620186a06101dd926106de565b600f146001166101ec906101f0565b5f5ff35b15600116156101fd575f5ffd5b565b61057461088181601f01601f19166040516080518181116102205750610223565b90505b60c08181116102325750610235565b90505b8091016040528091839139808201606050604051608051818111610259575061025c565b90505b60c081811161026b575061026e565b90505b8082905280602001829052604001529091f58015600116156102bc57503d80506040516080518181116102a157506102a4565b90505b60c08181116102b357506102b6565b90505b815f823efd5b90565b6040516040516102cd6105a0565b8060246102d991610542565b80517f6c65aae500000000000000000000000000000000000000000000000000000000815260040181602001529586610311916105ec565b8561031b906104f5565b805190602001515f5f9091909192888789f13d80601f01601f1916604051608051818111610349575061034c565b90505b60c081811161035b575061035e565b90505b809101604052815f823e9091156001161561037557fd5b9061037f9161038f565b9060405290604052935050505090565b60405160405160208410600116156103a957505050505f5ffd5b6040601f01601f19166040516080518181116103c557506103c8565b90505b60c08181116103d757506103da565b90505b80910160405280909390528260200190939052906103f790610450565b6104009061040a565b9160405260405290565b806020015181604001518060200183604001519160200192831160011691909210600116175f1461043b5750505f5ffd5b81604001518251015190916040019091905290565b6060601f01601f191660405160805181811161046c575061046f565b90505b60c081811161047e5750610481565b90505b8091016040528151815290602001518160200152806040015f90526080601f01601f19166040516080518181116104b857506104bb565b90505b60c08181116104ca57506104cd565b90505b809101604052815181528160200151816020015290604001518160400152806060015f905290565b805190604001516040601f01601f1916604051608051818111610518575061051b565b90505b60c081811161052a575061052d565b90505b80910160405280839052919003816020015290565b8051156001161561059b5781601f01601f1916604051608051818111610568575061056b565b90505b60c081811161057a575061057d565b90505b8091016040528181905281602001819052909101906040015261059e565b50505b565b6060601f01601f19166040516080518181116105bc57506105bf565b90505b60c08181116105ce57506105d1565b90505b809101604052805f9052806020015f9052806040015f905290565b81602001519081526020019060200152565b60405160405161060c6105a0565b80604461061891610542565b80517fab7ccc1c0000000000000000000000000000000000000000000000000000000081526004018160200152865187602001519082610657916105ec565b81610661916105ec565b61066a906104f5565b805190602001515f5f9091909192888789f13d80601f01601f1916604051608051818111610698575061069b565b90505b60c08181116106aa57506106ad565b90505b809101604052815f823e909115600116156106c457fd5b906106ce9161038f565b9060405290604052935050505090565b6040516040516106ec6105a0565b8060046106f891610542565b80517f3940e9ee000000000000000000000000000000000000000000000000000000008152600401816020015261072e906104f5565b805190602001515f5f9091909192888789f13d80601f01601f191660405160805181811161075c575061075f565b90505b60c081811161076e5750610771565b90505b809101604052815f823e9091156001161561078857fd5b906107929161038f565b90604052906040529250505090565b6040516040516107af6105a0565b8060446107bb91610542565b80517f0cf79e0a00000000000000000000000000000000000000000000000000000000815260040181602001528651876020015190826107fa916105ec565b81610804916105ec565b61080d906104f5565b805190602001515f5f9091909192888789f13d80601f01601f191660405160805181811161083b575061083e565b90505b60c081811161084d5750610850565b90505b809101604052815f823e9091156001161561086757fd5b906108719161038f565b9060405290604052935050505090565b61015361042138818301828401821060011615601e57505050505f5ffd5b82840190910380601f01601f1916604051608051818111603d57506040565b90505b60c0818111604d57506050565b90505b80910160405280928291396040601f01601f1916604051608051818111607557506078565b90505b60c0818111608557506088565b90505b80910160405280909290528160200152609f9060b2565b505f5f555f6001555f60025580915f395ff35b6060601f01601f191660405160805181811160cc575060cf565b90505b60c081811160dc575060df565b90505b8091016040528151815290602001518160200152806040015f90526080601f01601f19166040516080518181116101165750610119565b90505b60c0818111610128575061012b565b90505b809101604052815181528160200151816020015290604001518160400152806060015f905290565b60076103c1565b604050604051608051818111601b5750601e565b90505b60c0818111602b5750602e565b90505b805f9052806020015f9052516040601f01601f1916604051608051818111605457506057565b90505b60c0818111606457506067565b90505b80910160405280909190528060200160049052606050604051608051818111608e57506091565b90505b60c0818111609e575060a1565b90505b815181529060200151816020015280604001600490528163ab7ccc1c141561011d5790508060ce906103da565b9060d7906103da565b60405060405160805181811160eb575060ee565b90505b60c081811160fb575060fe565b90505b809092905281602001525f610112916101d2565b61011b90610292565bfe5b81630cf79e0a141561018957905080610135906103da565b9061013f906103da565b6040506040516080518181116101555750610158565b90505b60c0818111610167575061016a565b90505b809092905281602001525f61017e91610214565b61018790610292565bfe5b81636c65aae514156101b55790506101a0906103da565b5f6101aa9161027b565b6101b390610292565bfe5b50633940e9ee146101c4575f5ffd5b6002546101d090610292565bfe5b805190602001519015600116600114156101fb5781548101825581600201805490910190555490565b8160010180548201815591600201805490910190555490565b805190602001519015600116600114156102525781548190106001161561023c575050600190565b8154819003825590600101805490910190555f90565b8160010180548290106001161561026b57505050600190565b8054829003905581540190555f90565b156001166001141561028b575490565b6001015490565b61029a610375565b8060206102a691610317565b80602001519182529060200181602001526102c0906102ca565b8051906020015190f35b805190604001516040601f01601f19166040516080518181116102ed57506102f0565b90505b60c08181116102ff5750610302565b90505b80910160405280839052919003816020015290565b805115600116156103705781601f01601f191660405160805181811161033d5750610340565b90505b60c081811161034f5750610352565b90505b80910160405281819052816020018190529091019060400152610373565b50505b565b6060601f01601f19166040516080518181116103915750610394565b90505b60c08181116103a357506103a6565b90505b809101604052805f9052806020015f9052806040015f905290565b3660049010600116156103d2575f5ffd5b5f3560e01c90565b80513682602001518060200184602001519160200193909203831160011692106001169091175f1461040c5750505f5ffd5b8151826020015101359091602001909190529056
+0x5b5f5f600a916101ff565b8015156001166018906101f0565b6040601f01601f1916604051608051818111603257506035565b90505b60c0818111604257506045565b90505b809101604052805f905280602001600a905281905f620186a06066936105f9565b600a146001166074906101f0565b6040601f01601f1916604051608051818111608e57506091565b90505b60c0818111609e575060a1565b90505b8091016040528060019052806020016005905281905f620186a060c3936105f9565b60051460011660d1906101f0565b6040601f01601f191660405160805181811160eb575060ee565b90505b60c081811160fb575060fe565b90505b809101604052805f9052806020016003905281905f620186a06101209361079c565b1560011661012d906101f0565b805f5f620186a061013d936102bf565b60071460011661014c906101f0565b8060015f620186a061015d936102bf565b60081460011661016c906101f0565b6040601f01601f1916604051608051818111610188575061018b565b90505b60c081811161019a575061019d565b90505b8091016040528060019052806020016014905281905f620186a06101c09361079c565b6001146001166101cf906101f0565b5f620186a06101dd926106d9565b600f146001166101ec906101f0565b5f5ff35b15600116156101fd575f5ffd5b565b61056861087c81601f01601f19166040516080518181116102205750610223565b90505b60c08181116102325750610235565b90505b8091016040528091839139808201606050604051608051818111610259575061025c565b90505b60c081811161026b575061026e565b90505b8082905280602001829052604001529091f58015600116156102bc57503d80506040516080518181116102a157506102a4565b90505b60c08181116102b357506102b6565b90505b815f823efd5b90565b6040516040516102cd61059b565b8060246102d99161053d565b80517f6c65aae500000000000000000000000000000000000000000000000000000000815260040181602001529586610311916105e7565b8561031b906104f0565b805190602001515f5f9091909192888789f13d80601f01601f1916604051608051818111610349575061034c565b90505b60c081811161035b575061035e565b90505b809101604052815f823e9091156001161561037557fd5b9061037f9161038f565b9060405290604052935050505090565b60405160405160208410600116156103a957505050505f5ffd5b6040601f01601f19166040516080518181116103c557506103c8565b90505b60c08181116103d757506103da565b90505b80910160405280909390528260200190939052906103f79061044b565b6104009061040a565b9160405260405290565b80602001518160400151602001826040015181106001169181116001169091175f146104365750505f5ffd5b81604001518251015190916040019091905290565b6060601f01601f1916604051608051818111610467575061046a565b90505b60c0818111610479575061047c565b90505b8091016040528151815290602001518160200152806040015f90526080601f01601f19166040516080518181116104b357506104b6565b90505b60c08181116104c557506104c8565b90505b809101604052815181528160200151816020015290604001518160400152806060015f905290565b805190604001516040601f01601f19166040516080518181116105135750610516565b90505b60c08181116105255750610528565b90505b80910160405280839052919003816020015290565b805115600116156105965781601f01601f19166040516080518181116105635750610566565b90505b60c08181116105755750610578565b90505b80910160405281819052816020018190529091019060400152610599565b50505b565b6060601f01601f19166040516080518181116105b757506105ba565b90505b60c08181116105c957506105cc565b90505b809101604052805f9052806020015f9052806040015f905290565b81602001519081526020019060200152565b60405160405161060761059b565b8060446106139161053d565b80517fab7ccc1c0000000000000000000000000000000000000000000000000000000081526004018160200152865187602001519082610652916105e7565b8161065c916105e7565b610665906104f0565b805190602001515f5f9091909192888789f13d80601f01601f19166040516080518181116106935750610696565b90505b60c08181116106a557506106a8565b90505b809101604052815f823e909115600116156106bf57fd5b906106c99161038f565b9060405290604052935050505090565b6040516040516106e761059b565b8060046106f39161053d565b80517f3940e9ee0000000000000000000000000000000000000000000000000000000081526004018160200152610729906104f0565b805190602001515f5f9091909192888789f13d80601f01601f1916604051608051818111610757575061075a565b90505b60c0818111610769575061076c565b90505b809101604052815f823e9091156001161561078357fd5b9061078d9161038f565b90604052906040529250505090565b6040516040516107aa61059b565b8060446107b69161053d565b80517f0cf79e0a00000000000000000000000000000000000000000000000000000000815260040181602001528651876020015190826107f5916105e7565b816107ff916105e7565b610808906104f0565b805190602001515f5f9091909192888789f13d80601f01601f19166040516080518181116108365750610839565b90505b60c0818111610848575061084b565b90505b809101604052815f823e9091156001161561086257fd5b9061086c9161038f565b9060405290604052935050505090565b61014e61041a3881830180821060011615601c57505050505f5ffd5b80910380601f01601f191660405160805181811160385750603b565b90505b60c081811160485750604b565b90505b80910160405280928291396040601f01601f1916604051608051818111607057506073565b90505b60c0818111608057506083565b90505b80910160405280909290528160200152609a9060ad565b505f5f555f6001555f60025580915f395ff35b6060601f01601f191660405160805181811160c7575060ca565b90505b60c081811160d7575060da565b90505b8091016040528151815290602001518160200152806040015f90526080601f01601f19166040516080518181116101115750610114565b90505b60c08181116101235750610126565b90505b809101604052815181528160200151816020015290604001518160400152806060015f905290565b60076103c1565b604050604051608051818111601b5750601e565b90505b60c0818111602b5750602e565b90505b805f9052806020015f9052516040601f01601f1916604051608051818111605457506057565b90505b60c0818111606457506067565b90505b80910160405280909190528060200160049052606050604051608051818111608e57506091565b90505b60c0818111609e575060a1565b90505b815181529060200151816020015280604001600490528163ab7ccc1c141561011d5790508060ce906103da565b9060d7906103da565b60405060405160805181811160eb575060ee565b90505b60c081811160fb575060fe565b90505b809092905281602001525f610112916101d2565b61011b90610292565bfe5b81630cf79e0a141561018957905080610135906103da565b9061013f906103da565b6040506040516080518181116101555750610158565b90505b60c0818111610167575061016a565b90505b809092905281602001525f61017e91610214565b61018790610292565bfe5b81636c65aae514156101b55790506101a0906103da565b5f6101aa9161027b565b6101b390610292565bfe5b50633940e9ee146101c4575f5ffd5b6002546101d090610292565bfe5b805190602001519015600116600114156101fb5781548101825581600201805490910190555490565b8160010180548201815591600201805490910190555490565b805190602001519015600116600114156102525781548190106001161561023c575050600190565b8154819003825590600101805490910190555f90565b8160010180548290106001161561026b57505050600190565b8054829003905581540190555f90565b156001166001141561028b575490565b6001015490565b61029a610375565b8060206102a691610317565b80602001519182529060200181602001526102c0906102ca565b8051906020015190f35b805190604001516040601f01601f19166040516080518181116102ed57506102f0565b90505b60c08181116102ff5750610302565b90505b80910160405280839052919003816020015290565b805115600116156103705781601f01601f191660405160805181811161033d5750610340565b90505b60c081811161034f5750610352565b90505b80910160405281819052816020018190529091019060400152610373565b50505b565b6060601f01601f19166040516080518181116103915750610394565b90505b60c08181116103a357506103a6565b90505b809101604052805f9052806020015f9052806040015f905290565b3660049010600116156103d2575f5ffd5b5f3560e01c90565b805136038160200151602001826020015181106001169181116001169091175f146104055750505f5ffd5b8151826020015101359091602001909190529056
 
 // section coin_init
-0x5b61015361042138818301828401821060011615601e57505050505f5ffd5b82840190910380601f01601f1916604051608051818111603d57506040565b90505b60c0818111604d57506050565b90505b80910160405280928291396040601f01601f1916604051608051818111607557506078565b90505b60c0818111608557506088565b90505b80910160405280909290528160200152609f9060b2565b505f5f555f6001555f60025580915f395ff35b6060601f01601f191660405160805181811160cc575060cf565b90505b60c081811160dc575060df565b90505b8091016040528151815290602001518160200152806040015f90526080601f01601f19166040516080518181116101165750610119565b90505b60c0818111610128575061012b565b90505b809101604052815181528160200151816020015290604001518160400152806060015f905290565b60076103c1565b604050604051608051818111601b5750601e565b90505b60c0818111602b5750602e565b90505b805f9052806020015f9052516040601f01601f1916604051608051818111605457506057565b90505b60c0818111606457506067565b90505b80910160405280909190528060200160049052606050604051608051818111608e57506091565b90505b60c0818111609e575060a1565b90505b815181529060200151816020015280604001600490528163ab7ccc1c141561011d5790508060ce906103da565b9060d7906103da565b60405060405160805181811160eb575060ee565b90505b60c081811160fb575060fe565b90505b809092905281602001525f610112916101d2565b61011b90610292565bfe5b81630cf79e0a141561018957905080610135906103da565b9061013f906103da565b6040506040516080518181116101555750610158565b90505b60c0818111610167575061016a565b90505b809092905281602001525f61017e91610214565b61018790610292565bfe5b81636c65aae514156101b55790506101a0906103da565b5f6101aa9161027b565b6101b390610292565bfe5b50633940e9ee146101c4575f5ffd5b6002546101d090610292565bfe5b805190602001519015600116600114156101fb5781548101825581600201805490910190555490565b8160010180548201815591600201805490910190555490565b805190602001519015600116600114156102525781548190106001161561023c575050600190565b8154819003825590600101805490910190555f90565b8160010180548290106001161561026b57505050600190565b8054829003905581540190555f90565b156001166001141561028b575490565b6001015490565b61029a610375565b8060206102a691610317565b80602001519182529060200181602001526102c0906102ca565b8051906020015190f35b805190604001516040601f01601f19166040516080518181116102ed57506102f0565b90505b60c08181116102ff5750610302565b90505b80910160405280839052919003816020015290565b805115600116156103705781601f01601f191660405160805181811161033d5750610340565b90505b60c081811161034f5750610352565b90505b80910160405281819052816020018190529091019060400152610373565b50505b565b6060601f01601f19166040516080518181116103915750610394565b90505b60c08181116103a357506103a6565b90505b809101604052805f9052806020015f9052806040015f905290565b3660049010600116156103d2575f5ffd5b5f3560e01c90565b80513682602001518060200184602001519160200193909203831160011692106001169091175f1461040c5750505f5ffd5b8151826020015101359091602001909190529056
+0x5b61014e61041a3881830180821060011615601c57505050505f5ffd5b80910380601f01601f191660405160805181811160385750603b565b90505b60c081811160485750604b565b90505b80910160405280928291396040601f01601f1916604051608051818111607057506073565b90505b60c0818111608057506083565b90505b80910160405280909290528160200152609a9060ad565b505f5f555f6001555f60025580915f395ff35b6060601f01601f191660405160805181811160c7575060ca565b90505b60c081811160d7575060da565b90505b8091016040528151815290602001518160200152806040015f90526080601f01601f19166040516080518181116101115750610114565b90505b60c08181116101235750610126565b90505b809101604052815181528160200151816020015290604001518160400152806060015f905290565b60076103c1565b604050604051608051818111601b5750601e565b90505b60c0818111602b5750602e565b90505b805f9052806020015f9052516040601f01601f1916604051608051818111605457506057565b90505b60c0818111606457506067565b90505b80910160405280909190528060200160049052606050604051608051818111608e57506091565b90505b60c0818111609e575060a1565b90505b815181529060200151816020015280604001600490528163ab7ccc1c141561011d5790508060ce906103da565b9060d7906103da565b60405060405160805181811160eb575060ee565b90505b60c081811160fb575060fe565b90505b809092905281602001525f610112916101d2565b61011b90610292565bfe5b81630cf79e0a141561018957905080610135906103da565b9061013f906103da565b6040506040516080518181116101555750610158565b90505b60c0818111610167575061016a565b90505b809092905281602001525f61017e91610214565b61018790610292565bfe5b81636c65aae514156101b55790506101a0906103da565b5f6101aa9161027b565b6101b390610292565bfe5b50633940e9ee146101c4575f5ffd5b6002546101d090610292565bfe5b805190602001519015600116600114156101fb5781548101825581600201805490910190555490565b8160010180548201815591600201805490910190555490565b805190602001519015600116600114156102525781548190106001161561023c575050600190565b8154819003825590600101805490910190555f90565b8160010180548290106001161561026b57505050600190565b8054829003905581540190555f90565b156001166001141561028b575490565b6001015490565b61029a610375565b8060206102a691610317565b80602001519182529060200181602001526102c0906102ca565b8051906020015190f35b805190604001516040601f01601f19166040516080518181116102ed57506102f0565b90505b60c08181116102ff5750610302565b90505b80910160405280839052919003816020015290565b805115600116156103705781601f01601f191660405160805181811161033d5750610340565b90505b60c081811161034f5750610352565b90505b80910160405281819052816020018190529091019060400152610373565b50505b565b6060601f01601f19166040516080518181116103915750610394565b90505b60c08181116103a357506103a6565b90505b809101604052805f9052806020015f9052806040015f905290565b3660049010600116156103d2575f5ffd5b5f3560e01c90565b805136038160200151602001826020015181106001169181116001169091175f146104055750505f5ffd5b8151826020015101359091602001909190529056
 
 // section coin_runtime
-0x5b60076103c1565b604050604051608051818111601b5750601e565b90505b60c0818111602b5750602e565b90505b805f9052806020015f9052516040601f01601f1916604051608051818111605457506057565b90505b60c0818111606457506067565b90505b80910160405280909190528060200160049052606050604051608051818111608e57506091565b90505b60c0818111609e575060a1565b90505b815181529060200151816020015280604001600490528163ab7ccc1c141561011d5790508060ce906103da565b9060d7906103da565b60405060405160805181811160eb575060ee565b90505b60c081811160fb575060fe565b90505b809092905281602001525f610112916101d2565b61011b90610292565bfe5b81630cf79e0a141561018957905080610135906103da565b9061013f906103da565b6040506040516080518181116101555750610158565b90505b60c0818111610167575061016a565b90505b809092905281602001525f61017e91610214565b61018790610292565bfe5b81636c65aae514156101b55790506101a0906103da565b5f6101aa9161027b565b6101b390610292565bfe5b50633940e9ee146101c4575f5ffd5b6002546101d090610292565bfe5b805190602001519015600116600114156101fb5781548101825581600201805490910190555490565b8160010180548201815591600201805490910190555490565b805190602001519015600116600114156102525781548190106001161561023c575050600190565b8154819003825590600101805490910190555f90565b8160010180548290106001161561026b57505050600190565b8054829003905581540190555f90565b156001166001141561028b575490565b6001015490565b61029a610375565b8060206102a691610317565b80602001519182529060200181602001526102c0906102ca565b8051906020015190f35b805190604001516040601f01601f19166040516080518181116102ed57506102f0565b90505b60c08181116102ff5750610302565b90505b80910160405280839052919003816020015290565b805115600116156103705781601f01601f191660405160805181811161033d5750610340565b90505b60c081811161034f5750610352565b90505b80910160405281819052816020018190529091019060400152610373565b50505b565b6060601f01601f19166040516080518181116103915750610394565b90505b60c08181116103a357506103a6565b90505b809101604052805f9052806020015f9052806040015f905290565b3660049010600116156103d2575f5ffd5b5f3560e01c90565b80513682602001518060200184602001519160200193909203831160011692106001169091175f1461040c5750505f5ffd5b8151826020015101359091602001909190529056
+0x5b60076103c1565b604050604051608051818111601b5750601e565b90505b60c0818111602b5750602e565b90505b805f9052806020015f9052516040601f01601f1916604051608051818111605457506057565b90505b60c0818111606457506067565b90505b80910160405280909190528060200160049052606050604051608051818111608e57506091565b90505b60c0818111609e575060a1565b90505b815181529060200151816020015280604001600490528163ab7ccc1c141561011d5790508060ce906103da565b9060d7906103da565b60405060405160805181811160eb575060ee565b90505b60c081811160fb575060fe565b90505b809092905281602001525f610112916101d2565b61011b90610292565bfe5b81630cf79e0a141561018957905080610135906103da565b9061013f906103da565b6040506040516080518181116101555750610158565b90505b60c0818111610167575061016a565b90505b809092905281602001525f61017e91610214565b61018790610292565bfe5b81636c65aae514156101b55790506101a0906103da565b5f6101aa9161027b565b6101b390610292565bfe5b50633940e9ee146101c4575f5ffd5b6002546101d090610292565bfe5b805190602001519015600116600114156101fb5781548101825581600201805490910190555490565b8160010180548201815591600201805490910190555490565b805190602001519015600116600114156102525781548190106001161561023c575050600190565b8154819003825590600101805490910190555f90565b8160010180548290106001161561026b57505050600190565b8054829003905581540190555f90565b156001166001141561028b575490565b6001015490565b61029a610375565b8060206102a691610317565b80602001519182529060200181602001526102c0906102ca565b8051906020015190f35b805190604001516040601f01601f19166040516080518181116102ed57506102f0565b90505b60c08181116102ff5750610302565b90505b80910160405280839052919003816020015290565b805115600116156103705781601f01601f191660405160805181811161033d5750610340565b90505b60c081811161034f5750610352565b90505b80910160405281819052816020018190529091019060400152610373565b50505b565b6060601f01601f19166040516080518181116103915750610394565b90505b60c08181116103a357506103a6565b90505b809101604052805f9052806020015f9052806040015f905290565b3660049010600116156103d2575f5ffd5b5f3560e01c90565b805136038160200151602001826020015181106001169181116001169091175f146104055750505f5ffd5b8151826020015101359091602001909190529056
