@@ -207,6 +207,13 @@ impl SccpSolver {
             return;
         };
 
+        // SCCP here is intraprocedural. Do not attempt to interpret calls even
+        // when callee attrs classify them as effect-free.
+        if func.dfg.is_call(inst_id) {
+            self.set_lattice_cell(inst_result, LatticeCell::Top);
+            return;
+        }
+
         let inst = func.dfg.inst(inst_id);
         if func.dfg.side_effect(inst_id).has_effect() {
             self.set_lattice_cell(inst_result, LatticeCell::Top);
