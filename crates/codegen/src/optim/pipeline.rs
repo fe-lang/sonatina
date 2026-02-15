@@ -18,6 +18,7 @@ use crate::{
 use super::{
     adce::AdceSolver,
     cfg_cleanup::CfgCleanup,
+    dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
     egraph::run_egraph_pass,
     inliner::{Inliner, InlinerConfig},
     licm::LicmSolver,
@@ -52,13 +53,15 @@ pub enum Pass {
 ///
 /// Steps execute sequentially. [`Step::Inline`] operates on the whole module;
 /// [`Step::FuncPasses`] runs per-function passes in parallel across all
-/// functions.
+/// functions; [`Step::DeadFuncElim`] prunes unreachable function definitions.
 #[derive(Debug, Clone)]
 pub enum Step {
     /// Run the inliner across the whole module (cross-function).
     Inline,
     /// Run per-function optimization passes in parallel across all functions.
     FuncPasses(Vec<Pass>),
+    /// Remove unreachable function definitions rooted at object `entry`/`include` directives.
+    DeadFuncElim,
 }
 
 /// An ordered sequence of optimization steps.
@@ -135,6 +138,7 @@ impl Pipeline {
             Pass::Sccp,
             Pass::CfgCleanup,
         ]));
+        p.add_step(Step::DeadFuncElim);
         p
     }
 
@@ -143,7 +147,6 @@ impl Pipeline {
     /// Uses a larger inliner budget and a second inline+SCCP round.
     pub fn aggressive() -> Self {
         let mut p = Self::new();
-        p.inliner_config.splice_max_insts = 48;
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(vec![
             Pass::CfgCleanup,
@@ -161,6 +164,7 @@ impl Pipeline {
             Pass::Sccp,
             Pass::CfgCleanup,
         ]));
+        p.add_step(Step::DeadFuncElim);
         p
     }
 
@@ -177,6 +181,7 @@ impl Pipeline {
     ///    - `RebuildUsers` — fix stale `dfg.users` after egraph
     ///    - `Sccp` — second round catches constants exposed by egraph
     ///    - `CfgCleanup` — final cleanup
+    /// 3. `DeadFuncElim` — prune unreachable private definitions from object roots
     pub fn default_pipeline() -> Self {
         Self::balanced()
     }
@@ -220,6 +225,11 @@ impl Pipeline {
                     if step_may_invalidate_func_behavior(passes) {
                         func_behavior_dirty = true;
                     }
+                }
+                Step::DeadFuncElim => {
+                    let roots = collect_object_roots(module);
+                    run_dead_func_elim(module, &roots, DeadFuncElimConfig::default());
+                    func_behavior_dirty = true;
                 }
             }
         }
@@ -303,6 +313,7 @@ mod tests {
         inst::{arith::Add, control_flow::Return},
         prelude::*,
     };
+    use sonatina_parser::parse_module;
 
     /// Build a module with a single function: `fn test(i32) -> i32 { arg0 + 1 }`.
     fn build_test_module() -> sonatina_ir::module::Module {
@@ -368,5 +379,39 @@ mod tests {
         module.func_store.modify(func_ref, |func| {
             run_func_passes(&[Pass::CfgCleanup, Pass::Sccp, Pass::Egraph], func);
         });
+    }
+
+    #[test]
+    fn default_pipeline_prunes_unreachable_private_functions() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() {
+    block0:
+        return;
+}
+
+func private %dead() {
+    block0:
+        return;
+}
+
+object @O {
+    section runtime {
+        entry %entry;
+    }
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        Pipeline::default_pipeline().run(&mut module);
+
+        let mut names = module
+            .funcs()
+            .into_iter()
+            .map(|func_ref| module.ctx.func_sig(func_ref, |sig| sig.name().to_string()))
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, vec!["entry".to_string()]);
     }
 }
