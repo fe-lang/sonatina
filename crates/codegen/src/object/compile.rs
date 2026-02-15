@@ -461,6 +461,7 @@ mod tests {
         },
         object::{CompileOptions, OBSERVABILITY_SCHEMA_VERSION},
     };
+    use cranelift_entity::EntityRef;
     use smallvec::SmallVec;
     use sonatina_ir::{
         InstDowncast, InstDowncastMut, Module,
@@ -914,6 +915,149 @@ object @Contract {
 
         assert_eq!(a_obs.to_text(), b_obs.to_text());
         assert_eq!(a_obs.to_json(), b_obs.to_json());
+    }
+
+    #[test]
+    fn observability_rejects_invalid_ir_references() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %main() {
+    block0:
+        v0.i32 = add 1.i32 2.i32;
+        return;
+}
+
+object @O {
+  section runtime {
+    entry %main;
+  }
+}
+"#;
+
+        struct InvalidIrRefBackend;
+
+        impl LowerBackend for InvalidIrRefBackend {
+            type MInst = u8;
+            type Error = String;
+            type FixupPolicy = PushWidthPolicy;
+
+            fn lower_function(
+                &self,
+                module: &Module,
+                func: FuncRef,
+                section_ctx: &SectionLoweringCtx<'_>,
+            ) -> Result<LoweredFunction<Self::MInst>, Self::Error> {
+                let _ = section_ctx;
+                let mut vcode: VCode<Self::MInst> = VCode::default();
+                let mut block_order = Vec::new();
+
+                module.func_store.view(func, |function| {
+                    let block = function.layout.entry_block().expect("entry block");
+                    let _ = &mut vcode.blocks[block];
+                    block_order.push(block);
+                    let invalid_inst = sonatina_ir::InstId::new(9_999_999);
+                    let _ = vcode.add_inst_to_block(0x01, Some(invalid_inst), block);
+                });
+
+                Ok(LoweredFunction { vcode, block_order })
+            }
+
+            fn apply_sym_fixup(
+                &self,
+                vcode: &mut VCode<Self::MInst>,
+                inst: VCodeInst,
+                fixup: &SymFixup,
+                value: u32,
+                policy: &Self::FixupPolicy,
+            ) -> Result<FixupUpdate, Self::Error> {
+                let _ = (vcode, inst, fixup, value, policy);
+                Err("unexpected sym fixup in InvalidIrRefBackend".to_string())
+            }
+
+            fn lower(
+                &self,
+                ctx: &mut crate::machinst::lower::Lower<Self::MInst>,
+                alloc: &mut dyn crate::stackalloc::Allocator,
+                inst: sonatina_ir::InstId,
+            ) {
+                let _ = (ctx, alloc, inst);
+                unreachable!("InvalidIrRefBackend does not use machinst lowering")
+            }
+
+            fn enter_function(
+                &self,
+                ctx: &mut crate::machinst::lower::Lower<Self::MInst>,
+                alloc: &mut dyn crate::stackalloc::Allocator,
+                function: &sonatina_ir::Function,
+            ) {
+                let _ = (ctx, alloc, function);
+            }
+
+            fn enter_block(
+                &self,
+                ctx: &mut crate::machinst::lower::Lower<Self::MInst>,
+                alloc: &mut dyn crate::stackalloc::Allocator,
+                block: sonatina_ir::BlockId,
+            ) {
+                let _ = (ctx, alloc, block);
+            }
+
+            fn update_opcode_with_immediate_bytes(
+                &self,
+                opcode: &mut Self::MInst,
+                bytes: &mut SmallVec<[u8; 8]>,
+            ) {
+                debug_assert!(bytes.len() <= 32);
+                *opcode = 0x5f_u8.saturating_add(bytes.len() as u8);
+            }
+
+            fn update_opcode_with_label(
+                &self,
+                opcode: &mut Self::MInst,
+                label_offset: u32,
+            ) -> SmallVec<[u8; 4]> {
+                let bytes = label_offset
+                    .to_be_bytes()
+                    .into_iter()
+                    .skip_while(|b| *b == 0)
+                    .collect::<SmallVec<_>>();
+                debug_assert!(bytes.len() <= 32);
+                *opcode = 0x5f_u8.saturating_add(bytes.len() as u8);
+                bytes
+            }
+
+            fn emit_opcode(&self, opcode: &Self::MInst, buf: &mut Vec<u8>) {
+                buf.push(*opcode);
+            }
+
+            fn emit_immediate_bytes(&self, bytes: &[u8], buf: &mut Vec<u8>) {
+                buf.extend_from_slice(bytes);
+            }
+
+            fn emit_label(&self, address: u32, buf: &mut Vec<u8>) {
+                buf.extend(address.to_be_bytes().into_iter().skip_while(|b| *b == 0));
+            }
+        }
+
+        let parsed = parse_module(s).unwrap();
+        let backend = InvalidIrRefBackend;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::MinimalRelax,
+            emit_symtab: false,
+            emit_observability: true,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
+        };
+
+        let errs =
+            compile_object(&parsed.module, &backend, "O", &opts).expect_err("must reject bad ir");
+        let [ObjectCompileError::LinkError { message, .. }] = errs.as_slice() else {
+            panic!("expected a single link error, got {errs:?}");
+        };
+        assert!(
+            message.contains("invalid ir reference"),
+            "unexpected error message: {message}"
+        );
     }
 
     #[test]
