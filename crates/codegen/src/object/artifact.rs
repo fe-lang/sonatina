@@ -363,6 +363,9 @@ pub struct ObjectArtifact {
 }
 
 impl ObjectArtifact {
+    /// Build the aggregate object-level observability view from per-section observability data.
+    ///
+    /// Returns `None` when observability was not emitted at compile time.
     pub fn observability(&self) -> Option<ObjectObservability> {
         let mut sections: IndexMap<SectionName, SectionObservability> = IndexMap::new();
         let mut total_section_bytes = 0_u32;
@@ -403,6 +406,16 @@ impl ObjectArtifact {
             total_mapped_code_bytes,
             total_unmapped_code_bytes,
         })
+    }
+
+    /// Deterministic text serialization of object-level observability, if available.
+    pub fn observability_text(&self) -> Option<String> {
+        self.observability().map(|obs| obs.to_text())
+    }
+
+    /// Deterministic JSON serialization of object-level observability, if available.
+    pub fn observability_json(&self) -> Option<String> {
+        self.observability().map(|obs| obs.to_json())
     }
 }
 

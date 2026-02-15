@@ -808,6 +808,18 @@ object @Contract {
                 .to_json()
                 .contains("\"schema_version\":\"0.1.0\"")
         );
+        assert!(
+            artifact
+                .observability_text()
+                .expect("object text observability expected")
+                .contains("object schema=0.1.0")
+        );
+        assert!(
+            artifact
+                .observability_json()
+                .expect("object json observability expected")
+                .contains("\"schema_version\":\"0.1.0\"")
+        );
     }
 
     #[test]
