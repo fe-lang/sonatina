@@ -392,6 +392,14 @@ fn common_suffix_len(state: PackedState, goal: PackedState) -> usize {
     k
 }
 
+fn should_prune(f: Cost, upper_bound: Cost, have_incumbent: bool) -> bool {
+    if have_incumbent {
+        f >= upper_bound
+    } else {
+        f > upper_bound
+    }
+}
+
 pub(super) fn solve_optimal_normalize_plan(
     ctx: &StackifyContext<'_>,
     stack: &SymStack,
@@ -593,7 +601,7 @@ pub(super) fn solve_optimal_normalize_plan(
             continue;
         }
 
-        if entry.f >= upper_bound {
+        if should_prune(entry.f, upper_bound, incumbent_steps.is_some()) {
             break;
         }
 
@@ -624,7 +632,7 @@ pub(super) fn solve_optimal_normalize_plan(
             &key_infos,
             cost,
         );
-        if g.saturating_add(h) >= upper_bound {
+        if should_prune(g.saturating_add(h), upper_bound, incumbent_steps.is_some()) {
             continue;
         }
 
@@ -674,6 +682,7 @@ pub(super) fn solve_optimal_normalize_plan(
                 &key_infos,
                 cost,
                 upper_bound,
+                incumbent_steps.is_some(),
                 &mut best,
                 &mut parent,
                 &mut open,
@@ -698,6 +707,7 @@ pub(super) fn solve_optimal_normalize_plan(
                         &key_infos,
                         cost,
                         upper_bound,
+                        incumbent_steps.is_some(),
                         &mut best,
                         &mut parent,
                         &mut open,
@@ -732,6 +742,7 @@ pub(super) fn solve_optimal_normalize_plan(
                     &key_infos,
                     cost,
                     upper_bound,
+                    incumbent_steps.is_some(),
                     &mut best,
                     &mut parent,
                     &mut open,
@@ -768,6 +779,7 @@ pub(super) fn solve_optimal_normalize_plan(
                     &key_infos,
                     cost,
                     upper_bound,
+                    incumbent_steps.is_some(),
                     &mut best,
                     &mut parent,
                     &mut open,
@@ -803,6 +815,7 @@ pub(super) fn solve_optimal_normalize_plan(
                     &key_infos,
                     cost,
                     upper_bound,
+                    incumbent_steps.is_some(),
                     &mut best,
                     &mut parent,
                     &mut open,
@@ -828,6 +841,7 @@ pub(super) fn solve_optimal_normalize_plan(
                     &key_infos,
                     cost,
                     upper_bound,
+                    incumbent_steps.is_some(),
                     &mut best,
                     &mut parent,
                     &mut open,
@@ -1282,13 +1296,14 @@ fn consider_succ(
     key_infos: &[KeyInfo],
     cost: &impl CostModel,
     upper_bound: Cost,
+    have_incumbent: bool,
     best: &mut FxHashMap<PackedState, Cost>,
     parent: &mut FxHashMap<PackedState, (PackedState, Step)>,
     open: &mut BinaryHeap<QueueEntry>,
 ) {
     let h = heuristic(state, goal_counts, pop_gas, dup_gas, key_infos, cost);
     let f = g.saturating_add(h);
-    if f >= upper_bound {
+    if should_prune(f, upper_bound, have_incumbent) {
         return;
     }
 
@@ -1562,6 +1577,181 @@ func public %f() {
             );
 
             let mut replayed = stack.clone();
+            for depth in 0..desired.len() {
+                let want = desired[depth];
+                if ctx.func.dfg.value_is_imm(want) {
+                    let want_imm = ctx.func.dfg.value_imm(want).unwrap().as_i256();
+                    let StackItem::Value(cur) = *replayed.item_at(depth).unwrap() else {
+                        panic!("expected value on stack");
+                    };
+                    let cur_imm = ctx.func.dfg.value_imm(cur).unwrap().as_i256();
+                    assert_eq!(cur_imm, want_imm, "canonical immediate mismatch");
+                    replayed.rename_value_at_depth(depth, want);
+                }
+            }
+
+            assert!(stack_matches_exact(&replayed, &desired));
+        });
+    }
+
+    #[test]
+    fn solver_returns_push_plan_even_when_equal_to_flush_upper_bound() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() {
+    block0:
+        return;
+}
+"#;
+        let parsed = parse_module(SRC).unwrap();
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let imm1 = func.dfg.make_imm_value(Immediate::I8(1));
+
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(16);
+            let ctx = StackifyContext {
+                func,
+                cfg: &cfg,
+                dom: &dom,
+                liveness: &liveness,
+                scratch_live_values: Default::default(),
+                scratch_spill_slots: 0,
+                entry,
+                scc,
+                dom_depth: compute_dom_depth(&dom, entry),
+                def_info: compute_def_info(func, entry),
+                phi_results: compute_phi_results(func),
+                phi_out_sources: compute_phi_out_sources(func, &cfg),
+                has_internal_return: function_has_internal_return(func),
+                reach,
+            };
+
+            let stack = SymStack::entry_stack(func, false);
+            let desired = [imm1];
+
+            let cost = EstimatedCostModel::default();
+            let search_cfg = SearchCfg {
+                dup_max: ctx.reach.dup_max,
+                swap_max: ctx.reach.swap_max,
+                max_len: ctx.reach.swap_max,
+                max_expansions: 50_000,
+            };
+
+            let plan = solve_optimal_normalize_plan(&ctx, &stack, &desired, &cost, search_cfg)
+                .expect("expected push plan");
+            assert!(
+                plan.steps.iter().any(|s| matches!(s, Step::PushImm(_))),
+                "expected plan to materialize imm: {:?}",
+                plan.steps
+            );
+        });
+    }
+
+    #[test]
+    fn solver_returns_push0_plan_when_optimal_equals_flush_upper_bound() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() {
+    block0:
+        return;
+}
+"#;
+        let parsed = parse_module(SRC).unwrap();
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let v0 = func.dfg.make_imm_value(Immediate::I8(0));
+            let v1 = func.dfg.make_imm_value(Immediate::I256(I256::zero()));
+
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(16);
+            let ctx = StackifyContext {
+                func,
+                cfg: &cfg,
+                dom: &dom,
+                liveness: &liveness,
+                scratch_live_values: Default::default(),
+                scratch_spill_slots: 0,
+                entry,
+                scc,
+                dom_depth: compute_dom_depth(&dom, entry),
+                def_info: compute_def_info(func, entry),
+                phi_results: compute_phi_results(func),
+                phi_out_sources: compute_phi_out_sources(func, &cfg),
+                has_internal_return: function_has_internal_return(func),
+                reach,
+            };
+
+            let mut stack = SymStack::entry_stack(func, false);
+            stack.push_value(v0);
+
+            let desired = [v1, v0];
+
+            let cost = EstimatedCostModel::default();
+            let search_cfg = SearchCfg {
+                dup_max: ctx.reach.dup_max,
+                swap_max: ctx.reach.swap_max,
+                max_len: ctx.reach.swap_max,
+                max_expansions: 50_000,
+            };
+
+            let plan = solve_optimal_normalize_plan(&ctx, &stack, &desired, &cost, search_cfg)
+                .expect("expected push0 plan");
+            assert!(
+                plan.steps.iter().any(|s| matches!(s, Step::PushImm(_))),
+                "expected plan to use PUSH0: {:?}",
+                plan.steps
+            );
+
+            // Replay the plan and apply the immediate renaming contract to validate exactness.
+            let mut replayed = stack.clone();
+            let mut actions = crate::stackalloc::Actions::new();
+            for &step in &plan.steps {
+                match step {
+                    Step::Pop => replayed.pop(&mut actions),
+                    Step::Swap(d) => replayed.swap(d as usize, &mut actions),
+                    Step::Dup(p) => replayed.dup(p as usize, &mut actions),
+                    Step::PushImm(kid) => {
+                        let KeyInfo::Imm {
+                            rep_vid, rep_imm, ..
+                        } = plan.key_infos[kid as usize]
+                        else {
+                            panic!("expected imm key info");
+                        };
+                        replayed.push_imm(rep_vid, rep_imm, &mut actions);
+                    }
+                    Step::LoadVal(_) => panic!("unexpected load"),
+                }
+            }
+
             for depth in 0..desired.len() {
                 let want = desired[depth];
                 if ctx.func.dfg.value_is_imm(want) {
