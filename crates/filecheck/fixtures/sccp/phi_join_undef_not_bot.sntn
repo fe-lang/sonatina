@@ -3,7 +3,7 @@
 target = "evm-ethereum-london"
 
 # check: block3:
-# nextln:     v1.i8 = phi (undef.i8 block1) (0.i8 block2);
+# nextln:     v1.i8 = phi (undef.i8 block0) (0.i8 block2);
 # nextln:     return v1;
 func public %phi_join_undef_not_bot(v0.i1) -> i8 {
     block0:
