@@ -141,25 +141,68 @@ impl EvmBackend {
             };
 
             let name = module.ctx.func_sig(func, |sig| sig.name().to_string());
-
-            match &func_plan.scheme {
+            let scheme = match &func_plan.scheme {
                 MemScheme::StaticArena(st) => {
-                    writeln!(
-                        &mut out,
-                        "evm mem plan: {name} scheme=StaticArena need_words={} locals_words={}",
-                        st.need_words, func_plan.locals_words
-                    )
-                    .expect("mem plan write failed");
+                    format!("sa{{n:{},l:{}}}", st.need_words, func_plan.locals_words)
                 }
-                MemScheme::DynamicFrame => {
-                    writeln!(
-                        &mut out,
-                        "evm mem plan: {name} scheme=DynamicFrame locals_words={}",
-                        func_plan.locals_words
-                    )
-                    .expect("mem plan write failed");
+                MemScheme::DynamicFrame => format!("df{{l:{}}}", func_plan.locals_words),
+            };
+            let malloc = if func_plan.malloc_future_static_words.is_empty() {
+                String::new()
+            } else {
+                let mut min = u32::MAX;
+                let mut max = 0;
+                for &words in func_plan.malloc_future_static_words.values() {
+                    min = min.min(words);
+                    max = max.max(words);
                 }
-            }
+                let (const_wrds, dyn_cnt) = module.func_store.view(func, |function| {
+                    let mut const_wrds: u32 = 0;
+                    let mut dyn_cnt: usize = 0;
+
+                    for &malloc_inst in func_plan.malloc_future_static_words.keys() {
+                        let data = self
+                            .isa
+                            .inst_set()
+                            .resolve_inst(function.dfg.inst(malloc_inst));
+                        let EvmInstKind::EvmMalloc(malloc) = data else {
+                            panic!(
+                                "non-malloc instruction {} in malloc future bounds map for {}",
+                                malloc_inst.as_u32(),
+                                name
+                            );
+                        };
+
+                        if let Some(size_bytes) = function
+                            .dfg
+                            .value_imm(*malloc.size())
+                            .and_then(immediate_u32)
+                        {
+                            const_wrds = const_wrds
+                                .checked_add(size_bytes.div_ceil(WORD_BYTES))
+                                .expect("const malloc words overflow");
+                        } else {
+                            dyn_cnt += 1;
+                        }
+                    }
+
+                    (const_wrds, dyn_cnt)
+                });
+                let fsb = if min == max {
+                    format!("{min}")
+                } else {
+                    format!("{min}..{max}")
+                };
+                format!(
+                    " malloc{{n:{},fsb:{fsb},t:{},e:{},const_wrds:{const_wrds},dyn_cnt:{dyn_cnt}}}",
+                    func_plan.malloc_future_static_words.len(),
+                    func_plan.transient_mallocs.len(),
+                    func_plan.escaping_mallocs.len(),
+                )
+            };
+
+            writeln!(&mut out, "evm mem plan: {name} {scheme}{malloc}")
+                .expect("mem plan write failed");
 
             let addr_of = |offset_words: u32| match &func_plan.scheme {
                 MemScheme::StaticArena(_) => {
@@ -542,6 +585,18 @@ fn is_bool_producer_opcode(op: OpCode) -> bool {
     )
 }
 
+fn is_plain_opcode(
+    vcode: &VCode<OpCode>,
+    label_targets: &FxHashSet<VCodeInst>,
+    inst: VCodeInst,
+    opcode: OpCode,
+) -> bool {
+    !label_targets.contains(&inst)
+        && vcode.fixups.get(inst).is_none()
+        && vcode.inst_imm_bytes.get(inst).is_none()
+        && (vcode.insts[inst] as u8) == (opcode as u8)
+}
+
 fn is_noop_stack_peephole_sequence(
     vcode: &VCode<OpCode>,
     label_targets: &FxHashSet<VCodeInst>,
@@ -606,6 +661,38 @@ fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_order: &[Bl
         let mut changed = false;
         let mut i = 0usize;
         while i < insts.len() {
+            // JUMPI consumes truthiness, so a run of ISZERO before a direct
+            // `PUSH<label>; JUMPI` can be reduced by parity even when the
+            // original value is not canonicalized to 0/1.
+            if is_plain_opcode(vcode, &label_targets, insts[i], OpCode::ISZERO) {
+                let mut j = i + 1;
+                while j < insts.len()
+                    && is_plain_opcode(vcode, &label_targets, insts[j], OpCode::ISZERO)
+                {
+                    j += 1;
+                }
+
+                let run = j - i;
+                if run >= 2 && j + 1 < insts.len() {
+                    let push_inst = insts[j];
+                    let jumpi_inst = insts[j + 1];
+                    if !label_targets.contains(&push_inst)
+                        && vcode.fixups.get(push_inst).is_some()
+                        && is_push_opcode(vcode.insts[push_inst])
+                        && is_plain_opcode(vcode, &label_targets, jumpi_inst, OpCode::JUMPI)
+                    {
+                        if run % 2 == 1 {
+                            kept.push(insts[i]);
+                        }
+                        kept.push(push_inst);
+                        kept.push(jumpi_inst);
+                        changed = true;
+                        i = j + 2;
+                        continue;
+                    }
+                }
+            }
+
             // Collapse redundant ISZERO chains after known boolean producers.
             //
             // If `op` produces a 0/1 value:
@@ -620,15 +707,9 @@ fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_order: &[Bl
                     let op = vcode.insts[inst];
                     if is_bool_producer_opcode(op) {
                         let mut j = i + 1;
-                        while j < insts.len() {
-                            let z = insts[j];
-                            if label_targets.contains(&z)
-                                || vcode.fixups.get(z).is_some()
-                                || vcode.inst_imm_bytes.get(z).is_some()
-                                || (vcode.insts[z] as u8) != (OpCode::ISZERO as u8)
-                            {
-                                break;
-                            }
+                        while j < insts.len()
+                            && is_plain_opcode(vcode, &label_targets, insts[j], OpCode::ISZERO)
+                        {
                             j += 1;
                         }
 
@@ -2075,8 +2156,6 @@ fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
 
     // if sp != 0, skip init.
     ctx.push(OpCode::DUP1);
-    ctx.push(OpCode::ISZERO);
-    ctx.push(OpCode::ISZERO);
     let skip_init_push = ctx.push(OpCode::PUSH1);
     ctx.push(OpCode::JUMPI);
 

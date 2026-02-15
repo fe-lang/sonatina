@@ -12,16 +12,16 @@ object: Contract
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
   main: ir_blocks=1 ir_insts=14 vcode_ops=89 fixups=8 imm_bytes=14
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: sa{n:0,l:0} malloc{n:2,fsb:0,t:1,e:1,const_wrds:2,dyn_cnt:0}
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: sa{n:0,l:0}
 
 --------------- MEM PLAN ---------------
 
 evm mem plan: dyn_base=0xc0 static_base=0xc0
-evm mem plan: main scheme=StaticArena need_words=0 locals_words=0
+evm mem plan: main sa{n:0,l:0} malloc{n:2,fsb:0,t:1,e:1,const_wrds:2,dyn_cnt:0}
   detail locals_words=0 direct_callee_need_max_words=0 need_words=0
-evm mem plan: entry scheme=StaticArena need_words=0 locals_words=0
+evm mem plan: entry sa{n:0,l:0}
   detail locals_words=0 direct_callee_need_max_words=0 need_words=0
 
 evm:

@@ -12,9 +12,9 @@ object: Contract
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
   abi_encode_u256: ir_blocks=1 ir_insts=2 vcode_ops=8 fixups=0 imm_bytes=1
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: sa{n:0,l:0}
   runtime__StorPtr_Evm___207f35a85ac4062e: ir_blocks=9 ir_insts=24 vcode_ops=90 fixups=10 imm_bytes=11
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: sa{n:0,l:0} malloc{n:1,fsb:0,t:1,e:0,const_wrds:2,dyn_cnt:0}
 
 evm:
   case ok: calldata_len=36 success reason=Return gas_used=21472 gas_refunded=0 logs=0 output=call len=32

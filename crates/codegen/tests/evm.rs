@@ -4,8 +4,7 @@ use dir_test::{Fixture, dir_test};
 
 use hex::ToHex;
 use revm::{
-    Context, EvmContext, Handler, inspector_handle_register,
-    interpreter::Interpreter,
+    Context, EvmContext, Handler,
     primitives::{
         AccountInfo, Address, Bytecode, Bytes, Env, ExecutionResult, OsakaSpec, Output, TransactTo,
         U256,
@@ -18,24 +17,26 @@ use sonatina_codegen::{
     liveness::Liveness,
     machinst::lower::{LowerBackend, SectionLoweringCtx},
     object::{CompileOptions, compile_object},
+    optim::Pipeline,
     stackalloc::StackifyAlloc,
 };
 use sonatina_ir::{
     Function,
     cfg::ControlFlowGraph,
-    ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite},
+    ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite, ModuleWriter},
     isa::evm::Evm,
+    module::FuncRef,
     object::{EmbedSymbol, ObjectName, SectionName},
 };
 use sonatina_parser::{ParsedModule, parse_module};
 use sonatina_triple::{Architecture, OperatingSystem, Vendor};
 use sonatina_verifier::{VerificationLevel, VerifierConfig};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{Write, stderr},
 };
 
-use evm_directives::{EvmCase, EvmExpect};
+use evm_directives::{EvmCase, EvmExpect, EvmOptPipeline};
 
 fn fmt_stackify_trace(trace: &str) -> String {
     let mut out = String::new();
@@ -74,6 +75,37 @@ macro_rules! snap_test {
             .unwrap()
         })
     };
+
+    ($value:expr, $fixture_path: expr, $suffix: expr) => {
+        let mut settings = insta::Settings::new();
+        let fixture_path = ::std::path::Path::new($fixture_path);
+        let fixture_dir = fixture_path.parent().unwrap();
+        let fixture_name = fixture_path.file_stem().unwrap().to_str().unwrap();
+
+        settings.set_snapshot_path(fixture_dir);
+        settings.set_input_file($fixture_path);
+        settings.set_prepend_module_to_snapshot(false);
+
+        let suffix: Option<&str> = $suffix;
+        let name = if let Some(suffix) = suffix {
+            format!("{fixture_name}.{suffix}")
+        } else {
+            fixture_name.into()
+        };
+
+        settings.bind(|| {
+            insta::_macro_support::assert_snapshot(
+                (name, $value.as_str()).into(),
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+                fixture_name,
+                module_path!(),
+                file!(),
+                line!(),
+                stringify!($value),
+            )
+            .unwrap()
+        })
+    };
 }
 
 fn parse_sona(content: &str) -> ParsedModule {
@@ -94,13 +126,29 @@ fn parse_sona(content: &str) -> ParsedModule {
     glob: "*.sntn"
 )]
 fn test_evm(fixture: Fixture<&str>) {
-    let parsed = parse_sona(fixture.content());
+    let mut parsed = parse_sona(fixture.content());
     let stackify_reach_depth = stackify_reach_depth_for_fixture(fixture.path(), &parsed);
     let emit_debug_trace = emit_debug_trace_for_fixture(fixture.path(), &parsed);
     let emit_mem_plan = emit_mem_plan_for_fixture(fixture.path(), &parsed);
+    let opt_pipeline = opt_pipeline_for_fixture(fixture.path(), &parsed);
 
     let cases = evm_directives::parse_evm_cases(&parsed.debug.module_comments)
         .unwrap_or_else(|e| panic!("{}: {e}", fixture.path()));
+
+    match opt_pipeline {
+        EvmOptPipeline::None => {}
+        EvmOptPipeline::Balanced => Pipeline::balanced().run(&mut parsed.module),
+        EvmOptPipeline::Aggressive => Pipeline::aggressive().run(&mut parsed.module),
+    }
+
+    if opt_pipeline != EvmOptPipeline::None {
+        let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
+        let opt_ir = writer.dump_string();
+        let opt_snapshot = format!("opt_pipeline: {}\n\n{}", opt_pipeline.as_str(), opt_ir);
+        snap_test!(opt_snapshot, fixture.path(), Some("opt"));
+    }
+
+    let func_order = lowering_func_order(&parsed);
 
     let backend = EvmBackend::new(Evm::new(sonatina_triple::TargetTriple {
         architecture: Architecture::Evm,
@@ -118,18 +166,18 @@ fn test_evm(fixture: Fixture<&str>) {
         embed_symbols: &embed_symbols,
     };
 
-    backend.prepare_section(&parsed.module, &parsed.debug.func_order, &section_ctx);
+    backend.prepare_section(&parsed.module, &func_order, &section_ctx);
 
-    let mem_plan = backend.snapshot_mem_plan(&parsed.module, &parsed.debug.func_order);
-    let mem_plan_detail = emit_mem_plan
-        .then(|| backend.snapshot_mem_plan_detail(&parsed.module, &parsed.debug.func_order));
+    let mem_plan = backend.snapshot_mem_plan(&parsed.module, &func_order);
+    let mem_plan_detail =
+        emit_mem_plan.then(|| backend.snapshot_mem_plan_detail(&parsed.module, &func_order));
     let (mem_plan_header, mem_plan_funcs) = parse_mem_plan_summary(&mem_plan);
 
     let mut func_stats: Vec<FuncStats> = Vec::new();
     let mut stackify_out = Vec::new();
     let mut lowered_out = Vec::new();
 
-    for fref in parsed.debug.func_order.iter() {
+    for fref in &func_order {
         let lowered = backend
             .lower_function(&parsed.module, *fref, &section_ctx)
             .unwrap();
@@ -192,16 +240,30 @@ fn test_evm(fixture: Fixture<&str>) {
         .unwrap_or_else(|errs| panic!("{}: object compile failed: {errs:?}", fixture.path()));
 
     let mut out = Vec::new();
-    if emit_mem_plan {
+    if emit_mem_plan && opt_pipeline == EvmOptPipeline::None {
         writeln!(
             &mut out,
             "evm.config: stack_reach={stackify_reach_depth} emit_debug_trace={emit_debug_trace} emit_mem_plan=true"
         )
         .unwrap();
-    } else {
+    } else if emit_mem_plan {
+        writeln!(
+            &mut out,
+            "evm.config: stack_reach={stackify_reach_depth} emit_debug_trace={emit_debug_trace} emit_mem_plan=true opt_pipeline={}",
+            opt_pipeline.as_str()
+        )
+        .unwrap();
+    } else if opt_pipeline == EvmOptPipeline::None {
         writeln!(
             &mut out,
             "evm.config: stack_reach={stackify_reach_depth} emit_debug_trace={emit_debug_trace}"
+        )
+        .unwrap();
+    } else {
+        writeln!(
+            &mut out,
+            "evm.config: stack_reach={stackify_reach_depth} emit_debug_trace={emit_debug_trace} opt_pipeline={}",
+            opt_pipeline.as_str()
         )
         .unwrap();
     }
@@ -256,33 +318,15 @@ fn test_evm(fixture: Fixture<&str>) {
         .map(|(_, s)| s.bytes.clone())
         .unwrap_or_else(|| panic!("{}: missing `runtime` section", fixture.path()));
 
-    let mut deploy_res_dbg: Option<String> = None;
-    let mut deploy_trace: Option<String> = None;
-    let mut first_call_res_dbg: Option<String> = None;
-    let mut first_call_trace: Option<String> = None;
-
     let mut harness = if let Some(init) = init {
-        if emit_debug_trace {
-            let (res, trace, harness) = EvmHarness::deploy_with_trace(&init);
-            deploy_res_dbg = Some(format!("{res:?}"));
-            deploy_trace = Some(trace);
-            writeln!(&mut out, "evm:").unwrap();
-            writeln!(&mut out, "  deploy: {}", summarize_execution_result(&res)).unwrap();
-            match res {
-                ExecutionResult::Success { .. } => {}
-                _ => panic!("{}: deployment failed: {res:?}", fixture.path()),
-            }
-            harness
-        } else {
-            let (res, harness) = EvmHarness::deploy(&init);
-            writeln!(&mut out, "evm:").unwrap();
-            writeln!(&mut out, "  deploy: {}", summarize_execution_result(&res)).unwrap();
-            match res {
-                ExecutionResult::Success { .. } => {}
-                _ => panic!("{}: deployment failed: {res:?}", fixture.path()),
-            }
-            harness
+        let (res, harness) = EvmHarness::deploy(&init);
+        writeln!(&mut out, "evm:").unwrap();
+        writeln!(&mut out, "  deploy: {}", summarize_execution_result(&res)).unwrap();
+        match res {
+            ExecutionResult::Success { .. } => {}
+            _ => panic!("{}: deployment failed: {res:?}", fixture.path()),
         }
+        harness
     } else {
         writeln!(&mut out, "evm:").unwrap();
         EvmHarness::from_runtime(&runtime)
@@ -292,20 +336,8 @@ fn test_evm(fixture: Fixture<&str>) {
         writeln!(&mut out, "  <no evm.case directives>").unwrap();
     }
 
-    for (idx, case) in cases.iter().enumerate() {
-        let (res, trace) = if emit_debug_trace && idx == 0 {
-            let (res, trace) = harness.call_with_trace(&case.calldata);
-            (res, Some(trace))
-        } else {
-            (harness.call(&case.calldata), None)
-        };
-
-        if emit_debug_trace && idx == 0 {
-            first_call_res_dbg = Some(format!("{res:?}"));
-        }
-        if let Some(trace) = trace {
-            first_call_trace = Some(trace);
-        }
+    for case in &cases {
+        let res = harness.call(&case.calldata);
 
         assert_case(case, &res, fixture.path());
         writeln!(
@@ -333,20 +365,6 @@ fn test_evm(fixture: Fixture<&str>) {
             writeln!(&mut out, "// section {}", name.0.as_str()).unwrap();
             let hex = section.bytes.encode_hex::<String>();
             writeln!(&mut out, "0x{hex}\n").unwrap();
-        }
-
-        writeln!(&mut out, "\n\n--------------- EVM TRACE ---------------\n").unwrap();
-        if let Some(res) = deploy_res_dbg {
-            writeln!(&mut out, "\n{res}").unwrap();
-        }
-        if let Some(trace) = deploy_trace {
-            writeln!(&mut out, "\n{trace}").unwrap();
-        }
-        if let Some(res) = first_call_res_dbg {
-            writeln!(&mut out, "\n{res}").unwrap();
-        }
-        if let Some(trace) = first_call_trace {
-            writeln!(&mut out, "\n{trace}").unwrap();
         }
     }
 
@@ -438,31 +456,6 @@ impl EvmHarness {
         )
     }
 
-    fn deploy_with_trace(init_code: &[u8]) -> (ExecutionResult, String, Self) {
-        let mut env = Env::default();
-        env.tx.clear();
-        env.tx.transact_to = TransactTo::Create;
-        env.tx.data = Bytes::copy_from_slice(init_code);
-
-        let (res, trace, db) = Self::run_tx_with_trace(revm::InMemoryDB::default(), env);
-        let deployed = match &res {
-            ExecutionResult::Success {
-                output: Output::Create(_, Some(addr)),
-                ..
-            } => *addr,
-            _ => panic!("unexpected deployment result: {res:?}"),
-        };
-
-        (
-            res,
-            trace,
-            Self {
-                db,
-                contract: deployed,
-            },
-        )
-    }
-
     fn call(&mut self, calldata: &[u8]) -> ExecutionResult {
         let mut env = Env::default();
         env.tx.clear();
@@ -473,18 +466,6 @@ impl EvmHarness {
         let (res, db) = Self::run_tx(db, env);
         self.db = db;
         res
-    }
-
-    fn call_with_trace(&mut self, calldata: &[u8]) -> (ExecutionResult, String) {
-        let mut env = Env::default();
-        env.tx.clear();
-        env.tx.transact_to = TransactTo::Call(self.contract);
-        env.tx.data = Bytes::copy_from_slice(calldata);
-
-        let db = std::mem::take(&mut self.db);
-        let (res, trace, db) = Self::run_tx_with_trace(db, env);
-        self.db = db;
-        (res, trace)
     }
 
     fn run_tx(mut db: revm::InMemoryDB, env: Env) -> (ExecutionResult, revm::InMemoryDB) {
@@ -501,82 +482,6 @@ impl EvmHarness {
             Ok(r) => (r, db),
             Err(e) => panic!("evm failure: {e}"),
         }
-    }
-
-    fn run_tx_with_trace(
-        mut db: revm::InMemoryDB,
-        env: Env,
-    ) -> (ExecutionResult, String, revm::InMemoryDB) {
-        let context = Context::new(
-            EvmContext::new_with_env(db, Box::new(env)),
-            TestInspector::new(vec![]),
-        );
-
-        let mut evm = revm::Evm::new(context, Handler::mainnet::<OsakaSpec>());
-        evm = evm
-            .modify()
-            .append_handler_register(inspector_handle_register)
-            .build();
-
-        let res = evm.transact_commit();
-        let trace = String::from_utf8(evm.context.external.w).unwrap();
-        db = std::mem::take(&mut evm.context.evm.inner.db);
-
-        match res {
-            Ok(r) => (r, trace, db),
-            Err(e) => panic!("evm failure: {e}"),
-        }
-    }
-}
-
-struct TestInspector<W: Write> {
-    w: W,
-}
-
-impl<W: Write> TestInspector<W> {
-    fn new(w: W) -> TestInspector<W> {
-        Self { w }
-    }
-}
-
-impl<W: Write, DB: revm::Database> revm::Inspector<DB> for TestInspector<W> {
-    fn initialize_interp(&mut self, _interp: &mut Interpreter, _context: &mut EvmContext<DB>) {
-        writeln!(
-            self.w,
-            "{:>6}  {:<17} input (stack grows to the right)",
-            "pc", "opcode"
-        )
-        .unwrap();
-    }
-
-    fn step(&mut self, interp: &mut Interpreter, _context: &mut EvmContext<DB>) {
-        // xxx tentatively writing input stack; clean up
-        let pc = interp.program_counter();
-
-        let op = interp.current_opcode();
-        let code = unsafe { std::mem::transmute::<u8, revm::interpreter::OpCode>(op) };
-
-        let stack = interp.stack().data();
-
-        write!(
-            self.w,
-            "{:>6}  {:0>2}  {:<12}  ",
-            pc,
-            format!("{op:x}"),
-            code.info().name(),
-        )
-        .unwrap();
-        let imm_size = code.info().immediate_size() as usize;
-        if imm_size > 0 {
-            let imm_bytes = interp.bytecode.slice((pc + 1)..(pc + 1 + imm_size));
-            writeln!(self.w, "{}  {}", imm_bytes, fmt_evm_stack(stack)).unwrap();
-        } else {
-            writeln!(self.w, "{}", fmt_evm_stack(stack)).unwrap();
-        }
-    }
-
-    fn step_end(&mut self, _interp: &mut Interpreter, _context: &mut EvmContext<DB>) {
-        // NOTE: annoying revm behavior: `interp.current_opcode()` now returns the next opcode.
     }
 }
 
@@ -619,26 +524,29 @@ fn emit_mem_plan_for_fixture(path: &str, parsed: &ParsedModule) -> bool {
     }
 }
 
-fn fmt_evm_stack(stack: &[U256]) -> String {
-    const SHOW: usize = 6;
-
-    fn fmt_u256(v: &U256) -> String {
-        format!("{v:#x}")
+fn opt_pipeline_for_fixture(path: &str, parsed: &ParsedModule) -> EvmOptPipeline {
+    match evm_directives::opt_pipeline(&parsed.debug.module_comments) {
+        Ok(v) => v,
+        Err(e) => panic!("{path}: {e}"),
     }
+}
 
-    let len = stack.len();
-    if len == 0 {
-        return "[]".to_string();
+fn lowering_func_order(parsed: &ParsedModule) -> Vec<FuncRef> {
+    let mut funcs: Vec<FuncRef> = parsed
+        .debug
+        .func_order
+        .iter()
+        .copied()
+        .filter(|func| parsed.module.func_store.contains(*func))
+        .collect();
+
+    let mut seen: HashSet<FuncRef> = funcs.iter().copied().collect();
+    for func in parsed.module.func_store.funcs() {
+        if seen.insert(func) {
+            funcs.push(func);
+        }
     }
-
-    if len <= SHOW {
-        let elems: Vec<String> = stack.iter().map(fmt_u256).collect();
-        return format!("[{}]", elems.join(", "));
-    }
-
-    let head: Vec<String> = stack.iter().take(2).map(fmt_u256).collect();
-    let tail: Vec<String> = stack.iter().skip(len - 3).map(fmt_u256).collect();
-    format!("[{}, …, {}] (len={len})", head.join(", "), tail.join(", "))
+    funcs
 }
 
 struct FuncStats {

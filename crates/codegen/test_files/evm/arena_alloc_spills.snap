@@ -12,21 +12,21 @@ object: Contract
 functions:
   mem: dyn_base=0x240 static_base=0xc0
   entry: ir_blocks=1 ir_insts=7 vcode_ops=31 fixups=2 imm_bytes=10
-    mem: scheme=StaticArena need_words=12 locals_words=0
+    mem: sa{n:12,l:0}
   caller: ir_blocks=1 ir_insts=40 vcode_ops=164 fixups=2 imm_bytes=39
-    mem: scheme=StaticArena need_words=12 locals_words=12
+    mem: sa{n:12,l:12}
   mid: ir_blocks=1 ir_insts=6 vcode_ops=31 fixups=2 imm_bytes=1
-    mem: scheme=StaticArena need_words=9 locals_words=9
+    mem: sa{n:9,l:9}
   callee: ir_blocks=1 ir_insts=33 vcode_ops=78 fixups=0 imm_bytes=8
-    mem: scheme=StaticArena need_words=8 locals_words=8
+    mem: sa{n:8,l:8}
 
 --------------- MEM PLAN ---------------
 
 evm mem plan: dyn_base=0x240 static_base=0xc0
-evm mem plan: entry scheme=StaticArena need_words=12 locals_words=0
+evm mem plan: entry sa{n:12,l:0}
   detail locals_words=0 direct_callee_need_max_words=12 need_words=12
   call inst4 callee=%caller callee_need_words=12 choice=Save has_return=true save_words=0
-evm mem plan: caller scheme=StaticArena need_words=12 locals_words=12
+evm mem plan: caller sa{n:12,l:12}
   detail locals_words=12 direct_callee_need_max_words=9 need_words=12
   call inst19 callee=%mid callee_need_words=9 choice=Layout has_return=true save_words=0
   scratch_spill v0 slot=0 addr=0x0
@@ -40,11 +40,11 @@ evm mem plan: caller scheme=StaticArena need_words=12 locals_words=12
   spill v8 offset_words=9 addr=0x1e0
   spill v9 offset_words=11 addr=0x220
   alloca v8 offset_words=10 size_words=1 addr=0x200
-evm mem plan: mid scheme=StaticArena need_words=9 locals_words=9
+evm mem plan: mid sa{n:9,l:9}
   detail locals_words=9 direct_callee_need_max_words=8 need_words=9
   call inst2 callee=%callee callee_need_words=8 choice=Layout has_return=true save_words=0
   alloca v8 offset_words=8 size_words=1 addr=0x1c0
-evm mem plan: callee scheme=StaticArena need_words=8 locals_words=8
+evm mem plan: callee sa{n:8,l:8}
   detail locals_words=8 direct_callee_need_max_words=0 need_words=8
   alloca v8 offset_words=0 size_words=1 addr=0xc0
   alloca v9 offset_words=1 size_words=1 addr=0xe0

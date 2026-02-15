@@ -12,9 +12,9 @@ object: Contract
 functions:
   mem: dyn_base=0xe0 static_base=0xc0
   main: ir_blocks=1 ir_insts=10 vcode_ops=24 fixups=0 imm_bytes=5
-    mem: scheme=StaticArena need_words=1 locals_words=1
+    mem: sa{n:1,l:1}
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
-    mem: scheme=StaticArena need_words=1 locals_words=0
+    mem: sa{n:1,l:0}
 
 evm:
   case ok: calldata_len=0 success reason=Return gas_used=21121 gas_refunded=0 logs=0 output=call len=32
