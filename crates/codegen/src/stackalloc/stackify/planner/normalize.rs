@@ -1,9 +1,16 @@
 use sonatina_ir::ValueId;
-use std::collections::BTreeMap;
 
 use super::{
-    super::sym_stack::{StackItem, SymStack},
     Planner,
+    normalize_search::{
+        Cost, CostModel, EstimatedCostModel, SearchCfg, solve_optimal_normalize_plan,
+    },
+};
+
+use super::super::sym_stack::{StackItem, SymStack};
+use std::sync::{
+    OnceLock,
+    atomic::{AtomicUsize, Ordering},
 };
 
 impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
@@ -19,206 +26,124 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         self.flush_rebuild(desired);
     }
 
-    fn delete_to_match_multiset(&mut self, req: &BTreeMap<ValueId, usize>) -> bool {
-        let limit = self.stack.len_above_func_ret();
-        let mut keep: Vec<bool> = vec![false; limit];
-
-        // Choose the deepest occurrences to keep. This tends to keep values that are already
-        // "out of reach" (e.g. deep transfer values) while discarding dead prefixes, which helps
-        // avoid long swap+pop chains when cleaning up edge stacks.
-        let mut remaining: BTreeMap<ValueId, usize> = req.clone();
-        for depth in (0..limit).rev() {
-            let Some(StackItem::Value(v)) = self.stack.item_at(depth) else {
-                return false;
-            };
-            let need = remaining.get(v).copied().unwrap_or(0);
-            if need == 0 {
-                continue;
-            }
-            keep[depth] = true;
-            if need == 1 {
-                remaining.remove(v);
-            } else {
-                remaining.insert(*v, need - 1);
-            }
-        }
-
-        self.delete_unkept_values(&mut keep);
-        true
-    }
-
-    fn delete_unkept_values(&mut self, keep: &mut Vec<bool>) {
-        // Delete all values marked as "not kept" using only SWAPs + POPs.
-        //
-        // Key optimization: if we have a kept prefix followed by a long contiguous run of
-        // deletable values (and more kept values below), we can sink the kept prefix below the
-        // run with O(k) swaps and then pop the entire run without per-item swaps.
-        while keep.iter().any(|k| !*k) {
-            if !keep[0] {
-                self.stack.pop(self.actions);
-                keep.remove(0);
-                continue;
-            }
-
-            let keep_prefix_len = keep.iter().take_while(|k| **k).count();
-            debug_assert!(keep_prefix_len > 0);
-
-            let mut run_len: usize = 0;
-            for k in keep.iter().skip(keep_prefix_len) {
-                if *k {
-                    break;
-                }
-                run_len += 1;
-            }
-
-            let can_bulk_delete = run_len != 0
-                && keep_prefix_len + run_len < keep.len()
-                && run_len > keep_prefix_len.saturating_mul(2).saturating_sub(1);
-            if can_bulk_delete {
-                let mut prefix = keep_prefix_len;
-                let mut run = run_len;
-                while prefix != 0 {
-                    // Swap the top kept value with the bottom of the deletable run,
-                    // making a deletable value immediately available to pop.
-                    let sink_depth = prefix + run - 1;
-                    self.stack.swap(sink_depth, self.actions);
-                    keep.swap(0, sink_depth);
-
-                    debug_assert!(!keep[0], "bulk delete expected deletable value on top");
-                    self.stack.pop(self.actions);
-                    keep.remove(0);
-
-                    run = run.saturating_sub(1);
-                    prefix = prefix.saturating_sub(1);
-                }
-
-                for _ in 0..run {
-                    debug_assert!(!keep[0], "bulk delete expected deletable prefix");
-                    self.stack.pop(self.actions);
-                    keep.remove(0);
-                }
-                continue;
-            }
-
-            // Fallback: swap the first deletable value to the top and pop it.
-            let pos = keep
-                .iter()
-                .position(|k| !*k)
-                .expect("keep mask had deletable values");
-            debug_assert!(pos != 0);
-            self.stack.swap(pos, self.actions);
-            keep.swap(0, pos);
-            self.stack.pop(self.actions);
-            keep.remove(0);
-        }
-    }
-
     fn try_normalize_to_exact(&mut self, desired: &[ValueId]) -> bool {
         if desired.len() > self.ctx.reach.swap_max {
             return false;
         }
 
-        let mut limit = self.stack.len_above_func_ret();
+        let limit = self.stack.len_above_func_ret();
         if limit > self.ctx.reach.swap_max {
             return false;
         }
 
-        // If the desired stack begins with one or more immediates, delay pushing them until after
-        // the existing (non-immediate) stack prefix is normalized. This avoids permuting around
-        // freshly-pushed constants (e.g. a loop-entry phi source `0`).
-        let imm_prefix_len = desired
-            .iter()
-            .take_while(|v| self.ctx.func.dfg.value_is_imm(**v))
-            .count();
-        if imm_prefix_len != 0 {
-            let tail = &desired[imm_prefix_len..];
-            if !self.try_normalize_to_exact(tail) {
+        let debug = normalize_debug_enabled();
+        if debug {
+            eprintln!(
+                "normalize_to_exact: start_len={} desired_len={} spilled={}",
+                limit,
+                desired.len(),
+                self.mem.spill_set().bitset().len()
+            );
+        }
+
+        let cost = SpillAwareCostModel {
+            base: EstimatedCostModel::default(),
+            spilled: self.mem.spill_set(),
+            // Approximate "new spill" overhead (store at def + reloads elsewhere).
+            new_spill_penalty: Cost { gas: 15, bytes: 7 },
+        };
+        let search_cfg = SearchCfg {
+            dup_max: self.ctx.reach.dup_max,
+            swap_max: self.ctx.reach.swap_max,
+            // Bound intermediate length to the stack reach window (+ optional slack).
+            max_len: self.ctx.reach.swap_max,
+            max_expansions: 50_000,
+        };
+
+        let Some(plan) =
+            solve_optimal_normalize_plan(self.ctx, self.stack, desired, &cost, search_cfg)
+        else {
+            if debug {
+                eprintln!("normalize_to_exact: solver returned None (falling back)");
+                dump_failed_normalization(self.stack, desired);
+            }
+            return false;
+        };
+
+        if debug {
+            let mut pops = 0usize;
+            let mut dups = 0usize;
+            let mut swaps = 0usize;
+            let mut pushes = 0usize;
+            let mut loads = 0usize;
+            for &s in &plan.steps {
+                match s {
+                    super::normalize_search::Step::Pop => pops += 1,
+                    super::normalize_search::Step::Dup(_) => dups += 1,
+                    super::normalize_search::Step::Swap(_) => swaps += 1,
+                    super::normalize_search::Step::PushImm(_) => pushes += 1,
+                    super::normalize_search::Step::LoadVal(_) => loads += 1,
+                }
+            }
+            eprintln!(
+                "normalize_to_exact: plan steps={} pop={} dup={} swap={} push={} load={}",
+                plan.steps.len(),
+                pops,
+                dups,
+                swaps,
+                pushes,
+                loads
+            );
+        }
+
+        for step in plan.steps.iter().copied() {
+            if !self.replay_normalize_step(step, &plan.key_infos) {
+                if debug {
+                    eprintln!("normalize_to_exact: replay failed");
+                }
                 return false;
             }
+        }
 
-            for &v in desired[..imm_prefix_len].iter().rev() {
-                let imm = self
+        // Rename immediate slots to desired ValueIds (restore exact contract).
+        for depth in 0..desired.len() {
+            let want = desired[depth];
+            if self.ctx.func.dfg.value_is_imm(want) {
+                let want_imm = self
                     .ctx
                     .func
                     .dfg
-                    .value_imm(v)
-                    .expect("imm value missing payload");
-                self.stack.push_imm(v, imm, self.actions);
-            }
-            return true;
-        }
-
-        let mut req: BTreeMap<ValueId, usize> = BTreeMap::new();
-        for &v in desired.iter() {
-            *req.entry(v).or_insert(0) += 1;
-        }
-
-        // 1) Remove any extra values (including duplicates) so the stack multiset matches `req`.
-        if !self.delete_to_match_multiset(&req) {
-            return false;
-        }
-
-        // 2) Materialize any missing required multiplicities (DUP, PUSH, or MLOAD).
-        limit = self.stack.len_above_func_ret();
-        if limit > self.ctx.reach.swap_max {
-            return false;
-        }
-
-        let mut cur: BTreeMap<ValueId, usize> = BTreeMap::new();
-        for item in self.stack.iter().take(limit) {
-            let StackItem::Value(v) = item else {
-                continue;
-            };
-            *cur.entry(*v).or_insert(0) += 1;
-        }
-
-        for (&v, &need) in req.iter() {
-            let have = cur.get(&v).copied().unwrap_or(0);
-            if have >= need {
-                continue;
-            }
-            for _ in have..need {
-                if self.ctx.func.dfg.value_is_imm(v) {
-                    let imm = self
-                        .ctx
-                        .func
-                        .dfg
-                        .value_imm(v)
-                        .expect("imm value missing payload");
-                    self.stack.push_imm(v, imm, self.actions);
-                } else if let Some(pos) = self.stack.find_reachable_value(v, self.ctx.reach.dup_max)
-                {
-                    self.stack.dup(pos, &mut *self.actions);
-                } else {
-                    self.push_value_from_spill_slot_or_mark(v, v);
+                    .value_imm(want)
+                    .expect("imm value missing payload")
+                    .as_i256();
+                let Some(StackItem::Value(cur)) = self.stack.item_at(depth) else {
+                    return false;
+                };
+                let cur_imm = self
+                    .ctx
+                    .func
+                    .dfg
+                    .value_imm(*cur)
+                    .expect("expected immediate value on stack")
+                    .as_i256();
+                if cur_imm != want_imm {
+                    if debug {
+                        eprintln!(
+                            "normalize_to_exact: immediate rename mismatch at depth {}: want={want_imm:?} cur={cur_imm:?}",
+                            depth
+                        );
+                    }
+                    return false;
                 }
+                self.stack.rename_value_at_depth(depth, want);
             }
         }
 
-        // 3) Permute to the exact required order (bottom-up) using only SWAPs.
-        if self.stack.len_above_func_ret() != desired.len() {
-            return false;
+        let ok = matches_exact(self.stack, desired);
+        if debug && !ok {
+            eprintln!("normalize_to_exact: final matches_exact failed");
         }
-        let base_len = self.stack.common_suffix_len(desired);
-        let permute_limit = desired.len().saturating_sub(base_len);
-        for (depth, &want) in desired.iter().take(permute_limit).enumerate().rev() {
-            if self.stack.item_at(depth) == Some(&StackItem::Value(want)) {
-                continue;
-            }
-
-            let Some(pos) = self.stack.find_reachable_value(want, depth + 1) else {
-                return false;
-            };
-
-            if pos != 0 {
-                self.stack.swap(pos, self.actions);
-            }
-            self.stack.swap(depth, self.actions);
-
-            debug_assert!(self.stack.item_at(depth) == Some(&StackItem::Value(want)));
-        }
-
-        true
+        ok
     }
 
     fn flush_rebuild(&mut self, desired: &[ValueId]) {
@@ -272,6 +197,39 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     }
 }
 
+struct SpillAwareCostModel<'a> {
+    base: EstimatedCostModel,
+    spilled: super::super::spill::SpillSet<'a>,
+    new_spill_penalty: Cost,
+}
+
+impl CostModel for SpillAwareCostModel<'_> {
+    fn cost_pop(&self) -> Cost {
+        self.base.cost_pop()
+    }
+
+    fn cost_dup(&self, pos: u8) -> Cost {
+        self.base.cost_dup(pos)
+    }
+
+    fn cost_swap(&self, depth: u8) -> Cost {
+        self.base.cost_swap(depth)
+    }
+
+    fn cost_push_imm(&self, imm: sonatina_ir::I256) -> Cost {
+        self.base.cost_push_imm(imm)
+    }
+
+    fn cost_load(&self, v: ValueId) -> Cost {
+        let base = self.base.cost_load(v);
+        if self.spilled.contains(v) {
+            base
+        } else {
+            base.saturating_add(self.new_spill_penalty)
+        }
+    }
+}
+
 fn matches_exact(stack: &SymStack, desired: &[ValueId]) -> bool {
     let limit = stack.len_above_func_ret();
     limit == desired.len()
@@ -280,4 +238,31 @@ fn matches_exact(stack: &SymStack, desired: &[ValueId]) -> bool {
             .take(limit)
             .zip(desired.iter().copied())
             .all(|(item, v)| item == &StackItem::Value(v))
+}
+
+fn normalize_debug_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        matches!(
+            std::env::var("SONATINA_STACKIFY_NORMALIZE_DEBUG")
+                .as_deref()
+                .ok(),
+            Some("1") | Some("true") | Some("yes")
+        )
+    })
+}
+
+fn dump_failed_normalization(stack: &SymStack, desired: &[ValueId]) {
+    static DUMPS: AtomicUsize = AtomicUsize::new(0);
+    if DUMPS.fetch_add(1, Ordering::Relaxed) >= 3 {
+        return;
+    }
+
+    let start: Vec<StackItem> = stack
+        .iter()
+        .take(stack.len_above_func_ret())
+        .cloned()
+        .collect();
+    eprintln!("normalize_to_exact: start={start:?}");
+    eprintln!("normalize_to_exact: desired={desired:?}");
 }
