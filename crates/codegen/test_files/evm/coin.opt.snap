@@ -118,8 +118,7 @@ func private %__Coin_recv_0_0(v0.i256, v1.i256) -> i256 {
         v21.i256 = add 2.i256 v1;
         v22.i256 = evm_sload v21;
         v23.i256 = add v22 v11;
-        v24.i256 = add 2.i256 v1;
-        evm_sstore v24 v23;
+        evm_sstore v21 v23;
         v25.i256 = evm_sload v1;
         return v25;
 
@@ -127,15 +126,12 @@ func private %__Coin_recv_0_0(v0.i256, v1.i256) -> i256 {
         v27.i256 = add 1.i256 v1;
         v28.i256 = evm_sload v27;
         v30.i256 = add v28 v11;
-        v31.i256 = add 1.i256 v1;
-        evm_sstore v31 v30;
+        evm_sstore v27 v30;
         v32.i256 = add 2.i256 v1;
         v33.i256 = evm_sload v32;
         v34.i256 = add v33 v11;
-        v35.i256 = add 2.i256 v1;
-        evm_sstore v35 v34;
-        v36.i256 = add 1.i256 v1;
-        v37.i256 = evm_sload v36;
+        evm_sstore v32 v34;
+        v37.i256 = evm_sload v27;
         return v37;
 }
 
@@ -181,19 +177,16 @@ func private %__Coin_recv_0_1(v0.i256, v1.i256) -> i256 {
         v33.i256 = add 1.i256 v1;
         v34.i256 = evm_sload v33;
         v35.i256 = add v34 v11;
-        v36.i256 = add 1.i256 v1;
-        evm_sstore v36 v35;
+        evm_sstore v33 v35;
         return 0.i256;
 
     block5:
         return 1.i256;
 
     block6:
-        v38.i256 = add 1.i256 v1;
-        v39.i256 = evm_sload v38;
+        v39.i256 = evm_sload v23;
         v41.i256 = sub v39 v11;
-        v42.i256 = add 1.i256 v1;
-        evm_sstore v42 v41;
+        evm_sstore v23 v41;
         v43.i256 = evm_sload v1;
         v44.i256 = add v43 v11;
         evm_sstore v1 v44;
@@ -222,6 +215,7 @@ func private %__Coin_init() {
         v2.i256 = sym_addr &__Coin_runtime;
         v3.i256 = sym_size &__Coin_runtime;
         v4.i256 = evm_code_size;
+        v6.i256 = add v2 v3;
         v39.i256 = add v2 v3;
         v40.i1 = lt v4 v39;
         v41.i256 = zext v40 i256;
@@ -237,22 +231,17 @@ func private %__Coin_init() {
         v17.i256 = sub v4 v43;
         v18.*i8 = evm_malloc v17;
         v19.i256 = ptr_to_int v18 i256;
-        v20.i256 = add v2 v3;
-        v44.i256 = add v2 v3;
-        v22.i256 = sub v4 v44;
-        evm_code_copy v19 v20 v22;
+        evm_code_copy v19 v6 v17;
         v24.*i8 = evm_malloc 64.i256;
         v25.i256 = ptr_to_int v24 i256;
         v26.*@__fe_MemoryBytes_2 = int_to_ptr v25 *@__fe_MemoryBytes_2;
         v27.*i256 = gep v26 0.i256 0.i256;
         v28.i256 = ptr_to_int v27 i256;
         mstore v28 v19 i256;
-        v45.i256 = add v2 v3;
-        v30.i256 = sub v4 v45;
         v31.*@__fe_MemoryBytes_2 = int_to_ptr v25 *@__fe_MemoryBytes_2;
         v33.*i256 = gep v31 0.i256 1.i256;
         v34.i256 = ptr_to_int v33 i256;
-        mstore v34 v30 i256;
+        mstore v34 v17 i256;
         v35.i256 = call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v25;
         evm_sstore 0.i256 0.i256;
         evm_sstore 1.i256 0.i256;

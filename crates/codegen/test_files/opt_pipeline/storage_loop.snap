@@ -48,8 +48,7 @@ func private %__Foo_runtime() {
         v14.i256 = evm_malloc 96.i256;
         v15.i256 = mload v23 i256;
         mstore v14 v15 i256;
-        v16.i256 = add 32.i256 v23;
-        v17.i256 = mload v16 i256;
+        v17.i256 = mload v24 i256;
         v18.i256 = add 32.i256 v14;
         mstore v18 v17 i256;
         v19.i256 = add 64.i256 v14;
@@ -99,8 +98,7 @@ func public %soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc
         v6.i256 = evm_malloc 96.i256;
         v7.i256 = mload v17 i256;
         mstore v6 v7 i256;
-        v9.i256 = add 32.i256 v17;
-        v10.i256 = mload v9 i256;
+        v10.i256 = mload v18 i256;
         v11.i256 = add 32.i256 v6;
         mstore v11 v10 i256;
         v13.i256 = add 64.i256 v6;
