@@ -19,13 +19,12 @@ pub enum CleanupMode {
 /// cleanup pass (e.g. `CfgCleanup`) before relying on CFG/phi invariants.
 pub struct CfgEditor<'f> {
     func: &'f mut Function,
-    cfg: ControlFlowGraph,
+    cfg: &'f mut ControlFlowGraph,
     mode: CleanupMode,
 }
 
 impl<'f> CfgEditor<'f> {
-    pub fn new(func: &'f mut Function, mode: CleanupMode) -> Self {
-        let mut cfg = ControlFlowGraph::default();
+    pub fn new(func: &'f mut Function, cfg: &'f mut ControlFlowGraph, mode: CleanupMode) -> Self {
         cfg.compute(func);
         Self { func, cfg, mode }
     }
@@ -39,7 +38,7 @@ impl<'f> CfgEditor<'f> {
     }
 
     pub fn cfg(&self) -> &ControlFlowGraph {
-        &self.cfg
+        self.cfg
     }
 
     pub fn recompute_cfg(&mut self) {
@@ -768,7 +767,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use sonatina_ir::{
-        Type,
+        ControlFlowGraph, Type,
         builder::test_util::{dump_func, test_func_builder, test_module_builder},
         inst::{
             arith::{Add, Sub},
@@ -809,7 +808,8 @@ mod tests {
         let module = mb.build();
         let func_ref = module.funcs()[0];
         module.func_store.modify(func_ref, |func| {
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut cfg = ControlFlowGraph::default();
+            let mut editor = CfgEditor::new(func, &mut cfg, CleanupMode::Strict);
             assert!(editor.replace_succ_allow_existing_pred(b0, b1, b2, &[]));
 
             let phi_inst = editor.func().layout.first_inst_of(b2).unwrap();
@@ -842,7 +842,8 @@ mod tests {
         let module = mb.build();
         let func_ref = module.funcs()[0];
         module.func_store.modify(func_ref, |func| {
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut cfg = ControlFlowGraph::default();
+            let mut editor = CfgEditor::new(func, &mut cfg, CleanupMode::Strict);
             let block = editor.func().layout.entry_block().unwrap();
             let first_inst = editor.func().layout.first_inst_of(block).unwrap();
             let arg0 = editor.func().arg_values[0];
@@ -922,7 +923,8 @@ mod tests {
         let module = mb.build();
         let func_ref = module.funcs()[0];
         module.func_store.modify(func_ref, |func| {
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut cfg = ControlFlowGraph::default();
+            let mut editor = CfgEditor::new(func, &mut cfg, CleanupMode::Strict);
             let preheader = editor
                 .create_or_reuse_loop_preheader(b3, &[b1, b2])
                 .expect("preheader must be created");
@@ -985,7 +987,8 @@ mod tests {
         let module = mb.build();
         let func_ref = module.funcs()[0];
         module.func_store.modify(func_ref, |func| {
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut cfg = ControlFlowGraph::default();
+            let mut editor = CfgEditor::new(func, &mut cfg, CleanupMode::Strict);
             let preheader = editor
                 .create_or_reuse_loop_preheader(b0, &[])
                 .expect("entry-only loop should create a reachable preheader");
@@ -1035,7 +1038,8 @@ mod tests {
         let module = mb.build();
         let func_ref = module.funcs()[0];
         module.func_store.modify(func_ref, |func| {
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut cfg = ControlFlowGraph::default();
+            let mut editor = CfgEditor::new(func, &mut cfg, CleanupMode::Strict);
             assert!(editor.create_or_reuse_loop_preheader(b0, &[]).is_none());
             assert_eq!(editor.func().layout.entry_block(), Some(b0));
             assert_eq!(editor.func().layout.iter_block().count(), 3);
@@ -1125,7 +1129,8 @@ mod tests {
         let module = mb.build();
         let func_ref = module.funcs()[0];
         module.func_store.modify(func_ref, |func| {
-            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let mut cfg = ControlFlowGraph::default();
+            let mut editor = CfgEditor::new(func, &mut cfg, CleanupMode::Strict);
             assert!(editor.merge_linear_successor(b1));
             assert!(!editor.func().layout.is_block_inserted(b2));
 

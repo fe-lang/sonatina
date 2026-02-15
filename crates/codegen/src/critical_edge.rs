@@ -30,13 +30,11 @@ impl CriticalEdgeSplitter {
         }
 
         let edges = std::mem::take(&mut self.critical_edges);
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        let mut editor = CfgEditor::new(func, cfg, CleanupMode::Strict);
         for edge in edges {
             let from = editor.func().layout.inst_block(edge.inst);
             editor.split_edge(from, edge.to);
         }
-
-        cfg.compute(editor.func());
     }
 
     pub fn clear(&mut self) {
