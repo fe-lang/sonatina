@@ -109,10 +109,10 @@ pub struct ArenaCostModel {
 impl Default for ArenaCostModel {
     fn default() -> Self {
         Self {
-            w_mem: 1,
+            w_mem: 3,
             w_save: 1,
-            w_code: 200,
-            w_stack: 0,
+            w_code: 50,
+            w_stack: 1,
             max_save_words_per_call: 128,
         }
     }

@@ -1,7 +1,7 @@
 target = "evm-ethereum-london"
 
 # sameln: func public %complex_loop() -> i8 {
-# nextln:     block3:
+# nextln:     block0:
 # nextln:         return 1.i8;
 func public %complex_loop() -> i8 {
     block0:

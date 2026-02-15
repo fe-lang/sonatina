@@ -173,6 +173,25 @@ func public %bad_br() -> unit {
 }
 
 #[test]
+fn cmp_result_type_is_checked() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_cmp_result() -> unit {
+    block0:
+        v0.i256 = lt 1.i256 2.i256;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}
+
+#[test]
 fn branch_table_without_destinations_is_rejected() {
     let src = r#"
 target = "evm-ethereum-london"

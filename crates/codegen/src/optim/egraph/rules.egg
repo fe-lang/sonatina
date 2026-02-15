@@ -136,7 +136,7 @@
 
 (rule ((= e (Ne x (Const (i256 0) ty)))
        (= ty (expr-type x)))
-      ((union e (Not (IsZero x)))))
+      ((union e (IsZero (IsZero x)))))
 
 ; --- Cast Simplification ---
 ; Collapse nested same casts.

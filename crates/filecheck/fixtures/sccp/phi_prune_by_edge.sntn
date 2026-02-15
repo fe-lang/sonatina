@@ -3,8 +3,7 @@
 target = "evm-ethereum-london"
 
 # sameln: func public %phi_prune_by_edge(v0.i32) -> i32 {
-# nextln:     block3:
-# nextln:         return v0;
+# check:         return v0;
 func public %phi_prune_by_edge(v0.i32) -> i32 {
     block0:
         jump block1;

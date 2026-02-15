@@ -38,6 +38,18 @@ impl Function {
     pub fn inst_set(&self) -> &'static dyn InstSetBase {
         self.dfg.inst_set()
     }
+
+    /// Recompute `dfg.users` from scratch using only layout-inserted instructions.
+    ///
+    /// Call this after passes that may leave stale user entries (e.g. egraph).
+    pub fn rebuild_users(&mut self) {
+        self.dfg.clear_users();
+        for block in self.layout.iter_block() {
+            for inst in self.layout.iter_inst(block) {
+                self.dfg.attach_user(inst);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

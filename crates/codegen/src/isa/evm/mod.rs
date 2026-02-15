@@ -27,13 +27,14 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, Immediate, InstId, InstSetExt, Module, Type, U256, ValueId,
     cfg::ControlFlowGraph,
-    inst::evm::inst_set::EvmInstKind,
+    inst::{control_flow::BranchKind, evm::inst_set::EvmInstKind},
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
     types::CompoundType,
 };
 use sonatina_triple::{EvmVersion, OperatingSystem};
 
+use cranelift_entity::EntityList;
 use mem_effects::compute_func_mem_effects;
 use memory_plan::{
     ArenaCostModel, CallPreserveChoice, DYN_FP_SLOT, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan,
@@ -66,6 +67,7 @@ pub struct EvmBackend {
     arena_cost_model: ArenaCostModel,
     section_state: RefCell<Option<PreparedSection>>,
     current_mem_plan: RefCell<Option<FuncMemPlan>>,
+    current_jump_targets: RefCell<Option<FxHashSet<BlockId>>>,
 }
 impl EvmBackend {
     pub fn new(isa: Evm) -> Self {
@@ -83,6 +85,7 @@ impl EvmBackend {
             arena_cost_model: ArenaCostModel::default(),
             section_state: RefCell::new(None),
             current_mem_plan: RefCell::new(None),
+            current_jump_targets: RefCell::new(None),
         }
     }
 
@@ -401,17 +404,283 @@ impl EvmBackend {
     ) -> Result<LoweredFunction<OpCode>, String> {
         let mem_plan = prepared.mem_plan;
 
-        let vcode = module.func_store.view(func, |function| {
+        let block_order = prepared.block_order;
+        let mut vcode = module.func_store.view(func, |function| {
             let _plan_guard = CurrentMemPlanGuard::new(&self.current_mem_plan, mem_plan.clone());
+            let jump_targets = compute_explicit_jump_targets(function, &block_order);
+            let _jump_targets_guard =
+                CurrentJumpTargetsGuard::new(&self.current_jump_targets, jump_targets);
             let mut alloc = FinalAlloc::new(prepared.alloc, mem_plan);
-            let lower = Lower::new(&module.ctx, function, &prepared.block_order);
+            let lower = Lower::new(&module.ctx, function, &block_order);
             lower.lower(self, &mut alloc).map_err(|e| format!("{e:?}"))
         })?;
+        prune_redundant_opcode_sequences(&mut vcode, &block_order);
 
-        Ok(LoweredFunction {
-            vcode,
-            block_order: prepared.block_order,
-        })
+        Ok(LoweredFunction { vcode, block_order })
+    }
+}
+
+fn compute_explicit_jump_targets(
+    function: &Function,
+    block_order: &[BlockId],
+) -> FxHashSet<BlockId> {
+    let mut next_in_layout: FxHashMap<BlockId, BlockId> = FxHashMap::default();
+    for window in block_order.windows(2) {
+        next_in_layout.insert(window[0], window[1]);
+    }
+
+    let mut targets: FxHashSet<BlockId> = FxHashSet::default();
+
+    for block in function.layout.iter_block() {
+        let Some(term) = function.layout.last_inst_of(block) else {
+            continue;
+        };
+        let Some(branch) = function.dfg.branch_info(term) else {
+            continue;
+        };
+
+        let next = next_in_layout.get(&block).copied();
+        match branch.branch_kind() {
+            BranchKind::Jump(jump) => {
+                let dest = *jump.dest();
+                if Some(dest) != next {
+                    targets.insert(dest);
+                }
+            }
+            BranchKind::Br(br) => {
+                let nz_dest = *br.nz_dest();
+                let z_dest = *br.z_dest();
+
+                if Some(nz_dest) == next {
+                    targets.insert(z_dest);
+                } else {
+                    targets.insert(nz_dest);
+                    if Some(z_dest) != next {
+                        targets.insert(z_dest);
+                    }
+                }
+            }
+            BranchKind::BrTable(table) => {
+                for &(_, dest) in table.table().iter() {
+                    targets.insert(dest);
+                }
+                if let Some(default) = table.default()
+                    && Some(*default) != next
+                {
+                    targets.insert(*default);
+                }
+            }
+        }
+    }
+
+    targets
+}
+
+fn is_push_opcode(op: OpCode) -> bool {
+    let byte = op as u8;
+    byte == OpCode::PUSH0 as u8 || (OpCode::PUSH1 as u8..=OpCode::PUSH32 as u8).contains(&byte)
+}
+
+#[derive(Clone, Copy)]
+enum StackPeepholeOp {
+    Push,
+    Dup(u8),
+    Swap(u8),
+    Pop,
+}
+
+fn classify_stack_peephole_op(
+    vcode: &VCode<OpCode>,
+    label_targets: &FxHashSet<VCodeInst>,
+    inst: VCodeInst,
+) -> Option<StackPeepholeOp> {
+    if label_targets.contains(&inst) || vcode.fixups.get(inst).is_some() {
+        return None;
+    }
+    let op = vcode.insts[inst];
+    if is_push_opcode(op) {
+        if (op as u8) == (OpCode::PUSH0 as u8) {
+            if vcode.inst_imm_bytes.get(inst).is_none() {
+                return Some(StackPeepholeOp::Push);
+            }
+            return None;
+        }
+        if vcode.inst_imm_bytes.get(inst).is_some() {
+            return Some(StackPeepholeOp::Push);
+        }
+        return None;
+    }
+    if vcode.inst_imm_bytes.get(inst).is_some() {
+        return None;
+    }
+    let byte = op as u8;
+    if byte == OpCode::POP as u8 {
+        return Some(StackPeepholeOp::Pop);
+    }
+    if (OpCode::DUP1 as u8..=OpCode::DUP16 as u8).contains(&byte) {
+        return Some(StackPeepholeOp::Dup(byte - OpCode::DUP1 as u8 + 1));
+    }
+    if (OpCode::SWAP1 as u8..=OpCode::SWAP16 as u8).contains(&byte) {
+        return Some(StackPeepholeOp::Swap(byte - OpCode::SWAP1 as u8 + 1));
+    }
+    None
+}
+
+fn is_bool_producer_opcode(op: OpCode) -> bool {
+    matches!(
+        op,
+        OpCode::LT
+            | OpCode::GT
+            | OpCode::SLT
+            | OpCode::SGT
+            | OpCode::EQ
+            | OpCode::ISZERO
+            | OpCode::CALL
+            | OpCode::CALLCODE
+            | OpCode::DELEGATECALL
+            | OpCode::STATICCALL
+    )
+}
+
+fn is_noop_stack_peephole_sequence(
+    vcode: &VCode<OpCode>,
+    label_targets: &FxHashSet<VCodeInst>,
+    insts: &[VCodeInst],
+) -> bool {
+    let mut stack: SmallVec<[u16; 64]> = (0..32).collect();
+    let initial = stack.clone();
+    let mut next_push_token: u16 = 1000;
+
+    for &inst in insts {
+        let Some(op) = classify_stack_peephole_op(vcode, label_targets, inst) else {
+            return false;
+        };
+        match op {
+            StackPeepholeOp::Push => {
+                stack.push(next_push_token);
+                next_push_token = next_push_token.wrapping_add(1);
+            }
+            StackPeepholeOp::Dup(depth) => {
+                let depth = depth as usize;
+                let len = stack.len();
+                if len < depth {
+                    return false;
+                }
+                let value = stack[len - depth];
+                stack.push(value);
+            }
+            StackPeepholeOp::Swap(depth) => {
+                let depth = depth as usize;
+                let len = stack.len();
+                if len <= depth {
+                    return false;
+                }
+                stack.swap(len - 1, len - 1 - depth);
+            }
+            StackPeepholeOp::Pop => {
+                if stack.pop().is_none() {
+                    return false;
+                }
+            }
+        }
+    }
+
+    stack == initial
+}
+
+fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_order: &[BlockId]) {
+    let mut label_targets: FxHashSet<VCodeInst> = FxHashSet::default();
+    for label in vcode.labels.values() {
+        if let Label::Insn(inst) = *label {
+            label_targets.insert(inst);
+        }
+    }
+
+    for block in block_order.iter().copied() {
+        let insts: Vec<VCodeInst> = vcode.block_insns(block).collect();
+        if insts.len() < 3 {
+            continue;
+        }
+
+        let mut kept: Vec<VCodeInst> = Vec::with_capacity(insts.len());
+        let mut changed = false;
+        let mut i = 0usize;
+        while i < insts.len() {
+            // Collapse redundant ISZERO chains after known boolean producers.
+            //
+            // If `op` produces a 0/1 value:
+            // - `op; iszero; iszero` is equivalent to `op`
+            // - more trailing `iszero`s reduce by parity.
+            if i + 2 < insts.len() {
+                let inst = insts[i];
+                if !label_targets.contains(&inst)
+                    && vcode.fixups.get(inst).is_none()
+                    && vcode.inst_imm_bytes.get(inst).is_none()
+                {
+                    let op = vcode.insts[inst];
+                    if is_bool_producer_opcode(op) {
+                        let mut j = i + 1;
+                        while j < insts.len() {
+                            let z = insts[j];
+                            if label_targets.contains(&z)
+                                || vcode.fixups.get(z).is_some()
+                                || vcode.inst_imm_bytes.get(z).is_some()
+                                || (vcode.insts[z] as u8) != (OpCode::ISZERO as u8)
+                            {
+                                break;
+                            }
+                            j += 1;
+                        }
+
+                        let run = j - (i + 1);
+                        if run >= 2 {
+                            kept.push(inst);
+                            if run % 2 == 1 {
+                                kept.push(insts[i + 1]);
+                            }
+                            changed = true;
+                            i = j;
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            const MAX_WINDOW: usize = 24;
+            let run_limit = (i + MAX_WINDOW).min(insts.len());
+            let mut run_end = i;
+            while run_end < run_limit
+                && classify_stack_peephole_op(vcode, &label_targets, insts[run_end]).is_some()
+            {
+                run_end += 1;
+            }
+
+            let mut removed = false;
+            if run_end >= i + 3 {
+                for end in (i + 3..=run_end).rev() {
+                    if is_noop_stack_peephole_sequence(vcode, &label_targets, &insts[i..end]) {
+                        changed = true;
+                        removed = true;
+                        i = end;
+                        break;
+                    }
+                }
+            }
+            if removed {
+                continue;
+            }
+
+            kept.push(insts[i]);
+            i += 1;
+        }
+
+        if changed {
+            let mut list: EntityList<VCodeInst> = Default::default();
+            for inst in kept {
+                list.push(inst, &mut vcode.insts_pool);
+            }
+            vcode.blocks[block] = list;
+        }
     }
 }
 
@@ -427,6 +696,23 @@ impl<'a> CurrentMemPlanGuard<'a> {
 }
 
 impl Drop for CurrentMemPlanGuard<'_> {
+    fn drop(&mut self) {
+        *self.slot.borrow_mut() = None;
+    }
+}
+
+struct CurrentJumpTargetsGuard<'a> {
+    slot: &'a RefCell<Option<FxHashSet<BlockId>>>,
+}
+
+impl<'a> CurrentJumpTargetsGuard<'a> {
+    fn new(slot: &'a RefCell<Option<FxHashSet<BlockId>>>, targets: FxHashSet<BlockId>) -> Self {
+        *slot.borrow_mut() = Some(targets);
+        Self { slot }
+    }
+}
+
+impl Drop for CurrentJumpTargetsGuard<'_> {
     fn drop(&mut self) {
         *self.slot.borrow_mut() = None;
     }
@@ -654,12 +940,18 @@ impl LowerBackend for EvmBackend {
         &self,
         ctx: &mut Lower<Self::MInst>,
         _alloc: &mut dyn Allocator,
-        _block: BlockId,
+        block: BlockId,
     ) {
-        // Every block start is a jumpdest unless
-        //  - all incoming edges are fallthroughs (TODO)
-        //  - it's the entry block of the main fn (TODO)
-        ctx.push(OpCode::JUMPDEST);
+        // Entry blocks and explicit jump targets need a `JUMPDEST`.
+        // Blocks reached purely by fallthrough do not.
+        let is_jump_target = self
+            .current_jump_targets
+            .borrow()
+            .as_ref()
+            .is_none_or(|targets| targets.contains(&block));
+        if ctx.is_entry(block) || is_jump_target {
+            ctx.push(OpCode::JUMPDEST);
+        }
     }
 
     fn lower(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, insn: InstId) {
@@ -690,10 +982,17 @@ impl LowerBackend for EvmBackend {
 
                 perform_actions(ctx, &alloc.read(insn, &args));
 
-                // `i1` is treated as a boolean; sext is equivalent to zext.
                 if src_bits == 1 {
-                    push_bytes(ctx, &[1]);
-                    ctx.push(OpCode::AND);
+                    // Canonicalize to low bit first in case the producer left a non-canonical
+                    // i1 payload on stack (e.g. raw MLOAD lowering), then materialize
+                    // {0, -1} as required by sign-extension semantics.
+                    if let Some(mask) = low_bits_mask(src_bits) {
+                        let bytes = u256_to_be(&mask);
+                        push_bytes(ctx, &bytes);
+                        ctx.push(OpCode::AND);
+                    }
+                    ctx.push(OpCode::PUSH0);
+                    ctx.push(OpCode::SUB);
                 } else if (8..256).contains(&src_bits) {
                     let src_bytes = (src_bits / 8) as u8;
                     debug_assert!(src_bytes > 0 && src_bytes <= 32);
@@ -1515,23 +1814,84 @@ fn align_to(offset: u32, align: u32) -> u32 {
     offset.checked_add(align - 1).expect("align overflow") & !(align - 1)
 }
 
+fn fold_stack_actions(actions: &[Action]) -> SmallVec<[Action; 8]> {
+    let mut out: SmallVec<[Action; 8]> = SmallVec::new();
+    for &action in actions {
+        out.push(action);
+        loop {
+            let len = out.len();
+
+            let mut changed = false;
+            if len >= 2 {
+                let prev = out[len - 2];
+                let last = out[len - 1];
+                let cancels = match (prev, last) {
+                    // SWAPn is its own inverse.
+                    (Action::StackSwap(a), Action::StackSwap(b)) => a == b,
+                    (Action::StackDup(_), Action::Pop) | (Action::Push(_), Action::Pop) => true,
+                    _ => false,
+                };
+                if cancels {
+                    out.truncate(len - 2);
+                    changed = true;
+                }
+            }
+
+            if !changed && len >= 3 {
+                let a = out[len - 3];
+                let b = out[len - 2];
+                let c = out[len - 1];
+                // For any existing top stack word x: PUSH a; SWAP1; POP transforms x -> x.
+                if matches!(a, Action::Push(_)) && b == Action::StackSwap(1) && c == Action::Pop {
+                    out.truncate(len - 3);
+                    changed = true;
+                }
+            }
+
+            if !changed && len >= 8 {
+                let i = len - 8;
+                // For any existing top stack word x and immediates a/b:
+                // PUSH a; PUSH b; SWAP1; SWAP2; SWAP1; POP; SWAP1; POP transforms x -> x.
+                if matches!(out[i], Action::Push(_))
+                    && matches!(out[i + 1], Action::Push(_))
+                    && out[i + 2] == Action::StackSwap(1)
+                    && out[i + 3] == Action::StackSwap(2)
+                    && out[i + 4] == Action::StackSwap(1)
+                    && out[i + 5] == Action::Pop
+                    && out[i + 6] == Action::StackSwap(1)
+                    && out[i + 7] == Action::Pop
+                {
+                    out.truncate(len - 8);
+                    changed = true;
+                }
+            }
+
+            if !changed {
+                break;
+            }
+        }
+    }
+    out
+}
+
 fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
-    for action in actions {
+    let folded = fold_stack_actions(actions);
+    for action in folded {
         match action {
             Action::StackDup(slot) => {
-                debug_assert!(*slot < 16, "DUP out of range: {slot}");
-                ctx.push(dup_op(*slot));
+                debug_assert!(slot < 16, "DUP out of range: {slot}");
+                ctx.push(dup_op(slot));
             }
             Action::StackSwap(n) => {
-                debug_assert!((1..=16).contains(n), "SWAP out of range: {n}");
-                ctx.push(swap_op(*n));
+                debug_assert!((1..=16).contains(&n), "SWAP out of range: {n}");
+                ctx.push(swap_op(n));
             }
             Action::Push(imm) => {
                 if imm.is_zero() {
                     ctx.push(OpCode::PUSH0);
                 } else {
                     let bytes = match imm {
-                        Immediate::I1(v) => smallvec![*v as u8],
+                        Immediate::I1(v) => smallvec![v as u8],
                         Immediate::I8(v) => SmallVec::from_slice(&v.to_be_bytes()),
                         Immediate::I16(v) => shrink_bytes(&v.to_be_bytes()),
                         Immediate::I32(v) => shrink_bytes(&v.to_be_bytes()),
@@ -1553,7 +1913,7 @@ fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
                 ctx.push(OpCode::POP);
             }
             Action::MemLoadAbs(offset) => {
-                let bytes = u32_to_be(*offset);
+                let bytes = u32_to_be(offset);
                 push_bytes(ctx, &bytes);
                 ctx.push(OpCode::MLOAD);
             }
@@ -1571,7 +1931,7 @@ fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
                 ctx.push(OpCode::MLOAD);
             }
             Action::MemStoreAbs(offset) => {
-                let bytes = u32_to_be(*offset);
+                let bytes = u32_to_be(offset);
                 push_bytes(ctx, &bytes);
                 ctx.push(OpCode::MSTORE);
             }
@@ -2050,6 +2410,52 @@ mod tests {
     use sonatina_ir::cfg::ControlFlowGraph;
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, TargetTriple, Vendor};
+
+    #[test]
+    fn fold_stack_actions_cancels_swap_self_inverse() {
+        let actions = [Action::StackSwap(7), Action::StackSwap(7)];
+        let folded = fold_stack_actions(&actions);
+        assert!(folded.is_empty());
+    }
+
+    #[test]
+    fn fold_stack_actions_keeps_nonmatching_dup_swap() {
+        let actions = [Action::StackDup(3), Action::StackSwap(3)];
+        let folded = fold_stack_actions(&actions);
+        assert_eq!(folded.as_slice(), actions.as_slice());
+    }
+
+    #[test]
+    fn fold_stack_actions_cancels_push_swap1_pop_noop() {
+        let actions = [
+            Action::Push(Immediate::I8(7)),
+            Action::StackSwap(1),
+            Action::Pop,
+        ];
+        let folded = fold_stack_actions(&actions);
+        assert!(folded.is_empty());
+    }
+
+    #[test]
+    fn fold_stack_actions_cancels_double_push_swap_pop_shuffle_noop() {
+        let actions = [
+            Action::StackSwap(3),
+            Action::Push(Immediate::I1(false)),
+            Action::Push(Immediate::I1(true)),
+            Action::StackSwap(1),
+            Action::StackSwap(2),
+            Action::StackSwap(1),
+            Action::Pop,
+            Action::StackSwap(1),
+            Action::Pop,
+            Action::StackSwap(4),
+        ];
+        let folded = fold_stack_actions(&actions);
+        assert_eq!(
+            folded.as_slice(),
+            [Action::StackSwap(3), Action::StackSwap(4)].as_slice()
+        );
+    }
 
     #[test]
     fn call_save_pre_tucks_saved_words_below_operands() {

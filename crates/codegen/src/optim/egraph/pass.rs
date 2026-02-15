@@ -16,9 +16,31 @@ const EXPRS: &str = include_str!("expr.egg");
 const RULES: &str = include_str!("rules.egg");
 const MEMORY: &str = include_str!("memory.egg");
 
+fn has_unknown_call_attrs(func: &Function) -> bool {
+    for block in func.layout.iter_block() {
+        for inst_id in func.layout.iter_inst(block) {
+            if let Some(call) = func.dfg.call_info(inst_id)
+                && func.ctx().func_attrs(call.callee()).is_empty()
+            {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Run e-graph optimization pass on a function.
 /// Returns true if the function was modified.
 pub fn run_egraph_pass(func: &mut Function) -> bool {
+    if has_unknown_call_attrs(func) {
+        debug_assert!(
+            false,
+            "run func_behavior::analyze_module before egraph on call-containing functions"
+        );
+        return false;
+    }
+
     // Build value map
     let mut value_map: FxHashMap<String, ValueId> = FxHashMap::default();
     let mut type_map: FxHashMap<String, Type> = FxHashMap::default();
@@ -341,6 +363,8 @@ fn is_trivially_dead_pure_inst(func: &Function, inst: InstId) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use sonatina_parser::parse_module;
+
     use super::*;
 
     #[test]
@@ -713,5 +737,28 @@ mod tests {
             .filter(|&inst_id| <&Mstore>::downcast(is, builder.func.dfg.inst(inst_id)).is_some())
             .count();
         assert_eq!(store_count, 2);
+    }
+
+    #[test]
+    fn run_egraph_pass_skips_when_call_attrs_unknown() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-london"
+
+declare external %ext();
+
+func private %f() {
+    block0:
+        call %ext;
+        return;
+}
+"#,
+        )
+        .expect("parse should succeed");
+
+        let func_ref = parsed.module.funcs()[0];
+        parsed.module.func_store.modify(func_ref, |func| {
+            assert!(!run_egraph_pass(func));
+        });
     }
 }

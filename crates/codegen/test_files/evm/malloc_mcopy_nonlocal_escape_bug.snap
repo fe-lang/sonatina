@@ -6,12 +6,12 @@ input_file: test_files/evm/malloc_mcopy_nonlocal_escape_bug.sntn
 evm.config: stack_reach=16 emit_debug_trace=false emit_mem_plan=true
 
 object: Contract
-  section runtime: 127 bytes
-  total: 127 bytes
+  section runtime: 118 bytes
+  total: 118 bytes
 
 functions:
   mem: dyn_base=0x1c0 static_base=0xc0
-  big: ir_blocks=1 ir_insts=5 vcode_ops=18 fixups=0 imm_bytes=4
+  big: ir_blocks=1 ir_insts=5 vcode_ops=17 fixups=0 imm_bytes=4
     mem: scheme=StaticArena need_words=8 locals_words=8
   esc: ir_blocks=1 ir_insts=8 vcode_ops=56 fixups=4 imm_bytes=10
     mem: scheme=StaticArena need_words=1 locals_words=1
@@ -38,4 +38,4 @@ evm mem plan: entry scheme=StaticArena need_words=8 locals_words=0
   call inst0 callee=%main callee_need_words=8 choice=Save has_return=true save_words=0
 
 evm:
-  case bug_demo: calldata_len=8 success reason=Return gas_used=21400 gas_refunded=0 logs=0 output=call len=32
+  case bug_demo: calldata_len=8 success reason=Return gas_used=21379 gas_refunded=0 logs=0 output=call len=32

@@ -12,7 +12,8 @@ use rustc_hash::FxHashSet;
 use sonatina_ir::{
     BlockId, Function, InstDowncast, InstId, Type, U256, Value, ValueId,
     cfg::ControlFlowGraph,
-    inst::{arith::*, cast::*, cmp::*, control_flow::Phi, data::*, evm::*, logic::*},
+    inst::{SideEffect, arith::*, cast::*, cmp::*, control_flow::Phi, data::*, evm::*, logic::*},
+    module::FuncAttrs,
 };
 
 const TYPES: &str = include_str!("types.egg");
@@ -493,8 +494,36 @@ fn inst_to_egglog_with_mem(
         return Some((egglog, Some(new_mem)));
     }
 
-    // Fall back to non-memory instruction conversion
-    inst_to_egglog(func, inst_id, known_values).map(|s| (s, None))
+    let new_mem = if inst_writes_memory(func, inst_id) {
+        *mem_counter += 1;
+        Some(format!("mem{}", *mem_counter))
+    } else {
+        None
+    };
+
+    // Fall back to non-memory instruction conversion.
+    // Some write-barrier instructions (e.g. no-result calls) have no egglog term.
+    if let Some(stmt) = inst_to_egglog(func, inst_id, known_values) {
+        return Some((stmt, new_mem));
+    }
+
+    new_mem.map(|mem| {
+        (
+            format!("; memory-barrier inst{}", inst_id.as_u32()),
+            Some(mem),
+        )
+    })
+}
+
+fn inst_writes_memory(func: &Function, inst_id: InstId) -> bool {
+    if let Some(call) = func.dfg.call_info(inst_id) {
+        return func
+            .ctx()
+            .func_attrs(call.callee())
+            .contains(FuncAttrs::MEM_WRITE);
+    }
+
+    matches!(func.dfg.inst(inst_id).side_effect(), SideEffect::Write)
 }
 
 fn value_name(v: ValueId) -> String {
@@ -547,10 +576,80 @@ fn type_to_egglog(ty: Type) -> String {
 
 #[cfg(test)]
 mod tests {
+    use smallvec::smallvec;
+    use sonatina_ir::{
+        InstSetBase, Linkage, Signature,
+        builder::test_util::{test_func_builder, test_module_builder},
+        inst::{
+            control_flow::{Call, Return},
+            data::{Mload, Mstore},
+        },
+        isa::Isa,
+    };
+
     use super::*;
+
+    fn call_load_mem_id(attrs: FuncAttrs) -> u32 {
+        let mb = test_module_builder();
+        let callee_sig = Signature::new("callee", Linkage::Public, &[], Type::Unit);
+        let callee = mb.declare_function(callee_sig).unwrap();
+        mb.ctx.set_func_attrs(callee, attrs);
+
+        let ptr_ty = mb.ptr_type(Type::I32);
+        let (evm, mut builder) = test_func_builder(&mb, &[ptr_ty], Type::Unit);
+        let is = evm.inst_set();
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let addr = builder.func.arg_values[0];
+        let v10 = builder.make_imm_value(10i32);
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v10, Type::I32));
+        builder.insert_inst_no_result_with(|| {
+            Call::new(
+                is.has_call().expect("target ISA must support `call`"),
+                callee,
+                smallvec![],
+            )
+        });
+        builder.insert_inst_with(|| Mload::new(is, addr, Type::I32), Type::I32);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.seal_all();
+
+        let program = func_to_egglog(&builder.func);
+        let mem_ids: Vec<u32> = program
+            .lines()
+            .filter_map(|line| {
+                let (_, rest) = line.split_once("(LoadResult ")?;
+                let mut fields = rest.split_whitespace();
+                let _load_id = fields.next()?;
+                fields.next()?.parse().ok()
+            })
+            .collect();
+
+        assert_eq!(mem_ids.len(), 1, "expected one load in:\n{program}");
+        mem_ids[0]
+    }
 
     #[test]
     fn test_basic() {
         assert_eq!(type_to_egglog(Type::I32), "(I32)");
+    }
+
+    #[test]
+    fn test_mem_write_call_advances_memory() {
+        let mem_id = call_load_mem_id(FuncAttrs::MEM_WRITE | FuncAttrs::WILLRETURN);
+        assert_eq!(mem_id, 2);
+    }
+
+    #[test]
+    fn test_pure_call_does_not_advance_memory() {
+        let mem_id = call_load_mem_id(FuncAttrs::WILLRETURN);
+        assert_eq!(mem_id, 1);
+    }
+
+    #[test]
+    fn test_noreturn_mem_write_call_still_advances_memory() {
+        let mem_id = call_load_mem_id(FuncAttrs::MEM_WRITE | FuncAttrs::NORETURN);
+        assert_eq!(mem_id, 2);
     }
 }

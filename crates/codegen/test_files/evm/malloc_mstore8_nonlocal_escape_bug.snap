@@ -6,12 +6,12 @@ input_file: test_files/evm/malloc_mstore8_nonlocal_escape_bug.sntn
 evm.config: stack_reach=16 emit_debug_trace=false emit_mem_plan=true
 
 object: Contract
-  section runtime: 123 bytes
-  total: 123 bytes
+  section runtime: 115 bytes
+  total: 115 bytes
 
 functions:
   mem: dyn_base=0x1c0 static_base=0xc0
-  big: ir_blocks=1 ir_insts=5 vcode_ops=16 fixups=0 imm_bytes=2
+  big: ir_blocks=1 ir_insts=5 vcode_ops=15 fixups=0 imm_bytes=2
     mem: scheme=StaticArena need_words=8 locals_words=8
   esc8: ir_blocks=1 ir_insts=8 vcode_ops=55 fixups=4 imm_bytes=11
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -36,4 +36,4 @@ evm mem plan: entry scheme=StaticArena need_words=8 locals_words=0
   call inst0 callee=%main callee_need_words=8 choice=Save has_return=true save_words=0
 
 evm:
-  case bug_demo: calldata_len=8 success reason=Return gas_used=21388 gas_refunded=0 logs=0 output=call len=32
+  case bug_demo: calldata_len=8 success reason=Return gas_used=21368 gas_refunded=0 logs=0 output=call len=32

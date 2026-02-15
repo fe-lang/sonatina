@@ -218,6 +218,11 @@ impl DataFlowGraph {
         self.users[value_id].len()
     }
 
+    /// Clear all user sets. Used before `rebuild_users` on `Function`.
+    pub fn clear_users(&mut self) {
+        self.users.clear();
+    }
+
     pub fn users_set(&self, value_id: ValueId) -> Option<&BTreeSet<InstId>> {
         self.users.get(value_id)
     }

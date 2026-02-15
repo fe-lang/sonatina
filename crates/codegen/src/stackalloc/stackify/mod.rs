@@ -38,7 +38,7 @@ const SWAP_WINDOW_MAX: usize = SWAP_DEPTH_MAX + 1; // reachable items (incl. top
 ///
 /// This is a purely local heuristic: we rotate a last-use value up (preserving the current
 /// operand prefix order) so the instruction consumes it, avoiding a `DUP*` + later cleanup.
-const CONSUME_LAST_USE_MAX_SWAPS: usize = 3;
+const CONSUME_LAST_USE_MAX_SWAPS: usize = 4;
 
 #[cfg(test)]
 mod tests {

@@ -11,7 +11,7 @@ use sonatina_ir::{
 
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
-    optim::cfg_cleanup::CfgCleanup,
+    optim::{call_purity::is_removable_pure_call, cfg_cleanup::CfgCleanup},
     post_domtree::{PDFSet, PDTIdom, PostDomTree},
 };
 
@@ -60,12 +60,19 @@ impl AdceSolver {
             return false;
         }
 
+        // The entry block must always be live — removing it would shift
+        // the layout so a different block becomes the entry, breaking
+        // the function's control flow.
+        if let Some(entry) = func.layout.entry_block() {
+            self.mark_block(entry);
+            if let Some(term) = func.layout.last_inst_of(entry) {
+                self.mark_inst(func, term);
+            }
+        }
+
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                if matches!(
-                    func.dfg.side_effect(inst),
-                    SideEffect::Write | SideEffect::Control
-                ) {
+                if is_live_root_inst(func, inst) {
                     self.mark_inst(func, inst);
                 }
             }
@@ -126,6 +133,16 @@ impl AdceSolver {
                 self.mark_inst(func, value_inst);
             }
         });
+
+        // A live phi semantically depends on predecessor edges.
+        // Keep predecessor terminators live so we do not erase incoming values.
+        if let Some(phi) = func.dfg.cast_phi(inst_id) {
+            for &(_, pred) in phi.args() {
+                if let Some(term) = func.layout.last_inst_of(pred) {
+                    self.mark_inst(func, term);
+                }
+            }
+        }
 
         let inst_block = func.layout.inst_block(inst_id);
         for &block in pdf_set.frontiers(inst_block) {
@@ -241,5 +258,73 @@ impl AdceSolver {
 impl Default for AdceSolver {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn is_live_root_inst(func: &Function, inst_id: InstId) -> bool {
+    if func.dfg.call_info(inst_id).is_some() {
+        return !is_removable_pure_call(func, inst_id);
+    }
+
+    matches!(
+        func.dfg.side_effect(inst_id),
+        SideEffect::Write | SideEffect::Control
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use sonatina_ir::{Module, ir_writer::FuncWriter};
+
+    use super::AdceSolver;
+
+    fn parse_module(input: &str) -> sonatina_parser::ParsedModule {
+        sonatina_parser::parse_module(input).unwrap_or_else(|errs| panic!("parse failed: {errs:?}"))
+    }
+
+    fn only_func_ref(module: &Module) -> sonatina_ir::module::FuncRef {
+        let funcs = module.funcs();
+        assert_eq!(funcs.len(), 1);
+        funcs[0]
+    }
+
+    #[test]
+    fn keeps_phi_entry_pred_edge_live() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (v0 block0) (v2 block2);
+        v3.i1 = lt v1 10.i256;
+        br v3 block2 block3;
+
+    block2:
+        v2.i256 = add v1 1.i256;
+        jump block1;
+
+    block3:
+        return v1;
+}
+"#;
+
+        let parsed = parse_module(source);
+        let func_ref = only_func_ref(&parsed.module);
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            AdceSolver::new().run(func);
+        });
+
+        parsed.module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("phi (v0 block0)")
+                    && dumped.contains("block0:\n        jump block1;"),
+                "ADCE must keep the entry predecessor for live phi values:\n{dumped}"
+            );
+        });
     }
 }

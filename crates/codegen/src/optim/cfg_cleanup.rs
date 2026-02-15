@@ -43,12 +43,54 @@ impl CfgCleanup {
             changed |= crate::cfg_edit::simplify_trivial_phis_in_block(editor.func_mut(), block);
         }
 
+        let merged = merge_linear_blocks(&mut editor);
+        changed |= merged;
+        if merged {
+            let blocks: Vec<_> = editor.func().layout.iter_block().collect();
+            for block in blocks {
+                assert_phis_leading(editor.func(), block);
+
+                let preds: BTreeSet<_> = editor.cfg().preds_of(block).copied().collect();
+                changed |= prune_phi_to_preds(editor.func_mut(), block, &preds, self.mode);
+                changed |=
+                    crate::cfg_edit::simplify_trivial_phis_in_block(editor.func_mut(), block);
+            }
+        }
+
         if matches!(self.mode, CleanupMode::Strict) {
             assert_ir_invariants(editor.func(), editor.cfg());
         }
 
         changed
     }
+}
+
+fn merge_linear_blocks(editor: &mut CfgEditor) -> bool {
+    let mut changed = false;
+    let mut budget = editor.func().layout.iter_block().count().saturating_mul(2);
+
+    while budget > 0 {
+        budget -= 1;
+        let blocks: Vec<_> = editor.func().layout.iter_block().collect();
+        let mut merged = false;
+
+        for block in blocks {
+            if !editor.func().layout.is_block_inserted(block) {
+                continue;
+            }
+            if editor.fold_trampoline_block(block) || editor.merge_linear_successor(block) {
+                merged = true;
+                changed = true;
+                break;
+            }
+        }
+
+        if !merged {
+            break;
+        }
+    }
+
+    changed
 }
 
 fn trim_after_noreturn_call(func: &mut Function) -> bool {

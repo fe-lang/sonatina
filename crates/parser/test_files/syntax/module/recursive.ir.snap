@@ -2,6 +2,6 @@
 source: crates/parser/tests/syntax.rs
 input_file: test_files/syntax/module/recursive.sntn
 ---
-target = evm-ethereum-london
+target = "evm-ethereum-london"
 
 type @Node = {*@Node};

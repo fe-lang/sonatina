@@ -1,0 +1,134 @@
+---
+source: crates/codegen/tests/opt_pipeline.rs
+assertion_line: 46
+input_file: test_files/opt_pipeline/storage_loop.sntn
+---
+target = "evm-ethereum-osaka"
+
+func private %update_count__StorPtr_u256___64779554cfbf0358(v0.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = phi (0.i256 block0) (v13 block2);
+        v5.i1 = lt v3 20.i256;
+        br v5 block2 block4;
+
+    block2:
+        v9.i256 = evm_sload v0;
+        v11.i256 = add 1.i256 v9;
+        evm_sstore v0 v11;
+        v13.i256 = add 1.i256 v3;
+        jump block1;
+
+    block4:
+        return;
+}
+
+func private %__Foo_init() {
+    block0:
+        v2.i256 = sym_addr &__Foo_runtime;
+        v3.i256 = sym_size &__Foo_runtime;
+        evm_code_copy 0.i256 v2 v3;
+        evm_return 0.i256 v3;
+}
+
+func private %__Foo_runtime() {
+    block0:
+        v2.i256 = call %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2;
+        v20.i256 = evm_malloc 64.i256;
+        mstore v20 0.i256 i256;
+        v21.i256 = add 32.i256 v20;
+        mstore v21 0.i256 i256;
+        v22.i256 = mload v20 i256;
+        v23.i256 = evm_malloc 64.i256;
+        mstore v23 v22 i256;
+        v24.i256 = add 32.i256 v23;
+        mstore v24 4.i256 i256;
+        v14.i256 = evm_malloc 96.i256;
+        v15.i256 = mload v23 i256;
+        mstore v14 v15 i256;
+        v16.i256 = add 32.i256 v23;
+        v17.i256 = mload v16 i256;
+        v18.i256 = add 32.i256 v14;
+        mstore v18 v17 i256;
+        v19.i256 = add 64.i256 v14;
+        mstore v19 4.i256 i256;
+        v5.i1 = eq 1.i256 v2;
+        br v5 block2 block1;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        call %update_count__StorPtr_u256___64779554cfbf0358 0.i256;
+        evm_return 0.i256 0.i256;
+}
+
+func private %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> i256 {
+    block0:
+        v7.i256 = evm_calldata_size;
+        v4.i1 = lt v7 4.i256;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v10.i256 = evm_calldata_load 0.i256;
+        v12.i256 = shr 224.i256 v10;
+        return v12;
+}
+
+func public %soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256, v1.i256) -> i256 {
+    block0:
+        v14.i256 = evm_malloc 64.i256;
+        mstore v14 v0 i256;
+        v15.i256 = add 32.i256 v14;
+        mstore v15 0.i256 i256;
+        v16.i256 = mload v14 i256;
+        v17.i256 = evm_malloc 64.i256;
+        mstore v17 v16 i256;
+        v18.i256 = add 32.i256 v17;
+        mstore v18 v1 i256;
+        v6.i256 = evm_malloc 96.i256;
+        v7.i256 = mload v17 i256;
+        mstore v6 v7 i256;
+        v9.i256 = add 32.i256 v17;
+        v10.i256 = mload v9 i256;
+        v11.i256 = add 32.i256 v6;
+        mstore v11 v10 i256;
+        v13.i256 = add 64.i256 v6;
+        mstore v13 v1 i256;
+        return v6;
+}
+
+func public %cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256) -> i256 {
+    block0:
+        v3.i256 = evm_malloc 64.i256;
+        mstore v3 v0 i256;
+        v5.i256 = add 32.i256 v3;
+        mstore v5 0.i256 i256;
+        return v3;
+}
+
+func public %cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = mload v0 i256;
+        v5.i256 = evm_malloc 64.i256;
+        mstore v5 v3 i256;
+        v7.i256 = add 32.i256 v5;
+        mstore v7 v1 i256;
+        return v5;
+}
+
+
+object @Foo {
+    section init {
+        entry %__Foo_init;
+        embed .runtime as &__Foo_runtime;
+    }
+    section runtime {
+        entry %__Foo_runtime;
+    }
+}

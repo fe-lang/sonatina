@@ -6,13 +6,13 @@ input_file: test_files/evm/phi_dup.sntn
 evm.config: stack_reach=16 emit_debug_trace=false
 
 object: Contract
-  section runtime: 34 bytes
-  total: 34 bytes
+  section runtime: 33 bytes
+  total: 33 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
-  entry: ir_blocks=4 ir_insts=13 vcode_ops=28 fixups=2 imm_bytes=4
+  entry: ir_blocks=4 ir_insts=13 vcode_ops=27 fixups=2 imm_bytes=4
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21130 gas_refunded=0 logs=0 output=call len=32
+  case ok: calldata_len=8 success reason=Return gas_used=21129 gas_refunded=0 logs=0 output=call len=32

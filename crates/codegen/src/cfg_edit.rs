@@ -373,6 +373,62 @@ impl<'f> CfgEditor<'f> {
         true
     }
 
+    pub fn merge_linear_successor(&mut self, block: BlockId) -> bool {
+        if !self.func.layout.is_block_inserted(block) {
+            return false;
+        }
+
+        let Some(term) = self.func.layout.last_inst_of(block) else {
+            return false;
+        };
+        let Some(jump) = self.func.dfg.cast_jump(term) else {
+            return false;
+        };
+        let succ = *jump.dest();
+        if succ == block
+            || !self.func.layout.is_block_inserted(succ)
+            || self.func.layout.entry_block() == Some(succ)
+        {
+            return false;
+        }
+
+        let preds: Vec<_> = self.cfg.preds_of(succ).copied().collect();
+        if preds.as_slice() != [block] {
+            return false;
+        }
+
+        simplify_trivial_phis_in_block(self.func, succ);
+        if self
+            .func
+            .layout
+            .first_inst_of(succ)
+            .is_some_and(|inst| self.func.dfg.is_phi(inst))
+        {
+            return false;
+        }
+
+        let succ_succs: Vec<_> = self.cfg.succs_of(succ).copied().collect();
+        InstInserter::at_location(CursorLocation::At(term)).remove_inst(self.func);
+
+        let succ_insts: Vec<_> = self.func.layout.iter_inst(succ).collect();
+        for inst in succ_insts {
+            self.func.layout.remove_inst(inst);
+            self.func.layout.append_inst(inst, block);
+        }
+
+        for succ_succ in succ_succs {
+            if !self.func.layout.is_block_inserted(succ_succ) {
+                continue;
+            }
+            replace_phi_incoming_block(self.func, succ_succ, succ, block);
+            simplify_trivial_phis_in_block(self.func, succ_succ);
+        }
+
+        InstInserter::at_location(CursorLocation::BlockTop(succ)).remove_block(self.func);
+        self.recompute_cfg();
+        true
+    }
+
     pub fn delete_block_unreachable(&mut self, b: BlockId) -> bool {
         if !self.func.layout.is_block_inserted(b) {
             return false;
@@ -628,7 +684,22 @@ pub(crate) fn simplify_trivial_phi(func: &mut Function, phi_inst: InstId) -> boo
                 first
             }
         }
-        _ => return false,
+        Some(_) => {
+            let mut non_self = None;
+            for &(value, _) in phi.args() {
+                if value == phi_value {
+                    continue;
+                }
+
+                match non_self {
+                    Some(existing) if existing != value => return false,
+                    Some(_) => {}
+                    None => non_self = Some(value),
+                }
+            }
+
+            non_self.unwrap_or_else(|| func.dfg.make_undef_value(ty))
+        }
     };
 
     func.dfg.change_to_alias(phi_value, arg);
@@ -707,7 +778,7 @@ mod tests {
         isa::Isa,
     };
 
-    use super::{CfgEditor, CleanupMode};
+    use super::{CfgEditor, CleanupMode, simplify_trivial_phis_in_block};
 
     #[test]
     fn replace_succ_allow_existing_pred_does_not_duplicate_phi_inputs() {
@@ -968,6 +1039,105 @@ mod tests {
             assert!(editor.create_or_reuse_loop_preheader(b0, &[]).is_none());
             assert_eq!(editor.func().layout.entry_block(), Some(b0));
             assert_eq!(editor.func().layout.iter_block().count(), 3);
+        });
+    }
+
+    #[test]
+    fn simplify_trivial_phi_folds_self_recursive_invariant() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I1, Type::I32], Type::I32);
+        let is = evm.inst_set();
+
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+        let b2 = builder.append_block();
+        let b3 = builder.append_block();
+        let cond = builder.args()[0];
+        let seed = builder.args()[1];
+
+        builder.switch_to_block(b0);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b1));
+
+        builder.switch_to_block(b1);
+        let phi = builder.insert_inst_with(|| Phi::new(is, vec![(seed, b0)]), Type::I32);
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, b2, b3));
+
+        builder.switch_to_block(b2);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b1));
+        builder.append_phi_arg(phi, phi, b2);
+
+        builder.switch_to_block(b3);
+        builder.insert_inst_no_result_with(|| Return::new(is, Some(phi)));
+
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            assert!(simplify_trivial_phis_in_block(func, b1));
+
+            let first = func.layout.first_inst_of(b1).unwrap();
+            assert!(!func.dfg.is_phi(first));
+
+            let term = func.layout.last_inst_of(b3).unwrap();
+            assert_eq!(func.dfg.as_return(term), Some(seed));
+        });
+    }
+
+    #[test]
+    fn merge_linear_successor_rewrites_phi_predecessor() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I1, Type::I32], Type::I32);
+        let is = evm.inst_set();
+
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+        let b2 = builder.append_block();
+        let b3 = builder.append_block();
+        let b4 = builder.append_block();
+        let cond = builder.args()[0];
+        let seed = builder.args()[1];
+
+        builder.switch_to_block(b0);
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, b1, b4));
+
+        builder.switch_to_block(b1);
+        let one = builder.make_imm_value(1i32);
+        let v1 = builder.insert_inst_with(|| Add::new(is, seed, one), Type::I32);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b2));
+
+        builder.switch_to_block(b2);
+        let two = builder.make_imm_value(2i32);
+        let v2 = builder.insert_inst_with(|| Add::new(is, v1, two), Type::I32);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b3));
+
+        builder.switch_to_block(b4);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b3));
+
+        builder.switch_to_block(b3);
+        let phi = builder.insert_inst_with(|| Phi::new(is, vec![(v2, b2), (seed, b4)]), Type::I32);
+        builder.insert_inst_no_result_with(|| Return::new(is, Some(phi)));
+
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            assert!(editor.merge_linear_successor(b1));
+            assert!(!editor.func().layout.is_block_inserted(b2));
+
+            let b1_term = editor.func().layout.last_inst_of(b1).unwrap();
+            let b1_jump = editor.func().dfg.cast_jump(b1_term).unwrap();
+            assert_eq!(*b1_jump.dest(), b3);
+
+            let phi_inst = editor.func().layout.first_inst_of(b3).unwrap();
+            let phi = editor.func().dfg.cast_phi(phi_inst).unwrap();
+            assert!(phi.args().iter().any(|(_, pred)| *pred == b1));
+            assert!(phi.args().iter().any(|(_, pred)| *pred == b4));
+            assert!(!phi.args().iter().any(|(_, pred)| *pred == b2));
         });
     }
 }

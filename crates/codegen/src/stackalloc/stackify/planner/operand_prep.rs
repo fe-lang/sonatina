@@ -3,8 +3,8 @@ use crate::{
     stackalloc::{Action, Actions},
 };
 use smallvec::SmallVec;
-use sonatina_ir::{Function, InstId, ValueId};
-use std::collections::{BinaryHeap, HashMap};
+use sonatina_ir::{InstId, ValueId};
+use std::collections::{BTreeMap, BinaryHeap, HashMap};
 
 use super::{
     super::{CONSUME_LAST_USE_MAX_SWAPS, sym_stack::StackItem},
@@ -23,11 +23,17 @@ struct OperandPrepMetric {
     actions: usize,
 }
 
-struct BinaryOperandPrepPlan {
+struct SearchOperandPrepPlan {
     actions: Actions,
     /// Stack above the function return barrier, after applying `actions`.
     final_stack: Vec<StackItem>,
     metric: OperandPrepMetric,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OperandRequirement {
+    needed_total: usize,
+    is_immediate: bool,
 }
 
 impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
@@ -65,12 +71,12 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             return;
         }
 
-        // For binary ops, solve operand preparation via a small exact search over `DUP*`/`SWAP*`
-        // and choose the cheapest plan. This models "consume in place" correctly and avoids
-        // redundant swap chains (common with the greedy per-operand preparation).
-        if args.len() == 2 && args[0] != args[1] {
+        // For small arities, solve operand preparation via a bounded exact search over
+        // `DUP*`/`SWAP*`/`PUSH*`. This models "consume in place" correctly and avoids redundant
+        // swap chains (common with greedy per-operand preparation), especially around calls.
+        if (2..=5).contains(&args.len()) {
             let commutative = self.inst_is_commutative(inst);
-            if self.try_prepare_operands_binary_via_search(args, consume_last_use, commutative) {
+            if self.try_prepare_operands_small_via_search(args, consume_last_use, commutative) {
                 return;
             }
         }
@@ -106,21 +112,23 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         self.prepare_operands(args, consume_last_use);
     }
 
-    fn try_prepare_operands_binary_via_search(
+    fn try_prepare_operands_small_via_search(
         &mut self,
         args: &mut SmallVec<[ValueId; 8]>,
         consume_last_use: &BitSet<ValueId>,
         commutative: bool,
     ) -> bool {
-        debug_assert_eq!(args.len(), 2);
-        let order = [args[0], args[1]];
-        let mut best: Option<(BinaryOperandPrepPlan, bool)> = self
-            .search_binary_operand_prep(order, consume_last_use)
+        debug_assert!((2..=5).contains(&args.len()));
+
+        let order: SmallVec<[ValueId; 4]> = args.iter().copied().collect();
+        let mut best: Option<(SearchOperandPrepPlan, bool)> = self
+            .search_small_operand_prep(&order, consume_last_use)
             .map(|p| (p, false));
 
-        if commutative {
-            let swapped_order = [args[1], args[0]];
-            if let Some(swapped) = self.search_binary_operand_prep(swapped_order, consume_last_use)
+        if commutative && args.len() == 2 && args[0] != args[1] {
+            let mut swapped_order = order.clone();
+            swapped_order.swap(0, 1);
+            if let Some(swapped) = self.search_small_operand_prep(&swapped_order, consume_last_use)
             {
                 let better = match &best {
                     None => true,
@@ -144,25 +152,45 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         true
     }
 
-    fn search_binary_operand_prep(
+    fn search_small_operand_prep(
         &self,
-        target: [ValueId; 2],
+        target: &[ValueId],
         consume_last_use: &BitSet<ValueId>,
-    ) -> Option<BinaryOperandPrepPlan> {
-        const MAX_ACTIONS: usize = 12;
+    ) -> Option<SearchOperandPrepPlan> {
+        let max_actions = match target.len() {
+            2 => 12,
+            3 => 14,
+            4 => 16,
+            5 => 18,
+            _ => return None,
+        };
 
         let above_len = self.stack.len_above_func_ret();
         let initial: Vec<StackItem> = self.stack.iter().take(above_len).cloned().collect();
+        let requirements = self.target_requirements(target, consume_last_use);
 
-        // Only optimize when both operands can be produced without touching memory: either an
-        // immediate, or already present within `SWAP16` reach.
-        for v in target {
-            if !self.ctx.func.dfg.value_is_imm(v) {
-                let reachable = initial
-                    .iter()
-                    .take(self.ctx.reach.swap_max)
-                    .any(|i| matches!(i, StackItem::Value(x) if *x == v));
-                if !reachable {
+        // Only optimize when all non-immediate operands can be produced without touching memory.
+        let max_dup = self.ctx.reach.dup_max.min(initial.len());
+        for (&v, req) in &requirements {
+            if req.is_immediate {
+                continue;
+            }
+
+            let total_existing = initial
+                .iter()
+                .filter(|i| matches!(i, StackItem::Value(x) if *x == v))
+                .count();
+            let reachable_by_swap = initial
+                .iter()
+                .take(self.ctx.reach.swap_max)
+                .any(|i| matches!(i, StackItem::Value(x) if *x == v));
+            if !reachable_by_swap {
+                return None;
+            }
+
+            if total_existing < req.needed_total {
+                let reachable_by_dup = (0..max_dup).any(|i| initial[i] == StackItem::Value(v));
+                if !reachable_by_dup {
                     return None;
                 }
             }
@@ -175,35 +203,30 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             actions: 0,
         };
 
-        fn preserve_needed(
-            func: &Function,
-            consume_last_use: &BitSet<ValueId>,
-            v: ValueId,
-        ) -> bool {
-            !consume_last_use.contains(v) && !func.dfg.value_is_imm(v)
-        }
-
         fn is_goal(
-            func: &Function,
             state: &[StackItem],
-            target: [ValueId; 2],
-            consume_last_use: &BitSet<ValueId>,
+            target: &[ValueId],
+            requirements: &BTreeMap<ValueId, OperandRequirement>,
         ) -> bool {
-            if state.len() < 2 {
+            if state.len() < target.len() {
                 return false;
             }
-            if state[0] != StackItem::Value(target[0]) || state[1] != StackItem::Value(target[1]) {
+            if !state
+                .iter()
+                .take(target.len())
+                .zip(target.iter().copied())
+                .all(|(item, want)| item == &StackItem::Value(want))
+            {
                 return false;
             }
-            for v in target {
-                if preserve_needed(func, consume_last_use, v) {
-                    let copies = state
-                        .iter()
-                        .filter(|i| matches!(i, StackItem::Value(x) if *x == v))
-                        .count();
-                    if copies < 2 {
-                        return false;
-                    }
+
+            for (&v, req) in requirements {
+                let copies = state
+                    .iter()
+                    .filter(|i| matches!(i, StackItem::Value(x) if *x == v))
+                    .count();
+                if copies < req.needed_total {
+                    return false;
                 }
             }
             true
@@ -256,11 +279,11 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             let Some(&cur_best) = best.get(&item.state) else {
                 continue;
             };
-            if item.metric != cur_best || item.metric.actions > MAX_ACTIONS {
+            if item.metric != cur_best || item.metric.actions > max_actions {
                 continue;
             }
 
-            if is_goal(self.ctx.func, &item.state, target, consume_last_use) {
+            if is_goal(&item.state, target, &requirements) {
                 let mut actions: Vec<Action> = Vec::new();
                 let mut cur = item.state.clone();
                 while let Some((p, a)) = prev.get(&cur) {
@@ -270,7 +293,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 actions.reverse();
                 let mut out: Actions = Actions::new();
                 out.extend(actions.into_iter());
-                return Some(BinaryOperandPrepPlan {
+                return Some(SearchOperandPrepPlan {
                     actions: out,
                     final_stack: item.state,
                     metric: item.metric,
@@ -313,40 +336,17 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 }
             }
 
-            for &v in target.iter() {
-                let max_dup = self.ctx.reach.dup_max.min(item.state.len());
-                if preserve_needed(self.ctx.func, consume_last_use, v)
-                    && let Some(pos) = (0..max_dup).find(|&i| item.state[i] == StackItem::Value(v))
-                {
-                    let mut next_state = item.state.clone();
-                    next_state.insert(0, StackItem::Value(v));
-
-                    let next_metric = OperandPrepMetric {
-                        actions: item.metric.actions + 1,
-                        ..item.metric
-                    };
-                    let update = best
-                        .get(&next_state)
-                        .map(|m| next_metric < *m)
-                        .unwrap_or(true);
-                    if update {
-                        best.insert(next_state.clone(), next_metric);
-                        prev.insert(
-                            next_state.clone(),
-                            (item.state.clone(), Action::StackDup(pos as u8)),
-                        );
-                        heap.push(HeapItem {
-                            metric: next_metric,
-                            id: next_id,
-                            state: next_state,
-                        });
-                        next_id += 1;
-                    }
+            for (&v, req) in &requirements {
+                let current_copies = item
+                    .state
+                    .iter()
+                    .filter(|i| matches!(i, StackItem::Value(x) if *x == v))
+                    .count();
+                if current_copies >= req.needed_total {
+                    continue;
                 }
-            }
 
-            for &v in target.iter() {
-                if self.ctx.func.dfg.value_is_imm(v) {
+                if req.is_immediate {
                     let imm = self
                         .ctx
                         .func
@@ -374,11 +374,66 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                         });
                         next_id += 1;
                     }
+                    continue;
+                }
+
+                let max_dup = self.ctx.reach.dup_max.min(item.state.len());
+                if let Some(pos) = (0..max_dup).find(|&i| item.state[i] == StackItem::Value(v)) {
+                    let mut next_state = item.state.clone();
+                    next_state.insert(0, StackItem::Value(v));
+
+                    let next_metric = OperandPrepMetric {
+                        actions: item.metric.actions + 1,
+                        ..item.metric
+                    };
+                    let update = best
+                        .get(&next_state)
+                        .map(|m| next_metric < *m)
+                        .unwrap_or(true);
+                    if update {
+                        best.insert(next_state.clone(), next_metric);
+                        prev.insert(
+                            next_state.clone(),
+                            (item.state.clone(), Action::StackDup(pos as u8)),
+                        );
+                        heap.push(HeapItem {
+                            metric: next_metric,
+                            id: next_id,
+                            state: next_state,
+                        });
+                        next_id += 1;
+                    }
                 }
             }
         }
 
         None
+    }
+
+    fn target_requirements(
+        &self,
+        target: &[ValueId],
+        consume_last_use: &BitSet<ValueId>,
+    ) -> BTreeMap<ValueId, OperandRequirement> {
+        let mut top_counts: BTreeMap<ValueId, usize> = BTreeMap::new();
+        for &v in target {
+            *top_counts.entry(v).or_insert(0) += 1;
+        }
+
+        top_counts
+            .into_iter()
+            .map(|(v, top_count)| {
+                let is_immediate = self.ctx.func.dfg.value_is_imm(v);
+                let preserve_needed = !is_immediate && !consume_last_use.contains(v);
+                (
+                    v,
+                    OperandRequirement {
+                        needed_total: top_count + usize::from(preserve_needed),
+                        is_immediate,
+                    },
+                )
+            })
+            .collect()
     }
 
     fn stack_prefix_matches(&self, args: &[ValueId]) -> bool {

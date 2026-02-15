@@ -164,10 +164,23 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     &live_future,
                     &live_out,
                 );
-                let templates = self.templates;
-                self.with_planner(&mut inh, &mut prologue, &mut free_slots, |planner| {
-                    planner.plan_edge_fixup(templates, pred, block);
-                });
+                let has_phi_params = !self.ctx.phi_results[block].is_empty();
+                let in_cycle = self
+                    .ctx
+                    .scc
+                    .scc_of(block)
+                    .map(|scc| self.ctx.scc.scc_data(scc).is_cycle)
+                    .unwrap_or(false);
+
+                // Single-predecessor, acyclic blocks without phis do not need exact entry
+                // template normalization. Keeping the inherited stack avoids pointless bottom
+                // reshuffling that can cascade into SWAP/POP churn.
+                if has_phi_params || in_cycle {
+                    let templates = self.templates;
+                    self.with_planner(&mut inh, &mut prologue, &mut free_slots, |planner| {
+                        planner.plan_edge_fixup(templates, pred, block);
+                    });
+                }
                 self.observer.on_block_prologue(&prologue);
             }
             inh

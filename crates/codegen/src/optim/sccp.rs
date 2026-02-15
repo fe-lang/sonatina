@@ -207,20 +207,33 @@ impl SccpSolver {
             return;
         };
 
+        // SCCP here is intraprocedural. Do not attempt to interpret calls even
+        // when callee attrs classify them as effect-free.
+        if func.dfg.is_call(inst_id) {
+            self.set_lattice_cell(inst_result, LatticeCell::Top);
+            return;
+        }
+
         let inst = func.dfg.inst(inst_id);
         if func.dfg.side_effect(inst_id).has_effect() {
+            self.set_lattice_cell(inst_result, LatticeCell::Top);
+            return;
+        }
+        if func.dfg.is_call(inst_id) {
             self.set_lattice_cell(inst_result, LatticeCell::Top);
             return;
         }
 
         match simplify_inst(func, &self.lattice, &self.may_be_undef, inst_id) {
             SimplifyResult::Const(imm) => {
+                let imm = self.normalize_const_imm_for_value(func, inst_result, imm);
                 self.set_lattice_cell(inst_result, LatticeCell::Const(imm));
                 self.set_may_be_undef(inst_result, false);
                 return;
             }
             SimplifyResult::Copy(src) => {
-                let src_cell = self.cell_of(func, src);
+                let src_cell =
+                    self.normalize_cell_for_value(func, inst_result, self.cell_of(func, src));
                 self.set_lattice_cell(inst_result, src_cell);
                 self.set_may_be_undef(inst_result, self.may_be_undef_of(func, src));
                 return;
@@ -239,7 +252,10 @@ impl SccpSolver {
         });
 
         let cell = match value {
-            Some(EvalValue::Imm(value)) => LatticeCell::Const(value),
+            Some(EvalValue::Imm(value)) => {
+                let value = self.normalize_const_imm_for_value(func, inst_result, value);
+                LatticeCell::Const(value)
+            }
             Some(_) => cell_state.nonconst_result_cell(),
             None => LatticeCell::Top,
         };
@@ -528,6 +544,33 @@ impl SccpSolver {
             Value::Undef { .. } => true,
             Value::Arg { .. } | Value::Immediate { .. } | Value::Global { .. } => false,
             Value::Inst { .. } => self.may_be_undef.get(value).copied().unwrap_or_default(),
+        }
+    }
+
+    fn normalize_const_imm_for_value(
+        &self,
+        func: &Function,
+        value: ValueId,
+        imm: Immediate,
+    ) -> Immediate {
+        let ty = func.dfg.value_ty(value);
+        if imm.ty() == ty {
+            imm
+        } else {
+            Immediate::from_i256(imm.as_i256(), ty)
+        }
+    }
+
+    fn normalize_cell_for_value(
+        &self,
+        func: &Function,
+        value: ValueId,
+        cell: LatticeCell,
+    ) -> LatticeCell {
+        if let LatticeCell::Const(imm) = cell {
+            LatticeCell::Const(self.normalize_const_imm_for_value(func, value, imm))
+        } else {
+            cell
         }
     }
 

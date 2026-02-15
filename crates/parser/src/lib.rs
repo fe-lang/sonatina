@@ -209,15 +209,15 @@ impl BuildCtx {
             for stmt in &block.stmts {
                 let inst_id = match &stmt.kind {
                     ast::StmtKind::Assign(ValueDeclaration(name, type_), ast_inst) => {
-                        let inst = match InstBuild::build(self, &mut fb, ast_inst) {
-                            Ok(inst) => inst,
-                            Err(err) => {
-                                self.errors.push(*err);
-                                continue;
-                            }
-                        };
+                        let inst: Box<dyn ir::Inst> =
+                            match InstBuild::build(self, &mut fb, ast_inst) {
+                                Ok(inst) => inst,
+                                Err(err) => {
+                                    self.errors.push(*err);
+                                    continue;
+                                }
+                            };
 
-                        // xxx cleanup
                         let ty = self.type_(&fb.module_builder, type_);
                         let value = *self.func_value_names.get_by_right(&name.string).unwrap();
                         let inst_id = fb.cursor.insert_inst_data_dyn(&mut fb.func, inst);
