@@ -62,7 +62,7 @@ impl SccpSolver {
         } else {
             CleanupMode::RepairWithUndef
         };
-        CfgCleanup::new(cleanup_mode).run(func);
+        CfgCleanup::new(cleanup_mode).run_with_cfg(func, cfg);
 
         let Some(entry_block) = func.layout.entry_block() else {
             return;
@@ -104,7 +104,7 @@ impl SccpSolver {
         self.remove_unreachable_edges(func, cfg, cleanup_mode);
         self.fold_insts(func, cfg);
 
-        CfgCleanup::new(cleanup_mode).run(func);
+        CfgCleanup::new(cleanup_mode).run_with_cfg(func, cfg);
 
         AdceSolver::new().run(func);
         cfg.compute(func);

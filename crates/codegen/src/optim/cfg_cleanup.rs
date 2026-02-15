@@ -19,12 +19,16 @@ impl CfgCleanup {
     }
 
     pub fn run(&mut self, func: &mut Function) -> bool {
+        let mut cfg = ControlFlowGraph::default();
+        self.run_with_cfg(func, &mut cfg)
+    }
+
+    pub fn run_with_cfg(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) -> bool {
         let Some(entry) = func.layout.entry_block() else {
             return false;
         };
 
-        let mut cfg = ControlFlowGraph::default();
-        let mut editor = CfgEditor::new(func, &mut cfg, self.mode);
+        let mut editor = CfgEditor::new(func, cfg, self.mode);
 
         let mut changed = editor.trim_after_terminator();
         changed |= ensure_blocks_terminated(editor.func_mut(), self.mode);

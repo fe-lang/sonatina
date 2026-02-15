@@ -7,6 +7,8 @@ use crate::{
     loop_analysis::{Loop, LoopTree},
 };
 
+use super::cfg_cleanup::CfgCleanup;
+
 #[derive(Debug)]
 pub struct LicmSolver {
     invariants: Vec<InstId>,
@@ -36,6 +38,8 @@ impl LicmSolver {
                 self.invariants.clear();
             }
         }
+
+        CfgCleanup::new(CleanupMode::Strict).run_with_cfg(func, cfg);
     }
 
     /// Collect loop invariants int the `lp`.
@@ -187,7 +191,8 @@ mod tests {
             let invariant_inst = func.dfg.value_inst(invariant).unwrap();
             assert_eq!(func.layout.entry_block(), Some(b0));
             assert_eq!(func.layout.inst_block(invariant_inst), b0);
-            assert_eq!(func.layout.iter_block().count(), 3);
+            let block_count_before = func.layout.iter_block().count();
+            assert_eq!(block_count_before, 3);
 
             let mut cfg = ControlFlowGraph::default();
             cfg.compute(func);
@@ -201,7 +206,8 @@ mod tests {
 
             assert_eq!(func.layout.entry_block(), Some(b0));
             assert_eq!(func.layout.inst_block(invariant_inst), b0);
-            assert_eq!(func.layout.iter_block().count(), 3);
+            let block_count_after = func.layout.iter_block().count();
+            assert!(block_count_after <= block_count_before);
         });
     }
 }

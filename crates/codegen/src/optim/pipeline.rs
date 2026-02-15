@@ -11,13 +11,10 @@
 
 use sonatina_ir::{ControlFlowGraph, Function, module::Module};
 
-use crate::{
-    analysis::func_behavior, cfg_edit::CleanupMode, domtree::DomTree, loop_analysis::LoopTree,
-};
+use crate::{analysis::func_behavior, domtree::DomTree, loop_analysis::LoopTree};
 
 use super::{
     adce::AdceSolver,
-    cfg_cleanup::CfgCleanup,
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
     egraph::run_egraph_pass,
     inliner::{Inliner, InlinerConfig},
@@ -32,8 +29,6 @@ use super::{
 /// where standalone dead code elimination is needed without constant propagation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Pass {
-    /// Control flow graph cleanup (dead block removal, phi pruning, terminator repair).
-    CfgCleanup,
     /// Sparse conditional constant propagation (composite: CfgCleanup + SCCP + CfgCleanup + ADCE).
     Sccp,
     /// Standalone aggressive dead code elimination.
@@ -82,10 +77,7 @@ pub struct Pipeline {
 }
 
 fn pass_needs_func_behavior(pass: Pass) -> bool {
-    matches!(
-        pass,
-        Pass::CfgCleanup | Pass::Sccp | Pass::Adce | Pass::Egraph
-    )
+    matches!(pass, Pass::Sccp | Pass::Adce | Pass::Egraph)
 }
 
 fn step_needs_func_behavior(passes: &[Pass]) -> bool {
@@ -93,10 +85,7 @@ fn step_needs_func_behavior(passes: &[Pass]) -> bool {
 }
 
 fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
-    matches!(
-        pass,
-        Pass::CfgCleanup | Pass::Sccp | Pass::Adce | Pass::Licm | Pass::Egraph
-    )
+    matches!(pass, Pass::Sccp | Pass::Adce | Pass::Licm | Pass::Egraph)
 }
 
 fn step_may_invalidate_func_behavior(passes: &[Pass]) -> bool {
@@ -260,9 +249,6 @@ struct PassContext {
 /// current function state.
 fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
     match pass {
-        Pass::CfgCleanup => {
-            CfgCleanup::new(CleanupMode::Strict).run(func);
-        }
         Pass::Sccp => {
             // SccpSolver::run is composite: internally does
             //   CfgCleanup → SCCP solving → CfgCleanup → ADCE.
@@ -278,7 +264,6 @@ fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
             ctx.lpt.compute(&ctx.cfg, &ctx.domtree);
             let mut solver = LicmSolver::new();
             solver.run(func, &mut ctx.cfg, &mut ctx.lpt);
-            CfgCleanup::new(CleanupMode::Strict).run(func);
         }
         Pass::Egraph => {
             run_egraph_pass(func);
@@ -329,11 +314,7 @@ mod tests {
     #[test]
     fn custom_pipeline_runs() {
         let mut pipeline = Pipeline::new();
-        pipeline.add_step(Step::FuncPasses(vec![
-            Pass::CfgCleanup,
-            Pass::Adce,
-            Pass::CfgCleanup,
-        ]));
+        pipeline.add_step(Step::FuncPasses(vec![Pass::Adce]));
 
         let mut module = build_test_module();
         pipeline.run(&mut module);
@@ -344,7 +325,7 @@ mod tests {
         let mut pipeline = Pipeline::new();
         pipeline
             .add_step(Step::Inline)
-            .add_step(Step::FuncPasses(vec![Pass::CfgCleanup, Pass::Sccp]));
+            .add_step(Step::FuncPasses(vec![Pass::Sccp]));
 
         let mut module = build_test_module();
         pipeline.run(&mut module);
@@ -362,7 +343,7 @@ mod tests {
         let module = build_test_module();
         let func_ref = module.funcs()[0];
         module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Sccp, Pass::Egraph], func);
+            run_func_passes(&[Pass::Sccp, Pass::Egraph], func);
         });
     }
 
