@@ -129,14 +129,11 @@ impl Pipeline {
         let mut p = Self::new();
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(vec![
-            Pass::CfgCleanup,
             Pass::Sccp,
             Pass::Licm,
-            Pass::CfgCleanup,
             Pass::Egraph,
             Pass::RebuildUsers,
             Pass::Sccp,
-            Pass::CfgCleanup,
         ]));
         p.add_step(Step::DeadFuncElim);
         p
@@ -149,17 +146,14 @@ impl Pipeline {
         let mut p = Self::new();
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(vec![
-            Pass::CfgCleanup,
             Pass::Sccp,
             Pass::Licm,
-            Pass::CfgCleanup,
             Pass::Egraph,
             Pass::RebuildUsers,
             Pass::Sccp,
-            Pass::CfgCleanup,
         ]));
         p.add_step(Step::Inline);
-        p.add_step(Step::FuncPasses(vec![Pass::CfgCleanup, Pass::Sccp]));
+        p.add_step(Step::FuncPasses(vec![Pass::Sccp]));
         p.add_step(Step::DeadFuncElim);
         p
     }
@@ -169,14 +163,11 @@ impl Pipeline {
     /// Current sequence:
     /// 1. `Inline` — single-block inlining (module-level)
     /// 2. Per-function passes (parallel):
-    ///    - `CfgCleanup` — normalize CFG before analysis-heavy passes
     ///    - `Sccp` — constant propagation + dead code elimination (composite)
     ///    - `Licm` — loop invariant code motion
-    ///    - `CfgCleanup` — clean up after LICM structural changes
     ///    - `Egraph` — algebraic simplification, memory forwarding
     ///    - `RebuildUsers` — fix stale `dfg.users` after egraph
     ///    - `Sccp` — second round catches constants exposed by egraph
-    ///    - `CfgCleanup` — final cleanup
     /// 3. `DeadFuncElim` — prune unreachable private definitions from object roots
     pub fn default_pipeline() -> Self {
         Self::balanced()
@@ -275,10 +266,8 @@ fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
         Pass::Sccp => {
             // SccpSolver::run is composite: internally does
             //   CfgCleanup → SCCP solving → CfgCleanup → ADCE.
-            ctx.cfg.compute(func);
             let mut solver = SccpSolver::new();
             solver.run(func, &mut ctx.cfg);
-            CfgCleanup::new(CleanupMode::Strict).run(func);
         }
         Pass::Adce => {
             AdceSolver::new().run(func);
