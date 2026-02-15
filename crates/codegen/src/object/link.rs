@@ -315,6 +315,7 @@ fn build_section_observability<Op>(
                 block,
                 vcode_inst: insn,
                 ir_inst,
+                frontend_provenance: None,
                 unmapped_reason,
             });
         }

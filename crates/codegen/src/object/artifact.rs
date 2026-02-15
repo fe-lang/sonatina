@@ -10,6 +10,7 @@ use sonatina_ir::{
 use std::fmt::Write as _;
 
 pub const OBSERVABILITY_SCHEMA_VERSION: &str = "0.1.0";
+pub type FrontendProvenanceMap = FxHashMap<(FuncRef, InstId), String>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SymbolId {
@@ -86,6 +87,7 @@ pub struct PcMapEntry {
     pub block: BlockId,
     pub vcode_inst: VCodeInst,
     pub ir_inst: Option<InstId>,
+    pub frontend_provenance: Option<String>,
     pub unmapped_reason: Option<UnmappedReason>,
 }
 
@@ -149,20 +151,22 @@ impl SectionObservability {
                 .unmapped_reason
                 .map(UnmappedReason::as_str)
                 .unwrap_or("-");
+            let frontend = entry.frontend_provenance.as_deref().unwrap_or("-");
             let ir = entry
                 .ir_inst
                 .map(|ir| ir.0.to_string())
                 .unwrap_or("-".into());
             writeln!(
                 &mut out,
-                "pc [{}, {}) func={} block={} vcode={} ir={} reason={}",
+                "pc [{}, {}) func={} block={} vcode={} ir={} reason={} frontend={}",
                 entry.pc_start,
                 entry.pc_end,
                 entry.func_name,
                 entry.block.index(),
                 entry.vcode_inst.index(),
                 ir,
-                reason
+                reason,
+                frontend
             )
             .expect("in-memory write should not fail");
         }
@@ -266,6 +270,18 @@ impl SectionObservability {
                 write!(&mut out, ",\"reason\":null").expect("in-memory write should not fail");
             }
 
+            if let Some(frontend) = &entry.frontend_provenance {
+                write!(
+                    &mut out,
+                    ",\"frontend_provenance\":\"{}\"",
+                    json_escape(frontend)
+                )
+                .expect("in-memory write should not fail");
+            } else {
+                write!(&mut out, ",\"frontend_provenance\":null")
+                    .expect("in-memory write should not fail");
+            }
+
             write!(&mut out, "}}").expect("in-memory write should not fail");
         }
         write!(&mut out, "]").expect("in-memory write should not fail");
@@ -346,6 +362,22 @@ impl ObjectObservability {
 
         write!(&mut out, "]}}").expect("in-memory write should not fail");
         out
+    }
+
+    /// Enrich pc-map entries with frontend provenance attached to `(FuncRef, InstId)`.
+    ///
+    /// This is additive and does not require mutating Sonatina IR instructions.
+    pub fn apply_frontend_provenance(&mut self, provenance: &FrontendProvenanceMap) {
+        for section in self.sections.values_mut() {
+            for entry in &mut section.pc_map {
+                let Some(ir_inst) = entry.ir_inst else {
+                    continue;
+                };
+                if let Some(value) = provenance.get(&(entry.func, ir_inst)) {
+                    entry.frontend_provenance = Some(value.clone());
+                }
+            }
+        }
     }
 }
 

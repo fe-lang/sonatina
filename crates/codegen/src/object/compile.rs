@@ -459,7 +459,7 @@ mod tests {
             lower::{FixupUpdate, LowerBackend, LoweredFunction, SectionLoweringCtx},
             vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
         },
-        object::{CompileOptions, OBSERVABILITY_SCHEMA_VERSION},
+        object::{CompileOptions, FrontendProvenanceMap, OBSERVABILITY_SCHEMA_VERSION},
     };
     use cranelift_entity::EntityRef;
     use smallvec::SmallVec;
@@ -820,6 +820,25 @@ object @Contract {
                 .observability_json()
                 .expect("object json observability expected")
                 .contains("\"schema_version\":\"0.1.0\"")
+        );
+
+        let mut enriched = artifact
+            .observability()
+            .expect("object observability should be available");
+        let target = enriched
+            .sections
+            .values()
+            .flat_map(|section| section.pc_map.iter())
+            .find_map(|entry| entry.ir_inst.map(|ir_inst| (entry.func, ir_inst)))
+            .expect("expected at least one ir-backed pc-map entry");
+        let mut map = FrontendProvenanceMap::default();
+        map.insert(target, "mir_stmt:1".to_string());
+        enriched.apply_frontend_provenance(&map);
+        assert!(
+            enriched
+                .to_json()
+                .contains("\"frontend_provenance\":\"mir_stmt:1\""),
+            "frontend provenance must be serialized when provided"
         );
     }
 

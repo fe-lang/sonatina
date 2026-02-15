@@ -6,8 +6,9 @@ pub mod link;
 pub mod resolve;
 
 pub use artifact::{
-    OBSERVABILITY_SCHEMA_VERSION, ObjectArtifact, ObjectObservability, PcMapEntry, SectionArtifact,
-    SectionObservability, SymbolDef, SymbolId, UnmappedReason, UnmappedReasonCoverage,
+    FrontendProvenanceMap, OBSERVABILITY_SCHEMA_VERSION, ObjectArtifact, ObjectObservability,
+    PcMapEntry, SectionArtifact, SectionObservability, SymbolDef, SymbolId, UnmappedReason,
+    UnmappedReasonCoverage,
 };
 pub use compile::{compile_all_objects, compile_object};
 pub use data::encode_gv_initializer_to_bytes;
