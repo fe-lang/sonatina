@@ -1,6 +1,11 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHasher};
 use sonatina_ir::{I256, Immediate, ValueId};
-use std::{cmp::Ordering, collections::BinaryHeap, sync::OnceLock};
+use std::{
+    cmp::Ordering,
+    collections::{BinaryHeap, VecDeque},
+    hash::Hasher,
+    sync::{Mutex, OnceLock},
+};
 
 use super::{
     super::{
@@ -22,14 +27,6 @@ impl Cost {
             gas: self.gas.saturating_add(rhs.gas),
             bytes: self.bytes.saturating_add(rhs.bytes),
         }
-    }
-
-    pub(super) fn saturating_mul(self, n: usize) -> Self {
-        let mut out = Self::default();
-        for _ in 0..n {
-            out = out.saturating_add(self);
-        }
-        out
     }
 }
 
@@ -271,6 +268,68 @@ impl Ord for QueueEntry {
     }
 }
 
+const NORMALIZE_PLAN_CACHE_CAP: usize = 4096;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct PlanCacheKey {
+    func_ptr: usize,
+    dup_max: u8,
+    swap_max: u8,
+    max_len: u8,
+    max_expansions: u32,
+    cost_hash: u64,
+    start: PackedState,
+    goal: PackedState,
+}
+
+#[derive(Clone, Debug)]
+enum PlanCacheVal {
+    None,
+    Steps(Vec<Step>),
+}
+
+struct PlanCache {
+    map: FxHashMap<PlanCacheKey, PlanCacheVal>,
+    order: VecDeque<PlanCacheKey>,
+}
+
+impl PlanCache {
+    fn new() -> Self {
+        Self {
+            map: FxHashMap::default(),
+            order: VecDeque::new(),
+        }
+    }
+
+    fn get(&self, key: &PlanCacheKey) -> Option<&PlanCacheVal> {
+        self.map.get(key)
+    }
+
+    fn insert(&mut self, key: PlanCacheKey, val: PlanCacheVal) {
+        if let Some(existing) = self.map.get_mut(&key) {
+            if matches!(existing, PlanCacheVal::None) && matches!(val, PlanCacheVal::Steps(_)) {
+                *existing = val;
+            }
+            return;
+        }
+
+        self.map.insert(key, val);
+        self.order.push_back(key);
+
+        while self.order.len() > NORMALIZE_PLAN_CACHE_CAP {
+            let Some(old) = self.order.pop_front() else {
+                break;
+            };
+            self.map.remove(&old);
+        }
+    }
+}
+
+fn plan_cache() -> &'static Mutex<PlanCache> {
+    static CACHE: OnceLock<Mutex<PlanCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(PlanCache::new()))
+}
+
 fn normalize_search_debug_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
@@ -281,6 +340,56 @@ fn normalize_search_debug_enabled() -> bool {
             Some("1") | Some("true") | Some("yes")
         )
     })
+}
+
+fn compute_cost_hash(cost: &impl CostModel, key_infos: &[KeyInfo], cfg: SearchCfg) -> u64 {
+    let mut h = FxHasher::default();
+
+    let pop = cost.cost_pop();
+    h.write_u32(pop.gas);
+    h.write_u32(pop.bytes);
+
+    for pos in 0..cfg.dup_max {
+        let c = cost.cost_dup(pos as u8);
+        h.write_u32(c.gas);
+        h.write_u32(c.bytes);
+    }
+
+    for depth in 1..cfg.swap_max {
+        let c = cost.cost_swap(depth as u8);
+        h.write_u32(c.gas);
+        h.write_u32(c.bytes);
+    }
+
+    for info in key_infos {
+        match *info {
+            KeyInfo::Imm { canon, .. } => {
+                let c = cost.cost_push_imm(canon);
+                h.write_u32(c.gas);
+                h.write_u32(c.bytes);
+            }
+            KeyInfo::Val { vid } => {
+                let c = cost.cost_load(vid);
+                h.write_u32(c.gas);
+                h.write_u32(c.bytes);
+            }
+        }
+    }
+
+    h.finish()
+}
+
+fn common_suffix_len(state: PackedState, goal: PackedState) -> usize {
+    let n = state.len();
+    let m = goal.len();
+    let mut k = 0usize;
+    while k < n && k < m {
+        if state.get(n - 1 - k) != goal.get(m - 1 - k) {
+            break;
+        }
+        k += 1;
+    }
+    k
 }
 
 pub(super) fn solve_optimal_normalize_plan(
@@ -373,7 +482,40 @@ pub(super) fn solve_optimal_normalize_plan(
 
     let start = PackedState::from_ids(&start_keys)?;
     let goal = PackedState::from_ids(&goal_keys)?;
+
+    let cache_key = PlanCacheKey {
+        func_ptr: ctx.func as *const _ as usize,
+        dup_max: cfg.dup_max as u8,
+        swap_max: cfg.swap_max as u8,
+        max_len: cfg.max_len as u8,
+        max_expansions: cfg.max_expansions as u32,
+        cost_hash: compute_cost_hash(cost, &key_infos, cfg),
+        start,
+        goal,
+    };
+
+    if let Some(hit) = {
+        let cache = plan_cache().lock().unwrap();
+        cache.get(&cache_key).cloned()
+    } {
+        if debug {
+            eprintln!("normalize_search: cache hit");
+        }
+        return match hit {
+            PlanCacheVal::None => None,
+            PlanCacheVal::Steps(steps) => Some(NormalizePlan {
+                steps,
+                key_infos,
+                goal_keys,
+            }),
+        };
+    }
+
     if start == goal {
+        plan_cache()
+            .lock()
+            .unwrap()
+            .insert(cache_key, PlanCacheVal::Steps(Vec::new()));
         return Some(NormalizePlan {
             steps: Vec::new(),
             key_infos,
@@ -382,8 +524,8 @@ pub(super) fn solve_optimal_normalize_plan(
     }
 
     let pop_cost = cost.cost_pop();
-    let min_dup_cost = minimal_dup_cost(cost, cfg.dup_max);
-    let min_swap_cost = minimal_swap_cost(cost, cfg.swap_max);
+    let pop_gas = pop_cost.gas;
+    let dup_gas_lb = minimal_dup_gas(cost, cfg.dup_max);
     let goal_counts = compute_goal_counts(&goal_keys);
 
     let mut upper_bound = estimate_flush_rebuild_cost(ctx, stack, desired, cost);
@@ -404,16 +546,20 @@ pub(super) fn solve_optimal_normalize_plan(
         }
     }
 
-    let start_h = heuristic(
-        start,
-        goal,
-        &goal_counts,
-        min_dup_cost,
-        min_swap_cost,
-        pop_cost,
-        &key_infos,
-        cost,
-    );
+    let push0_kid: Option<u8> = materializable_imm.iter().copied().find(|&kid| {
+        matches!(
+            key_infos[kid as usize],
+            KeyInfo::Imm { canon, .. } if canon.is_zero()
+        )
+    });
+    let push0_cost = push0_kid.map(|kid| {
+        let KeyInfo::Imm { canon, .. } = key_infos[kid as usize] else {
+            unreachable!("expected imm key info")
+        };
+        cost.cost_push_imm(canon)
+    });
+
+    let start_h = heuristic(start, &goal_counts, pop_gas, dup_gas_lb, &key_infos, cost);
 
     let mut best: FxHashMap<PackedState, Cost> = FxHashMap::default();
     best.insert(start, Cost::default());
@@ -436,12 +582,23 @@ pub(super) fn solve_optimal_normalize_plan(
             continue;
         }
 
+        if entry.state == goal {
+            let Some(steps) = reconstruct_steps(start, goal, &parent) else {
+                break;
+            };
+            if incumbent_steps.is_none() || g < upper_bound {
+                upper_bound = g;
+                incumbent_steps = Some(steps);
+            }
+            continue;
+        }
+
         if entry.f >= upper_bound {
             break;
         }
 
-        // If we already have a feasible incumbent (greedy) plan, don't let the exact search blow
-        // up compile time or memory trying to prove optimality.
+        // If we already have a feasible incumbent (greedy or found) plan, don't let the exact
+        // search blow up compile time or memory trying to prove optimality.
         let max_states = if incumbent_steps.is_some() {
             200_000usize
         } else {
@@ -456,29 +613,14 @@ pub(super) fn solve_optimal_normalize_plan(
                     open.len()
                 );
             }
-            return incumbent_steps.map(|steps| NormalizePlan {
-                steps,
-                key_infos,
-                goal_keys,
-            });
-        }
-
-        if entry.state == goal {
-            let steps = reconstruct_steps(start, goal, &parent)?;
-            return Some(NormalizePlan {
-                steps,
-                key_infos,
-                goal_keys,
-            });
+            break;
         }
 
         let h = heuristic(
             entry.state,
-            goal,
             &goal_counts,
-            min_dup_cost,
-            min_swap_cost,
-            pop_cost,
+            pop_gas,
+            dup_gas_lb,
             &key_infos,
             cost,
         );
@@ -496,18 +638,27 @@ pub(super) fn solve_optimal_normalize_plan(
                     open.len()
                 );
             }
-            return incumbent_steps.map(|steps| NormalizePlan {
-                steps,
-                key_infos,
-                goal_keys,
-            });
+            break;
         }
 
         let cur_len = entry.state.len();
-        let mut cur_counts = [0u8; 64];
-        for i in 0..cur_len {
-            let kid = entry.state.get(i) as usize;
-            cur_counts[kid] = cur_counts[kid].saturating_add(1);
+        let suffix_k = common_suffix_len(entry.state, goal);
+        let suffix_start = cur_len.saturating_sub(suffix_k);
+
+        let prev_step = parent.get(&entry.state).map(|(_, s)| *s);
+
+        let mut dup_cost_for_kid = [Cost {
+            gas: u32::MAX,
+            bytes: u32::MAX,
+        }; 64];
+        let mut duplicable: u64 = 0;
+        if cur_len != 0 && cfg.dup_max != 0 {
+            let max_pos = cur_len.saturating_sub(1).min(cfg.dup_max.saturating_sub(1));
+            for pos in 0..=max_pos {
+                let kid = entry.state.get(pos) as usize;
+                duplicable |= 1u64 << kid;
+                dup_cost_for_kid[kid] = dup_cost_for_kid[kid].min(cost.cost_dup(pos as u8));
+            }
         }
 
         // POP
@@ -517,11 +668,9 @@ pub(super) fn solve_optimal_normalize_plan(
                 g.saturating_add(cost.cost_pop()),
                 entry.state,
                 Step::Pop,
-                goal,
-                pop_cost,
                 &goal_counts,
-                min_dup_cost,
-                min_swap_cost,
+                pop_gas,
+                dup_gas_lb,
                 &key_infos,
                 cost,
                 upper_bound,
@@ -531,22 +680,55 @@ pub(super) fn solve_optimal_normalize_plan(
             );
         }
 
+        // PUSH0 (if present in the goal) before the 3-gas moves.
+        if cur_len < cfg.max_len {
+            if let (Some(kid), Some(push0_cost)) = (push0_kid, push0_cost) {
+                let bit = 1u64 << kid;
+                let dominated =
+                    (duplicable & bit) != 0 && push0_cost >= dup_cost_for_kid[kid as usize];
+                if !dominated {
+                    consider_succ(
+                        entry.state.push(kid),
+                        g.saturating_add(push0_cost),
+                        entry.state,
+                        Step::PushImm(kid),
+                        &goal_counts,
+                        pop_gas,
+                        dup_gas_lb,
+                        &key_infos,
+                        cost,
+                        upper_bound,
+                        &mut best,
+                        &mut parent,
+                        &mut open,
+                    );
+                }
+            }
+        }
+
         // SWAP
         if cur_len >= 2 {
             let max_depth = cur_len
                 .saturating_sub(1)
                 .min(cfg.swap_max.saturating_sub(1));
             for depth in 1..=max_depth {
+                if matches!(prev_step, Some(Step::Swap(d)) if d as usize == depth) {
+                    continue;
+                }
+                if entry.state.get(0) == entry.state.get(depth) {
+                    continue;
+                }
+                if depth >= suffix_start && depth < cfg.dup_max {
+                    continue;
+                }
                 consider_succ(
                     entry.state.swap(depth),
                     g.saturating_add(cost.cost_swap(depth as u8)),
                     entry.state,
                     Step::Swap(depth as u8),
-                    goal,
-                    pop_cost,
                     &goal_counts,
-                    min_dup_cost,
-                    min_swap_cost,
+                    pop_gas,
+                    dup_gas_lb,
                     &key_infos,
                     cost,
                     upper_bound,
@@ -560,17 +742,29 @@ pub(super) fn solve_optimal_normalize_plan(
         // DUP
         if cur_len != 0 && cfg.dup_max != 0 && cur_len < cfg.max_len {
             let max_pos = cur_len.saturating_sub(1).min(cfg.dup_max.saturating_sub(1));
+            let mut seen: u64 = 0;
             for pos in 0..=max_pos {
+                let kid = entry.state.get(pos);
+                let bit = 1u64 << kid;
+                if (seen & bit) != 0 {
+                    continue;
+                }
+                seen |= bit;
+
+                if Some(kid) == push0_kid
+                    && let Some(push0_cost) = push0_cost
+                    && push0_cost < dup_cost_for_kid[kid as usize]
+                {
+                    continue;
+                }
                 consider_succ(
                     entry.state.dup(pos),
                     g.saturating_add(cost.cost_dup(pos as u8)),
                     entry.state,
                     Step::Dup(pos as u8),
-                    goal,
-                    pop_cost,
                     &goal_counts,
-                    min_dup_cost,
-                    min_swap_cost,
+                    pop_gas,
+                    dup_gas_lb,
                     &key_infos,
                     cost,
                     upper_bound,
@@ -583,19 +777,29 @@ pub(super) fn solve_optimal_normalize_plan(
 
         if cur_len < cfg.max_len {
             for &kid in &materializable_imm {
+                if Some(kid) == push0_kid {
+                    continue;
+                }
+
                 let KeyInfo::Imm { canon, .. } = key_infos[kid as usize] else {
                     unreachable!("expected imm key info")
                 };
+                let push_cost = cost.cost_push_imm(canon);
+                let bit = 1u64 << kid;
+                let dominated =
+                    (duplicable & bit) != 0 && push_cost >= dup_cost_for_kid[kid as usize];
+                if dominated {
+                    continue;
+                }
+
                 consider_succ(
                     entry.state.push(kid),
-                    g.saturating_add(cost.cost_push_imm(canon)),
+                    g.saturating_add(push_cost),
                     entry.state,
                     Step::PushImm(kid),
-                    goal,
-                    pop_cost,
                     &goal_counts,
-                    min_dup_cost,
-                    min_swap_cost,
+                    pop_gas,
+                    dup_gas_lb,
                     &key_infos,
                     cost,
                     upper_bound,
@@ -606,10 +810,8 @@ pub(super) fn solve_optimal_normalize_plan(
             }
 
             for &kid in &materializable_val {
-                // Loading an already-present value is always dominated by DUP (and would also
-                // request a new spill slot if it wasn't already spilled). Only load values that
-                // are still missing from the current multiset.
-                if cur_counts[kid as usize] != 0 {
+                // If a value is duplicable, `DUP` dominates `LOAD` to the same successor state.
+                if (duplicable & (1u64 << kid)) != 0 {
                     continue;
                 }
                 let KeyInfo::Val { vid } = key_infos[kid as usize] else {
@@ -620,11 +822,9 @@ pub(super) fn solve_optimal_normalize_plan(
                     g.saturating_add(cost.cost_load(vid)),
                     entry.state,
                     Step::LoadVal(kid),
-                    goal,
-                    pop_cost,
                     &goal_counts,
-                    min_dup_cost,
-                    min_swap_cost,
+                    pop_gas,
+                    dup_gas_lb,
                     &key_infos,
                     cost,
                     upper_bound,
@@ -642,6 +842,15 @@ pub(super) fn solve_optimal_normalize_plan(
             best.len()
         );
     }
+
+    plan_cache().lock().unwrap().insert(
+        cache_key,
+        incumbent_steps
+            .as_ref()
+            .map_or(PlanCacheVal::None, |steps| {
+                PlanCacheVal::Steps(steps.clone())
+            }),
+    );
 
     incumbent_steps.map(|steps| NormalizePlan {
         steps,
@@ -767,26 +976,14 @@ fn compute_counts(keys: &[u8]) -> [u8; 64] {
     counts
 }
 
-fn minimal_dup_cost(cost: &impl CostModel, dup_max: usize) -> Cost {
+fn minimal_dup_gas(cost: &impl CostModel, dup_max: usize) -> u32 {
     if dup_max == 0 {
-        return Cost::default();
+        return u32::MAX;
     }
 
-    let mut best = cost.cost_dup(0);
+    let mut best = cost.cost_dup(0).gas;
     for pos in 1..dup_max {
-        best = best.min(cost.cost_dup(pos as u8));
-    }
-    best
-}
-
-fn minimal_swap_cost(cost: &impl CostModel, swap_max: usize) -> Cost {
-    if swap_max <= 1 {
-        return Cost::default();
-    }
-
-    let mut best = cost.cost_swap(1);
-    for depth in 2..swap_max {
-        best = best.min(cost.cost_swap(depth as u8));
+        best = best.min(cost.cost_dup(pos as u8).gas);
     }
     best
 }
@@ -1021,20 +1218,18 @@ fn build_dup_and_star_swap_upper_bound(
     Some(steps)
 }
 
-fn materialize_cost(kid: u8, key_infos: &[KeyInfo], cost: &impl CostModel) -> Cost {
+fn materialize_cost_gas(kid: u8, key_infos: &[KeyInfo], cost: &impl CostModel) -> u32 {
     match key_infos[kid as usize] {
-        KeyInfo::Imm { canon, .. } => cost.cost_push_imm(canon),
-        KeyInfo::Val { vid } => cost.cost_load(vid),
+        KeyInfo::Imm { canon, .. } => cost.cost_push_imm(canon).gas,
+        KeyInfo::Val { vid } => cost.cost_load(vid).gas,
     }
 }
 
 fn heuristic(
     state: PackedState,
-    goal: PackedState,
     goal_counts: &[u8; 64],
-    min_dup_cost: Cost,
-    min_swap_cost: Cost,
-    pop_cost: Cost,
+    pop_gas: u32,
+    dup_gas: u32,
     key_infos: &[KeyInfo],
     cost: &impl CostModel,
 ) -> Cost {
@@ -1044,54 +1239,36 @@ fn heuristic(
         cur_counts[kid] = cur_counts[kid].saturating_add(1);
     }
 
-    // Lower bound: number of required POPs (for excess keys) + cost to create missing keys.
-    //
-    // This ignores swap/dup reachability constraints (so it stays admissible).
-    let mut total = Cost::default();
+    // Admissible lower bound for remaining *gas*:
+    // - pop all surplus keys
+    // - materialize/dup missing keys, with a "bootstrap" materialization when the key is absent.
+    let mut gas = 0u32;
     for (kid, &want) in goal_counts.iter().enumerate() {
         let have = cur_counts[kid];
 
         if have > want {
-            total = total.saturating_add(pop_cost.saturating_mul((have - want) as usize));
+            gas = gas.saturating_add(pop_gas.saturating_mul((have - want) as u32));
             continue;
         }
         if have == want {
             continue;
         }
 
-        // Missing copies of this key must be created via DUP/PUSH/LOAD.
-        let missing = (want - have) as usize;
-        let materialize = materialize_cost(kid as u8, key_infos, cost);
-        let per_copy = if min_dup_cost == Cost::default() {
-            materialize
-        } else {
-            materialize.min(min_dup_cost)
-        };
+        let def = (want - have) as u32;
+        let mat = materialize_cost_gas(kid as u8, key_infos, cost);
+        let per_copy = mat.min(dup_gas);
 
         if have == 0 {
-            total = total.saturating_add(materialize);
-            if missing > 1 {
-                total = total.saturating_add(per_copy.saturating_mul(missing - 1));
+            gas = gas.saturating_add(mat);
+            if def > 1 {
+                gas = gas.saturating_add(per_copy.saturating_mul(def - 1));
             }
         } else {
-            total = total.saturating_add(per_copy.saturating_mul(missing));
+            gas = gas.saturating_add(per_copy.saturating_mul(def));
         }
     }
 
-    let perm = if state.len == goal.len {
-        let len = state.len();
-        let mut mismatched_non_top = 0usize;
-        for i in 1..len {
-            if state.get(i) != goal.get(i) {
-                mismatched_non_top += 1;
-            }
-        }
-        min_swap_cost.saturating_mul(mismatched_non_top)
-    } else {
-        Cost::default()
-    };
-
-    total.max(perm)
+    Cost { gas, bytes: 0 }
 }
 
 fn consider_succ(
@@ -1099,11 +1276,9 @@ fn consider_succ(
     g: Cost,
     parent_state: PackedState,
     step: Step,
-    goal: PackedState,
-    pop_cost: Cost,
     goal_counts: &[u8; 64],
-    min_dup_cost: Cost,
-    min_swap_cost: Cost,
+    pop_gas: u32,
+    dup_gas: u32,
     key_infos: &[KeyInfo],
     cost: &impl CostModel,
     upper_bound: Cost,
@@ -1111,16 +1286,7 @@ fn consider_succ(
     parent: &mut FxHashMap<PackedState, (PackedState, Step)>,
     open: &mut BinaryHeap<QueueEntry>,
 ) {
-    let h = heuristic(
-        state,
-        goal,
-        goal_counts,
-        min_dup_cost,
-        min_swap_cost,
-        pop_cost,
-        key_infos,
-        cost,
-    );
+    let h = heuristic(state, goal_counts, pop_gas, dup_gas, key_infos, cost);
     let f = g.saturating_add(h);
     if f >= upper_bound {
         return;
