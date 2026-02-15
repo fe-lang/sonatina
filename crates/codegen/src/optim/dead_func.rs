@@ -72,7 +72,11 @@ pub fn run_dead_func_elim(
 
     for func_ref in module.funcs() {
         let linkage = module.ctx.func_linkage(func_ref);
-        if !linkage.has_definition() || reachability.funcs.contains(&func_ref) {
+        if reachability.funcs.contains(&func_ref) {
+            continue;
+        }
+
+        if !linkage.has_definition() && (config.keep_external_decls || !linkage.is_external()) {
             continue;
         }
 
@@ -379,6 +383,40 @@ object @O {
             DeadFuncElimConfig {
                 export_mode: ExportMode::WholeProgram,
                 keep_external_decls: true,
+            },
+        );
+
+        let names = function_names(&parsed.module);
+        assert_eq!(names, vec!["entry".to_string()]);
+    }
+
+    #[test]
+    fn keep_external_decls_false_removes_unreachable_external_decls() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+declare external %ext();
+
+func private %entry() {
+    block0:
+        return;
+}
+
+object @O {
+    section runtime {
+        entry %entry;
+    }
+}
+"#;
+
+        let mut parsed = parse_module(source);
+        let roots = collect_object_roots(&parsed.module);
+        run_dead_func_elim(
+            &mut parsed.module,
+            &roots,
+            DeadFuncElimConfig {
+                export_mode: ExportMode::Conservative,
+                keep_external_decls: false,
             },
         );
 

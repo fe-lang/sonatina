@@ -134,17 +134,6 @@ impl AdceSolver {
             }
         });
 
-        // A live phi depends on the branches that select its input.
-        // Mark predecessor terminators so the control flow choosing
-        // which phi operand is taken stays alive.
-        if let Some(phi) = func.dfg.cast_phi(inst_id) {
-            for &(_, pred) in phi.args() {
-                if let Some(term) = func.layout.last_inst_of(pred) {
-                    self.mark_inst(func, term);
-                }
-            }
-        }
-
         // A live phi semantically depends on predecessor edges.
         // Keep predecessor terminators live so we do not erase incoming values.
         if let Some(phi) = func.dfg.cast_phi(inst_id) {
