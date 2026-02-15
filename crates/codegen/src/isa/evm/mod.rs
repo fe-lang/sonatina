@@ -982,9 +982,18 @@ impl LowerBackend for EvmBackend {
 
                 perform_actions(ctx, &alloc.read(insn, &args));
 
-                // `i1` values are already canonicalized to 0/1 by their producers.
-                // Avoid emitting a redundant `AND 0x01` mask for `sext i1`.
-                if (8..256).contains(&src_bits) {
+                if src_bits == 1 {
+                    // Canonicalize to low bit first in case the producer left a non-canonical
+                    // i1 payload on stack (e.g. raw MLOAD lowering), then materialize
+                    // {0, -1} as required by sign-extension semantics.
+                    if let Some(mask) = low_bits_mask(src_bits) {
+                        let bytes = u256_to_be(&mask);
+                        push_bytes(ctx, &bytes);
+                        ctx.push(OpCode::AND);
+                    }
+                    ctx.push(OpCode::PUSH0);
+                    ctx.push(OpCode::SUB);
+                } else if (8..256).contains(&src_bits) {
                     let src_bytes = (src_bits / 8) as u8;
                     debug_assert!(src_bytes > 0 && src_bytes <= 32);
                     // `SIGNEXTEND` takes (byte_index, value) with `byte_index` at top of stack.
@@ -1000,11 +1009,7 @@ impl LowerBackend for EvmBackend {
                 let src_bits = scalar_bit_width(src_ty, ctx.module).unwrap_or(256);
 
                 perform_actions(ctx, &alloc.read(insn, &args));
-                // `zext i1` is a representation no-op on the EVM stack:
-                // i1-producing ops already produce canonical 0/1.
-                if src_bits != 1
-                    && let Some(mask) = low_bits_mask(src_bits)
-                {
+                if let Some(mask) = low_bits_mask(src_bits) {
                     let bytes = u256_to_be(&mask);
                     push_bytes(ctx, &bytes);
                     ctx.push(OpCode::AND);
@@ -1036,10 +1041,7 @@ impl LowerBackend for EvmBackend {
                 let src_bits = scalar_bit_width(src_ty, ctx.module).unwrap_or(256);
 
                 perform_actions(ctx, &alloc.read(insn, &args));
-                // `i1` values are already 0/1; masking before int_to_ptr is redundant.
-                if src_bits != 1
-                    && let Some(mask) = low_bits_mask(src_bits)
-                {
+                if let Some(mask) = low_bits_mask(src_bits) {
                     let bytes = u256_to_be(&mask);
                     push_bytes(ctx, &bytes);
                     ctx.push(OpCode::AND);
