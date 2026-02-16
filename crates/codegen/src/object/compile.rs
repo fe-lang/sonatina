@@ -457,10 +457,11 @@ mod tests {
         isa::evm::PushWidthPolicy,
         machinst::{
             lower::{FixupUpdate, LowerBackend, LoweredFunction, SectionLoweringCtx},
-            vcode::{SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
+            vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
         },
-        object::CompileOptions,
+        object::{CompileOptions, FrontendProvenanceMap, OBSERVABILITY_SCHEMA_VERSION},
     };
+    use cranelift_entity::EntityRef;
     use smallvec::SmallVec;
     use sonatina_ir::{
         InstDowncast, InstDowncastMut, Module,
@@ -679,6 +680,7 @@ object @Contract {
         let opts = CompileOptions {
             fixup_policy: PushWidthPolicy::Push4,
             emit_symtab: true,
+            emit_observability: false,
             verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
         };
 
@@ -716,6 +718,368 @@ object @Contract {
     }
 
     #[test]
+    fn compile_object_emits_observability_when_enabled() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+global public const [i8; 3] $blob = [1, 2, 3];
+
+func public %runtime() {
+    block0:
+        v0.i256 = sym_addr $blob;
+        v1.i256 = sym_size $blob;
+        return;
+}
+
+func public %init() {
+    block0:
+        v0.i256 = sym_addr &runtime;
+        v1.i256 = sym_size &runtime;
+        return;
+}
+
+object @Contract {
+  section init {
+    entry %init;
+    embed .runtime as &runtime;
+  }
+  section runtime {
+    entry %runtime;
+    data $blob;
+  }
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let backend = FakeBackend;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: false,
+            emit_observability: true,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
+        };
+
+        let artifact = compile_object(&parsed.module, &backend, "Contract", &opts).unwrap();
+
+        let init = artifact.sections.get_index(0).expect("init section").1;
+        let runtime = artifact.sections.get_index(1).expect("runtime section").1;
+        let init_obs = init
+            .observability
+            .as_ref()
+            .expect("init observability should be emitted");
+        let runtime_obs = runtime
+            .observability
+            .as_ref()
+            .expect("runtime observability should be emitted");
+
+        assert_eq!(init_obs.schema_version, OBSERVABILITY_SCHEMA_VERSION);
+        assert_eq!(runtime_obs.schema_version, OBSERVABILITY_SCHEMA_VERSION);
+
+        assert_eq!(init_obs.section_bytes, init.bytes.len() as u32);
+        assert_eq!(runtime_obs.section_bytes, runtime.bytes.len() as u32);
+
+        assert_eq!(
+            init_obs.mapped_code_bytes + init_obs.unmapped_code_bytes,
+            init_obs.code_bytes
+        );
+        assert_eq!(
+            runtime_obs.mapped_code_bytes + runtime_obs.unmapped_code_bytes,
+            runtime_obs.code_bytes
+        );
+        assert_eq!(
+            init_obs.unmapped_reason_coverage.total_bytes(),
+            init_obs.unmapped_code_bytes
+        );
+        assert_eq!(
+            runtime_obs.unmapped_reason_coverage.total_bytes(),
+            runtime_obs.unmapped_code_bytes
+        );
+
+        let object_obs = artifact
+            .observability()
+            .expect("object observability should be available");
+        assert_eq!(object_obs.schema_version, OBSERVABILITY_SCHEMA_VERSION);
+        assert_eq!(
+            object_obs.total_section_bytes,
+            init.bytes.len() as u32 + runtime.bytes.len() as u32
+        );
+        assert!(object_obs.to_text().contains("section init"));
+        assert!(
+            object_obs
+                .to_json()
+                .contains("\"schema_version\":\"0.1.0\"")
+        );
+        assert!(
+            artifact
+                .observability_text()
+                .expect("object text observability expected")
+                .contains("object schema=0.1.0")
+        );
+        assert!(
+            artifact
+                .observability_json()
+                .expect("object json observability expected")
+                .contains("\"schema_version\":\"0.1.0\"")
+        );
+
+        let mut enriched = artifact
+            .observability()
+            .expect("object observability should be available");
+        let target = enriched
+            .sections
+            .values()
+            .flat_map(|section| section.pc_map.iter())
+            .find_map(|entry| entry.ir_inst.map(|ir_inst| (entry.func, ir_inst)))
+            .expect("expected at least one ir-backed pc-map entry");
+        let mut map = FrontendProvenanceMap::default();
+        map.insert(target, "mir_stmt:1".to_string());
+        enriched.apply_frontend_provenance(&map);
+        assert!(
+            enriched
+                .to_json()
+                .contains("\"frontend_provenance\":\"mir_stmt:1\""),
+            "frontend provenance must be serialized when provided"
+        );
+    }
+
+    #[test]
+    fn compile_object_omits_observability_when_disabled() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+global public const [i8; 3] $blob = [1, 2, 3];
+
+func public %runtime() {
+    block0:
+        v0.i256 = sym_addr $blob;
+        v1.i256 = sym_size $blob;
+        return;
+}
+
+object @Contract {
+  section runtime {
+    entry %runtime;
+    data $blob;
+  }
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let backend = FakeBackend;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: false,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
+        };
+
+        let artifact = compile_object(&parsed.module, &backend, "Contract", &opts).unwrap();
+        assert!(
+            artifact
+                .sections
+                .values()
+                .all(|section| section.observability.is_none()),
+            "observability must be absent when disabled"
+        );
+        assert!(artifact.observability().is_none());
+    }
+
+    #[test]
+    fn observability_serialization_is_deterministic_across_repeated_builds() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+global public const [i8; 3] $blob = [1, 2, 3];
+
+func public %runtime() {
+    block0:
+        v0.i256 = sym_addr $blob;
+        v1.i256 = sym_size $blob;
+        return;
+}
+
+func public %init() {
+    block0:
+        v0.i256 = sym_addr &runtime;
+        v1.i256 = sym_size &runtime;
+        return;
+}
+
+object @Contract {
+  section init {
+    entry %init;
+    embed .runtime as &runtime;
+  }
+  section runtime {
+    entry %runtime;
+    data $blob;
+  }
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let backend = FakeBackend;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: false,
+            emit_observability: true,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
+        };
+
+        let a = compile_object(&parsed.module, &backend, "Contract", &opts).unwrap();
+        let b = compile_object(&parsed.module, &backend, "Contract", &opts).unwrap();
+
+        let a_obs = a.observability().expect("observability expected");
+        let b_obs = b.observability().expect("observability expected");
+
+        assert_eq!(a_obs.to_text(), b_obs.to_text());
+        assert_eq!(a_obs.to_json(), b_obs.to_json());
+    }
+
+    #[test]
+    fn observability_rejects_invalid_ir_references() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %main() {
+    block0:
+        v0.i32 = add 1.i32 2.i32;
+        return;
+}
+
+object @O {
+  section runtime {
+    entry %main;
+  }
+}
+"#;
+
+        struct InvalidIrRefBackend;
+
+        impl LowerBackend for InvalidIrRefBackend {
+            type MInst = u8;
+            type Error = String;
+            type FixupPolicy = PushWidthPolicy;
+
+            fn lower_function(
+                &self,
+                module: &Module,
+                func: FuncRef,
+                section_ctx: &SectionLoweringCtx<'_>,
+            ) -> Result<LoweredFunction<Self::MInst>, Self::Error> {
+                let _ = section_ctx;
+                let mut vcode: VCode<Self::MInst> = VCode::default();
+                let mut block_order = Vec::new();
+
+                module.func_store.view(func, |function| {
+                    let block = function.layout.entry_block().expect("entry block");
+                    let _ = &mut vcode.blocks[block];
+                    block_order.push(block);
+                    let invalid_inst = sonatina_ir::InstId::new(9_999_999);
+                    let _ = vcode.add_inst_to_block(0x01, Some(invalid_inst), block);
+                });
+
+                Ok(LoweredFunction { vcode, block_order })
+            }
+
+            fn apply_sym_fixup(
+                &self,
+                vcode: &mut VCode<Self::MInst>,
+                inst: VCodeInst,
+                fixup: &SymFixup,
+                value: u32,
+                policy: &Self::FixupPolicy,
+            ) -> Result<FixupUpdate, Self::Error> {
+                let _ = (vcode, inst, fixup, value, policy);
+                Err("unexpected sym fixup in InvalidIrRefBackend".to_string())
+            }
+
+            fn lower(
+                &self,
+                ctx: &mut crate::machinst::lower::Lower<Self::MInst>,
+                alloc: &mut dyn crate::stackalloc::Allocator,
+                inst: sonatina_ir::InstId,
+            ) {
+                let _ = (ctx, alloc, inst);
+                unreachable!("InvalidIrRefBackend does not use machinst lowering")
+            }
+
+            fn enter_function(
+                &self,
+                ctx: &mut crate::machinst::lower::Lower<Self::MInst>,
+                alloc: &mut dyn crate::stackalloc::Allocator,
+                function: &sonatina_ir::Function,
+            ) {
+                let _ = (ctx, alloc, function);
+            }
+
+            fn enter_block(
+                &self,
+                ctx: &mut crate::machinst::lower::Lower<Self::MInst>,
+                alloc: &mut dyn crate::stackalloc::Allocator,
+                block: sonatina_ir::BlockId,
+            ) {
+                let _ = (ctx, alloc, block);
+            }
+
+            fn update_opcode_with_immediate_bytes(
+                &self,
+                opcode: &mut Self::MInst,
+                bytes: &mut SmallVec<[u8; 8]>,
+            ) {
+                debug_assert!(bytes.len() <= 32);
+                *opcode = 0x5f_u8.saturating_add(bytes.len() as u8);
+            }
+
+            fn update_opcode_with_label(
+                &self,
+                opcode: &mut Self::MInst,
+                label_offset: u32,
+            ) -> SmallVec<[u8; 4]> {
+                let bytes = label_offset
+                    .to_be_bytes()
+                    .into_iter()
+                    .skip_while(|b| *b == 0)
+                    .collect::<SmallVec<_>>();
+                debug_assert!(bytes.len() <= 32);
+                *opcode = 0x5f_u8.saturating_add(bytes.len() as u8);
+                bytes
+            }
+
+            fn emit_opcode(&self, opcode: &Self::MInst, buf: &mut Vec<u8>) {
+                buf.push(*opcode);
+            }
+
+            fn emit_immediate_bytes(&self, bytes: &[u8], buf: &mut Vec<u8>) {
+                buf.extend_from_slice(bytes);
+            }
+
+            fn emit_label(&self, address: u32, buf: &mut Vec<u8>) {
+                buf.extend(address.to_be_bytes().into_iter().skip_while(|b| *b == 0));
+            }
+        }
+
+        let parsed = parse_module(s).unwrap();
+        let backend = InvalidIrRefBackend;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::MinimalRelax,
+            emit_symtab: false,
+            emit_observability: true,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
+        };
+
+        let errs =
+            compile_object(&parsed.module, &backend, "O", &opts).expect_err("must reject bad ir");
+        let [ObjectCompileError::LinkError { message, .. }] = errs.as_slice() else {
+            panic!("expected a single link error, got {errs:?}");
+        };
+        assert!(
+            message.contains("invalid ir reference"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
     fn compile_object_reports_verifier_failures_before_codegen() {
         let s = r#"
 target = "evm-ethereum-london"
@@ -737,6 +1101,7 @@ object @O {
         let opts = CompileOptions {
             fixup_policy: PushWidthPolicy::Push4,
             emit_symtab: false,
+            emit_observability: false,
             verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
         };
 
@@ -790,6 +1155,7 @@ object @O {
         let opts = CompileOptions {
             fixup_policy: PushWidthPolicy::Push4,
             emit_symtab: false,
+            emit_observability: false,
             verifier_cfg,
         };
 
@@ -805,6 +1171,196 @@ object @O {
                 .any(|diagnostic| diagnostic.code.as_str() == "IR0700"),
             "expected IR0700 users mismatch diagnostic, got {report}"
         );
+    }
+
+    #[test]
+    fn observability_reason_buckets_account_for_unmapped_bytes() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %main() {
+    block0:
+        v0.i32 = add 1.i32 2.i32;
+        return;
+}
+
+object @O {
+  section runtime {
+    entry %main;
+  }
+}
+"#;
+
+        struct UnmappedObsBackend;
+
+        impl LowerBackend for UnmappedObsBackend {
+            type MInst = u8;
+            type Error = String;
+            type FixupPolicy = PushWidthPolicy;
+
+            fn lower_function(
+                &self,
+                module: &Module,
+                func: FuncRef,
+                section_ctx: &SectionLoweringCtx<'_>,
+            ) -> Result<LoweredFunction<Self::MInst>, Self::Error> {
+                let _ = section_ctx;
+                let mut vcode: VCode<Self::MInst> = VCode::default();
+                let mut block_order = Vec::new();
+
+                module.func_store.view(func, |function| {
+                    let block = function.layout.entry_block().expect("entry block");
+                    let mapped_ir = function
+                        .layout
+                        .iter_inst(block)
+                        .next()
+                        .expect("mapped ir inst");
+
+                    let _ = &mut vcode.blocks[block];
+                    block_order.push(block);
+
+                    let _synthetic = vcode.add_inst_to_block(0x5b, None, block);
+                    let mapped = vcode.add_inst_to_block(0x01, Some(mapped_ir), block);
+                    let _mapped_again = vcode.add_inst_to_block(0x02, Some(mapped_ir), block);
+                    let label_only = vcode.add_inst_to_block(0x60, None, block);
+                    let label = vcode.labels.push(Label::Insn(mapped));
+                    vcode.fixups.insert((label_only, VCodeFixup::Label(label)));
+                    let _no_ir = vcode.add_inst_to_block(0xaa, None, block);
+                });
+
+                Ok(LoweredFunction { vcode, block_order })
+            }
+
+            fn apply_sym_fixup(
+                &self,
+                vcode: &mut VCode<Self::MInst>,
+                inst: VCodeInst,
+                fixup: &SymFixup,
+                value: u32,
+                policy: &Self::FixupPolicy,
+            ) -> Result<FixupUpdate, Self::Error> {
+                let _ = (vcode, inst, fixup, value, policy);
+                Err("unexpected sym fixup in UnmappedObsBackend".to_string())
+            }
+
+            fn lower(
+                &self,
+                ctx: &mut crate::machinst::lower::Lower<Self::MInst>,
+                alloc: &mut dyn crate::stackalloc::Allocator,
+                inst: sonatina_ir::InstId,
+            ) {
+                let _ = (ctx, alloc, inst);
+                unreachable!("UnmappedObsBackend does not use machinst lowering")
+            }
+
+            fn enter_function(
+                &self,
+                ctx: &mut crate::machinst::lower::Lower<Self::MInst>,
+                alloc: &mut dyn crate::stackalloc::Allocator,
+                function: &sonatina_ir::Function,
+            ) {
+                let _ = (ctx, alloc, function);
+            }
+
+            fn enter_block(
+                &self,
+                ctx: &mut crate::machinst::lower::Lower<Self::MInst>,
+                alloc: &mut dyn crate::stackalloc::Allocator,
+                block: sonatina_ir::BlockId,
+            ) {
+                let _ = (ctx, alloc, block);
+            }
+
+            fn update_opcode_with_immediate_bytes(
+                &self,
+                opcode: &mut Self::MInst,
+                bytes: &mut SmallVec<[u8; 8]>,
+            ) {
+                debug_assert!(bytes.len() <= 32);
+                *opcode = 0x5f_u8.saturating_add(bytes.len() as u8);
+            }
+
+            fn update_opcode_with_label(
+                &self,
+                opcode: &mut Self::MInst,
+                label_offset: u32,
+            ) -> SmallVec<[u8; 4]> {
+                let bytes = label_offset
+                    .to_be_bytes()
+                    .into_iter()
+                    .skip_while(|b| *b == 0)
+                    .collect::<SmallVec<_>>();
+                debug_assert!(bytes.len() <= 32);
+                *opcode = 0x5f_u8.saturating_add(bytes.len() as u8);
+                bytes
+            }
+
+            fn emit_opcode(&self, opcode: &Self::MInst, buf: &mut Vec<u8>) {
+                buf.push(*opcode);
+            }
+
+            fn emit_immediate_bytes(&self, bytes: &[u8], buf: &mut Vec<u8>) {
+                buf.extend_from_slice(bytes);
+            }
+
+            fn emit_label(&self, address: u32, buf: &mut Vec<u8>) {
+                buf.extend(address.to_be_bytes().into_iter().skip_while(|b| *b == 0));
+            }
+        }
+
+        let parsed = parse_module(s).unwrap();
+        let backend = UnmappedObsBackend;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::MinimalRelax,
+            emit_symtab: false,
+            emit_observability: true,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
+        };
+
+        let artifact = compile_object(&parsed.module, &backend, "O", &opts).unwrap();
+        let runtime = artifact
+            .sections
+            .iter()
+            .find(|(name, _)| name.0.as_str() == "runtime")
+            .expect("runtime section")
+            .1;
+        let obs = runtime
+            .observability
+            .as_ref()
+            .expect("runtime observability should be emitted");
+
+        assert_eq!(obs.section_bytes, runtime.bytes.len() as u32);
+        assert_eq!(obs.code_bytes, runtime.bytes.len() as u32);
+        assert_eq!(
+            obs.mapped_code_bytes + obs.unmapped_code_bytes,
+            obs.code_bytes
+        );
+        assert_eq!(
+            obs.unmapped_reason_coverage.total_bytes(),
+            obs.unmapped_code_bytes
+        );
+
+        assert!(obs.mapped_code_bytes > 0);
+        assert!(obs.unmapped_code_bytes > 0);
+        assert!(obs.unmapped_reason_coverage.synthetic > 0);
+        assert!(obs.unmapped_reason_coverage.label_or_fixup_only > 0);
+        assert!(obs.unmapped_reason_coverage.no_ir_inst > 0);
+
+        let mut ir_counts: std::collections::HashMap<sonatina_ir::InstId, usize> =
+            std::collections::HashMap::new();
+        for entry in &obs.pc_map {
+            if let Some(ir_inst) = entry.ir_inst {
+                *ir_counts.entry(ir_inst).or_default() += 1;
+            }
+        }
+        assert!(
+            ir_counts.values().any(|count| *count > 1),
+            "expected at least one many-to-one mapping from vcode instructions to the same ir instruction"
+        );
+
+        for pair in obs.pc_map.windows(2) {
+            assert!(pair[0].pc_end <= pair[1].pc_start);
+        }
     }
 
     #[test]
@@ -959,6 +1515,7 @@ object @O {
         let opts = CompileOptions {
             fixup_policy: PushWidthPolicy::Push4,
             emit_symtab: false,
+            emit_observability: false,
             verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
         };
 

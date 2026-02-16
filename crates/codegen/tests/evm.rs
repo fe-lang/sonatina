@@ -98,6 +98,7 @@ fn test_evm(fixture: Fixture<&str>) {
     let stackify_reach_depth = stackify_reach_depth_for_fixture(fixture.path(), &parsed);
     let emit_debug_trace = emit_debug_trace_for_fixture(fixture.path(), &parsed);
     let emit_mem_plan = emit_mem_plan_for_fixture(fixture.path(), &parsed);
+    let emit_observability = emit_observability_for_fixture(fixture.path(), &parsed);
 
     let cases = evm_directives::parse_evm_cases(&parsed.debug.module_comments)
         .unwrap_or_else(|e| panic!("{}: {e}", fixture.path()));
@@ -185,6 +186,7 @@ fn test_evm(fixture: Fixture<&str>) {
     let opts = CompileOptions {
         fixup_policy: PushWidthPolicy::MinimalRelax,
         emit_symtab: false,
+        emit_observability,
         verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
     };
 
@@ -192,19 +194,18 @@ fn test_evm(fixture: Fixture<&str>) {
         .unwrap_or_else(|errs| panic!("{}: object compile failed: {errs:?}", fixture.path()));
 
     let mut out = Vec::new();
+    let mut cfg_flags = String::new();
     if emit_mem_plan {
-        writeln!(
-            &mut out,
-            "evm.config: stack_reach={stackify_reach_depth} emit_debug_trace={emit_debug_trace} emit_mem_plan=true"
-        )
-        .unwrap();
-    } else {
-        writeln!(
-            &mut out,
-            "evm.config: stack_reach={stackify_reach_depth} emit_debug_trace={emit_debug_trace}"
-        )
-        .unwrap();
+        cfg_flags.push_str(" emit_mem_plan=true");
     }
+    if emit_observability {
+        cfg_flags.push_str(" emit_observability=true");
+    }
+    writeln!(
+        &mut out,
+        "evm.config: stack_reach={stackify_reach_depth} emit_debug_trace={emit_debug_trace}{cfg_flags}"
+    )
+    .unwrap();
     writeln!(&mut out).unwrap();
 
     writeln!(&mut out, "object: {}", artifact.object.0.as_str()).unwrap();
@@ -242,6 +243,11 @@ fn test_evm(fixture: Fixture<&str>) {
     {
         writeln!(&mut out, "--------------- MEM PLAN ---------------\n").unwrap();
         writeln!(&mut out, "{mem_plan_detail}").unwrap();
+    }
+
+    if emit_observability && let Some(observability) = artifact.observability() {
+        writeln!(&mut out, "--------------- OBSERVABILITY ---------------\n").unwrap();
+        writeln!(&mut out, "{}", observability.to_text()).unwrap();
     }
 
     let init = artifact
@@ -614,6 +620,13 @@ fn emit_debug_trace_for_fixture(path: &str, parsed: &ParsedModule) -> bool {
 
 fn emit_mem_plan_for_fixture(path: &str, parsed: &ParsedModule) -> bool {
     match evm_directives::emit_mem_plan(&parsed.debug.module_comments) {
+        Ok(v) => v,
+        Err(e) => panic!("{path}: {e}"),
+    }
+}
+
+fn emit_observability_for_fixture(path: &str, parsed: &ParsedModule) -> bool {
+    match evm_directives::emit_observability(&parsed.debug.module_comments) {
         Ok(v) => v,
         Err(e) => panic!("{path}: {e}"),
     }

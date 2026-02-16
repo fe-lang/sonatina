@@ -6,6 +6,7 @@ struct EvmConfig {
     pub stack_reach: Option<u8>,
     pub emit_debug_trace: Option<bool>,
     pub emit_mem_plan: Option<bool>,
+    pub emit_observability: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +56,12 @@ pub(crate) fn emit_debug_trace(module_comments: &[String]) -> Result<bool, Strin
 pub(crate) fn emit_mem_plan(module_comments: &[String]) -> Result<bool, String> {
     Ok(parse_evm_config(module_comments)?
         .emit_mem_plan
+        .unwrap_or(false))
+}
+
+pub(crate) fn emit_observability(module_comments: &[String]) -> Result<bool, String> {
+    Ok(parse_evm_config(module_comments)?
+        .emit_observability
         .unwrap_or(false))
 }
 
@@ -195,6 +202,13 @@ fn parse_evm_config_object(spec: &str, cfg: &mut EvmConfig) -> Result<(), String
                     return Err("duplicate `emit_mem_plan`".to_string());
                 }
                 cfg.emit_mem_plan =
+                    Some(parse_bool_literal(value).map_err(|e| format!("{key}: {e}"))?);
+            }
+            "emit_observability" => {
+                if cfg.emit_observability.is_some() {
+                    return Err("duplicate `emit_observability`".to_string());
+                }
+                cfg.emit_observability =
                     Some(parse_bool_literal(value).map_err(|e| format!("{key}: {e}"))?);
             }
             _ => {
