@@ -438,7 +438,7 @@ fn classify_unmapped_reason<Op>(
 ) -> UnmappedReason {
     if matches!(
         func_layout.vcode().fixups.get(insn),
-        Some((_, VCodeFixup::Label(_)))
+        Some((_, VCodeFixup::Label(_) | VCodeFixup::Sym(_)))
     ) {
         UnmappedReason::LabelOrFixupOnly
     } else if is_block_head {
