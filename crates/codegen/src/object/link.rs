@@ -23,6 +23,17 @@ pub enum LinkSectionError<E> {
     Link(String),
 }
 
+struct BuildSectionObservabilityInput<'a, Op> {
+    module: &'a Module,
+    layout: &'a ObjectLayout<Op>,
+    funcs: &'a [FuncRef],
+    symtab: &'a FxHashMap<SymbolId, SymbolDef>,
+    data: &'a [(GlobalVariableRef, Vec<u8>)],
+    embeds: &'a [(EmbedSymbol, Vec<u8>)],
+    section_ctx: &'a SectionLoweringCtx<'a>,
+    section_bytes: u32,
+}
+
 pub fn link_section<B: LowerBackend>(
     module: &Module,
     backend: &B,
@@ -97,16 +108,16 @@ pub fn link_section<B: LowerBackend>(
 
             let observability = if opts.emit_observability {
                 Some(
-                    build_section_observability(
+                    build_section_observability(BuildSectionObservabilityInput {
                         module,
-                        &layout,
+                        layout: &layout,
                         funcs,
-                        &symtab,
+                        symtab: &symtab,
                         data,
                         embeds,
                         section_ctx,
                         section_bytes,
-                    )
+                    })
                     .map_err(LinkSectionError::Link)?,
                 )
             } else {
@@ -200,15 +211,19 @@ fn symbol_id(sym: &SymbolRef) -> SymbolId {
 }
 
 fn build_section_observability<Op>(
-    module: &Module,
-    layout: &ObjectLayout<Op>,
-    funcs: &[FuncRef],
-    symtab: &FxHashMap<SymbolId, SymbolDef>,
-    data: &[(GlobalVariableRef, Vec<u8>)],
-    embeds: &[(EmbedSymbol, Vec<u8>)],
-    section_ctx: &SectionLoweringCtx<'_>,
-    section_bytes: u32,
+    input: BuildSectionObservabilityInput<'_, Op>,
 ) -> Result<SectionObservability, String> {
+    let BuildSectionObservabilityInput {
+        module,
+        layout,
+        funcs,
+        symtab,
+        data,
+        embeds,
+        section_ctx,
+        section_bytes,
+    } = input;
+
     let mut code_bytes: u32 = 0;
     for &func in funcs {
         let def = symtab
