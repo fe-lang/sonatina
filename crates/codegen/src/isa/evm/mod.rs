@@ -51,6 +51,7 @@ pub enum PushWidthPolicy {
 
 struct PreparedSection {
     plan: ProgramMemoryPlan,
+    has_dynamic_frames: bool,
     allocs: FxHashMap<FuncRef, StackifyAlloc>,
     block_orders: FxHashMap<FuncRef, Vec<BlockId>>,
 }
@@ -394,6 +395,13 @@ impl EvmBackend {
             .as_ref()
             .map(|s| s.plan.dyn_base)
             .unwrap_or(STATIC_BASE)
+    }
+
+    fn section_has_dynamic_frames(&self) -> bool {
+        self.section_state
+            .borrow()
+            .as_ref()
+            .is_none_or(|s| s.has_dynamic_frames)
     }
 
     fn lower_prepared_function(
@@ -831,6 +839,10 @@ impl LowerBackend for EvmBackend {
         if std::env::var_os("SONATINA_EVM_MEM_DEBUG").is_some() {
             debug_print_mem_plan(module, funcs, &plan);
         }
+        let has_dynamic_frames = plan
+            .funcs
+            .values()
+            .any(|func_plan| matches!(&func_plan.scheme, MemScheme::DynamicFrame));
 
         let mut allocs: FxHashMap<FuncRef, StackifyAlloc> = FxHashMap::default();
         let mut block_orders: FxHashMap<FuncRef, Vec<BlockId>> = FxHashMap::default();
@@ -841,6 +853,7 @@ impl LowerBackend for EvmBackend {
 
         *self.section_state.borrow_mut() = Some(PreparedSection {
             plan,
+            has_dynamic_frames,
             allocs,
             block_orders,
         });
@@ -1390,6 +1403,7 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::EvmSelfDestruct(_) => basic_op(ctx, &[OpCode::SELFDESTRUCT]),
 
             EvmInstKind::EvmMalloc(_) => {
+                let needs_dyn_sp_clamp = self.section_has_dynamic_frames();
                 let mem_plan = self.current_mem_plan.borrow();
                 let mem_plan = mem_plan
                     .as_ref()
@@ -1428,20 +1442,7 @@ impl LowerBackend for EvmBackend {
                     // update `FREE_PTR_SLOT` and is allowed to overlap with later allocations.
                     ctx.push(OpCode::POP);
 
-                    // heap_end = mload(0x40)
-                    push_bytes(ctx, &[FREE_PTR_SLOT]);
-                    ctx.push(OpCode::MLOAD);
-
-                    // sp = mload(DYN_SP_SLOT)
-                    push_bytes(ctx, &[DYN_SP_SLOT]);
-                    ctx.push(OpCode::MLOAD);
-
-                    // max(heap_end, sp)
-                    emit_max_top_two(ctx);
-
-                    // max(max(heap_end, sp), min_base)
-                    push_bytes(ctx, &u32_to_be(min_base_bytes));
-                    emit_max_top_two(ctx);
+                    emit_malloc_base(ctx, min_base_bytes, needs_dyn_sp_clamp);
 
                     perform_actions(ctx, &alloc.write(insn, result));
                     return;
@@ -1455,20 +1456,7 @@ impl LowerBackend for EvmBackend {
                 ctx.push(OpCode::NOT);
                 ctx.push(OpCode::AND);
 
-                // heap_end = mload(0x40)
-                push_bytes(ctx, &[FREE_PTR_SLOT]);
-                ctx.push(OpCode::MLOAD);
-
-                // sp = mload(DYN_SP_SLOT)
-                push_bytes(ctx, &[DYN_SP_SLOT]);
-                ctx.push(OpCode::MLOAD);
-
-                // max(heap_end, sp)
-                emit_max_top_two(ctx);
-
-                // max(max(heap_end, sp), min_base)
-                push_bytes(ctx, &u32_to_be(min_base_bytes));
-                emit_max_top_two(ctx);
+                emit_malloc_base(ctx, min_base_bytes, needs_dyn_sp_clamp);
 
                 // new_end = base + aligned_size; mstore(0x40, new_end); return base
                 ctx.push(OpCode::DUP1);
@@ -2058,6 +2046,23 @@ fn emit_max_top_two(ctx: &mut Lower<OpCode>) {
 
     let end = ctx.push(OpCode::JUMPDEST);
     ctx.add_label_reference(end_push, Label::Insn(end));
+}
+
+fn emit_malloc_base(ctx: &mut Lower<OpCode>, min_base_bytes: u32, needs_dyn_sp_clamp: bool) {
+    // heap_end = mload(0x40)
+    push_bytes(ctx, &[FREE_PTR_SLOT]);
+    ctx.push(OpCode::MLOAD);
+
+    if needs_dyn_sp_clamp {
+        // max(heap_end, mload(DYN_SP_SLOT))
+        push_bytes(ctx, &[DYN_SP_SLOT]);
+        ctx.push(OpCode::MLOAD);
+        emit_max_top_two(ctx);
+    }
+
+    // max(base, min_base)
+    push_bytes(ctx, &u32_to_be(min_base_bytes));
+    emit_max_top_two(ctx);
 }
 
 fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {

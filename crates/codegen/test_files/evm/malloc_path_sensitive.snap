@@ -6,8 +6,8 @@ input_file: test_files/evm/malloc_path_sensitive.sntn
 evm.config: stack_reach=16 emit_debug_trace=false
 
 object: Contract
-  section runtime: 136 bytes
-  total: 136 bytes
+  section runtime: 102 bytes
+  total: 102 bytes
 
 functions:
   mem: dyn_base=0x1c0 static_base=0xc0
@@ -15,10 +15,10 @@ functions:
     mem: scheme=StaticArena need_words=8 locals_words=8
   small: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=1
     mem: scheme=StaticArena need_words=0 locals_words=0
-  dispatch: ir_blocks=3 ir_insts=7 vcode_ops=81 fixups=13 imm_bytes=8
+  dispatch: ir_blocks=3 ir_insts=7 vcode_ops=53 fixups=9 imm_bytes=6
     mem: scheme=StaticArena need_words=8 locals_words=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=14 fixups=2 imm_bytes=2
     mem: scheme=StaticArena need_words=8 locals_words=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21273 gas_refunded=0 logs=0 output=call len=32
+  case ok: calldata_len=8 success reason=Return gas_used=21231 gas_refunded=0 logs=0 output=call len=32
