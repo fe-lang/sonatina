@@ -159,11 +159,6 @@ fn compute_summary_for_func(
         let arg_count = function.arg_values.len();
         let mut summary = PtrEscapeSummary::new(arg_count);
 
-        let mut arg_is_ptr: Vec<bool> = Vec::with_capacity(arg_count);
-        for &arg in &function.arg_values {
-            arg_is_ptr.push(function.dfg.value_ty(arg).is_pointer(&module.ctx));
-        }
-
         let prov_info = compute_provenance(function, &module.ctx, isa, |callee| {
             summaries
                 .get(&callee)
@@ -196,14 +191,6 @@ fn compute_summary_for_func(
                                 summary.arg_may_be_returned[idx] = true;
                             }
                         }
-
-                        if ret_ty.is_pointer(&module.ctx) && !ret_prov.has_any_arg() {
-                            for (idx, is_ptr) in arg_is_ptr.iter().copied().enumerate() {
-                                if is_ptr {
-                                    summary.arg_may_be_returned[idx] = true;
-                                }
-                            }
-                        }
                     }
                     EvmInstKind::Mstore(mstore) => {
                         let addr_prov = &prov[*mstore.addr()];
@@ -217,9 +204,6 @@ fn compute_summary_for_func(
                             if idx < summary.arg_may_escape.len() {
                                 summary.arg_may_escape[idx] = true;
                             }
-                        }
-                        if val_prov.is_unknown_ptr() {
-                            mark_all_ptr_args_escape(&mut summary, &arg_is_ptr);
                         }
                     }
                     EvmInstKind::EvmMstore8(mstore8) => {
@@ -235,9 +219,6 @@ fn compute_summary_for_func(
                                 summary.arg_may_escape[idx] = true;
                             }
                         }
-                        if val_prov.is_unknown_ptr() {
-                            mark_all_ptr_args_escape(&mut summary, &arg_is_ptr);
-                        }
                     }
                     EvmInstKind::EvmMcopy(mcopy) => {
                         let dest_prov = &prov[*mcopy.dest()];
@@ -247,9 +228,7 @@ fn compute_summary_for_func(
 
                         let src_prov = &prov[*mcopy.addr()];
                         if src_prov.is_local_addr() {
-                            let mut any = false;
                             for base in src_prov.alloca_insts() {
-                                any = true;
                                 if let Some(stored) = local_mem.get(&base) {
                                     for idx in stored.arg_indices() {
                                         let idx = idx as usize;
@@ -257,16 +236,15 @@ fn compute_summary_for_func(
                                             summary.arg_may_escape[idx] = true;
                                         }
                                     }
-                                    if stored.is_unknown_ptr() {
-                                        mark_all_ptr_args_escape(&mut summary, &arg_is_ptr);
-                                    }
                                 }
                             }
-                            if !any {
-                                mark_all_ptr_args_escape(&mut summary, &arg_is_ptr);
-                            }
                         } else {
-                            mark_all_ptr_args_escape(&mut summary, &arg_is_ptr);
+                            for idx in src_prov.arg_indices() {
+                                let idx = idx as usize;
+                                if idx < summary.arg_may_escape.len() {
+                                    summary.arg_may_escape[idx] = true;
+                                }
+                            }
                         }
                     }
                     EvmInstKind::Call(call) => {
@@ -297,14 +275,6 @@ fn compute_summary_for_func(
 
         summary
     })
-}
-
-fn mark_all_ptr_args_escape(summary: &mut PtrEscapeSummary, arg_is_ptr: &[bool]) {
-    for (idx, is_ptr) in arg_is_ptr.iter().copied().enumerate() {
-        if is_ptr {
-            summary.arg_may_escape[idx] = true;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -414,5 +384,45 @@ block0:
         assert!(f.returns_any_ptr);
         assert_eq!(f.arg_may_be_returned, vec![true]);
         assert_eq!(f.arg_may_escape, vec![false]);
+    }
+
+    #[test]
+    fn ptr_escape_non_arg_unknown_return_does_not_mark_all_args_returned() {
+        let (summaries, _) = compute(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.*i8, v1.*i8) -> *i8 {
+block0:
+    v2.*i8 = int_to_ptr 0.i32 *i8;
+    return v2;
+}
+"#,
+        );
+
+        let f = &summaries["f"];
+        assert!(f.returns_any_ptr);
+        assert_eq!(f.arg_may_be_returned, vec![false, false]);
+        assert_eq!(f.arg_may_escape, vec![false, false]);
+    }
+
+    #[test]
+    fn ptr_escape_non_arg_unknown_store_does_not_mark_all_args_escape() {
+        let (summaries, _) = compute(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.*i8, v1.*i8) {
+block0:
+    v2.*i8 = int_to_ptr 0.i32 *i8;
+    mstore 0.i32 v2 *i8;
+    return;
+}
+"#,
+        );
+
+        let f = &summaries["f"];
+        assert_eq!(f.arg_may_be_returned, vec![false, false]);
+        assert_eq!(f.arg_may_escape, vec![false, false]);
     }
 }
