@@ -530,6 +530,67 @@ fn compute_explicit_jump_targets(
     targets
 }
 
+fn compute_return_escape_caller_clamp_words(
+    module: &Module,
+    funcs: &[FuncRef],
+    plan: &ProgramMemoryPlan,
+) -> FxHashMap<FuncRef, u32> {
+    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
+
+    let mut callers: FxHashMap<FuncRef, FxHashSet<FuncRef>> = FxHashMap::default();
+    let mut clamp_words: FxHashMap<FuncRef, u32> = FxHashMap::default();
+    for &func in funcs {
+        callers.insert(func, FxHashSet::default());
+        clamp_words.insert(func, 0);
+    }
+
+    for &caller in funcs {
+        module.func_store.view(caller, |function| {
+            for block in function.layout.iter_block() {
+                for inst in function.layout.iter_inst(block) {
+                    let Some(call) = function.dfg.call_info(inst) else {
+                        continue;
+                    };
+                    let callee = call.callee();
+                    if funcs_set.contains(&callee) {
+                        callers.entry(callee).or_default().insert(caller);
+                    }
+                }
+            }
+        });
+    }
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+
+        for &func in funcs {
+            let Some(func_callers) = callers.get(&func) else {
+                continue;
+            };
+
+            let mut next = clamp_words.get(&func).copied().unwrap_or(0);
+            for caller in func_callers.iter().copied() {
+                let caller_clobber_words = plan
+                    .funcs
+                    .get(&caller)
+                    .map(|func_plan| func_plan.static_clobber_words)
+                    .unwrap_or(0);
+                let caller_transitive_words = clamp_words.get(&caller).copied().unwrap_or(0);
+                next = next.max(caller_clobber_words.max(caller_transitive_words));
+            }
+
+            let cur = clamp_words.get(&func).copied().unwrap_or(0);
+            if next > cur {
+                clamp_words.insert(func, next);
+                changed = true;
+            }
+        }
+    }
+
+    clamp_words
+}
+
 fn is_push_opcode(op: OpCode) -> bool {
     let byte = op as u8;
     byte == OpCode::PUSH0 as u8 || (OpCode::PUSH1 as u8..=OpCode::PUSH32 as u8).contains(&byte)
@@ -847,28 +908,35 @@ impl LowerBackend for EvmBackend {
 
         let mem_effects =
             compute_func_mem_effects(module, funcs, &plan, &scratch_effects, &self.isa);
+        let return_escape_caller_clamp_words =
+            compute_return_escape_caller_clamp_words(module, funcs, &plan);
 
         for &func in funcs {
             let analysis = analyses.get(&func).expect("missing analysis");
-            let (escaping_mallocs, transient_mallocs) = module.func_store.view(func, |function| {
-                let escaping = malloc_plan::compute_escaping_mallocs_for_function(
-                    function,
-                    &module.ctx,
-                    &self.isa,
-                    &ptr_escape,
-                );
-                let transient = malloc_plan::compute_transient_mallocs(
-                    function,
-                    &module.ctx,
-                    &self.isa,
-                    &ptr_escape,
-                    Some(&mem_effects),
-                    &analysis.inst_liveness,
-                );
-                (escaping, transient)
-            });
+            let (malloc_escape_kinds, transient_mallocs) =
+                module.func_store.view(func, |function| {
+                    let escape_kinds = malloc_plan::compute_malloc_escape_kinds_for_function(
+                        function,
+                        &module.ctx,
+                        &self.isa,
+                        &ptr_escape,
+                    );
+                    let transient = malloc_plan::compute_transient_mallocs(
+                        function,
+                        &module.ctx,
+                        &self.isa,
+                        &ptr_escape,
+                        Some(&mem_effects),
+                        &analysis.inst_liveness,
+                    );
+                    (escape_kinds, transient)
+                });
             if let Some(mem_plan) = plan.funcs.get_mut(&func) {
-                mem_plan.escaping_mallocs = escaping_mallocs;
+                mem_plan.malloc_escape_kinds = malloc_escape_kinds;
+                mem_plan.return_escape_caller_clamp_words = return_escape_caller_clamp_words
+                    .get(&func)
+                    .copied()
+                    .unwrap_or(0);
                 mem_plan.transient_mallocs = transient_mallocs;
             }
         }
@@ -946,7 +1014,8 @@ impl LowerBackend for EvmBackend {
                 locals_words: layout.locals_words,
                 malloc_future_static_words: FxHashMap::default(),
                 transient_mallocs: FxHashSet::default(),
-                escaping_mallocs: FxHashSet::default(),
+                malloc_escape_kinds: FxHashMap::default(),
+                return_escape_caller_clamp_words: 0,
             },
         };
         self.lower_prepared_function(module, func, lowering)
@@ -1426,16 +1495,24 @@ impl LowerBackend for EvmBackend {
                     .checked_sub(STATIC_BASE)
                     .expect("dyn base below static base")
                     / WORD_BYTES;
-                let escapes_func = mem_plan.escaping_mallocs.contains(&insn);
                 let mut future_words = mem_plan
                     .malloc_future_static_words
                     .get(&insn)
                     .copied()
                     .unwrap_or(dyn_base_words);
-                if escapes_func {
-                    // Escaping allocations must survive future callers that may clobber any
-                    // per-function static arena prefix up to the global dynamic base.
+                let escape_kinds = mem_plan
+                    .malloc_escape_kinds
+                    .get(&insn)
+                    .copied()
+                    .unwrap_or_default();
+                if escape_kinds.has_global_or_unknown() {
+                    // Non-local/unknown escapes must survive any future caller that can clobber
+                    // static arena state up to the section dynamic base.
                     future_words = future_words.max(dyn_base_words);
+                } else if escape_kinds.is_return_only() {
+                    // Return-only escapes only need to survive the transitive caller set of this
+                    // function, not unrelated functions in the section.
+                    future_words = future_words.max(mem_plan.return_escape_caller_clamp_words);
                 }
 
                 let min_base_bytes = STATIC_BASE

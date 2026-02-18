@@ -20,6 +20,31 @@ use super::{
     ptr_escape::PtrEscapeSummary,
 };
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct MallocEscapeKind(u8);
+
+impl MallocEscapeKind {
+    pub(crate) const RETURNS_TO_CALLER: Self = Self(1 << 0);
+    pub(crate) const STORED_NON_LOCAL: Self = Self(1 << 1);
+    pub(crate) const UNKNOWN: Self = Self(1 << 2);
+
+    pub(crate) fn has_global_or_unknown(self) -> bool {
+        self.contains(Self::STORED_NON_LOCAL) || self.contains(Self::UNKNOWN)
+    }
+
+    pub(crate) fn is_return_only(self) -> bool {
+        self.contains(Self::RETURNS_TO_CALLER) && !self.has_global_or_unknown()
+    }
+
+    fn contains(self, other: Self) -> bool {
+        self.0 & other.0 != 0
+    }
+
+    fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
+
 pub(crate) fn should_restore_free_ptr_on_internal_returns(
     function: &Function,
     module: &ModuleCtx,
@@ -202,7 +227,7 @@ pub(crate) fn compute_transient_mallocs(
     let local_mem = &prov_info.local_mem;
 
     let block_malloc_in = compute_block_malloc_in(function, isa);
-    let escaping = compute_escaping_mallocs(
+    let escape_kinds = compute_malloc_escape_kinds(
         function,
         module,
         isa,
@@ -212,8 +237,8 @@ pub(crate) fn compute_transient_mallocs(
         &block_malloc_in,
     );
 
-    for base in escaping {
-        mallocs.remove(&base);
+    for malloc in escape_kinds.keys().copied() {
+        mallocs.remove(&malloc);
     }
 
     for block in function.layout.iter_block() {
@@ -269,12 +294,12 @@ pub(crate) fn compute_transient_mallocs(
     mallocs
 }
 
-pub(crate) fn compute_escaping_mallocs_for_function(
+pub(crate) fn compute_malloc_escape_kinds_for_function(
     function: &Function,
     module: &ModuleCtx,
     isa: &Evm,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
-) -> FxHashSet<InstId> {
+) -> FxHashMap<InstId, MallocEscapeKind> {
     let prov_info = compute_provenance(function, module, isa, |callee| {
         ptr_escape
             .get(&callee)
@@ -285,7 +310,7 @@ pub(crate) fn compute_escaping_mallocs_for_function(
     let prov = &prov_info.value;
     let local_mem = &prov_info.local_mem;
     let block_malloc_in = compute_block_malloc_in(function, isa);
-    compute_escaping_mallocs(
+    compute_malloc_escape_kinds(
         function,
         module,
         isa,
@@ -385,24 +410,50 @@ fn compute_block_malloc_in(
 }
 
 fn record_escaping_mallocs(
-    escaping: &mut FxHashSet<InstId>,
+    escape_kinds: &mut FxHashMap<InstId, MallocEscapeKind>,
     value: ValueId,
     prov: &SecondaryMap<ValueId, Provenance>,
     seen_mallocs: &BitSet<InstId>,
+    direct_kind: MallocEscapeKind,
 ) {
     let p = &prov[value];
-    record_escaping_provenance(escaping, p, seen_mallocs);
+    record_escaping_provenance(escape_kinds, p, seen_mallocs, direct_kind);
 }
 
 fn record_escaping_provenance(
-    escaping: &mut FxHashSet<InstId>,
+    escape_kinds: &mut FxHashMap<InstId, MallocEscapeKind>,
     p: &Provenance,
     seen_mallocs: &BitSet<InstId>,
+    direct_kind: MallocEscapeKind,
 ) {
     if p.is_unknown_ptr() {
-        escaping.extend(seen_mallocs.iter());
+        for malloc in seen_mallocs.iter() {
+            record_escape_kind(escape_kinds, malloc, MallocEscapeKind::UNKNOWN);
+        }
     }
-    escaping.extend(p.malloc_insts());
+    for malloc in p.malloc_insts() {
+        record_escape_kind(escape_kinds, malloc, direct_kind);
+    }
+}
+
+fn record_escape_kind(
+    escape_kinds: &mut FxHashMap<InstId, MallocEscapeKind>,
+    malloc: InstId,
+    kind: MallocEscapeKind,
+) {
+    escape_kinds
+        .entry(malloc)
+        .and_modify(|cur| *cur = cur.union(kind))
+        .or_insert(kind);
+}
+
+fn record_unknown_seen_mallocs(
+    escape_kinds: &mut FxHashMap<InstId, MallocEscapeKind>,
+    seen_mallocs: &BitSet<InstId>,
+) {
+    for malloc in seen_mallocs.iter() {
+        record_escape_kind(escape_kinds, malloc, MallocEscapeKind::UNKNOWN);
+    }
 }
 
 fn local_copy_source_may_be_heap_derived(
@@ -428,7 +479,7 @@ fn local_copy_source_may_be_heap_derived(
     !any
 }
 
-fn compute_escaping_mallocs(
+fn compute_malloc_escape_kinds(
     function: &Function,
     module: &ModuleCtx,
     isa: &Evm,
@@ -436,8 +487,8 @@ fn compute_escaping_mallocs(
     prov: &SecondaryMap<ValueId, Provenance>,
     local_mem: &FxHashMap<InstId, Provenance>,
     block_malloc_in: &SecondaryMap<BlockId, BitSet<InstId>>,
-) -> FxHashSet<InstId> {
-    let mut escaping: FxHashSet<InstId> = FxHashSet::default();
+) -> FxHashMap<InstId, MallocEscapeKind> {
+    let mut escape_kinds: FxHashMap<InstId, MallocEscapeKind> = FxHashMap::default();
 
     for block in function.layout.iter_block() {
         let mut seen_mallocs = block_malloc_in[block].clone();
@@ -448,7 +499,13 @@ fn compute_escaping_mallocs(
                     let Some(ret_val) = *ret.arg() else {
                         continue;
                     };
-                    record_escaping_mallocs(&mut escaping, ret_val, prov, &seen_mallocs);
+                    record_escaping_mallocs(
+                        &mut escape_kinds,
+                        ret_val,
+                        prov,
+                        &seen_mallocs,
+                        MallocEscapeKind::RETURNS_TO_CALLER,
+                    );
                 }
                 EvmInstKind::Mstore(mstore) => {
                     let addr = *mstore.addr();
@@ -457,7 +514,13 @@ fn compute_escaping_mallocs(
                     }
 
                     let val = *mstore.value();
-                    record_escaping_mallocs(&mut escaping, val, prov, &seen_mallocs);
+                    record_escaping_mallocs(
+                        &mut escape_kinds,
+                        val,
+                        prov,
+                        &seen_mallocs,
+                        MallocEscapeKind::STORED_NON_LOCAL,
+                    );
                 }
                 EvmInstKind::EvmMstore8(mstore8) => {
                     let addr = *mstore8.addr();
@@ -466,7 +529,13 @@ fn compute_escaping_mallocs(
                     }
 
                     let val = *mstore8.val();
-                    record_escaping_mallocs(&mut escaping, val, prov, &seen_mallocs);
+                    record_escaping_mallocs(
+                        &mut escape_kinds,
+                        val,
+                        prov,
+                        &seen_mallocs,
+                        MallocEscapeKind::STORED_NON_LOCAL,
+                    );
                 }
                 EvmInstKind::EvmMcopy(mcopy) => {
                     let dest = *mcopy.dest();
@@ -481,16 +550,21 @@ fn compute_escaping_mallocs(
                         for base in src_prov.alloca_insts() {
                             any = true;
                             if let Some(stored) = local_mem.get(&base) {
-                                record_escaping_provenance(&mut escaping, stored, &seen_mallocs);
+                                record_escaping_provenance(
+                                    &mut escape_kinds,
+                                    stored,
+                                    &seen_mallocs,
+                                    MallocEscapeKind::STORED_NON_LOCAL,
+                                );
                             }
                         }
                         if !any {
-                            escaping.extend(seen_mallocs.iter());
+                            record_unknown_seen_mallocs(&mut escape_kinds, &seen_mallocs);
                         }
                     } else {
                         // Unknown source bytes copied to non-local memory may include malloc-derived
                         // pointers from this function.
-                        escaping.extend(seen_mallocs.iter());
+                        record_unknown_seen_mallocs(&mut escape_kinds, &seen_mallocs);
                     }
                 }
                 EvmInstKind::Call(call) => {
@@ -501,7 +575,13 @@ fn compute_escaping_mallocs(
                         .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee));
                     for (idx, &arg) in call.args().iter().enumerate() {
                         if idx < callee_sum.arg_may_escape.len() && callee_sum.arg_may_escape[idx] {
-                            record_escaping_mallocs(&mut escaping, arg, prov, &seen_mallocs);
+                            record_escaping_mallocs(
+                                &mut escape_kinds,
+                                arg,
+                                prov,
+                                &seen_mallocs,
+                                MallocEscapeKind::STORED_NON_LOCAL,
+                            );
                         }
                     }
                 }
@@ -514,7 +594,7 @@ fn compute_escaping_mallocs(
         }
     }
 
-    escaping
+    escape_kinds
 }
 
 fn conservative_unknown_ptr_summary(module: &ModuleCtx, func_ref: FuncRef) -> PtrEscapeSummary {
