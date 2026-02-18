@@ -226,8 +226,11 @@ impl SccpSolver {
 
         match simplify_inst(func, &self.lattice, &self.may_be_undef, inst_id) {
             SimplifyResult::Const(imm) => {
-                let imm = self.normalize_const_imm_for_value(func, inst_result, imm);
-                self.set_lattice_cell(inst_result, LatticeCell::Const(imm));
+                let cell = self
+                    .normalize_const_imm_for_value(func, inst_result, imm)
+                    .map(LatticeCell::Const)
+                    .unwrap_or(LatticeCell::Top);
+                self.set_lattice_cell(inst_result, cell);
                 self.set_may_be_undef(inst_result, false);
                 return;
             }
@@ -252,10 +255,10 @@ impl SccpSolver {
         });
 
         let cell = match value {
-            Some(EvalValue::Imm(value)) => {
-                let value = self.normalize_const_imm_for_value(func, inst_result, value);
-                LatticeCell::Const(value)
-            }
+            Some(EvalValue::Imm(value)) => self
+                .normalize_const_imm_for_value(func, inst_result, value)
+                .map(LatticeCell::Const)
+                .unwrap_or(LatticeCell::Top),
             Some(_) => cell_state.nonconst_result_cell(),
             None => LatticeCell::Top,
         };
@@ -552,12 +555,14 @@ impl SccpSolver {
         func: &Function,
         value: ValueId,
         imm: Immediate,
-    ) -> Immediate {
+    ) -> Option<Immediate> {
         let ty = func.dfg.value_ty(value);
-        if imm.ty() == ty {
-            imm
+        if !ty.is_integral() {
+            None
+        } else if imm.ty() == ty {
+            Some(imm)
         } else {
-            Immediate::from_i256(imm.as_i256(), ty)
+            Some(Immediate::from_i256(imm.as_i256(), ty))
         }
     }
 
@@ -568,7 +573,9 @@ impl SccpSolver {
         cell: LatticeCell,
     ) -> LatticeCell {
         if let LatticeCell::Const(imm) = cell {
-            LatticeCell::Const(self.normalize_const_imm_for_value(func, value, imm))
+            self.normalize_const_imm_for_value(func, value, imm)
+                .map(LatticeCell::Const)
+                .unwrap_or(LatticeCell::Top)
         } else {
             cell
         }
@@ -768,9 +775,13 @@ mod tests {
     use super::*;
 
     use sonatina_ir::{
-        Linkage, Signature, Type,
-        builder::test_util::test_module_builder,
-        inst::{control_flow::Return, logic},
+        I256, Linkage, Signature, Type,
+        builder::test_util::{test_isa, test_module_builder},
+        inst::{
+            cast::{IntToPtr, PtrToInt},
+            control_flow::Return,
+            logic,
+        },
     };
 
     #[derive(Clone, Copy)]
@@ -845,5 +856,35 @@ mod tests {
                 CfgCleanup::new(CleanupMode::Strict).run(func);
             });
         }
+    }
+
+    #[test]
+    fn sccp_does_not_fold_pointer_constants() {
+        let mb = test_module_builder();
+        let sig = Signature::new("ptr_const", Linkage::Public, &[], Type::I256);
+        let func_ref = mb.declare_function(sig).unwrap();
+
+        let mut fb = mb.func_builder::<InstInserter>(func_ref);
+        let block0 = fb.append_block();
+        fb.switch_to_block(block0);
+
+        let isa = test_isa();
+        let is = isa.inst_set();
+        let ptr_ty = fb.ptr_type(Type::I8);
+        let word = fb.make_imm_value(Immediate::from_i256(I256::from(64u64), Type::I256));
+        let ptr = fb.insert_inst(IntToPtr::new(is, word, ptr_ty), ptr_ty);
+        let roundtrip = fb.insert_inst(PtrToInt::new(is, ptr, Type::I256), Type::I256);
+
+        fb.insert_inst_no_result(Return::new_unchecked(is, Some(roundtrip)));
+        fb.seal_all();
+        fb.finish();
+
+        let mut cfg = ControlFlowGraph::default();
+        mb.func_store.modify(func_ref, |func| {
+            cfg.compute(func);
+            let mut solver = SccpSolver::new();
+            solver.run(func, &mut cfg);
+            CfgCleanup::new(CleanupMode::Strict).run(func);
+        });
     }
 }
