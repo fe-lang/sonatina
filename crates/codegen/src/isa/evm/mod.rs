@@ -426,6 +426,52 @@ impl EvmBackend {
 
         Ok(LoweredFunction { vcode, block_order })
     }
+
+    fn try_fold_gep_static_arena_addr(
+        &self,
+        ctx: &Lower<OpCode>,
+        args: &[ValueId],
+        steps: &[GepStep],
+    ) -> Option<u32> {
+        let mem_plan = self.current_mem_plan.borrow();
+        let mem_plan = mem_plan.as_ref()?;
+        if !matches!(mem_plan.scheme, MemScheme::StaticArena(_)) {
+            return None;
+        }
+
+        let &base = args.first()?;
+        let base_addr = self.try_fold_static_arena_addr_value(ctx, mem_plan, base)?;
+        let offset = gep_const_offset_bytes(steps)?;
+        base_addr.checked_add(offset)
+    }
+
+    fn try_fold_static_arena_addr_value(
+        &self,
+        ctx: &Lower<OpCode>,
+        mem_plan: &FuncMemPlan,
+        value: ValueId,
+    ) -> Option<u32> {
+        let inst = ctx.value_def_inst(value)?;
+        let data = self.isa.inst_set().resolve_inst(ctx.insn_data(inst));
+        match data {
+            EvmInstKind::Alloca(_) => {
+                let &offset_words = mem_plan.alloca_offset_words.get(&inst)?;
+                Some(static_arena_addr_bytes(offset_words))
+            }
+            EvmInstKind::Bitcast(bitcast) => {
+                self.try_fold_static_arena_addr_value(ctx, mem_plan, *bitcast.from())
+            }
+            EvmInstKind::Gep(gep) => {
+                let values = gep.values();
+                let &base = values.first()?;
+                let base_addr = self.try_fold_static_arena_addr_value(ctx, mem_plan, base)?;
+                let steps = build_gep_steps(ctx, values.as_slice());
+                let offset = gep_const_offset_bytes(&steps)?;
+                base_addr.checked_add(offset)
+            }
+            _ => None,
+        }
+    }
 }
 
 fn compute_explicit_jump_targets(
@@ -1236,52 +1282,23 @@ impl LowerBackend for EvmBackend {
             }
             EvmInstKind::EvmMcopy(_) => basic_op(ctx, &[OpCode::MCOPY]),
             EvmInstKind::Gep(_) => {
-                perform_actions(ctx, &alloc.read(insn, &args));
                 if args.is_empty() {
                     panic!("gep without operands");
                 }
 
-                let mut current_ty = ctx.value_ty(args[0]);
-                if !current_ty.is_pointer(ctx.module) {
-                    panic!("gep base must be a pointer (got {current_ty:?})");
-                }
+                let steps = build_gep_steps(ctx, &args);
 
-                let mut steps: Vec<GepStep> = Vec::new();
-                for &idx_val in args.iter().skip(1) {
-                    let Some(cmpd) = current_ty.resolve_compound(ctx.module) else {
-                        panic!("invalid gep: indexing into scalar {current_ty:?}");
-                    };
-
-                    let idx_imm_u32 = ctx.value_imm(idx_val).and_then(immediate_u32);
-
-                    match cmpd {
-                        CompoundType::Ptr(elem_ty) => {
-                            let elem_size = u32::try_from(ctx.module.size_of_unchecked(elem_ty))
-                                .expect("gep element too large");
-                            steps.push(gep_step(elem_size, idx_imm_u32));
-                            current_ty = elem_ty;
-                        }
-                        CompoundType::Array { elem, .. } => {
-                            let elem_size = u32::try_from(ctx.module.size_of_unchecked(elem))
-                                .expect("gep element too large");
-                            steps.push(gep_step(elem_size, idx_imm_u32));
-                            current_ty = elem;
-                        }
-                        CompoundType::Struct(s) => {
-                            let Some(idx) = idx_imm_u32.map(|idx| idx as usize) else {
-                                panic!("struct gep indices must be immediate constants");
-                            };
-                            let (field_offset, field_ty) =
-                                struct_field_offset_bytes(&s.fields, s.packed, idx, ctx.module);
-                            steps.push(GepStep::AddConst(field_offset));
-                            current_ty = field_ty;
-                        }
-                        CompoundType::Func { .. } => {
-                            panic!("invalid gep: indexing into function type");
-                        }
+                if let Some(addr_bytes) = self.try_fold_gep_static_arena_addr(ctx, &args, &steps) {
+                    perform_actions(ctx, &alloc.read(insn, &args));
+                    for _ in 0..args.len() {
+                        ctx.push(OpCode::POP);
                     }
+                    push_bytes(ctx, &u32_to_be(addr_bytes));
+                    perform_actions(ctx, &alloc.write(insn, result));
+                    return;
                 }
 
+                perform_actions(ctx, &alloc.read(insn, &args));
                 for step in steps {
                     match step {
                         GepStep::AddConst(offset_bytes) => {
@@ -1318,13 +1335,7 @@ impl LowerBackend for EvmBackend {
 
                 match &mem_plan.scheme {
                     MemScheme::StaticArena(_) => {
-                        let addr_bytes = STATIC_BASE
-                            .checked_add(
-                                offset_words
-                                    .checked_mul(WORD_BYTES)
-                                    .expect("alloca address bytes overflow"),
-                            )
-                            .expect("alloca address bytes overflow");
+                        let addr_bytes = static_arena_addr_bytes(offset_words);
                         push_bytes(ctx, &u32_to_be(addr_bytes));
                     }
                     MemScheme::DynamicFrame => {
@@ -1727,9 +1738,70 @@ impl Allocator for FinalAlloc {
     }
 }
 
+#[derive(Clone, Copy)]
 enum GepStep {
     AddConst(u32),
     AddScaled(u32),
+}
+
+fn build_gep_steps(ctx: &Lower<OpCode>, args: &[ValueId]) -> Vec<GepStep> {
+    if args.is_empty() {
+        panic!("gep without operands");
+    }
+
+    let mut current_ty = ctx.value_ty(args[0]);
+    if !current_ty.is_pointer(ctx.module) {
+        panic!("gep base must be a pointer (got {current_ty:?})");
+    }
+
+    let mut steps: Vec<GepStep> = Vec::new();
+    for &idx_val in args.iter().skip(1) {
+        let Some(cmpd) = current_ty.resolve_compound(ctx.module) else {
+            panic!("invalid gep: indexing into scalar {current_ty:?}");
+        };
+
+        let idx_imm_u32 = ctx.value_imm(idx_val).and_then(immediate_u32);
+
+        match cmpd {
+            CompoundType::Ptr(elem_ty) => {
+                let elem_size = u32::try_from(ctx.module.size_of_unchecked(elem_ty))
+                    .expect("gep element too large");
+                steps.push(gep_step(elem_size, idx_imm_u32));
+                current_ty = elem_ty;
+            }
+            CompoundType::Array { elem, .. } => {
+                let elem_size = u32::try_from(ctx.module.size_of_unchecked(elem))
+                    .expect("gep element too large");
+                steps.push(gep_step(elem_size, idx_imm_u32));
+                current_ty = elem;
+            }
+            CompoundType::Struct(s) => {
+                let Some(idx) = idx_imm_u32.map(|idx| idx as usize) else {
+                    panic!("struct gep indices must be immediate constants");
+                };
+                let (field_offset, field_ty) =
+                    struct_field_offset_bytes(&s.fields, s.packed, idx, ctx.module);
+                steps.push(GepStep::AddConst(field_offset));
+                current_ty = field_ty;
+            }
+            CompoundType::Func { .. } => {
+                panic!("invalid gep: indexing into function type");
+            }
+        }
+    }
+
+    steps
+}
+
+fn gep_const_offset_bytes(steps: &[GepStep]) -> Option<u32> {
+    let mut total: u32 = 0;
+    for &step in steps {
+        let GepStep::AddConst(offset) = step else {
+            return None;
+        };
+        total = total.checked_add(offset)?;
+    }
+    Some(total)
 }
 
 fn gep_step(elem_size_bytes: u32, idx: Option<u32>) -> GepStep {
@@ -1746,6 +1818,16 @@ fn gep_step(elem_size_bytes: u32, idx: Option<u32>) -> GepStep {
             .checked_mul(idx)
             .expect("gep offset overflow"),
     )
+}
+
+fn static_arena_addr_bytes(offset_words: u32) -> u32 {
+    STATIC_BASE
+        .checked_add(
+            offset_words
+                .checked_mul(WORD_BYTES)
+                .expect("alloca address bytes overflow"),
+        )
+        .expect("alloca address bytes overflow")
 }
 
 fn immediate_u32(imm: Immediate) -> Option<u32> {

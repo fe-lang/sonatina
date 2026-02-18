@@ -1,0 +1,53 @@
+#! evm.config: { emit_debug_trace: true }
+#! evm.case: folded_and_fallback
+#!   calldata: u32be(11) u32be(22)
+#!   expect: return u256(27)
+
+target = "evm-ethereum-osaka"
+
+type @triple = { i256, i256, i256 };
+
+func public %fold_simple() -> i256 {
+    block0:
+        v0.*@triple = alloca @triple;
+        v1.*i256 = gep v0 0.i8 1.i8;
+        mstore v1 7.i256 i256;
+        v2.i256 = mload v1 i256;
+        return v2;
+}
+
+func public %fold_nested() -> i256 {
+    block0:
+        v0.*@triple = alloca @triple;
+        v1.*i256 = gep v0 0.i8 0.i8;
+        v2.*i256 = gep v1 2.i8;
+        mstore v2 9.i256 i256;
+        v3.i256 = mload v2 i256;
+        return v3;
+}
+
+func public %dynamic_index(v0.i8) -> i256 {
+    block0:
+        v1.*[i256; 3] = alloca [i256; 3];
+        v2.*i256 = gep v1 0.i8 v0;
+        mstore v2 11.i256 i256;
+        v3.i256 = mload v2 i256;
+        return v3;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = call %fold_simple;
+        v1.i256 = call %fold_nested;
+        v2.i256 = call %dynamic_index 1.i8;
+        v3.i256 = add v0 v1;
+        v4.i256 = add v3 v2;
+        mstore 0.i32 v4 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

@@ -11,7 +11,7 @@ object: Contract
 
 functions:
   mem: dyn_base=0x1c0 static_base=0xc0
-  big: ir_blocks=1 ir_insts=5 vcode_ops=15 fixups=0 imm_bytes=2
+  big: ir_blocks=1 ir_insts=5 vcode_ops=15 fixups=0 imm_bytes=3
     mem: scheme=StaticArena need_words=8 locals_words=8
   esc8: ir_blocks=1 ir_insts=8 vcode_ops=41 fixups=2 imm_bytes=10
     mem: scheme=StaticArena need_words=0 locals_words=0

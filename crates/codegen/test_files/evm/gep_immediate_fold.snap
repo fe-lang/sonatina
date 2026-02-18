@@ -1,0 +1,241 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/gep_immediate_fold.sntn
+---
+evm.config: stack_reach=16 emit_debug_trace=true
+
+object: Contract
+  section runtime: 67 bytes
+  total: 67 bytes
+
+functions:
+  mem: dyn_base=0x120 static_base=0xc0
+  fold_simple: ir_blocks=1 ir_insts=5 vcode_ops=15 fixups=0 imm_bytes=4
+    mem: scheme=StaticArena need_words=3 locals_words=3
+  fold_nested: ir_blocks=1 ir_insts=6 vcode_ops=20 fixups=0 imm_bytes=5
+    mem: scheme=StaticArena need_words=3 locals_words=3
+  dynamic_index: ir_blocks=1 ir_insts=5 vcode_ops=16 fixups=0 imm_bytes=3
+    mem: scheme=StaticArena need_words=3 locals_words=3
+  entry: ir_blocks=1 ir_insts=7 vcode_ops=23 fixups=6 imm_bytes=2
+    mem: scheme=StaticArena need_words=3 locals_words=0
+
+evm:
+  case folded_and_fallback: calldata_len=8 success reason=Return gas_used=21249 gas_refunded=0 logs=0 output=call len=32
+
+
+--------------- DEBUG ---------------
+
+evm mem plan: dyn_base=0x120 static_base=0xc0
+evm mem plan: fold_simple scheme=StaticArena need_words=3 locals_words=3
+  alloca v0 offset_words=0 size_words=3 addr=0xc0
+evm mem plan: fold_nested scheme=StaticArena need_words=3 locals_words=3
+  alloca v0 offset_words=0 size_words=3 addr=0xc0
+evm mem plan: dynamic_index scheme=StaticArena need_words=3 locals_words=3
+  alloca v1 offset_words=0 size_words=3 addr=0xc0
+evm mem plan: entry scheme=StaticArena need_words=3 locals_words=0
+
+// func public %fold_simple() -> i256
+  block0 P=[] T=[]
+    - stack=[<RET>]
+      alloca [] -> v0
+    - stack=[v0, <RET>], last_use=[v0]
+      pre: [PUSH(0), PUSH(1), SWAP2]
+      gep [v0, 0, 1] -> v1
+    - stack=[v1, <RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 7 }), DUP2]
+      mstore [v1, I256 { is_negative: false, abs: 7 }]
+    - stack=[v1, <RET>], last_use=[v1]
+      mload [v1] -> v2
+    - stack=[v2, <RET>]
+      return [v2]
+
+// func public %fold_nested() -> i256
+  block0 P=[] T=[]
+    - stack=[<RET>]
+      alloca [] -> v0
+    - stack=[v0, <RET>], last_use=[v0]
+      pre: [PUSH(0), PUSH(0), SWAP2]
+      gep [v0, 0, 0] -> v1
+    - stack=[v1, <RET>], last_use=[v1]
+      pre: [PUSH(2), SWAP1]
+      gep [v1, 2] -> v2
+    - stack=[v2, <RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 9 }), DUP2]
+      mstore [v2, I256 { is_negative: false, abs: 9 }]
+    - stack=[v2, <RET>], last_use=[v2]
+      mload [v2] -> v3
+    - stack=[v3, <RET>]
+      return [v3]
+
+// func public %dynamic_index(v0.i8) -> i256
+  block0 P=[v0] T=[]
+    - stack=[v0, <RET>]
+      alloca [] -> v1
+    - stack=[v1, v0, <RET>], last_use=[v0, v1]
+      pre: [PUSH(0), SWAP1]
+      gep [v1, 0, v0] -> v2
+    - stack=[v2, <RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 11 }), DUP2]
+      mstore [v2, I256 { is_negative: false, abs: 11 }]
+    - stack=[v2, <RET>], last_use=[v2]
+      mload [v2] -> v3
+    - stack=[v3, <RET>]
+      return [v3]
+
+// func public %entry()
+  block0 P=[] T=[]
+    - stack=[]
+      pre: [PUSH_CONT]
+      call [] -> v0
+    - stack=[v0]
+      pre: [PUSH_CONT]
+      call [] -> v1
+    - stack=[v1, v0]
+      pre: [PUSH(1), PUSH_CONT, SWAP1]
+      call [1] -> v2
+    - stack=[v2, v1, v0], last_use=[v0, v1]
+      pre: [SWAP2]
+      add [v0, v1] -> v3
+    - stack=[v3, v2], last_use=[v2, v3]
+      add [v3, v2] -> v4
+    - stack=[v4], last_use=[v4]
+      pre: [PUSH(0)]
+      mstore [0, v4]
+    - stack=[]
+      pre: [PUSH(32), PUSH(0)]
+      evm_return [0, 32]
+
+// func public %fold_simple() -> i256
+fold_simple:
+  block0:
+    JUMPDEST
+    PUSH1 0xe0 (224)  // v1.*i256 = gep v0 0.i8 1.i8;
+    PUSH1 0x7 (7)  // mstore v1 7.i256 i256;
+    DUP2
+    MSTORE
+    MLOAD  // v2.i256 = mload v1 i256;
+    SWAP1  // return v2;
+    JUMP
+
+// func public %fold_nested() -> i256
+fold_nested:
+  block0:
+    JUMPDEST
+    PUSH2 0x100 (256)  // v2.*i256 = gep v1 2.i8;
+    PUSH1 0x9 (9)  // mstore v2 9.i256 i256;
+    DUP2
+    MSTORE
+    MLOAD  // v3.i256 = mload v2 i256;
+    SWAP1  // return v3;
+    JUMP
+
+// func public %dynamic_index(v0.i8) -> i256
+dynamic_index:
+  block0:
+    JUMPDEST
+    PUSH1 0xc0 (192)  // v1.*[i256; 3] = alloca [i256; 3];
+    SWAP1  // v2.*i256 = gep v1 0.i8 v0;
+    PUSH1 0x20 (32)
+    MUL
+    ADD
+    PUSH1 0xb (11)  // mstore v2 11.i256 i256;
+    DUP2
+    MSTORE
+    MLOAD  // v3.i256 = mload v2 i256;
+    SWAP1  // return v3;
+    JUMP
+
+// func public %entry()
+entry:
+  block0:
+    JUMPDEST
+    PUSH1 `pc + (3)`  // v0.i256 = call %fold_simple;
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    PUSH1 `pc + (3)`  // v1.i256 = call %fold_nested;
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH1 0x1 (1)  // v2.i256 = call %dynamic_index 1.i8;
+    PUSH1 `pc + (4)`
+    SWAP1
+    PUSH1 FuncRef(2)
+    JUMP
+    JUMPDEST
+    SWAP2  // v3.i256 = add v0 v1;
+    ADD
+    ADD  // v4.i256 = add v3 v2;
+    PUSH0  // mstore 0.i32 v4 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH0
+    RETURN
+
+
+
+--------------- BYTECODE ---------------
+
+// section runtime
+0x5b60066039565b600c602e565b6001601590601f565b9101015f5260205ff35b60c09060200201600b81525190565b610100600981525190565b60e060078152519056
+
+
+
+--------------- EVM TRACE ---------------
+
+
+Success { reason: Return, gas_used: 21249, gas_refunded: 0, logs: [], output: Call(0x000000000000000000000000000000000000000000000000000000000000001b) }
+
+    pc  opcode            input (stack grows to the right)
+     0  5b  JUMPDEST      []
+     1  60  PUSH1         0x06  []
+     3  60  PUSH1         0x39  [0x6]
+     5  56  JUMP          [0x6, 0x39]
+    57  5b  JUMPDEST      [0x6]
+    58  60  PUSH1         0xe0  [0x6]
+    60  60  PUSH1         0x07  [0x6, 0xe0]
+    62  81  DUP2          [0x6, 0xe0, 0x7]
+    63  52  MSTORE        [0x6, 0xe0, 0x7, 0xe0]
+    64  51  MLOAD         [0x6, 0xe0]
+    65  90  SWAP1         [0x6, 0x7]
+    66  56  JUMP          [0x7, 0x6]
+     6  5b  JUMPDEST      [0x7]
+     7  60  PUSH1         0x0c  [0x7]
+     9  60  PUSH1         0x2e  [0x7, 0xc]
+    11  56  JUMP          [0x7, 0xc, 0x2e]
+    46  5b  JUMPDEST      [0x7, 0xc]
+    47  61  PUSH2         0x0100  [0x7, 0xc]
+    50  60  PUSH1         0x09  [0x7, 0xc, 0x100]
+    52  81  DUP2          [0x7, 0xc, 0x100, 0x9]
+    53  52  MSTORE        [0x7, 0xc, 0x100, 0x9, 0x100]
+    54  51  MLOAD         [0x7, 0xc, 0x100]
+    55  90  SWAP1         [0x7, 0xc, 0x9]
+    56  56  JUMP          [0x7, 0x9, 0xc]
+    12  5b  JUMPDEST      [0x7, 0x9]
+    13  60  PUSH1         0x01  [0x7, 0x9]
+    15  60  PUSH1         0x15  [0x7, 0x9, 0x1]
+    17  90  SWAP1         [0x7, 0x9, 0x1, 0x15]
+    18  60  PUSH1         0x1f  [0x7, 0x9, 0x15, 0x1]
+    20  56  JUMP          [0x7, 0x9, 0x15, 0x1, 0x1f]
+    31  5b  JUMPDEST      [0x7, 0x9, 0x15, 0x1]
+    32  60  PUSH1         0xc0  [0x7, 0x9, 0x15, 0x1]
+    34  90  SWAP1         [0x7, 0x9, 0x15, 0x1, 0xc0]
+    35  60  PUSH1         0x20  [0x7, 0x9, 0x15, 0xc0, 0x1]
+    37  02  MUL           [0x7, 0x9, 0x15, 0xc0, 0x1, 0x20]
+    38  01  ADD           [0x7, 0x9, 0x15, 0xc0, 0x20]
+    39  60  PUSH1         0x0b  [0x7, 0x9, 0x15, 0xe0]
+    41  81  DUP2          [0x7, 0x9, 0x15, 0xe0, 0xb]
+    42  52  MSTORE        [0x7, 0x9, 0x15, 0xe0, 0xb, 0xe0]
+    43  51  MLOAD         [0x7, 0x9, 0x15, 0xe0]
+    44  90  SWAP1         [0x7, 0x9, 0x15, 0xb]
+    45  56  JUMP          [0x7, 0x9, 0xb, 0x15]
+    21  5b  JUMPDEST      [0x7, 0x9, 0xb]
+    22  91  SWAP2         [0x7, 0x9, 0xb]
+    23  01  ADD           [0xb, 0x9, 0x7]
+    24  01  ADD           [0xb, 0x10]
+    25  5f  PUSH0         [0x1b]
+    26  52  MSTORE        [0x1b, 0x0]
+    27  60  PUSH1         0x20  []
+    29  5f  PUSH0         [0x20]
+    30  f3  RETURN        [0x20, 0x0]
