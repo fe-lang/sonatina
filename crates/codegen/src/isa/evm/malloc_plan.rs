@@ -237,7 +237,7 @@ pub(crate) fn compute_transient_mallocs(
         &block_malloc_in,
     );
 
-    for malloc in escape_kinds.keys().copied() {
+    for malloc in escape_kinds.keys() {
         mallocs.remove(&malloc);
     }
 

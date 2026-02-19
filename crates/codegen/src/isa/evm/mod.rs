@@ -570,7 +570,7 @@ fn compute_return_escape_caller_clamp_words(
             };
 
             let mut next = clamp_words.get(&func).copied().unwrap_or(0);
-            for caller in func_callers.iter().copied() {
+            for caller in func_callers.iter() {
                 let caller_clobber_words = plan
                     .funcs
                     .get(&caller)

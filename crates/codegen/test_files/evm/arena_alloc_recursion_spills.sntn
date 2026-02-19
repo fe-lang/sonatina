@@ -1,4 +1,4 @@
-#! evm.config: { stack_reach: 4, emit_mem_plan: true }
+#! evm.config: { stack_reach: 4 }
 
 target = "evm-ethereum-osaka"
 

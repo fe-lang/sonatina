@@ -1,4 +1,4 @@
-#! evm.config: { emit_debug_trace: true }
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: false, evm_trace: false }
 #! evm.case: folded_and_fallback
 #!   calldata: u32be(11) u32be(22)
 #!   expect: return u256(27)
