@@ -137,12 +137,14 @@ impl Default for LicmSolver {
 #[cfg(test)]
 mod tests {
     use sonatina_ir::{
-        ControlFlowGraph, Type,
+        ControlFlowGraph, I256, Type,
         builder::test_util::*,
         inst::{
             arith::Add,
-            cmp::Slt,
+            cmp::{Lt, Slt},
             control_flow::{Br, Jump, Phi, Return},
+            data::Mstore,
+            evm::EvmKeccak256,
         },
         prelude::*,
     };
@@ -203,6 +205,76 @@ mod tests {
             assert_eq!(func.layout.entry_block(), Some(b0));
             assert_eq!(func.layout.inst_block(invariant_inst), b0);
             assert_eq!(func.layout.iter_block().count(), 3);
+        });
+    }
+
+    #[test]
+    fn licm_does_not_hoist_keccak256_across_memory_writes() {
+        // Regression: `evm_keccak256` reads linear memory and must not be treated as a pure op.
+        //
+        // If `evm_keccak256` is considered pure, LICM may hoist it out of loops where the
+        // pointer/length are loop-invariant, even though the hashed bytes are written inside
+        // the loop (e.g. `mstore` + `keccak256(ptr, 64)` in Merkle hashing code).
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let preheader = builder.append_block();
+        let header = builder.append_block();
+        let body = builder.append_block();
+        let exit = builder.append_block();
+
+        builder.switch_to_block(preheader);
+        let ptr = builder.make_imm_value(I256::from(0x2000u64));
+        let len = builder.make_imm_value(I256::from(64u64));
+        builder.insert_inst_no_result_with(|| Jump::new(is, header));
+
+        builder.switch_to_block(header);
+        let idx = builder.insert_inst_with(|| Phi::new(is, vec![]), Type::I256);
+        let limit = builder.make_imm_value(I256::from(2u64));
+        let cond = builder.insert_inst_with(|| Lt::new(is, idx, limit), Type::I1);
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, body, exit));
+
+        builder.switch_to_block(body);
+        // A trivially loop-invariant pure op: should hoist.
+        let pure_invariant = builder.insert_inst_with(|| Add::new(is, ptr, len), Type::I256);
+        // A loop write to memory that `keccak256(ptr, len)` depends on.
+        builder.insert_inst_no_result_with(|| Mstore::new(is, ptr, idx, Type::I256));
+        // Must remain in the loop body (not safe to hoist).
+        let keccak = builder.insert_inst_with(|| EvmKeccak256::new(is, ptr, len), Type::I256);
+
+        let one = builder.make_imm_value(I256::from(1u64));
+        let idx_next = builder.insert_inst_with(|| Add::new(is, idx, one), Type::I256);
+        builder.insert_inst_no_result_with(|| Jump::new(is, header));
+        builder.append_phi_arg(idx, idx_next, body);
+
+        builder.switch_to_block(exit);
+        builder.insert_inst_no_result_with(|| Return::new(is, None));
+
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let pure_invariant_inst = func.dfg.value_inst(pure_invariant).unwrap();
+            let keccak_inst = func.dfg.value_inst(keccak).unwrap();
+            assert_eq!(func.layout.inst_block(pure_invariant_inst), body);
+            assert_eq!(func.layout.inst_block(keccak_inst), body);
+
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+            let mut lpt = LoopTree::default();
+            lpt.compute(&cfg, &domtree);
+
+            LicmSolver::new().run(func, &mut cfg, &mut lpt);
+
+            // Sanity: LICM runs and hoists pure invariants.
+            assert_eq!(func.layout.inst_block(pure_invariant_inst), preheader);
+            // Regression: keccak must not be hoisted out of the loop.
+            assert_eq!(func.layout.inst_block(keccak_inst), body);
         });
     }
 }
