@@ -18,6 +18,7 @@ use sonatina_codegen::{
     liveness::Liveness,
     machinst::lower::{LowerBackend, SectionLoweringCtx},
     object::{CompileOptions, compile_object},
+    optim::pipeline::Pipeline,
     stackalloc::StackifyAlloc,
 };
 use sonatina_ir::{
@@ -25,6 +26,7 @@ use sonatina_ir::{
     cfg::ControlFlowGraph,
     ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite},
     isa::evm::Evm,
+    module::Module,
     object::{EmbedSymbol, ObjectName, SectionName},
 };
 use sonatina_parser::{ParsedModule, parse_module};
@@ -35,7 +37,7 @@ use std::{
     io::{Write, stderr},
 };
 
-use evm_directives::{EvmCase, EvmExpect};
+use evm_directives::{EvmCase, EvmExpect, EvmOptPipeline};
 
 fn fmt_stackify_trace(trace: &str) -> String {
     let mut out = String::new();
@@ -89,12 +91,20 @@ fn parse_sona(content: &str) -> ParsedModule {
     }
 }
 
+fn run_opt_pipeline(module: &mut Module, opt_pipeline: EvmOptPipeline) {
+    match opt_pipeline {
+        EvmOptPipeline::None => {}
+        EvmOptPipeline::Balanced => Pipeline::balanced().run(module),
+        EvmOptPipeline::Aggressive => Pipeline::aggressive().run(module),
+    }
+}
+
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/test_files/evm",
     glob: "*.sntn"
 )]
 fn test_evm(fixture: Fixture<&str>) {
-    let parsed = parse_sona(fixture.content());
+    let mut parsed = parse_sona(fixture.content());
     let cfg = evm_directives::parse_evm_config(&parsed.debug.module_comments)
         .unwrap_or_else(|e| panic!("{}: {e}", fixture.path()));
     let stackify_reach_depth = cfg.stack_reach.unwrap_or(16);
@@ -103,9 +113,26 @@ fn test_evm(fixture: Fixture<&str>) {
     let emit_stackify_trace = cfg.stackify_trace.unwrap_or(false);
     let emit_evm_trace = cfg.evm_trace.unwrap_or(false);
     let emit_observability = cfg.emit_observability.unwrap_or(false);
+    let opt_pipeline = cfg.opt.unwrap_or(EvmOptPipeline::None);
 
     let cases = evm_directives::parse_evm_cases(&parsed.debug.module_comments)
         .unwrap_or_else(|e| panic!("{}: {e}", fixture.path()));
+
+    run_opt_pipeline(&mut parsed.module, opt_pipeline);
+
+    let func_order: Vec<_> = parsed
+        .debug
+        .func_order
+        .iter()
+        .copied()
+        .filter(|func_ref| {
+            parsed.module.ctx.declared_funcs.contains_key(func_ref)
+                && parsed
+                    .module
+                    .ctx
+                    .func_sig(*func_ref, |sig| sig.linkage().has_definition())
+        })
+        .collect();
 
     let backend = EvmBackend::new(Evm::new(sonatina_triple::TargetTriple {
         architecture: Architecture::Evm,
@@ -123,16 +150,16 @@ fn test_evm(fixture: Fixture<&str>) {
         embed_symbols: &embed_symbols,
     };
 
-    backend.prepare_section(&parsed.module, &parsed.debug.func_order, &section_ctx);
+    backend.prepare_section(&parsed.module, &func_order, &section_ctx);
 
-    let mem_plan = backend.snapshot_mem_plan(&parsed.module, &parsed.debug.func_order);
+    let mem_plan = backend.snapshot_mem_plan(&parsed.module, &func_order);
     let (mem_plan_header, mem_plan_funcs) = parse_mem_plan_summary(&mem_plan);
 
     let mut func_stats: Vec<FuncStats> = Vec::new();
     let mut stackify_out = Vec::new();
     let mut lowered_out = Vec::new();
 
-    for fref in parsed.debug.func_order.iter() {
+    for fref in &func_order {
         let lowered = backend
             .lower_function(&parsed.module, *fref, &section_ctx)
             .unwrap();
@@ -200,9 +227,14 @@ fn test_evm(fixture: Fixture<&str>) {
         .unwrap_or_else(|errs| panic!("{}: object compile failed: {errs:?}", fixture.path()));
 
     let mut out = Vec::new();
+    let opt_pipeline_suffix = if opt_pipeline == EvmOptPipeline::None {
+        String::new()
+    } else {
+        format!(" opt={}", opt_pipeline.as_u8())
+    };
     writeln!(
         &mut out,
-        "evm.config: stack_reach={stackify_reach_depth} vcode={emit_vcode} bytecode_hex={emit_bytecode_hex} stackify_trace={emit_stackify_trace} evm_trace={emit_evm_trace} emit_observability={emit_observability}",
+        "evm.config: stack_reach={stackify_reach_depth} vcode={emit_vcode} bytecode_hex={emit_bytecode_hex} stackify_trace={emit_stackify_trace} evm_trace={emit_evm_trace} emit_observability={emit_observability}{opt_pipeline_suffix}",
     )
     .unwrap();
     writeln!(&mut out).unwrap();

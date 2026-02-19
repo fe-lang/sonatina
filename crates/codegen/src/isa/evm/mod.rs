@@ -573,10 +573,10 @@ fn compute_return_escape_caller_clamp_words(
             for caller in func_callers.iter() {
                 let caller_clobber_words = plan
                     .funcs
-                    .get(&caller)
+                    .get(caller)
                     .map(|func_plan| func_plan.static_clobber_words)
                     .unwrap_or(0);
-                let caller_transitive_words = clamp_words.get(&caller).copied().unwrap_or(0);
+                let caller_transitive_words = clamp_words.get(caller).copied().unwrap_or(0);
                 next = next.max(caller_clobber_words.max(caller_transitive_words));
             }
 

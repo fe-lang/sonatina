@@ -9,6 +9,25 @@ pub(crate) struct EvmConfig {
     pub stackify_trace: Option<bool>,
     pub evm_trace: Option<bool>,
     pub emit_observability: Option<bool>,
+    pub opt: Option<EvmOptPipeline>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum EvmOptPipeline {
+    #[default]
+    None,
+    Balanced,
+    Aggressive,
+}
+
+impl EvmOptPipeline {
+    pub(crate) fn as_u8(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::Balanced => 1,
+            Self::Aggressive => 2,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,6 +223,15 @@ fn parse_evm_config_object(spec: &str, cfg: &mut EvmConfig) -> Result<(), String
                 cfg.emit_observability =
                     Some(parse_bool_literal(value).map_err(|e| format!("{key}: {e}"))?);
             }
+            "opt" => {
+                if cfg.opt.is_some() {
+                    return Err("duplicate `opt`".to_string());
+                }
+                cfg.opt = Some(parse_opt_level_literal(value).map_err(|e| format!("{key}: {e}"))?);
+            }
+            "opt_pipeline" => {
+                return Err("`opt_pipeline` has been renamed to `opt` (0|1|2)".to_string());
+            }
             "emit_debug_trace" => {
                 return Err(
                     "`emit_debug_trace` has been removed; use `vcode`, `bytecode_hex`, `stackify_trace`, and `evm_trace`".to_string(),
@@ -295,6 +323,15 @@ fn parse_bool_literal(lit: &str) -> Result<bool, String> {
     }
 }
 
+fn parse_opt_level_literal(lit: &str) -> Result<EvmOptPipeline, String> {
+    match parse_u8_literal(lit)? {
+        0 => Ok(EvmOptPipeline::None),
+        1 => Ok(EvmOptPipeline::Balanced),
+        2 => Ok(EvmOptPipeline::Aggressive),
+        _ => Err("expected one of `0`, `1`, `2`".to_string()),
+    }
+}
+
 fn parse_u256_be_32(lit: &str) -> Result<[u8; 32], String> {
     let lit = lit.trim();
 
@@ -319,4 +356,30 @@ fn parse_u256_be_32(lit: &str) -> Result<[u8; 32], String> {
     let mut be = [0u8; 32];
     be[32 - bytes.len()..].copy_from_slice(bytes);
     Ok(be)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EvmOptPipeline, parse_evm_config};
+
+    #[test]
+    fn parse_opt_level_balanced() {
+        let comments = vec!["#! evm.config: { opt: 1 }".to_string()];
+        let cfg = parse_evm_config(&comments).expect("config parse should succeed");
+        assert_eq!(cfg.opt, Some(EvmOptPipeline::Balanced));
+    }
+
+    #[test]
+    fn parse_opt_level_aggressive() {
+        let comments = vec!["#! evm.config: { opt: 2 }".to_string()];
+        let cfg = parse_evm_config(&comments).expect("config parse should succeed");
+        assert_eq!(cfg.opt, Some(EvmOptPipeline::Aggressive));
+    }
+
+    #[test]
+    fn parse_opt_level_rejects_duplicate() {
+        let comments = vec!["#! evm.config: { opt: 0, opt: 1 }".to_string()];
+        let err = parse_evm_config(&comments).expect_err("duplicate key must fail");
+        assert_eq!(err, "duplicate `opt`");
+    }
 }

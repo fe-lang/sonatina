@@ -238,7 +238,7 @@ pub(crate) fn compute_transient_mallocs(
     );
 
     for malloc in escape_kinds.keys() {
-        mallocs.remove(&malloc);
+        mallocs.remove(malloc);
     }
 
     for block in function.layout.iter_block() {
