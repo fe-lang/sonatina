@@ -657,6 +657,31 @@ fn is_bool_producer_opcode(op: OpCode) -> bool {
     )
 }
 
+fn is_plain_inst(
+    vcode: &VCode<OpCode>,
+    label_targets: &FxHashSet<VCodeInst>,
+    inst: VCodeInst,
+) -> bool {
+    !label_targets.contains(&inst)
+        && vcode.fixups.get(inst).is_none()
+        && vcode.inst_imm_bytes.get(inst).is_none()
+}
+
+fn push_immediate_u256(vcode: &VCode<OpCode>, inst: VCodeInst) -> Option<U256> {
+    let op = vcode.insts[inst];
+    if (op as u8) == (OpCode::PUSH0 as u8) {
+        return Some(U256::zero());
+    }
+    if !is_push_opcode(op) || vcode.fixups.get(inst).is_some() {
+        return None;
+    }
+
+    let (_, bytes) = vcode.inst_imm_bytes.get(inst)?;
+    let mut be = [0u8; 32];
+    be[32 - bytes.len()..].copy_from_slice(bytes);
+    Some(U256::from_big_endian(&be))
+}
+
 fn is_noop_stack_peephole_sequence(
     vcode: &VCode<OpCode>,
     label_targets: &FxHashSet<VCodeInst>,
@@ -721,6 +746,25 @@ fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_order: &[Bl
         let mut changed = false;
         let mut i = 0usize;
         while i < insts.len() {
+            // `zext i1 -> i256` lowers to `push 1; and` in EVM codegen.
+            // After known bool producers (already in {0,1}), this mask is a no-op.
+            if i + 2 < insts.len() {
+                let inst = insts[i];
+                let push = insts[i + 1];
+                let and = insts[i + 2];
+                if is_plain_inst(vcode, &label_targets, inst)
+                    && is_plain_inst(vcode, &label_targets, and)
+                    && is_bool_producer_opcode(vcode.insts[inst])
+                    && (vcode.insts[and] as u8) == (OpCode::AND as u8)
+                    && push_immediate_u256(vcode, push) == Some(U256::one())
+                {
+                    kept.push(inst);
+                    changed = true;
+                    i += 3;
+                    continue;
+                }
+            }
+
             // Collapse redundant ISZERO chains after known boolean producers.
             //
             // If `op` produces a 0/1 value:
@@ -728,10 +772,7 @@ fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_order: &[Bl
             // - more trailing `iszero`s reduce by parity.
             if i + 2 < insts.len() {
                 let inst = insts[i];
-                if !label_targets.contains(&inst)
-                    && vcode.fixups.get(inst).is_none()
-                    && vcode.inst_imm_bytes.get(inst).is_none()
-                {
+                if is_plain_inst(vcode, &label_targets, inst) {
                     let op = vcode.insts[inst];
                     if is_bool_producer_opcode(op) {
                         let mut j = i + 1;
@@ -2776,5 +2817,68 @@ block0:
                 );
             }
         }
+    }
+
+    #[test]
+    fn prune_removes_and_one_after_bool_producer() {
+        let mut vcode = VCode::<OpCode>::default();
+        let block = BlockId(0);
+
+        vcode.add_inst_to_block(OpCode::LT, None, block);
+        let push = vcode.add_inst_to_block(OpCode::PUSH1, None, block);
+        vcode.inst_imm_bytes.insert((push, smallvec![1u8]));
+        vcode.add_inst_to_block(OpCode::AND, None, block);
+
+        prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+        let ops: Vec<_> = vcode
+            .block_insns(block)
+            .map(|inst| vcode.insts[inst] as u8)
+            .collect();
+        assert_eq!(ops, vec![OpCode::LT as u8]);
+    }
+
+    #[test]
+    fn prune_keeps_and_mask_when_not_bool_producer() {
+        let mut vcode = VCode::<OpCode>::default();
+        let block = BlockId(0);
+
+        vcode.add_inst_to_block(OpCode::ADD, None, block);
+        let push = vcode.add_inst_to_block(OpCode::PUSH1, None, block);
+        vcode.inst_imm_bytes.insert((push, smallvec![1u8]));
+        vcode.add_inst_to_block(OpCode::AND, None, block);
+
+        prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+        let ops: Vec<_> = vcode
+            .block_insns(block)
+            .map(|inst| vcode.insts[inst] as u8)
+            .collect();
+        assert_eq!(
+            ops,
+            vec![OpCode::ADD as u8, OpCode::PUSH1 as u8, OpCode::AND as u8]
+        );
+    }
+
+    #[test]
+    fn prune_keeps_and_mask_when_mask_not_one() {
+        let mut vcode = VCode::<OpCode>::default();
+        let block = BlockId(0);
+
+        vcode.add_inst_to_block(OpCode::EQ, None, block);
+        let push = vcode.add_inst_to_block(OpCode::PUSH1, None, block);
+        vcode.inst_imm_bytes.insert((push, smallvec![3u8]));
+        vcode.add_inst_to_block(OpCode::AND, None, block);
+
+        prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+        let ops: Vec<_> = vcode
+            .block_insns(block)
+            .map(|inst| vcode.insts[inst] as u8)
+            .collect();
+        assert_eq!(
+            ops,
+            vec![OpCode::EQ as u8, OpCode::PUSH1 as u8, OpCode::AND as u8]
+        );
     }
 }
