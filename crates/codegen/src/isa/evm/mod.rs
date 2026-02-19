@@ -1160,8 +1160,9 @@ impl LowerBackend for EvmBackend {
                 // continuation address for the call. We therefore allow the marker to
                 // appear anywhere in the action list and split around it.
                 let suffix: SmallVec<[Action; 2]> = actions.drain(cont_pos + 1..).collect();
+                let marker = actions.remove(cont_pos);
                 debug_assert_eq!(
-                    actions.remove(cont_pos),
+                    marker,
                     Action::PushContinuationOffset,
                     "expected continuation marker at split point"
                 );
