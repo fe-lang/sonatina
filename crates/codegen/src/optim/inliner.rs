@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
-    Function, GlobalVariableRef, Immediate, Inst, InstDowncast, InstId, Module, Type, Value,
-    ValueId,
+    ControlFlowGraph, Function, GlobalVariableRef, Immediate, Inst, InstDowncast, InstId, Module,
+    Type, Value, ValueId,
     inst::{SideEffect, control_flow},
     module::{FuncRef, ModuleCtx},
 };
@@ -726,7 +726,8 @@ fn apply_splice_single_block_terminator(
         return false;
     }
 
-    let mut editor = CfgEditor::new(caller, CleanupMode::Strict);
+    let mut cfg = ControlFlowGraph::default();
+    let mut editor = CfgEditor::new(caller, &mut cfg, CleanupMode::Strict);
     let call_block = editor.truncate_block_from_inst(call_inst_id);
     apply_splice_body(splice_plan.body, &mut value_map, |new_inst, result_ty| {
         let (_, new_result) = editor.append_inst_with_result(call_block, new_inst, result_ty);

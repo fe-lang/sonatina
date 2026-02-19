@@ -1,17 +1,17 @@
 ---
 source: crates/codegen/tests/opt_pipeline.rs
-assertion_line: 46
 input_file: test_files/opt_pipeline/storage_loop.sntn
 ---
 target = "evm-ethereum-osaka"
 
 func private %update_count__StorPtr_u256___64779554cfbf0358(v0.i256) {
     block0:
+        v2.i256 = call %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_20__54453bb2a5c6e6e2;
         jump block1;
 
     block1:
         v3.i256 = phi (0.i256 block0) (v13 block2);
-        v5.i1 = lt v3 20.i256;
+        v5.i1 = lt v3 v2;
         br v5 block2 block4;
 
     block2:
@@ -48,8 +48,7 @@ func private %__Foo_runtime() {
         v14.i256 = evm_malloc 96.i256;
         v15.i256 = mload v23 i256;
         mstore v14 v15 i256;
-        v16.i256 = add 32.i256 v23;
-        v17.i256 = mload v16 i256;
+        v17.i256 = mload v24 i256;
         v18.i256 = add 32.i256 v14;
         mstore v18 v17 i256;
         v19.i256 = add 64.i256 v14;
@@ -63,6 +62,11 @@ func private %__Foo_runtime() {
     block2:
         call %update_count__StorPtr_u256___64779554cfbf0358 0.i256;
         evm_return 0.i256 0.i256;
+}
+
+func private %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_20__54453bb2a5c6e6e2() -> i256 {
+    block0:
+        return 20.i256;
 }
 
 func private %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> i256 {
@@ -94,8 +98,7 @@ func public %soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc
         v6.i256 = evm_malloc 96.i256;
         v7.i256 = mload v17 i256;
         mstore v6 v7 i256;
-        v9.i256 = add 32.i256 v17;
-        v10.i256 = mload v9 i256;
+        v10.i256 = mload v18 i256;
         v11.i256 = add 32.i256 v6;
         mstore v11 v10 i256;
         v13.i256 = add 64.i256 v6;

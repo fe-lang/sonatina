@@ -12,18 +12,18 @@ object: Contract
 functions:
   mem: dyn_base=0x160 static_base=0xc0
   f: ir_blocks=3 ir_insts=28 vcode_ops=142 fixups=5 imm_bytes=28
-    mem: scheme=StaticArena need_words=5 locals_words=5
+    mem: sa{n:5,l:5}
   sink8: ir_blocks=1 ir_insts=8 vcode_ops=19 fixups=0 imm_bytes=0
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: sa{n:0,l:0}
   a: ir_blocks=1 ir_insts=2 vcode_ops=9 fixups=2 imm_bytes=1
-    mem: scheme=StaticArena need_words=5 locals_words=0
+    mem: sa{n:5,l:0}
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
-    mem: scheme=StaticArena need_words=5 locals_words=0
+    mem: sa{n:5,l:0}
 
 --------------- MEM PLAN ---------------
 
 evm mem plan: dyn_base=0x160 static_base=0xc0
-evm mem plan: f scheme=StaticArena need_words=5 locals_words=5
+evm mem plan: f sa{n:5,l:5}
   detail locals_words=5 direct_callee_need_max_words=5 need_words=5
   call inst21 callee=%f callee_need_words=5 choice=ForcedSave has_return=true save_words=2 save_offsets=[0, 1]
   scratch_spill v3 slot=0 addr=0x0
@@ -33,12 +33,12 @@ evm mem plan: f scheme=StaticArena need_words=5 locals_words=5
   spill v10 offset_words=3 addr=0x120
   spill v11 offset_words=4 addr=0x140
   alloca v2 offset_words=1 size_words=1 addr=0xe0
-evm mem plan: sink8 scheme=StaticArena need_words=0 locals_words=0
+evm mem plan: sink8 sa{n:0,l:0}
   detail locals_words=0 direct_callee_need_max_words=0 need_words=0
-evm mem plan: a scheme=StaticArena need_words=5 locals_words=0
+evm mem plan: a sa{n:5,l:0}
   detail locals_words=0 direct_callee_need_max_words=5 need_words=5
   call inst0 callee=%f callee_need_words=5 choice=Save has_return=true save_words=0
-evm mem plan: entry scheme=StaticArena need_words=5 locals_words=0
+evm mem plan: entry sa{n:5,l:0}
   detail locals_words=0 direct_callee_need_max_words=5 need_words=5
   call inst0 callee=%a callee_need_words=5 choice=Save has_return=true save_words=0
 
