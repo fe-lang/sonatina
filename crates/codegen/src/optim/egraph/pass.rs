@@ -105,6 +105,7 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
 
     // Check results for simplifications
     let mut changed = false;
+    let mut term_value_candidates: FxHashMap<EggTerm, Vec<ValueId>> = FxHashMap::default();
 
     let mut extract_results = results.iter().filter_map(extract_output_to_string);
 
@@ -179,6 +180,18 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
                     continue;
                 }
 
+                if let Some(alias_val) = find_dominating_term_value(
+                    func,
+                    &dom,
+                    &term_value_candidates,
+                    &term,
+                    original_val,
+                ) {
+                    func.dfg.change_to_alias(original_val, alias_val);
+                    changed = true;
+                    continue;
+                }
+
                 let mut dominates = true;
                 term.for_each_value(&mut |value| {
                     dominates &= value_dominates_inst(func, &dom, value, original_inst);
@@ -190,6 +203,7 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
                 let mut elaborator = Elaborator::new(func, original_inst);
                 if let Some(inst) = elaborator.build_inst(&term) {
                     func.dfg.replace_inst(original_inst, inst);
+                    record_term_value_candidate(&mut term_value_candidates, term, original_val);
                     changed = true;
                 }
             }
@@ -204,6 +218,30 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
     }
 
     changed
+}
+
+fn find_dominating_term_value(
+    func: &Function,
+    dom: &DomTree,
+    term_value_candidates: &FxHashMap<EggTerm, Vec<ValueId>>,
+    term: &EggTerm,
+    original_val: ValueId,
+) -> Option<ValueId> {
+    term_value_candidates.get(term).and_then(|candidates| {
+        candidates
+            .iter()
+            .rev()
+            .copied()
+            .find(|&candidate| can_alias(func, dom, original_val, candidate))
+    })
+}
+
+fn record_term_value_candidate(
+    term_value_candidates: &mut FxHashMap<EggTerm, Vec<ValueId>>,
+    term: EggTerm,
+    value: ValueId,
+) {
+    term_value_candidates.entry(term).or_default().push(value);
 }
 
 fn extract_output_to_string(output: &CommandOutput) -> Option<String> {

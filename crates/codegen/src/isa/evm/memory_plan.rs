@@ -12,6 +12,7 @@ use crate::{
 #[cfg(debug_assertions)]
 use super::static_arena_alloc::verify_object_packing;
 use super::{
+    malloc_plan::MallocEscapeKind,
     ptr_escape::PtrEscapeSummary,
     static_arena_alloc::{
         FuncObjectLayout, FuncStackObjects, StackObjId, StaticArenaAllocCtx,
@@ -60,7 +61,8 @@ pub struct FuncMemPlan {
 
     pub malloc_future_static_words: FxHashMap<InstId, u32>,
     pub transient_mallocs: FxHashSet<InstId>,
-    pub escaping_mallocs: FxHashSet<InstId>,
+    pub malloc_escape_kinds: FxHashMap<InstId, MallocEscapeKind>,
+    pub return_escape_caller_clamp_words: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -269,7 +271,8 @@ pub(crate) fn compute_program_memory_plan(
                         locals_words: layout.locals_words,
                         malloc_future_static_words: FxHashMap::default(),
                         transient_mallocs: FxHashSet::default(),
-                        escaping_mallocs: FxHashSet::default(),
+                        malloc_escape_kinds: FxHashMap::default(),
+                        return_escape_caller_clamp_words: 0,
                     },
                 );
             }
@@ -311,7 +314,8 @@ pub(crate) fn compute_program_memory_plan(
                     locals_words: planned_func.layout.locals_words,
                     malloc_future_static_words: FxHashMap::default(),
                     transient_mallocs: FxHashSet::default(),
-                    escaping_mallocs: FxHashSet::default(),
+                    malloc_escape_kinds: FxHashMap::default(),
+                    return_escape_caller_clamp_words: 0,
                 },
             );
         }

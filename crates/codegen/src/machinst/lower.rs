@@ -3,7 +3,7 @@ use crate::stackalloc::Allocator;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use sonatina_ir::{
-    BlockId, Function, Immediate, Inst, InstId, Module, Type, ValueId,
+    BlockId, Function, Immediate, Inst, InstId, Module, Type, Value, ValueId,
     module::{FuncRef, ModuleCtx},
     object::{EmbedSymbol, ObjectName, SectionName},
 };
@@ -196,6 +196,13 @@ impl<'a, Op: Default> Lower<'a, Op> {
 
     pub fn insn_result(&self, inst: InstId) -> Option<ValueId> {
         self.function.dfg.inst_result(inst)
+    }
+
+    pub fn value_def_inst(&self, value: ValueId) -> Option<InstId> {
+        let Value::Inst { inst, .. } = self.function.dfg.value(value) else {
+            return None;
+        };
+        Some(*inst)
     }
 
     pub fn insn_block(&self, inst: InstId) -> BlockId {

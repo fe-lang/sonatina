@@ -1,0 +1,94 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/gep_immediate_fold.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 67 bytes
+  total: 67 bytes
+
+functions:
+  mem: dyn_base=0x120 static_base=0xc0
+  fold_simple: ir_blocks=1 ir_insts=5 vcode_ops=15 fixups=0 imm_bytes=4
+    mem: scheme=StaticArena need_words=3 locals_words=3
+  fold_nested: ir_blocks=1 ir_insts=6 vcode_ops=20 fixups=0 imm_bytes=5
+    mem: scheme=StaticArena need_words=3 locals_words=3
+  dynamic_index: ir_blocks=1 ir_insts=5 vcode_ops=16 fixups=0 imm_bytes=3
+    mem: scheme=StaticArena need_words=3 locals_words=3
+  entry: ir_blocks=1 ir_insts=7 vcode_ops=23 fixups=6 imm_bytes=2
+    mem: scheme=StaticArena need_words=3 locals_words=0
+
+evm:
+  case folded_and_fallback: calldata_len=8 success reason=Return gas_used=21249 gas_refunded=0 logs=0 output=call len=32
+
+
+--------------- DEBUG ---------------
+
+// func public %fold_simple() -> i256
+fold_simple:
+  block0:
+    JUMPDEST
+    PUSH1 0xe0 (224)  // v1.*i256 = gep v0 0.i8 1.i8;
+    PUSH1 0x7 (7)  // mstore v1 7.i256 i256;
+    DUP2
+    MSTORE
+    MLOAD  // v2.i256 = mload v1 i256;
+    SWAP1  // return v2;
+    JUMP
+
+// func public %fold_nested() -> i256
+fold_nested:
+  block0:
+    JUMPDEST
+    PUSH2 0x100 (256)  // v2.*i256 = gep v1 2.i8;
+    PUSH1 0x9 (9)  // mstore v2 9.i256 i256;
+    DUP2
+    MSTORE
+    MLOAD  // v3.i256 = mload v2 i256;
+    SWAP1  // return v3;
+    JUMP
+
+// func public %dynamic_index(v0.i8) -> i256
+dynamic_index:
+  block0:
+    JUMPDEST
+    PUSH1 0xc0 (192)  // v1.*[i256; 3] = alloca [i256; 3];
+    SWAP1  // v2.*i256 = gep v1 0.i8 v0;
+    PUSH1 0x20 (32)
+    MUL
+    ADD
+    PUSH1 0xb (11)  // mstore v2 11.i256 i256;
+    DUP2
+    MSTORE
+    MLOAD  // v3.i256 = mload v2 i256;
+    SWAP1  // return v3;
+    JUMP
+
+// func public %entry()
+entry:
+  block0:
+    JUMPDEST
+    PUSH1 `pc + (3)`  // v0.i256 = call %fold_simple;
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    PUSH1 `pc + (3)`  // v1.i256 = call %fold_nested;
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH1 0x1 (1)  // v2.i256 = call %dynamic_index 1.i8;
+    PUSH1 `pc + (4)`
+    SWAP1
+    PUSH1 FuncRef(2)
+    JUMP
+    JUMPDEST
+    SWAP2  // v3.i256 = add v0 v1;
+    ADD
+    ADD  // v4.i256 = add v3 v2;
+    PUSH0  // mstore 0.i32 v4 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH0
+    RETURN

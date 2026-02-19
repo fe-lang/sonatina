@@ -3,7 +3,7 @@ source: crates/codegen/tests/evm.rs
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/arena_alloc_spills.sntn
 ---
-evm.config: stack_reach=16 emit_debug_trace=false emit_mem_plan=true
+evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
   section runtime: 393 bytes
@@ -19,41 +19,6 @@ functions:
     mem: scheme=StaticArena need_words=9 locals_words=9
   callee: ir_blocks=1 ir_insts=33 vcode_ops=78 fixups=0 imm_bytes=8
     mem: scheme=StaticArena need_words=8 locals_words=8
-
---------------- MEM PLAN ---------------
-
-evm mem plan: dyn_base=0x240 static_base=0xc0
-evm mem plan: entry scheme=StaticArena need_words=12 locals_words=0
-  detail locals_words=0 direct_callee_need_max_words=12 need_words=12
-  call inst4 callee=%caller callee_need_words=12 choice=Save has_return=true save_words=0
-evm mem plan: caller scheme=StaticArena need_words=12 locals_words=12
-  detail locals_words=12 direct_callee_need_max_words=9 need_words=12
-  call inst19 callee=%mid callee_need_words=9 choice=Layout has_return=true save_words=0
-  scratch_spill v0 slot=0 addr=0x0
-  scratch_spill v1 slot=1 addr=0x20
-  spill v2 offset_words=0 addr=0xc0
-  spill v3 offset_words=1 addr=0xe0
-  spill v4 offset_words=2 addr=0x100
-  spill v5 offset_words=3 addr=0x120
-  spill v6 offset_words=4 addr=0x140
-  spill v7 offset_words=5 addr=0x160
-  spill v8 offset_words=9 addr=0x1e0
-  spill v9 offset_words=11 addr=0x220
-  alloca v8 offset_words=10 size_words=1 addr=0x200
-evm mem plan: mid scheme=StaticArena need_words=9 locals_words=9
-  detail locals_words=9 direct_callee_need_max_words=8 need_words=9
-  call inst2 callee=%callee callee_need_words=8 choice=Layout has_return=true save_words=0
-  alloca v8 offset_words=8 size_words=1 addr=0x1c0
-evm mem plan: callee scheme=StaticArena need_words=8 locals_words=8
-  detail locals_words=8 direct_callee_need_max_words=0 need_words=8
-  alloca v8 offset_words=0 size_words=1 addr=0xc0
-  alloca v9 offset_words=1 size_words=1 addr=0xe0
-  alloca v10 offset_words=2 size_words=1 addr=0x100
-  alloca v11 offset_words=3 size_words=1 addr=0x120
-  alloca v12 offset_words=4 size_words=1 addr=0x140
-  alloca v13 offset_words=5 size_words=1 addr=0x160
-  alloca v14 offset_words=6 size_words=1 addr=0x180
-  alloca v15 offset_words=7 size_words=1 addr=0x1a0
 
 evm:
   case ok: calldata_len=8 success reason=Return gas_used=22004 gas_refunded=0 logs=0 output=call len=32

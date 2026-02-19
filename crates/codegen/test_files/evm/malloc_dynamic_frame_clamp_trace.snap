@@ -1,0 +1,151 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/malloc_dynamic_frame_clamp_trace.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 43 bytes
+  total: 43 bytes
+
+functions:
+  mem: dyn_base=0xc0 static_base=0xc0
+  dyn: ir_blocks=1 ir_insts=4 vcode_ops=66 fixups=5 imm_bytes=14
+    mem: scheme=DynamicFrame locals_words=1
+  main: ir_blocks=1 ir_insts=5 vcode_ops=38 fixups=4 imm_bytes=5
+    mem: scheme=StaticArena need_words=0 locals_words=0
+  entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
+    mem: scheme=StaticArena need_words=0 locals_words=0
+
+evm:
+  case ok: calldata_len=8 success reason=Return gas_used=21170 gas_refunded=0 logs=0 output=call len=32
+
+
+--------------- DEBUG ---------------
+
+// func public %dyn(v0.*i256) -> i256
+dyn:
+  block0:
+    JUMPDEST
+    PUSH1 0x80 (128)
+    MLOAD
+    DUP1
+    ISZERO
+    ISZERO
+    PUSH1 `pc + (7)`
+    JUMPI
+    POP
+    PUSH1 0xc0 (192)
+    DUP1
+    PUSH1 0x80 (128)
+    MSTORE
+    JUMPDEST
+    PUSH1 0x40 (64)
+    MLOAD
+    DUP2
+    DUP2
+    GT
+    PUSH1 `pc + (5)`
+    JUMPI
+    POP
+    PUSH1 `pc + (5)`
+    JUMP
+    JUMPDEST
+    SWAP1
+    POP
+    JUMPDEST
+    PUSH1 0xa0 (160)
+    MLOAD
+    DUP2
+    MSTORE
+    DUP1
+    PUSH1 0x20 (32)
+    ADD
+    DUP1
+    PUSH1 0xa0 (160)
+    MSTORE
+    PUSH1 0x20 (32)
+    ADD
+    PUSH1 0x80 (128)
+    MSTORE
+    POP
+    POP  // v1.*i256 = alloca i256;
+    PUSH1 0xa0 (160)
+    MLOAD
+    PUSH0  // mstore v1 0.i256 i256;
+    DUP2
+    MSTORE
+    PUSH1 `pc + (4)`  // v2.i256 = call %dyn v1;
+    SWAP1
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    PUSH1 0x20 (32)  // return v2;
+    PUSH1 0xa0 (160)
+    MLOAD
+    SUB
+    DUP1
+    MLOAD
+    PUSH1 0xa0 (160)
+    MSTORE
+    PUSH1 0x80 (128)
+    MSTORE
+    SWAP1
+    JUMP
+
+// func public %main() -> i256
+main:
+  block0:
+    JUMPDEST
+    PUSH1 0x20 (32)  // v0.*i8 = evm_malloc 32.i256;
+    POP
+    PUSH1 0x40 (64)
+    MLOAD
+    PUSH1 0x80 (128)
+    MLOAD
+    DUP2
+    DUP2
+    GT
+    PUSH1 `pc + (5)`
+    JUMPI
+    POP
+    PUSH1 `pc + (5)`
+    JUMP
+    JUMPDEST
+    SWAP1
+    POP
+    JUMPDEST
+    PUSH1 0xc0 (192)
+    DUP2
+    DUP2
+    GT
+    PUSH1 `pc + (5)`
+    JUMPI
+    POP
+    PUSH1 `pc + (5)`
+    JUMP
+    JUMPDEST
+    SWAP1
+    POP
+    JUMPDEST
+    PUSH1 0x6f (111)  // mstore v1 111.i256 i256;
+    DUP2
+    MSTORE
+    MLOAD  // v2.i256 = mload v1 i256;
+    SWAP1  // return v2;
+    JUMP
+
+// func public %entry()
+entry:
+  block0:
+    JUMPDEST
+    PUSH1 `pc + (3)`  // v0.i256 = call %main;
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH0  // mstore 0.i32 v0 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH0
+    RETURN

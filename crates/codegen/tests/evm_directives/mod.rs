@@ -2,11 +2,32 @@ use hex::FromHex as _;
 use sonatina_ir::U256;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct EvmConfig {
+pub(crate) struct EvmConfig {
     pub stack_reach: Option<u8>,
-    pub emit_debug_trace: Option<bool>,
-    pub emit_mem_plan: Option<bool>,
+    pub vcode: Option<bool>,
+    pub bytecode_hex: Option<bool>,
+    pub stackify_trace: Option<bool>,
+    pub evm_trace: Option<bool>,
     pub emit_observability: Option<bool>,
+    pub opt: Option<EvmOptPipeline>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum EvmOptPipeline {
+    #[default]
+    None,
+    Balanced,
+    Aggressive,
+}
+
+impl EvmOptPipeline {
+    pub(crate) fn as_u8(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::Balanced => 1,
+            Self::Aggressive => 2,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,7 +43,7 @@ pub(crate) enum EvmExpect {
     Revert(Vec<u8>),
 }
 
-fn parse_evm_config(module_comments: &[String]) -> Result<EvmConfig, String> {
+pub(crate) fn parse_evm_config(module_comments: &[String]) -> Result<EvmConfig, String> {
     let mut cfg = EvmConfig::default();
 
     for raw in module_comments {
@@ -41,28 +62,6 @@ fn parse_evm_config(module_comments: &[String]) -> Result<EvmConfig, String> {
     }
 
     Ok(cfg)
-}
-
-pub(crate) fn stack_reach_depth(module_comments: &[String]) -> Result<u8, String> {
-    Ok(parse_evm_config(module_comments)?.stack_reach.unwrap_or(16))
-}
-
-pub(crate) fn emit_debug_trace(module_comments: &[String]) -> Result<bool, String> {
-    Ok(parse_evm_config(module_comments)?
-        .emit_debug_trace
-        .unwrap_or(false))
-}
-
-pub(crate) fn emit_mem_plan(module_comments: &[String]) -> Result<bool, String> {
-    Ok(parse_evm_config(module_comments)?
-        .emit_mem_plan
-        .unwrap_or(false))
-}
-
-pub(crate) fn emit_observability(module_comments: &[String]) -> Result<bool, String> {
-    Ok(parse_evm_config(module_comments)?
-        .emit_observability
-        .unwrap_or(false))
 }
 
 pub(crate) fn parse_evm_cases(module_comments: &[String]) -> Result<Vec<EvmCase>, String> {
@@ -190,18 +189,31 @@ fn parse_evm_config_object(spec: &str, cfg: &mut EvmConfig) -> Result<(), String
                 }
                 cfg.stack_reach = Some(parse_u8_literal(value).map_err(|e| format!("{key}: {e}"))?);
             }
-            "emit_debug_trace" => {
-                if cfg.emit_debug_trace.is_some() {
-                    return Err("duplicate `emit_debug_trace`".to_string());
+            "vcode" => {
+                if cfg.vcode.is_some() {
+                    return Err("duplicate `vcode`".to_string());
                 }
-                cfg.emit_debug_trace =
+                cfg.vcode = Some(parse_bool_literal(value).map_err(|e| format!("{key}: {e}"))?);
+            }
+            "bytecode_hex" => {
+                if cfg.bytecode_hex.is_some() {
+                    return Err("duplicate `bytecode_hex`".to_string());
+                }
+                cfg.bytecode_hex =
                     Some(parse_bool_literal(value).map_err(|e| format!("{key}: {e}"))?);
             }
-            "emit_mem_plan" => {
-                if cfg.emit_mem_plan.is_some() {
-                    return Err("duplicate `emit_mem_plan`".to_string());
+            "stackify_trace" => {
+                if cfg.stackify_trace.is_some() {
+                    return Err("duplicate `stackify_trace`".to_string());
                 }
-                cfg.emit_mem_plan =
+                cfg.stackify_trace =
+                    Some(parse_bool_literal(value).map_err(|e| format!("{key}: {e}"))?);
+            }
+            "evm_trace" => {
+                if cfg.evm_trace.is_some() {
+                    return Err("duplicate `evm_trace`".to_string());
+                }
+                cfg.evm_trace =
                     Some(parse_bool_literal(value).map_err(|e| format!("{key}: {e}"))?);
             }
             "emit_observability" => {
@@ -210,6 +222,26 @@ fn parse_evm_config_object(spec: &str, cfg: &mut EvmConfig) -> Result<(), String
                 }
                 cfg.emit_observability =
                     Some(parse_bool_literal(value).map_err(|e| format!("{key}: {e}"))?);
+            }
+            "opt" => {
+                if cfg.opt.is_some() {
+                    return Err("duplicate `opt`".to_string());
+                }
+                cfg.opt = Some(parse_opt_level_literal(value).map_err(|e| format!("{key}: {e}"))?);
+            }
+            "opt_pipeline" => {
+                return Err("`opt_pipeline` has been renamed to `opt` (0|1|2)".to_string());
+            }
+            "emit_debug_trace" => {
+                return Err(
+                    "`emit_debug_trace` has been removed; use `vcode`, `bytecode_hex`, `stackify_trace`, and `evm_trace`".to_string(),
+                )
+            }
+            "emit_revm_trace" => {
+                return Err("`emit_revm_trace` has been removed; use `evm_trace`".to_string());
+            }
+            "emit_mem_plan" => {
+                return Err("`emit_mem_plan` has been removed".to_string());
             }
             _ => {
                 // Ignore unknown keys for forward compatibility.
@@ -291,6 +323,15 @@ fn parse_bool_literal(lit: &str) -> Result<bool, String> {
     }
 }
 
+fn parse_opt_level_literal(lit: &str) -> Result<EvmOptPipeline, String> {
+    match parse_u8_literal(lit)? {
+        0 => Ok(EvmOptPipeline::None),
+        1 => Ok(EvmOptPipeline::Balanced),
+        2 => Ok(EvmOptPipeline::Aggressive),
+        _ => Err("expected one of `0`, `1`, `2`".to_string()),
+    }
+}
+
 fn parse_u256_be_32(lit: &str) -> Result<[u8; 32], String> {
     let lit = lit.trim();
 
@@ -315,4 +356,30 @@ fn parse_u256_be_32(lit: &str) -> Result<[u8; 32], String> {
     let mut be = [0u8; 32];
     be[32 - bytes.len()..].copy_from_slice(bytes);
     Ok(be)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EvmOptPipeline, parse_evm_config};
+
+    #[test]
+    fn parse_opt_level_balanced() {
+        let comments = vec!["#! evm.config: { opt: 1 }".to_string()];
+        let cfg = parse_evm_config(&comments).expect("config parse should succeed");
+        assert_eq!(cfg.opt, Some(EvmOptPipeline::Balanced));
+    }
+
+    #[test]
+    fn parse_opt_level_aggressive() {
+        let comments = vec!["#! evm.config: { opt: 2 }".to_string()];
+        let cfg = parse_evm_config(&comments).expect("config parse should succeed");
+        assert_eq!(cfg.opt, Some(EvmOptPipeline::Aggressive));
+    }
+
+    #[test]
+    fn parse_opt_level_rejects_duplicate() {
+        let comments = vec!["#! evm.config: { opt: 0, opt: 1 }".to_string()];
+        let err = parse_evm_config(&comments).expect_err("duplicate key must fail");
+        assert_eq!(err, "duplicate `opt`");
+    }
 }
