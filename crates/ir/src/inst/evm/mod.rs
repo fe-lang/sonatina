@@ -69,6 +69,7 @@ pub struct EvmClz {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Read))]
 pub struct EvmKeccak256 {
     addr: ValueId,
     len: ValueId,
