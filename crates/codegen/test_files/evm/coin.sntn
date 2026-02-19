@@ -1,4 +1,4 @@
-#! evm.config: { vcode: true, opt: 2 }
+#! evm.config: { vcode: true, opt: 2, stackify_trace: true }
 
 target = "evm-ethereum-osaka"
 

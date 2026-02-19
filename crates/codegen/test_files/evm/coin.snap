@@ -3,7 +3,7 @@ source: crates/codegen/tests/evm.rs
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/coin.sntn
 ---
-evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Contract
   section init: 1170 bytes
@@ -55,6 +55,1799 @@ evm:
 
 
 --------------- DEBUG ---------------
+
+// func private %__Coin_recv_0_0(v0.i256, v1.i256) -> i256
+  block0 P=[v0, v1] T=[]
+    // v2.*@__fe_Credit_0 = int_to_ptr v0 *@__fe_Credit_0;
+    - stack=[v0, v1, <RET>]
+      pre: [DUP1]
+      int_to_ptr [v0] -> v2
+    // v3.*i256 = gep v2 0.i256 0.i256;
+    - stack=[v2, v0, v1, <RET>], last_use=[v2]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v2, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v3
+    // v4.i256 = mload v3 i256;
+    - stack=[v3, v0, v1, <RET>], last_use=[v3]
+      mload [v3] -> v4
+    // v5.*@__fe_Credit_0 = int_to_ptr v0 *@__fe_Credit_0;
+    - stack=[v4, v0, v1, <RET>], last_use=[v0]
+      pre: [SWAP1]
+      int_to_ptr [v0] -> v5
+    // v6.*i256 = gep v5 0.i256 1.i256;
+    - stack=[v5, v4, v1, <RET>], last_use=[v5]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v5, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v6
+    // v7.i256 = mload v6 i256;
+    - stack=[v6, v4, v1, <RET>], last_use=[v6]
+      mload [v6] -> v7
+    // v33.i1 = is_zero v4;
+    - stack=[v7, v4, v1, <RET>], last_use=[v4]
+      pre: [SWAP1]
+      is_zero [v4] -> v33
+    // v34.i256 = zext v33 i256;
+    - stack=[v33, v7, v1, <RET>], last_use=[v33]
+      zext [v33] -> v34
+    // v10.i1 = eq 1.i256 v34;
+    - stack=[v34, v7, v1, <RET>], last_use=[v34]
+      pre: [PUSH(I256 { is_negative: false, abs: 1 })]
+      eq [I256 { is_negative: false, abs: 1 }, v34] -> v10
+    // br v10 block1 block2;
+    - stack=[v10, v7, v1, <RET>]
+      br [v10] -> [block1, block2]
+  block1 P=[] T=[v7, v1]
+    inherited from block0: [v7, v1, <RET>]
+    // v11.i256 = evm_sload v1;
+    - stack=[v7, v1, <RET>]
+      pre: [DUP2]
+      evm_sload [v1] -> v11
+    // v12.i256 = add v11 v7;
+    - stack=[v11, v7, v1, <RET>], last_use=[v11]
+      pre: [DUP2]
+      add [v7, v11] -> v12
+    // evm_sstore v1 v12;
+    - stack=[v12, v7, v1, <RET>], last_use=[v12]
+      pre: [DUP3]
+      evm_sstore [v1, v12]
+    // v13.i256 = add 2.i256 v1;
+    - stack=[v7, v1, <RET>]
+      pre: [DUP2, PUSH(I256 { is_negative: false, abs: 2 })]
+      add [I256 { is_negative: false, abs: 2 }, v1] -> v13
+    // v14.i256 = evm_sload v13;
+    - stack=[v13, v7, v1, <RET>]
+      pre: [DUP1]
+      evm_sload [v13] -> v14
+    // v15.i256 = add v14 v7;
+    - stack=[v14, v13, v7, v1, <RET>], last_use=[v7, v14]
+      pre: [SWAP1, SWAP2]
+      add [v7, v14] -> v15
+    // evm_sstore v13 v15;
+    - stack=[v15, v13, v1, <RET>], last_use=[v13, v15]
+      pre: [SWAP1]
+      evm_sstore [v13, v15]
+    // v17.i256 = evm_sload v1;
+    - stack=[v1, <RET>], last_use=[v1]
+      evm_sload [v1] -> v17
+    // return v17;
+    - stack=[v17, <RET>]
+      return [v17]
+  block2 P=[] T=[v7, v1]
+    inherited from block0: [v7, v1, <RET>]
+    // v18.i256 = add 1.i256 v1;
+    - stack=[v7, v1, <RET>]
+      pre: [DUP2, PUSH(I256 { is_negative: false, abs: 1 })]
+      add [I256 { is_negative: false, abs: 1 }, v1] -> v18
+    // v19.i256 = evm_sload v18;
+    - stack=[v18, v7, v1, <RET>]
+      pre: [DUP1]
+      evm_sload [v18] -> v19
+    // v20.i256 = add v19 v7;
+    - stack=[v19, v18, v7, v1, <RET>], last_use=[v19]
+      pre: [DUP3]
+      add [v7, v19] -> v20
+    // evm_sstore v18 v20;
+    - stack=[v20, v18, v7, v1, <RET>], last_use=[v20]
+      pre: [DUP2]
+      evm_sstore [v18, v20]
+    // v22.i256 = add 2.i256 v1;
+    - stack=[v18, v7, v1, <RET>], last_use=[v1]
+      pre: [SWAP2, PUSH(I256 { is_negative: false, abs: 2 })]
+      add [I256 { is_negative: false, abs: 2 }, v1] -> v22
+    // v23.i256 = evm_sload v22;
+    - stack=[v22, v7, v18, <RET>]
+      pre: [DUP1]
+      evm_sload [v22] -> v23
+    // v24.i256 = add v23 v7;
+    - stack=[v23, v22, v7, v18, <RET>], last_use=[v7, v23]
+      pre: [SWAP1, SWAP2]
+      add [v7, v23] -> v24
+    // evm_sstore v22 v24;
+    - stack=[v24, v22, v18, <RET>], last_use=[v22, v24]
+      pre: [SWAP1]
+      evm_sstore [v22, v24]
+    // v27.i256 = evm_sload v18;
+    - stack=[v18, <RET>], last_use=[v18]
+      evm_sload [v18] -> v27
+    // return v27;
+    - stack=[v27, <RET>]
+      return [v27]
+
+// func private %__Coin_recv_0_1(v0.i256, v1.i256) -> i256
+  block0 P=[v0, v1] T=[]
+    // v2.*@__fe_Transfer_1 = int_to_ptr v0 *@__fe_Transfer_1;
+    - stack=[v0, v1, <RET>]
+      pre: [DUP1]
+      int_to_ptr [v0] -> v2
+    // v3.*i256 = gep v2 0.i256 0.i256;
+    - stack=[v2, v0, v1, <RET>], last_use=[v2]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v2, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v3
+    // v4.i256 = mload v3 i256;
+    - stack=[v3, v0, v1, <RET>], last_use=[v3]
+      mload [v3] -> v4
+    // v5.*@__fe_Transfer_1 = int_to_ptr v0 *@__fe_Transfer_1;
+    - stack=[v4, v0, v1, <RET>], last_use=[v0]
+      pre: [SWAP1]
+      int_to_ptr [v0] -> v5
+    // v6.*i256 = gep v5 0.i256 1.i256;
+    - stack=[v5, v4, v1, <RET>], last_use=[v5]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v5, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v6
+    // v7.i256 = mload v6 i256;
+    - stack=[v6, v4, v1, <RET>], last_use=[v6]
+      mload [v6] -> v7
+    // v36.i1 = is_zero v4;
+    - stack=[v7, v4, v1, <RET>], last_use=[v4]
+      pre: [SWAP1]
+      is_zero [v4] -> v36
+    // v37.i256 = zext v36 i256;
+    - stack=[v36, v7, v1, <RET>], last_use=[v36]
+      zext [v36] -> v37
+    // v10.i1 = eq 1.i256 v37;
+    - stack=[v37, v7, v1, <RET>], last_use=[v37]
+      pre: [PUSH(I256 { is_negative: false, abs: 1 })]
+      eq [I256 { is_negative: false, abs: 1 }, v37] -> v10
+    // br v10 block1 block2;
+    - stack=[v10, v7, v1, <RET>]
+      br [v10] -> [block1, block2]
+  block1 P=[] T=[v7, v1]
+    inherited from block0: [v7, v1, <RET>]
+    // v11.i256 = evm_sload v1;
+    - stack=[v7, v1, <RET>]
+      pre: [DUP2]
+      evm_sload [v1] -> v11
+    // v39.i1 = lt v11 v7;
+    - stack=[v11, v7, v1, <RET>], last_use=[v11]
+      pre: [DUP2, SWAP1]
+      lt [v11, v7] -> v39
+    // v40.i256 = zext v39 i256;
+    - stack=[v39, v7, v1, <RET>], last_use=[v39]
+      zext [v39] -> v40
+    // v41.i1 = is_zero v40;
+    - stack=[v40, v7, v1, <RET>], last_use=[v40]
+      is_zero [v40] -> v41
+    // v14.i1 = is_zero v41;
+    - stack=[v41, v7, v1, <RET>], last_use=[v41]
+      is_zero [v41] -> v14
+    // br v14 block3 block4;
+    - stack=[v14, v7, v1, <RET>]
+      br [v14] -> [block3, block4]
+  block3 P=[] T=[]
+    inherited from block1: [v7x, v1x, <RET>]
+    // return 1.i256;
+    - stack=[v7x, v1x, <RET>]
+      cleanup: [POP, POP]
+      return: [PUSH(I256 { is_negative: false, abs: 1 })]
+      return [I256 { is_negative: false, abs: 1 }]
+  block4 P=[] T=[v7, v1]
+    inherited from block1: [v7, v1, <RET>]
+    // v20.i256 = evm_sload v1;
+    - stack=[v7, v1, <RET>]
+      pre: [DUP2]
+      evm_sload [v1] -> v20
+    // v21.i256 = sub v20 v7;
+    - stack=[v20, v7, v1, <RET>], last_use=[v20]
+      pre: [DUP2, SWAP1]
+      sub [v20, v7] -> v21
+    // evm_sstore v1 v21;
+    - stack=[v21, v7, v1, <RET>], last_use=[v21]
+      pre: [DUP3]
+      evm_sstore [v1, v21]
+    // v22.i256 = add 1.i256 v1;
+    - stack=[v7, v1, <RET>], last_use=[v1]
+      pre: [SWAP1, PUSH(I256 { is_negative: false, abs: 1 })]
+      add [I256 { is_negative: false, abs: 1 }, v1] -> v22
+    // v23.i256 = evm_sload v22;
+    - stack=[v22, v7, <RET>]
+      pre: [DUP1]
+      evm_sload [v22] -> v23
+    // v24.i256 = add v23 v7;
+    - stack=[v23, v22, v7, <RET>], last_use=[v7, v23]
+      pre: [SWAP1, SWAP2]
+      add [v7, v23] -> v24
+    // evm_sstore v22 v24;
+    - stack=[v24, v22, <RET>], last_use=[v22, v24]
+      pre: [SWAP1]
+      evm_sstore [v22, v24]
+    // return 0.i256;
+    - stack=[<RET>]
+      return: [PUSH(I256 { is_negative: false, abs: 0 })]
+      return [I256 { is_negative: false, abs: 0 }]
+  block2 P=[] T=[v7, v1]
+    inherited from block0: [v7, v1, <RET>]
+    // v15.i256 = add 1.i256 v1;
+    - stack=[v7, v1, <RET>]
+      pre: [DUP2, PUSH(I256 { is_negative: false, abs: 1 })]
+      add [I256 { is_negative: false, abs: 1 }, v1] -> v15
+    // v16.i256 = evm_sload v15;
+    - stack=[v15, v7, v1, <RET>]
+      pre: [DUP1]
+      evm_sload [v15] -> v16
+    // v43.i1 = lt v16 v7;
+    - stack=[v16, v15, v7, v1, <RET>], last_use=[v16]
+      pre: [DUP3, SWAP1]
+      lt [v16, v7] -> v43
+    // v44.i256 = zext v43 i256;
+    - stack=[v43, v15, v7, v1, <RET>], last_use=[v43]
+      zext [v43] -> v44
+    // v45.i1 = is_zero v44;
+    - stack=[v44, v15, v7, v1, <RET>], last_use=[v44]
+      is_zero [v44] -> v45
+    // v19.i1 = is_zero v45;
+    - stack=[v45, v15, v7, v1, <RET>], last_use=[v45]
+      is_zero [v45] -> v19
+    // br v19 block5 block6;
+    - stack=[v19, v15, v7, v1, <RET>]
+      br [v19] -> [block5, block6]
+  block5 P=[] T=[]
+    inherited from block2: [v15x, v7x, v1x, <RET>]
+    // return 1.i256;
+    - stack=[v15x, v7x, v1x, <RET>]
+      cleanup: [POP, POP, POP]
+      return: [PUSH(I256 { is_negative: false, abs: 1 })]
+      return [I256 { is_negative: false, abs: 1 }]
+  block6 P=[] T=[v15, v7, v1]
+    inherited from block2: [v15, v7, v1, <RET>]
+    // v27.i256 = evm_sload v15;
+    - stack=[v15, v7, v1, <RET>]
+      pre: [DUP1]
+      evm_sload [v15] -> v27
+    // v28.i256 = sub v27 v7;
+    - stack=[v27, v15, v7, v1, <RET>], last_use=[v27]
+      pre: [DUP3, SWAP1]
+      sub [v27, v7] -> v28
+    // evm_sstore v15 v28;
+    - stack=[v28, v15, v7, v1, <RET>], last_use=[v15, v28]
+      pre: [SWAP1]
+      evm_sstore [v15, v28]
+    // v30.i256 = evm_sload v1;
+    - stack=[v7, v1, <RET>]
+      pre: [DUP2]
+      evm_sload [v1] -> v30
+    // v31.i256 = add v30 v7;
+    - stack=[v30, v7, v1, <RET>], last_use=[v7, v30]
+      add [v30, v7] -> v31
+    // evm_sstore v1 v31;
+    - stack=[v31, v1, <RET>], last_use=[v1, v31]
+      pre: [SWAP1]
+      evm_sstore [v1, v31]
+    // return 0.i256;
+    - stack=[<RET>]
+      return: [PUSH(I256 { is_negative: false, abs: 0 })]
+      return [I256 { is_negative: false, abs: 0 }]
+
+// func private %__Coin_recv_0_2(v0.i256, v1.i256) -> i256
+  block0 P=[v0, v1] T=[]
+    // v12.i1 = is_zero v0;
+    - stack=[v0, v1, <RET>], last_use=[v0]
+      is_zero [v0] -> v12
+    // v13.i256 = zext v12 i256;
+    - stack=[v12, v1, <RET>], last_use=[v12]
+      zext [v12] -> v13
+    // v4.i1 = eq 1.i256 v13;
+    - stack=[v13, v1, <RET>], last_use=[v13]
+      pre: [PUSH(I256 { is_negative: false, abs: 1 })]
+      eq [I256 { is_negative: false, abs: 1 }, v13] -> v4
+    // br v4 block1 block2;
+    - stack=[v4, v1, <RET>]
+      br [v4] -> [block1, block2]
+  block1 P=[] T=[v1]
+    inherited from block0: [v1, <RET>]
+    // v5.i256 = evm_sload v1;
+    - stack=[v1, <RET>], last_use=[v1]
+      evm_sload [v1] -> v5
+    // return v5;
+    - stack=[v5, <RET>]
+      return [v5]
+  block2 P=[] T=[v1]
+    inherited from block0: [v1, <RET>]
+    // v6.i256 = add 1.i256 v1;
+    - stack=[v1, <RET>], last_use=[v1]
+      pre: [PUSH(I256 { is_negative: false, abs: 1 })]
+      add [I256 { is_negative: false, abs: 1 }, v1] -> v6
+    // v7.i256 = evm_sload v6;
+    - stack=[v6, <RET>], last_use=[v6]
+      evm_sload [v6] -> v7
+    // return v7;
+    - stack=[v7, <RET>]
+      return [v7]
+
+// func private %__Coin_init()
+  block0 P=[] T=[]
+    // v1.i256 = sym_addr &__Coin_runtime;
+    - stack=[]
+      sym_addr [] -> v1
+    // v2.i256 = sym_size &__Coin_runtime;
+    - stack=[v1]
+      sym_size [] -> v2
+    // v3.i256 = evm_code_size;
+    - stack=[v2, v1]
+      evm_code_size [] -> v3
+    // v5.i256 = add v1 v2;
+    - stack=[v3, v2, v1]
+      pre: [DUP2, DUP4]
+      add [v1, v2] -> v5
+    // v37.i256 = add v1 v2;
+    - stack=[v5, v3, v2, v1]
+      pre: [DUP3, DUP5]
+      add [v1, v2] -> v37
+    // v38.i1 = lt v3 v37;
+    - stack=[v37, v5, v3, v2, v1], last_use=[v37]
+      pre: [DUP3]
+      lt [v3, v37] -> v38
+    // v39.i256 = zext v38 i256;
+    - stack=[v38, v5, v3, v2, v1], last_use=[v38]
+      zext [v38] -> v39
+    // v40.i1 = is_zero v39;
+    - stack=[v39, v5, v3, v2, v1], last_use=[v39]
+      is_zero [v39] -> v40
+    // v8.i1 = is_zero v40;
+    - stack=[v40, v5, v3, v2, v1], last_use=[v40]
+      is_zero [v40] -> v8
+    // br v8 block1 block2;
+    - stack=[v8, v5, v3, v2, v1]
+      br [v8] -> [block1, block2]
+  block1 P=[] T=[]
+    inherited from block0: [v5x, v3x, v2x, v1x]
+    // evm_revert 0.i256 0.i256;
+    - stack=[v5x, v3x, v2x, v1x]
+      cleanup: [POP, POP, POP, POP]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 })]
+      evm_revert [I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }]
+  block2 P=[] T=[v5, v3, v2, v1]
+    inherited from block0: [v5, v3, v2, v1]
+    // v41.i256 = add v1 v2;
+    - stack=[v5, v3, v2, v1]
+      pre: [DUP3, DUP5]
+      add [v1, v2] -> v41
+    // v13.i256 = sub v3 v41;
+    - stack=[v41, v5, v3, v2, v1], last_use=[v3, v41]
+      pre: [SWAP1, SWAP2]
+      sub [v3, v41] -> v13
+    // v14.*i8 = evm_malloc v13;
+    - stack=[v13, v5, v2, v1]
+      pre: [DUP1]
+      evm_malloc [v13] -> v14
+    // v15.i256 = ptr_to_int v14 i256;
+    - stack=[v14, v13, v5, v2, v1], last_use=[v14]
+      ptr_to_int [v14] -> v15
+    // evm_code_copy v15 v5 v13;
+    - stack=[v15, v13, v5, v2, v1], last_use=[v5]
+      pre: [DUP1, SWAP3, DUP3, SWAP2]
+      evm_code_copy [v15, v5, v13]
+    // v19.*i8 = evm_malloc 64.i256;
+    - stack=[v13, v15, v2, v1]
+      pre: [PUSH(I256 { is_negative: false, abs: 64 })]
+      evm_malloc [I256 { is_negative: false, abs: 64 }] -> v19
+    // v20.i256 = ptr_to_int v19 i256;
+    - stack=[v19, v13, v15, v2, v1]
+      pre: [DUP1]
+      ptr_to_int [v19] -> v20
+    // v42.*@__fe_MemoryBytes_2 = bitcast v19 *@__fe_MemoryBytes_2;
+    - stack=[v20, v19, v13, v15, v2, v1]
+      pre: [DUP2]
+      bitcast [v19] -> v42
+    // v22.*i256 = gep v42 0.i256 0.i256;
+    - stack=[v42, v20, v19, v13, v15, v2, v1], last_use=[v42]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v42, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v22
+    // mstore v22 v15 i256;
+    - stack=[v22, v20, v19, v13, v15, v2, v1], last_use=[v15, v22]
+      pre: [SWAP1, SWAP4, SWAP1]
+      mstore [v22, v15]
+    // v43.*@__fe_MemoryBytes_2 = bitcast v19 *@__fe_MemoryBytes_2;
+    - stack=[v19, v13, v20, v2, v1], last_use=[v19]
+      bitcast [v19] -> v43
+    // v26.*i256 = gep v43 0.i256 1.i256;
+    - stack=[v43, v13, v20, v2, v1], last_use=[v43]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v43, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v26
+    // mstore v26 v13 i256;
+    - stack=[v26, v13, v20, v2, v1], last_use=[v13, v26]
+      mstore [v26, v13]
+    // v27.i256 = call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v20;
+    - stack=[v20, v2, v1], last_use=[v20]
+      pre: [PUSH_CONT, SWAP1]
+      call [v20] -> v27
+    // evm_sstore 0.i256 0.i256;
+    - stack=[v27x, v2, v1]
+      cleanup: [POP]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 })]
+      evm_sstore [I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }]
+    // evm_sstore 1.i256 0.i256;
+    - stack=[v2, v1]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 })]
+      evm_sstore [I256 { is_negative: false, abs: 1 }, I256 { is_negative: false, abs: 0 }]
+    // evm_sstore 2.i256 0.i256;
+    - stack=[v2, v1]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 2 })]
+      evm_sstore [I256 { is_negative: false, abs: 2 }, I256 { is_negative: false, abs: 0 }]
+    // evm_code_copy 0.i256 v1 v2;
+    - stack=[v2, v1], last_use=[v1]
+      pre: [DUP1, SWAP2, PUSH(I256 { is_negative: false, abs: 0 })]
+      evm_code_copy [I256 { is_negative: false, abs: 0 }, v1, v2]
+    // evm_return 0.i256 v2;
+    - stack=[v2], last_use=[v2]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 })]
+      evm_return [I256 { is_negative: false, abs: 0 }, v2]
+
+// func private %__Coin_runtime()
+  block0 P=[] T=[]
+    // v1.i256 = call %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2 0.i256;
+    - stack=[]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH_CONT, SWAP1]
+      call [I256 { is_negative: false, abs: 0 }] -> v1
+    // v60.*i8 = evm_malloc 64.i256;
+    - stack=[v1]
+      pre: [PUSH(I256 { is_negative: false, abs: 64 })]
+      evm_malloc [I256 { is_negative: false, abs: 64 }] -> v60
+    // v61.i256 = ptr_to_int v60 i256;
+    - stack=[v60, v1]
+      pre: [DUP1]
+      ptr_to_int [v60] -> v61
+    // v75.*@__fe_Cursor_8 = bitcast v60 *@__fe_Cursor_8;
+    - stack=[v61, v60, v1]
+      pre: [DUP2]
+      bitcast [v60] -> v75
+    // v63.*@__fe_CallData_7 = gep v75 0.i256 0.i256;
+    - stack=[v75, v61, v60, v1], last_use=[v75]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v75, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v63
+    // mstore v63 0.i256 i256;
+    - stack=[v63, v61, v60, v1], last_use=[v63]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), SWAP1]
+      mstore [v63, I256 { is_negative: false, abs: 0 }]
+    // v76.*@__fe_Cursor_8 = bitcast v60 *@__fe_Cursor_8;
+    - stack=[v61, v60, v1], last_use=[v60]
+      pre: [SWAP1]
+      bitcast [v60] -> v76
+    // v65.*i256 = gep v76 0.i256 1.i256;
+    - stack=[v76, v61, v1], last_use=[v76]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v76, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v65
+    // mstore v65 0.i256 i256;
+    - stack=[v65, v61, v1], last_use=[v65]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), SWAP1]
+      mstore [v65, I256 { is_negative: false, abs: 0 }]
+    // v66.*@__fe_Cursor_8 = int_to_ptr v61 *@__fe_Cursor_8;
+    - stack=[v61, v1], last_use=[v61]
+      int_to_ptr [v61] -> v66
+    // v67.*@__fe_CallData_7 = gep v66 0.i256 0.i256;
+    - stack=[v66, v1], last_use=[v66]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v66, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v67
+    // v68.i256 = mload v67 i256;
+    - stack=[v67, v1], last_use=[v67]
+      mload [v67] -> v68
+    // v69.*i8 = evm_malloc 64.i256;
+    - stack=[v68, v1]
+      pre: [PUSH(I256 { is_negative: false, abs: 64 })]
+      evm_malloc [I256 { is_negative: false, abs: 64 }] -> v69
+    // v70.i256 = ptr_to_int v69 i256;
+    - stack=[v69, v68, v1]
+      pre: [DUP1]
+      ptr_to_int [v69] -> v70
+    // v77.*@__fe_Cursor_8 = bitcast v69 *@__fe_Cursor_8;
+    - stack=[v70, v69, v68, v1]
+      pre: [DUP2]
+      bitcast [v69] -> v77
+    // v72.*@__fe_CallData_7 = gep v77 0.i256 0.i256;
+    - stack=[v77, v70, v69, v68, v1], last_use=[v77]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v77, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v72
+    // mstore v72 v68 i256;
+    - stack=[v72, v70, v69, v68, v1], last_use=[v68, v72]
+      pre: [SWAP1, SWAP3, SWAP1]
+      mstore [v72, v68]
+    // v78.*@__fe_Cursor_8 = bitcast v69 *@__fe_Cursor_8;
+    - stack=[v69, v70, v1], last_use=[v69]
+      bitcast [v69] -> v78
+    // v74.*i256 = gep v78 0.i256 1.i256;
+    - stack=[v78, v70, v1], last_use=[v78]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v78, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v74
+    // mstore v74 4.i256 i256;
+    - stack=[v74, v70, v1], last_use=[v74]
+      pre: [PUSH(I256 { is_negative: false, abs: 4 }), SWAP1]
+      mstore [v74, I256 { is_negative: false, abs: 4 }]
+    // v46.*i8 = evm_malloc 96.i256;
+    - stack=[v70, v1]
+      pre: [PUSH(I256 { is_negative: false, abs: 96 })]
+      evm_malloc [I256 { is_negative: false, abs: 96 }] -> v46
+    // v47.i256 = ptr_to_int v46 i256;
+    - stack=[v46, v70, v1]
+      pre: [DUP1]
+      ptr_to_int [v46] -> v47
+    // v48.*@__fe_Cursor_8 = int_to_ptr v70 *@__fe_Cursor_8;
+    - stack=[v47, v46, v70, v1]
+      pre: [DUP3]
+      int_to_ptr [v70] -> v48
+    // v49.*i256 = gep v48 0.i256 0.i256 0.i256;
+    - stack=[v48, v47, v46, v70, v1], last_use=[v48]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP3]
+      gep [v48, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v49
+    // v50.i256 = mload v49 i256;
+    - stack=[v49, v47, v46, v70, v1], last_use=[v49]
+      mload [v49] -> v50
+    // v79.*@__fe_SolDecoder_9 = bitcast v46 *@__fe_SolDecoder_9;
+    - stack=[v50, v47, v46, v70, v1]
+      pre: [DUP3]
+      bitcast [v46] -> v79
+    // v52.*i256 = gep v79 0.i256 0.i256 0.i256 0.i256;
+    - stack=[v79, v50, v47, v46, v70, v1], last_use=[v79]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP4]
+      gep [v79, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v52
+    // mstore v52 v50 i256;
+    - stack=[v52, v50, v47, v46, v70, v1], last_use=[v50, v52]
+      mstore [v52, v50]
+    // v53.*@__fe_Cursor_8 = int_to_ptr v70 *@__fe_Cursor_8;
+    - stack=[v47, v46, v70, v1], last_use=[v70]
+      pre: [SWAP1, SWAP2]
+      int_to_ptr [v70] -> v53
+    // v54.*i256 = gep v53 0.i256 1.i256;
+    - stack=[v53, v47, v46, v1], last_use=[v53]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v53, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v54
+    // v55.i256 = mload v54 i256;
+    - stack=[v54, v47, v46, v1], last_use=[v54]
+      mload [v54] -> v55
+    // v80.*@__fe_SolDecoder_9 = bitcast v46 *@__fe_SolDecoder_9;
+    - stack=[v55, v47, v46, v1]
+      pre: [DUP3]
+      bitcast [v46] -> v80
+    // v57.*i256 = gep v80 0.i256 0.i256 1.i256;
+    - stack=[v80, v55, v47, v46, v1], last_use=[v80]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP3]
+      gep [v80, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v57
+    // mstore v57 v55 i256;
+    - stack=[v57, v55, v47, v46, v1], last_use=[v55, v57]
+      mstore [v57, v55]
+    // v81.*@__fe_SolDecoder_9 = bitcast v46 *@__fe_SolDecoder_9;
+    - stack=[v47, v46, v1], last_use=[v46]
+      pre: [SWAP1]
+      bitcast [v46] -> v81
+    // v59.*i256 = gep v81 0.i256 1.i256;
+    - stack=[v81, v47, v1], last_use=[v81]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v81, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v59
+    // mstore v59 4.i256 i256;
+    - stack=[v59, v47, v1], last_use=[v59]
+      pre: [PUSH(I256 { is_negative: false, abs: 4 }), SWAP1]
+      mstore [v59, I256 { is_negative: false, abs: 4 }]
+    // v3.i1 = eq 2877082652.i256 v1;
+    - stack=[v47, v1]
+      pre: [DUP2, PUSH(I256 { is_negative: false, abs: 2877082652 })]
+      eq [I256 { is_negative: false, abs: 2877082652 }, v1] -> v3
+    // br v3 block2 block6;
+    - stack=[v3, v47, v1]
+      br [v3] -> [block2, block6]
+  block2 P=[] T=[v47]
+    inherited from block0: [v47, v1x]
+    // v24.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v47;
+    - stack=[v47, v1x]
+      cleanup: [SWAP1, POP]
+      pre: [DUP1, PUSH_CONT, SWAP1]
+      call [v47] -> v24
+    // v25.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v47;
+    - stack=[v24, v47], last_use=[v47]
+      pre: [SWAP1, PUSH_CONT, SWAP1]
+      call [v47] -> v25
+    // v26.*i8 = evm_malloc 64.i256;
+    - stack=[v25, v24]
+      pre: [PUSH(I256 { is_negative: false, abs: 64 })]
+      evm_malloc [I256 { is_negative: false, abs: 64 }] -> v26
+    // v27.i256 = ptr_to_int v26 i256;
+    - stack=[v26, v25, v24]
+      pre: [DUP1]
+      ptr_to_int [v26] -> v27
+    // v82.*@__fe_Credit_0 = bitcast v26 *@__fe_Credit_0;
+    - stack=[v27, v26, v25, v24]
+      pre: [DUP2]
+      bitcast [v26] -> v82
+    // v29.*i256 = gep v82 0.i256 0.i256;
+    - stack=[v82, v27, v26, v25, v24], last_use=[v82]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v82, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v29
+    // mstore v29 v24 i256;
+    - stack=[v29, v27, v26, v25, v24], last_use=[v24, v29]
+      pre: [SWAP1, SWAP4, SWAP1]
+      mstore [v29, v24]
+    // v83.*@__fe_Credit_0 = bitcast v26 *@__fe_Credit_0;
+    - stack=[v26, v25, v27], last_use=[v26]
+      bitcast [v26] -> v83
+    // v31.*i256 = gep v83 0.i256 1.i256;
+    - stack=[v83, v25, v27], last_use=[v83]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v83, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v31
+    // mstore v31 v25 i256;
+    - stack=[v31, v25, v27], last_use=[v25, v31]
+      mstore [v31, v25]
+    // v5.i256 = call %__Coin_recv_0_0 v27 0.i256;
+    - stack=[v27], last_use=[v27]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH_CONT, SWAP2]
+      call [I256 { is_negative: false, abs: 0 }, v27] -> v5
+    // call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v5;
+    - stack=[v5], last_use=[v5]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), SWAP1, PUSH_CONT, SWAP2]
+      call [v5, I256 { is_negative: false, abs: 0 }]
+    // unreachable;
+    - stack=[]
+      unreachable []
+  block6 P=[] T=[v47, v1]
+    inherited from block0: [v47, v1]
+    // v11.i1 = eq 217554442.i256 v1;
+    - stack=[v47, v1]
+      pre: [DUP2, PUSH(I256 { is_negative: false, abs: 217554442 })]
+      eq [I256 { is_negative: false, abs: 217554442 }, v1] -> v11
+    // br v11 block3 block7;
+    - stack=[v11, v47, v1]
+      br [v11] -> [block3, block7]
+  block3 P=[] T=[v47]
+    inherited from block6: [v47, v1x]
+    // v32.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v47;
+    - stack=[v47, v1x]
+      cleanup: [SWAP1, POP]
+      pre: [DUP1, PUSH_CONT, SWAP1]
+      call [v47] -> v32
+    // v33.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v47;
+    - stack=[v32, v47], last_use=[v47]
+      pre: [SWAP1, PUSH_CONT, SWAP1]
+      call [v47] -> v33
+    // v34.*i8 = evm_malloc 64.i256;
+    - stack=[v33, v32]
+      pre: [PUSH(I256 { is_negative: false, abs: 64 })]
+      evm_malloc [I256 { is_negative: false, abs: 64 }] -> v34
+    // v35.i256 = ptr_to_int v34 i256;
+    - stack=[v34, v33, v32]
+      pre: [DUP1]
+      ptr_to_int [v34] -> v35
+    // v84.*@__fe_Transfer_1 = bitcast v34 *@__fe_Transfer_1;
+    - stack=[v35, v34, v33, v32]
+      pre: [DUP2]
+      bitcast [v34] -> v84
+    // v37.*i256 = gep v84 0.i256 0.i256;
+    - stack=[v84, v35, v34, v33, v32], last_use=[v84]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v84, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v37
+    // mstore v37 v32 i256;
+    - stack=[v37, v35, v34, v33, v32], last_use=[v32, v37]
+      pre: [SWAP1, SWAP4, SWAP1]
+      mstore [v37, v32]
+    // v85.*@__fe_Transfer_1 = bitcast v34 *@__fe_Transfer_1;
+    - stack=[v34, v33, v35], last_use=[v34]
+      bitcast [v34] -> v85
+    // v39.*i256 = gep v85 0.i256 1.i256;
+    - stack=[v85, v33, v35], last_use=[v85]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v85, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v39
+    // mstore v39 v33 i256;
+    - stack=[v39, v33, v35], last_use=[v33, v39]
+      mstore [v39, v33]
+    // v7.i256 = call %__Coin_recv_0_1 v35 0.i256;
+    - stack=[v35], last_use=[v35]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH_CONT, SWAP2]
+      call [I256 { is_negative: false, abs: 0 }, v35] -> v7
+    // call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v7;
+    - stack=[v7], last_use=[v7]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), SWAP1, PUSH_CONT, SWAP2]
+      call [v7, I256 { is_negative: false, abs: 0 }]
+    // unreachable;
+    - stack=[]
+      unreachable []
+  block7 P=[] T=[v47, v1]
+    inherited from block6: [v47, v1]
+    // v12.i1 = eq 1818602213.i256 v1;
+    - stack=[v47, v1]
+      pre: [DUP2, PUSH(I256 { is_negative: false, abs: 1818602213 })]
+      eq [I256 { is_negative: false, abs: 1818602213 }, v1] -> v12
+    // br v12 block4 block8;
+    - stack=[v12, v47, v1]
+      br [v12] -> [block4, block8]
+  block4 P=[] T=[v47]
+    inherited from block7: [v47, v1x]
+    // v8.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v47;
+    - stack=[v47, v1x], last_use=[v47]
+      cleanup: [SWAP1, POP]
+      pre: [PUSH_CONT, SWAP1]
+      call [v47] -> v8
+    // v9.i256 = call %__Coin_recv_0_2 v8 0.i256;
+    - stack=[v8], last_use=[v8]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH_CONT, SWAP2]
+      call [I256 { is_negative: false, abs: 0 }, v8] -> v9
+    // call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v9;
+    - stack=[v9], last_use=[v9]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), SWAP1, PUSH_CONT, SWAP2]
+      call [v9, I256 { is_negative: false, abs: 0 }]
+    // unreachable;
+    - stack=[]
+      unreachable []
+  block8 P=[] T=[v1]
+    inherited from block7: [v47x, v1]
+    // v13.i1 = eq 960555502.i256 v1;
+    - stack=[v47x, v1], last_use=[v1]
+      cleanup: [POP]
+      pre: [PUSH(I256 { is_negative: false, abs: 960555502 })]
+      eq [I256 { is_negative: false, abs: 960555502 }, v1] -> v13
+    // br v13 block5 block1;
+    - stack=[v13]
+      br [v13] -> [block5, block1]
+  block1 P=[] T=[]
+    inherited from block8: []
+    // evm_revert 0.i256 0.i256;
+    - stack=[]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 })]
+      evm_revert [I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }]
+  block5 P=[] T=[]
+    inherited from block8: []
+    // v42.i256 = evm_sload 2.i256;
+    - stack=[]
+      pre: [PUSH(I256 { is_negative: false, abs: 2 })]
+      evm_sload [I256 { is_negative: false, abs: 2 }] -> v42
+    // call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v42;
+    - stack=[v42], last_use=[v42]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), SWAP1, PUSH_CONT, SWAP2]
+      call [v42, I256 { is_negative: false, abs: 0 }]
+    // unreachable;
+    - stack=[]
+      unreachable []
+
+// func public %assert(v0.i256)
+  block0 P=[v0] T=[]
+    // v6.i1 = is_zero v0;
+    - stack=[v0, <RET>], last_use=[v0]
+      is_zero [v0] -> v6
+    // v7.i256 = zext v6 i256;
+    - stack=[v6, <RET>], last_use=[v6]
+      zext [v6] -> v7
+    // v8.i1 = is_zero v7;
+    - stack=[v7, <RET>], last_use=[v7]
+      is_zero [v7] -> v8
+    // v3.i1 = is_zero v8;
+    - stack=[v8, <RET>], last_use=[v8]
+      is_zero [v8] -> v3
+    // br v3 block1 block2;
+    - stack=[v3, <RET>]
+      br [v3] -> [block1, block2]
+  block1 P=[] T=[]
+    inherited from block0: [<RET>]
+    // evm_revert 0.i256 0.i256;
+    - stack=[<RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 })]
+      evm_revert [I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }]
+  block2 P=[] T=[]
+    inherited from block0: [<RET>]
+    // return;
+    - stack=[<RET>]
+      return []
+
+// func public %alloc(v0.i256) -> i256
+  block0 P=[v0] T=[]
+    // v1.i256 = mload 64.i256 i256;
+    - stack=[v0, <RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 64 })]
+      mload [I256 { is_negative: false, abs: 64 }] -> v1
+    // v16.i1 = is_zero v1;
+    - stack=[v1, v0, <RET>]
+      pre: [DUP1]
+      is_zero [v1] -> v16
+    // v17.i256 = zext v16 i256;
+    - stack=[v16, v1, v0, <RET>], last_use=[v16]
+      zext [v16] -> v17
+    // v18.i1 = is_zero v17;
+    - stack=[v17, v1, v0, <RET>], last_use=[v17]
+      is_zero [v17] -> v18
+    // v4.i1 = is_zero v18;
+    - stack=[v18, v1, v0, <RET>], last_use=[v18]
+      is_zero [v18] -> v4
+    // br v4 block1 block5;
+    - stack=[v4, v1, v0, <RET>]
+      br [v4] -> [block1, block5]
+  block1 P=[] T=[v0]
+    inherited from block0: [v1x, v0, <RET>]
+    // v5.i256 = evm_msize;
+    - stack=[v1x, v0, <RET>]
+      cleanup: [POP]
+      evm_msize [] -> v5
+    // jump block2;
+    - stack=[v5, v0, <RET>]
+      jump -> block2
+  block5 P=[] T=[v1, v0]
+    inherited from block0: [v1, v0, <RET>]
+    // jump block2;
+    - stack=[v1, v0, <RET>]
+      jump -> block2
+  block2 P=[v6] T=[v0]
+    // v20.i1 = lt v6 8192.i256;
+    - stack=[v6, v0, <RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 8192 }), DUP2]
+      lt [v6, I256 { is_negative: false, abs: 8192 }] -> v20
+    // v21.i256 = zext v20 i256;
+    - stack=[v20, v6, v0, <RET>], last_use=[v20]
+      zext [v20] -> v21
+    // v22.i1 = is_zero v21;
+    - stack=[v21, v6, v0, <RET>], last_use=[v21]
+      is_zero [v21] -> v22
+    // v9.i1 = is_zero v22;
+    - stack=[v22, v6, v0, <RET>], last_use=[v22]
+      is_zero [v22] -> v9
+    // br v9 block3 block6;
+    - stack=[v9, v6, v0, <RET>]
+      br [v9] -> [block3, block6]
+  block3 P=[] T=[v0]
+    inherited from block2: [v6x, v0, <RET>]
+    // jump block4;
+    - stack=[v6x, v0, <RET>]
+      cleanup: [POP]
+      exit(block4): [PUSH(I256 { is_negative: false, abs: 8192 })]
+      jump -> block4
+  block6 P=[] T=[v6, v0]
+    inherited from block2: [v6, v0, <RET>]
+    // jump block4;
+    - stack=[v6, v0, <RET>]
+      jump -> block4
+  block4 P=[v10] T=[v0]
+    // v11.i256 = add v0 v10;
+    - stack=[v10, v0, <RET>], last_use=[v0]
+      pre: [DUP1, SWAP2]
+      add [v0, v10] -> v11
+    // mstore 64.i256 v11 i256;
+    - stack=[v11, v10, <RET>], last_use=[v11]
+      pre: [PUSH(I256 { is_negative: false, abs: 64 })]
+      mstore [I256 { is_negative: false, abs: 64 }, v11]
+    // return v10;
+    - stack=[v10, <RET>]
+      return [v10]
+
+// func private %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(v0.i256) -> i256
+  block0 P=[v0] T=[]
+    // v10.i256 = evm_calldata_size;
+    - stack=[v0x, <RET>]
+      cleanup: [POP]
+      evm_calldata_size [] -> v10
+    // v19.i1 = lt v10 4.i256;
+    - stack=[v10, <RET>], last_use=[v10]
+      pre: [PUSH(I256 { is_negative: false, abs: 4 }), SWAP1]
+      lt [v10, I256 { is_negative: false, abs: 4 }] -> v19
+    // v20.i256 = zext v19 i256;
+    - stack=[v19, <RET>], last_use=[v19]
+      zext [v19] -> v20
+    // v21.i1 = is_zero v20;
+    - stack=[v20, <RET>], last_use=[v20]
+      is_zero [v20] -> v21
+    // v5.i1 = is_zero v21;
+    - stack=[v21, <RET>], last_use=[v21]
+      is_zero [v21] -> v5
+    // br v5 block1 block2;
+    - stack=[v5, <RET>]
+      br [v5] -> [block1, block2]
+  block1 P=[] T=[]
+    inherited from block0: [<RET>]
+    // evm_revert 0.i256 0.i256;
+    - stack=[<RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 })]
+      evm_revert [I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }]
+  block2 P=[] T=[]
+    inherited from block0: [<RET>]
+    // v14.i256 = evm_calldata_load 0.i256;
+    - stack=[<RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 })]
+      evm_calldata_load [I256 { is_negative: false, abs: 0 }] -> v14
+    // v16.i256 = shr 224.i256 v14;
+    - stack=[v14, <RET>], last_use=[v14]
+      pre: [PUSH(I256 { is_negative: false, abs: 224 })]
+      shr [I256 { is_negative: false, abs: 224 }, v14] -> v16
+    // return v16;
+    - stack=[v16, <RET>]
+      return [v16]
+
+// func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v0.i256, v1.i256)
+  block0 P=[v0, v1] T=[]
+    // v2.i256 = call %solencoder_h1b9228b90dad6928_new;
+    - stack=[v0x, v1]
+      cleanup: [POP]
+      pre: [PUSH_CONT]
+      call [] -> v2
+    // v3.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v2 32.i256;
+    - stack=[v2, v1]
+      pre: [DUP1, PUSH(I256 { is_negative: false, abs: 32 }), PUSH_CONT, SWAP2]
+      call [I256 { is_negative: false, abs: 32 }, v2] -> v3
+    // v14.*@__fe_SolEncoder_3 = int_to_ptr v2 *@__fe_SolEncoder_3;
+    - stack=[v3x, v2, v1]
+      cleanup: [POP]
+      pre: [DUP1]
+      int_to_ptr [v2] -> v14
+    // v15.*i256 = gep v14 0.i256 1.i256;
+    - stack=[v14, v2, v1], last_use=[v14]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v14, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v15
+    // v16.i256 = mload v15 i256;
+    - stack=[v15, v2, v1], last_use=[v15]
+      mload [v15] -> v16
+    // mstore v16 v1 i256;
+    - stack=[v16, v2, v1], last_use=[v1]
+      pre: [SWAP2, DUP3]
+      mstore [v16, v1]
+    // v17.i256 = add 32.i256 v16;
+    - stack=[v2, v16], last_use=[v16]
+      pre: [SWAP1, PUSH(I256 { is_negative: false, abs: 32 })]
+      add [I256 { is_negative: false, abs: 32 }, v16] -> v17
+    // v18.*@__fe_SolEncoder_3 = int_to_ptr v2 *@__fe_SolEncoder_3;
+    - stack=[v17, v2]
+      pre: [DUP2]
+      int_to_ptr [v2] -> v18
+    // v19.*i256 = gep v18 0.i256 1.i256;
+    - stack=[v18, v17, v2], last_use=[v18]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v18, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v19
+    // mstore v19 v17 i256;
+    - stack=[v19, v17, v2], last_use=[v17, v19]
+      mstore [v19, v17]
+    // v4.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v2;
+    - stack=[v2], last_use=[v2]
+      pre: [PUSH_CONT, SWAP1]
+      call [v2] -> v4
+    // v5.*@__fe_tuple_4 = int_to_ptr v4 *@__fe_tuple_4;
+    - stack=[v4]
+      pre: [DUP1]
+      int_to_ptr [v4] -> v5
+    // v6.*i256 = gep v5 0.i256 0.i256;
+    - stack=[v5, v4], last_use=[v5]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v5, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v6
+    // v7.i256 = mload v6 i256;
+    - stack=[v6, v4], last_use=[v6]
+      mload [v6] -> v7
+    // v8.*@__fe_tuple_4 = int_to_ptr v4 *@__fe_tuple_4;
+    - stack=[v7, v4], last_use=[v4]
+      pre: [SWAP1]
+      int_to_ptr [v4] -> v8
+    // v9.*i256 = gep v8 0.i256 1.i256;
+    - stack=[v8, v7], last_use=[v8]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v8, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v9
+    // v10.i256 = mload v9 i256;
+    - stack=[v9, v7], last_use=[v9]
+      mload [v9] -> v10
+    // evm_return v7 v10;
+    - stack=[v10, v7], last_use=[v7, v10]
+      pre: [SWAP1]
+      evm_return [v7, v10]
+
+// func public %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.i256) -> i256
+  block0 P=[v0] T=[]
+    // v25.*i8 = evm_malloc 96.i256;
+    - stack=[v0, <RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 96 })]
+      evm_malloc [I256 { is_negative: false, abs: 96 }] -> v25
+    // v26.i256 = ptr_to_int v25 i256;
+    - stack=[v25, v0, <RET>]
+      pre: [DUP1]
+      ptr_to_int [v25] -> v26
+    // v27.*@__fe_MemoryBytes_2 = int_to_ptr v0 *@__fe_MemoryBytes_2;
+    - stack=[v26, v25, v0, <RET>]
+      pre: [DUP3]
+      int_to_ptr [v0] -> v27
+    // v28.*i256 = gep v27 0.i256 0.i256;
+    - stack=[v27, v26, v25, v0, <RET>], last_use=[v27]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v27, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v28
+    // v29.i256 = mload v28 i256;
+    - stack=[v28, v26, v25, v0, <RET>], last_use=[v28]
+      mload [v28] -> v29
+    // v39.*@__fe_Cursor_5 = bitcast v25 *@__fe_Cursor_5;
+    - stack=[v29, v26, v25, v0, <RET>]
+      pre: [DUP3]
+      bitcast [v25] -> v39
+    // v31.*i256 = gep v39 0.i256 0.i256 0.i256;
+    - stack=[v39, v29, v26, v25, v0, <RET>], last_use=[v39]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP3]
+      gep [v39, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v31
+    // mstore v31 v29 i256;
+    - stack=[v31, v29, v26, v25, v0, <RET>], last_use=[v29, v31]
+      mstore [v31, v29]
+    // v32.*@__fe_MemoryBytes_2 = int_to_ptr v0 *@__fe_MemoryBytes_2;
+    - stack=[v26, v25, v0, <RET>], last_use=[v0]
+      pre: [SWAP1, SWAP2]
+      int_to_ptr [v0] -> v32
+    // v33.*i256 = gep v32 0.i256 1.i256;
+    - stack=[v32, v26, v25, <RET>], last_use=[v32]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v32, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v33
+    // v34.i256 = mload v33 i256;
+    - stack=[v33, v26, v25, <RET>], last_use=[v33]
+      mload [v33] -> v34
+    // v40.*@__fe_Cursor_5 = bitcast v25 *@__fe_Cursor_5;
+    - stack=[v34, v26, v25, <RET>]
+      pre: [DUP3]
+      bitcast [v25] -> v40
+    // v36.*i256 = gep v40 0.i256 0.i256 1.i256;
+    - stack=[v40, v34, v26, v25, <RET>], last_use=[v40]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP3]
+      gep [v40, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v36
+    // mstore v36 v34 i256;
+    - stack=[v36, v34, v26, v25, <RET>], last_use=[v34, v36]
+      mstore [v36, v34]
+    // v41.*@__fe_Cursor_5 = bitcast v25 *@__fe_Cursor_5;
+    - stack=[v26, v25, <RET>], last_use=[v25]
+      pre: [SWAP1]
+      bitcast [v25] -> v41
+    // v38.*i256 = gep v41 0.i256 1.i256;
+    - stack=[v41, v26, <RET>], last_use=[v41]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v41, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v38
+    // mstore v38 0.i256 i256;
+    - stack=[v38, v26, <RET>], last_use=[v38]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), SWAP1]
+      mstore [v38, I256 { is_negative: false, abs: 0 }]
+    // v2.*i8 = evm_malloc 128.i256;
+    - stack=[v26, <RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 128 })]
+      evm_malloc [I256 { is_negative: false, abs: 128 }] -> v2
+    // v3.i256 = ptr_to_int v2 i256;
+    - stack=[v2, v26, <RET>]
+      pre: [DUP1]
+      ptr_to_int [v2] -> v3
+    // v4.*@__fe_Cursor_5 = int_to_ptr v26 *@__fe_Cursor_5;
+    - stack=[v3, v2, v26, <RET>]
+      pre: [DUP3]
+      int_to_ptr [v26] -> v4
+    // v5.*i256 = gep v4 0.i256 0.i256 0.i256;
+    - stack=[v4, v3, v2, v26, <RET>], last_use=[v4]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP3]
+      gep [v4, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v5
+    // v6.i256 = mload v5 i256;
+    - stack=[v5, v3, v2, v26, <RET>], last_use=[v5]
+      mload [v5] -> v6
+    // v42.*@__fe_SolDecoder_6 = bitcast v2 *@__fe_SolDecoder_6;
+    - stack=[v6, v3, v2, v26, <RET>]
+      pre: [DUP3]
+      bitcast [v2] -> v42
+    // v8.*i256 = gep v42 0.i256 0.i256 0.i256 0.i256;
+    - stack=[v42, v6, v3, v2, v26, <RET>], last_use=[v42]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP4]
+      gep [v42, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v8
+    // mstore v8 v6 i256;
+    - stack=[v8, v6, v3, v2, v26, <RET>], last_use=[v6, v8]
+      mstore [v8, v6]
+    // v9.*@__fe_Cursor_5 = int_to_ptr v26 *@__fe_Cursor_5;
+    - stack=[v3, v2, v26, <RET>]
+      pre: [DUP3]
+      int_to_ptr [v26] -> v9
+    // v10.*i256 = gep v9 0.i256 0.i256 1.i256;
+    - stack=[v9, v3, v2, v26, <RET>], last_use=[v9]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP3]
+      gep [v9, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v10
+    // v11.i256 = mload v10 i256;
+    - stack=[v10, v3, v2, v26, <RET>], last_use=[v10]
+      mload [v10] -> v11
+    // v43.*@__fe_SolDecoder_6 = bitcast v2 *@__fe_SolDecoder_6;
+    - stack=[v11, v3, v2, v26, <RET>]
+      pre: [DUP3]
+      bitcast [v2] -> v43
+    // v13.*i256 = gep v43 0.i256 0.i256 0.i256 1.i256;
+    - stack=[v43, v11, v3, v2, v26, <RET>], last_use=[v43]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP4]
+      gep [v43, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v13
+    // mstore v13 v11 i256;
+    - stack=[v13, v11, v3, v2, v26, <RET>], last_use=[v11, v13]
+      mstore [v13, v11]
+    // v14.*@__fe_Cursor_5 = int_to_ptr v26 *@__fe_Cursor_5;
+    - stack=[v3, v2, v26, <RET>], last_use=[v26]
+      pre: [SWAP1, SWAP2]
+      int_to_ptr [v26] -> v14
+    // v15.*i256 = gep v14 0.i256 1.i256;
+    - stack=[v14, v3, v2, <RET>], last_use=[v14]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v14, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v15
+    // v16.i256 = mload v15 i256;
+    - stack=[v15, v3, v2, <RET>], last_use=[v15]
+      mload [v15] -> v16
+    // v44.*@__fe_SolDecoder_6 = bitcast v2 *@__fe_SolDecoder_6;
+    - stack=[v16, v3, v2, <RET>]
+      pre: [DUP3]
+      bitcast [v2] -> v44
+    // v18.*i256 = gep v44 0.i256 0.i256 1.i256;
+    - stack=[v44, v16, v3, v2, <RET>], last_use=[v44]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP3]
+      gep [v44, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v18
+    // mstore v18 v16 i256;
+    - stack=[v18, v16, v3, v2, <RET>], last_use=[v16, v18]
+      mstore [v18, v16]
+    // v45.*@__fe_SolDecoder_6 = bitcast v2 *@__fe_SolDecoder_6;
+    - stack=[v3, v2, <RET>], last_use=[v2]
+      pre: [SWAP1]
+      bitcast [v2] -> v45
+    // v20.*i256 = gep v45 0.i256 1.i256;
+    - stack=[v45, v3, <RET>], last_use=[v45]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v45, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v20
+    // mstore v20 0.i256 i256;
+    - stack=[v20, v3, <RET>], last_use=[v20]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), SWAP1]
+      mstore [v20, I256 { is_negative: false, abs: 0 }]
+    // return v3;
+    - stack=[v3, <RET>]
+      return [v3]
+
+// func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0.i256, v1.i256) -> i256
+  block0 P=[v0, v1] T=[]
+    // v2.*@__fe_SolEncoder_3 = int_to_ptr v0 *@__fe_SolEncoder_3;
+    - stack=[v0, v1, <RET>]
+      pre: [DUP1]
+      int_to_ptr [v0] -> v2
+    // v3.*i256 = gep v2 0.i256 0.i256;
+    - stack=[v2, v0, v1, <RET>], last_use=[v2]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v2, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v3
+    // v4.i256 = mload v3 i256;
+    - stack=[v3, v0, v1, <RET>], last_use=[v3]
+      mload [v3] -> v4
+    // v24.i1 = is_zero v4;
+    - stack=[v4, v0, v1, <RET>], last_use=[v4]
+      is_zero [v4] -> v24
+    // v25.i256 = zext v24 i256;
+    - stack=[v24, v0, v1, <RET>], last_use=[v24]
+      zext [v24] -> v25
+    // v26.i1 = is_zero v25;
+    - stack=[v25, v0, v1, <RET>], last_use=[v25]
+      is_zero [v25] -> v26
+    // v7.i1 = is_zero v26;
+    - stack=[v26, v0, v1, <RET>], last_use=[v26]
+      is_zero [v26] -> v7
+    // br v7 block1 block3;
+    - stack=[v7, v0, v1, <RET>]
+      br [v7] -> [block1, block3]
+  block1 P=[] T=[v0, v1]
+    inherited from block0: [v0, v1, <RET>]
+    // v8.*i8 = evm_malloc v1;
+    - stack=[v0, v1, <RET>]
+      pre: [DUP2]
+      evm_malloc [v1] -> v8
+    // v9.i256 = ptr_to_int v8 i256;
+    - stack=[v8, v0, v1, <RET>], last_use=[v8]
+      ptr_to_int [v8] -> v9
+    // v10.*@__fe_SolEncoder_3 = int_to_ptr v0 *@__fe_SolEncoder_3;
+    - stack=[v9, v0, v1, <RET>]
+      pre: [DUP2]
+      int_to_ptr [v0] -> v10
+    // v11.*i256 = gep v10 0.i256 0.i256;
+    - stack=[v10, v9, v0, v1, <RET>], last_use=[v10]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v10, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v11
+    // mstore v11 v9 i256;
+    - stack=[v11, v9, v0, v1, <RET>], last_use=[v11]
+      pre: [DUP2, SWAP1]
+      mstore [v11, v9]
+    // v12.*@__fe_SolEncoder_3 = int_to_ptr v0 *@__fe_SolEncoder_3;
+    - stack=[v9, v0, v1, <RET>]
+      pre: [DUP2]
+      int_to_ptr [v0] -> v12
+    // v13.*i256 = gep v12 0.i256 1.i256;
+    - stack=[v12, v9, v0, v1, <RET>], last_use=[v12]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v12, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v13
+    // mstore v13 v9 i256;
+    - stack=[v13, v9, v0, v1, <RET>], last_use=[v13]
+      pre: [DUP2, SWAP1]
+      mstore [v13, v9]
+    // v14.i256 = add v1 v9;
+    - stack=[v9, v0, v1, <RET>], last_use=[v1, v9]
+      pre: [SWAP1, SWAP2]
+      add [v1, v9] -> v14
+    // v15.*@__fe_SolEncoder_3 = int_to_ptr v0 *@__fe_SolEncoder_3;
+    - stack=[v14, v0, <RET>]
+      pre: [DUP2]
+      int_to_ptr [v0] -> v15
+    // v16.*i256 = gep v15 0.i256 2.i256;
+    - stack=[v15, v14, v0, <RET>], last_use=[v15]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 2 }), SWAP2]
+      gep [v15, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 2 }] -> v16
+    // mstore v16 v14 i256;
+    - stack=[v16, v14, v0, <RET>], last_use=[v14, v16]
+      mstore [v16, v14]
+    // jump block2;
+    - stack=[v0, <RET>]
+      jump -> block2
+  block3 P=[] T=[v0]
+    inherited from block0: [v0, v1x, <RET>]
+    // jump block2;
+    - stack=[v0, v1x, <RET>]
+      cleanup: [SWAP1, POP]
+      jump -> block2
+  block2 P=[] T=[v0]
+    // v17.*@__fe_SolEncoder_3 = int_to_ptr v0 *@__fe_SolEncoder_3;
+    - stack=[v0, <RET>], last_use=[v0]
+      int_to_ptr [v0] -> v17
+    // v18.*i256 = gep v17 0.i256 0.i256;
+    - stack=[v17, <RET>], last_use=[v17]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v17, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v18
+    // v19.i256 = mload v18 i256;
+    - stack=[v18, <RET>], last_use=[v18]
+      mload [v18] -> v19
+    // return v19;
+    - stack=[v19, <RET>]
+      return [v19]
+
+// func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0.i256) -> i256
+  block0 P=[v0] T=[]
+    // v1.*@__fe_SolEncoder_3 = int_to_ptr v0 *@__fe_SolEncoder_3;
+    - stack=[v0, <RET>]
+      pre: [DUP1]
+      int_to_ptr [v0] -> v1
+    // v2.*i256 = gep v1 0.i256 0.i256;
+    - stack=[v1, v0, <RET>], last_use=[v1]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v1, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v2
+    // v3.i256 = mload v2 i256;
+    - stack=[v2, v0, <RET>], last_use=[v2]
+      mload [v2] -> v3
+    // v4.*@__fe_SolEncoder_3 = int_to_ptr v0 *@__fe_SolEncoder_3;
+    - stack=[v3, v0, <RET>], last_use=[v0]
+      pre: [SWAP1]
+      int_to_ptr [v0] -> v4
+    // v5.*i256 = gep v4 0.i256 2.i256;
+    - stack=[v4, v3, <RET>], last_use=[v4]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 2 }), SWAP2]
+      gep [v4, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 2 }] -> v5
+    // v6.i256 = mload v5 i256;
+    - stack=[v5, v3, <RET>], last_use=[v5]
+      mload [v5] -> v6
+    // v7.*i8 = evm_malloc 64.i256;
+    - stack=[v6, v3, <RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 64 })]
+      evm_malloc [I256 { is_negative: false, abs: 64 }] -> v7
+    // v8.i256 = ptr_to_int v7 i256;
+    - stack=[v7, v6, v3, <RET>]
+      pre: [DUP1]
+      ptr_to_int [v7] -> v8
+    // v18.*@__fe_tuple_4 = bitcast v7 *@__fe_tuple_4;
+    - stack=[v8, v7, v6, v3, <RET>]
+      pre: [DUP2]
+      bitcast [v7] -> v18
+    // v10.*i256 = gep v18 0.i256 0.i256;
+    - stack=[v18, v8, v7, v6, v3, <RET>], last_use=[v18]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v18, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v10
+    // mstore v10 v3 i256;
+    - stack=[v10, v8, v7, v6, v3, <RET>], last_use=[v10]
+      pre: [DUP5, SWAP1]
+      mstore [v10, v3]
+    // v11.i256 = sub v6 v3;
+    - stack=[v8, v7, v6, v3, <RET>], last_use=[v3, v6]
+      pre: [SWAP3, SWAP1, SWAP2]
+      sub [v6, v3] -> v11
+    // v19.*@__fe_tuple_4 = bitcast v7 *@__fe_tuple_4;
+    - stack=[v11, v7, v8, <RET>], last_use=[v7]
+      pre: [SWAP1]
+      bitcast [v7] -> v19
+    // v13.*i256 = gep v19 0.i256 1.i256;
+    - stack=[v19, v11, v8, <RET>], last_use=[v19]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v19, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v13
+    // mstore v13 v11 i256;
+    - stack=[v13, v11, v8, <RET>], last_use=[v11, v13]
+      mstore [v13, v11]
+    // return v8;
+    - stack=[v8, <RET>]
+      return [v8]
+
+// func public %solencoder_h1b9228b90dad6928_new() -> i256
+  block0 P=[] T=[]
+    // v0.*i8 = evm_malloc 96.i256;
+    - stack=[<RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 96 })]
+      evm_malloc [I256 { is_negative: false, abs: 96 }] -> v0
+    // v1.i256 = ptr_to_int v0 i256;
+    - stack=[v0, <RET>]
+      pre: [DUP1]
+      ptr_to_int [v0] -> v1
+    // v12.*@__fe_SolEncoder_3 = bitcast v0 *@__fe_SolEncoder_3;
+    - stack=[v1, v0, <RET>]
+      pre: [DUP2]
+      bitcast [v0] -> v12
+    // v3.*i256 = gep v12 0.i256 0.i256;
+    - stack=[v12, v1, v0, <RET>], last_use=[v12]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v12, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v3
+    // mstore v3 0.i256 i256;
+    - stack=[v3, v1, v0, <RET>], last_use=[v3]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), SWAP1]
+      mstore [v3, I256 { is_negative: false, abs: 0 }]
+    // v13.*@__fe_SolEncoder_3 = bitcast v0 *@__fe_SolEncoder_3;
+    - stack=[v1, v0, <RET>]
+      pre: [DUP2]
+      bitcast [v0] -> v13
+    // v5.*i256 = gep v13 0.i256 1.i256;
+    - stack=[v13, v1, v0, <RET>], last_use=[v13]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v13, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v5
+    // mstore v5 0.i256 i256;
+    - stack=[v5, v1, v0, <RET>], last_use=[v5]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), SWAP1]
+      mstore [v5, I256 { is_negative: false, abs: 0 }]
+    // v14.*@__fe_SolEncoder_3 = bitcast v0 *@__fe_SolEncoder_3;
+    - stack=[v1, v0, <RET>], last_use=[v0]
+      pre: [SWAP1]
+      bitcast [v0] -> v14
+    // v7.*i256 = gep v14 0.i256 2.i256;
+    - stack=[v14, v1, <RET>], last_use=[v14]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 2 }), SWAP2]
+      gep [v14, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 2 }] -> v7
+    // mstore v7 0.i256 i256;
+    - stack=[v7, v1, <RET>], last_use=[v7]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), SWAP1]
+      mstore [v7, I256 { is_negative: false, abs: 0 }]
+    // return v1;
+    - stack=[v1, <RET>]
+      return [v1]
+
+// func public %cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.i256) -> i256
+  block0 P=[v0] T=[]
+    // v1.*i8 = evm_malloc 96.i256;
+    - stack=[v0, <RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 96 })]
+      evm_malloc [I256 { is_negative: false, abs: 96 }] -> v1
+    // v2.i256 = ptr_to_int v1 i256;
+    - stack=[v1, v0, <RET>]
+      pre: [DUP1]
+      ptr_to_int [v1] -> v2
+    // v3.*@__fe_MemoryBytes_2 = int_to_ptr v0 *@__fe_MemoryBytes_2;
+    - stack=[v2, v1, v0, <RET>]
+      pre: [DUP3]
+      int_to_ptr [v0] -> v3
+    // v4.*i256 = gep v3 0.i256 0.i256;
+    - stack=[v3, v2, v1, v0, <RET>], last_use=[v3]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v3, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v4
+    // v5.i256 = mload v4 i256;
+    - stack=[v4, v2, v1, v0, <RET>], last_use=[v4]
+      mload [v4] -> v5
+    // v18.*@__fe_Cursor_5 = bitcast v1 *@__fe_Cursor_5;
+    - stack=[v5, v2, v1, v0, <RET>]
+      pre: [DUP3]
+      bitcast [v1] -> v18
+    // v7.*i256 = gep v18 0.i256 0.i256 0.i256;
+    - stack=[v18, v5, v2, v1, v0, <RET>], last_use=[v18]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP3]
+      gep [v18, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v7
+    // mstore v7 v5 i256;
+    - stack=[v7, v5, v2, v1, v0, <RET>], last_use=[v5, v7]
+      mstore [v7, v5]
+    // v8.*@__fe_MemoryBytes_2 = int_to_ptr v0 *@__fe_MemoryBytes_2;
+    - stack=[v2, v1, v0, <RET>], last_use=[v0]
+      pre: [SWAP1, SWAP2]
+      int_to_ptr [v0] -> v8
+    // v9.*i256 = gep v8 0.i256 1.i256;
+    - stack=[v8, v2, v1, <RET>], last_use=[v8]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v8, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v9
+    // v10.i256 = mload v9 i256;
+    - stack=[v9, v2, v1, <RET>], last_use=[v9]
+      mload [v9] -> v10
+    // v19.*@__fe_Cursor_5 = bitcast v1 *@__fe_Cursor_5;
+    - stack=[v10, v2, v1, <RET>]
+      pre: [DUP3]
+      bitcast [v1] -> v19
+    // v12.*i256 = gep v19 0.i256 0.i256 1.i256;
+    - stack=[v19, v10, v2, v1, <RET>], last_use=[v19]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP3]
+      gep [v19, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v12
+    // mstore v12 v10 i256;
+    - stack=[v12, v10, v2, v1, <RET>], last_use=[v10, v12]
+      mstore [v12, v10]
+    // v20.*@__fe_Cursor_5 = bitcast v1 *@__fe_Cursor_5;
+    - stack=[v2, v1, <RET>], last_use=[v1]
+      pre: [SWAP1]
+      bitcast [v1] -> v20
+    // v14.*i256 = gep v20 0.i256 1.i256;
+    - stack=[v20, v2, <RET>], last_use=[v20]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v20, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v14
+    // mstore v14 0.i256 i256;
+    - stack=[v14, v2, <RET>], last_use=[v14]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), SWAP1]
+      mstore [v14, I256 { is_negative: false, abs: 0 }]
+    // return v2;
+    - stack=[v2, <RET>]
+      return [v2]
+
+// func public %soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256, v1.i256) -> i256
+  block0 P=[v0, v1] T=[]
+    // v22.*i8 = evm_malloc 64.i256;
+    - stack=[v0, v1, <RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 64 })]
+      evm_malloc [I256 { is_negative: false, abs: 64 }] -> v22
+    // v23.i256 = ptr_to_int v22 i256;
+    - stack=[v22, v0, v1, <RET>]
+      pre: [DUP1]
+      ptr_to_int [v22] -> v23
+    // v37.*@__fe_Cursor_8 = bitcast v22 *@__fe_Cursor_8;
+    - stack=[v23, v22, v0, v1, <RET>]
+      pre: [DUP2]
+      bitcast [v22] -> v37
+    // v25.*@__fe_CallData_7 = gep v37 0.i256 0.i256;
+    - stack=[v37, v23, v22, v0, v1, <RET>], last_use=[v37]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v37, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v25
+    // mstore v25 v0 i256;
+    - stack=[v25, v23, v22, v0, v1, <RET>], last_use=[v0, v25]
+      pre: [SWAP1, SWAP3, SWAP1]
+      mstore [v25, v0]
+    // v38.*@__fe_Cursor_8 = bitcast v22 *@__fe_Cursor_8;
+    - stack=[v22, v23, v1, <RET>], last_use=[v22]
+      bitcast [v22] -> v38
+    // v27.*i256 = gep v38 0.i256 1.i256;
+    - stack=[v38, v23, v1, <RET>], last_use=[v38]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v38, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v27
+    // mstore v27 0.i256 i256;
+    - stack=[v27, v23, v1, <RET>], last_use=[v27]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), SWAP1]
+      mstore [v27, I256 { is_negative: false, abs: 0 }]
+    // v28.*@__fe_Cursor_8 = int_to_ptr v23 *@__fe_Cursor_8;
+    - stack=[v23, v1, <RET>], last_use=[v23]
+      int_to_ptr [v23] -> v28
+    // v29.*@__fe_CallData_7 = gep v28 0.i256 0.i256;
+    - stack=[v28, v1, <RET>], last_use=[v28]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v28, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v29
+    // v30.i256 = mload v29 i256;
+    - stack=[v29, v1, <RET>], last_use=[v29]
+      mload [v29] -> v30
+    // v31.*i8 = evm_malloc 64.i256;
+    - stack=[v30, v1, <RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 64 })]
+      evm_malloc [I256 { is_negative: false, abs: 64 }] -> v31
+    // v32.i256 = ptr_to_int v31 i256;
+    - stack=[v31, v30, v1, <RET>]
+      pre: [DUP1]
+      ptr_to_int [v31] -> v32
+    // v39.*@__fe_Cursor_8 = bitcast v31 *@__fe_Cursor_8;
+    - stack=[v32, v31, v30, v1, <RET>]
+      pre: [DUP2]
+      bitcast [v31] -> v39
+    // v34.*@__fe_CallData_7 = gep v39 0.i256 0.i256;
+    - stack=[v39, v32, v31, v30, v1, <RET>], last_use=[v39]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v39, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v34
+    // mstore v34 v30 i256;
+    - stack=[v34, v32, v31, v30, v1, <RET>], last_use=[v30, v34]
+      pre: [SWAP1, SWAP3, SWAP1]
+      mstore [v34, v30]
+    // v40.*@__fe_Cursor_8 = bitcast v31 *@__fe_Cursor_8;
+    - stack=[v31, v32, v1, <RET>], last_use=[v31]
+      bitcast [v31] -> v40
+    // v36.*i256 = gep v40 0.i256 1.i256;
+    - stack=[v40, v32, v1, <RET>], last_use=[v40]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v40, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v36
+    // mstore v36 v1 i256;
+    - stack=[v36, v32, v1, <RET>], last_use=[v36]
+      pre: [DUP3, SWAP1]
+      mstore [v36, v1]
+    // v4.*i8 = evm_malloc 96.i256;
+    - stack=[v32, v1, <RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 96 })]
+      evm_malloc [I256 { is_negative: false, abs: 96 }] -> v4
+    // v5.i256 = ptr_to_int v4 i256;
+    - stack=[v4, v32, v1, <RET>]
+      pre: [DUP1]
+      ptr_to_int [v4] -> v5
+    // v6.*@__fe_Cursor_8 = int_to_ptr v32 *@__fe_Cursor_8;
+    - stack=[v5, v4, v32, v1, <RET>]
+      pre: [DUP3]
+      int_to_ptr [v32] -> v6
+    // v7.*i256 = gep v6 0.i256 0.i256 0.i256;
+    - stack=[v6, v5, v4, v32, v1, <RET>], last_use=[v6]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP3]
+      gep [v6, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v7
+    // v8.i256 = mload v7 i256;
+    - stack=[v7, v5, v4, v32, v1, <RET>], last_use=[v7]
+      mload [v7] -> v8
+    // v41.*@__fe_SolDecoder_9 = bitcast v4 *@__fe_SolDecoder_9;
+    - stack=[v8, v5, v4, v32, v1, <RET>]
+      pre: [DUP3]
+      bitcast [v4] -> v41
+    // v10.*i256 = gep v41 0.i256 0.i256 0.i256 0.i256;
+    - stack=[v41, v8, v5, v4, v32, v1, <RET>], last_use=[v41]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP4]
+      gep [v41, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v10
+    // mstore v10 v8 i256;
+    - stack=[v10, v8, v5, v4, v32, v1, <RET>], last_use=[v8, v10]
+      mstore [v10, v8]
+    // v11.*@__fe_Cursor_8 = int_to_ptr v32 *@__fe_Cursor_8;
+    - stack=[v5, v4, v32, v1, <RET>], last_use=[v32]
+      pre: [SWAP1, SWAP2]
+      int_to_ptr [v32] -> v11
+    // v12.*i256 = gep v11 0.i256 1.i256;
+    - stack=[v11, v5, v4, v1, <RET>], last_use=[v11]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v11, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v12
+    // v13.i256 = mload v12 i256;
+    - stack=[v12, v5, v4, v1, <RET>], last_use=[v12]
+      mload [v12] -> v13
+    // v42.*@__fe_SolDecoder_9 = bitcast v4 *@__fe_SolDecoder_9;
+    - stack=[v13, v5, v4, v1, <RET>]
+      pre: [DUP3]
+      bitcast [v4] -> v42
+    // v15.*i256 = gep v42 0.i256 0.i256 1.i256;
+    - stack=[v42, v13, v5, v4, v1, <RET>], last_use=[v42]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP3]
+      gep [v42, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v15
+    // mstore v15 v13 i256;
+    - stack=[v15, v13, v5, v4, v1, <RET>], last_use=[v13, v15]
+      mstore [v15, v13]
+    // v43.*@__fe_SolDecoder_9 = bitcast v4 *@__fe_SolDecoder_9;
+    - stack=[v5, v4, v1, <RET>], last_use=[v4]
+      pre: [SWAP1]
+      bitcast [v4] -> v43
+    // v17.*i256 = gep v43 0.i256 1.i256;
+    - stack=[v43, v5, v1, <RET>], last_use=[v43]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v43, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v17
+    // mstore v17 v1 i256;
+    - stack=[v17, v5, v1, <RET>], last_use=[v1, v17]
+      pre: [SWAP1, SWAP2, SWAP1]
+      mstore [v17, v1]
+    // return v5;
+    - stack=[v5, <RET>]
+      return [v5]
+
+// func private %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256) -> i256
+  block0 P=[v0] T=[]
+    // v1.*@__fe_SolDecoder_9 = int_to_ptr v0 *@__fe_SolDecoder_9;
+    - stack=[v0, <RET>]
+      pre: [DUP1]
+      int_to_ptr [v0] -> v1
+    // v47.*@__fe_Cursor_8 = gep v1 0.i256 0.i256;
+    - stack=[v1, v0, <RET>], last_use=[v1]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v1, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v47
+    // v4.*@__fe_CallData_7 = gep v47 0.i256 0.i256;
+    - stack=[v47, v0, <RET>], last_use=[v47]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v47, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v4
+    // v5.i256 = mload v4 i256;
+    - stack=[v4, v0, <RET>], last_use=[v4]
+      mload [v4] -> v5
+    // v42.i256 = evm_calldata_size;
+    - stack=[v5, v0, <RET>]
+      evm_calldata_size [] -> v42
+    // v7.*@__fe_SolDecoder_9 = int_to_ptr v0 *@__fe_SolDecoder_9;
+    - stack=[v42, v5, v0, <RET>]
+      pre: [DUP3]
+      int_to_ptr [v0] -> v7
+    // v48.*@__fe_Cursor_8 = gep v7 0.i256 0.i256;
+    - stack=[v7, v42, v5, v0, <RET>], last_use=[v7]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v7, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v48
+    // v10.*i256 = gep v48 0.i256 1.i256;
+    - stack=[v48, v42, v5, v0, <RET>], last_use=[v48]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v48, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v10
+    // v11.i256 = mload v10 i256;
+    - stack=[v10, v42, v5, v0, <RET>], last_use=[v10]
+      mload [v10] -> v11
+    // v12.i256 = add 32.i256 v11;
+    - stack=[v11, v42, v5, v0, <RET>]
+      pre: [DUP1, PUSH(I256 { is_negative: false, abs: 32 })]
+      add [I256 { is_negative: false, abs: 32 }, v11] -> v12
+    // v13.*@__fe_SolDecoder_9 = int_to_ptr v0 *@__fe_SolDecoder_9;
+    - stack=[v12, v11, v42, v5, v0, <RET>]
+      pre: [DUP5]
+      int_to_ptr [v0] -> v13
+    // v49.*@__fe_Cursor_8 = gep v13 0.i256 0.i256;
+    - stack=[v13, v12, v11, v42, v5, v0, <RET>], last_use=[v13]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v13, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v49
+    // v16.*i256 = gep v49 0.i256 1.i256;
+    - stack=[v49, v12, v11, v42, v5, v0, <RET>], last_use=[v49]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v49, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v16
+    // v17.i256 = mload v16 i256;
+    - stack=[v16, v12, v11, v42, v5, v0, <RET>], last_use=[v16]
+      mload [v16] -> v17
+    // v64.i256 = add 32.i256 v11;
+    - stack=[v17, v12, v11, v42, v5, v0, <RET>], last_use=[v11]
+      pre: [SWAP2, PUSH(I256 { is_negative: false, abs: 32 })]
+      add [I256 { is_negative: false, abs: 32 }, v11] -> v64
+    // v65.i256 = sub v42 v5;
+    - stack=[v64, v12, v17, v42, v5, v0, <RET>], last_use=[v5, v42]
+      pre: [SWAP4, SWAP1, SWAP3]
+      sub [v42, v5] -> v65
+    // v66.i1 = gt v64 v65;
+    - stack=[v65, v17, v12, v64, v0, <RET>], last_use=[v65]
+      pre: [DUP4]
+      gt [v64, v65] -> v66
+    // v67.i256 = zext v66 i256;
+    - stack=[v66, v17, v12, v64, v0, <RET>], last_use=[v66]
+      zext [v66] -> v67
+    // v68.i1 = lt v64 v17;
+    - stack=[v67, v17, v12, v64, v0, <RET>], last_use=[v17, v64]
+      pre: [SWAP3]
+      lt [v64, v17] -> v68
+    // v69.i256 = zext v68 i256;
+    - stack=[v68, v12, v67, v0, <RET>], last_use=[v68]
+      zext [v68] -> v69
+    // v70.i256 = or v67 v69;
+    - stack=[v69, v12, v67, v0, <RET>], last_use=[v67, v69]
+      pre: [SWAP1, SWAP2]
+      or [v67, v69] -> v70
+    // v23.i1 = ne 0.i256 v70;
+    - stack=[v70, v12, v0, <RET>], last_use=[v70]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 })]
+      ne [I256 { is_negative: false, abs: 0 }, v70] -> v23
+    // br v23 block1 block2;
+    - stack=[v23, v12, v0, <RET>]
+      br [v23] -> [block1, block2]
+  block1 P=[] T=[]
+    inherited from block0: [v12x, v0x, <RET>]
+    // evm_revert 0.i256 0.i256;
+    - stack=[v12x, v0x, <RET>]
+      cleanup: [POP, POP]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 })]
+      evm_revert [I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }]
+  block2 P=[] T=[v12, v0]
+    inherited from block0: [v12, v0, <RET>]
+    // v24.*@__fe_SolDecoder_9 = int_to_ptr v0 *@__fe_SolDecoder_9;
+    - stack=[v12, v0, <RET>]
+      pre: [DUP2]
+      int_to_ptr [v0] -> v24
+    // v71.*@__fe_Cursor_8 = gep v24 0.i256 0.i256;
+    - stack=[v24, v12, v0, <RET>], last_use=[v24]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v24, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v71
+    // v27.*@__fe_CallData_7 = gep v71 0.i256 0.i256;
+    - stack=[v71, v12, v0, <RET>], last_use=[v71]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v71, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v27
+    // v28.i256 = mload v27 i256;
+    - stack=[v27, v12, v0, <RET>], last_use=[v27]
+      mload [v27] -> v28
+    // v29.*@__fe_SolDecoder_9 = int_to_ptr v0 *@__fe_SolDecoder_9;
+    - stack=[v28, v12, v0, <RET>]
+      pre: [DUP3]
+      int_to_ptr [v0] -> v29
+    // v72.*@__fe_Cursor_8 = gep v29 0.i256 0.i256;
+    - stack=[v29, v28, v12, v0, <RET>], last_use=[v29]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v29, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v72
+    // v32.*i256 = gep v72 0.i256 1.i256;
+    - stack=[v72, v28, v12, v0, <RET>], last_use=[v72]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v72, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v32
+    // v33.i256 = mload v32 i256;
+    - stack=[v32, v28, v12, v0, <RET>], last_use=[v32]
+      mload [v32] -> v33
+    // v45.i256 = add v28 v33;
+    - stack=[v33, v28, v12, v0, <RET>], last_use=[v28, v33]
+      add [v33, v28] -> v45
+    // v46.i256 = evm_calldata_load v45;
+    - stack=[v45, v12, v0, <RET>], last_use=[v45]
+      evm_calldata_load [v45] -> v46
+    // v35.*@__fe_SolDecoder_9 = int_to_ptr v0 *@__fe_SolDecoder_9;
+    - stack=[v46, v12, v0, <RET>], last_use=[v0]
+      pre: [SWAP1, SWAP2]
+      int_to_ptr [v0] -> v35
+    // v73.*@__fe_Cursor_8 = gep v35 0.i256 0.i256;
+    - stack=[v35, v46, v12, <RET>], last_use=[v35]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v35, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v73
+    // v38.*i256 = gep v73 0.i256 1.i256;
+    - stack=[v73, v46, v12, <RET>], last_use=[v73]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v73, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v38
+    // mstore v38 v12 i256;
+    - stack=[v38, v46, v12, <RET>], last_use=[v12, v38]
+      pre: [SWAP1, SWAP2, SWAP1]
+      mstore [v38, v12]
+    // return v46;
+    - stack=[v46, <RET>]
+      return [v46]
+
+// func public %cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256) -> i256
+  block0 P=[v0] T=[]
+    // v1.*i8 = evm_malloc 64.i256;
+    - stack=[v0, <RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 64 })]
+      evm_malloc [I256 { is_negative: false, abs: 64 }] -> v1
+    // v2.i256 = ptr_to_int v1 i256;
+    - stack=[v1, v0, <RET>]
+      pre: [DUP1]
+      ptr_to_int [v1] -> v2
+    // v10.*@__fe_Cursor_8 = bitcast v1 *@__fe_Cursor_8;
+    - stack=[v2, v1, v0, <RET>]
+      pre: [DUP2]
+      bitcast [v1] -> v10
+    // v4.*@__fe_CallData_7 = gep v10 0.i256 0.i256;
+    - stack=[v10, v2, v1, v0, <RET>], last_use=[v10]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v10, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v4
+    // mstore v4 v0 i256;
+    - stack=[v4, v2, v1, v0, <RET>], last_use=[v0, v4]
+      pre: [SWAP1, SWAP3, SWAP1]
+      mstore [v4, v0]
+    // v11.*@__fe_Cursor_8 = bitcast v1 *@__fe_Cursor_8;
+    - stack=[v1, v2, <RET>], last_use=[v1]
+      bitcast [v1] -> v11
+    // v6.*i256 = gep v11 0.i256 1.i256;
+    - stack=[v11, v2, <RET>], last_use=[v11]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v11, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v6
+    // mstore v6 0.i256 i256;
+    - stack=[v6, v2, <RET>], last_use=[v6]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), SWAP1]
+      mstore [v6, I256 { is_negative: false, abs: 0 }]
+    // return v2;
+    - stack=[v2, <RET>]
+      return [v2]
+
+// func public %cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256, v1.i256) -> i256
+  block0 P=[v0, v1] T=[]
+    // v2.*@__fe_Cursor_8 = int_to_ptr v0 *@__fe_Cursor_8;
+    - stack=[v0, v1, <RET>], last_use=[v0]
+      int_to_ptr [v0] -> v2
+    // v3.*@__fe_CallData_7 = gep v2 0.i256 0.i256;
+    - stack=[v2, v1, <RET>], last_use=[v2]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v2, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v3
+    // v4.i256 = mload v3 i256;
+    - stack=[v3, v1, <RET>], last_use=[v3]
+      mload [v3] -> v4
+    // v5.*i8 = evm_malloc 64.i256;
+    - stack=[v4, v1, <RET>]
+      pre: [PUSH(I256 { is_negative: false, abs: 64 })]
+      evm_malloc [I256 { is_negative: false, abs: 64 }] -> v5
+    // v6.i256 = ptr_to_int v5 i256;
+    - stack=[v5, v4, v1, <RET>]
+      pre: [DUP1]
+      ptr_to_int [v5] -> v6
+    // v14.*@__fe_Cursor_8 = bitcast v5 *@__fe_Cursor_8;
+    - stack=[v6, v5, v4, v1, <RET>]
+      pre: [DUP2]
+      bitcast [v5] -> v14
+    // v8.*@__fe_CallData_7 = gep v14 0.i256 0.i256;
+    - stack=[v14, v6, v5, v4, v1, <RET>], last_use=[v14]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 0 }), SWAP2]
+      gep [v14, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 0 }] -> v8
+    // mstore v8 v4 i256;
+    - stack=[v8, v6, v5, v4, v1, <RET>], last_use=[v4, v8]
+      pre: [SWAP1, SWAP3, SWAP1]
+      mstore [v8, v4]
+    // v15.*@__fe_Cursor_8 = bitcast v5 *@__fe_Cursor_8;
+    - stack=[v5, v6, v1, <RET>], last_use=[v5]
+      bitcast [v5] -> v15
+    // v10.*i256 = gep v15 0.i256 1.i256;
+    - stack=[v15, v6, v1, <RET>], last_use=[v15]
+      pre: [PUSH(I256 { is_negative: false, abs: 0 }), PUSH(I256 { is_negative: false, abs: 1 }), SWAP2]
+      gep [v15, I256 { is_negative: false, abs: 0 }, I256 { is_negative: false, abs: 1 }] -> v10
+    // mstore v10 v1 i256;
+    - stack=[v10, v6, v1, <RET>], last_use=[v1, v10]
+      pre: [SWAP1, SWAP2, SWAP1]
+      mstore [v10, v1]
+    // return v6;
+    - stack=[v6, <RET>]
+      return [v6]
 
 // func private %__Coin_recv_0_0(v0.i256, v1.i256) -> i256
 __Coin_recv_0_0:

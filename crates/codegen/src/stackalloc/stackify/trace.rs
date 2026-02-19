@@ -1,6 +1,10 @@
 use std::{collections::BTreeMap, fmt::Write};
 
-use sonatina_ir::{BlockId, Function, InstId, ValueId};
+use sonatina_ir::{
+    BlockId, Function, InstId, ValueId,
+    ir_writer::{FuncWriteCtx, InstStatement, IrWrite},
+    module::FuncRef,
+};
 
 use crate::bitset::BitSet;
 
@@ -92,11 +96,17 @@ impl StackifyObserver for NullObserver {
 pub(super) struct StackifyTrace {
     out: String,
     action_chunks: Vec<ActionChunk>,
+    inst_chunks: Vec<InstChunk>,
 }
 
 struct ActionChunk {
     placeholder: String,
     actions: crate::stackalloc::Actions,
+}
+
+struct InstChunk {
+    placeholder: String,
+    inst: InstId,
 }
 
 impl StackifyTrace {
@@ -152,6 +162,10 @@ impl StackifyTrace {
             let formatted = fmt_actions(&chunk.actions);
             trace = trace.replace(&chunk.placeholder, &formatted);
         }
+        for chunk in self.inst_chunks {
+            let comment = fmt_inst_comment(func, chunk.inst);
+            trace = trace.replace(&chunk.placeholder, &comment);
+        }
         out.push_str(&trace);
         out
     }
@@ -167,19 +181,34 @@ impl StackifyTrace {
         });
         placeholder
     }
+
+    fn push_inst_placeholder(&mut self, inst: InstId) -> String {
+        let idx = self.inst_chunks.len();
+        let placeholder = format!("@@INST:{idx}@@");
+        self.inst_chunks.push(InstChunk {
+            placeholder: placeholder.clone(),
+            inst,
+        });
+        placeholder
+    }
 }
 
 impl StackifyObserver for StackifyTrace {
-    type Checkpoint = (usize, usize);
+    type Checkpoint = (usize, usize, usize);
 
     fn checkpoint(&mut self) -> Self::Checkpoint {
-        (self.out.len(), self.action_chunks.len())
+        (
+            self.out.len(),
+            self.action_chunks.len(),
+            self.inst_chunks.len(),
+        )
     }
 
     fn rollback(&mut self, checkpoint: Self::Checkpoint) {
-        let (out_len, chunk_len) = checkpoint;
+        let (out_len, action_chunk_len, inst_chunk_len) = checkpoint;
         self.out.truncate(out_len);
-        self.action_chunks.truncate(chunk_len);
+        self.action_chunks.truncate(action_chunk_len);
+        self.inst_chunks.truncate(inst_chunk_len);
     }
 
     fn on_block_header(&mut self, func: &Function, block: BlockId, template: &BlockTemplate) {
@@ -218,12 +247,14 @@ impl StackifyObserver for StackifyTrace {
     fn on_inst_start(
         &mut self,
         func: &Function,
-        _inst: InstId,
+        inst: InstId,
         stack: &SymStack,
         live_future: &BitSet<ValueId>,
         live_out: &BitSet<ValueId>,
         last_use: &BitSet<ValueId>,
     ) {
+        let comment = self.push_inst_placeholder(inst);
+        let _ = writeln!(&mut self.out, "    // {comment}");
         let stack_start = fmt_stack(func, stack, live_future, live_out);
         let last_use_list: Vec<ValueId> = last_use.iter().collect();
         if last_use_list.is_empty() {
@@ -296,6 +327,32 @@ impl StackifyObserver for StackifyTrace {
             let _ = writeln!(&mut self.out, "      {op_name} []");
         }
     }
+}
+
+fn fmt_inst_comment(func: &Function, inst: InstId) -> String {
+    let Some(func_ref) = fallback_func_ref(func) else {
+        return fmt_inst_comment_fallback(func, inst);
+    };
+    let ctx = FuncWriteCtx::new(func, func_ref);
+    let mut bytes = Vec::new();
+    if InstStatement(inst).write(&mut bytes, &ctx).is_ok()
+        && let Ok(comment) = String::from_utf8(bytes)
+    {
+        return comment;
+    }
+    fmt_inst_comment_fallback(func, inst)
+}
+
+fn fallback_func_ref(func: &Function) -> Option<FuncRef> {
+    func.ctx()
+        .declared_funcs
+        .iter()
+        .next()
+        .map(|entry| *entry.key())
+}
+
+fn fmt_inst_comment_fallback(func: &Function, inst: InstId) -> String {
+    format!("{};", func.dfg.inst(inst).as_text())
 }
 
 fn fmt_immediate(imm: sonatina_ir::Immediate) -> String {
