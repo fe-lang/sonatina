@@ -95,6 +95,24 @@ impl StackifyAlloc {
         (alloc, trace)
     }
 
+    /// Same as [`Self::for_function_with_trace`], but canonicalizes values via `value_aliases`
+    /// during stackify planning and tracing.
+    pub fn for_function_with_trace_and_value_aliases(
+        func: &Function,
+        cfg: &ControlFlowGraph,
+        dom: &DomTree,
+        liveness: &Liveness,
+        reach_depth: u8,
+        value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
+    ) -> (Self, String) {
+        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
+            .with_value_aliases(value_aliases);
+        let mut trace = StackifyTrace::default();
+        let alloc = builder.compute_with_observer(&mut trace);
+        let trace = trace.render(func, &alloc);
+        (alloc, trace)
+    }
+
     pub fn for_function_with_trace_call_live_values_and_scratch_spills(
         func: &Function,
         cfg: &ControlFlowGraph,

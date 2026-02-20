@@ -12,6 +12,7 @@ use revm::{
     },
 };
 
+use cranelift_entity::SecondaryMap;
 use sonatina_codegen::{
     domtree::DomTree,
     isa::evm::{EvmBackend, PushWidthPolicy},
@@ -22,11 +23,11 @@ use sonatina_codegen::{
     stackalloc::StackifyAlloc,
 };
 use sonatina_ir::{
-    Function,
+    Function, ValueId,
     cfg::ControlFlowGraph,
     ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite},
     isa::evm::Evm,
-    module::Module,
+    module::{Module, ModuleCtx},
     object::{EmbedSymbol, ObjectName, SectionName},
 };
 use sonatina_parser::{ParsedModule, parse_module};
@@ -183,7 +184,12 @@ fn test_evm(fixture: Fixture<&str>) {
                 let ctx = FuncWriteCtx::with_debug_provider(function, *fref, &parsed.debug);
 
                 if emit_stackify_trace {
-                    let stackify = stackify_trace_for_fn(function, stackify_reach_depth);
+                    let stackify = stackify_trace_for_fn(
+                        function,
+                        &parsed.module.ctx,
+                        &backend,
+                        stackify_reach_depth,
+                    );
                     write!(&mut stackify_out, "// ").unwrap();
                     FunctionSignature.write(&mut stackify_out, &ctx).unwrap();
                     writeln!(&mut stackify_out).unwrap();
@@ -620,20 +626,45 @@ impl<W: Write, DB: revm::Database> revm::Inspector<DB> for TestInspector<W> {
     }
 }
 
-fn stackify_trace_for_fn(function: &Function, stackify_reach_depth: u8) -> String {
+fn stackify_trace_for_fn(
+    function: &Function,
+    module_ctx: &ModuleCtx,
+    backend: &EvmBackend,
+    stackify_reach_depth: u8,
+) -> String {
+    fn canonicalize_alias_value(
+        value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
+        value: ValueId,
+    ) -> ValueId {
+        let mut current = value;
+        loop {
+            let next = value_aliases[current].unwrap_or(current);
+            if next == current {
+                return current;
+            }
+            current = next;
+        }
+    }
+
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
 
+    let value_aliases = backend.compute_stackify_value_aliases(function, module_ctx);
+
     let mut liveness = Liveness::new();
-    liveness.compute(function, &cfg);
+    liveness.compute_with_value_normalizer(function, &cfg, |v| {
+        canonicalize_alias_value(&value_aliases, v)
+    });
     let mut dom = DomTree::new();
     dom.compute(&cfg);
-    let (_alloc, stackify) = StackifyAlloc::for_function_with_trace(
+
+    let (_alloc, stackify) = StackifyAlloc::for_function_with_trace_and_value_aliases(
         function,
         &cfg,
         &dom,
         &liveness,
         stackify_reach_depth,
+        &value_aliases,
     );
     stackify
 }

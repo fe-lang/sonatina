@@ -35,7 +35,7 @@ use sonatina_ir::{
 };
 use sonatina_triple::{EvmVersion, OperatingSystem};
 
-use cranelift_entity::EntityList;
+use cranelift_entity::{EntityList, SecondaryMap};
 use late_alias::compute_evm_late_aliases;
 use mem_effects::compute_func_mem_effects;
 use memory_plan::{
@@ -103,6 +103,16 @@ impl EvmBackend {
 
     pub fn stackify_reach_depth(&self) -> u8 {
         self.stackify_reach_depth
+    }
+
+    pub fn compute_stackify_value_aliases(
+        &self,
+        function: &Function,
+        module: &ModuleCtx,
+    ) -> SecondaryMap<ValueId, Option<ValueId>> {
+        compute_evm_late_aliases(function, module, &self.isa)
+            .map()
+            .clone()
     }
 
     pub fn with_arena_cost_model(mut self, model: ArenaCostModel) -> Self {
@@ -2541,10 +2551,12 @@ fn prepare_stackify_analysis(
     let mut inst_liveness = InstLiveness::new();
     inst_liveness.compute(function, &cfg, &liveness);
 
-    let value_aliases = compute_evm_late_aliases(function, module, &backend.isa);
+    let value_aliases = backend.compute_stackify_value_aliases(function, module);
 
     let mut stack_liveness = Liveness::new();
-    stack_liveness.compute_with_value_normalizer(function, &cfg, |v| value_aliases.rep(v));
+    stack_liveness.compute_with_value_normalizer(function, &cfg, |v| {
+        canonicalize_alias_value(&value_aliases, v)
+    });
 
     let scratch_live_values = scratch_plan::compute_scratch_live_values(
         function,
@@ -2557,7 +2569,7 @@ fn prepare_stackify_analysis(
     let mut canonical_scratch_live_values: crate::bitset::BitSet<ValueId> =
         crate::bitset::BitSet::default();
     for v in scratch_live_values.iter() {
-        canonical_scratch_live_values.insert(value_aliases.rep(v));
+        canonical_scratch_live_values.insert(canonicalize_alias_value(&value_aliases, v));
     }
 
     let alloc =
@@ -2571,13 +2583,27 @@ fn prepare_stackify_analysis(
                 scratch_live_values: canonical_scratch_live_values,
             },
             scratch_plan::SCRATCH_SPILL_SLOTS,
-            value_aliases.map(),
+            &value_aliases,
         );
 
     memory_plan::FuncAnalysis {
         alloc,
         inst_liveness,
         block_order,
+    }
+}
+
+fn canonicalize_alias_value(
+    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
+    value: ValueId,
+) -> ValueId {
+    let mut current = value;
+    loop {
+        let next = value_aliases[current].unwrap_or(current);
+        if next == current {
+            return current;
+        }
+        current = next;
     }
 }
 
