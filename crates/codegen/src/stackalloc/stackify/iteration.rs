@@ -16,6 +16,11 @@ use super::{
     trace::StackifyObserver,
 };
 
+use sonatina_ir::{
+    InstDowncast,
+    inst::{cast, data},
+};
+
 pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
     ctx: &'a StackifyContext<'ctx>,
     spill: SpillSet<'a>,
@@ -262,6 +267,41 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             last_use,
         );
 
+        let res = self
+            .ctx
+            .func
+            .dfg
+            .inst_result(inst)
+            .map(|v| self.ctx.canonicalize_value(v));
+        if is_normal && inst_is_noop_alias_cast(self.ctx, inst, &args, res) {
+            self.observer.on_inst_actions("cleanup", &[], None);
+            self.observer.on_inst_actions("pre", &[], None);
+            self.observer
+                .on_inst_normal(self.ctx.func, inst, &args, res);
+
+            // The instruction is a typed alias-only cast for EVM stackify purposes:
+            // it does not consume or produce stack values, but it still counts as an SSA use.
+            for &v in args.iter() {
+                if !self.ctx.func.dfg.value_is_imm(v)
+                    && let Some(n) = state.remaining_uses.get_mut(&v)
+                {
+                    let before = *n;
+                    *n = n.saturating_sub(1);
+                    if before != 0 && *n == 0 {
+                        state.live_future.remove(v);
+                        if !state.live_out.contains(v) {
+                            self.slots
+                                .scratch
+                                .release_if_assigned(v, &mut state.free_slots.scratch);
+                        }
+                    }
+                }
+            }
+
+            self.observer.on_inst_actions("post", &[], None);
+            return InstOutcome::Continue;
+        }
+
         // Stable cleanup: pop dead values (and dead chains under the top live value).
         let before_cleanup_len = self.alloc.pre_actions[inst].len();
         clean_dead_stack_prefix(
@@ -487,12 +527,6 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             &self.alloc.pre_actions[inst][after_cleanup_len..],
             None,
         );
-        let res = self
-            .ctx
-            .func
-            .dfg
-            .inst_result(inst)
-            .map(|v| self.ctx.canonicalize_value(v));
         self.observer
             .on_inst_normal(self.ctx.func, inst, &args, res);
 
@@ -635,6 +669,28 @@ pub(super) fn operand_order_for_evm(
     inst: InstId,
     value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
 ) -> SmallVec<[ValueId; 8]> {
+    let is = func.inst_set();
+    let data = func.dfg.inst(inst);
+    if let Some(gep) = <&data::Gep as InstDowncast>::downcast(is, data) {
+        let mut args: SmallVec<[ValueId; 8]> = SmallVec::new();
+        let values = gep.values().as_slice();
+        let Some((&base, indices)) = values.split_first() else {
+            panic!("gep without operands");
+        };
+        args.push(value_aliases[base].unwrap_or(base));
+
+        // GEP immediate indices are compile-time metadata for EVM lowering; they do not need to
+        // be materialized as runtime stack operands.
+        args.extend(
+            indices
+                .iter()
+                .copied()
+                .filter(|v| !func.dfg.value_is_imm(*v))
+                .map(|v| value_aliases[v].unwrap_or(v)),
+        );
+        return args;
+    }
+
     // This IR mostly already stores operands in the order expected by the EVM backend
     // (e.g. `mstore addr value`, `gt lhs rhs`, `shl bits value`).
     //
@@ -656,6 +712,26 @@ pub(super) fn operand_order_for_evm(
     }
 
     args
+}
+
+pub(super) fn inst_is_noop_alias_cast(
+    ctx: &super::builder::StackifyContext<'_>,
+    inst: InstId,
+    args: &[ValueId],
+    res: Option<ValueId>,
+) -> bool {
+    let Some(res) = res else {
+        return false;
+    };
+    if args != [res] {
+        return false;
+    }
+
+    let is = ctx.func.inst_set();
+    let data = ctx.func.dfg.inst(inst);
+    <&cast::Bitcast as InstDowncast>::downcast(is, data).is_some()
+        || <&cast::IntToPtr as InstDowncast>::downcast(is, data).is_some()
+        || <&cast::PtrToInt as InstDowncast>::downcast(is, data).is_some()
 }
 
 pub(super) fn last_use_values_in_inst(

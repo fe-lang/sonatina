@@ -1399,11 +1399,12 @@ impl LowerBackend for EvmBackend {
                     panic!("gep without operands");
                 }
 
+                let runtime_args = runtime_gep_operands(ctx, &args);
                 let steps = build_gep_steps(ctx, &args);
 
                 if let Some(addr_bytes) = self.try_fold_gep_static_arena_addr(ctx, &args, &steps) {
-                    perform_actions(ctx, &alloc.read(insn, &args));
-                    for _ in 0..args.len() {
+                    perform_actions(ctx, &alloc.read(insn, runtime_args.as_slice()));
+                    for _ in 0..runtime_args.len() {
                         ctx.push(OpCode::POP);
                     }
                     push_bytes(ctx, &u32_to_be(addr_bytes));
@@ -1411,12 +1412,17 @@ impl LowerBackend for EvmBackend {
                     return;
                 }
 
-                perform_actions(ctx, &alloc.read(insn, &args));
+                perform_actions(ctx, &alloc.read(insn, runtime_args.as_slice()));
                 for step in steps {
                     match step {
-                        GepStep::AddConst(offset_bytes) => {
-                            ctx.push(OpCode::SWAP1);
-                            ctx.push(OpCode::POP);
+                        GepStep::AddConst {
+                            offset_bytes,
+                            consume_index,
+                        } => {
+                            if consume_index {
+                                ctx.push(OpCode::SWAP1);
+                                ctx.push(OpCode::POP);
+                            }
                             if offset_bytes != 0 {
                                 push_bytes(ctx, &u32_to_be(offset_bytes));
                                 ctx.push(OpCode::ADD);
@@ -1861,8 +1867,27 @@ impl Allocator for FinalAlloc {
 
 #[derive(Clone, Copy)]
 enum GepStep {
-    AddConst(u32),
+    AddConst {
+        offset_bytes: u32,
+        consume_index: bool,
+    },
     AddScaled(u32),
+}
+
+fn runtime_gep_operands(ctx: &Lower<OpCode>, args: &[ValueId]) -> SmallVec<[ValueId; 8]> {
+    let Some((&base, indices)) = args.split_first() else {
+        panic!("gep without operands");
+    };
+
+    let mut runtime = SmallVec::<[ValueId; 8]>::new();
+    runtime.push(base);
+    runtime.extend(
+        indices
+            .iter()
+            .copied()
+            .filter(|idx| ctx.value_imm(*idx).is_none()),
+    );
+    runtime
 }
 
 fn build_gep_steps(ctx: &Lower<OpCode>, args: &[ValueId]) -> Vec<GepStep> {
@@ -1902,7 +1927,10 @@ fn build_gep_steps(ctx: &Lower<OpCode>, args: &[ValueId]) -> Vec<GepStep> {
                 };
                 let (field_offset, field_ty) =
                     struct_field_offset_bytes(&s.fields, s.packed, idx, ctx.module);
-                steps.push(GepStep::AddConst(field_offset));
+                steps.push(GepStep::AddConst {
+                    offset_bytes: field_offset,
+                    consume_index: false,
+                });
                 current_ty = field_ty;
             }
             CompoundType::Func { .. } => {
@@ -1917,10 +1945,10 @@ fn build_gep_steps(ctx: &Lower<OpCode>, args: &[ValueId]) -> Vec<GepStep> {
 fn gep_const_offset_bytes(steps: &[GepStep]) -> Option<u32> {
     let mut total: u32 = 0;
     for &step in steps {
-        let GepStep::AddConst(offset) = step else {
+        let GepStep::AddConst { offset_bytes, .. } = step else {
             return None;
         };
-        total = total.checked_add(offset)?;
+        total = total.checked_add(offset_bytes)?;
     }
     Some(total)
 }
@@ -1928,17 +1956,21 @@ fn gep_const_offset_bytes(steps: &[GepStep]) -> Option<u32> {
 fn gep_step(elem_size_bytes: u32, idx: Option<u32>) -> GepStep {
     let Some(idx) = idx else {
         return if elem_size_bytes == 0 {
-            GepStep::AddConst(0)
+            GepStep::AddConst {
+                offset_bytes: 0,
+                consume_index: true,
+            }
         } else {
             GepStep::AddScaled(elem_size_bytes)
         };
     };
 
-    GepStep::AddConst(
-        elem_size_bytes
+    GepStep::AddConst {
+        offset_bytes: elem_size_bytes
             .checked_mul(idx)
             .expect("gep offset overflow"),
-    )
+        consume_index: false,
+    }
 }
 
 fn static_arena_addr_bytes(offset_words: u32) -> u32 {
