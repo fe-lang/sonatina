@@ -369,7 +369,7 @@ fn fmt_immediate(imm: sonatina_ir::Immediate) -> String {
         I32(v) => format!("{v}"),
         I64(v) => format!("{v}"),
         I128(v) => format!("{v}"),
-        I256(v) => format!("{v:?}"),
+        I256(v) => format!("{v}"),
     }
 }
 
