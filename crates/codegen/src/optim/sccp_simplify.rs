@@ -1,7 +1,7 @@
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     Function, Immediate, InstId, Type, Value, ValueId,
-    inst::{arith, cast, cmp, downcast, evm, inst_set::InstSetBase, logic},
+    inst::{arith, cast, cmp, data, downcast, evm, inst_set::InstSetBase, logic},
 };
 
 use super::sccp::LatticeCell;
@@ -173,17 +173,46 @@ fn simplify_commutative_add(
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyResult {
-    let ty = func.dfg.value_ty(lhs);
     let lhs_imm = known_imm(func, lattice, lhs);
     let rhs_imm = known_imm(func, lattice, rhs);
 
-    let zero = Immediate::zero(ty);
+    if lhs_imm.is_some_and(Immediate::is_zero) {
+        return SimplifyResult::Copy(rhs);
+    }
+    if rhs_imm.is_some_and(Immediate::is_zero) {
+        return SimplifyResult::Copy(lhs);
+    }
 
+    let ty = func.dfg.value_ty(lhs);
+    if !ty.is_integral() {
+        return SimplifyResult::NoChange;
+    }
+
+    let zero = Immediate::zero(ty);
     if lhs_imm == Some(zero) {
         return SimplifyResult::Copy(rhs);
     }
     if rhs_imm == Some(zero) {
         return SimplifyResult::Copy(lhs);
+    }
+
+    SimplifyResult::NoChange
+}
+
+fn simplify_gep_all_zero(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    values: &[ValueId],
+) -> SimplifyResult {
+    let Some((&base, indices)) = values.split_first() else {
+        return SimplifyResult::NoChange;
+    };
+
+    if indices
+        .iter()
+        .all(|&idx| known_imm(func, lattice, idx).is_some_and(Immediate::is_zero))
+    {
+        return SimplifyResult::Copy(base);
     }
 
     SimplifyResult::NoChange
@@ -396,6 +425,10 @@ pub(super) fn simplify_inst(
     }
     if let Some(i) = downcast::<&cast::Bitcast>(is, inst) {
         return simplify_redundant_cast(func, *i.from(), *i.ty());
+    }
+
+    if let Some(i) = downcast::<&data::Gep>(is, inst) {
+        return simplify_gep_all_zero(func, lattice, i.values().as_slice());
     }
 
     if let Some(i) = downcast::<&cmp::Eq>(is, inst) {
