@@ -7,9 +7,9 @@ input_file: test_files/evm/coin.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 1139 bytes
-  section runtime: 877 bytes
-  total: 2016 bytes
+  section init: 1131 bytes
+  section runtime: 869 bytes
+  total: 2000 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
@@ -51,7 +51,7 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  deploy: success reason=Return gas_used=254051 gas_refunded=0 logs=0 output=create len=877 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=252335 gas_refunded=0 logs=0 output=create len=869 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   <no evm.case directives>
 
 
@@ -1668,9 +1668,7 @@ __Coin_recv_0_0:
     ADD
     MLOAD  // v9.i256 = mload v8 i256;
     SWAP1  // v10.i1 = is_zero v5;
-    ISZERO
-    ISZERO  // br v10 block1 block2;
-    PUSH1 block2
+    PUSH1 block2  // br v10 block1 block2;
     JUMPI
   block1:
     DUP2  // v15.i256 = evm_sload v1;
@@ -1728,9 +1726,7 @@ __Coin_recv_0_1:
     ADD
     MLOAD  // v9.i256 = mload v8 i256;
     SWAP1  // v10.i1 = is_zero v5;
-    ISZERO
-    ISZERO  // br v10 block1 block2;
-    PUSH1 block2
+    PUSH1 block2  // br v10 block1 block2;
     JUMPI
   block1:
     DUP2  // v15.i256 = evm_sload v1;
@@ -1811,9 +1807,7 @@ __Coin_recv_0_1:
 __Coin_recv_0_2:
   block0:
     JUMPDEST
-    ISZERO  // v3.i1 = is_zero v0;
-    ISZERO  // br v3 block1 block2;
-    PUSH1 block2
+    PUSH1 block2  // br v3 block1 block2;
     JUMPI
   block1:
     SLOAD  // v9.i256 = evm_sload v1;
@@ -2232,9 +2226,7 @@ __Coin_runtime:
 assert:
   block0:
     JUMPDEST
-    ISZERO  // v2.i1 = is_zero v0;
-    ISZERO  // br v2 block1 block2;
-    PUSH1 block2
+    PUSH1 block2  // br v2 block1 block2;
     JUMPI
   block1:
     PUSH0  // evm_revert 0.i256 0.i256;
@@ -2251,9 +2243,7 @@ alloc:
     PUSH1 0x40 (64)  // v3.i256 = mload 64.i256 i256;
     MLOAD
     DUP1  // v4.i1 = is_zero v3;
-    ISZERO
-    ISZERO  // br v4 block1 block5;
-    PUSH1 block5
+    PUSH1 block5  // br v4 block1 block5;
     JUMPI
   block1:
     POP  // v7.i256 = evm_msize;
@@ -2466,9 +2456,7 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     JUMPDEST
     DUP1  // v5.i256 = mload v4 i256;
     MLOAD
-    ISZERO  // v6.i1 = is_zero v5;
-    ISZERO  // br v6 block1 block3;
-    PUSH1 block3
+    PUSH1 block3  // br v6 block1 block3;
     JUMPI
   block1:
     DUP2  // v10.*i8 = evm_malloc v1;

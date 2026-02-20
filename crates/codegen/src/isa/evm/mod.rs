@@ -21,7 +21,7 @@ use crate::{
     liveness::{InstLiveness, Liveness},
     machinst::{
         lower::{FixupUpdate, Lower, LowerBackend, LoweredFunction, SectionLoweringCtx},
-        vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeInst},
+        vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
     },
     stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyLiveValues},
 };
@@ -759,6 +759,31 @@ fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_order: &[Bl
         let mut changed = false;
         let mut i = 0usize;
         while i < insts.len() {
+            // `iszero; iszero; push <label>; jumpi` can use the original condition directly:
+            // JUMPI branches on any non-zero value, so double-negating to canonical {0,1}
+            // is redundant in this specific control-flow shape.
+            if i + 3 < insts.len() {
+                let z0 = insts[i];
+                let z1 = insts[i + 1];
+                let push = insts[i + 2];
+                let jumpi = insts[i + 3];
+                if is_plain_inst(vcode, &label_targets, z0)
+                    && is_plain_inst(vcode, &label_targets, z1)
+                    && is_plain_inst(vcode, &label_targets, jumpi)
+                    && (vcode.insts[z0] as u8) == (OpCode::ISZERO as u8)
+                    && (vcode.insts[z1] as u8) == (OpCode::ISZERO as u8)
+                    && is_push_opcode(vcode.insts[push])
+                    && matches!(vcode.fixups.get(push), Some((_, VCodeFixup::Label(_))))
+                    && (vcode.insts[jumpi] as u8) == (OpCode::JUMPI as u8)
+                {
+                    kept.push(push);
+                    kept.push(jumpi);
+                    changed = true;
+                    i += 4;
+                    continue;
+                }
+            }
+
             // `zext i1 -> i256` lowers to `push 1; and` in EVM codegen.
             // After known bool producers (already in {0,1}), this mask is a no-op.
             if i + 2 < insts.len() {
@@ -2939,6 +2964,56 @@ block0:
         assert_eq!(
             ops,
             vec![OpCode::EQ as u8, OpCode::PUSH1 as u8, OpCode::AND as u8]
+        );
+    }
+
+    #[test]
+    fn prune_removes_iszero_iszero_before_labeled_jumpi() {
+        let mut vcode = VCode::<OpCode>::default();
+        let block = BlockId(0);
+
+        vcode.add_inst_to_block(OpCode::ISZERO, None, block);
+        vcode.add_inst_to_block(OpCode::ISZERO, None, block);
+        let push = vcode.add_inst_to_block(OpCode::PUSH1, None, block);
+        vcode.add_inst_to_block(OpCode::JUMPI, None, block);
+
+        let label = vcode.labels.push(Label::Block(BlockId(1)));
+        vcode.fixups.insert((push, VCodeFixup::Label(label)));
+
+        prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+        let ops: Vec<_> = vcode
+            .block_insns(block)
+            .map(|inst| vcode.insts[inst] as u8)
+            .collect();
+        assert_eq!(ops, vec![OpCode::PUSH1 as u8, OpCode::JUMPI as u8]);
+    }
+
+    #[test]
+    fn prune_keeps_iszero_iszero_before_non_labeled_jumpi() {
+        let mut vcode = VCode::<OpCode>::default();
+        let block = BlockId(0);
+
+        vcode.add_inst_to_block(OpCode::ISZERO, None, block);
+        vcode.add_inst_to_block(OpCode::ISZERO, None, block);
+        let push = vcode.add_inst_to_block(OpCode::PUSH1, None, block);
+        vcode.inst_imm_bytes.insert((push, smallvec![7u8]));
+        vcode.add_inst_to_block(OpCode::JUMPI, None, block);
+
+        prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+        let ops: Vec<_> = vcode
+            .block_insns(block)
+            .map(|inst| vcode.insts[inst] as u8)
+            .collect();
+        assert_eq!(
+            ops,
+            vec![
+                OpCode::ISZERO as u8,
+                OpCode::ISZERO as u8,
+                OpCode::PUSH1 as u8,
+                OpCode::JUMPI as u8
+            ]
         );
     }
 }
