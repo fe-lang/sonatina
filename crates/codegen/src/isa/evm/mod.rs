@@ -1,5 +1,6 @@
 mod heap_plan;
 mod late_alias;
+pub use late_alias::canonicalize_alias_value;
 mod malloc_plan;
 mod mem_effects;
 mod memory_plan;
@@ -2590,20 +2591,6 @@ fn prepare_stackify_analysis(
         alloc,
         inst_liveness,
         block_order,
-    }
-}
-
-fn canonicalize_alias_value(
-    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
-    value: ValueId,
-) -> ValueId {
-    let mut current = value;
-    loop {
-        let next = value_aliases[current].unwrap_or(current);
-        if next == current {
-            return current;
-        }
-        current = next;
     }
 }
 

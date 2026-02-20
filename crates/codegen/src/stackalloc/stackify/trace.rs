@@ -395,9 +395,25 @@ fn fmt_values(func: &Function, values: &[ValueId]) -> String {
 }
 
 fn fmt_trace_operands(func: &Function, inst: InstId, args: &[ValueId]) -> String {
-    if downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)).is_some() {
-        let values = func.dfg.inst(inst).collect_values();
-        return fmt_values(func, &values);
+    if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)) {
+        // Keep the alias-canonicalized runtime operands from `args`, but still surface the
+        // full static GEP index list in the trace by reinserting immediate indices.
+        let mut canonical = args.iter().copied();
+        let mut rendered: Vec<_> = gep
+            .values()
+            .as_slice()
+            .iter()
+            .enumerate()
+            .map(|(i, &idx)| {
+                if i == 0 || !func.dfg.value_is_imm(idx) {
+                    canonical.next().unwrap_or(idx)
+                } else {
+                    idx
+                }
+            })
+            .collect();
+        rendered.extend(canonical);
+        return fmt_values(func, &rendered);
     }
     fmt_values(func, args)
 }

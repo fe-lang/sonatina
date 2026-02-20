@@ -12,10 +12,9 @@ use revm::{
     },
 };
 
-use cranelift_entity::SecondaryMap;
 use sonatina_codegen::{
     domtree::DomTree,
-    isa::evm::{EvmBackend, PushWidthPolicy},
+    isa::evm::{EvmBackend, PushWidthPolicy, canonicalize_alias_value},
     liveness::Liveness,
     machinst::lower::{LowerBackend, SectionLoweringCtx},
     object::{CompileOptions, compile_object},
@@ -23,7 +22,7 @@ use sonatina_codegen::{
     stackalloc::StackifyAlloc,
 };
 use sonatina_ir::{
-    Function, ValueId,
+    Function,
     cfg::ControlFlowGraph,
     ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite},
     isa::evm::Evm,
@@ -632,20 +631,6 @@ fn stackify_trace_for_fn(
     backend: &EvmBackend,
     stackify_reach_depth: u8,
 ) -> String {
-    fn canonicalize_alias_value(
-        value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
-        value: ValueId,
-    ) -> ValueId {
-        let mut current = value;
-        loop {
-            let next = value_aliases[current].unwrap_or(current);
-            if next == current {
-                return current;
-            }
-            current = next;
-        }
-    }
-
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
 

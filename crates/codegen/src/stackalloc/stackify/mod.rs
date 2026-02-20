@@ -46,11 +46,10 @@ mod tests {
     use crate::{
         critical_edge::CriticalEdgeSplitter,
         domtree::DomTree,
-        isa::evm::EvmBackend,
+        isa::evm::{EvmBackend, canonicalize_alias_value},
         liveness::{InstLiveness, Liveness},
     };
-    use cranelift_entity::SecondaryMap;
-    use sonatina_ir::{ValueId, cfg::ControlFlowGraph, isa::evm::Evm};
+    use sonatina_ir::{cfg::ControlFlowGraph, isa::evm::Evm};
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
@@ -123,20 +122,6 @@ mod tests {
 
     #[test]
     fn alias_aware_trace_keeps_noop_casts_action_free() {
-        fn canonicalize_alias_value(
-            value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
-            value: ValueId,
-        ) -> ValueId {
-            let mut current = value;
-            loop {
-                let next = value_aliases[current].unwrap_or(current);
-                if next == current {
-                    return current;
-                }
-                current = next;
-            }
-        }
-
         const SRC: &str = r#"
 target = "evm-ethereum-osaka"
 

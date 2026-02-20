@@ -11,6 +11,20 @@ pub(crate) struct LateValueAliasMap {
     rep_of: SecondaryMap<ValueId, Option<ValueId>>,
 }
 
+pub fn canonicalize_alias_value(
+    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
+    value: ValueId,
+) -> ValueId {
+    let mut current = value;
+    loop {
+        let next = value_aliases[current].unwrap_or(current);
+        if next == current {
+            return current;
+        }
+        current = next;
+    }
+}
+
 impl LateValueAliasMap {
     pub(crate) fn identity(function: &Function) -> Self {
         let mut rep_of: SecondaryMap<ValueId, Option<ValueId>> = SecondaryMap::new();
@@ -21,14 +35,7 @@ impl LateValueAliasMap {
     }
 
     pub(crate) fn rep(&self, value: ValueId) -> ValueId {
-        let mut current = value;
-        loop {
-            let next = self.rep_of[current].unwrap_or(current);
-            if next == current {
-                return current;
-            }
-            current = next;
-        }
+        canonicalize_alias_value(&self.rep_of, value)
     }
 
     pub(crate) fn map(&self) -> &SecondaryMap<ValueId, Option<ValueId>> {
