@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, fmt::Write};
 
 use sonatina_ir::{
     BlockId, Function, InstId, ValueId,
+    inst::{data, downcast},
     ir_writer::{FuncWriteCtx, InstStatement, IrWrite},
     module::FuncRef,
 };
@@ -291,7 +292,11 @@ impl StackifyObserver for StackifyTrace {
         res: Option<ValueId>,
     ) {
         let op_name = func.dfg.inst(inst).as_text();
-        let _ = write!(&mut self.out, "      {op_name} {}", fmt_values(func, args));
+        let _ = write!(
+            &mut self.out,
+            "      {op_name} {}",
+            fmt_trace_operands(func, inst, args)
+        );
         if let Some(r) = res {
             let _ = write!(&mut self.out, " -> {}", fmt_value(func, r));
         }
@@ -387,6 +392,14 @@ fn fmt_values(func: &Function, values: &[ValueId]) -> String {
     }
     s.push(']');
     s
+}
+
+fn fmt_trace_operands(func: &Function, inst: InstId, args: &[ValueId]) -> String {
+    if downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+        let values = func.dfg.inst(inst).collect_values();
+        return fmt_values(func, &values);
+    }
+    fmt_values(func, args)
 }
 
 fn fmt_stack(
