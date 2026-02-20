@@ -144,7 +144,8 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         let injected_prologue = false;
 
         // Track per-block remaining uses to implement `PopDeadTops`.
-        let (remaining_uses, live_future) = count_block_uses(self.ctx.func, block);
+        let (remaining_uses, live_future) =
+            count_block_uses(self.ctx.func, block, &self.ctx.value_aliases);
         let mut live_out = self.ctx.liveness.block_live_outs(block).clone();
         live_out.union_with(&self.ctx.phi_out_sources[block]);
 
@@ -239,7 +240,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         let mut args = SmallVec::<[ValueId; 8]>::new();
         let mut consume_last_use: BitSet<ValueId> = BitSet::default();
         if is_normal {
-            args = operand_order_for_evm(self.ctx.func, inst);
+            args = operand_order_for_evm(self.ctx.func, inst, &self.ctx.value_aliases);
             consume_last_use = last_use_values_in_inst(
                 self.ctx.func,
                 &args,
@@ -325,6 +326,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     // targets are single-predecessor blocks (after critical-edge splitting)
                     // and will run an entry prologue to normalize to their templates.
                     let cond = *br.cond();
+                    let cond = self.ctx.canonicalize_value(cond);
                     let consume_last_use = last_use_values_in_inst(
                         self.ctx.func,
                         &[cond],
@@ -379,6 +381,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     // Build per-case compare actions. As with `br`, we normalize successor entry
                     // stacks in their block prologues, so we keep the current stack order here.
                     let scrutinee = *table.scrutinee();
+                    let scrutinee = self.ctx.canonicalize_value(scrutinee);
 
                     improve_reachability_before_operands(
                         self.ctx.func,
@@ -484,7 +487,12 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             &self.alloc.pre_actions[inst][after_cleanup_len..],
             None,
         );
-        let res = self.ctx.func.dfg.inst_result(inst);
+        let res = self
+            .ctx
+            .func
+            .dfg
+            .inst_result(inst)
+            .map(|v| self.ctx.canonicalize_value(v));
         self.observer
             .on_inst_normal(self.ctx.func, inst, &args, res);
 
@@ -539,6 +547,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
 pub(super) fn count_block_uses(
     func: &Function,
     block: BlockId,
+    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
 ) -> (BTreeMap<ValueId, u32>, BitSet<ValueId>) {
     let mut counts: BTreeMap<ValueId, u32> = BTreeMap::new();
     for inst in func.layout.iter_inst(block) {
@@ -546,6 +555,7 @@ pub(super) fn count_block_uses(
             continue;
         }
         for v in func.dfg.inst(inst).collect_values() {
+            let v = value_aliases[v].unwrap_or(v);
             if func.dfg.value_is_imm(v) {
                 continue;
             }
@@ -620,13 +630,22 @@ pub(super) fn clean_dead_stack_prefix(
     }
 }
 
-pub(super) fn operand_order_for_evm(func: &Function, inst: InstId) -> SmallVec<[ValueId; 8]> {
+pub(super) fn operand_order_for_evm(
+    func: &Function,
+    inst: InstId,
+    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
+) -> SmallVec<[ValueId; 8]> {
     // This IR mostly already stores operands in the order expected by the EVM backend
     // (e.g. `mstore addr value`, `gt lhs rhs`, `shl bits value`).
     //
     // Keeping this as a dedicated hook makes the required operand conventions explicit.
-    let mut args: SmallVec<[ValueId; 8]> =
-        func.dfg.inst(inst).collect_values().into_iter().collect();
+    let mut args: SmallVec<[ValueId; 8]> = func
+        .dfg
+        .inst(inst)
+        .collect_values()
+        .into_iter()
+        .map(|v| value_aliases[v].unwrap_or(v))
+        .collect();
 
     // For internal calls, we want the continuation address to end up directly under the call
     // operands. We arrange the operands as a left rotation so that after the backend pushes the

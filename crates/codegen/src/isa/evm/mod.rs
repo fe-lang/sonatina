@@ -1,4 +1,5 @@
 mod heap_plan;
+mod late_alias;
 mod malloc_plan;
 mod mem_effects;
 mod memory_plan;
@@ -35,6 +36,7 @@ use sonatina_ir::{
 use sonatina_triple::{EvmVersion, OperatingSystem};
 
 use cranelift_entity::EntityList;
+use late_alias::compute_evm_late_aliases;
 use mem_effects::compute_func_mem_effects;
 use memory_plan::{
     ArenaCostModel, CallPreserveChoice, DYN_FP_SLOT, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan,
@@ -2507,6 +2509,11 @@ fn prepare_stackify_analysis(
     let mut inst_liveness = InstLiveness::new();
     inst_liveness.compute(function, &cfg, &liveness);
 
+    let value_aliases = compute_evm_late_aliases(function, module, &backend.isa);
+
+    let mut stack_liveness = Liveness::new();
+    stack_liveness.compute_with_value_normalizer(function, &cfg, |v| value_aliases.rep(v));
+
     let scratch_live_values = scratch_plan::compute_scratch_live_values(
         function,
         module,
@@ -2515,18 +2522,25 @@ fn prepare_stackify_analysis(
         scratch_effects,
         &inst_liveness,
     );
+    let mut canonical_scratch_live_values: crate::bitset::BitSet<ValueId> =
+        crate::bitset::BitSet::default();
+    for v in scratch_live_values.iter() {
+        canonical_scratch_live_values.insert(value_aliases.rep(v));
+    }
 
-    let alloc = StackifyAlloc::for_function_with_call_live_values_and_scratch_spills(
-        function,
-        &cfg,
-        &dom,
-        &liveness,
-        backend.stackify_reach_depth,
-        StackifyLiveValues {
-            scratch_live_values,
-        },
-        scratch_plan::SCRATCH_SPILL_SLOTS,
-    );
+    let alloc =
+        StackifyAlloc::for_function_with_call_live_values_and_scratch_spills_and_value_aliases(
+            function,
+            &cfg,
+            &dom,
+            &stack_liveness,
+            backend.stackify_reach_depth,
+            StackifyLiveValues {
+                scratch_live_values: canonical_scratch_live_values,
+            },
+            scratch_plan::SCRATCH_SPILL_SLOTS,
+            value_aliases.map(),
+        );
 
     memory_plan::FuncAnalysis {
         alloc,

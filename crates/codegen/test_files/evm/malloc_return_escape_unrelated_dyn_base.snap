@@ -6,14 +6,14 @@ input_file: test_files/evm/malloc_return_escape_unrelated_dyn_base.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 64 bytes
-  total: 64 bytes
+  section runtime: 65 bytes
+  total: 65 bytes
 
 functions:
   mem: dyn_base=0x1c0 static_base=0xc0
   big: ir_blocks=1 ir_insts=5 vcode_ops=15 fixups=0 imm_bytes=3
     mem: scheme=StaticArena need_words=8 locals_words=8
-  mk: ir_blocks=1 ir_insts=4 vcode_ops=32 fixups=2 imm_bytes=7
+  mk: ir_blocks=1 ir_insts=4 vcode_ops=33 fixups=2 imm_bytes=7
     mem: scheme=StaticArena need_words=0 locals_words=0
   main: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=2 imm_bytes=0
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -21,7 +21,7 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21225 gas_refunded=0 logs=0 output=call len=32
+  case ok: calldata_len=8 success reason=Return gas_used=21228 gas_refunded=0 logs=0 output=call len=32
 
 
 --------------- DEBUG ---------------
@@ -68,8 +68,9 @@ mk:
     ADD
     PUSH1 0x40 (64)
     MSTORE
+    DUP1  // v1.*i256 = bitcast v0 *i256;
     PUSH1 0x6f (111)  // mstore v1 111.i256 i256;
-    DUP2
+    SWAP1
     MSTORE
     SWAP1  // return v1;
     JUMP

@@ -6,15 +6,15 @@ input_file: test_files/evm/malloc_local_mem_reload.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 102 bytes
-  total: 102 bytes
+  section runtime: 111 bytes
+  total: 111 bytes
 
 functions:
   mem: dyn_base=0xe0 static_base=0xc0
-  main: ir_blocks=1 ir_insts=16 vcode_ops=64 fixups=4 imm_bytes=14
+  main: ir_blocks=1 ir_insts=16 vcode_ops=73 fixups=4 imm_bytes=14
     mem: scheme=StaticArena need_words=1 locals_words=1
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
     mem: scheme=StaticArena need_words=1 locals_words=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21311 gas_refunded=0 logs=0 output=call len=32
+  case ok: calldata_len=8 success reason=Return gas_used=21334 gas_refunded=0 logs=0 output=call len=32

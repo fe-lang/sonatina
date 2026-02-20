@@ -48,6 +48,7 @@ pub(super) struct StackifyBuilder<'a> {
     reach: StackifyReachability,
     scratch_live_values_override: Option<BitSet<ValueId>>,
     scratch_spill_slots: u32,
+    value_aliases_override: Option<&'a SecondaryMap<ValueId, Option<ValueId>>>,
 }
 
 pub(super) struct StackifyContext<'a> {
@@ -65,6 +66,13 @@ pub(super) struct StackifyContext<'a> {
     pub(super) phi_out_sources: SecondaryMap<BlockId, BitSet<ValueId>>,
     pub(super) has_internal_return: bool,
     pub(super) reach: StackifyReachability,
+    pub(super) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
+}
+
+impl StackifyContext<'_> {
+    pub(super) fn canonicalize_value(&self, value: ValueId) -> ValueId {
+        self.value_aliases[value].unwrap_or(value)
+    }
 }
 
 impl<'a> StackifyBuilder<'a> {
@@ -83,6 +91,7 @@ impl<'a> StackifyBuilder<'a> {
             reach: StackifyReachability::new(reach_depth),
             scratch_live_values_override: None,
             scratch_spill_slots: 0,
+            value_aliases_override: None,
         }
     }
 
@@ -93,6 +102,14 @@ impl<'a> StackifyBuilder<'a> {
 
     pub(super) fn with_scratch_spills(mut self, scratch_spill_slots: u32) -> Self {
         self.scratch_spill_slots = scratch_spill_slots;
+        self
+    }
+
+    pub(super) fn with_value_aliases(
+        mut self,
+        value_aliases: &'a SecondaryMap<ValueId, Option<ValueId>>,
+    ) -> Self {
+        self.value_aliases_override = Some(value_aliases);
         self
     }
 
@@ -125,6 +142,16 @@ impl<'a> StackifyBuilder<'a> {
             scratch_live_values
         };
 
+        let value_aliases = if let Some(value_aliases) = self.value_aliases_override {
+            value_aliases.clone()
+        } else {
+            let mut aliases: SecondaryMap<ValueId, Option<ValueId>> = SecondaryMap::new();
+            for value in self.func.dfg.values.keys() {
+                aliases[value] = Some(value);
+            }
+            aliases
+        };
+
         let ctx = StackifyContext {
             func: self.func,
             cfg: self.cfg,
@@ -135,12 +162,13 @@ impl<'a> StackifyBuilder<'a> {
             entry,
             scc,
             dom_depth: compute_dom_depth(self.dom, entry),
-            def_info: compute_def_info(self.func, entry),
-            phi_results: compute_phi_results(self.func),
-            phi_out_sources: compute_phi_out_sources(self.func, self.cfg),
+            def_info: compute_def_info(self.func, entry, &value_aliases),
+            phi_results: compute_phi_results(self.func, &value_aliases),
+            phi_out_sources: compute_phi_out_sources(self.func, self.cfg, &value_aliases),
             // Internal-return functions expect a caller-provided return address below their args.
             has_internal_return: function_has_internal_return(self.func),
             reach: self.reach,
+            value_aliases,
         };
 
         // `spill_set` is discovered via a monotone fixed point:
@@ -178,6 +206,7 @@ impl<'a> StackifyBuilder<'a> {
     ) -> (StackifyAlloc, BitSet<ValueId>) {
         let mut arg_free_slots: FreeSlotPools = FreeSlotPools::default();
         for &arg in ctx.func.arg_values.iter() {
+            let arg = ctx.canonicalize_value(arg);
             if let Some(spilled) = spill.spilled(arg)
                 && ctx.scratch_spill_slots != 0
                 && !ctx.scratch_live_values.contains(arg)
@@ -217,13 +246,11 @@ impl<'a> StackifyBuilder<'a> {
         // Blocks that are reached from multi-way branches inherit a dynamic stack and
         // run an entry normalization prologue (single-pred only; critical edges split).
         let mut inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)> = BTreeMap::new();
-        inherited_stack.insert(
-            ctx.entry,
-            (
-                ctx.entry,
-                SymStack::entry_stack(ctx.func, ctx.has_internal_return),
-            ),
-        );
+        let mut entry_stack = SymStack::entry_stack(ctx.func, ctx.has_internal_return);
+        for (idx, &arg) in ctx.func.arg_values.iter().enumerate() {
+            entry_stack.rename_value_at_depth(idx, ctx.canonicalize_value(arg));
+        }
+        inherited_stack.insert(ctx.entry, (ctx.entry, entry_stack));
 
         let mut planner = IterationPlanner::new(
             ctx,

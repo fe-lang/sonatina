@@ -196,7 +196,8 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
         let mut free_slots: FreeSlotPools = FreeSlotPools::default();
         let mut actions: Actions = Actions::new();
 
-        let (mut remaining_uses, mut live_future) = count_block_uses(ctx.func, block);
+        let (mut remaining_uses, mut live_future) =
+            count_block_uses(ctx.func, block, &ctx.value_aliases);
 
         let mut live_out = ctx.liveness.block_live_outs(block).clone();
         live_out.union_with(&ctx.phi_out_sources[block]);
@@ -219,7 +220,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
             let mut args = SmallVec::<[ValueId; 8]>::new();
             let mut consume_last_use: BitSet<ValueId> = BitSet::default();
             if is_normal {
-                args = operand_order_for_evm(ctx.func, inst);
+                args = operand_order_for_evm(ctx.func, inst, &ctx.value_aliases);
                 consume_last_use =
                     last_use_values_in_inst(ctx.func, &args, &remaining_uses, &live_out);
             }
@@ -251,7 +252,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                         return;
                     }
                     BranchKind::Br(br) => {
-                        let cond = *br.cond();
+                        let cond = ctx.canonicalize_value(*br.cond());
                         let consume_last_use =
                             last_use_values_in_inst(ctx.func, &[cond], &remaining_uses, &live_out);
 
@@ -290,7 +291,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                         return;
                     }
                     BranchKind::BrTable(table) => {
-                        let scrutinee = *table.scrutinee();
+                        let scrutinee = ctx.canonicalize_value(*table.scrutinee());
 
                         improve_reachability_before_operands(
                             ctx.func,
@@ -352,7 +353,11 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                 stack.position_call_ret_below_operands(args.len(), &mut actions);
             }
 
-            let res = ctx.func.dfg.inst_result(inst);
+            let res = ctx
+                .func
+                .dfg
+                .inst_result(inst)
+                .map(|v| ctx.canonicalize_value(v));
 
             for &v in args.iter() {
                 if !ctx.func.dfg.value_is_imm(v)

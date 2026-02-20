@@ -59,6 +59,26 @@ impl StackifyAlloc {
         builder.compute()
     }
 
+    pub fn for_function_with_call_live_values_and_scratch_spills_and_value_aliases(
+        func: &Function,
+        cfg: &ControlFlowGraph,
+        dom: &DomTree,
+        liveness: &Liveness,
+        reach_depth: u8,
+        live_values: StackifyLiveValues,
+        scratch_spill_slots: u32,
+        value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
+    ) -> Self {
+        let StackifyLiveValues {
+            scratch_live_values,
+        } = live_values;
+        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
+            .with_scratch_live_values(scratch_live_values)
+            .with_scratch_spills(scratch_spill_slots)
+            .with_value_aliases(value_aliases);
+        builder.compute()
+    }
+
     /// Compute stack allocation for a single function and return a human-oriented trace of the
     /// planning decisions made during the final fixed-point iteration.
     pub fn for_function_with_trace(
