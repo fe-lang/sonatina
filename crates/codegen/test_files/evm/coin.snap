@@ -1,39 +1,39 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 373
+assertion_line: 372
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/coin.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 1148 bytes
-  section runtime: 886 bytes
-  total: 2034 bytes
+  section init: 1139 bytes
+  section runtime: 877 bytes
+  total: 2016 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
-  __Coin_recv_0_0: ir_blocks=3 ir_insts=29 vcode_ops=58 fixups=1 imm_bytes=6
+  __Coin_recv_0_0: ir_blocks=3 ir_insts=27 vcode_ops=54 fixups=1 imm_bytes=4
     mem: scheme=StaticArena need_words=0 locals_words=0
-  __Coin_recv_0_1: ir_blocks=7 ir_insts=40 vcode_ops=92 fixups=3 imm_bytes=9
+  __Coin_recv_0_1: ir_blocks=7 ir_insts=32 vcode_ops=80 fixups=3 imm_bytes=5
     mem: scheme=StaticArena need_words=0 locals_words=0
-  __Coin_recv_0_2: ir_blocks=3 ir_insts=9 vcode_ops=18 fixups=1 imm_bytes=3
+  __Coin_recv_0_2: ir_blocks=3 ir_insts=7 vcode_ops=14 fixups=1 imm_bytes=1
     mem: scheme=StaticArena need_words=0 locals_words=0
-  __Coin_init: ir_blocks=3 ir_insts=30 vcode_ops=118 fixups=9 imm_bytes=17
+  __Coin_init: ir_blocks=3 ir_insts=27 vcode_ops=114 fixups=9 imm_bytes=16
     mem: scheme=StaticArena need_words=0 locals_words=0
   __Coin_runtime: ir_blocks=9 ir_insts=79 vcode_ops=269 fixups=40 imm_bytes=32
     mem: scheme=StaticArena need_words=0 locals_words=0
-  assert: ir_blocks=3 ir_insts=7 vcode_ops=14 fixups=1 imm_bytes=1
+  assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scheme=StaticArena need_words=0 locals_words=0
-  alloc: ir_blocks=7 ir_insts=21 vcode_ops=41 fixups=4 imm_bytes=6
+  alloc: ir_blocks=7 ir_insts=15 vcode_ops=33 fixups=4 imm_bytes=4
     mem: scheme=StaticArena need_words=0 locals_words=0
-  runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2: ir_blocks=3 ir_insts=10 vcode_ops=23 fixups=1 imm_bytes=3
+  runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2: ir_blocks=3 ir_insts=7 vcode_ops=19 fixups=1 imm_bytes=2
     mem: scheme=StaticArena need_words=0 locals_words=0
   return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f: ir_blocks=1 ir_insts=18 vcode_ops=41 fixups=6 imm_bytes=5
     mem: scheme=StaticArena need_words=0 locals_words=0
   soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=1 ir_insts=41 vcode_ops=99 fixups=4 imm_bytes=20
     mem: scheme=StaticArena need_words=0 locals_words=0
-  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=4 ir_insts=26 vcode_ops=62 fixups=4 imm_bytes=8
+  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=4 ir_insts=23 vcode_ops=58 fixups=4 imm_bytes=7
     mem: scheme=StaticArena need_words=0 locals_words=0
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish: ir_blocks=1 ir_insts=16 vcode_ops=45 fixups=2 imm_bytes=8
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -51,7 +51,7 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  deploy: success reason=Return gas_used=256007 gas_refunded=0 logs=0 output=create len=886 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=254051 gas_refunded=0 logs=0 output=create len=877 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   <no evm.case directives>
 
 
@@ -79,20 +79,13 @@ evm:
     // v7.i256 = mload v6 i256;
     - stack=[v6, v4, v1, <RET>], last_use=[v6]
       mload [v6] -> v7
-    // v33.i1 = is_zero v4;
+    // v8.i1 = is_zero v4;
     - stack=[v7, v4, v1, <RET>], last_use=[v4]
       pre: [SWAP1]
-      is_zero [v4] -> v33
-    // v34.i256 = zext v33 i256;
-    - stack=[v33, v7, v1, <RET>], last_use=[v33]
-      zext [v33] -> v34
-    // v10.i1 = eq 1.i256 v34;
-    - stack=[v34, v7, v1, <RET>], last_use=[v34]
-      pre: [PUSH(1)]
-      eq [1, v34] -> v10
-    // br v10 block1 block2;
-    - stack=[v10, v7, v1, <RET>]
-      br [v10] -> [block1, block2]
+      is_zero [v4] -> v8
+    // br v8 block1 block2;
+    - stack=[v8, v7, v1, <RET>]
+      br [v8] -> [block1, block2]
   block1 P=[] T=[v7, v1]
     inherited from block0: [v7, v1, <RET>]
     // v11.i256 = evm_sload v1;
@@ -192,42 +185,26 @@ evm:
     // v7.i256 = mload v6 i256;
     - stack=[v6, v4, v1, <RET>], last_use=[v6]
       mload [v6] -> v7
-    // v36.i1 = is_zero v4;
+    // v8.i1 = is_zero v4;
     - stack=[v7, v4, v1, <RET>], last_use=[v4]
       pre: [SWAP1]
-      is_zero [v4] -> v36
-    // v37.i256 = zext v36 i256;
-    - stack=[v36, v7, v1, <RET>], last_use=[v36]
-      zext [v36] -> v37
-    // v10.i1 = eq 1.i256 v37;
-    - stack=[v37, v7, v1, <RET>], last_use=[v37]
-      pre: [PUSH(1)]
-      eq [1, v37] -> v10
-    // br v10 block1 block2;
-    - stack=[v10, v7, v1, <RET>]
-      br [v10] -> [block1, block2]
+      is_zero [v4] -> v8
+    // br v8 block1 block2;
+    - stack=[v8, v7, v1, <RET>]
+      br [v8] -> [block1, block2]
   block1 P=[] T=[v7, v1]
     inherited from block0: [v7, v1, <RET>]
     // v11.i256 = evm_sload v1;
     - stack=[v7, v1, <RET>]
       pre: [DUP2]
       evm_sload [v1] -> v11
-    // v39.i1 = lt v11 v7;
+    // v12.i1 = lt v11 v7;
     - stack=[v11, v7, v1, <RET>], last_use=[v11]
       pre: [DUP2, SWAP1]
-      lt [v11, v7] -> v39
-    // v40.i256 = zext v39 i256;
-    - stack=[v39, v7, v1, <RET>], last_use=[v39]
-      zext [v39] -> v40
-    // v41.i1 = is_zero v40;
-    - stack=[v40, v7, v1, <RET>], last_use=[v40]
-      is_zero [v40] -> v41
-    // v14.i1 = is_zero v41;
-    - stack=[v41, v7, v1, <RET>], last_use=[v41]
-      is_zero [v41] -> v14
-    // br v14 block3 block4;
-    - stack=[v14, v7, v1, <RET>]
-      br [v14] -> [block3, block4]
+      lt [v11, v7] -> v12
+    // br v12 block3 block4;
+    - stack=[v12, v7, v1, <RET>]
+      br [v12] -> [block3, block4]
   block3 P=[] T=[]
     inherited from block1: [v7x, v1x, <RET>]
     // return 1.i256;
@@ -279,22 +256,13 @@ evm:
     - stack=[v15, v7, v1, <RET>]
       pre: [DUP1]
       evm_sload [v15] -> v16
-    // v43.i1 = lt v16 v7;
+    // v17.i1 = lt v16 v7;
     - stack=[v16, v15, v7, v1, <RET>], last_use=[v16]
       pre: [DUP3, SWAP1]
-      lt [v16, v7] -> v43
-    // v44.i256 = zext v43 i256;
-    - stack=[v43, v15, v7, v1, <RET>], last_use=[v43]
-      zext [v43] -> v44
-    // v45.i1 = is_zero v44;
-    - stack=[v44, v15, v7, v1, <RET>], last_use=[v44]
-      is_zero [v44] -> v45
-    // v19.i1 = is_zero v45;
-    - stack=[v45, v15, v7, v1, <RET>], last_use=[v45]
-      is_zero [v45] -> v19
-    // br v19 block5 block6;
-    - stack=[v19, v15, v7, v1, <RET>]
-      br [v19] -> [block5, block6]
+      lt [v16, v7] -> v17
+    // br v17 block5 block6;
+    - stack=[v17, v15, v7, v1, <RET>]
+      br [v17] -> [block5, block6]
   block5 P=[] T=[]
     inherited from block2: [v15x, v7x, v1x, <RET>]
     // return 1.i256;
@@ -334,19 +302,12 @@ evm:
 
 // func private %__Coin_recv_0_2(v0.i256, v1.i256) -> i256
   block0 P=[v0, v1] T=[]
-    // v12.i1 = is_zero v0;
+    // v2.i1 = is_zero v0;
     - stack=[v0, v1, <RET>], last_use=[v0]
-      is_zero [v0] -> v12
-    // v13.i256 = zext v12 i256;
-    - stack=[v12, v1, <RET>], last_use=[v12]
-      zext [v12] -> v13
-    // v4.i1 = eq 1.i256 v13;
-    - stack=[v13, v1, <RET>], last_use=[v13]
-      pre: [PUSH(1)]
-      eq [1, v13] -> v4
-    // br v4 block1 block2;
-    - stack=[v4, v1, <RET>]
-      br [v4] -> [block1, block2]
+      is_zero [v0] -> v2
+    // br v2 block1 block2;
+    - stack=[v2, v1, <RET>]
+      br [v2] -> [block1, block2]
   block1 P=[] T=[v1]
     inherited from block0: [v1, <RET>]
     // v5.i256 = evm_sload v1;
@@ -383,26 +344,17 @@ evm:
     - stack=[v3, v2, v1]
       pre: [DUP2, DUP4]
       add [v1, v2] -> v5
-    // v37.i256 = add v1 v2;
+    // v34.i256 = add v1 v2;
     - stack=[v5, v3, v2, v1]
       pre: [DUP3, DUP5]
-      add [v1, v2] -> v37
-    // v38.i1 = lt v3 v37;
-    - stack=[v37, v5, v3, v2, v1], last_use=[v37]
+      add [v1, v2] -> v34
+    // v6.i1 = lt v3 v34;
+    - stack=[v34, v5, v3, v2, v1], last_use=[v34]
       pre: [DUP3]
-      lt [v3, v37] -> v38
-    // v39.i256 = zext v38 i256;
-    - stack=[v38, v5, v3, v2, v1], last_use=[v38]
-      zext [v38] -> v39
-    // v40.i1 = is_zero v39;
-    - stack=[v39, v5, v3, v2, v1], last_use=[v39]
-      is_zero [v39] -> v40
-    // v8.i1 = is_zero v40;
-    - stack=[v40, v5, v3, v2, v1], last_use=[v40]
-      is_zero [v40] -> v8
-    // br v8 block1 block2;
-    - stack=[v8, v5, v3, v2, v1]
-      br [v8] -> [block1, block2]
+      lt [v3, v34] -> v6
+    // br v6 block1 block2;
+    - stack=[v6, v5, v3, v2, v1]
+      br [v6] -> [block1, block2]
   block1 P=[] T=[]
     inherited from block0: [v5x, v3x, v2x, v1x]
     // evm_revert 0.i256 0.i256;
@@ -412,14 +364,14 @@ evm:
       evm_revert [0, 0]
   block2 P=[] T=[v5, v3, v2, v1]
     inherited from block0: [v5, v3, v2, v1]
-    // v41.i256 = add v1 v2;
+    // v35.i256 = add v1 v2;
     - stack=[v5, v3, v2, v1]
       pre: [DUP3, DUP5]
-      add [v1, v2] -> v41
-    // v13.i256 = sub v3 v41;
-    - stack=[v41, v5, v3, v2, v1], last_use=[v3, v41]
+      add [v1, v2] -> v35
+    // v13.i256 = sub v3 v35;
+    - stack=[v35, v5, v3, v2, v1], last_use=[v3, v35]
       pre: [SWAP1, SWAP2]
-      sub [v3, v41] -> v13
+      sub [v3, v35] -> v13
     // v14.*i8 = evm_malloc v13;
     - stack=[v13, v5, v2, v1]
       pre: [DUP1]
@@ -438,20 +390,20 @@ evm:
     // v20.i256 = ptr_to_int v19 i256;
     - stack=[v19, v13, v14, v2, v1]
       ptr_to_int [v19] -> v19
-    // v42.*@__fe_MemoryBytes_2 = bitcast v19 *@__fe_MemoryBytes_2;
+    // v36.*@__fe_MemoryBytes_2 = bitcast v19 *@__fe_MemoryBytes_2;
     - stack=[v19, v13, v14, v2, v1]
       bitcast [v19] -> v19
-    // v22.*i256 = bitcast v42 *i256;
+    // v22.*i256 = bitcast v36 *i256;
     - stack=[v19, v13, v14, v2, v1]
       bitcast [v19] -> v19
     // mstore v22 v15 i256;
     - stack=[v19, v13, v14, v2, v1], last_use=[v14]
       pre: [SWAP2, DUP3]
       mstore [v19, v14]
-    // v43.*@__fe_MemoryBytes_2 = bitcast v19 *@__fe_MemoryBytes_2;
+    // v37.*@__fe_MemoryBytes_2 = bitcast v19 *@__fe_MemoryBytes_2;
     - stack=[v13, v19, v2, v1]
       bitcast [v19] -> v19
-    // v26.*i256 = gep v43 0.i256 1.i256;
+    // v26.*i256 = gep v37 0.i256 1.i256;
     - stack=[v13, v19, v2, v1]
       pre: [DUP2]
       gep [v19, 0, 1] -> v26
@@ -786,21 +738,12 @@ evm:
 
 // func public %assert(v0.i256)
   block0 P=[v0] T=[]
-    // v6.i1 = is_zero v0;
+    // v1.i1 = is_zero v0;
     - stack=[v0, <RET>], last_use=[v0]
-      is_zero [v0] -> v6
-    // v7.i256 = zext v6 i256;
-    - stack=[v6, <RET>], last_use=[v6]
-      zext [v6] -> v7
-    // v8.i1 = is_zero v7;
-    - stack=[v7, <RET>], last_use=[v7]
-      is_zero [v7] -> v8
-    // v3.i1 = is_zero v8;
-    - stack=[v8, <RET>], last_use=[v8]
-      is_zero [v8] -> v3
-    // br v3 block1 block2;
-    - stack=[v3, <RET>]
-      br [v3] -> [block1, block2]
+      is_zero [v0] -> v1
+    // br v1 block1 block2;
+    - stack=[v1, <RET>]
+      br [v1] -> [block1, block2]
   block1 P=[] T=[]
     inherited from block0: [<RET>]
     // evm_revert 0.i256 0.i256;
@@ -819,22 +762,13 @@ evm:
     - stack=[v0, <RET>]
       pre: [PUSH(64)]
       mload [64] -> v1
-    // v16.i1 = is_zero v1;
+    // v2.i1 = is_zero v1;
     - stack=[v1, v0, <RET>]
       pre: [DUP1]
-      is_zero [v1] -> v16
-    // v17.i256 = zext v16 i256;
-    - stack=[v16, v1, v0, <RET>], last_use=[v16]
-      zext [v16] -> v17
-    // v18.i1 = is_zero v17;
-    - stack=[v17, v1, v0, <RET>], last_use=[v17]
-      is_zero [v17] -> v18
-    // v4.i1 = is_zero v18;
-    - stack=[v18, v1, v0, <RET>], last_use=[v18]
-      is_zero [v18] -> v4
-    // br v4 block1 block5;
-    - stack=[v4, v1, v0, <RET>]
-      br [v4] -> [block1, block5]
+      is_zero [v1] -> v2
+    // br v2 block1 block5;
+    - stack=[v2, v1, v0, <RET>]
+      br [v2] -> [block1, block5]
   block1 P=[] T=[v0]
     inherited from block0: [v1x, v0, <RET>]
     // v5.i256 = evm_msize;
@@ -850,22 +784,13 @@ evm:
     - stack=[v1, v0, <RET>]
       jump -> block2
   block2 P=[v6] T=[v0]
-    // v20.i1 = lt v6 8192.i256;
+    // v7.i1 = lt v6 8192.i256;
     - stack=[v6, v0, <RET>]
       pre: [PUSH(8192), DUP2]
-      lt [v6, 8192] -> v20
-    // v21.i256 = zext v20 i256;
-    - stack=[v20, v6, v0, <RET>], last_use=[v20]
-      zext [v20] -> v21
-    // v22.i1 = is_zero v21;
-    - stack=[v21, v6, v0, <RET>], last_use=[v21]
-      is_zero [v21] -> v22
-    // v9.i1 = is_zero v22;
-    - stack=[v22, v6, v0, <RET>], last_use=[v22]
-      is_zero [v22] -> v9
-    // br v9 block3 block6;
-    - stack=[v9, v6, v0, <RET>]
-      br [v9] -> [block3, block6]
+      lt [v6, 8192] -> v7
+    // br v7 block3 block6;
+    - stack=[v7, v6, v0, <RET>]
+      br [v7] -> [block3, block6]
   block3 P=[] T=[v0]
     inherited from block2: [v6x, v0, <RET>]
     // jump block4;
@@ -897,22 +822,13 @@ evm:
     - stack=[v0x, <RET>]
       cleanup: [POP]
       evm_calldata_size [] -> v10
-    // v19.i1 = lt v10 4.i256;
+    // v3.i1 = lt v10 4.i256;
     - stack=[v10, <RET>], last_use=[v10]
       pre: [PUSH(4), SWAP1]
-      lt [v10, 4] -> v19
-    // v20.i256 = zext v19 i256;
-    - stack=[v19, <RET>], last_use=[v19]
-      zext [v19] -> v20
-    // v21.i1 = is_zero v20;
-    - stack=[v20, <RET>], last_use=[v20]
-      is_zero [v20] -> v21
-    // v5.i1 = is_zero v21;
-    - stack=[v21, <RET>], last_use=[v21]
-      is_zero [v21] -> v5
-    // br v5 block1 block2;
-    - stack=[v5, <RET>]
-      br [v5] -> [block1, block2]
+      lt [v10, 4] -> v3
+    // br v3 block1 block2;
+    - stack=[v3, <RET>]
+      br [v3] -> [block1, block2]
   block1 P=[] T=[]
     inherited from block0: [<RET>]
     // evm_revert 0.i256 0.i256;
@@ -1156,21 +1072,12 @@ evm:
     - stack=[v0, v1, <RET>]
       pre: [DUP1]
       mload [v0] -> v4
-    // v24.i1 = is_zero v4;
+    // v5.i1 = is_zero v4;
     - stack=[v4, v0, v1, <RET>], last_use=[v4]
-      is_zero [v4] -> v24
-    // v25.i256 = zext v24 i256;
-    - stack=[v24, v0, v1, <RET>], last_use=[v24]
-      zext [v24] -> v25
-    // v26.i1 = is_zero v25;
-    - stack=[v25, v0, v1, <RET>], last_use=[v25]
-      is_zero [v25] -> v26
-    // v7.i1 = is_zero v26;
-    - stack=[v26, v0, v1, <RET>], last_use=[v26]
-      is_zero [v26] -> v7
-    // br v7 block1 block3;
-    - stack=[v7, v0, v1, <RET>]
-      br [v7] -> [block1, block3]
+      is_zero [v4] -> v5
+    // br v5 block1 block3;
+    - stack=[v5, v0, v1, <RET>]
+      br [v5] -> [block1, block3]
   block1 P=[] T=[v0, v1]
     inherited from block0: [v0, v1, <RET>]
     // v8.*i8 = evm_malloc v1;
@@ -1760,11 +1667,9 @@ __Coin_recv_0_0:
     PUSH1 0x20 (32)
     ADD
     MLOAD  // v9.i256 = mload v8 i256;
-    SWAP1  // v33.i1 = is_zero v5;
+    SWAP1  // v10.i1 = is_zero v5;
     ISZERO
-    PUSH1 0x1 (1)  // v12.i1 = eq 1.i256 v34;
-    EQ
-    ISZERO  // br v12 block1 block2;
+    ISZERO  // br v10 block1 block2;
     PUSH1 block2
     JUMPI
   block1:
@@ -1822,21 +1727,19 @@ __Coin_recv_0_1:
     PUSH1 0x20 (32)
     ADD
     MLOAD  // v9.i256 = mload v8 i256;
-    SWAP1  // v36.i1 = is_zero v5;
+    SWAP1  // v10.i1 = is_zero v5;
     ISZERO
-    PUSH1 0x1 (1)  // v12.i1 = eq 1.i256 v37;
-    EQ
-    ISZERO  // br v12 block1 block2;
+    ISZERO  // br v10 block1 block2;
     PUSH1 block2
     JUMPI
   block1:
     DUP2  // v15.i256 = evm_sload v1;
     SLOAD
-    DUP2  // v39.i1 = lt v15 v9;
+    DUP2  // v17.i1 = lt v15 v9;
     SWAP1
     LT
-    ISZERO  // v41.i1 = is_zero v40;
-    PUSH1 block4  // br v19 block3 block4;
+    ISZERO  // br v17 block3 block4;
+    PUSH1 block4
     JUMPI
   block2:
     JUMPDEST
@@ -1845,11 +1748,11 @@ __Coin_recv_0_1:
     ADD
     DUP1  // v22.i256 = evm_sload v21;
     SLOAD
-    DUP3  // v43.i1 = lt v22 v9;
+    DUP3  // v24.i1 = lt v22 v9;
     SWAP1
     LT
-    ISZERO  // v45.i1 = is_zero v44;
-    PUSH1 block6  // br v26 block5 block6;
+    ISZERO  // br v24 block5 block6;
+    PUSH1 block6
     JUMPI
   block3:
     POP  // return 1.i256;
@@ -1908,10 +1811,8 @@ __Coin_recv_0_1:
 __Coin_recv_0_2:
   block0:
     JUMPDEST
-    ISZERO  // v12.i1 = is_zero v0;
-    PUSH1 0x1 (1)  // v6.i1 = eq 1.i256 v13;
-    EQ
-    ISZERO  // br v6 block1 block2;
+    ISZERO  // v3.i1 = is_zero v0;
+    ISZERO  // br v3 block1 block2;
     PUSH1 block2
     JUMPI
   block1:
@@ -1936,13 +1837,13 @@ __Coin_init:
     DUP2  // v6.i256 = add v2 v3;
     DUP4
     ADD
-    DUP3  // v37.i256 = add v2 v3;
+    DUP3  // v34.i256 = add v2 v3;
     DUP5
     ADD
-    DUP3  // v38.i1 = lt v4 v37;
+    DUP3  // v7.i1 = lt v4 v34;
     LT
-    ISZERO  // v40.i1 = is_zero v39;
-    PUSH1 block2  // br v9 block1 block2;
+    ISZERO  // br v7 block1 block2;
+    PUSH1 block2
     JUMPI
   block1:
     POP  // evm_revert 0.i256 0.i256;
@@ -1954,10 +1855,10 @@ __Coin_init:
     REVERT
   block2:
     JUMPDEST
-    DUP3  // v41.i256 = add v2 v3;
+    DUP3  // v35.i256 = add v2 v3;
     DUP5
     ADD
-    SWAP1  // v17.i256 = sub v4 v41;
+    SWAP1  // v17.i256 = sub v4 v35;
     SWAP2
     SUB
     DUP1  // v18.*i8 = evm_malloc v17;
@@ -2020,7 +1921,7 @@ __Coin_init:
     SWAP2  // mstore v27 v19 i256;
     DUP3
     MSTORE
-    DUP2  // v32.*i256 = gep v43 0.i256 1.i256;
+    DUP2  // v32.*i256 = gep v37 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
     MSTORE  // mstore v32 v17 i256;
@@ -2331,9 +2232,9 @@ __Coin_runtime:
 assert:
   block0:
     JUMPDEST
-    ISZERO  // v6.i1 = is_zero v0;
-    ISZERO  // v8.i1 = is_zero v7;
-    PUSH1 block2  // br v4 block1 block2;
+    ISZERO  // v2.i1 = is_zero v0;
+    ISZERO  // br v2 block1 block2;
+    PUSH1 block2
     JUMPI
   block1:
     PUSH0  // evm_revert 0.i256 0.i256;
@@ -2349,10 +2250,10 @@ alloc:
     JUMPDEST
     PUSH1 0x40 (64)  // v3.i256 = mload 64.i256 i256;
     MLOAD
-    DUP1  // v16.i1 = is_zero v3;
+    DUP1  // v4.i1 = is_zero v3;
     ISZERO
-    ISZERO  // v18.i1 = is_zero v17;
-    PUSH1 block5  // br v6 block1 block5;
+    ISZERO  // br v4 block1 block5;
+    PUSH1 block5
     JUMPI
   block1:
     POP  // v7.i256 = evm_msize;
@@ -2361,11 +2262,11 @@ alloc:
     JUMP
   block2:
     JUMPDEST
-    PUSH2 0x2000 (8192)  // v20.i1 = lt v8 8192.i256;
+    PUSH2 0x2000 (8192)  // v10.i1 = lt v8 8192.i256;
     DUP2
     LT
-    ISZERO  // v22.i1 = is_zero v21;
-    PUSH1 block6  // br v12 block3 block6;
+    ISZERO  // br v10 block3 block6;
+    PUSH1 block6
     JUMPI
   block3:
     POP  // jump block4;
@@ -2392,11 +2293,11 @@ runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2:
     JUMPDEST
     POP  // v10.i256 = evm_calldata_size;
     CALLDATASIZE
-    PUSH1 0x4 (4)  // v19.i1 = lt v10 4.i256;
+    PUSH1 0x4 (4)  // v5.i1 = lt v10 4.i256;
     SWAP1
     LT
-    ISZERO  // v21.i1 = is_zero v20;
-    PUSH1 block2  // br v7 block1 block2;
+    ISZERO  // br v5 block1 block2;
+    PUSH1 block2
     JUMPI
   block1:
     PUSH0  // evm_revert 0.i256 0.i256;
@@ -2565,9 +2466,9 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     JUMPDEST
     DUP1  // v5.i256 = mload v4 i256;
     MLOAD
-    ISZERO  // v24.i1 = is_zero v5;
-    ISZERO  // v26.i1 = is_zero v25;
-    PUSH1 block3  // br v8 block1 block3;
+    ISZERO  // v6.i1 = is_zero v5;
+    ISZERO  // br v6 block1 block3;
+    PUSH1 block3
     JUMPI
   block1:
     DUP2  // v10.*i8 = evm_malloc v1;
