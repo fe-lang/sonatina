@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 367
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/malloc_return_escape_clobber_bug.sntn
 ---
@@ -14,7 +13,7 @@ functions:
   mem: dyn_base=0x1c0 static_base=0xc0
   big: ir_blocks=1 ir_insts=5 vcode_ops=10 fixups=0 imm_bytes=3
     mem: scheme=StaticArena need_words=8 locals_words=8
-  mk: ir_blocks=1 ir_insts=4 vcode_ops=32 fixups=2 imm_bytes=7
+  mk: ir_blocks=1 ir_insts=4 vcode_ops=30 fixups=2 imm_bytes=8
     mem: scheme=StaticArena need_words=0 locals_words=0
   main: ir_blocks=1 ir_insts=4 vcode_ops=13 fixups=4 imm_bytes=0
     mem: scheme=StaticArena need_words=8 locals_words=0
@@ -22,4 +21,4 @@ functions:
     mem: scheme=StaticArena need_words=8 locals_words=0
 
 evm:
-  case bug_demo: calldata_len=8 success reason=Return gas_used=21298 gas_refunded=0 logs=0 output=call len=32
+  case bug_demo: calldata_len=8 success reason=Return gas_used=21305 gas_refunded=0 logs=0 output=call len=32

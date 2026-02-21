@@ -2319,6 +2319,30 @@ fn emit_max_top_two(ctx: &mut Lower<OpCode>) {
     ctx.add_label_reference(end_push, Label::Insn(end));
 }
 
+fn emit_max_top_with_const(ctx: &mut Lower<OpCode>, constant: &[u8]) {
+    // Stack: [..., x]
+    // Result: [..., max(x, constant)]
+    push_bytes(ctx, constant);
+    ctx.push(OpCode::DUP2);
+    ctx.push(OpCode::GT);
+
+    let keep_x_push = ctx.push(OpCode::PUSH1);
+    ctx.push(OpCode::JUMPI);
+
+    // x <= constant: replace x with constant.
+    ctx.push(OpCode::POP);
+    push_bytes(ctx, constant);
+    let end_push = ctx.push(OpCode::PUSH1);
+    ctx.push(OpCode::JUMP);
+
+    // x > constant: keep x.
+    let keep_x = ctx.push(OpCode::JUMPDEST);
+    ctx.add_label_reference(keep_x_push, Label::Insn(keep_x));
+
+    let end = ctx.push(OpCode::JUMPDEST);
+    ctx.add_label_reference(end_push, Label::Insn(end));
+}
+
 fn emit_malloc_base(ctx: &mut Lower<OpCode>, min_base_bytes: u32, needs_dyn_sp_clamp: bool) {
     // heap_end = mload(0x40)
     push_bytes(ctx, &[FREE_PTR_SLOT]);
@@ -2332,8 +2356,8 @@ fn emit_malloc_base(ctx: &mut Lower<OpCode>, min_base_bytes: u32, needs_dyn_sp_c
     }
 
     // max(base, min_base)
-    push_bytes(ctx, &u32_to_be(min_base_bytes));
-    emit_max_top_two(ctx);
+    let min_base = u32_to_be(min_base_bytes);
+    emit_max_top_with_const(ctx, &min_base);
 }
 
 fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {

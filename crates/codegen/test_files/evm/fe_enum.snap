@@ -6,16 +6,16 @@ input_file: test_files/evm/fe_enum.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 106 bytes
-  total: 106 bytes
+  section runtime: 105 bytes
+  total: 105 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
   abi_encode_u256: ir_blocks=1 ir_insts=2 vcode_ops=8 fixups=0 imm_bytes=1
     mem: scheme=StaticArena need_words=0 locals_words=0
-  runtime__StorPtr_Evm___207f35a85ac4062e: ir_blocks=9 ir_insts=24 vcode_ops=76 fixups=8 imm_bytes=10
+  runtime__StorPtr_Evm___207f35a85ac4062e: ir_blocks=9 ir_insts=24 vcode_ops=74 fixups=8 imm_bytes=11
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case ok: calldata_len=36 success reason=Return gas_used=21430 gas_refunded=0 logs=0 output=call len=32
+  case ok: calldata_len=36 success reason=Return gas_used=21437 gas_refunded=0 logs=0 output=call len=32
   case fallback: calldata_len=4 success reason=Return gas_used=21055 gas_refunded=0 logs=0 output=call len=0

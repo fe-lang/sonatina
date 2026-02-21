@@ -17,10 +17,10 @@ struct OperandPrepMetric {
     spill_requests: usize,
     /// Number of frame-slot loads emitted by operand preparation (preferred to minimize).
     mem_loads: usize,
-    /// Number of `SWAP*` actions emitted by operand preparation (preferred to minimize).
-    swaps: usize,
-    /// Total actions emitted by operand preparation (tie-breaker).
+    /// Total actions emitted by operand preparation (preferred to minimize).
     actions: usize,
+    /// Number of `SWAP*` actions emitted by operand preparation (tie-breaker).
+    swaps: usize,
 }
 
 struct SearchOperandPrepPlan {
@@ -199,8 +199,8 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         let metric0 = OperandPrepMetric {
             spill_requests: 0,
             mem_loads: 0,
-            swaps: 0,
             actions: 0,
+            swaps: 0,
         };
 
         fn is_goal(
@@ -300,42 +300,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 });
             }
 
-            // Neighbors: SWAP*, then DUP* for non-last-use operands, then PUSH for immediates.
-            let max_swap = self
-                .ctx
-                .reach
-                .swap_max
-                .saturating_sub(1)
-                .min(item.state.len().saturating_sub(1));
-            for k in 1..=max_swap {
-                let mut next_state = item.state.clone();
-                next_state.swap(0, k);
-
-                let next_metric = OperandPrepMetric {
-                    swaps: item.metric.swaps + 1,
-                    actions: item.metric.actions + 1,
-                    ..item.metric
-                };
-
-                let update = best
-                    .get(&next_state)
-                    .map(|m| next_metric < *m)
-                    .unwrap_or(true);
-                if update {
-                    best.insert(next_state.clone(), next_metric);
-                    prev.insert(
-                        next_state.clone(),
-                        (item.state.clone(), Action::StackSwap(k as u8)),
-                    );
-                    heap.push(HeapItem {
-                        metric: next_metric,
-                        id: next_id,
-                        state: next_state,
-                    });
-                    next_id += 1;
-                }
-            }
-
+            // Neighbors: DUP* for non-last-use operands, PUSH for immediates, then SWAP*.
             for (&v, req) in &requirements {
                 let current_copies = item
                     .state
@@ -403,6 +368,41 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                         });
                         next_id += 1;
                     }
+                }
+            }
+
+            let max_swap = self
+                .ctx
+                .reach
+                .swap_max
+                .saturating_sub(1)
+                .min(item.state.len().saturating_sub(1));
+            for k in 1..=max_swap {
+                let mut next_state = item.state.clone();
+                next_state.swap(0, k);
+
+                let next_metric = OperandPrepMetric {
+                    actions: item.metric.actions + 1,
+                    swaps: item.metric.swaps + 1,
+                    ..item.metric
+                };
+
+                let update = best
+                    .get(&next_state)
+                    .map(|m| next_metric < *m)
+                    .unwrap_or(true);
+                if update {
+                    best.insert(next_state.clone(), next_metric);
+                    prev.insert(
+                        next_state.clone(),
+                        (item.state.clone(), Action::StackSwap(k as u8)),
+                    );
+                    heap.push(HeapItem {
+                        metric: next_metric,
+                        id: next_id,
+                        state: next_state,
+                    });
+                    next_id += 1;
                 }
             }
         }
@@ -487,8 +487,8 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 .len()
                 .saturating_sub(before_spill_requests),
             mem_loads,
-            swaps,
             actions: sim_actions.len(),
+            swaps,
         }
     }
 

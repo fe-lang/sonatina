@@ -1,21 +1,20 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 367
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/malloc_int_escape_arith_bug.sntn
 ---
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 89 bytes
-  total: 89 bytes
+  section runtime: 87 bytes
+  total: 87 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
-  main: ir_blocks=1 ir_insts=14 vcode_ops=60 fixups=4 imm_bytes=12
+  main: ir_blocks=1 ir_insts=14 vcode_ops=56 fixups=4 imm_bytes=14
     mem: scheme=StaticArena need_words=0 locals_words=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case bug_demo: calldata_len=8 success reason=Return gas_used=21281 gas_refunded=0 logs=0 output=call len=32
+  case bug_demo: calldata_len=8 success reason=Return gas_used=21273 gas_refunded=0 logs=0 output=call len=32
