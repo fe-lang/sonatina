@@ -1615,18 +1615,21 @@ impl LowerBackend for EvmBackend {
                     )
                     .expect("malloc static bound bytes overflow");
 
-                let aligned_size_imm = args
-                    .first()
-                    .and_then(|&v| ctx.value_imm(v))
-                    .and_then(immediate_u32)
-                    .and_then(|size| size.checked_add(0x1f))
-                    .map(|size| size & !0x1f);
-                perform_actions(ctx, &alloc.read(insn, &args));
+                let size = *args.first().expect("evm_malloc missing size");
+                let aligned_size_imm = ctx.value_imm(size).map(aligned_malloc_size_imm);
+                let runtime_args: SmallVec<[ValueId; 1]> = if aligned_size_imm.is_some() {
+                    smallvec![]
+                } else {
+                    smallvec![size]
+                };
+                perform_actions(ctx, &alloc.read(insn, runtime_args.as_slice()));
 
                 if is_transient {
-                    // Drop the requested size; this is a transient bump allocation that does not
-                    // update `FREE_PTR_SLOT` and is allowed to overlap with later allocations.
-                    ctx.push(OpCode::POP);
+                    // Drop the requested size if it was materialized at runtime; transient bump
+                    // allocations do not update `FREE_PTR_SLOT` and may overlap later ones.
+                    if aligned_size_imm.is_none() {
+                        ctx.push(OpCode::POP);
+                    }
 
                     emit_malloc_base(ctx, min_base_bytes, needs_dyn_sp_clamp);
 
@@ -1634,11 +1637,7 @@ impl LowerBackend for EvmBackend {
                     return;
                 }
 
-                if let Some(aligned) = aligned_size_imm {
-                    // Replace the original immediate argument with its aligned form.
-                    ctx.push(OpCode::POP);
-                    push_bytes(ctx, &u32_to_be(aligned));
-                } else {
+                if aligned_size_imm.is_none() {
                     // Align to 32 bytes:
                     // aligned = (size + 31) & !31
                     push_bytes(ctx, &[0x1f]);
@@ -1651,9 +1650,17 @@ impl LowerBackend for EvmBackend {
                 emit_malloc_base(ctx, min_base_bytes, needs_dyn_sp_clamp);
 
                 // new_end = base + aligned_size; mstore(0x40, new_end); return base
-                ctx.push(OpCode::DUP1);
-                ctx.push(OpCode::SWAP2);
-                ctx.push(OpCode::ADD);
+                if let Some(aligned) = aligned_size_imm {
+                    ctx.push(OpCode::DUP1);
+                    if !aligned.is_zero() {
+                        push_bytes(ctx, &u256_to_be(&aligned));
+                        ctx.push(OpCode::ADD);
+                    }
+                } else {
+                    ctx.push(OpCode::DUP1);
+                    ctx.push(OpCode::SWAP2);
+                    ctx.push(OpCode::ADD);
+                }
                 push_bytes(ctx, &[FREE_PTR_SLOT]);
                 ctx.push(OpCode::MSTORE);
 
@@ -2060,6 +2067,12 @@ fn immediate_u32(imm: Immediate) -> Option<u32> {
     }
 
     Some(u256.low_u32())
+}
+
+fn aligned_malloc_size_imm(imm: Immediate) -> U256 {
+    let size = imm.as_i256().to_u256();
+    let (size_padded, _) = size.overflowing_add(U256::from(0x1f_u8));
+    size_padded & !U256::from(0x1f_u8)
 }
 
 fn struct_field_offset_bytes(

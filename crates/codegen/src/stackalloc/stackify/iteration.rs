@@ -20,7 +20,7 @@ use super::{
 
 use sonatina_ir::{
     InstDowncast,
-    inst::{cast, data},
+    inst::{cast, data, evm},
 };
 
 pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
@@ -680,6 +680,16 @@ pub(super) fn operand_order_for_evm(
 ) -> SmallVec<[ValueId; 8]> {
     let is = func.inst_set();
     let data = func.dfg.inst(inst);
+    if let Some(malloc) = <&evm::EvmMalloc as InstDowncast>::downcast(is, data) {
+        let size = *malloc.size();
+        if func.dfg.value_is_imm(size) {
+            // `evm_malloc` immediates are lowered as compile-time constants.
+            return SmallVec::new();
+        }
+
+        return smallvec::smallvec![value_aliases[size].unwrap_or(size)];
+    }
+
     if let Some(gep) = <&data::Gep as InstDowncast>::downcast(is, data) {
         let mut args: SmallVec<[ValueId; 8]> = SmallVec::new();
         let values = gep.values().as_slice();
