@@ -6,17 +6,17 @@ input_file: test_files/evm/malloc_live_empty_prov_call_bug.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 96 bytes
-  total: 96 bytes
+  section runtime: 92 bytes
+  total: 92 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
   const_ptr: ir_blocks=1 ir_insts=2 vcode_ops=4 fixups=0 imm_bytes=1
     mem: scheme=StaticArena need_words=0 locals_words=0
-  main: ir_blocks=1 ir_insts=12 vcode_ops=52 fixups=4 imm_bytes=15
+  main: ir_blocks=1 ir_insts=12 vcode_ops=49 fixups=4 imm_bytes=14
     mem: scheme=StaticArena need_words=0 locals_words=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case bug_demo: calldata_len=8 success reason=Return gas_used=21300 gas_refunded=0 logs=0 output=call len=32
+  case bug_demo: calldata_len=8 success reason=Return gas_used=21290 gas_refunded=0 logs=0 output=call len=32

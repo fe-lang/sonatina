@@ -1609,6 +1609,12 @@ impl LowerBackend for EvmBackend {
                     )
                     .expect("malloc static bound bytes overflow");
 
+                let aligned_size_imm = args
+                    .first()
+                    .and_then(|&v| ctx.value_imm(v))
+                    .and_then(immediate_u32)
+                    .and_then(|size| size.checked_add(0x1f))
+                    .map(|size| size & !0x1f);
                 perform_actions(ctx, &alloc.read(insn, &args));
 
                 if is_transient {
@@ -1622,13 +1628,19 @@ impl LowerBackend for EvmBackend {
                     return;
                 }
 
-                // Align to 32 bytes:
-                // aligned = (size + 31) & !31
-                push_bytes(ctx, &[0x1f]);
-                ctx.push(OpCode::ADD);
-                push_bytes(ctx, &[0x1f]);
-                ctx.push(OpCode::NOT);
-                ctx.push(OpCode::AND);
+                if let Some(aligned) = aligned_size_imm {
+                    // Replace the original immediate argument with its aligned form.
+                    ctx.push(OpCode::POP);
+                    push_bytes(ctx, &u32_to_be(aligned));
+                } else {
+                    // Align to 32 bytes:
+                    // aligned = (size + 31) & !31
+                    push_bytes(ctx, &[0x1f]);
+                    ctx.push(OpCode::ADD);
+                    push_bytes(ctx, &[0x1f]);
+                    ctx.push(OpCode::NOT);
+                    ctx.push(OpCode::AND);
+                }
 
                 emit_malloc_base(ctx, min_base_bytes, needs_dyn_sp_clamp);
 
