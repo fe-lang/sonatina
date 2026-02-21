@@ -227,6 +227,118 @@ func public %caller_noreturn() {
     assert!(stats.skipped_not_pure > 0);
 }
 
+#[test]
+fn single_callsite_splices_large_single_block_even_with_tight_cap() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %large(v0.i32) -> i32 {
+    block0:
+        v1.i32 = add v0 1.i32;
+        v2.i32 = add v1 2.i32;
+        v3.i32 = add v2 3.i32;
+        v4.i32 = add v3 4.i32;
+        v5.i32 = add v4 5.i32;
+        v6.i32 = add v5 6.i32;
+        v7.i32 = add v6 7.i32;
+        v8.i32 = add v7 8.i32;
+        return v8;
+}
+
+func public %caller(v0.i32) -> i32 {
+    block0:
+        v2.i32 = call %large v0;
+        return v2;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let cfg = InlinerConfig {
+        splice_max_insts: 1,
+        ..Default::default()
+    };
+    let mut inliner = Inliner::new(cfg);
+    let stats = inliner.run(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        stats.calls_spliced >= 1,
+        "single callsite should splice even when cap is tight:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains("call %large"),
+        "single callsite should inline large callee:\n{dumped}"
+    );
+}
+
+#[test]
+fn multi_callsite_splice_uses_configurable_size_cap() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %large(v0.i32) -> i32 {
+    block0:
+        v1.i32 = add v0 1.i32;
+        v2.i32 = add v1 2.i32;
+        v3.i32 = add v2 3.i32;
+        v4.i32 = add v3 4.i32;
+        v5.i32 = add v4 5.i32;
+        return v5;
+}
+
+func public %caller(v0.i32, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %large v0;
+        v3.i32 = call %large v1;
+        v4.i32 = add v2 v3;
+        return v4;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(InlinerConfig {
+        splice_max_insts: 2,
+        ..Default::default()
+    });
+    let stats = inliner.run(module);
+    let dumped = dump_module(module);
+
+    assert_eq!(
+        stats.calls_spliced, 0,
+        "large multi-callsite callee should be capped"
+    );
+    assert!(
+        dumped.contains("call %large"),
+        "tight multi-callsite cap should keep calls:\n{dumped}"
+    );
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(InlinerConfig {
+        splice_max_insts: 8,
+        ..Default::default()
+    });
+    let stats = inliner.run(module);
+    let dumped = dump_module(module);
+
+    assert!(
+        stats.calls_spliced >= 2,
+        "looser multi-callsite cap should allow splicing:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains("call %large"),
+        "large callee should inline when multi-callsite cap is raised:\n{dumped}"
+    );
+}
+
 fn dump_module(module: &sonatina_ir::Module) -> String {
     let mut result = String::new();
     for func_ref in module.funcs() {
