@@ -478,7 +478,7 @@ impl EvmBackend {
                 let values = gep.values();
                 let &base = values.first()?;
                 let base_addr = self.try_fold_static_arena_addr_value(ctx, mem_plan, base)?;
-                let steps = build_gep_steps(ctx, values.as_slice());
+                let steps = build_gep_lower_plan(ctx, values.as_slice()).steps;
                 let offset = gep_const_offset_bytes(&steps)?;
                 base_addr.checked_add(offset)
             }
@@ -1435,12 +1435,18 @@ impl LowerBackend for EvmBackend {
                     panic!("gep without operands");
                 }
 
-                let runtime_args = runtime_gep_operands(ctx, &args);
-                let steps = build_gep_steps(ctx, &args);
+                let gep_plan = build_gep_lower_plan(ctx, &args);
+                debug_assert_eq!(
+                    gep_plan.runtime_args.len(),
+                    1 + gep_plan.runtime_index_count(),
+                    "GEP runtime args/step consumption mismatch",
+                );
 
-                if let Some(addr_bytes) = self.try_fold_gep_static_arena_addr(ctx, &args, &steps) {
-                    perform_actions(ctx, &alloc.read(insn, runtime_args.as_slice()));
-                    for _ in 0..runtime_args.len() {
+                if let Some(addr_bytes) =
+                    self.try_fold_gep_static_arena_addr(ctx, &args, &gep_plan.steps)
+                {
+                    perform_actions(ctx, &alloc.read(insn, gep_plan.runtime_args.as_slice()));
+                    for _ in 0..gep_plan.runtime_args.len() {
                         ctx.push(OpCode::POP);
                     }
                     push_bytes(ctx, &u32_to_be(addr_bytes));
@@ -1448,8 +1454,8 @@ impl LowerBackend for EvmBackend {
                     return;
                 }
 
-                perform_actions(ctx, &alloc.read(insn, runtime_args.as_slice()));
-                for step in steps {
+                perform_actions(ctx, &alloc.read(insn, gep_plan.runtime_args.as_slice()));
+                for step in gep_plan.steps {
                     match step {
                         GepStep::AddConst {
                             offset_bytes,
@@ -1922,32 +1928,35 @@ enum GepStep {
     AddScaled(u32),
 }
 
-fn runtime_gep_operands(ctx: &Lower<OpCode>, args: &[ValueId]) -> SmallVec<[ValueId; 8]> {
-    let Some((&base, indices)) = args.split_first() else {
-        panic!("gep without operands");
-    };
-
-    let mut runtime = SmallVec::<[ValueId; 8]>::new();
-    runtime.push(base);
-    runtime.extend(
-        indices
-            .iter()
-            .copied()
-            .filter(|idx| ctx.value_imm(*idx).is_none()),
-    );
-    runtime
+struct GepLowerPlan {
+    runtime_args: SmallVec<[ValueId; 8]>,
+    steps: Vec<GepStep>,
 }
 
-fn build_gep_steps(ctx: &Lower<OpCode>, args: &[ValueId]) -> Vec<GepStep> {
-    if args.is_empty() {
-        panic!("gep without operands");
+impl GepLowerPlan {
+    fn runtime_index_count(&self) -> usize {
+        self.steps
+            .iter()
+            .filter(|step| match step {
+                GepStep::AddConst { consume_index, .. } => *consume_index,
+                GepStep::AddScaled(_) => true,
+            })
+            .count()
     }
+}
+
+fn build_gep_lower_plan(ctx: &Lower<OpCode>, args: &[ValueId]) -> GepLowerPlan {
+    let Some((&base, _indices)) = args.split_first() else {
+        panic!("gep without operands");
+    };
 
     let mut current_ty = ctx.value_ty(args[0]);
     if !current_ty.is_pointer(ctx.module) {
         panic!("gep base must be a pointer (got {current_ty:?})");
     }
 
+    let mut runtime_args = SmallVec::<[ValueId; 8]>::new();
+    runtime_args.push(base);
     let mut steps: Vec<GepStep> = Vec::new();
     for &idx_val in args.iter().skip(1) {
         let Some(cmpd) = current_ty.resolve_compound(ctx.module) else {
@@ -1961,12 +1970,18 @@ fn build_gep_steps(ctx: &Lower<OpCode>, args: &[ValueId]) -> Vec<GepStep> {
                 let elem_size = u32::try_from(ctx.module.size_of_unchecked(elem_ty))
                     .expect("gep element too large");
                 steps.push(gep_step(elem_size, idx_imm_u32));
+                if idx_imm_u32.is_none() {
+                    runtime_args.push(idx_val);
+                }
                 current_ty = elem_ty;
             }
             CompoundType::Array { elem, .. } => {
                 let elem_size = u32::try_from(ctx.module.size_of_unchecked(elem))
                     .expect("gep element too large");
                 steps.push(gep_step(elem_size, idx_imm_u32));
+                if idx_imm_u32.is_none() {
+                    runtime_args.push(idx_val);
+                }
                 current_ty = elem;
             }
             CompoundType::Struct(s) => {
@@ -1987,7 +2002,10 @@ fn build_gep_steps(ctx: &Lower<OpCode>, args: &[ValueId]) -> Vec<GepStep> {
         }
     }
 
-    steps
+    GepLowerPlan {
+        runtime_args,
+        steps,
+    }
 }
 
 fn gep_const_offset_bytes(steps: &[GepStep]) -> Option<u32> {

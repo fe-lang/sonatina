@@ -1,6 +1,8 @@
 use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
-use sonatina_ir::{BlockId, Function, Immediate, InstId, ValueId, inst::control_flow::BranchKind};
+use sonatina_ir::{
+    BlockId, Function, Immediate, InstId, U256, ValueId, inst::control_flow::BranchKind,
+};
 use std::collections::BTreeMap;
 
 use crate::{bitset::BitSet, stackalloc::Actions};
@@ -680,12 +682,15 @@ pub(super) fn operand_order_for_evm(
         args.push(value_aliases[base].unwrap_or(base));
 
         // GEP immediate indices are compile-time metadata for EVM lowering; they do not need to
-        // be materialized as runtime stack operands.
+        // be materialized as runtime stack operands unless they fail immediate-u32 folding.
         args.extend(
             indices
                 .iter()
                 .copied()
-                .filter(|v| !func.dfg.value_is_imm(*v))
+                .filter(|v| {
+                    !func.dfg.value_is_imm(*v)
+                        || func.dfg.value_imm(*v).and_then(immediate_u32).is_none()
+                })
                 .map(|v| value_aliases[v].unwrap_or(v)),
         );
         return args;
@@ -894,6 +899,19 @@ fn is_evictable_imm(func: &Function, v: ValueId) -> bool {
         return false;
     };
     imm_push_data_len(imm) <= MAX_PUSH_DATA_BYTES
+}
+
+fn immediate_u32(imm: Immediate) -> Option<u32> {
+    if imm.is_negative() {
+        return None;
+    }
+
+    let u256 = imm.as_i256().to_u256();
+    if u256 > U256::from(u32::MAX) {
+        return None;
+    }
+
+    Some(u256.low_u32())
 }
 
 fn imm_push_data_len(imm: Immediate) -> usize {
