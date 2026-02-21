@@ -2361,18 +2361,25 @@ fn emit_max_top_two(ctx: &mut Lower<OpCode>) {
 fn emit_max_top_with_const(ctx: &mut Lower<OpCode>, constant: &[u8]) {
     // Stack: [..., x]
     // Result: [..., max(x, constant)]
-    push_bytes(ctx, constant);
+    let constant = U256::from_big_endian(constant);
+    if constant.is_zero() {
+        return;
+    }
+
+    // Use `x > (constant - 1)` so the hot keep path covers equality too.
+    let compare_const = u256_to_be(&(constant - U256::from(1_u8)));
+    push_bytes(ctx, &compare_const);
     ctx.push(OpCode::DUP2);
     ctx.push(OpCode::GT);
 
     let keep_x_push = ctx.push(OpCode::PUSH1);
     ctx.push(OpCode::JUMPI);
 
-    // x <= constant: replace x with constant.
+    // x < constant: replace x with constant.
     ctx.push(OpCode::POP);
-    push_bytes(ctx, constant);
+    push_bytes(ctx, &u256_to_be(&constant));
 
-    // x > constant: keep x.
+    // x >= constant: keep x.
     let keep_x = ctx.push(OpCode::JUMPDEST);
     ctx.add_label_reference(keep_x_push, Label::Insn(keep_x));
 }

@@ -46,7 +46,7 @@ mk:
     JUMPDEST
     PUSH1 0x40 (64)  // v0.*i8 = evm_malloc 32.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`

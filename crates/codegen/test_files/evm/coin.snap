@@ -50,7 +50,7 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  deploy: success reason=Return gas_used=232848 gas_refunded=0 logs=0 output=create len=783 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=232843 gas_refunded=0 logs=0 output=create len=783 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   <no evm.case directives>
 
 
@@ -1840,7 +1840,7 @@ __Coin_init:
     AND
     PUSH1 0x40 (64)
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
@@ -1860,7 +1860,7 @@ __Coin_init:
     CODECOPY
     PUSH1 0x40 (64)  // v24.*i8 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
@@ -1914,7 +1914,7 @@ __Coin_runtime:
     JUMPDEST
     PUSH1 0x40 (64)  // v60.*i8 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
@@ -1934,7 +1934,7 @@ __Coin_runtime:
     MLOAD  // v68.i256 = mload v67 i256;
     PUSH1 0x40 (64)  // v69.*i8 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
@@ -1958,7 +1958,7 @@ __Coin_runtime:
     MSTORE
     PUSH1 0x40 (64)  // v46.*i8 = evm_malloc 96.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
@@ -2011,7 +2011,7 @@ __Coin_runtime:
     JUMPDEST
     PUSH1 0x40 (64)  // v26.*i8 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
@@ -2057,7 +2057,7 @@ __Coin_runtime:
     JUMPDEST
     PUSH1 0x40 (64)  // v34.*i8 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
@@ -2275,7 +2275,7 @@ soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54c
     JUMPDEST
     PUSH1 0x40 (64)  // v25.*i8 = evm_malloc 96.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
@@ -2308,7 +2308,7 @@ soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54c
     MSTORE
     PUSH1 0x40 (64)  // v4.*i8 = evm_malloc 128.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
@@ -2367,7 +2367,7 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     AND
     PUSH1 0x40 (64)
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
@@ -2420,7 +2420,7 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish:
     MLOAD  // v8.i256 = mload v7 i256;
     PUSH1 0x40 (64)  // v10.*i8 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
@@ -2452,7 +2452,7 @@ solencoder_h1b9228b90dad6928_new:
     JUMPDEST
     PUSH1 0x40 (64)  // v2.*i8 = evm_malloc 96.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
@@ -2489,7 +2489,7 @@ cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b
     JUMPDEST
     PUSH1 0x40 (64)  // v3.*i8 = evm_malloc 96.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
@@ -2529,7 +2529,7 @@ soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3
     JUMPDEST
     PUSH1 0x40 (64)  // v22.*i8 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
@@ -2549,7 +2549,7 @@ soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3
     MLOAD  // v30.i256 = mload v29 i256;
     PUSH1 0x40 (64)  // v31.*i8 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
@@ -2573,7 +2573,7 @@ soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3
     MSTORE
     PUSH1 0x40 (64)  // v6.*i8 = evm_malloc 96.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
@@ -2675,7 +2675,7 @@ cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563:
     JUMPDEST
     PUSH1 0x40 (64)  // v3.*i8 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
@@ -2707,7 +2707,7 @@ cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563:
     MLOAD  // v5.i256 = mload v4 i256;
     PUSH1 0x40 (64)  // v7.*i8 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0xbf (191)
     DUP2
     GT
     PUSH1 `pc + (4)`
