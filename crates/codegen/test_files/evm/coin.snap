@@ -6,9 +6,9 @@ input_file: test_files/evm/coin.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 1040 bytes
-  section runtime: 811 bytes
-  total: 1851 bytes
+  section init: 1034 bytes
+  section runtime: 809 bytes
+  total: 1843 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
@@ -18,7 +18,7 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
   __Coin_recv_0_2: ir_blocks=3 ir_insts=7 vcode_ops=14 fixups=1 imm_bytes=1
     mem: scheme=StaticArena need_words=0 locals_words=0
-  __Coin_init: ir_blocks=3 ir_insts=27 vcode_ops=101 fixups=7 imm_bytes=17
+  __Coin_init: ir_blocks=3 ir_insts=27 vcode_ops=97 fixups=7 imm_bytes=17
     mem: scheme=StaticArena need_words=0 locals_words=0
   __Coin_runtime: ir_blocks=9 ir_insts=79 vcode_ops=241 fixups=35 imm_bytes=36
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -42,7 +42,7 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
   soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=37 vcode_ops=89 fixups=3 imm_bytes=21
     mem: scheme=StaticArena need_words=0 locals_words=0
-  soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=3 ir_insts=39 vcode_ops=63 fixups=1 imm_bytes=8
+  soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=3 ir_insts=39 vcode_ops=61 fixups=1 imm_bytes=8
     mem: scheme=StaticArena need_words=0 locals_words=0
   cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=9 vcode_ops=30 fixups=1 imm_bytes=7
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -50,7 +50,7 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  deploy: success reason=Return gas_used=239184 gas_refunded=0 logs=0 output=create len=811 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=238688 gas_refunded=0 logs=0 output=create len=809 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   <no evm.case directives>
 
 
@@ -358,7 +358,6 @@ evm:
     inherited from block0: [v5x, v3x, v2x, v1x]
     // evm_revert 0.i256 0.i256;
     - stack=[v5x, v3x, v2x, v1x]
-      cleanup: [POP, POP, POP, POP]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
   block2 P=[] T=[v5, v3, v2, v1]
@@ -1524,7 +1523,6 @@ evm:
     inherited from block0: [v12x, v0x, <RET>]
     // evm_revert 0.i256 0.i256;
     - stack=[v12x, v0x, <RET>]
-      cleanup: [POP, POP]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
   block2 P=[] T=[v12, v0]
@@ -1839,11 +1837,7 @@ __Coin_init:
     PUSH1 block2
     JUMPI
   block1:
-    POP  // evm_revert 0.i256 0.i256;
-    POP
-    POP
-    POP
-    PUSH0
+    PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
   block2:
@@ -2704,9 +2698,7 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData
     PUSH1 block2  // br v26 block1 block2;
     JUMPI
   block1:
-    POP  // evm_revert 0.i256 0.i256;
-    POP
-    PUSH0
+    PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
   block2:

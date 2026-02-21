@@ -243,6 +243,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         let is_call = self.ctx.func.dfg.is_call(inst);
         let is_normal =
             self.ctx.func.dfg.branch_info(inst).is_none() && !self.ctx.func.dfg.is_return(inst);
+        let skip_cleanup = skip_pre_exit_cleanup(self.ctx.func, inst);
 
         let mut args = SmallVec::<[ValueId; 8]>::new();
         let mut consume_last_use: BitSet<ValueId> = BitSet::default();
@@ -306,20 +307,22 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
 
         // Stable cleanup: pop dead values (and dead chains under the top live value).
         let before_cleanup_len = self.alloc.pre_actions[inst].len();
-        clean_dead_stack_prefix(
-            self.ctx.reach,
-            &mut state.stack,
-            &state.live_future,
-            &state.live_out,
-            &mut self.alloc.pre_actions[inst],
-        );
+        if !skip_cleanup {
+            clean_dead_stack_prefix(
+                self.ctx.reach,
+                &mut state.stack,
+                &state.live_future,
+                &state.live_out,
+                &mut self.alloc.pre_actions[inst],
+            );
+        }
 
         // Try to improve operand reachability before operand preparation:
         // - do nothing if all operands are already `DUP16`-reachable
         // - otherwise, if an operand is close (within a small depth window), delete dead values,
         //   redundant duplicates, and (small) immediates above it to pull it back into reach
         // This helps avoid unnecessary spill-set growth.
-        if is_normal {
+        if is_normal && !skip_cleanup {
             improve_reachability_before_operands(
                 self.ctx.func,
                 &args,
@@ -578,6 +581,10 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
 
         InstOutcome::Continue
     }
+}
+
+pub(super) fn skip_pre_exit_cleanup(func: &Function, inst: InstId) -> bool {
+    func.dfg.is_exit(inst) && !func.dfg.is_return(inst)
 }
 
 pub(super) fn count_block_uses(

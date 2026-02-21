@@ -15,6 +15,7 @@ use super::{
     iteration::{
         clean_dead_stack_prefix, count_block_uses, improve_reachability_before_operands,
         inst_is_noop_alias_cast, last_use_values_in_inst, operand_order_for_evm,
+        skip_pre_exit_cleanup,
     },
     planner::{self, Planner},
     slots::{FreeSlotPools, SpillSlotPools},
@@ -257,9 +258,17 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                 continue;
             }
 
-            clean_dead_stack_prefix(ctx.reach, &mut stack, &live_future, &live_out, &mut actions);
+            if !skip_pre_exit_cleanup(ctx.func, inst) {
+                clean_dead_stack_prefix(
+                    ctx.reach,
+                    &mut stack,
+                    &live_future,
+                    &live_out,
+                    &mut actions,
+                );
+            }
 
-            if is_normal {
+            if is_normal && !skip_pre_exit_cleanup(ctx.func, inst) {
                 improve_reachability_before_operands(
                     ctx.func,
                     &args,
