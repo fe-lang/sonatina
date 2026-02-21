@@ -2330,23 +2330,15 @@ fn emit_max_top_two(ctx: &mut Lower<OpCode>) {
     ctx.push(OpCode::DUP2);
     ctx.push(OpCode::DUP2);
     ctx.push(OpCode::GT);
-
-    let keep_a_push = ctx.push(OpCode::PUSH1);
-    ctx.push(OpCode::JUMPI);
-
-    // keep b (a <= b): drop a.
-    ctx.push(OpCode::POP);
-    let end_push = ctx.push(OpCode::PUSH1);
-    ctx.push(OpCode::JUMP);
-
-    // keep a (a > b): drop b.
-    let keep_a = ctx.push(OpCode::JUMPDEST);
-    ctx.add_label_reference(keep_a_push, Label::Insn(keep_a));
+    // Branchless max:
+    // max(a, b) = b - ((b - a) * (a > b))
+    // This avoids JUMP/JUMPI and gives stable execution cost.
     ctx.push(OpCode::SWAP1);
-    ctx.push(OpCode::POP);
-
-    let end = ctx.push(OpCode::JUMPDEST);
-    ctx.add_label_reference(end_push, Label::Insn(end));
+    ctx.push(OpCode::DUP3);
+    ctx.push(OpCode::SUB);
+    ctx.push(OpCode::MUL);
+    ctx.push(OpCode::SWAP1);
+    ctx.push(OpCode::SUB);
 }
 
 fn emit_max_top_with_const(ctx: &mut Lower<OpCode>, constant: &[u8]) {
@@ -2393,6 +2385,9 @@ fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
     let frame_bytes = frame_slots
         .checked_mul(WORD_BYTES)
         .expect("frame size overflow");
+    let frame_plus_fp_bytes = frame_bytes
+        .checked_add(WORD_BYTES)
+        .expect("frame size overflow");
 
     // sp = mload(DYN_SP_SLOT); if sp == 0, initialize it.
     push_bytes(ctx, &[DYN_SP_SLOT]);
@@ -2400,8 +2395,6 @@ fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
 
     // if sp != 0, skip init.
     ctx.push(OpCode::DUP1);
-    ctx.push(OpCode::ISZERO);
-    ctx.push(OpCode::ISZERO);
     let skip_init_push = ctx.push(OpCode::PUSH1);
     ctx.push(OpCode::JUMPI);
 
@@ -2430,20 +2423,14 @@ fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
     ctx.push(OpCode::DUP1);
     push_bytes(ctx, &u32_to_be(WORD_BYTES));
     ctx.push(OpCode::ADD);
-    ctx.push(OpCode::DUP1);
     push_bytes(ctx, &[DYN_FP_SLOT]);
     ctx.push(OpCode::MSTORE);
 
-    // new_sp = new_fp + frame_bytes; mstore(DYN_SP_SLOT, new_sp)
-    if frame_bytes != 0 {
-        push_bytes(ctx, &u32_to_be(frame_bytes));
-        ctx.push(OpCode::ADD);
-    }
+    // new_sp = frame_base + WORD_BYTES + frame_bytes; mstore(DYN_SP_SLOT, new_sp)
+    push_bytes(ctx, &u32_to_be(frame_plus_fp_bytes));
+    ctx.push(OpCode::ADD);
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MSTORE);
-
-    // Discard frame_base (sp).
-    ctx.push(OpCode::POP);
 }
 
 fn leave_frame(ctx: &mut Lower<OpCode>, frame_slots: u32) {
