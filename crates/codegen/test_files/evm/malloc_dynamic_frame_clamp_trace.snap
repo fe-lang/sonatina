@@ -6,20 +6,20 @@ input_file: test_files/evm/malloc_dynamic_frame_clamp_trace.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 42 bytes
-  total: 42 bytes
+  section runtime: 38 bytes
+  total: 38 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
   dyn: ir_blocks=1 ir_insts=4 vcode_ops=66 fixups=5 imm_bytes=14
     mem: scheme=DynamicFrame locals_words=1
-  main: ir_blocks=1 ir_insts=5 vcode_ops=36 fixups=4 imm_bytes=6
+  main: ir_blocks=1 ir_insts=5 vcode_ops=33 fixups=3 imm_bytes=6
     mem: scheme=StaticArena need_words=0 locals_words=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21177 gas_refunded=0 logs=0 output=call len=32
+  case ok: calldata_len=8 success reason=Return gas_used=21166 gas_refunded=0 logs=0 output=call len=32
 
 
 --------------- DEBUG ---------------
@@ -117,13 +117,10 @@ main:
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     PUSH1 0x6f (111)  // mstore v1 111.i256 i256;
     DUP2

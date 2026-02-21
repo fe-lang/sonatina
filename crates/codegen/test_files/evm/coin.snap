@@ -6,9 +6,9 @@ input_file: test_files/evm/coin.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 1119 bytes
-  section runtime: 861 bytes
-  total: 1980 bytes
+  section init: 1065 bytes
+  section runtime: 824 bytes
+  total: 1889 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
@@ -18,9 +18,9 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
   __Coin_recv_0_2: ir_blocks=3 ir_insts=7 vcode_ops=14 fixups=1 imm_bytes=1
     mem: scheme=StaticArena need_words=0 locals_words=0
-  __Coin_init: ir_blocks=3 ir_insts=27 vcode_ops=110 fixups=9 imm_bytes=18
+  __Coin_init: ir_blocks=3 ir_insts=27 vcode_ops=104 fixups=7 imm_bytes=18
     mem: scheme=StaticArena need_words=0 locals_words=0
-  __Coin_runtime: ir_blocks=9 ir_insts=79 vcode_ops=259 fixups=40 imm_bytes=37
+  __Coin_runtime: ir_blocks=9 ir_insts=79 vcode_ops=244 fixups=35 imm_bytes=37
     mem: scheme=StaticArena need_words=0 locals_words=0
   assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -30,27 +30,27 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
   return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f: ir_blocks=1 ir_insts=18 vcode_ops=41 fixups=6 imm_bytes=5
     mem: scheme=StaticArena need_words=0 locals_words=0
-  soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=1 ir_insts=41 vcode_ops=95 fixups=4 imm_bytes=22
+  soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=1 ir_insts=41 vcode_ops=89 fixups=2 imm_bytes=22
     mem: scheme=StaticArena need_words=0 locals_words=0
-  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=4 ir_insts=23 vcode_ops=56 fixups=4 imm_bytes=8
+  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=4 ir_insts=23 vcode_ops=53 fixups=3 imm_bytes=8
     mem: scheme=StaticArena need_words=0 locals_words=0
-  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish: ir_blocks=1 ir_insts=16 vcode_ops=43 fixups=2 imm_bytes=9
+  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish: ir_blocks=1 ir_insts=16 vcode_ops=40 fixups=1 imm_bytes=9
     mem: scheme=StaticArena need_words=0 locals_words=0
-  solencoder_h1b9228b90dad6928_new: ir_blocks=1 ir_insts=12 vcode_ops=42 fixups=2 imm_bytes=9
+  solencoder_h1b9228b90dad6928_new: ir_blocks=1 ir_insts=12 vcode_ops=39 fixups=1 imm_bytes=9
     mem: scheme=StaticArena need_words=0 locals_words=0
-  cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=1 ir_insts=18 vcode_ops=45 fixups=2 imm_bytes=10
+  cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=1 ir_insts=18 vcode_ops=42 fixups=1 imm_bytes=10
     mem: scheme=StaticArena need_words=0 locals_words=0
-  soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=37 vcode_ops=104 fixups=6 imm_bytes=23
+  soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=37 vcode_ops=95 fixups=3 imm_bytes=23
     mem: scheme=StaticArena need_words=0 locals_words=0
   soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=3 ir_insts=39 vcode_ops=63 fixups=1 imm_bytes=8
     mem: scheme=StaticArena need_words=0 locals_words=0
-  cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=9 vcode_ops=36 fixups=2 imm_bytes=8
+  cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=9 vcode_ops=33 fixups=1 imm_bytes=8
     mem: scheme=StaticArena need_words=0 locals_words=0
-  cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=12 vcode_ops=38 fixups=2 imm_bytes=8
+  cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=12 vcode_ops=35 fixups=1 imm_bytes=8
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  deploy: success reason=Return gas_used=250512 gas_refunded=0 logs=0 output=create len=861 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=242168 gas_refunded=0 logs=0 output=create len=824 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   <no evm.case directives>
 
 
@@ -1865,13 +1865,10 @@ __Coin_init:
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     DUP1
     SWAP2
@@ -1894,13 +1891,10 @@ __Coin_init:
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     DUP1
     SWAP2
@@ -1953,13 +1947,10 @@ __Coin_runtime:
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     PUSH0  // mstore v63 0.i256 i256;
     DUP2
@@ -1982,13 +1973,10 @@ __Coin_runtime:
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     DUP1
     SWAP2
@@ -2011,13 +1999,10 @@ __Coin_runtime:
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     DUP2  // v50.i256 = mload v49 i256;
     MLOAD
@@ -2069,13 +2054,10 @@ __Coin_runtime:
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     SWAP2  // mstore v29 v24 i256;
     DUP3
@@ -2120,13 +2102,10 @@ __Coin_runtime:
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     SWAP2  // mstore v37 v32 i256;
     DUP3
@@ -2347,13 +2326,10 @@ soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54c
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     DUP1
     SWAP2
@@ -2389,13 +2365,10 @@ soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54c
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     DUP1
     SWAP2
@@ -2451,13 +2424,10 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     DUP1
     SWAP2
@@ -2513,13 +2483,10 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish:
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     DUP1
     SWAP2
@@ -2554,13 +2521,10 @@ solencoder_h1b9228b90dad6928_new:
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     DUP1
     SWAP2
@@ -2600,13 +2564,10 @@ cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     DUP1
     SWAP2
@@ -2645,13 +2606,10 @@ soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     SWAP1  // mstore v25 v0 i256;
     DUP2
@@ -2674,13 +2632,10 @@ soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     DUP1
     SWAP2
@@ -2707,13 +2662,10 @@ soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     DUP1
     SWAP2
@@ -2820,13 +2772,10 @@ cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563:
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     DUP1
     SWAP2
@@ -2861,13 +2810,10 @@ cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563:
     PUSH1 0xc0 (192)
     DUP2
     GT
-    PUSH1 `pc + (6)`
+    PUSH1 `pc + (4)`
     JUMPI
     POP
     PUSH1 0xc0 (192)
-    PUSH1 `pc + (3)`
-    JUMP
-    JUMPDEST
     JUMPDEST
     DUP1
     SWAP2

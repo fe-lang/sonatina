@@ -2332,15 +2332,10 @@ fn emit_max_top_with_const(ctx: &mut Lower<OpCode>, constant: &[u8]) {
     // x <= constant: replace x with constant.
     ctx.push(OpCode::POP);
     push_bytes(ctx, constant);
-    let end_push = ctx.push(OpCode::PUSH1);
-    ctx.push(OpCode::JUMP);
 
     // x > constant: keep x.
     let keep_x = ctx.push(OpCode::JUMPDEST);
     ctx.add_label_reference(keep_x_push, Label::Insn(keep_x));
-
-    let end = ctx.push(OpCode::JUMPDEST);
-    ctx.add_label_reference(end_push, Label::Insn(end));
 }
 
 fn emit_malloc_base(ctx: &mut Lower<OpCode>, min_base_bytes: u32, needs_dyn_sp_clamp: bool) {
