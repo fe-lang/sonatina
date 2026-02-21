@@ -24,7 +24,7 @@ use sonatina_codegen::{
 use sonatina_ir::{
     Function,
     cfg::ControlFlowGraph,
-    ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite},
+    ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite, ModuleWriter},
     isa::evm::Evm,
     module::{Module, ModuleCtx},
     object::{EmbedSymbol, ObjectName, SectionName},
@@ -66,6 +66,31 @@ macro_rules! snap_test {
         settings.bind(|| {
             insta::_macro_support::assert_snapshot(
                 (insta::_macro_support::AutoName, $value.as_str()).into(),
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+                fixture_name,
+                module_path!(),
+                file!(),
+                line!(),
+                stringify!($value),
+            )
+            .unwrap()
+        })
+    };
+
+    ($value:expr, $fixture_path: expr, $suffix:expr) => {
+        let mut settings = insta::Settings::new();
+        let fixture_path = ::std::path::Path::new($fixture_path);
+        let fixture_dir = fixture_path.parent().unwrap();
+        let fixture_name = fixture_path.file_stem().unwrap().to_str().unwrap();
+        let suffix: &str = $suffix;
+        let name = format!("{fixture_name}.{suffix}");
+
+        settings.set_snapshot_path(fixture_dir);
+        settings.set_input_file($fixture_path);
+        settings.set_prepend_module_to_snapshot(false);
+        settings.bind(|| {
+            insta::_macro_support::assert_snapshot(
+                (name, $value.as_str()).into(),
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
                 fixture_name,
                 module_path!(),
@@ -119,6 +144,10 @@ fn test_evm(fixture: Fixture<&str>) {
         .unwrap_or_else(|e| panic!("{}: {e}", fixture.path()));
 
     run_opt_pipeline(&mut parsed.module, opt_pipeline);
+    let opt_ir_snapshot = (opt_pipeline != EvmOptPipeline::None).then(|| {
+        let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
+        writer.dump_string()
+    });
 
     let func_order: Vec<_> = parsed
         .debug
@@ -370,6 +399,9 @@ fn test_evm(fixture: Fixture<&str>) {
     }
 
     snap_test!(String::from_utf8(out).unwrap(), fixture.path());
+    if let Some(opt_ir_snapshot) = opt_ir_snapshot {
+        snap_test!(opt_ir_snapshot, fixture.path(), "opt_ir");
+    }
 }
 
 fn assert_case(case: &EvmCase, res: &ExecutionResult, fixture_path: &str) {
