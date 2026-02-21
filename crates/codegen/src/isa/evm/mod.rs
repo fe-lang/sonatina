@@ -2342,16 +2342,20 @@ fn emit_max_top_two(ctx: &mut Lower<OpCode>) {
     // Result: [..., max(a, b)]
     ctx.push(OpCode::DUP2);
     ctx.push(OpCode::DUP2);
-    ctx.push(OpCode::GT);
-    // Branchless max:
-    // max(a, b) = b - ((b - a) * (a > b))
-    // This avoids JUMP/JUMPI and gives stable execution cost.
+    ctx.push(OpCode::LT);
+
+    let keep_b_push = ctx.push(OpCode::PUSH1);
+    ctx.push(OpCode::JUMPI);
+
+    // a >= b: rotate so common POP keeps `a`.
     ctx.push(OpCode::SWAP1);
-    ctx.push(OpCode::DUP3);
-    ctx.push(OpCode::SUB);
-    ctx.push(OpCode::MUL);
-    ctx.push(OpCode::SWAP1);
-    ctx.push(OpCode::SUB);
+
+    let keep_b = ctx.push(OpCode::JUMPDEST);
+    ctx.add_label_reference(keep_b_push, Label::Insn(keep_b));
+
+    // a < b (taken): [b, a] -> POP => [b]
+    // a >= b (fallthrough): [b, a] -> SWAP1 => [a, b] -> POP => [a]
+    ctx.push(OpCode::POP);
 }
 
 fn emit_max_top_with_const(ctx: &mut Lower<OpCode>, constant: &[u8]) {

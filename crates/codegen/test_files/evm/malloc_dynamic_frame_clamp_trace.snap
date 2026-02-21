@@ -11,9 +11,9 @@ object: Contract
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
-  dyn: ir_blocks=1 ir_insts=4 vcode_ops=59 fixups=3 imm_bytes=14
+  dyn: ir_blocks=1 ir_insts=4 vcode_ops=58 fixups=4 imm_bytes=14
     mem: scheme=DynamicFrame locals_words=1
-  main: ir_blocks=1 ir_insts=5 vcode_ops=28 fixups=1 imm_bytes=5
+  main: ir_blocks=1 ir_insts=5 vcode_ops=27 fixups=2 imm_bytes=5
     mem: scheme=StaticArena need_words=0 locals_words=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -43,13 +43,12 @@ dyn:
     MLOAD
     DUP2
     DUP2
-    GT
+    LT
+    PUSH1 `pc + (3)`
+    JUMPI
     SWAP1
-    DUP3
-    SUB
-    MUL
-    SWAP1
-    SUB
+    JUMPDEST
+    POP
     PUSH1 0xa0 (160)
     MLOAD
     DUP2
@@ -97,13 +96,12 @@ main:
     MLOAD
     DUP2
     DUP2
-    GT
+    LT
+    PUSH1 `pc + (3)`
+    JUMPI
     SWAP1
-    DUP3
-    SUB
-    MUL
-    SWAP1
-    SUB
+    JUMPDEST
+    POP
     PUSH1 0xc0 (192)
     DUP2
     GT
