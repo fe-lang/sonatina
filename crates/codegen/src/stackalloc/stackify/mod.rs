@@ -27,7 +27,8 @@ mod sym_stack;
 mod templates;
 mod trace;
 
-pub use alloc::{StackifyAlloc, StackifyLiveValues};
+pub use alloc::StackifyAlloc;
+pub use builder::StackifyBuilder;
 
 use builder::StackifyContext;
 
@@ -42,7 +43,7 @@ const CONSUME_LAST_USE_MAX_SWAPS: usize = 4;
 
 #[cfg(test)]
 mod tests {
-    use super::{StackifyAlloc, StackifyLiveValues};
+    use super::StackifyBuilder;
     use crate::{
         critical_edge::CriticalEdgeSplitter,
         domtree::DomTree,
@@ -90,17 +91,10 @@ mod tests {
                 "expected some scratch-live values"
             );
 
-            let alloc = StackifyAlloc::for_function_with_call_live_values_and_scratch_spills(
-                function,
-                &cfg,
-                &dom,
-                &liveness,
-                16,
-                StackifyLiveValues {
-                    scratch_live_values: scratch_live_values.clone(),
-                },
-                2,
-            );
+            let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16)
+                .with_scratch_live_values(scratch_live_values.clone())
+                .with_scratch_spills(2)
+                .compute();
 
             for (v, slot) in alloc.scratch_slot_of_value.iter() {
                 if slot.is_some() {
@@ -163,14 +157,9 @@ block0:
                 canonicalize_alias_value(&value_aliases, v)
             });
 
-            let (_, trace) = StackifyAlloc::for_function_with_trace_and_value_aliases(
-                function,
-                &cfg,
-                &dom,
-                &liveness,
-                16,
-                &value_aliases,
-            );
+            let (_, trace) = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16)
+                .with_value_aliases(&value_aliases)
+                .compute_with_trace();
 
             let lines: Vec<_> = trace.lines().collect();
             for (i, line) in lines.iter().enumerate() {

@@ -1,19 +1,8 @@
 use cranelift_entity::SecondaryMap;
-use sonatina_ir::{BlockId, Function, InstId, ValueId, cfg::ControlFlowGraph};
+use sonatina_ir::{BlockId, Function, InstId, ValueId};
 use std::collections::BTreeMap;
 
-use crate::{
-    bitset::BitSet,
-    domtree::DomTree,
-    liveness::Liveness,
-    stackalloc::{Action, Actions, Allocator},
-};
-
-use super::{builder::StackifyBuilder, trace::StackifyTrace};
-
-pub struct StackifyLiveValues {
-    pub scratch_live_values: BitSet<ValueId>,
-}
+use crate::stackalloc::{Action, Actions, Allocator};
 
 #[derive(Default)]
 pub struct StackifyAlloc {
@@ -29,111 +18,6 @@ pub struct StackifyAlloc {
 }
 
 impl StackifyAlloc {
-    /// Compute stack allocation for a single function using the transfer-region stackify spec.
-    pub fn for_function(
-        func: &Function,
-        cfg: &ControlFlowGraph,
-        dom: &DomTree,
-        liveness: &Liveness,
-        reach_depth: u8,
-    ) -> Self {
-        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth);
-        builder.compute()
-    }
-
-    pub fn for_function_with_call_live_values_and_scratch_spills(
-        func: &Function,
-        cfg: &ControlFlowGraph,
-        dom: &DomTree,
-        liveness: &Liveness,
-        reach_depth: u8,
-        live_values: StackifyLiveValues,
-        scratch_spill_slots: u32,
-    ) -> Self {
-        let StackifyLiveValues {
-            scratch_live_values,
-        } = live_values;
-        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
-            .with_scratch_live_values(scratch_live_values)
-            .with_scratch_spills(scratch_spill_slots);
-        builder.compute()
-    }
-
-    pub fn for_function_with_call_live_values_and_scratch_spills_and_value_aliases(
-        func: &Function,
-        cfg: &ControlFlowGraph,
-        dom: &DomTree,
-        liveness: &Liveness,
-        reach_depth: u8,
-        live_values: StackifyLiveValues,
-        scratch_spill_slots: u32,
-        value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
-    ) -> Self {
-        let StackifyLiveValues {
-            scratch_live_values,
-        } = live_values;
-        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
-            .with_scratch_live_values(scratch_live_values)
-            .with_scratch_spills(scratch_spill_slots)
-            .with_value_aliases(value_aliases);
-        builder.compute()
-    }
-
-    /// Compute stack allocation for a single function and return a human-oriented trace of the
-    /// planning decisions made during the final fixed-point iteration.
-    pub fn for_function_with_trace(
-        func: &Function,
-        cfg: &ControlFlowGraph,
-        dom: &DomTree,
-        liveness: &Liveness,
-        reach_depth: u8,
-    ) -> (Self, String) {
-        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth);
-        let mut trace = StackifyTrace::default();
-        let alloc = builder.compute_with_observer(&mut trace);
-        let trace = trace.render(func, &alloc);
-        (alloc, trace)
-    }
-
-    /// Same as [`Self::for_function_with_trace`], but canonicalizes values via `value_aliases`
-    /// during stackify planning and tracing.
-    pub fn for_function_with_trace_and_value_aliases(
-        func: &Function,
-        cfg: &ControlFlowGraph,
-        dom: &DomTree,
-        liveness: &Liveness,
-        reach_depth: u8,
-        value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
-    ) -> (Self, String) {
-        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
-            .with_value_aliases(value_aliases);
-        let mut trace = StackifyTrace::default();
-        let alloc = builder.compute_with_observer(&mut trace);
-        let trace = trace.render(func, &alloc);
-        (alloc, trace)
-    }
-
-    pub fn for_function_with_trace_call_live_values_and_scratch_spills(
-        func: &Function,
-        cfg: &ControlFlowGraph,
-        dom: &DomTree,
-        liveness: &Liveness,
-        reach_depth: u8,
-        live_values: StackifyLiveValues,
-        scratch_spill_slots: u32,
-    ) -> (Self, String) {
-        let StackifyLiveValues {
-            scratch_live_values,
-        } = live_values;
-        let builder = StackifyBuilder::new(func, cfg, dom, liveness, reach_depth)
-            .with_scratch_live_values(scratch_live_values)
-            .with_scratch_spills(scratch_spill_slots);
-        let mut trace = StackifyTrace::default();
-        let alloc = builder.compute_with_observer(&mut trace);
-        let trace = trace.render(func, &alloc);
-        (alloc, trace)
-    }
-
     pub(crate) fn uses_scratch_spills(&self) -> bool {
         self.scratch_slot_of_value
             .values()

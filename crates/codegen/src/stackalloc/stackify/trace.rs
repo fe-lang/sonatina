@@ -18,7 +18,7 @@ use super::{
 
 /// Optional observer hooks for tracing stackify planning.
 ///
-/// `StackifyAlloc::for_function_with_trace` is allowed to run multiple fixed-point iterations.
+/// `StackifyBuilder::compute_with_trace` is allowed to run multiple fixed-point iterations.
 /// Observers must support `checkpoint`/`rollback` so unsuccessful iterations can be discarded.
 pub(super) trait StackifyObserver {
     type Checkpoint: Copy;

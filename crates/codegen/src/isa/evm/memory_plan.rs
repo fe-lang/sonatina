@@ -1104,7 +1104,9 @@ mod tests {
                 dom.compute(&cfg);
 
                 let block_order = dom.rpo().to_owned();
-                let alloc = StackifyAlloc::for_function(function, &cfg, &dom, &liveness, 16);
+                let alloc =
+                    crate::stackalloc::StackifyBuilder::new(function, &cfg, &dom, &liveness, 16)
+                        .compute();
 
                 analyses.insert(
                     func,

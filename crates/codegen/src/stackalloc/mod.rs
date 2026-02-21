@@ -4,7 +4,7 @@ use sonatina_ir::{BlockId, Function, Immediate, InstId, ValueId};
 use crate::isa::evm::static_arena_alloc::StackObjId;
 
 mod stackify;
-pub use stackify::{StackifyAlloc, StackifyLiveValues};
+pub use stackify::{StackifyAlloc, StackifyBuilder};
 
 pub type Actions = SmallVec<[Action; 2]>;
 

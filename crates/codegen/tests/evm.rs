@@ -19,7 +19,7 @@ use sonatina_codegen::{
     machinst::lower::{LowerBackend, SectionLoweringCtx},
     object::{CompileOptions, compile_object},
     optim::pipeline::Pipeline,
-    stackalloc::StackifyAlloc,
+    stackalloc::StackifyBuilder,
 };
 use sonatina_ir::{
     Function,
@@ -643,14 +643,10 @@ fn stackify_trace_for_fn(
     let mut dom = DomTree::new();
     dom.compute(&cfg);
 
-    let (_alloc, stackify) = StackifyAlloc::for_function_with_trace_and_value_aliases(
-        function,
-        &cfg,
-        &dom,
-        &liveness,
-        stackify_reach_depth,
-        &value_aliases,
-    );
+    let (_alloc, stackify) =
+        StackifyBuilder::new(function, &cfg, &dom, &liveness, stackify_reach_depth)
+            .with_value_aliases(&value_aliases)
+            .compute_with_trace();
     stackify
 }
 

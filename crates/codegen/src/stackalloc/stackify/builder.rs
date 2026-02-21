@@ -40,7 +40,7 @@ impl StackifyReachability {
     }
 }
 
-pub(super) struct StackifyBuilder<'a> {
+pub struct StackifyBuilder<'a> {
     func: &'a Function,
     cfg: &'a ControlFlowGraph,
     dom: &'a DomTree,
@@ -76,7 +76,7 @@ impl StackifyContext<'_> {
 }
 
 impl<'a> StackifyBuilder<'a> {
-    pub(super) fn new(
+    pub fn new(
         func: &'a Function,
         cfg: &'a ControlFlowGraph,
         dom: &'a DomTree,
@@ -95,17 +95,17 @@ impl<'a> StackifyBuilder<'a> {
         }
     }
 
-    pub(super) fn with_scratch_live_values(mut self, scratch_live_values: BitSet<ValueId>) -> Self {
+    pub(crate) fn with_scratch_live_values(mut self, scratch_live_values: BitSet<ValueId>) -> Self {
         self.scratch_live_values_override = Some(scratch_live_values);
         self
     }
 
-    pub(super) fn with_scratch_spills(mut self, scratch_spill_slots: u32) -> Self {
+    pub(crate) fn with_scratch_spills(mut self, scratch_spill_slots: u32) -> Self {
         self.scratch_spill_slots = scratch_spill_slots;
         self
     }
 
-    pub(super) fn with_value_aliases(
+    pub fn with_value_aliases(
         mut self,
         value_aliases: &'a SecondaryMap<ValueId, Option<ValueId>>,
     ) -> Self {
@@ -113,9 +113,17 @@ impl<'a> StackifyBuilder<'a> {
         self
     }
 
-    pub(super) fn compute(self) -> StackifyAlloc {
+    pub fn compute(self) -> StackifyAlloc {
         let mut observer = NullObserver;
         self.compute_with_observer(&mut observer)
+    }
+
+    pub fn compute_with_trace(self) -> (StackifyAlloc, String) {
+        let func = self.func;
+        let mut trace = super::trace::StackifyTrace::default();
+        let alloc = self.compute_with_observer(&mut trace);
+        let trace = trace.render(func, &alloc);
+        (alloc, trace)
     }
 
     pub(super) fn compute_with_observer<O: StackifyObserver>(

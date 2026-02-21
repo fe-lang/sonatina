@@ -23,7 +23,7 @@ use crate::{
         lower::{FixupUpdate, Lower, LowerBackend, LoweredFunction, SectionLoweringCtx},
         vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
     },
-    stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyLiveValues},
+    stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyBuilder},
 };
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
@@ -2598,19 +2598,17 @@ fn prepare_stackify_analysis(
         canonical_scratch_live_values.insert(canonicalize_alias_value(&value_aliases, v));
     }
 
-    let alloc =
-        StackifyAlloc::for_function_with_call_live_values_and_scratch_spills_and_value_aliases(
-            function,
-            &cfg,
-            &dom,
-            &stack_liveness,
-            backend.stackify_reach_depth,
-            StackifyLiveValues {
-                scratch_live_values: canonical_scratch_live_values,
-            },
-            scratch_plan::SCRATCH_SPILL_SLOTS,
-            &value_aliases,
-        );
+    let alloc = StackifyBuilder::new(
+        function,
+        &cfg,
+        &dom,
+        &stack_liveness,
+        backend.stackify_reach_depth,
+    )
+    .with_scratch_live_values(canonical_scratch_live_values)
+    .with_scratch_spills(scratch_plan::SCRATCH_SPILL_SLOTS)
+    .with_value_aliases(&value_aliases)
+    .compute();
 
     memory_plan::FuncAnalysis {
         alloc,
@@ -2802,7 +2800,7 @@ block0:
                 dom.compute(&cfg);
 
                 let block_order = dom.rpo().to_owned();
-                let alloc = StackifyAlloc::for_function(function, &cfg, &dom, &liveness, 16);
+                let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute();
 
                 analyses.insert(
                     func,
