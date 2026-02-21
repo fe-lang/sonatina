@@ -50,7 +50,8 @@ mod tests {
         isa::evm::{EvmBackend, canonicalize_alias_value},
         liveness::{InstLiveness, Liveness},
     };
-    use sonatina_ir::{cfg::ControlFlowGraph, isa::evm::Evm};
+    use cranelift_entity::SecondaryMap;
+    use sonatina_ir::{ValueId, cfg::ControlFlowGraph, isa::evm::Evm};
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
@@ -168,6 +169,72 @@ block0:
                     assert!(
                         !prev_is_pre,
                         "alias-only cast should not have stack prep actions:\n{trace}"
+                    );
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn alias_aware_trace_keeps_multihop_noop_casts_action_free() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256, v1.i256) {
+block0:
+    v2.*i8 = int_to_ptr v0 *i8;
+    v3.*i32 = bitcast v2 *i32;
+    v4.*i256 = bitcast v3 *i256;
+    mstore v4 v1 i256;
+    return;
+}
+"#;
+
+        let parsed = parse_module(SRC).unwrap();
+        let fref = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&f| parsed.module.ctx.func_sig(f, |sig| sig.name() == "f"))
+            .expect("missing f");
+
+        parsed.module.func_store.view(fref, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let v0 = parsed.debug.value(fref, "v0").expect("v0");
+            let v2 = parsed.debug.value(fref, "v2").expect("v2");
+            let v3 = parsed.debug.value(fref, "v3").expect("v3");
+            let v4 = parsed.debug.value(fref, "v4").expect("v4");
+
+            let mut value_aliases: SecondaryMap<ValueId, Option<ValueId>> = SecondaryMap::new();
+            for v in function.dfg.values.keys() {
+                value_aliases[v] = Some(v);
+            }
+            value_aliases[v2] = Some(v0);
+            value_aliases[v3] = Some(v2);
+            value_aliases[v4] = Some(v3);
+
+            let mut liveness = Liveness::new();
+            liveness.compute_with_value_normalizer(function, &cfg, |v| {
+                canonicalize_alias_value(&value_aliases, v)
+            });
+
+            let (_, trace) = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16)
+                .with_value_aliases(&value_aliases)
+                .compute_with_trace();
+
+            let lines: Vec<_> = trace.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                let op = line.trim_start();
+                if op.starts_with("bitcast [") || op.starts_with("int_to_ptr [") {
+                    let prev_is_pre = i > 0 && lines[i - 1].trim_start().starts_with("pre:");
+                    assert!(
+                        !prev_is_pre,
+                        "multi-hop alias no-op cast should not have stack prep actions:\n{trace}"
                     );
                 }
             }

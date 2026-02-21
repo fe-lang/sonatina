@@ -75,6 +75,50 @@ impl StackifyContext<'_> {
     }
 }
 
+fn normalize_value_aliases(
+    func: &Function,
+    value_aliases: &mut SecondaryMap<ValueId, Option<ValueId>>,
+) {
+    for value in func.dfg.values.keys() {
+        let mut seen: BitSet<ValueId> = BitSet::default();
+        let mut path = SmallVec::<[ValueId; 8]>::new();
+        let mut current = value;
+        let rep = loop {
+            if !seen.insert(current) {
+                debug_assert!(
+                    false,
+                    "cycle detected in stackify value aliases at v{}",
+                    current.as_u32()
+                );
+                for v in path.iter().copied() {
+                    value_aliases[v] = Some(v);
+                }
+                break value;
+            }
+            path.push(current);
+            let next = value_aliases[current].unwrap_or(current);
+            if next == current {
+                break current;
+            }
+            current = next;
+        };
+        for v in path {
+            value_aliases[v] = Some(rep);
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    for value in func.dfg.values.keys() {
+        let rep = value_aliases[value].unwrap_or(value);
+        debug_assert_eq!(
+            value_aliases[rep].unwrap_or(rep),
+            rep,
+            "stackify value alias map is not one-hop canonical for v{}",
+            value.as_u32()
+        );
+    }
+}
+
 impl<'a> StackifyBuilder<'a> {
     pub fn new(
         func: &'a Function,
@@ -150,7 +194,7 @@ impl<'a> StackifyBuilder<'a> {
             scratch_live_values
         };
 
-        let value_aliases = if let Some(value_aliases) = self.value_aliases_override {
+        let mut value_aliases = if let Some(value_aliases) = self.value_aliases_override {
             value_aliases.clone()
         } else {
             let mut aliases: SecondaryMap<ValueId, Option<ValueId>> = SecondaryMap::new();
@@ -159,6 +203,7 @@ impl<'a> StackifyBuilder<'a> {
             }
             aliases
         };
+        normalize_value_aliases(self.func, &mut value_aliases);
 
         let ctx = StackifyContext {
             func: self.func,
