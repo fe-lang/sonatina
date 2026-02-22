@@ -1,0 +1,340 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/array_iter_reverse.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
+
+object: Contract
+  section runtime: 366 bytes
+  total: 366 bytes
+
+functions:
+  mem: dyn_base=0xc0 static_base=0xc0
+  sum_last4: ir_blocks=4 ir_insts=27 vcode_ops=70 fixups=5 imm_bytes=11
+    mem: scheme=StaticArena need_words=0 locals_words=0
+  sum_first4: ir_blocks=4 ir_insts=26 vcode_ops=68 fixups=5 imm_bytes=10
+    mem: scheme=StaticArena need_words=0 locals_words=0
+  test_view_param_local_ref_take_reverse: ir_blocks=1 ir_insts=35 vcode_ops=93 fixups=9 imm_bytes=24
+    mem: scheme=StaticArena need_words=0 locals_words=0
+  take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Reverse_u256___u256__8____3cbd747f44bd7a69: ir_blocks=4 ir_insts=12 vcode_ops=18 fixups=2 imm_bytes=2
+    mem: scheme=StaticArena need_words=0 locals_words=0
+  take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93f2650f4: ir_blocks=4 ir_insts=12 vcode_ops=18 fixups=2 imm_bytes=2
+    mem: scheme=StaticArena need_words=0 locals_words=0
+  assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
+    mem: scheme=StaticArena need_words=0 locals_words=0
+
+evm:
+  case ok: calldata_len=0 success reason=Return gas_used=22512 gas_refunded=0 logs=0 output=call len=0
+
+
+--------------- DEBUG ---------------
+
+// func private %sum_last4(v0.i256) -> i256
+sum_last4:
+  block0:
+    JUMPDEST
+    PUSH1 0x40 (64)  // v40.i256 = mload 64.i32 i256;
+    MLOAD
+    PUSH1 0x40 (64)  // v23.*i8 = evm_malloc 64.i256;
+    MLOAD
+    PUSH1 0xbf (191)
+    DUP2
+    GT
+    PUSH1 `pc + (4)`
+    JUMPI
+    POP
+    PUSH1 0xc0 (192)
+    JUMPDEST
+    PUSH1 0x4 (4)  // mstore v26 4.i256 i256;
+    DUP2
+    MSTORE
+    DUP1  // v28.*i256 = gep v37 0.i256 1.i256;
+    PUSH1 0x20 (32)
+    ADD
+    SWAP1  // mstore v28 v0 i256;
+    SWAP3
+    SWAP1
+    MSTORE
+    DUP2  // v5.i256 = call %take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Reverse_u256___u256__8____3cbd747f44bd7a69 v24;
+    PUSH1 `pc + (4)`
+    SWAP1
+    PUSH1 FuncRef(5)
+    JUMP
+    JUMPDEST
+    SWAP1  // v19.*i256 = gep v18 0.i256 1.i256;
+    SWAP2
+    PUSH1 0x20 (32)
+    ADD
+    PUSH0  // jump block1;
+    PUSH0
+  block1:
+    JUMPDEST
+    DUP4  // v8.i1 = lt v6 v5;
+    DUP3
+    LT
+    ISZERO  // br v8 block2 block4;
+    PUSH1 block4
+    JUMPI
+  block2:
+    DUP3  // v20.i256 = mload v19 i256;
+    MLOAD
+    DUP3  // v38.i256 = sub 7.i256 v6;
+    PUSH1 0x7 (7)
+    SUB
+    SWAP1  // v33.*i256 = gep v32 0.i256 v38;
+    SWAP1
+    PUSH1 0x20 (32)
+    MUL
+    ADD
+    MLOAD  // v34.i256 = mload v33 i256;
+    ADD  // v15.i256 = add v34 v23;
+    SWAP1  // v18.i256 = add 1.i256 v6;
+    PUSH1 0x1 (1)
+    ADD
+    SWAP1  // jump block1;
+    PUSH1 block1
+    JUMP
+  block4:
+    JUMPDEST
+    SWAP3  // mstore 64.i32 v40 i256;
+    POP
+    POP
+    POP
+    SWAP1
+    PUSH1 0x40 (64)
+    MSTORE
+    SWAP1  // return v23;
+    JUMP
+
+// func private %sum_first4(v0.i256) -> i256
+sum_first4:
+  block0:
+    JUMPDEST
+    PUSH1 0x40 (64)  // v31.i256 = mload 64.i32 i256;
+    MLOAD
+    PUSH1 0x40 (64)  // v19.*i8 = evm_malloc 64.i256;
+    MLOAD
+    PUSH1 0xbf (191)
+    DUP2
+    GT
+    PUSH1 `pc + (4)`
+    JUMPI
+    POP
+    PUSH1 0xc0 (192)
+    JUMPDEST
+    PUSH1 0x4 (4)  // mstore v22 4.i256 i256;
+    DUP2
+    MSTORE
+    DUP1  // v24.*i256 = gep v29 0.i256 1.i256;
+    PUSH1 0x20 (32)
+    ADD
+    SWAP1  // mstore v24 v0 i256;
+    SWAP3
+    SWAP1
+    MSTORE
+    DUP2  // v4.i256 = call %take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93f2650f4 v20;
+    PUSH1 `pc + (4)`
+    SWAP1
+    PUSH1 FuncRef(8)
+    JUMP
+    JUMPDEST
+    SWAP1  // v15.*i256 = gep v14 0.i256 1.i256;
+    SWAP2
+    PUSH1 0x20 (32)
+    ADD
+    PUSH0  // jump block1;
+    PUSH0
+  block1:
+    JUMPDEST
+    DUP4  // v7.i1 = lt v5 v4;
+    DUP3
+    LT
+    ISZERO  // br v7 block2 block4;
+    PUSH1 block4
+    JUMPI
+  block2:
+    DUP3  // v16.i256 = mload v15 i256;
+    MLOAD
+    DUP3  // v26.*i256 = gep v25 0.i256 v5;
+    SWAP1
+    SWAP1
+    PUSH1 0x20 (32)
+    MUL
+    ADD
+    MLOAD  // v27.i256 = mload v26 i256;
+    ADD  // v14.i256 = add v27 v22;
+    SWAP1  // v17.i256 = add 1.i256 v5;
+    PUSH1 0x1 (1)
+    ADD
+    SWAP1  // jump block1;
+    PUSH1 block1
+    JUMP
+  block4:
+    JUMPDEST
+    SWAP3  // mstore 64.i32 v31 i256;
+    POP
+    POP
+    POP
+    SWAP1
+    PUSH1 0x40 (64)
+    MSTORE
+    SWAP1  // return v22;
+    JUMP
+
+// func private %test_view_param_local_ref_take_reverse()
+test_view_param_local_ref_take_reverse:
+  block0:
+    JUMPDEST
+    PUSH1 0x40 (64)  // v2.*i8 = evm_malloc 256.i256;
+    MLOAD
+    PUSH1 0xbf (191)
+    DUP2
+    GT
+    PUSH1 `pc + (4)`
+    JUMPI
+    POP
+    PUSH1 0xc0 (192)
+    JUMPDEST
+    DUP1
+    PUSH2 0x100 (256)
+    ADD
+    PUSH1 0x40 (64)
+    MSTORE
+    PUSH1 0x1 (1)  // mstore v6 1.i256 i256;
+    DUP2
+    MSTORE
+    DUP1  // v9.*i256 = gep v37 0.i256 1.i256;
+    PUSH1 0x20 (32)
+    ADD
+    PUSH1 0x2 (2)  // mstore v9 2.i256 i256;
+    SWAP1
+    MSTORE
+    DUP1  // v12.*i256 = gep v38 0.i256 2.i256;
+    PUSH1 0x40 (64)
+    ADD
+    PUSH1 0x3 (3)  // mstore v12 3.i256 i256;
+    SWAP1
+    MSTORE
+    DUP1  // v15.*i256 = gep v39 0.i256 3.i256;
+    PUSH1 0x60 (96)
+    ADD
+    PUSH1 0x4 (4)  // mstore v15 4.i256 i256;
+    SWAP1
+    MSTORE
+    DUP1  // v18.*i256 = gep v40 0.i256 4.i256;
+    PUSH1 0x80 (128)
+    ADD
+    PUSH1 0x5 (5)  // mstore v18 5.i256 i256;
+    SWAP1
+    MSTORE
+    DUP1  // v21.*i256 = gep v41 0.i256 5.i256;
+    PUSH1 0xa0 (160)
+    ADD
+    PUSH1 0x6 (6)  // mstore v21 6.i256 i256;
+    SWAP1
+    MSTORE
+    DUP1  // v24.*i256 = gep v42 0.i256 6.i256;
+    PUSH1 0xc0 (192)
+    ADD
+    PUSH1 0x7 (7)  // mstore v24 7.i256 i256;
+    SWAP1
+    MSTORE
+    DUP1  // v27.*i256 = gep v43 0.i256 7.i256;
+    PUSH1 0xe0 (224)
+    ADD
+    PUSH1 0x8 (8)  // mstore v27 8.i256 i256;
+    SWAP1
+    MSTORE
+    DUP1  // v28.i256 = call %sum_last4 v3;
+    PUSH1 `pc + (4)`
+    SWAP1
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    PUSH1 0x1a (26)  // v44.i1 = eq 26.i256 v28;
+    EQ
+    PUSH1 `pc + (4)`  // call %assert v31;
+    SWAP1
+    PUSH1 FuncRef(10)
+    JUMP
+    JUMPDEST
+    PUSH1 `pc + (4)`  // v32.i256 = call %sum_first4 v3;
+    SWAP1
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH1 0xa (10)  // v45.i1 = eq 10.i256 v32;
+    EQ
+    PUSH1 `pc + (4)`  // call %assert v35;
+    SWAP1
+    PUSH1 FuncRef(10)
+    JUMP
+    JUMPDEST
+    PUSH0  // evm_return 0.i256 0.i256;
+    PUSH0
+    RETURN
+
+// func private %take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Reverse_u256___u256__8____3cbd747f44bd7a69(v0.i256) -> i256
+take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Reverse_u256___u256__8____3cbd747f44bd7a69:
+  block0:
+    JUMPDEST
+    DUP1  // v9.i256 = mload v8 i256;
+    MLOAD
+    PUSH1 0x8 (8)  // v10.i1 = lt v9 8.i256;
+    SWAP1
+    LT
+    ISZERO  // br v10 block1 block5;
+    PUSH1 block5
+    JUMPI
+  block1:
+    MLOAD  // v17.i256 = mload v16 i256;
+    PUSH1 block3  // jump block3;
+    JUMP
+  block3:
+    JUMPDEST
+    SWAP1  // return v19;
+    JUMP
+  block5:
+    JUMPDEST
+    POP  // jump block3;
+    PUSH1 0x8 (8)
+
+// func private %take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93f2650f4(v0.i256) -> i256
+take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93f2650f4:
+  block0:
+    JUMPDEST
+    DUP1  // v9.i256 = mload v8 i256;
+    MLOAD
+    PUSH1 0x8 (8)  // v10.i1 = lt v9 8.i256;
+    SWAP1
+    LT
+    ISZERO  // br v10 block1 block5;
+    PUSH1 block5
+    JUMPI
+  block1:
+    MLOAD  // v17.i256 = mload v16 i256;
+    PUSH1 block3  // jump block3;
+    JUMP
+  block3:
+    JUMPDEST
+    SWAP1  // return v19;
+    JUMP
+  block5:
+    JUMPDEST
+    POP  // jump block3;
+    PUSH1 0x8 (8)
+
+// func public %assert(v0.i256)
+assert:
+  block0:
+    JUMPDEST
+    PUSH1 block2  // br v2 block1 block2;
+    JUMPI
+  block1:
+    PUSH0  // evm_revert 0.i256 0.i256;
+    PUSH0
+    REVERT
+  block2:
+    JUMPDEST
+    JUMP  // return;
