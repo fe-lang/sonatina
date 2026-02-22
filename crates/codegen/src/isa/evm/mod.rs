@@ -56,6 +56,8 @@ pub enum PushWidthPolicy {
 struct PreparedSection {
     plan: ProgramMemoryPlan,
     has_dynamic_frames: bool,
+    has_persistent_mallocs: bool,
+    has_explicit_free_ptr_writes: bool,
     allocs: FxHashMap<FuncRef, StackifyAlloc>,
     block_orders: FxHashMap<FuncRef, Vec<BlockId>>,
 }
@@ -416,6 +418,20 @@ impl EvmBackend {
             .borrow()
             .as_ref()
             .is_none_or(|s| s.has_dynamic_frames)
+    }
+
+    fn section_has_persistent_mallocs(&self) -> bool {
+        self.section_state
+            .borrow()
+            .as_ref()
+            .is_none_or(|s| s.has_persistent_mallocs)
+    }
+
+    fn section_has_explicit_free_ptr_writes(&self) -> bool {
+        self.section_state
+            .borrow()
+            .as_ref()
+            .is_none_or(|s| s.has_explicit_free_ptr_writes)
     }
 
     fn lower_prepared_function(
@@ -1033,6 +1049,43 @@ impl LowerBackend for EvmBackend {
         if std::env::var_os("SONATINA_EVM_MEM_DEBUG").is_some() {
             debug_print_mem_plan(module, funcs, &plan);
         }
+        let has_persistent_mallocs = funcs.iter().copied().any(|func| {
+            let Some(mem_plan) = plan.funcs.get(&func) else {
+                return false;
+            };
+            module.func_store.view(func, |function| {
+                function.layout.iter_block().any(|block| {
+                    function.layout.iter_inst(block).any(|inst| {
+                        matches!(
+                            self.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                            EvmInstKind::EvmMalloc(_)
+                        ) && !mem_plan.transient_mallocs.contains(&inst)
+                    })
+                })
+            })
+        });
+        let has_explicit_free_ptr_writes = funcs.iter().copied().any(|func| {
+            module.func_store.view(func, |function| {
+                function.layout.iter_block().any(|block| {
+                    function.layout.iter_inst(block).any(|inst| {
+                        match self.isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
+                            EvmInstKind::Mstore(mstore) => function
+                                .dfg
+                                .value_imm(*mstore.addr())
+                                .and_then(immediate_u32)
+                                .is_some_and(|addr| addr == u32::from(FREE_PTR_SLOT)),
+                            EvmInstKind::EvmMstore8(mstore8) => function
+                                .dfg
+                                .value_imm(*mstore8.addr())
+                                .and_then(immediate_u32)
+                                .is_some_and(|addr| addr == u32::from(FREE_PTR_SLOT)),
+                            _ => false,
+                        }
+                    })
+                })
+            })
+        });
+
         let has_dynamic_frames = plan
             .funcs
             .values()
@@ -1048,6 +1101,8 @@ impl LowerBackend for EvmBackend {
         *self.section_state.borrow_mut() = Some(PreparedSection {
             plan,
             has_dynamic_frames,
+            has_persistent_mallocs,
+            has_explicit_free_ptr_writes,
             allocs,
             block_orders,
         });
@@ -1577,6 +1632,8 @@ impl LowerBackend for EvmBackend {
 
             EvmInstKind::EvmMalloc(_) => {
                 let needs_dyn_sp_clamp = self.section_has_dynamic_frames();
+                let has_persistent_mallocs = self.section_has_persistent_mallocs();
+                let has_explicit_free_ptr_writes = self.section_has_explicit_free_ptr_writes();
                 let mem_plan = self.current_mem_plan.borrow();
                 let mem_plan = mem_plan
                     .as_ref()
@@ -1632,7 +1689,17 @@ impl LowerBackend for EvmBackend {
                         ctx.push(OpCode::POP);
                     }
 
-                    emit_malloc_base(ctx, min_base_bytes, needs_dyn_sp_clamp);
+                    if aligned_size_imm.is_some()
+                        && !needs_dyn_sp_clamp
+                        && !has_persistent_mallocs
+                        && !has_explicit_free_ptr_writes
+                    {
+                        // In static-only sections without persistent mallocs or explicit free-pointer
+                        // writes, a non-escaping immediate-size malloc can use a fixed base directly.
+                        push_bytes(ctx, &u32_to_be(min_base_bytes));
+                    } else {
+                        emit_malloc_base(ctx, min_base_bytes, needs_dyn_sp_clamp);
+                    }
 
                     perform_actions(ctx, &alloc.write(insn, result));
                     return;

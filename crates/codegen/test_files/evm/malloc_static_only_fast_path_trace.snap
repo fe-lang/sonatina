@@ -1,23 +1,24 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 408
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/malloc_static_only_fast_path_trace.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 35 bytes
-  total: 35 bytes
+  section runtime: 23 bytes
+  total: 23 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
-  main: ir_blocks=1 ir_insts=5 vcode_ops=17 fixups=1 imm_bytes=4
+  main: ir_blocks=1 ir_insts=5 vcode_ops=8 fixups=0 imm_bytes=2
     mem: scheme=StaticArena need_words=0 locals_words=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21161 gas_refunded=0 logs=0 output=call len=32
+  case ok: calldata_len=8 success reason=Return gas_used=21130 gas_refunded=0 logs=0 output=call len=32
 
 
 --------------- DEBUG ---------------
@@ -26,16 +27,7 @@ evm:
 main:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v0.*i8 = evm_malloc 32.i256;
-    MLOAD
-    PUSH1 0xbf (191)
-    DUP2
-    GT
-    PUSH1 `pc + (4)`
-    JUMPI
-    POP
-    PUSH1 0xc0 (192)
-    JUMPDEST
+    PUSH1 0xc0 (192)  // v0.*i8 = evm_malloc 32.i256;
     PUSH1 0x6f (111)  // mstore v1 111.i256 i256;
     DUP2
     MSTORE
