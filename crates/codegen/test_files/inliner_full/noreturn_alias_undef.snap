@@ -1,0 +1,21 @@
+---
+source: crates/codegen/tests/inliner.rs
+input_file: test_files/inliner_full/noreturn_alias_undef.sntn
+---
+func private %spin(v0.i32) -> i32 {
+    block0:
+        jump block0;
+}
+
+
+func public %caller(v0.i32) -> i32 {
+    block0:
+        jump block2;
+
+    block2:
+        jump block2;
+
+    block1:
+        v2.i32 = add undef.i32 1.i32;
+        return v2;
+}

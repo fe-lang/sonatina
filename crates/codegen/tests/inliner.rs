@@ -5,7 +5,7 @@ use sonatina_codegen::{
     analysis::func_behavior,
     optim::inliner::{Inliner, InlinerConfig},
 };
-use sonatina_ir::ir_writer::FuncWriter;
+use sonatina_ir::{ir_writer::FuncWriter, module::FuncAttrs};
 use sonatina_parser::ParsedModule;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
@@ -21,6 +21,36 @@ fn test(fixture: Fixture<ParsedModule>) {
 
     let mut inliner = Inliner::new(InlinerConfig::default());
     inliner.run(module);
+
+    let mut result = String::new();
+    for func_ref in module.funcs() {
+        module.func_store.view(func_ref, |func| {
+            result.push_str(&FuncWriter::new(func_ref, func).dump_string());
+        });
+        result.push_str("\n\n");
+    }
+
+    snap_test!(result, fixture_path);
+}
+
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/test_files/inliner_full/",
+    glob: "*.sntn"
+    loader: common::parse_module,
+)]
+fn test_full(fixture: Fixture<ParsedModule>) {
+    let fixture_path = fixture.path();
+    let mut parsed = fixture.into_content();
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(full_inliner_test_config());
+    let stats = inliner.run(module);
+    assert!(
+        stats.full_calls_inlined > 0,
+        "expected at least one full-inline in {}",
+        fixture_path
+    );
+    assert_module_verified(module);
 
     let mut result = String::new();
     for func_ref in module.funcs() {
@@ -555,6 +585,165 @@ func public %caller(v0.i256, v1.i1) -> (i256, i1) {
     assert!(report.is_ok(), "module failed verification: {report:?}");
 }
 
+#[test]
+fn full_inliner_respects_growth_budget() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %multi(v0.i1) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return 1.i32;
+
+    block2:
+        return 2.i32;
+}
+
+func public %caller(v0.i1) -> i32 {
+    block0:
+        v1.i32 = call %multi v0;
+        return v1;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let cfg = InlinerConfig {
+        enable_full_inliner: true,
+        max_growth_per_caller: 1,
+        max_inlinee_blocks: 64,
+        max_inlinee_insts: 256,
+        inline_threshold: 1000,
+        inline_threshold_cold: 1000,
+        ..Default::default()
+    };
+    let mut inliner = Inliner::new(cfg);
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        dumped.contains("call %multi"),
+        "growth budget should keep the call:\n{dumped}"
+    );
+    assert!(stats.skipped_budget > 0);
+}
+
+#[test]
+fn full_inliner_skips_recursive_scc_when_disabled() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %self(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = call %self v0 v1;
+        return v2;
+}
+
+func public %caller(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %self v0 v1;
+        return v2;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(InlinerConfig {
+        enable_full_inliner: true,
+        max_inlinee_blocks: 64,
+        max_inlinee_insts: 256,
+        inline_threshold: 1000,
+        inline_threshold_cold: 1000,
+        ..Default::default()
+    });
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    assert!(stats.skipped_recursive_scc > 0);
+}
+
+#[test]
+fn full_inliner_honors_noinline_and_alwaysinline_attrs() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %forced(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 1.i32;
+        return v2;
+}
+
+func private %blocked(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 2.i32;
+        return v2;
+}
+
+func public %caller(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %forced v0 v1;
+        v3.i32 = call %blocked v0 v2;
+        return v3;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let forced = find_func(module, "forced");
+    let blocked = find_func(module, "blocked");
+    module.ctx.set_func_attrs(forced, FuncAttrs::ALWAYSINLINE);
+    module.ctx.set_func_attrs(blocked, FuncAttrs::NOINLINE);
+
+    let mut inliner = Inliner::new(InlinerConfig {
+        enable_full_inliner: true,
+        max_inlinee_blocks: 64,
+        max_inlinee_insts: 256,
+        inline_threshold: -1000,
+        inline_threshold_cold: -1000,
+        ..Default::default()
+    });
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %forced"),
+        "alwaysinline call should be inlined:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("call %blocked"),
+        "noinline call should remain:\n{dumped}"
+    );
+    assert!(stats.full_calls_inlined > 0);
+}
+
 fn dump_module(module: &sonatina_ir::Module) -> String {
     let mut result = String::new();
     for func_ref in module.funcs() {
@@ -564,4 +753,32 @@ fn dump_module(module: &sonatina_ir::Module) -> String {
         result.push_str("\n\n");
     }
     result
+}
+
+fn assert_module_verified(module: &sonatina_ir::Module) {
+    let mut cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    cfg.allow_detached_entities = true;
+    let report = verify_module(module, &cfg);
+    assert!(!report.has_errors(), "{report}");
+}
+
+fn full_inliner_test_config() -> InlinerConfig {
+    InlinerConfig {
+        enable_full_inliner: true,
+        max_inlinee_blocks: 64,
+        max_inlinee_insts: 1024,
+        max_growth_per_caller: 4096,
+        max_total_growth: 1 << 20,
+        inline_threshold: 1000,
+        inline_threshold_cold: 1000,
+        ..Default::default()
+    }
+}
+
+fn find_func(module: &sonatina_ir::Module, name: &str) -> sonatina_ir::module::FuncRef {
+    module
+        .funcs()
+        .into_iter()
+        .find(|func_ref| module.ctx.func_sig(*func_ref, |sig| sig.name() == name))
+        .unwrap_or_else(|| panic!("function %{name} not found"))
 }

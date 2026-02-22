@@ -1,0 +1,13 @@
+target = "evm-ethereum-london"
+
+func private %spin(v0.i32) -> i32 {
+    block0:
+        jump block0;
+}
+
+func public %caller(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %spin v0;
+        v2.i32 = add v1 1.i32;
+        return v2;
+}

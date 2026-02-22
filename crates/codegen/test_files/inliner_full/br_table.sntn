@@ -1,0 +1,21 @@
+target = "evm-ethereum-london"
+
+func private %dispatch(v0.i8) -> i32 {
+    block0:
+        br_table v0 block3 (0.i8 block1) (1.i8 block2);
+
+    block1:
+        return 7.i32;
+
+    block2:
+        return 11.i32;
+
+    block3:
+        return 13.i32;
+}
+
+func public %caller(v0.i8) -> i32 {
+    block0:
+        v1.i32 = call %dispatch v0;
+        return v1;
+}
