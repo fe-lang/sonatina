@@ -83,27 +83,28 @@ fn normalize_value_aliases(
         let mut seen: BitSet<ValueId> = BitSet::default();
         let mut path = SmallVec::<[ValueId; 8]>::new();
         let mut current = value;
-        let rep = loop {
+        let mut rep = None;
+        loop {
             if !seen.insert(current) {
-                debug_assert!(
-                    false,
-                    "cycle detected in stackify value aliases at v{}",
-                    current.as_u32()
-                );
+                // Invalid alias cycles should not be canonicalized to an arbitrary value from
+                // outside the cycle. Keep all traversed values self-canonical.
                 for v in path.iter().copied() {
                     value_aliases[v] = Some(v);
                 }
-                break value;
+                break;
             }
             path.push(current);
             let next = value_aliases[current].unwrap_or(current);
             if next == current {
-                break current;
+                rep = Some(current);
+                break;
             }
             current = next;
-        };
-        for v in path {
-            value_aliases[v] = Some(rep);
+        }
+        if let Some(rep) = rep {
+            for v in path {
+                value_aliases[v] = Some(rep);
+            }
         }
     }
 
@@ -338,4 +339,58 @@ fn assign_spill_obj_ids(
         map[v] = Some(crate::isa::evm::static_arena_alloc::StackObjId::new(idx));
     }
     map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_value_aliases;
+    use cranelift_entity::SecondaryMap;
+    use sonatina_parser::parse_module;
+
+    #[test]
+    fn normalize_value_aliases_keeps_cycle_paths_self_canonical() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256) -> i256 {
+block0:
+    v1.i256 = add v0 1.i256;
+    v2.i256 = add v1 1.i256;
+    v3.i256 = add v2 1.i256;
+    return v3;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&f| parsed.module.ctx.func_sig(f, |sig| sig.name() == "f"))
+            .expect("function exists");
+
+        let v0 = parsed.debug.value(func_ref, "v0").expect("v0 exists");
+        let v1 = parsed.debug.value(func_ref, "v1").expect("v1 exists");
+        let v2 = parsed.debug.value(func_ref, "v2").expect("v2 exists");
+        let v3 = parsed.debug.value(func_ref, "v3").expect("v3 exists");
+
+        parsed.module.func_store.view(func_ref, |func| {
+            let mut aliases: SecondaryMap<_, Option<_>> = SecondaryMap::new();
+            for value in func.dfg.values.keys() {
+                aliases[value] = Some(value);
+            }
+
+            // v0 -> v1 -> v2 -> v3 -> v2 (cycle entered from outside).
+            aliases[v0] = Some(v1);
+            aliases[v1] = Some(v2);
+            aliases[v2] = Some(v3);
+            aliases[v3] = Some(v2);
+
+            normalize_value_aliases(func, &mut aliases);
+
+            for value in [v0, v1, v2, v3] {
+                assert_eq!(aliases[value], Some(value));
+            }
+        });
+    }
 }

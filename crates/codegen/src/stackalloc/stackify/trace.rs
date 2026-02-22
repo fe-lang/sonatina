@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, fmt::Write};
 
 use sonatina_ir::{
-    BlockId, Function, InstId, ValueId,
+    BlockId, Function, InstId, U256, ValueId,
     inst::{data, downcast},
     ir_writer::{FuncWriteCtx, InstStatement, IrWrite},
     module::FuncRef,
@@ -394,25 +394,39 @@ fn fmt_values(func: &Function, values: &[ValueId]) -> String {
     s
 }
 
+fn immediate_u32(imm: sonatina_ir::Immediate) -> Option<u32> {
+    if imm.is_negative() {
+        return None;
+    }
+
+    let value = imm.as_i256().to_u256();
+    if value > U256::from(u32::MAX) {
+        return None;
+    }
+
+    Some(value.low_u32())
+}
+
 fn fmt_trace_operands(func: &Function, inst: InstId, args: &[ValueId]) -> String {
     if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)) {
-        // Keep the alias-canonicalized runtime operands from `args`, but still surface the
-        // full static GEP index list in the trace by reinserting immediate indices.
-        let mut canonical = args.iter().copied();
-        let mut rendered: Vec<_> = gep
-            .values()
-            .as_slice()
-            .iter()
-            .enumerate()
-            .map(|(i, &idx)| {
-                if i == 0 || !func.dfg.value_is_imm(idx) {
-                    canonical.next().unwrap_or(idx)
-                } else {
-                    idx
-                }
-            })
-            .collect();
-        rendered.extend(canonical);
+        // Keep alias-canonicalized runtime operands from `args`, while still showing the full
+        // static GEP index list by reinserting compile-time immediate-u32 indices.
+        let mut runtime = args.iter().copied();
+        let mut rendered: Vec<ValueId> = Vec::with_capacity(gep.values().len());
+        for (i, &value) in gep.values().as_slice().iter().enumerate() {
+            let is_runtime_operand = i == 0
+                || !func.dfg.value_is_imm(value)
+                || func.dfg.value_imm(value).and_then(immediate_u32).is_none();
+            if is_runtime_operand {
+                rendered.push(runtime.next().unwrap_or(value));
+            } else {
+                rendered.push(value);
+            }
+        }
+        debug_assert!(
+            runtime.next().is_none(),
+            "trace GEP runtime operand reconstruction left extra args"
+        );
         return fmt_values(func, &rendered);
     }
     fmt_values(func, args)
@@ -488,4 +502,54 @@ fn fmt_actions(actions: &[Action]) -> String {
     }
     s.push(']');
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fmt_trace_operands, fmt_values};
+    use sonatina_ir::inst::{data, downcast};
+    use sonatina_parser::parse_module;
+
+    #[test]
+    fn gep_trace_does_not_duplicate_runtime_immediates() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.*i256) -> *i256 {
+block0:
+    v1.*i256 = gep v0 -1.i8;
+    return v1;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&f| parsed.module.ctx.func_sig(f, |sig| sig.name() == "f"))
+            .expect("function exists");
+
+        parsed.module.func_store.view(func_ref, |func| {
+            let block = func.layout.entry_block().expect("entry block exists");
+            let inst = func
+                .layout
+                .iter_inst(block)
+                .find(|&inst| {
+                    downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)).is_some()
+                })
+                .expect("gep inst exists");
+            let gep =
+                downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)).expect("downcast gep");
+            let base = gep.values()[0];
+            let idx = gep.values()[1];
+
+            // Non-u32 immediates stay runtime operands in stackify planning.
+            assert!(func.dfg.value_is_imm(idx));
+            assert!(func.dfg.value_imm(idx).expect("imm").is_negative());
+
+            let rendered = fmt_trace_operands(func, inst, &[base, idx]);
+            assert_eq!(rendered, fmt_values(func, &[base, idx]));
+        });
+    }
 }
