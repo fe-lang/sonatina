@@ -25,6 +25,9 @@ bitflags! {
         const NORETURN = 1 << 2;
         const WILLRETURN = 1 << 3;
         const WILLTERMINATE = 1 << 4;
+        const NOINLINE = 1 << 5;
+        const ALWAYSINLINE = 1 << 6;
+        const INLINEHINT = 1 << 7;
     }
 }
 
