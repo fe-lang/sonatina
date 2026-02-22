@@ -17,7 +17,7 @@ use sonatina_codegen::{
     isa::evm::{EvmBackend, PushWidthPolicy, canonicalize_alias_value},
     liveness::Liveness,
     machinst::lower::{LowerBackend, SectionLoweringCtx},
-    object::{CompileOptions, compile_object},
+    object::{CompileOptions, compile_all_objects},
     optim::pipeline::Pipeline,
     stackalloc::StackifyBuilder,
 };
@@ -257,7 +257,7 @@ fn test_evm(fixture: Fixture<&str>) {
         verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
     };
 
-    let artifact = compile_object(&parsed.module, &backend, "Contract", &opts)
+    let artifacts = compile_all_objects(&parsed.module, &backend, &opts)
         .unwrap_or_else(|errs| panic!("{}: object compile failed: {errs:?}", fixture.path()));
 
     let mut out = Vec::new();
@@ -273,15 +273,22 @@ fn test_evm(fixture: Fixture<&str>) {
     .unwrap();
     writeln!(&mut out).unwrap();
 
-    writeln!(&mut out, "object: {}", artifact.object.0.as_str()).unwrap();
-    let mut total_bytes: usize = 0;
-    for (name, section) in &artifact.sections {
-        let size = section.bytes.len();
-        total_bytes += size;
-        writeln!(&mut out, "  section {}: {} bytes", name.0.as_str(), size).unwrap();
+    for artifact in &artifacts {
+        writeln!(&mut out, "object: {}", artifact.object.0.as_str()).unwrap();
+        let mut total_bytes: usize = 0;
+        for (name, section) in &artifact.sections {
+            let size = section.bytes.len();
+            total_bytes += size;
+            writeln!(&mut out, "  section {}: {} bytes", name.0.as_str(), size).unwrap();
+        }
+        writeln!(&mut out, "  total: {total_bytes} bytes").unwrap();
+        writeln!(&mut out).unwrap();
     }
-    writeln!(&mut out, "  total: {total_bytes} bytes").unwrap();
-    writeln!(&mut out).unwrap();
+
+    let artifact = artifacts
+        .iter()
+        .find(|artifact| artifact.object.0.as_str() == "Contract")
+        .unwrap_or_else(|| panic!("{}: missing `Contract` object", fixture.path()));
 
     writeln!(&mut out, "functions:").unwrap();
     if let Some(header) = mem_plan_header {

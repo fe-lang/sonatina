@@ -1,13 +1,13 @@
 use std::{collections::BTreeMap, fmt::Write};
 
 use sonatina_ir::{
-    BlockId, Function, InstId, U256, ValueId,
+    BlockId, Function, InstId, ValueId,
     inst::{data, downcast},
     ir_writer::{FuncWriteCtx, InstStatement, IrWrite},
     module::FuncRef,
 };
 
-use crate::bitset::BitSet;
+use crate::{bitset::BitSet, isa::evm::immediate_u32};
 
 use super::{
     super::Action,
@@ -392,19 +392,6 @@ fn fmt_values(func: &Function, values: &[ValueId]) -> String {
     }
     s.push(']');
     s
-}
-
-fn immediate_u32(imm: sonatina_ir::Immediate) -> Option<u32> {
-    if imm.is_negative() {
-        return None;
-    }
-
-    let value = imm.as_i256().to_u256();
-    if value > U256::from(u32::MAX) {
-        return None;
-    }
-
-    Some(value.low_u32())
 }
 
 fn fmt_trace_operands(func: &Function, inst: InstId, args: &[ValueId]) -> String {

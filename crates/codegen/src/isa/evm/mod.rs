@@ -1,6 +1,7 @@
 mod heap_plan;
 mod late_alias;
 pub use late_alias::canonicalize_alias_value;
+pub(crate) use late_alias::normalize_alias_map;
 mod malloc_plan;
 mod mem_effects;
 mod memory_plan;
@@ -2056,7 +2057,7 @@ fn static_arena_addr_bytes(offset_words: u32) -> u32 {
         .expect("alloca address bytes overflow")
 }
 
-fn immediate_u32(imm: Immediate) -> Option<u32> {
+pub(crate) fn immediate_u32(imm: Immediate) -> Option<u32> {
     if imm.is_negative() {
         return None;
     }

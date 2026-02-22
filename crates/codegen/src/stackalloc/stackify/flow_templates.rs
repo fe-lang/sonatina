@@ -13,9 +13,9 @@ use crate::{
 use super::{
     builder::StackifyContext,
     iteration::{
-        clean_dead_stack_prefix, count_block_uses, improve_reachability_before_operands,
-        inst_is_noop_alias_cast, last_use_values_in_inst, operand_order_for_evm,
-        skip_pre_exit_cleanup,
+        clean_dead_stack_prefix, consume_operand_uses, count_block_uses,
+        improve_reachability_before_operands, inst_is_noop_alias_cast, last_use_values_in_inst,
+        operand_order_for_evm, skip_pre_exit_cleanup,
     },
     planner::{self, Planner},
     slots::{FreeSlotPools, SpillSlotPools},
@@ -239,22 +239,15 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
             if is_normal && inst_is_noop_alias_cast(ctx, inst, &args, res) {
                 // Typed alias-only no-op casts should be invisible to stack simulation:
                 // they do not move stack values, but still consume one SSA use.
-                for &v in args.iter() {
-                    if !ctx.func.dfg.value_is_imm(v)
-                        && let Some(n) = remaining_uses.get_mut(&v)
-                    {
-                        let before = *n;
-                        *n = n.saturating_sub(1);
-                        if before != 0 && *n == 0 {
-                            live_future.remove(v);
-                            if !live_out.contains(v) {
-                                slots
-                                    .scratch
-                                    .release_if_assigned(v, &mut free_slots.scratch);
-                            }
-                        }
-                    }
-                }
+                consume_operand_uses(
+                    ctx.func,
+                    &args,
+                    &mut remaining_uses,
+                    &mut live_future,
+                    &live_out,
+                    &slots.scratch,
+                    &mut free_slots.scratch,
+                );
                 continue;
             }
 
@@ -389,22 +382,15 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                 stack.position_call_ret_below_operands(args.len(), &mut actions);
             }
 
-            for &v in args.iter() {
-                if !ctx.func.dfg.value_is_imm(v)
-                    && let Some(n) = remaining_uses.get_mut(&v)
-                {
-                    let before = *n;
-                    *n = n.saturating_sub(1);
-                    if before != 0 && *n == 0 {
-                        live_future.remove(v);
-                        if !live_out.contains(v) {
-                            slots
-                                .scratch
-                                .release_if_assigned(v, &mut free_slots.scratch);
-                        }
-                    }
-                }
-            }
+            consume_operand_uses(
+                ctx.func,
+                &args,
+                &mut remaining_uses,
+                &mut live_future,
+                &live_out,
+                &slots.scratch,
+                &mut free_slots.scratch,
+            );
 
             stack.pop_n_operands(args.len());
 

@@ -1,4 +1,7 @@
 #! evm.config: { vcode: true, opt: 2, stackify_trace: true }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return
 
 target = "evm-ethereum-osaka"
 
@@ -81,6 +84,12 @@ func private %test_coin__StorPtr_Evm___207f35a85ac4062e(v0.i256) {
         v60.i256 = zext v59 i256;
         call %assert v60;
         return;
+}
+
+func private %__Contract_runtime_entry() {
+    block0:
+        call %test_coin__StorPtr_Evm___207f35a85ac4062e 0.i256;
+        evm_return 0.i256 0.i256;
 }
 
 func private %__Coin_init_contract(v0.i256) {
@@ -1157,12 +1166,19 @@ func private %memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at(
 }
 
 
-object @Contract {
+object @Coin {
     section init {
         entry %__Coin_init;
         embed .runtime as &__Coin_runtime;
     }
     section runtime {
         entry %__Coin_runtime;
+    }
+}
+
+object @Contract {
+    section runtime {
+        entry %__Contract_runtime_entry;
+        embed @Coin.init as &__Coin_init;
     }
 }

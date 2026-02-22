@@ -3,7 +3,10 @@ use smallvec::SmallVec;
 use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
 use std::collections::BTreeMap;
 
-use crate::{bitset::BitSet, cfg_scc::CfgSccAnalysis, domtree::DomTree, liveness::Liveness};
+use crate::{
+    bitset::BitSet, cfg_scc::CfgSccAnalysis, domtree::DomTree, isa::evm::normalize_alias_map,
+    liveness::Liveness,
+};
 
 use super::{
     alloc::StackifyAlloc,
@@ -72,51 +75,6 @@ pub(super) struct StackifyContext<'a> {
 impl StackifyContext<'_> {
     pub(super) fn canonicalize_value(&self, value: ValueId) -> ValueId {
         self.value_aliases[value].unwrap_or(value)
-    }
-}
-
-fn normalize_value_aliases(
-    func: &Function,
-    value_aliases: &mut SecondaryMap<ValueId, Option<ValueId>>,
-) {
-    for value in func.dfg.values.keys() {
-        let mut seen: BitSet<ValueId> = BitSet::default();
-        let mut path = SmallVec::<[ValueId; 8]>::new();
-        let mut current = value;
-        let mut rep = None;
-        loop {
-            if !seen.insert(current) {
-                // Invalid alias cycles should not be canonicalized to an arbitrary value from
-                // outside the cycle. Keep all traversed values self-canonical.
-                for v in path.iter().copied() {
-                    value_aliases[v] = Some(v);
-                }
-                break;
-            }
-            path.push(current);
-            let next = value_aliases[current].unwrap_or(current);
-            if next == current {
-                rep = Some(current);
-                break;
-            }
-            current = next;
-        }
-        if let Some(rep) = rep {
-            for v in path {
-                value_aliases[v] = Some(rep);
-            }
-        }
-    }
-
-    #[cfg(debug_assertions)]
-    for value in func.dfg.values.keys() {
-        let rep = value_aliases[value].unwrap_or(value);
-        debug_assert_eq!(
-            value_aliases[rep].unwrap_or(rep),
-            rep,
-            "stackify value alias map is not one-hop canonical for v{}",
-            value.as_u32()
-        );
     }
 }
 
@@ -204,7 +162,7 @@ impl<'a> StackifyBuilder<'a> {
             }
             aliases
         };
-        normalize_value_aliases(self.func, &mut value_aliases);
+        normalize_alias_map(self.func, &mut value_aliases);
 
         let ctx = StackifyContext {
             func: self.func,
@@ -343,7 +301,7 @@ fn assign_spill_obj_ids(
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_value_aliases;
+    use crate::isa::evm::normalize_alias_map;
     use cranelift_entity::SecondaryMap;
     use sonatina_parser::parse_module;
 
@@ -386,7 +344,7 @@ block0:
             aliases[v2] = Some(v3);
             aliases[v3] = Some(v2);
 
-            normalize_value_aliases(func, &mut aliases);
+            normalize_alias_map(func, &mut aliases);
 
             for value in [v0, v1, v2, v3] {
                 assert_eq!(aliases[value], Some(value));

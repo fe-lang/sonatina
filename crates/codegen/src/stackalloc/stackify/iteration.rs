@@ -1,17 +1,15 @@
 use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
-use sonatina_ir::{
-    BlockId, Function, Immediate, InstId, U256, ValueId, inst::control_flow::BranchKind,
-};
+use sonatina_ir::{BlockId, Function, Immediate, InstId, ValueId, inst::control_flow::BranchKind};
 use std::collections::BTreeMap;
 
-use crate::{bitset::BitSet, stackalloc::Actions};
+use crate::{bitset::BitSet, isa::evm::immediate_u32, stackalloc::Actions};
 
 use super::{
     alloc::StackifyAlloc,
     builder::{StackifyContext, StackifyReachability},
     planner::{self, Planner},
-    slots::{FreeSlotPools, SpillSlotPools},
+    slots::{FreeSlotPools, FreeSlots, SlotPool, SpillSlotPools},
     spill::SpillSet,
     sym_stack::{StackItem, SymStack},
     templates::BlockTemplate,
@@ -284,22 +282,15 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
 
             // The instruction is a typed alias-only cast for EVM stackify purposes:
             // it does not consume or produce stack values, but it still counts as an SSA use.
-            for &v in args.iter() {
-                if !self.ctx.func.dfg.value_is_imm(v)
-                    && let Some(n) = state.remaining_uses.get_mut(&v)
-                {
-                    let before = *n;
-                    *n = n.saturating_sub(1);
-                    if before != 0 && *n == 0 {
-                        state.live_future.remove(v);
-                        if !state.live_out.contains(v) {
-                            self.slots
-                                .scratch
-                                .release_if_assigned(v, &mut state.free_slots.scratch);
-                        }
-                    }
-                }
-            }
+            consume_operand_uses(
+                self.ctx.func,
+                &args,
+                &mut state.remaining_uses,
+                &mut state.live_future,
+                &state.live_out,
+                &self.slots.scratch,
+                &mut state.free_slots.scratch,
+            );
 
             self.observer.on_inst_actions("post", &[], None);
             return InstOutcome::Continue;
@@ -535,23 +526,15 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         self.observer
             .on_inst_normal(self.ctx.func, inst, &args, res);
 
-        // Update remaining uses.
-        for &v in args.iter() {
-            if !self.ctx.func.dfg.value_is_imm(v)
-                && let Some(n) = state.remaining_uses.get_mut(&v)
-            {
-                let before = *n;
-                *n = n.saturating_sub(1);
-                if before != 0 && *n == 0 {
-                    state.live_future.remove(v);
-                    if !state.live_out.contains(v) {
-                        self.slots
-                            .scratch
-                            .release_if_assigned(v, &mut state.free_slots.scratch);
-                    }
-                }
-            }
-        }
+        consume_operand_uses(
+            self.ctx.func,
+            &args,
+            &mut state.remaining_uses,
+            &mut state.live_future,
+            &state.live_out,
+            &self.slots.scratch,
+            &mut state.free_slots.scratch,
+        );
 
         let arity = args.len();
         state.stack.pop_n_operands(arity);
@@ -756,6 +739,31 @@ pub(super) fn inst_is_noop_alias_cast(
         || <&cast::PtrToInt as InstDowncast>::downcast(is, data).is_some()
 }
 
+pub(super) fn consume_operand_uses(
+    func: &Function,
+    args: &[ValueId],
+    remaining_uses: &mut BTreeMap<ValueId, u32>,
+    live_future: &mut BitSet<ValueId>,
+    live_out: &BitSet<ValueId>,
+    scratch_slots: &SlotPool,
+    free_scratch_slots: &mut FreeSlots,
+) {
+    for &v in args {
+        if !func.dfg.value_is_imm(v)
+            && let Some(n) = remaining_uses.get_mut(&v)
+        {
+            let before = *n;
+            *n = n.saturating_sub(1);
+            if before != 0 && *n == 0 {
+                live_future.remove(v);
+                if !live_out.contains(v) {
+                    scratch_slots.release_if_assigned(v, free_scratch_slots);
+                }
+            }
+        }
+    }
+}
+
 pub(super) fn last_use_values_in_inst(
     func: &Function,
     args: &[ValueId],
@@ -916,19 +924,6 @@ fn is_evictable_imm(func: &Function, v: ValueId) -> bool {
         return false;
     };
     imm_push_data_len(imm) <= MAX_PUSH_DATA_BYTES
-}
-
-fn immediate_u32(imm: Immediate) -> Option<u32> {
-    if imm.is_negative() {
-        return None;
-    }
-
-    let u256 = imm.as_i256().to_u256();
-    if u256 > U256::from(u32::MAX) {
-        return None;
-    }
-
-    Some(u256.low_u32())
 }
 
 fn imm_push_data_len(imm: Immediate) -> usize {
