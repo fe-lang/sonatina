@@ -14,19 +14,19 @@ use revm::{
 
 use sonatina_codegen::{
     domtree::DomTree,
-    isa::evm::{EvmBackend, PushWidthPolicy},
+    isa::evm::{EvmBackend, PushWidthPolicy, canonicalize_alias_value},
     liveness::Liveness,
     machinst::lower::{LowerBackend, SectionLoweringCtx},
-    object::{CompileOptions, compile_object},
+    object::{CompileOptions, compile_all_objects},
     optim::pipeline::Pipeline,
-    stackalloc::StackifyAlloc,
+    stackalloc::StackifyBuilder,
 };
 use sonatina_ir::{
     Function,
     cfg::ControlFlowGraph,
-    ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite},
+    ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite, ModuleWriter},
     isa::evm::Evm,
-    module::Module,
+    module::{Module, ModuleCtx},
     object::{EmbedSymbol, ObjectName, SectionName},
 };
 use sonatina_parser::{ParsedModule, parse_module};
@@ -66,6 +66,31 @@ macro_rules! snap_test {
         settings.bind(|| {
             insta::_macro_support::assert_snapshot(
                 (insta::_macro_support::AutoName, $value.as_str()).into(),
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+                fixture_name,
+                module_path!(),
+                file!(),
+                line!(),
+                stringify!($value),
+            )
+            .unwrap()
+        })
+    };
+
+    ($value:expr, $fixture_path: expr, $suffix:expr) => {
+        let mut settings = insta::Settings::new();
+        let fixture_path = ::std::path::Path::new($fixture_path);
+        let fixture_dir = fixture_path.parent().unwrap();
+        let fixture_name = fixture_path.file_stem().unwrap().to_str().unwrap();
+        let suffix: &str = $suffix;
+        let name = format!("{fixture_name}.{suffix}");
+
+        settings.set_snapshot_path(fixture_dir);
+        settings.set_input_file($fixture_path);
+        settings.set_prepend_module_to_snapshot(false);
+        settings.bind(|| {
+            insta::_macro_support::assert_snapshot(
+                (name, $value.as_str()).into(),
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
                 fixture_name,
                 module_path!(),
@@ -119,6 +144,10 @@ fn test_evm(fixture: Fixture<&str>) {
         .unwrap_or_else(|e| panic!("{}: {e}", fixture.path()));
 
     run_opt_pipeline(&mut parsed.module, opt_pipeline);
+    let opt_ir_snapshot = (opt_pipeline != EvmOptPipeline::None).then(|| {
+        let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
+        writer.dump_string()
+    });
 
     let func_order: Vec<_> = parsed
         .debug
@@ -183,7 +212,12 @@ fn test_evm(fixture: Fixture<&str>) {
                 let ctx = FuncWriteCtx::with_debug_provider(function, *fref, &parsed.debug);
 
                 if emit_stackify_trace {
-                    let stackify = stackify_trace_for_fn(function, stackify_reach_depth);
+                    let stackify = stackify_trace_for_fn(
+                        function,
+                        &parsed.module.ctx,
+                        &backend,
+                        stackify_reach_depth,
+                    );
                     write!(&mut stackify_out, "// ").unwrap();
                     FunctionSignature.write(&mut stackify_out, &ctx).unwrap();
                     writeln!(&mut stackify_out).unwrap();
@@ -223,7 +257,7 @@ fn test_evm(fixture: Fixture<&str>) {
         verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
     };
 
-    let artifact = compile_object(&parsed.module, &backend, "Contract", &opts)
+    let artifacts = compile_all_objects(&parsed.module, &backend, &opts)
         .unwrap_or_else(|errs| panic!("{}: object compile failed: {errs:?}", fixture.path()));
 
     let mut out = Vec::new();
@@ -239,15 +273,22 @@ fn test_evm(fixture: Fixture<&str>) {
     .unwrap();
     writeln!(&mut out).unwrap();
 
-    writeln!(&mut out, "object: {}", artifact.object.0.as_str()).unwrap();
-    let mut total_bytes: usize = 0;
-    for (name, section) in &artifact.sections {
-        let size = section.bytes.len();
-        total_bytes += size;
-        writeln!(&mut out, "  section {}: {} bytes", name.0.as_str(), size).unwrap();
+    for artifact in &artifacts {
+        writeln!(&mut out, "object: {}", artifact.object.0.as_str()).unwrap();
+        let mut total_bytes: usize = 0;
+        for (name, section) in &artifact.sections {
+            let size = section.bytes.len();
+            total_bytes += size;
+            writeln!(&mut out, "  section {}: {} bytes", name.0.as_str(), size).unwrap();
+        }
+        writeln!(&mut out, "  total: {total_bytes} bytes").unwrap();
+        writeln!(&mut out).unwrap();
     }
-    writeln!(&mut out, "  total: {total_bytes} bytes").unwrap();
-    writeln!(&mut out).unwrap();
+
+    let artifact = artifacts
+        .iter()
+        .find(|artifact| artifact.object.0.as_str() == "Contract")
+        .unwrap_or_else(|| panic!("{}: missing `Contract` object", fixture.path()));
 
     writeln!(&mut out, "functions:").unwrap();
     if let Some(header) = mem_plan_header {
@@ -365,6 +406,9 @@ fn test_evm(fixture: Fixture<&str>) {
     }
 
     snap_test!(String::from_utf8(out).unwrap(), fixture.path());
+    if let Some(opt_ir_snapshot) = opt_ir_snapshot {
+        snap_test!(opt_ir_snapshot, fixture.path(), "opt_ir");
+    }
 }
 
 fn assert_case(case: &EvmCase, res: &ExecutionResult, fixture_path: &str) {
@@ -620,21 +664,28 @@ impl<W: Write, DB: revm::Database> revm::Inspector<DB> for TestInspector<W> {
     }
 }
 
-fn stackify_trace_for_fn(function: &Function, stackify_reach_depth: u8) -> String {
+fn stackify_trace_for_fn(
+    function: &Function,
+    module_ctx: &ModuleCtx,
+    backend: &EvmBackend,
+    stackify_reach_depth: u8,
+) -> String {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
 
+    let value_aliases = backend.compute_stackify_value_aliases(function, module_ctx);
+
     let mut liveness = Liveness::new();
-    liveness.compute(function, &cfg);
+    liveness.compute_with_value_normalizer(function, &cfg, |v| {
+        canonicalize_alias_value(&value_aliases, v)
+    });
     let mut dom = DomTree::new();
     dom.compute(&cfg);
-    let (_alloc, stackify) = StackifyAlloc::for_function_with_trace(
-        function,
-        &cfg,
-        &dom,
-        &liveness,
-        stackify_reach_depth,
-    );
+
+    let (_alloc, stackify) =
+        StackifyBuilder::new(function, &cfg, &dom, &liveness, stackify_reach_depth)
+            .with_value_aliases(&value_aliases)
+            .compute_with_trace();
     stackify
 }
 

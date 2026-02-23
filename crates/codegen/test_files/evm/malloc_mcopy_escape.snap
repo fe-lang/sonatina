@@ -6,17 +6,17 @@ input_file: test_files/evm/malloc_mcopy_escape.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 110 bytes
-  total: 110 bytes
+  section runtime: 88 bytes
+  total: 88 bytes
 
 functions:
   mem: dyn_base=0x100 static_base=0xc0
   escape: ir_blocks=1 ir_insts=3 vcode_ops=4 fixups=0 imm_bytes=0
     mem: scheme=StaticArena need_words=0 locals_words=0
-  main: ir_blocks=1 ir_insts=19 vcode_ops=72 fixups=6 imm_bytes=14
+  main: ir_blocks=1 ir_insts=19 vcode_ops=53 fixups=4 imm_bytes=13
     mem: scheme=StaticArena need_words=2 locals_words=2
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
     mem: scheme=StaticArena need_words=2 locals_words=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21342 gas_refunded=0 logs=0 output=call len=32
+  case ok: calldata_len=8 success reason=Return gas_used=21296 gas_refunded=0 logs=0 output=call len=32

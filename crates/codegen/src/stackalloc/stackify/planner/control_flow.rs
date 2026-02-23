@@ -20,7 +20,10 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         let tmpl = &templates[succ];
         let phi_results = &self.ctx.phi_results[succ];
 
-        let phi_srcs = phi_args_for_edge(self.ctx.func, pred, succ);
+        let phi_srcs: SmallVec<[ValueId; 4]> = phi_args_for_edge(self.ctx.func, pred, succ)
+            .into_iter()
+            .map(|v| self.ctx.canonicalize_value(v))
+            .collect();
         debug_assert_eq!(
             phi_srcs.len(),
             phi_results.len(),
@@ -73,6 +76,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             self.stack.clear_above_func_ret(self.actions);
             return;
         };
+        let ret_val = self.ctx.canonicalize_value(ret_val);
 
         if self.ctx.func.dfg.value_is_imm(ret_val) {
             let imm = self

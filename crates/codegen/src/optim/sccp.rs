@@ -12,7 +12,7 @@ use sonatina_ir::{
     BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{
-        arith,
+        arith, cast,
         control_flow::{BranchInfo, BranchKind},
         downcast,
     },
@@ -407,8 +407,17 @@ impl SccpSolver {
             && let SimplifyResult::Copy(src) =
                 simplify_inst(func, &self.lattice, &self.may_be_undef, inst)
         {
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-            func.dfg.change_to_alias(inst_result, src);
+            let result_ty = func.dfg.value_ty(inst_result);
+            let src_ty = func.dfg.value_ty(src);
+            if src_ty == result_ty {
+                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+                func.dfg.change_to_alias(inst_result, src);
+            } else if let Some(bitcast) = func.inst_set().has_bitcast()
+                && func.dfg.ctx.size_of(src_ty).ok() == func.dfg.ctx.size_of(result_ty).ok()
+            {
+                func.dfg
+                    .replace_inst(inst, Box::new(cast::Bitcast::new(bitcast, src, result_ty)));
+            }
             return;
         }
 
@@ -774,15 +783,19 @@ impl State for CellState<'_, '_> {
 mod tests {
     use super::*;
 
+    use smallvec::smallvec;
     use sonatina_ir::{
-        I256, Linkage, Signature, Type,
+        I256, Linkage, Module, Signature, Type,
         builder::test_util::{test_isa, test_module_builder},
         inst::{
             cast::{IntToPtr, PtrToInt},
+            cmp,
             control_flow::Return,
+            data::{Gep, Mstore},
             logic,
         },
     };
+    use sonatina_parser::parse_module;
 
     #[derive(Clone, Copy)]
     struct XorShift64(u64);
@@ -800,6 +813,24 @@ mod tests {
         fn pick<T>(self, values: &[T]) -> usize {
             (self.0 as usize) % values.len()
         }
+    }
+
+    fn parse_sona(input: &str) -> sonatina_parser::ParsedModule {
+        parse_module(input).unwrap_or_else(|errs| panic!("parse failed: {errs:?}"))
+    }
+
+    fn only_func_ref(module: &Module) -> sonatina_ir::module::FuncRef {
+        let funcs = module.funcs();
+        assert_eq!(funcs.len(), 1, "expected exactly one function");
+        funcs[0]
+    }
+
+    fn run_sccp_on_func(func: &mut Function) {
+        let mut cfg = ControlFlowGraph::default();
+        cfg.compute(func);
+        let mut solver = SccpSolver::new();
+        solver.run(func, &mut cfg);
+        CfgCleanup::new(CleanupMode::Strict).run(func);
     }
 
     #[test]
@@ -885,6 +916,221 @@ mod tests {
             let mut solver = SccpSolver::new();
             solver.run(func, &mut cfg);
             CfgCleanup::new(CleanupMode::Strict).run(func);
+        });
+    }
+
+    #[test]
+    fn sccp_folds_add_zero_with_pointer_operand() {
+        let mb = test_module_builder();
+        let sig = Signature::new("ptr_add_zero", Linkage::Public, &[], Type::I256);
+        let func_ref = mb.declare_function(sig).unwrap();
+
+        let mut fb = mb.func_builder::<InstInserter>(func_ref);
+        let block0 = fb.append_block();
+        fb.switch_to_block(block0);
+
+        let isa = test_isa();
+        let is = isa.inst_set();
+        let ptr_ty = fb.ptr_type(Type::I8);
+        let base_word = fb.make_imm_value(Immediate::from_i256(I256::from(64u64), Type::I256));
+        let ptr = fb.insert_inst(IntToPtr::new(is, base_word, ptr_ty), ptr_ty);
+        let zero = fb.make_imm_value(Immediate::zero(Type::I256));
+        let addr = fb.insert_inst(arith::Add::new_unchecked(is, ptr, zero), Type::I256);
+        let one = fb.make_imm_value(Immediate::one(Type::I256));
+        fb.insert_inst_no_result(Mstore::new(is, addr, one, Type::I256));
+        fb.insert_inst_no_result(Return::new_unchecked(is, Some(one)));
+        fb.seal_all();
+        fb.finish();
+
+        let mut cfg = ControlFlowGraph::default();
+        mb.func_store.modify(func_ref, |func| {
+            cfg.compute(func);
+            let mut solver = SccpSolver::new();
+            solver.run(func, &mut cfg);
+            CfgCleanup::new(CleanupMode::Strict).run(func);
+
+            let mut has_zero_add = false;
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    let Some(add) = downcast::<&arith::Add>(func.inst_set(), func.dfg.inst(inst))
+                    else {
+                        continue;
+                    };
+                    let lhs_zero = func
+                        .dfg
+                        .value_imm(*add.lhs())
+                        .is_some_and(Immediate::is_zero);
+                    let rhs_zero = func
+                        .dfg
+                        .value_imm(*add.rhs())
+                        .is_some_and(Immediate::is_zero);
+                    has_zero_add |= lhs_zero || rhs_zero;
+                }
+            }
+
+            assert!(!has_zero_add, "SCCP should fold add-with-zero");
+        });
+    }
+
+    #[test]
+    fn sccp_folds_all_zero_gep_chain() {
+        let mb = test_module_builder();
+        let sig = Signature::new("ptr_gep_zero", Linkage::Public, &[], Type::I256);
+        let func_ref = mb.declare_function(sig).unwrap();
+
+        let mut fb = mb.func_builder::<InstInserter>(func_ref);
+        let block0 = fb.append_block();
+        fb.switch_to_block(block0);
+
+        let isa = test_isa();
+        let is = isa.inst_set();
+        let outer_ty = fb.declare_struct_type("Outer", &[Type::I256, Type::I256], false);
+        let ptr_outer_ty = fb.ptr_type(outer_ty);
+        let ptr_i256_ty = fb.ptr_type(Type::I256);
+        let base_word = fb.make_imm_value(Immediate::from_i256(I256::from(64u64), Type::I256));
+        let base_ptr = fb.insert_inst(IntToPtr::new(is, base_word, ptr_outer_ty), ptr_outer_ty);
+        let zero = fb.make_imm_value(Immediate::zero(Type::I8));
+        let gep = fb.insert_inst(
+            Gep::new(
+                is.has_gep().expect("inst set has gep"),
+                smallvec![base_ptr, zero, zero],
+            ),
+            ptr_i256_ty,
+        );
+        let roundtrip = fb.insert_inst(PtrToInt::new(is, gep, Type::I256), Type::I256);
+        fb.insert_inst_no_result(Return::new_unchecked(is, Some(roundtrip)));
+        fb.seal_all();
+        fb.finish();
+
+        let mut cfg = ControlFlowGraph::default();
+        mb.func_store.modify(func_ref, |func| {
+            cfg.compute(func);
+            let mut solver = SccpSolver::new();
+            solver.run(func, &mut cfg);
+            CfgCleanup::new(CleanupMode::Strict).run(func);
+
+            let mut has_all_zero_gep = false;
+            let mut has_bitcast = false;
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    if let Some(gep) = downcast::<&Gep>(func.inst_set(), func.dfg.inst(inst)) {
+                        let values = gep.values();
+                        let is_all_zero = values[1..]
+                            .iter()
+                            .all(|&idx| func.dfg.value_imm(idx).is_some_and(Immediate::is_zero));
+                        has_all_zero_gep |= is_all_zero;
+                    }
+                    if downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+                        has_bitcast = true;
+                    }
+                }
+            }
+
+            assert!(!has_all_zero_gep, "SCCP should fold all-zero geps");
+            assert!(
+                has_bitcast,
+                "SCCP should preserve typed zero-gep via bitcast"
+            );
+        });
+    }
+
+    #[test]
+    fn sccp_folds_eq_one_of_zext_i1() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256) -> i1 {
+block0:
+    v1.i1 = is_zero v0;
+    v2.i256 = zext v1 i256;
+    v3.i1 = eq 1.i256 v2;
+    return v3;
+}
+"#;
+
+        let parsed = parse_sona(source);
+        let func_ref = only_func_ref(&parsed.module);
+
+        parsed.module.func_store.modify(func_ref, run_sccp_on_func);
+
+        parsed.module.func_store.view(func_ref, |func| {
+            let mut has_eq = false;
+            let mut has_zext = false;
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    has_eq |= downcast::<&cmp::Eq>(func.inst_set(), func.dfg.inst(inst)).is_some();
+                    has_zext |=
+                        downcast::<&cast::Zext>(func.inst_set(), func.dfg.inst(inst)).is_some();
+                }
+            }
+
+            assert!(!has_eq, "SCCP should fold eq(1, zext(i1))");
+            assert!(!has_zext, "SCCP should DCE dead zext after folding");
+        });
+    }
+
+    #[test]
+    fn sccp_folds_ne_zero_of_zext_i1() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256) -> i1 {
+block0:
+    v1.i1 = is_zero v0;
+    v2.i256 = zext v1 i256;
+    v3.i1 = ne 0.i256 v2;
+    return v3;
+}
+"#;
+
+        let parsed = parse_sona(source);
+        let func_ref = only_func_ref(&parsed.module);
+
+        parsed.module.func_store.modify(func_ref, run_sccp_on_func);
+
+        parsed.module.func_store.view(func_ref, |func| {
+            let mut has_ne = false;
+            let mut has_zext = false;
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    has_ne |= downcast::<&cmp::Ne>(func.inst_set(), func.dfg.inst(inst)).is_some();
+                    has_zext |=
+                        downcast::<&cast::Zext>(func.inst_set(), func.dfg.inst(inst)).is_some();
+                }
+            }
+
+            assert!(!has_ne, "SCCP should fold ne(0, zext(i1))");
+            assert!(!has_zext, "SCCP should DCE dead zext after folding");
+        });
+    }
+
+    #[test]
+    fn sccp_does_not_fold_eq_one_of_zext_non_i1() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256) -> i1 {
+block0:
+    v1.i8 = trunc v0 i8;
+    v2.i256 = zext v1 i256;
+    v3.i1 = eq 1.i256 v2;
+    return v3;
+}
+"#;
+
+        let parsed = parse_sona(source);
+        let func_ref = only_func_ref(&parsed.module);
+
+        parsed.module.func_store.modify(func_ref, run_sccp_on_func);
+
+        parsed.module.func_store.view(func_ref, |func| {
+            let mut has_eq = false;
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    has_eq |= downcast::<&cmp::Eq>(func.inst_set(), func.dfg.inst(inst)).is_some();
+                }
+            }
+            assert!(has_eq, "SCCP must not fold eq(1, zext(non-i1))");
         });
     }
 }

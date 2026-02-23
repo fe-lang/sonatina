@@ -1,7 +1,7 @@
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     Function, Immediate, InstId, Type, Value, ValueId,
-    inst::{arith, cast, cmp, downcast, evm, inst_set::InstSetBase, logic},
+    inst::{arith, cast, cmp, data, downcast, evm, inst_set::InstSetBase, logic},
 };
 
 use super::sccp::LatticeCell;
@@ -173,17 +173,46 @@ fn simplify_commutative_add(
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyResult {
-    let ty = func.dfg.value_ty(lhs);
     let lhs_imm = known_imm(func, lattice, lhs);
     let rhs_imm = known_imm(func, lattice, rhs);
 
-    let zero = Immediate::zero(ty);
+    if lhs_imm.is_some_and(Immediate::is_zero) {
+        return SimplifyResult::Copy(rhs);
+    }
+    if rhs_imm.is_some_and(Immediate::is_zero) {
+        return SimplifyResult::Copy(lhs);
+    }
 
+    let ty = func.dfg.value_ty(lhs);
+    if !ty.is_integral() {
+        return SimplifyResult::NoChange;
+    }
+
+    let zero = Immediate::zero(ty);
     if lhs_imm == Some(zero) {
         return SimplifyResult::Copy(rhs);
     }
     if rhs_imm == Some(zero) {
         return SimplifyResult::Copy(lhs);
+    }
+
+    SimplifyResult::NoChange
+}
+
+fn simplify_gep_all_zero(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    values: &[ValueId],
+) -> SimplifyResult {
+    let Some((&base, indices)) = values.split_first() else {
+        return SimplifyResult::NoChange;
+    };
+
+    if indices
+        .iter()
+        .all(|&idx| known_imm(func, lattice, idx).is_some_and(Immediate::is_zero))
+    {
+        return SimplifyResult::Copy(base);
     }
 
     SimplifyResult::NoChange
@@ -262,6 +291,55 @@ fn simplify_redundant_cast(func: &Function, from: ValueId, ty: Type) -> Simplify
         return SimplifyResult::Copy(from);
     }
 
+    SimplifyResult::NoChange
+}
+
+fn zext_i1_source(func: &Function, is: &dyn InstSetBase, value: ValueId) -> Option<ValueId> {
+    let Value::Inst { inst, .. } = func.dfg.value(value) else {
+        return None;
+    };
+    let zext = downcast::<&cast::Zext>(is, func.dfg.inst(*inst))?;
+    let from = *zext.from();
+    (func.dfg.value_ty(from) == Type::I1).then_some(from)
+}
+
+fn simplify_eq_zext_i1_one(
+    func: &Function,
+    is: &dyn InstSetBase,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> SimplifyResult {
+    if let Some(from) = zext_i1_source(func, is, lhs)
+        && known_imm(func, lattice, rhs) == Some(Immediate::one(func.dfg.value_ty(lhs)))
+    {
+        return SimplifyResult::Copy(from);
+    }
+    if let Some(from) = zext_i1_source(func, is, rhs)
+        && known_imm(func, lattice, lhs) == Some(Immediate::one(func.dfg.value_ty(rhs)))
+    {
+        return SimplifyResult::Copy(from);
+    }
+    SimplifyResult::NoChange
+}
+
+fn simplify_ne_zext_i1_zero(
+    func: &Function,
+    is: &dyn InstSetBase,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> SimplifyResult {
+    if let Some(from) = zext_i1_source(func, is, lhs)
+        && known_imm(func, lattice, rhs) == Some(Immediate::zero(func.dfg.value_ty(lhs)))
+    {
+        return SimplifyResult::Copy(from);
+    }
+    if let Some(from) = zext_i1_source(func, is, rhs)
+        && known_imm(func, lattice, lhs) == Some(Immediate::zero(func.dfg.value_ty(rhs)))
+    {
+        return SimplifyResult::Copy(from);
+    }
     SimplifyResult::NoChange
 }
 
@@ -398,10 +476,22 @@ pub(super) fn simplify_inst(
         return simplify_redundant_cast(func, *i.from(), *i.ty());
     }
 
+    if let Some(i) = downcast::<&data::Gep>(is, inst) {
+        return simplify_gep_all_zero(func, lattice, i.values().as_slice());
+    }
+
     if let Some(i) = downcast::<&cmp::Eq>(is, inst) {
+        let simplified = simplify_eq_zext_i1_one(func, is, lattice, *i.lhs(), *i.rhs());
+        if !matches!(simplified, SimplifyResult::NoChange) {
+            return simplified;
+        }
         return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), true);
     }
     if let Some(i) = downcast::<&cmp::Ne>(is, inst) {
+        let simplified = simplify_ne_zext_i1_zero(func, is, lattice, *i.lhs(), *i.rhs());
+        if !matches!(simplified, SimplifyResult::NoChange) {
+            return simplified;
+        }
         return simplify_cmp_self(func, lattice, may_be_undef, *i.lhs(), *i.rhs(), false);
     }
 

@@ -37,11 +37,16 @@ pub(super) fn compute_dom_depth(dom: &DomTree, entry: BlockId) -> SecondaryMap<B
 pub(super) fn compute_def_info(
     func: &Function,
     entry: BlockId,
+    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
 ) -> SecondaryMap<ValueId, Option<DefInfo>> {
     let mut info: SecondaryMap<ValueId, Option<DefInfo>> = SecondaryMap::new();
 
     // Treat function arguments as "defined" in the entry block, before any instruction.
-    for (idx, &arg) in func.arg_values.iter().enumerate() {
+    for (idx, &arg_orig) in func.arg_values.iter().enumerate() {
+        let arg = value_aliases[arg_orig].unwrap_or(arg_orig);
+        if arg != arg_orig {
+            continue;
+        }
         info[arg] = Some(DefInfo {
             def_block: entry,
             def_index: idx as u32,
@@ -55,9 +60,13 @@ pub(super) fn compute_def_info(
             0
         };
         for inst in func.layout.iter_inst(block) {
-            let Some(res) = func.dfg.inst_result(inst) else {
+            let Some(res_orig) = func.dfg.inst_result(inst) else {
                 continue;
             };
+            let res = value_aliases[res_orig].unwrap_or(res_orig);
+            if res != res_orig {
+                continue;
+            }
             info[res] = Some(DefInfo {
                 def_block: block,
                 def_index: idx,
@@ -71,16 +80,21 @@ pub(super) fn compute_def_info(
 
 pub(super) fn compute_phi_results(
     func: &Function,
+    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
 ) -> SecondaryMap<BlockId, SmallVec<[ValueId; 4]>> {
     let mut phi_results: SecondaryMap<BlockId, SmallVec<[ValueId; 4]>> = SecondaryMap::new();
     for block in func.layout.iter_block() {
         let mut results = SmallVec::<[ValueId; 4]>::new();
+        let mut seen: BitSet<ValueId> = BitSet::default();
         for inst in func.layout.iter_inst(block) {
             if !func.dfg.is_phi(inst) {
                 break;
             }
             if let Some(res) = func.dfg.inst_result(inst) {
-                results.push(res);
+                let res = value_aliases[res].unwrap_or(res);
+                if seen.insert(res) {
+                    results.push(res);
+                }
             }
         }
         phi_results[block] = results;
@@ -158,12 +172,14 @@ fn sort_values_desc(
 pub(super) fn compute_phi_out_sources(
     func: &Function,
     cfg: &ControlFlowGraph,
+    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
 ) -> SecondaryMap<BlockId, BitSet<ValueId>> {
     let mut sets: SecondaryMap<BlockId, BitSet<ValueId>> = SecondaryMap::new();
     for block in func.layout.iter_block() {
         let mut set: BitSet<ValueId> = BitSet::default();
         for succ in cfg.succs_of(block) {
             for v in phi_args_for_edge(func, block, *succ) {
+                let v = value_aliases[v].unwrap_or(v);
                 if !func.dfg.value_is_imm(v) {
                     set.insert(v);
                 }

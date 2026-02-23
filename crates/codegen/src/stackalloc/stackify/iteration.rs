@@ -3,17 +3,22 @@ use smallvec::SmallVec;
 use sonatina_ir::{BlockId, Function, Immediate, InstId, ValueId, inst::control_flow::BranchKind};
 use std::collections::BTreeMap;
 
-use crate::{bitset::BitSet, stackalloc::Actions};
+use crate::{bitset::BitSet, isa::evm::immediate_u32, stackalloc::Actions};
 
 use super::{
     alloc::StackifyAlloc,
     builder::{StackifyContext, StackifyReachability},
     planner::{self, Planner},
-    slots::{FreeSlotPools, SpillSlotPools},
+    slots::{FreeSlotPools, FreeSlots, SlotPool, SpillSlotPools},
     spill::SpillSet,
     sym_stack::{StackItem, SymStack},
     templates::BlockTemplate,
     trace::StackifyObserver,
+};
+
+use sonatina_ir::{
+    InstDowncast,
+    inst::{cast, data, evm},
 };
 
 pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
@@ -144,7 +149,8 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         let injected_prologue = false;
 
         // Track per-block remaining uses to implement `PopDeadTops`.
-        let (remaining_uses, live_future) = count_block_uses(self.ctx.func, block);
+        let (remaining_uses, live_future) =
+            count_block_uses(self.ctx.func, block, &self.ctx.value_aliases);
         let mut live_out = self.ctx.liveness.block_live_outs(block).clone();
         live_out.union_with(&self.ctx.phi_out_sources[block]);
 
@@ -235,11 +241,12 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         let is_call = self.ctx.func.dfg.is_call(inst);
         let is_normal =
             self.ctx.func.dfg.branch_info(inst).is_none() && !self.ctx.func.dfg.is_return(inst);
+        let skip_cleanup = skip_pre_exit_cleanup(self.ctx.func, inst);
 
         let mut args = SmallVec::<[ValueId; 8]>::new();
         let mut consume_last_use: BitSet<ValueId> = BitSet::default();
         if is_normal {
-            args = operand_order_for_evm(self.ctx.func, inst);
+            args = operand_order_for_evm(self.ctx.func, inst, &self.ctx.value_aliases);
             consume_last_use = last_use_values_in_inst(
                 self.ctx.func,
                 &args,
@@ -261,22 +268,52 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             last_use,
         );
 
+        let res = self
+            .ctx
+            .func
+            .dfg
+            .inst_result(inst)
+            .map(|v| self.ctx.canonicalize_value(v));
+        if is_normal && inst_is_noop_alias_cast(self.ctx, inst, &args, res) {
+            self.observer.on_inst_actions("cleanup", &[], None);
+            self.observer.on_inst_actions("pre", &[], None);
+            self.observer
+                .on_inst_normal(self.ctx.func, inst, &args, res);
+
+            // The instruction is a typed alias-only cast for EVM stackify purposes:
+            // it does not consume or produce stack values, but it still counts as an SSA use.
+            consume_operand_uses(
+                self.ctx.func,
+                &args,
+                &mut state.remaining_uses,
+                &mut state.live_future,
+                &state.live_out,
+                &self.slots.scratch,
+                &mut state.free_slots.scratch,
+            );
+
+            self.observer.on_inst_actions("post", &[], None);
+            return InstOutcome::Continue;
+        }
+
         // Stable cleanup: pop dead values (and dead chains under the top live value).
         let before_cleanup_len = self.alloc.pre_actions[inst].len();
-        clean_dead_stack_prefix(
-            self.ctx.reach,
-            &mut state.stack,
-            &state.live_future,
-            &state.live_out,
-            &mut self.alloc.pre_actions[inst],
-        );
+        if !skip_cleanup {
+            clean_dead_stack_prefix(
+                self.ctx.reach,
+                &mut state.stack,
+                &state.live_future,
+                &state.live_out,
+                &mut self.alloc.pre_actions[inst],
+            );
+        }
 
         // Try to improve operand reachability before operand preparation:
         // - do nothing if all operands are already `DUP16`-reachable
         // - otherwise, if an operand is close (within a small depth window), delete dead values,
         //   redundant duplicates, and (small) immediates above it to pull it back into reach
         // This helps avoid unnecessary spill-set growth.
-        if is_normal {
+        if is_normal && !skip_cleanup {
             improve_reachability_before_operands(
                 self.ctx.func,
                 &args,
@@ -325,6 +362,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     // targets are single-predecessor blocks (after critical-edge splitting)
                     // and will run an entry prologue to normalize to their templates.
                     let cond = *br.cond();
+                    let cond = self.ctx.canonicalize_value(cond);
                     let consume_last_use = last_use_values_in_inst(
                         self.ctx.func,
                         &[cond],
@@ -379,6 +417,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     // Build per-case compare actions. As with `br`, we normalize successor entry
                     // stacks in their block prologues, so we keep the current stack order here.
                     let scrutinee = *table.scrutinee();
+                    let scrutinee = self.ctx.canonicalize_value(scrutinee);
 
                     improve_reachability_before_operands(
                         self.ctx.func,
@@ -484,27 +523,18 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             &self.alloc.pre_actions[inst][after_cleanup_len..],
             None,
         );
-        let res = self.ctx.func.dfg.inst_result(inst);
         self.observer
             .on_inst_normal(self.ctx.func, inst, &args, res);
 
-        // Update remaining uses.
-        for &v in args.iter() {
-            if !self.ctx.func.dfg.value_is_imm(v)
-                && let Some(n) = state.remaining_uses.get_mut(&v)
-            {
-                let before = *n;
-                *n = n.saturating_sub(1);
-                if before != 0 && *n == 0 {
-                    state.live_future.remove(v);
-                    if !state.live_out.contains(v) {
-                        self.slots
-                            .scratch
-                            .release_if_assigned(v, &mut state.free_slots.scratch);
-                    }
-                }
-            }
-        }
+        consume_operand_uses(
+            self.ctx.func,
+            &args,
+            &mut state.remaining_uses,
+            &mut state.live_future,
+            &state.live_out,
+            &self.slots.scratch,
+            &mut state.free_slots.scratch,
+        );
 
         let arity = args.len();
         state.stack.pop_n_operands(arity);
@@ -536,9 +566,14 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
     }
 }
 
+pub(super) fn skip_pre_exit_cleanup(func: &Function, inst: InstId) -> bool {
+    func.dfg.is_exit(inst) && !func.dfg.is_return(inst)
+}
+
 pub(super) fn count_block_uses(
     func: &Function,
     block: BlockId,
+    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
 ) -> (BTreeMap<ValueId, u32>, BitSet<ValueId>) {
     let mut counts: BTreeMap<ValueId, u32> = BTreeMap::new();
     for inst in func.layout.iter_inst(block) {
@@ -546,6 +581,7 @@ pub(super) fn count_block_uses(
             continue;
         }
         for v in func.dfg.inst(inst).collect_values() {
+            let v = value_aliases[v].unwrap_or(v);
             if func.dfg.value_is_imm(v) {
                 continue;
             }
@@ -620,13 +656,57 @@ pub(super) fn clean_dead_stack_prefix(
     }
 }
 
-pub(super) fn operand_order_for_evm(func: &Function, inst: InstId) -> SmallVec<[ValueId; 8]> {
+pub(super) fn operand_order_for_evm(
+    func: &Function,
+    inst: InstId,
+    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
+) -> SmallVec<[ValueId; 8]> {
+    let is = func.inst_set();
+    let data = func.dfg.inst(inst);
+    if let Some(malloc) = <&evm::EvmMalloc as InstDowncast>::downcast(is, data) {
+        let size = *malloc.size();
+        if func.dfg.value_is_imm(size) {
+            // `evm_malloc` immediates are lowered as compile-time constants.
+            return SmallVec::new();
+        }
+
+        return smallvec::smallvec![value_aliases[size].unwrap_or(size)];
+    }
+
+    if let Some(gep) = <&data::Gep as InstDowncast>::downcast(is, data) {
+        let mut args: SmallVec<[ValueId; 8]> = SmallVec::new();
+        let values = gep.values().as_slice();
+        let Some((&base, indices)) = values.split_first() else {
+            panic!("gep without operands");
+        };
+        args.push(value_aliases[base].unwrap_or(base));
+
+        // GEP immediate indices are compile-time metadata for EVM lowering; they do not need to
+        // be materialized as runtime stack operands unless they fail immediate-u32 folding.
+        args.extend(
+            indices
+                .iter()
+                .copied()
+                .filter(|v| {
+                    !func.dfg.value_is_imm(*v)
+                        || func.dfg.value_imm(*v).and_then(immediate_u32).is_none()
+                })
+                .map(|v| value_aliases[v].unwrap_or(v)),
+        );
+        return args;
+    }
+
     // This IR mostly already stores operands in the order expected by the EVM backend
     // (e.g. `mstore addr value`, `gt lhs rhs`, `shl bits value`).
     //
     // Keeping this as a dedicated hook makes the required operand conventions explicit.
-    let mut args: SmallVec<[ValueId; 8]> =
-        func.dfg.inst(inst).collect_values().into_iter().collect();
+    let mut args: SmallVec<[ValueId; 8]> = func
+        .dfg
+        .inst(inst)
+        .collect_values()
+        .into_iter()
+        .map(|v| value_aliases[v].unwrap_or(v))
+        .collect();
 
     // For internal calls, we want the continuation address to end up directly under the call
     // operands. We arrange the operands as a left rotation so that after the backend pushes the
@@ -637,6 +717,51 @@ pub(super) fn operand_order_for_evm(func: &Function, inst: InstId) -> SmallVec<[
     }
 
     args
+}
+
+pub(super) fn inst_is_noop_alias_cast(
+    ctx: &super::builder::StackifyContext<'_>,
+    inst: InstId,
+    args: &[ValueId],
+    res: Option<ValueId>,
+) -> bool {
+    let Some(res) = res else {
+        return false;
+    };
+    if args != [res] {
+        return false;
+    }
+
+    let is = ctx.func.inst_set();
+    let data = ctx.func.dfg.inst(inst);
+    <&cast::Bitcast as InstDowncast>::downcast(is, data).is_some()
+        || <&cast::IntToPtr as InstDowncast>::downcast(is, data).is_some()
+        || <&cast::PtrToInt as InstDowncast>::downcast(is, data).is_some()
+}
+
+pub(super) fn consume_operand_uses(
+    func: &Function,
+    args: &[ValueId],
+    remaining_uses: &mut BTreeMap<ValueId, u32>,
+    live_future: &mut BitSet<ValueId>,
+    live_out: &BitSet<ValueId>,
+    scratch_slots: &SlotPool,
+    free_scratch_slots: &mut FreeSlots,
+) {
+    for &v in args {
+        if !func.dfg.value_is_imm(v)
+            && let Some(n) = remaining_uses.get_mut(&v)
+        {
+            let before = *n;
+            *n = n.saturating_sub(1);
+            if before != 0 && *n == 0 {
+                live_future.remove(v);
+                if !live_out.contains(v) {
+                    scratch_slots.release_if_assigned(v, free_scratch_slots);
+                }
+            }
+        }
+    }
 }
 
 pub(super) fn last_use_values_in_inst(

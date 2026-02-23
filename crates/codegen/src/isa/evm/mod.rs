@@ -1,4 +1,7 @@
 mod heap_plan;
+mod late_alias;
+pub use late_alias::canonicalize_alias_value;
+pub(crate) use late_alias::normalize_alias_map;
 mod malloc_plan;
 mod mem_effects;
 mod memory_plan;
@@ -19,9 +22,9 @@ use crate::{
     liveness::{InstLiveness, Liveness},
     machinst::{
         lower::{FixupUpdate, Lower, LowerBackend, LoweredFunction, SectionLoweringCtx},
-        vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeInst},
+        vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
     },
-    stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyLiveValues},
+    stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyBuilder},
 };
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
@@ -34,7 +37,8 @@ use sonatina_ir::{
 };
 use sonatina_triple::{EvmVersion, OperatingSystem};
 
-use cranelift_entity::EntityList;
+use cranelift_entity::{EntityList, SecondaryMap};
+use late_alias::compute_evm_late_aliases;
 use mem_effects::compute_func_mem_effects;
 use memory_plan::{
     ArenaCostModel, CallPreserveChoice, DYN_FP_SLOT, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan,
@@ -52,6 +56,8 @@ pub enum PushWidthPolicy {
 struct PreparedSection {
     plan: ProgramMemoryPlan,
     has_dynamic_frames: bool,
+    has_persistent_mallocs: bool,
+    has_explicit_free_ptr_writes: bool,
     allocs: FxHashMap<FuncRef, StackifyAlloc>,
     block_orders: FxHashMap<FuncRef, Vec<BlockId>>,
 }
@@ -101,6 +107,16 @@ impl EvmBackend {
 
     pub fn stackify_reach_depth(&self) -> u8 {
         self.stackify_reach_depth
+    }
+
+    pub fn compute_stackify_value_aliases(
+        &self,
+        function: &Function,
+        module: &ModuleCtx,
+    ) -> SecondaryMap<ValueId, Option<ValueId>> {
+        compute_evm_late_aliases(function, module, &self.isa)
+            .map()
+            .clone()
     }
 
     pub fn with_arena_cost_model(mut self, model: ArenaCostModel) -> Self {
@@ -404,6 +420,20 @@ impl EvmBackend {
             .is_none_or(|s| s.has_dynamic_frames)
     }
 
+    fn section_has_persistent_mallocs(&self) -> bool {
+        self.section_state
+            .borrow()
+            .as_ref()
+            .is_none_or(|s| s.has_persistent_mallocs)
+    }
+
+    fn section_has_explicit_free_ptr_writes(&self) -> bool {
+        self.section_state
+            .borrow()
+            .as_ref()
+            .is_none_or(|s| s.has_explicit_free_ptr_writes)
+    }
+
     fn lower_prepared_function(
         &self,
         module: &Module,
@@ -465,7 +495,7 @@ impl EvmBackend {
                 let values = gep.values();
                 let &base = values.first()?;
                 let base_addr = self.try_fold_static_arena_addr_value(ctx, mem_plan, base)?;
-                let steps = build_gep_steps(ctx, values.as_slice());
+                let steps = build_gep_lower_plan(ctx, values.as_slice()).steps;
                 let offset = gep_const_offset_bytes(&steps)?;
                 base_addr.checked_add(offset)
             }
@@ -746,6 +776,31 @@ fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_order: &[Bl
         let mut changed = false;
         let mut i = 0usize;
         while i < insts.len() {
+            // `iszero; iszero; push <label>; jumpi` can use the original condition directly:
+            // JUMPI branches on any non-zero value, so double-negating to canonical {0,1}
+            // is redundant in this specific control-flow shape.
+            if i + 3 < insts.len() {
+                let z0 = insts[i];
+                let z1 = insts[i + 1];
+                let push = insts[i + 2];
+                let jumpi = insts[i + 3];
+                if is_plain_inst(vcode, &label_targets, z0)
+                    && is_plain_inst(vcode, &label_targets, z1)
+                    && is_plain_inst(vcode, &label_targets, jumpi)
+                    && (vcode.insts[z0] as u8) == (OpCode::ISZERO as u8)
+                    && (vcode.insts[z1] as u8) == (OpCode::ISZERO as u8)
+                    && is_push_opcode(vcode.insts[push])
+                    && matches!(vcode.fixups.get(push), Some((_, VCodeFixup::Label(_))))
+                    && (vcode.insts[jumpi] as u8) == (OpCode::JUMPI as u8)
+                {
+                    kept.push(push);
+                    kept.push(jumpi);
+                    changed = true;
+                    i += 4;
+                    continue;
+                }
+            }
+
             // `zext i1 -> i256` lowers to `push 1; and` in EVM codegen.
             // After known bool producers (already in {0,1}), this mask is a no-op.
             if i + 2 < insts.len() {
@@ -994,6 +1049,43 @@ impl LowerBackend for EvmBackend {
         if std::env::var_os("SONATINA_EVM_MEM_DEBUG").is_some() {
             debug_print_mem_plan(module, funcs, &plan);
         }
+        let has_persistent_mallocs = funcs.iter().copied().any(|func| {
+            let Some(mem_plan) = plan.funcs.get(&func) else {
+                return false;
+            };
+            module.func_store.view(func, |function| {
+                function.layout.iter_block().any(|block| {
+                    function.layout.iter_inst(block).any(|inst| {
+                        matches!(
+                            self.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                            EvmInstKind::EvmMalloc(_)
+                        ) && !mem_plan.transient_mallocs.contains(&inst)
+                    })
+                })
+            })
+        });
+        let has_explicit_free_ptr_writes = funcs.iter().copied().any(|func| {
+            module.func_store.view(func, |function| {
+                function.layout.iter_block().any(|block| {
+                    function.layout.iter_inst(block).any(|inst| {
+                        match self.isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
+                            EvmInstKind::Mstore(mstore) => function
+                                .dfg
+                                .value_imm(*mstore.addr())
+                                .and_then(immediate_u32)
+                                .is_some_and(|addr| addr == u32::from(FREE_PTR_SLOT)),
+                            EvmInstKind::EvmMstore8(mstore8) => function
+                                .dfg
+                                .value_imm(*mstore8.addr())
+                                .and_then(immediate_u32)
+                                .is_some_and(|addr| addr == u32::from(FREE_PTR_SLOT)),
+                            _ => false,
+                        }
+                    })
+                })
+            })
+        });
+
         let has_dynamic_frames = plan
             .funcs
             .values()
@@ -1009,6 +1101,8 @@ impl LowerBackend for EvmBackend {
         *self.section_state.borrow_mut() = Some(PreparedSection {
             plan,
             has_dynamic_frames,
+            has_persistent_mallocs,
+            has_explicit_free_ptr_writes,
             allocs,
             block_orders,
         });
@@ -1397,11 +1491,18 @@ impl LowerBackend for EvmBackend {
                     panic!("gep without operands");
                 }
 
-                let steps = build_gep_steps(ctx, &args);
+                let gep_plan = build_gep_lower_plan(ctx, &args);
+                debug_assert_eq!(
+                    gep_plan.runtime_args.len(),
+                    1 + gep_plan.runtime_index_count(),
+                    "GEP runtime args/step consumption mismatch",
+                );
 
-                if let Some(addr_bytes) = self.try_fold_gep_static_arena_addr(ctx, &args, &steps) {
-                    perform_actions(ctx, &alloc.read(insn, &args));
-                    for _ in 0..args.len() {
+                if let Some(addr_bytes) =
+                    self.try_fold_gep_static_arena_addr(ctx, &args, &gep_plan.steps)
+                {
+                    perform_actions(ctx, &alloc.read(insn, gep_plan.runtime_args.as_slice()));
+                    for _ in 0..gep_plan.runtime_args.len() {
                         ctx.push(OpCode::POP);
                     }
                     push_bytes(ctx, &u32_to_be(addr_bytes));
@@ -1409,12 +1510,17 @@ impl LowerBackend for EvmBackend {
                     return;
                 }
 
-                perform_actions(ctx, &alloc.read(insn, &args));
-                for step in steps {
+                perform_actions(ctx, &alloc.read(insn, gep_plan.runtime_args.as_slice()));
+                for step in gep_plan.steps {
                     match step {
-                        GepStep::AddConst(offset_bytes) => {
-                            ctx.push(OpCode::SWAP1);
-                            ctx.push(OpCode::POP);
+                        GepStep::AddConst {
+                            offset_bytes,
+                            consume_index,
+                        } => {
+                            if consume_index {
+                                ctx.push(OpCode::SWAP1);
+                                ctx.push(OpCode::POP);
+                            }
                             if offset_bytes != 0 {
                                 push_bytes(ctx, &u32_to_be(offset_bytes));
                                 ctx.push(OpCode::ADD);
@@ -1526,6 +1632,8 @@ impl LowerBackend for EvmBackend {
 
             EvmInstKind::EvmMalloc(_) => {
                 let needs_dyn_sp_clamp = self.section_has_dynamic_frames();
+                let has_persistent_mallocs = self.section_has_persistent_mallocs();
+                let has_explicit_free_ptr_writes = self.section_has_explicit_free_ptr_writes();
                 let mem_plan = self.current_mem_plan.borrow();
                 let mem_plan = mem_plan
                     .as_ref()
@@ -1565,33 +1673,62 @@ impl LowerBackend for EvmBackend {
                     )
                     .expect("malloc static bound bytes overflow");
 
-                perform_actions(ctx, &alloc.read(insn, &args));
+                let size = *args.first().expect("evm_malloc missing size");
+                let aligned_size_imm = ctx.value_imm(size).map(aligned_malloc_size_imm);
+                let runtime_args: SmallVec<[ValueId; 1]> = if aligned_size_imm.is_some() {
+                    smallvec![]
+                } else {
+                    smallvec![size]
+                };
+                perform_actions(ctx, &alloc.read(insn, runtime_args.as_slice()));
 
                 if is_transient {
-                    // Drop the requested size; this is a transient bump allocation that does not
-                    // update `FREE_PTR_SLOT` and is allowed to overlap with later allocations.
-                    ctx.push(OpCode::POP);
+                    // Drop the requested size if it was materialized at runtime; transient bump
+                    // allocations do not update `FREE_PTR_SLOT` and may overlap later ones.
+                    if aligned_size_imm.is_none() {
+                        ctx.push(OpCode::POP);
+                    }
 
-                    emit_malloc_base(ctx, min_base_bytes, needs_dyn_sp_clamp);
+                    if aligned_size_imm.is_some()
+                        && !needs_dyn_sp_clamp
+                        && !has_persistent_mallocs
+                        && !has_explicit_free_ptr_writes
+                    {
+                        // In static-only sections without persistent mallocs or explicit free-pointer
+                        // writes, a non-escaping immediate-size malloc can use a fixed base directly.
+                        push_bytes(ctx, &u32_to_be(min_base_bytes));
+                    } else {
+                        emit_malloc_base(ctx, min_base_bytes, needs_dyn_sp_clamp);
+                    }
 
                     perform_actions(ctx, &alloc.write(insn, result));
                     return;
                 }
 
-                // Align to 32 bytes:
-                // aligned = (size + 31) & !31
-                push_bytes(ctx, &[0x1f]);
-                ctx.push(OpCode::ADD);
-                push_bytes(ctx, &[0x1f]);
-                ctx.push(OpCode::NOT);
-                ctx.push(OpCode::AND);
+                if aligned_size_imm.is_none() {
+                    // Align to 32 bytes:
+                    // aligned = (size + 31) & !31
+                    push_bytes(ctx, &[0x1f]);
+                    ctx.push(OpCode::ADD);
+                    push_bytes(ctx, &[0x1f]);
+                    ctx.push(OpCode::NOT);
+                    ctx.push(OpCode::AND);
+                }
 
                 emit_malloc_base(ctx, min_base_bytes, needs_dyn_sp_clamp);
 
                 // new_end = base + aligned_size; mstore(0x40, new_end); return base
-                ctx.push(OpCode::DUP1);
-                ctx.push(OpCode::SWAP2);
-                ctx.push(OpCode::ADD);
+                if let Some(aligned) = aligned_size_imm {
+                    ctx.push(OpCode::DUP1);
+                    if !aligned.is_zero() {
+                        push_bytes(ctx, &u256_to_be(&aligned));
+                        ctx.push(OpCode::ADD);
+                    }
+                } else {
+                    ctx.push(OpCode::DUP1);
+                    ctx.push(OpCode::SWAP2);
+                    ctx.push(OpCode::ADD);
+                }
                 push_bytes(ctx, &[FREE_PTR_SLOT]);
                 ctx.push(OpCode::MSTORE);
 
@@ -1859,20 +1996,42 @@ impl Allocator for FinalAlloc {
 
 #[derive(Clone, Copy)]
 enum GepStep {
-    AddConst(u32),
+    AddConst {
+        offset_bytes: u32,
+        consume_index: bool,
+    },
     AddScaled(u32),
 }
 
-fn build_gep_steps(ctx: &Lower<OpCode>, args: &[ValueId]) -> Vec<GepStep> {
-    if args.is_empty() {
-        panic!("gep without operands");
+struct GepLowerPlan {
+    runtime_args: SmallVec<[ValueId; 8]>,
+    steps: Vec<GepStep>,
+}
+
+impl GepLowerPlan {
+    fn runtime_index_count(&self) -> usize {
+        self.steps
+            .iter()
+            .filter(|step| match step {
+                GepStep::AddConst { consume_index, .. } => *consume_index,
+                GepStep::AddScaled(_) => true,
+            })
+            .count()
     }
+}
+
+fn build_gep_lower_plan(ctx: &Lower<OpCode>, args: &[ValueId]) -> GepLowerPlan {
+    let Some((&base, _indices)) = args.split_first() else {
+        panic!("gep without operands");
+    };
 
     let mut current_ty = ctx.value_ty(args[0]);
     if !current_ty.is_pointer(ctx.module) {
         panic!("gep base must be a pointer (got {current_ty:?})");
     }
 
+    let mut runtime_args = SmallVec::<[ValueId; 8]>::new();
+    runtime_args.push(base);
     let mut steps: Vec<GepStep> = Vec::new();
     for &idx_val in args.iter().skip(1) {
         let Some(cmpd) = current_ty.resolve_compound(ctx.module) else {
@@ -1886,12 +2045,18 @@ fn build_gep_steps(ctx: &Lower<OpCode>, args: &[ValueId]) -> Vec<GepStep> {
                 let elem_size = u32::try_from(ctx.module.size_of_unchecked(elem_ty))
                     .expect("gep element too large");
                 steps.push(gep_step(elem_size, idx_imm_u32));
+                if idx_imm_u32.is_none() {
+                    runtime_args.push(idx_val);
+                }
                 current_ty = elem_ty;
             }
             CompoundType::Array { elem, .. } => {
                 let elem_size = u32::try_from(ctx.module.size_of_unchecked(elem))
                     .expect("gep element too large");
                 steps.push(gep_step(elem_size, idx_imm_u32));
+                if idx_imm_u32.is_none() {
+                    runtime_args.push(idx_val);
+                }
                 current_ty = elem;
             }
             CompoundType::Struct(s) => {
@@ -1900,7 +2065,10 @@ fn build_gep_steps(ctx: &Lower<OpCode>, args: &[ValueId]) -> Vec<GepStep> {
                 };
                 let (field_offset, field_ty) =
                     struct_field_offset_bytes(&s.fields, s.packed, idx, ctx.module);
-                steps.push(GepStep::AddConst(field_offset));
+                steps.push(GepStep::AddConst {
+                    offset_bytes: field_offset,
+                    consume_index: false,
+                });
                 current_ty = field_ty;
             }
             CompoundType::Func { .. } => {
@@ -1909,16 +2077,19 @@ fn build_gep_steps(ctx: &Lower<OpCode>, args: &[ValueId]) -> Vec<GepStep> {
         }
     }
 
-    steps
+    GepLowerPlan {
+        runtime_args,
+        steps,
+    }
 }
 
 fn gep_const_offset_bytes(steps: &[GepStep]) -> Option<u32> {
     let mut total: u32 = 0;
     for &step in steps {
-        let GepStep::AddConst(offset) = step else {
+        let GepStep::AddConst { offset_bytes, .. } = step else {
             return None;
         };
-        total = total.checked_add(offset)?;
+        total = total.checked_add(offset_bytes)?;
     }
     Some(total)
 }
@@ -1926,17 +2097,21 @@ fn gep_const_offset_bytes(steps: &[GepStep]) -> Option<u32> {
 fn gep_step(elem_size_bytes: u32, idx: Option<u32>) -> GepStep {
     let Some(idx) = idx else {
         return if elem_size_bytes == 0 {
-            GepStep::AddConst(0)
+            GepStep::AddConst {
+                offset_bytes: 0,
+                consume_index: true,
+            }
         } else {
             GepStep::AddScaled(elem_size_bytes)
         };
     };
 
-    GepStep::AddConst(
-        elem_size_bytes
+    GepStep::AddConst {
+        offset_bytes: elem_size_bytes
             .checked_mul(idx)
             .expect("gep offset overflow"),
-    )
+        consume_index: false,
+    }
 }
 
 fn static_arena_addr_bytes(offset_words: u32) -> u32 {
@@ -1949,7 +2124,7 @@ fn static_arena_addr_bytes(offset_words: u32) -> u32 {
         .expect("alloca address bytes overflow")
 }
 
-fn immediate_u32(imm: Immediate) -> Option<u32> {
+pub(crate) fn immediate_u32(imm: Immediate) -> Option<u32> {
     if imm.is_negative() {
         return None;
     }
@@ -1960,6 +2135,12 @@ fn immediate_u32(imm: Immediate) -> Option<u32> {
     }
 
     Some(u256.low_u32())
+}
+
+fn aligned_malloc_size_imm(imm: Immediate) -> U256 {
+    let size = imm.as_i256().to_u256();
+    let (size_padded, _) = size.overflowing_add(U256::from(0x1f_u8));
+    size_padded & !U256::from(0x1f_u8)
 }
 
 fn struct_field_offset_bytes(
@@ -2229,24 +2410,46 @@ fn emit_max_top_two(ctx: &mut Lower<OpCode>) {
     // Result: [..., max(a, b)]
     ctx.push(OpCode::DUP2);
     ctx.push(OpCode::DUP2);
-    ctx.push(OpCode::GT);
+    ctx.push(OpCode::LT);
 
-    let keep_a_push = ctx.push(OpCode::PUSH1);
+    let keep_b_push = ctx.push(OpCode::PUSH1);
     ctx.push(OpCode::JUMPI);
 
-    // keep b (a <= b): drop a.
-    ctx.push(OpCode::POP);
-    let end_push = ctx.push(OpCode::PUSH1);
-    ctx.push(OpCode::JUMP);
-
-    // keep a (a > b): drop b.
-    let keep_a = ctx.push(OpCode::JUMPDEST);
-    ctx.add_label_reference(keep_a_push, Label::Insn(keep_a));
+    // a >= b: rotate so common POP keeps `a`.
     ctx.push(OpCode::SWAP1);
-    ctx.push(OpCode::POP);
 
-    let end = ctx.push(OpCode::JUMPDEST);
-    ctx.add_label_reference(end_push, Label::Insn(end));
+    let keep_b = ctx.push(OpCode::JUMPDEST);
+    ctx.add_label_reference(keep_b_push, Label::Insn(keep_b));
+
+    // a < b (taken): [b, a] -> POP => [b]
+    // a >= b (fallthrough): [b, a] -> SWAP1 => [a, b] -> POP => [a]
+    ctx.push(OpCode::POP);
+}
+
+fn emit_max_top_with_const(ctx: &mut Lower<OpCode>, constant: &[u8]) {
+    // Stack: [..., x]
+    // Result: [..., max(x, constant)]
+    let constant = U256::from_big_endian(constant);
+    if constant.is_zero() {
+        return;
+    }
+
+    // Use `x > (constant - 1)` so the hot keep path covers equality too.
+    let compare_const = u256_to_be(&(constant - U256::from(1_u8)));
+    push_bytes(ctx, &compare_const);
+    ctx.push(OpCode::DUP2);
+    ctx.push(OpCode::GT);
+
+    let keep_x_push = ctx.push(OpCode::PUSH1);
+    ctx.push(OpCode::JUMPI);
+
+    // x < constant: replace x with constant.
+    ctx.push(OpCode::POP);
+    push_bytes(ctx, &u256_to_be(&constant));
+
+    // x >= constant: keep x.
+    let keep_x = ctx.push(OpCode::JUMPDEST);
+    ctx.add_label_reference(keep_x_push, Label::Insn(keep_x));
 }
 
 fn emit_malloc_base(ctx: &mut Lower<OpCode>, min_base_bytes: u32, needs_dyn_sp_clamp: bool) {
@@ -2262,8 +2465,8 @@ fn emit_malloc_base(ctx: &mut Lower<OpCode>, min_base_bytes: u32, needs_dyn_sp_c
     }
 
     // max(base, min_base)
-    push_bytes(ctx, &u32_to_be(min_base_bytes));
-    emit_max_top_two(ctx);
+    let min_base = u32_to_be(min_base_bytes);
+    emit_max_top_with_const(ctx, &min_base);
 }
 
 fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
@@ -2274,6 +2477,9 @@ fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
     let frame_bytes = frame_slots
         .checked_mul(WORD_BYTES)
         .expect("frame size overflow");
+    let frame_plus_fp_bytes = frame_bytes
+        .checked_add(WORD_BYTES)
+        .expect("frame size overflow");
 
     // sp = mload(DYN_SP_SLOT); if sp == 0, initialize it.
     push_bytes(ctx, &[DYN_SP_SLOT]);
@@ -2281,8 +2487,6 @@ fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
 
     // if sp != 0, skip init.
     ctx.push(OpCode::DUP1);
-    ctx.push(OpCode::ISZERO);
-    ctx.push(OpCode::ISZERO);
     let skip_init_push = ctx.push(OpCode::PUSH1);
     ctx.push(OpCode::JUMPI);
 
@@ -2311,20 +2515,14 @@ fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
     ctx.push(OpCode::DUP1);
     push_bytes(ctx, &u32_to_be(WORD_BYTES));
     ctx.push(OpCode::ADD);
-    ctx.push(OpCode::DUP1);
     push_bytes(ctx, &[DYN_FP_SLOT]);
     ctx.push(OpCode::MSTORE);
 
-    // new_sp = new_fp + frame_bytes; mstore(DYN_SP_SLOT, new_sp)
-    if frame_bytes != 0 {
-        push_bytes(ctx, &u32_to_be(frame_bytes));
-        ctx.push(OpCode::ADD);
-    }
+    // new_sp = frame_base + WORD_BYTES + frame_bytes; mstore(DYN_SP_SLOT, new_sp)
+    push_bytes(ctx, &u32_to_be(frame_plus_fp_bytes));
+    ctx.push(OpCode::ADD);
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MSTORE);
-
-    // Discard frame_base (sp).
-    ctx.push(OpCode::POP);
 }
 
 fn leave_frame(ctx: &mut Lower<OpCode>, frame_slots: u32) {
@@ -2507,6 +2705,13 @@ fn prepare_stackify_analysis(
     let mut inst_liveness = InstLiveness::new();
     inst_liveness.compute(function, &cfg, &liveness);
 
+    let value_aliases = backend.compute_stackify_value_aliases(function, module);
+
+    let mut stack_liveness = Liveness::new();
+    stack_liveness.compute_with_value_normalizer(function, &cfg, |v| {
+        canonicalize_alias_value(&value_aliases, v)
+    });
+
     let scratch_live_values = scratch_plan::compute_scratch_live_values(
         function,
         module,
@@ -2515,18 +2720,23 @@ fn prepare_stackify_analysis(
         scratch_effects,
         &inst_liveness,
     );
+    let mut canonical_scratch_live_values: crate::bitset::BitSet<ValueId> =
+        crate::bitset::BitSet::default();
+    for v in scratch_live_values.iter() {
+        canonical_scratch_live_values.insert(canonicalize_alias_value(&value_aliases, v));
+    }
 
-    let alloc = StackifyAlloc::for_function_with_call_live_values_and_scratch_spills(
+    let alloc = StackifyBuilder::new(
         function,
         &cfg,
         &dom,
-        &liveness,
+        &stack_liveness,
         backend.stackify_reach_depth,
-        StackifyLiveValues {
-            scratch_live_values,
-        },
-        scratch_plan::SCRATCH_SPILL_SLOTS,
-    );
+    )
+    .with_scratch_live_values(canonical_scratch_live_values)
+    .with_scratch_spills(scratch_plan::SCRATCH_SPILL_SLOTS)
+    .with_value_aliases(&value_aliases)
+    .compute();
 
     memory_plan::FuncAnalysis {
         alloc,
@@ -2718,7 +2928,7 @@ block0:
                 dom.compute(&cfg);
 
                 let block_order = dom.rpo().to_owned();
-                let alloc = StackifyAlloc::for_function(function, &cfg, &dom, &liveness, 16);
+                let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute();
 
                 analyses.insert(
                     func,
@@ -2880,6 +3090,56 @@ block0:
         assert_eq!(
             ops,
             vec![OpCode::EQ as u8, OpCode::PUSH1 as u8, OpCode::AND as u8]
+        );
+    }
+
+    #[test]
+    fn prune_removes_iszero_iszero_before_labeled_jumpi() {
+        let mut vcode = VCode::<OpCode>::default();
+        let block = BlockId(0);
+
+        vcode.add_inst_to_block(OpCode::ISZERO, None, block);
+        vcode.add_inst_to_block(OpCode::ISZERO, None, block);
+        let push = vcode.add_inst_to_block(OpCode::PUSH1, None, block);
+        vcode.add_inst_to_block(OpCode::JUMPI, None, block);
+
+        let label = vcode.labels.push(Label::Block(BlockId(1)));
+        vcode.fixups.insert((push, VCodeFixup::Label(label)));
+
+        prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+        let ops: Vec<_> = vcode
+            .block_insns(block)
+            .map(|inst| vcode.insts[inst] as u8)
+            .collect();
+        assert_eq!(ops, vec![OpCode::PUSH1 as u8, OpCode::JUMPI as u8]);
+    }
+
+    #[test]
+    fn prune_keeps_iszero_iszero_before_non_labeled_jumpi() {
+        let mut vcode = VCode::<OpCode>::default();
+        let block = BlockId(0);
+
+        vcode.add_inst_to_block(OpCode::ISZERO, None, block);
+        vcode.add_inst_to_block(OpCode::ISZERO, None, block);
+        let push = vcode.add_inst_to_block(OpCode::PUSH1, None, block);
+        vcode.inst_imm_bytes.insert((push, smallvec![7u8]));
+        vcode.add_inst_to_block(OpCode::JUMPI, None, block);
+
+        prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+        let ops: Vec<_> = vcode
+            .block_insns(block)
+            .map(|inst| vcode.insts[inst] as u8)
+            .collect();
+        assert_eq!(
+            ops,
+            vec![
+                OpCode::ISZERO as u8,
+                OpCode::ISZERO as u8,
+                OpCode::PUSH1 as u8,
+                OpCode::JUMPI as u8
+            ]
         );
     }
 }

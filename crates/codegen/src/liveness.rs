@@ -47,14 +47,32 @@ impl Liveness {
     }
 
     pub fn compute(&mut self, func: &Function, cfg: &ControlFlowGraph) {
+        self.compute_with_value_normalizer(func, cfg, |v| v);
+    }
+
+    pub fn compute_with_value_normalizer(
+        &mut self,
+        func: &Function,
+        cfg: &ControlFlowGraph,
+        normalize: impl Fn(ValueId) -> ValueId + Copy,
+    ) {
         self.clear();
 
-        for arg in &func.arg_values {
-            self.defs[*arg] = Some(ValDef::FnArg);
+        for &arg in &func.arg_values {
+            let arg_norm = normalize(arg);
+            if arg_norm != arg {
+                continue;
+            }
+            self.defs[arg_norm] = Some(ValDef::FnArg);
         }
         for block in cfg.post_order() {
             for_each_def(func, block, |val, is_phi_def| {
-                self.defs[val] = if is_phi_def {
+                let val_norm = normalize(val);
+                // Alias-only definitions (e.g. no-op cast results) do not introduce a new def.
+                if val_norm != val {
+                    return;
+                }
+                self.defs[val_norm] = if is_phi_def {
                     Some(ValDef::Phi(block))
                 } else {
                     Some(ValDef::Normal(block))
@@ -64,6 +82,7 @@ impl Liveness {
 
         for block in cfg.post_order() {
             for_each_use(func, block, |val, phi_source_block| {
+                let val = normalize(val);
                 if func.dfg.value_is_imm(val) {
                     self.mark_use(val, block);
                 } else if let Some(pred_block) = phi_source_block {
@@ -131,6 +150,8 @@ impl Liveness {
         self.live_outs.clear();
         self.defs.clear();
         self.val_live_blocks.clear();
+        self.val_use_blocks.clear();
+        self.val_use_count.clear();
     }
 }
 

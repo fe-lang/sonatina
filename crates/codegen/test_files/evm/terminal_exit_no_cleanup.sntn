@@ -1,0 +1,41 @@
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: true, evm_trace: false }
+#! evm.case: empty
+#!   calldata:
+#!   expect: return
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        evm_return 0.i256 0.i256;
+}
+
+func private %exit_return() {
+    block0:
+        v0.i256 = add 1.i256 2.i256;
+        evm_return 0.i256 0.i256;
+}
+
+func private %exit_revert() {
+    block0:
+        v0.i256 = add 3.i256 4.i256;
+        evm_revert 0.i256 0.i256;
+}
+
+func private %exit_stop() {
+    block0:
+        v0.i256 = add 5.i256 6.i256;
+        evm_stop;
+}
+
+func private %exit_invalid() {
+    block0:
+        v0.i256 = add 7.i256 8.i256;
+        evm_invalid;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

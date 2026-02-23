@@ -114,6 +114,7 @@ pub struct InlinerConfig {
     pub enable_wrapper_rewrite: bool,
     pub enable_single_block_splice: bool,
 
+    /// Max splice body size when a callee has multiple callsites.
     pub splice_max_insts: usize,
     pub splice_require_pure: bool,
 
@@ -191,13 +192,14 @@ impl Inliner {
                     {
                         cached.clone()
                     } else {
-                        let callee_call_count = call_counts.get(&site.callee).copied().unwrap_or(0);
+                        let callee_callsite_count =
+                            call_counts.get(&site.callee).copied().unwrap_or(0);
                         let analyzed = module.func_store.view(site.callee, |callee_func| {
                             analyze_callee(
                                 module,
                                 site.callee,
                                 callee_func,
-                                callee_call_count,
+                                callee_callsite_count,
                                 &self.config,
                                 &mut stats,
                             )
@@ -266,24 +268,24 @@ fn collect_iteration_call_data(
     funcs: &[FuncRef],
 ) -> (FxHashMap<FuncRef, Vec<CallSite>>, FxHashMap<FuncRef, usize>) {
     let mut sites_by_caller: FxHashMap<FuncRef, Vec<CallSite>> = FxHashMap::default();
-    let mut counts: FxHashMap<FuncRef, usize> = FxHashMap::default();
+    let mut call_counts: FxHashMap<FuncRef, usize> = FxHashMap::default();
 
     for &caller in funcs {
         let sites = module.func_store.view(caller, collect_call_sites);
         for site in &sites {
-            *counts.entry(site.callee).or_insert(0) += 1;
+            *call_counts.entry(site.callee).or_insert(0) += 1;
         }
         sites_by_caller.insert(caller, sites);
     }
 
-    (sites_by_caller, counts)
+    (sites_by_caller, call_counts)
 }
 
 fn analyze_callee(
     module: &Module,
     callee_ref: FuncRef,
     callee: &Function,
-    callee_call_count: usize,
+    callee_callsite_count: usize,
     config: &InlinerConfig,
     stats: &mut InlineStats,
 ) -> Option<InlinePlanSummary> {
@@ -328,7 +330,7 @@ fn analyze_callee(
     else {
         return analyze_terminator_splice(
             callee,
-            callee_call_count,
+            callee_callsite_count,
             config,
             stats,
             term_inst_id,
@@ -363,7 +365,14 @@ fn analyze_callee(
             <&control_flow::Call as InstDowncast>::downcast(is, callee.dfg.inst(call_inst_id))
         else {
             // Not a wrapper; fall through to splicing.
-            return analyze_splice(callee, callee_call_count, config, stats, ret_value, &insts);
+            return analyze_splice(
+                callee,
+                callee_callsite_count,
+                config,
+                stats,
+                ret_value,
+                &insts,
+            );
         };
 
         let call_res = callee.dfg.inst_result(call_inst_id);
@@ -388,12 +397,19 @@ fn analyze_callee(
         });
     }
 
-    analyze_splice(callee, callee_call_count, config, stats, ret_value, &insts)
+    analyze_splice(
+        callee,
+        callee_callsite_count,
+        config,
+        stats,
+        ret_value,
+        &insts,
+    )
 }
 
 fn analyze_splice(
     callee: &Function,
-    callee_call_count: usize,
+    callee_callsite_count: usize,
     config: &InlinerConfig,
     stats: &mut InlineStats,
     ret_value: Option<ValueId>,
@@ -404,7 +420,8 @@ fn analyze_splice(
     }
 
     let (_, body_insts) = insts.split_last()?;
-    let mut collected = collect_splice_body(callee, callee_call_count, config, stats, body_insts)?;
+    let mut collected =
+        collect_splice_body(callee, callee_callsite_count, config, stats, body_insts)?;
 
     if let Some(ret_value) = ret_value
         && let Some(tpl) = classify_value_template(callee, ret_value)
@@ -425,7 +442,7 @@ fn analyze_splice(
 
 fn analyze_terminator_splice(
     callee: &Function,
-    callee_call_count: usize,
+    callee_callsite_count: usize,
     config: &InlinerConfig,
     stats: &mut InlineStats,
     term_inst_id: InstId,
@@ -441,7 +458,8 @@ fn analyze_terminator_splice(
     }
 
     let (_, body_insts) = insts.split_last()?;
-    let mut collected = collect_splice_body(callee, callee_call_count, config, stats, body_insts)?;
+    let mut collected =
+        collect_splice_body(callee, callee_callsite_count, config, stats, body_insts)?;
 
     extend_const_values_from_inst_operands(callee, term_inst_id, &mut collected.const_values);
     let callee_args: Vec<ValueId> = callee.arg_values.iter().copied().collect();
@@ -457,13 +475,12 @@ fn analyze_terminator_splice(
 
 fn collect_splice_body(
     callee: &Function,
-    callee_call_count: usize,
+    callee_callsite_count: usize,
     config: &InlinerConfig,
     stats: &mut InlineStats,
     body_insts: &[InstId],
 ) -> Option<CollectedSpliceBody> {
-    let is_single_use = callee_call_count == 1;
-    if !is_single_use && body_insts.len() > config.splice_max_insts {
+    if callee_callsite_count > 1 && body_insts.len() > config.splice_max_insts {
         stats.skipped_too_large += 1;
         return None;
     }

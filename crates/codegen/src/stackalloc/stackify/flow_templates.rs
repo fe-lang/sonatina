@@ -13,8 +13,9 @@ use crate::{
 use super::{
     builder::StackifyContext,
     iteration::{
-        clean_dead_stack_prefix, count_block_uses, improve_reachability_before_operands,
-        last_use_values_in_inst, operand_order_for_evm,
+        clean_dead_stack_prefix, consume_operand_uses, count_block_uses,
+        improve_reachability_before_operands, inst_is_noop_alias_cast, last_use_values_in_inst,
+        operand_order_for_evm, skip_pre_exit_cleanup,
     },
     planner::{self, Planner},
     slots::{FreeSlotPools, SpillSlotPools},
@@ -196,7 +197,8 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
         let mut free_slots: FreeSlotPools = FreeSlotPools::default();
         let mut actions: Actions = Actions::new();
 
-        let (mut remaining_uses, mut live_future) = count_block_uses(ctx.func, block);
+        let (mut remaining_uses, mut live_future) =
+            count_block_uses(ctx.func, block, &ctx.value_aliases);
 
         let mut live_out = ctx.liveness.block_live_outs(block).clone();
         live_out.union_with(&ctx.phi_out_sources[block]);
@@ -219,7 +221,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
             let mut args = SmallVec::<[ValueId; 8]>::new();
             let mut consume_last_use: BitSet<ValueId> = BitSet::default();
             if is_normal {
-                args = operand_order_for_evm(ctx.func, inst);
+                args = operand_order_for_evm(ctx.func, inst, &ctx.value_aliases);
                 consume_last_use =
                     last_use_values_in_inst(ctx.func, &args, &remaining_uses, &live_out);
             }
@@ -229,9 +231,37 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                 &empty_last_use
             };
 
-            clean_dead_stack_prefix(ctx.reach, &mut stack, &live_future, &live_out, &mut actions);
+            let res = ctx
+                .func
+                .dfg
+                .inst_result(inst)
+                .map(|v| ctx.canonicalize_value(v));
+            if is_normal && inst_is_noop_alias_cast(ctx, inst, &args, res) {
+                // Typed alias-only no-op casts should be invisible to stack simulation:
+                // they do not move stack values, but still consume one SSA use.
+                consume_operand_uses(
+                    ctx.func,
+                    &args,
+                    &mut remaining_uses,
+                    &mut live_future,
+                    &live_out,
+                    &slots.scratch,
+                    &mut free_slots.scratch,
+                );
+                continue;
+            }
 
-            if is_normal {
+            if !skip_pre_exit_cleanup(ctx.func, inst) {
+                clean_dead_stack_prefix(
+                    ctx.reach,
+                    &mut stack,
+                    &live_future,
+                    &live_out,
+                    &mut actions,
+                );
+            }
+
+            if is_normal && !skip_pre_exit_cleanup(ctx.func, inst) {
                 improve_reachability_before_operands(
                     ctx.func,
                     &args,
@@ -251,7 +281,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                         return;
                     }
                     BranchKind::Br(br) => {
-                        let cond = *br.cond();
+                        let cond = ctx.canonicalize_value(*br.cond());
                         let consume_last_use =
                             last_use_values_in_inst(ctx.func, &[cond], &remaining_uses, &live_out);
 
@@ -290,7 +320,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                         return;
                     }
                     BranchKind::BrTable(table) => {
-                        let scrutinee = *table.scrutinee();
+                        let scrutinee = ctx.canonicalize_value(*table.scrutinee());
 
                         improve_reachability_before_operands(
                             ctx.func,
@@ -352,24 +382,15 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                 stack.position_call_ret_below_operands(args.len(), &mut actions);
             }
 
-            let res = ctx.func.dfg.inst_result(inst);
-
-            for &v in args.iter() {
-                if !ctx.func.dfg.value_is_imm(v)
-                    && let Some(n) = remaining_uses.get_mut(&v)
-                {
-                    let before = *n;
-                    *n = n.saturating_sub(1);
-                    if before != 0 && *n == 0 {
-                        live_future.remove(v);
-                        if !live_out.contains(v) {
-                            slots
-                                .scratch
-                                .release_if_assigned(v, &mut free_slots.scratch);
-                        }
-                    }
-                }
-            }
+            consume_operand_uses(
+                ctx.func,
+                &args,
+                &mut remaining_uses,
+                &mut live_future,
+                &live_out,
+                &slots.scratch,
+                &mut free_slots.scratch,
+            );
 
             stack.pop_n_operands(args.len());
 
