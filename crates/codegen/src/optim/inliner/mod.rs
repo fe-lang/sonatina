@@ -12,6 +12,7 @@ mod trivial;
 struct CallSite {
     call_inst: InstId,
     callee: FuncRef,
+    has_result: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -113,6 +114,7 @@ impl Inliner {
 
         let mut total_growth = 0usize;
         let mut inline_depth_by_func: FxHashMap<FuncRef, usize> = FxHashMap::default();
+        let mut growth_by_caller: FxHashMap<FuncRef, usize> = FxHashMap::default();
 
         let mut iter = 0;
         while iter < MAX_ITERS {
@@ -121,7 +123,6 @@ impl Inliner {
             let analysis = module_analysis::analyze_module(module);
             let mut inlinee_summaries: FxHashMap<FuncRef, cost::InlineeSummary> =
                 FxHashMap::default();
-            let mut growth_by_caller: FxHashMap<FuncRef, usize> = FxHashMap::default();
 
             let mut changed = false;
             for caller_ref in funcs {
@@ -188,6 +189,7 @@ impl Inliner {
                                 .get(&site.callee)
                                 .copied()
                                 .unwrap_or(0),
+                            call_has_result: site.has_result,
                         },
                         &self.config,
                     );
@@ -292,6 +294,7 @@ fn collect_call_sites(func: &Function) -> Vec<CallSite> {
             sites.push(CallSite {
                 call_inst: inst_id,
                 callee: *call.callee(),
+                has_result: func.dfg.inst_result(inst_id).is_some(),
             });
         }
     }

@@ -52,6 +52,7 @@ pub(super) struct InlineRequest {
     pub caller_growth: usize,
     pub total_growth: usize,
     pub callee_depth: usize,
+    pub call_has_result: bool,
 }
 
 pub(super) fn decide_inline(
@@ -89,7 +90,10 @@ pub(super) fn decide_inline(
         return InlineDecision::Skip(InlineSkipReason::NoBody);
     }
 
-    let predicted_growth = summary.insts.saturating_sub(1);
+    let mut predicted_growth = summary.insts.saturating_sub(1);
+    if request.call_has_result && summary.returns > 1 {
+        predicted_growth = predicted_growth.saturating_add(1);
+    }
     if config.always_inline_single_use && request.callee_call_count == 1 && summary.blocks > 1 {
         return InlineDecision::Inline(InlinePlan {
             summary,

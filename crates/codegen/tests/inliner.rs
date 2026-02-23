@@ -966,6 +966,118 @@ func public %caller(v0.i32, v1.i32) -> i32 {
     assert!(stats.full_calls_inlined >= 2);
 }
 
+#[test]
+fn full_inliner_keeps_per_caller_growth_across_iterations() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func public %caller(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %mid v0 v1;
+        return v2;
+}
+
+func private %mid(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %leaf v0 v1;
+        jump block1;
+
+    block1:
+        return v2;
+}
+
+func private %leaf(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 1.i32;
+        return v2;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut cfg = full_only_inliner_test_config();
+    cfg.always_inline_single_use = false;
+    cfg.max_growth_per_caller = 5;
+    cfg.max_total_growth = 64;
+    cfg.inline_threshold = 1000;
+    cfg.inline_threshold_cold = 1000;
+
+    let mut inliner = Inliner::new(cfg);
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    let caller_ref = find_func(module, "caller");
+    let caller_dump = module.func_store.view(caller_ref, |func| {
+        FuncWriter::new(caller_ref, func).dump_string()
+    });
+    assert!(
+        !caller_dump.contains("call %mid"),
+        "first-stage inline should remove %mid call:\n{dumped}"
+    );
+    assert!(
+        caller_dump.contains("call %leaf"),
+        "second-stage inline should be blocked by caller growth cap:\n{dumped}"
+    );
+    assert!(stats.skipped_budget > 0);
+}
+
+#[test]
+fn full_inliner_growth_prediction_accounts_for_merge_phi() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %multi_ret(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 1.i32;
+        return v2;
+}
+
+func public %caller(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %multi_ret v0 v1;
+        return v2;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut cfg = full_only_inliner_test_config();
+    cfg.always_inline_single_use = false;
+    cfg.max_growth_per_caller = 3;
+    cfg.max_total_growth = 64;
+    cfg.inline_threshold = 1000;
+    cfg.inline_threshold_cold = 1000;
+
+    let mut inliner = Inliner::new(cfg);
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        dumped.contains("call %multi_ret"),
+        "merge-phi growth should be budgeted and block this inline:\n{dumped}"
+    );
+    assert_eq!(stats.full_calls_inlined, 0);
+    assert!(stats.skipped_budget > 0);
+}
+
 fn dump_module(module: &sonatina_ir::Module) -> String {
     let mut result = String::new();
     for func_ref in module.funcs() {
