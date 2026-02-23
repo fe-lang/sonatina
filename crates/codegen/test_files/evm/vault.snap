@@ -480,6 +480,14 @@ __Vault_recv_0_0:
     SWAP1
     PUSH1 block5
     JUMP
+  block7:
+    JUMPDEST
+    SWAP3  // jump block5;
+    POP
+    DUP1
+    SWAP2
+    SWAP3
+    SWAP1
   block5:
     JUMPDEST
     DUP4  // v25.i256 = evm_sload v1;
@@ -549,14 +557,6 @@ __Vault_recv_0_0:
     SSTORE  // evm_sstore v45 v34;
     SWAP1  // return v23;
     JUMP
-  block7:
-    JUMPDEST
-    SWAP3  // jump block5;
-    POP
-    DUP1
-    SWAP2
-    SWAP3
-    SWAP1
 
 // func private %__Vault_recv_0_1(v0.i256, v1.i256, v2.i256) -> i256
 __Vault_recv_0_1:
@@ -801,10 +801,6 @@ __Vault_runtime:
     ISZERO  // br v10 block2 block8;
     PUSH1 block8
     JUMPI
-  block1:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block2:
     SWAP1  // v17.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v25;
     POP
@@ -828,6 +824,14 @@ __Vault_runtime:
     JUMP
     JUMPDEST
     INVALID  // unreachable;
+  block8:
+    JUMPDEST
+    DUP2  // v11.i1 = eq 2.i256 v2;
+    PUSH1 0x2 (2)
+    EQ
+    ISZERO  // br v11 block3 block9;
+    PUSH1 block9
+    JUMPI
   block3:
     SWAP1  // v21.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v25;
     POP
@@ -851,6 +855,14 @@ __Vault_runtime:
     JUMP
     JUMPDEST
     INVALID  // unreachable;
+  block9:
+    JUMPDEST
+    DUP2  // v12.i1 = eq 3.i256 v2;
+    PUSH1 0x3 (3)
+    EQ
+    ISZERO  // br v12 block4 block10;
+    PUSH1 block10
+    JUMPI
   block4:
     SWAP1  // v25.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v25;
     POP
@@ -867,6 +879,15 @@ __Vault_runtime:
     PUSH0  // evm_return 0.i256 0.i256;
     PUSH0
     RETURN
+  block10:
+    JUMPDEST
+    POP  // v13.i1 = eq 4.i256 v2;
+    DUP1
+    PUSH1 0x4 (4)
+    EQ
+    ISZERO  // br v13 block5 block11;
+    PUSH1 block11
+    JUMPI
   block5:
     POP  // v28.i256 = evm_sload 0.i256;
     PUSH0
@@ -879,6 +900,14 @@ __Vault_runtime:
     JUMP
     JUMPDEST
     INVALID  // unreachable;
+  block11:
+    JUMPDEST
+    DUP1  // v14.i1 = eq 5.i256 v2;
+    PUSH1 0x5 (5)
+    EQ
+    ISZERO  // br v14 block6 block12;
+    PUSH1 block12
+    JUMPI
   block6:
     POP  // v30.i256 = evm_sload 1.i256;
     PUSH1 0x1 (1)
@@ -891,6 +920,16 @@ __Vault_runtime:
     JUMP
     JUMPDEST
     INVALID  // unreachable;
+  block12:
+    JUMPDEST
+    PUSH1 0x6 (6)  // v15.i1 = eq 6.i256 v2;
+    EQ
+    PUSH1 block7  // br v15 block7 block1;
+    JUMPI
+  block1:
+    PUSH0  // evm_revert 0.i256 0.i256;
+    PUSH0
+    REVERT
   block7:
     JUMPDEST
     CALLER  // v31.i256 = evm_caller;
@@ -925,45 +964,6 @@ __Vault_runtime:
     JUMP
     JUMPDEST
     INVALID  // unreachable;
-  block8:
-    JUMPDEST
-    DUP2  // v11.i1 = eq 2.i256 v2;
-    PUSH1 0x2 (2)
-    EQ
-    ISZERO  // br v11 block3 block9;
-    PUSH1 block9
-    JUMPI
-  block9:
-    JUMPDEST
-    DUP2  // v12.i1 = eq 3.i256 v2;
-    PUSH1 0x3 (3)
-    EQ
-    ISZERO  // br v12 block4 block10;
-    PUSH1 block10
-    JUMPI
-  block10:
-    JUMPDEST
-    POP  // v13.i1 = eq 4.i256 v2;
-    DUP1
-    PUSH1 0x4 (4)
-    EQ
-    ISZERO  // br v13 block5 block11;
-    PUSH1 block11
-    JUMPI
-  block11:
-    JUMPDEST
-    DUP1  // v14.i1 = eq 5.i256 v2;
-    PUSH1 0x5 (5)
-    EQ
-    ISZERO  // br v14 block6 block12;
-    PUSH1 block12
-    JUMPI
-  block12:
-    JUMPDEST
-    PUSH1 0x6 (6)  // v15.i1 = eq 6.i256 v2;
-    EQ
-    PUSH1 block7  // br v15 block7 block1;
-    JUMPI
 
 // func private %__VaultUser_recv_0_2(v0.i256, v1.i256) -> i256
 __VaultUser_recv_0_2:
@@ -1016,10 +1016,6 @@ __VaultUser_runtime:
     ISZERO  // br v6 block2 block5;
     PUSH1 block5
     JUMPI
-  block1:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block2:
     SWAP1  // v20.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v17;
     POP
@@ -1075,6 +1071,14 @@ __VaultUser_runtime:
     JUMP
     JUMPDEST
     INVALID  // unreachable;
+  block5:
+    JUMPDEST
+    DUP2  // v7.i1 = eq 17.i256 v1;
+    PUSH1 0x11 (17)
+    EQ
+    ISZERO  // br v7 block3 block6;
+    PUSH1 block6
+    JUMPI
   block3:
     SWAP1  // v36.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v17;
     POP
@@ -1130,6 +1134,17 @@ __VaultUser_runtime:
     JUMP
     JUMPDEST
     INVALID  // unreachable;
+  block6:
+    JUMPDEST
+    SWAP1  // v8.i1 = eq 18.i256 v1;
+    PUSH1 0x12 (18)
+    EQ
+    PUSH1 block4  // br v8 block4 block1;
+    JUMPI
+  block1:
+    PUSH0  // evm_revert 0.i256 0.i256;
+    PUSH0
+    REVERT
   block4:
     JUMPDEST
     PUSH1 `pc + (4)`  // v16.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v17;
@@ -1151,21 +1166,6 @@ __VaultUser_runtime:
     JUMP
     JUMPDEST
     INVALID  // unreachable;
-  block5:
-    JUMPDEST
-    DUP2  // v7.i1 = eq 17.i256 v1;
-    PUSH1 0x11 (17)
-    EQ
-    ISZERO  // br v7 block3 block6;
-    PUSH1 block6
-    JUMPI
-  block6:
-    JUMPDEST
-    SWAP1  // v8.i1 = eq 18.i256 v1;
-    PUSH1 0x12 (18)
-    EQ
-    PUSH1 block4  // br v8 block4 block1;
-    JUMPI
 
 // func private %create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8(v0.i256, v1.i256, v2.i256) -> i256
 create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8:
@@ -2747,15 +2747,15 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     MSTORE  // mstore v21 v18 i256;
     PUSH1 block2  // jump block2;
     JUMP
+  block3:
+    JUMPDEST
+    SWAP1  // jump block2;
+    POP
   block2:
     JUMPDEST
     MLOAD  // v25.i256 = mload v24 i256;
     SWAP1  // return v25;
     JUMP
-  block3:
-    JUMPDEST
-    SWAP1  // jump block2;
-    POP
 
 // func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0.i256) -> i256
 solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish:
