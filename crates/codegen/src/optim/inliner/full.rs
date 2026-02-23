@@ -190,9 +190,11 @@ pub(super) fn try_inline_callsite_full(
         }
 
         if callee.dfg.is_return(term_id) {
-            let ret_value = callee.dfg.as_return(term_id).and_then(|value| {
-                map_or_materialize(callee, editor.func_mut(), &mut value_map, value)
-            });
+            let ret_value = callee
+                .dfg
+                .return_args(term_id)
+                .and_then(|args| args.first().copied())
+                .and_then(|value| map_or_materialize(callee, editor.func_mut(), &mut value_map, value));
 
             let jump = editor.func_mut().dfg.make_jump(cont_block);
             editor.append_inst_with_result(new_block, Box::new(jump), None);
@@ -274,6 +276,7 @@ pub(super) fn try_inline_callsite_full(
 
                 let phi_value = func.dfg.make_value(Value::Inst {
                     inst: phi_inst,
+                    result_idx: 0,
                     ty: call_res_ty,
                 });
                 func.dfg.attach_result(phi_inst, phi_value);

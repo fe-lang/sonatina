@@ -33,6 +33,9 @@ pub struct InlinerConfig {
     pub max_inline_depth: usize,
     pub allow_inline_recursive: bool,
 
+    pub always_inline_single_use: bool,
+    pub multi_block_multi_use_penalty: i32,
+
     pub inline_threshold: i32,
     pub inline_threshold_cold: i32,
     pub single_use_bonus: i32,
@@ -59,6 +62,9 @@ impl Default for InlinerConfig {
             max_total_growth: 0,
             max_inline_depth: 8,
             allow_inline_recursive: false,
+
+            always_inline_single_use: true,
+            multi_block_multi_use_penalty: 12,
 
             inline_threshold: 24,
             inline_threshold_cold: 12,

@@ -614,6 +614,7 @@ func public %caller(v0.i1) -> i32 {
 
     let cfg = InlinerConfig {
         enable_full_inliner: true,
+        always_inline_single_use: false,
         max_growth_per_caller: 1,
         max_inlinee_blocks: 64,
         max_inlinee_insts: 256,
@@ -744,6 +745,227 @@ func public %caller(v0.i1, v1.i32) -> i32 {
     assert!(stats.full_calls_inlined > 0);
 }
 
+#[test]
+fn full_inliner_always_inlines_single_use_when_enabled() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %once(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 7.i32;
+        return v2;
+}
+
+func public %caller(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %once v0 v1;
+        return v2;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut cfg = full_only_inliner_test_config();
+    cfg.inline_threshold = -1000;
+    cfg.inline_threshold_cold = -1000;
+
+    let mut inliner = Inliner::new(cfg);
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %once"),
+        "single-use callee should inline even with strict thresholds:\n{dumped}"
+    );
+    assert!(stats.full_calls_inlined > 0);
+}
+
+#[test]
+fn full_inliner_single_use_multi_block_bypasses_size_and_growth_caps() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %once(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 7.i32;
+        return v2;
+}
+
+func public %caller(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %once v0 v1;
+        return v2;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut cfg = full_only_inliner_test_config();
+    cfg.max_inlinee_blocks = 1;
+    cfg.max_inlinee_insts = 1;
+    cfg.max_growth_per_caller = 1;
+    cfg.max_total_growth = 1;
+    cfg.inline_threshold = -1000;
+    cfg.inline_threshold_cold = -1000;
+
+    let mut inliner = Inliner::new(cfg);
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %once"),
+        "single-use multi-block callee should bypass size/growth caps:\n{dumped}"
+    );
+    assert!(stats.full_calls_inlined > 0);
+}
+
+#[test]
+fn full_inliner_multi_use_keeps_non_tiny_callee() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %multi(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 1.i32;
+        return v2;
+}
+
+func public %caller(v0.i1, v1.i32, v2.i32) -> i32 {
+    block0:
+        v3.i32 = call %multi v0 v1;
+        v4.i32 = call %multi v0 v2;
+        v5.i32 = add v3 v4;
+        return v5;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut cfg = full_only_inliner_test_config();
+    cfg.inline_threshold = 24;
+    cfg.inline_threshold_cold = 12;
+
+    let mut inliner = Inliner::new(cfg);
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        dumped.contains("call %multi"),
+        "multi-use non-tiny callee should remain:\n{dumped}"
+    );
+    assert_eq!(stats.full_calls_inlined, 0);
+    assert!(stats.skipped_cost > 0);
+}
+
+#[test]
+fn full_inliner_multi_block_multi_use_can_inline_with_loose_score() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %multi(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 1.i32;
+        return v2;
+}
+
+func public %caller(v0.i1, v1.i32, v2.i32) -> i32 {
+    block0:
+        v3.i32 = call %multi v0 v1;
+        v4.i32 = call %multi v0 v2;
+        v5.i32 = add v3 v4;
+        return v5;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut cfg = full_only_inliner_test_config();
+    cfg.inline_threshold_cold = 1000;
+    cfg.multi_block_multi_use_penalty = 0;
+
+    let mut inliner = Inliner::new(cfg);
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %multi"),
+        "loose score settings should allow multi-use multi-block inline:\n{dumped}"
+    );
+    assert!(stats.full_calls_inlined >= 2);
+}
+
+#[test]
+fn full_inliner_multi_use_allows_tiny_leaf_callee() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %tiny(v0.i32) -> i32 {
+    block0:
+        v1.i32 = add v0 1.i32;
+        return v1;
+}
+
+func public %caller(v0.i32, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %tiny v0;
+        v3.i32 = call %tiny v1;
+        v4.i32 = add v2 v3;
+        return v4;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(full_only_inliner_test_config());
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %tiny"),
+        "tiny multi-use callee should inline:\n{dumped}"
+    );
+    assert!(stats.full_calls_inlined >= 2);
+}
+
 fn dump_module(module: &sonatina_ir::Module) -> String {
     let mut result = String::new();
     for func_ref in module.funcs() {
@@ -764,6 +986,23 @@ fn assert_module_verified(module: &sonatina_ir::Module) {
 
 fn full_inliner_test_config() -> InlinerConfig {
     InlinerConfig {
+        enable_full_inliner: true,
+        max_inlinee_blocks: 64,
+        max_inlinee_insts: 1024,
+        max_growth_per_caller: 4096,
+        max_total_growth: 1 << 20,
+        inline_threshold: 1000,
+        inline_threshold_cold: 1000,
+        ..Default::default()
+    }
+}
+
+fn full_only_inliner_test_config() -> InlinerConfig {
+    InlinerConfig {
+        enable_noop: false,
+        enable_return_alias: false,
+        enable_wrapper_rewrite: false,
+        enable_single_block_splice: false,
         enable_full_inliner: true,
         max_inlinee_blocks: 64,
         max_inlinee_insts: 1024,

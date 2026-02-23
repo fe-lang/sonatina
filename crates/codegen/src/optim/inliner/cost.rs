@@ -84,13 +84,22 @@ pub(super) fn decide_inline(
         return InlineDecision::Skip(InlineSkipReason::NoBody);
     }
 
+    let predicted_growth = summary.insts.saturating_sub(1);
+    if config.always_inline_single_use && callee_call_count == 1 && summary.blocks > 1 {
+        return InlineDecision::Inline(InlinePlan {
+            summary,
+            score: i32::MIN + 1,
+            predicted_growth,
+            forced: true,
+        });
+    }
+
     if exceeds_cap(summary.blocks, config.max_inlinee_blocks)
         || exceeds_cap(summary.insts, config.max_inlinee_insts)
     {
         return InlineDecision::Skip(InlineSkipReason::Budget);
     }
 
-    let predicted_growth = summary.insts.saturating_sub(1);
     if exceeds_budget(
         caller_growth,
         predicted_growth,
@@ -114,23 +123,28 @@ pub(super) fn decide_inline(
         });
     }
 
-    let threshold = if summary.has_loop || summary.calls > 0 {
-        config.inline_threshold_cold
-    } else {
-        config.inline_threshold
-    };
-
     let is_leaf = module_info
         .func_info
         .get(&callee_ref)
         .map(|info| info.is_leaf)
         .unwrap_or_else(|| module_info.call_graph.is_leaf(&module.ctx, callee_ref));
 
+    let threshold = if summary.blocks > 1 && callee_call_count > 1 {
+        config.inline_threshold_cold
+    } else if summary.has_loop || summary.calls > 0 {
+        config.inline_threshold_cold
+    } else {
+        config.inline_threshold
+    };
+
     let mut score = summary.base_cost;
     score += summary.phis as i32;
     score += summary.returns.saturating_sub(1) as i32;
     if summary.has_loop {
         score += config.loop_penalty;
+    }
+    if summary.blocks > 1 && callee_call_count > 1 {
+        score += config.multi_block_multi_use_penalty;
     }
     if callee_call_count == 1 {
         score -= config.single_use_bonus;

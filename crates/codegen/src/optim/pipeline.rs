@@ -156,6 +156,46 @@ fn step_may_invalidate_func_behavior(passes: &[Pass]) -> bool {
         .any(pass_may_invalidate_func_behavior)
 }
 
+fn balanced_inliner_config() -> InlinerConfig {
+    InlinerConfig {
+        // Keep balanced mode conservative but still allow constrained full
+        // CFG inlining in addition to trivial fast paths.
+        enable_full_inliner: true,
+        splice_max_insts: 8,
+        max_inlinee_blocks: 2,
+        max_inlinee_insts: 12,
+        max_growth_per_caller: 12,
+        max_total_growth: 48,
+        max_inline_depth: 2,
+        inline_threshold: 6,
+        inline_threshold_cold: 3,
+        single_use_bonus: 4,
+        leaf_bonus: 2,
+        loop_penalty: 32,
+        ..InlinerConfig::default()
+    }
+}
+
+fn aggressive_inliner_config() -> InlinerConfig {
+    InlinerConfig {
+        // Aggressive mode enables full CFG inlining with constrained budgets,
+        // plus a larger trivial-inliner profile and extra inline/SCCP rounds.
+        enable_full_inliner: true,
+        splice_max_insts: 12,
+        max_inlinee_blocks: 2,
+        max_inlinee_insts: 12,
+        max_growth_per_caller: 16,
+        max_total_growth: 64,
+        max_inline_depth: 2,
+        inline_threshold: 8,
+        inline_threshold_cold: 4,
+        single_use_bonus: 4,
+        leaf_bonus: 2,
+        loop_penalty: 32,
+        ..InlinerConfig::default()
+    }
+}
+
 impl Pipeline {
     /// Create an empty pipeline with default inliner configuration.
     pub fn new() -> Self {
@@ -174,9 +214,11 @@ impl Pipeline {
 
     /// Conservative optimization pipeline preset.
     ///
-    /// This is the recommended baseline (O1-style) pipeline.
+    /// This is the recommended baseline (O1-style) pipeline with constrained
+    /// full inlining and one inline/simplify round.
     pub fn balanced() -> Self {
         let mut p = Self::new();
+        p.inliner_config = balanced_inliner_config();
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(vec![
             Pass::CfgCleanup,
@@ -198,9 +240,11 @@ impl Pipeline {
 
     /// Aggressive optimization pipeline preset.
     ///
-    /// Uses a larger inliner budget and a second inline+SCCP round.
+    /// Runs additional inline/SCCP rounds, a larger trivial-inliner splice
+    /// budget, and enables constrained full CFG-aware inlining.
     pub fn aggressive() -> Self {
         let mut p = Self::new();
+        p.inliner_config = aggressive_inliner_config();
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(vec![
             Pass::CfgCleanup,
@@ -233,7 +277,7 @@ impl Pipeline {
     /// Default optimization pipeline with a conservative ordering.
     ///
     /// Current sequence:
-    /// 1. `Inline` — single-block inlining (module-level)
+    /// 1. `Inline` — module-level inlining (trivial + constrained full inliner)
     /// 2. Per-function passes (parallel):
     ///    - `CfgCleanup` — normalize CFG before analysis-heavy passes
     ///    - `Sccp` — constant propagation + dead code elimination (composite)
@@ -1062,5 +1106,54 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                 "expected inferred equality from eq(ne x y, 0) to fold sub in true branch:\n{dumped}"
             );
         });
+    }
+
+    #[test]
+    fn balanced_and_aggressive_use_distinct_inliner_profiles() {
+        let balanced = Pipeline::balanced();
+        assert!(balanced.inliner_config.enable_full_inliner);
+        assert_eq!(balanced.inliner_config.splice_max_insts, 8);
+
+        let aggressive = Pipeline::aggressive();
+        assert!(aggressive.inliner_config.enable_full_inliner);
+        assert!(
+            aggressive.inliner_config.splice_max_insts > balanced.inliner_config.splice_max_insts
+        );
+        assert!(aggressive.inliner_config.max_inlinee_blocks > 0);
+        assert!(aggressive.inliner_config.max_inlinee_insts > 0);
+        assert!(
+            aggressive.inliner_config.max_growth_per_caller
+                >= balanced.inliner_config.max_growth_per_caller
+        );
+        assert!(
+            aggressive.inliner_config.max_total_growth >= balanced.inliner_config.max_total_growth
+        );
+        assert_ne!(
+            aggressive.inliner_config.inline_threshold,
+            balanced.inliner_config.inline_threshold
+        );
+        assert_ne!(
+            aggressive.inliner_config.inline_threshold_cold,
+            balanced.inliner_config.inline_threshold_cold
+        );
+    }
+
+    #[test]
+    fn aggressive_pipeline_has_extra_inline_round() {
+        let balanced = Pipeline::balanced();
+        let aggressive = Pipeline::aggressive();
+        let balanced_inline_steps = balanced
+            .steps
+            .iter()
+            .filter(|step| matches!(step, Step::Inline))
+            .count();
+        let aggressive_inline_steps = aggressive
+            .steps
+            .iter()
+            .filter(|step| matches!(step, Step::Inline))
+            .count();
+
+        assert_eq!(balanced_inline_steps, 1);
+        assert_eq!(aggressive_inline_steps, 2);
     }
 }

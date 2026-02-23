@@ -6,17 +6,16 @@ input_file: test_files/evm/aggregate_legalize.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 39 bytes
-  total: 39 bytes
+  section runtime: 26 bytes
+  total: 26 bytes
 
 functions:
-  entry: ir_blocks=1 ir_insts=7 vcode_ops=20 fixups=2 imm_bytes=2
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  agg_phi: ir_blocks=4 ir_insts=6 vcode_ops=14 fixups=2 imm_bytes=0
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  mem: dyn_base=0xc0 static_base=0xc0
+  entry: ir_blocks=4 ir_insts=11 vcode_ops=23 fixups=2 imm_bytes=2
+    mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case ok: calldata_len=64 success reason=Return gas_used=21370 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=90
+  case ok: calldata_len=64 success reason=Return gas_used=21335 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=55
 
 
 --------------- DEBUG ---------------
@@ -29,39 +28,24 @@ entry:
     CALLDATALOAD
     PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i256;
     CALLDATALOAD
-    DUP2  // v3.i256 = call %agg_phi v0 v1;
-    DUP2
-    PUSH1 `pc + (4)`
-    SWAP2
-    PUSH1 FuncRef(2)
+    DUP2  // v19.i1 = is_zero v0;
+    ISZERO
+    PUSH1 block7  // br v19 block7 block4;
+    JUMPI
+  block4:
+    DUP1  // jump block5;
+    PUSH1 block5
     JUMP
+  block7:
     JUMPDEST
-    SWAP2  // v22.i256 = add v0 v1;
+    DUP2  // jump block5;
+  block5:
+    JUMPDEST
+    SWAP2  // v50.i256 = add v0 v1;
     ADD
-    ADD  // v4.i256 = add v22 v3;
+    ADD  // v4.i256 = add v50 v32;
     PUSH0  // mstore 0.i256 v4 i256;
     MSTORE
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
     RETURN
-
-// func private %agg_phi(v0.i256, v1.i256) -> i256
-agg_phi:
-  block0:
-    JUMPDEST
-    DUP1  // v2.i1 = is_zero v0;
-    ISZERO
-    PUSH1 block4  // br v2 block4 block2;
-    JUMPI
-  block2:
-    POP  // jump block3;
-    PUSH1 block3
-    JUMP
-  block4:
-    JUMPDEST
-    SWAP1  // jump block3;
-    POP
-  block3:
-    JUMPDEST
-    SWAP1  // return v18;
-    JUMP
