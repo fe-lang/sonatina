@@ -62,6 +62,15 @@ impl FuncStore {
         self.funcs.insert(func_ref, func).unwrap();
     }
 
+    pub fn restore(&self, func_ref: FuncRef, func: Function) {
+        let _guard = self._guard.lock().unwrap();
+        let prev = self.funcs.insert(func_ref, func);
+        debug_assert!(
+            prev.is_none(),
+            "restore expected vacant slot for {func_ref:?}"
+        );
+    }
+
     pub fn insert(&self, func: Function) -> FuncRef {
         let _guard = self._guard.lock().unwrap();
 

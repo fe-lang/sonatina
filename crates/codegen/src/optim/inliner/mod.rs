@@ -167,8 +167,8 @@ impl Inliner {
                         continue;
                     }
 
-                    // Recursive full-inlining requires a snapshot strategy because FuncStore
-                    // cannot `view` and `modify` the same function concurrently.
+                    // Avoid nested `view` + `modify` locks. With DashMap sharding, those can
+                    // deadlock when caller/callee hash to the same shard.
                     if site.callee == caller_ref {
                         stats.skipped_recursive_scc += 1;
                         continue;
@@ -197,19 +197,22 @@ impl Inliner {
                         continue;
                     };
 
+                    let Some(mut caller_func) = module.func_store.remove(caller_ref) else {
+                        stats.skipped_no_body += 1;
+                        continue;
+                    };
                     let full_result = module.func_store.view(site.callee, |callee| {
-                        module.func_store.modify(caller_ref, |caller| {
-                            full::try_inline_callsite_full(
-                                module,
-                                caller_ref,
-                                caller,
-                                site.call_inst,
-                                site.callee,
-                                callee,
-                                &self.config,
-                            )
-                        })
+                        full::try_inline_callsite_full(
+                            module,
+                            caller_ref,
+                            &mut caller_func,
+                            site.call_inst,
+                            site.callee,
+                            callee,
+                            &self.config,
+                        )
                     });
+                    module.func_store.restore(caller_ref, caller_func);
 
                     match full_result {
                         Ok(result) => {
