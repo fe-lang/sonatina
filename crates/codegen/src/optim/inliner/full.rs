@@ -172,10 +172,10 @@ pub(super) fn try_inline_callsite_full(
                 editor.append_inst_with_result(new_block, cloned, result_ty);
             inserted_insts += 1;
 
-            if let Some(old_result) = old_result {
-                if let Some(new_result) = new_result {
-                    value_map.insert(old_result, new_result);
-                }
+            if let Some(old_result) = old_result
+                && let Some(new_result) = new_result
+            {
+                value_map.insert(old_result, new_result);
             }
 
             if is_phi {

@@ -178,12 +178,17 @@ impl Inliner {
                         module,
                         &analysis,
                         &mut inlinee_summaries,
-                        caller_ref,
-                        site.callee,
-                        callee_calls,
-                        growth_by_caller.get(&caller_ref).copied().unwrap_or(0),
-                        total_growth,
-                        &inline_depth_by_func,
+                        cost::InlineRequest {
+                            caller_ref,
+                            callee_ref: site.callee,
+                            callee_call_count: callee_calls,
+                            caller_growth: growth_by_caller.get(&caller_ref).copied().unwrap_or(0),
+                            total_growth,
+                            callee_depth: inline_depth_by_func
+                                .get(&site.callee)
+                                .copied()
+                                .unwrap_or(0),
+                        },
                         &self.config,
                     );
 

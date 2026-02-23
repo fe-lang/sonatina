@@ -44,39 +44,44 @@ pub(super) struct InlineeSummary {
     pub base_cost: i32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct InlineRequest {
+    pub caller_ref: FuncRef,
+    pub callee_ref: FuncRef,
+    pub callee_call_count: usize,
+    pub caller_growth: usize,
+    pub total_growth: usize,
+    pub callee_depth: usize,
+}
+
 pub(super) fn decide_inline(
     module: &Module,
     module_info: &ModuleInfo,
     summary_cache: &mut FxHashMap<FuncRef, InlineeSummary>,
-    caller_ref: FuncRef,
-    callee_ref: FuncRef,
-    callee_call_count: usize,
-    caller_growth: usize,
-    total_growth: usize,
-    inline_depth_by_func: &FxHashMap<FuncRef, usize>,
+    request: InlineRequest,
     config: &InlinerConfig,
 ) -> InlineDecision {
-    let attrs = module.ctx.func_attrs(callee_ref);
+    let attrs = module.ctx.func_attrs(request.callee_ref);
     if attrs.contains(FuncAttrs::NOINLINE) {
         return InlineDecision::Skip(InlineSkipReason::NoInlineAttr);
     }
 
-    if !module.ctx.func_linkage(callee_ref).has_definition() {
+    if !module.ctx.func_linkage(request.callee_ref).has_definition() {
         return InlineDecision::Skip(InlineSkipReason::NoBody);
     }
 
     if !config.allow_inline_recursive {
-        let caller_scc = module_info.scc.scc_ref(caller_ref);
-        let callee_scc = module_info.scc.scc_ref(callee_ref);
+        let caller_scc = module_info.scc.scc_ref(request.caller_ref);
+        let callee_scc = module_info.scc.scc_ref(request.callee_ref);
         if caller_scc == callee_scc && module_info.scc.scc_info(caller_scc).is_cycle {
             return InlineDecision::Skip(InlineSkipReason::RecursiveScc);
         }
     }
 
-    let summary = *summary_cache.entry(callee_ref).or_insert_with(|| {
+    let summary = *summary_cache.entry(request.callee_ref).or_insert_with(|| {
         module
             .func_store
-            .try_view(callee_ref, compute_inlinee_summary)
+            .try_view(request.callee_ref, compute_inlinee_summary)
             .unwrap_or_default()
     });
 
@@ -85,7 +90,7 @@ pub(super) fn decide_inline(
     }
 
     let predicted_growth = summary.insts.saturating_sub(1);
-    if config.always_inline_single_use && callee_call_count == 1 && summary.blocks > 1 {
+    if config.always_inline_single_use && request.callee_call_count == 1 && summary.blocks > 1 {
         return InlineDecision::Inline(InlinePlan {
             summary,
             score: i32::MIN + 1,
@@ -101,16 +106,18 @@ pub(super) fn decide_inline(
     }
 
     if exceeds_budget(
-        caller_growth,
+        request.caller_growth,
         predicted_growth,
         config.max_growth_per_caller,
-    ) || exceeds_budget(total_growth, predicted_growth, config.max_total_growth)
-    {
+    ) || exceeds_budget(
+        request.total_growth,
+        predicted_growth,
+        config.max_total_growth,
+    ) {
         return InlineDecision::Skip(InlineSkipReason::Budget);
     }
 
-    let callee_depth = inline_depth_by_func.get(&callee_ref).copied().unwrap_or(0);
-    if config.max_inline_depth > 0 && callee_depth + 1 > config.max_inline_depth {
+    if config.max_inline_depth > 0 && request.callee_depth + 1 > config.max_inline_depth {
         return InlineDecision::Skip(InlineSkipReason::Budget);
     }
 
@@ -125,13 +132,18 @@ pub(super) fn decide_inline(
 
     let is_leaf = module_info
         .func_info
-        .get(&callee_ref)
+        .get(&request.callee_ref)
         .map(|info| info.is_leaf)
-        .unwrap_or_else(|| module_info.call_graph.is_leaf(&module.ctx, callee_ref));
+        .unwrap_or_else(|| {
+            module_info
+                .call_graph
+                .is_leaf(&module.ctx, request.callee_ref)
+        });
 
-    let threshold = if summary.blocks > 1 && callee_call_count > 1 {
-        config.inline_threshold_cold
-    } else if summary.has_loop || summary.calls > 0 {
+    let threshold = if summary.has_loop
+        || summary.calls > 0
+        || (summary.blocks > 1 && request.callee_call_count > 1)
+    {
         config.inline_threshold_cold
     } else {
         config.inline_threshold
@@ -143,10 +155,10 @@ pub(super) fn decide_inline(
     if summary.has_loop {
         score += config.loop_penalty;
     }
-    if summary.blocks > 1 && callee_call_count > 1 {
+    if summary.blocks > 1 && request.callee_call_count > 1 {
         score += config.multi_block_multi_use_penalty;
     }
-    if callee_call_count == 1 {
+    if request.callee_call_count == 1 {
         score -= config.single_use_bonus;
     }
     if is_leaf {
