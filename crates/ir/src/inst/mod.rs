@@ -3,6 +3,7 @@ pub mod cast;
 pub mod cmp;
 pub mod control_flow;
 pub mod data;
+pub mod equiv;
 pub mod evm;
 #[macro_use]
 pub mod inst_set;
@@ -36,6 +37,9 @@ pub trait Inst:
     fn arity(&self) -> InstArity;
     fn as_text(&self) -> &'static str;
     fn is_terminator(&self) -> bool;
+    fn kind(&self) -> InstClassKind {
+        InstClassKind::Opaque
+    }
 
     fn collect_values(&self) -> SmallVec<[ValueId; 2]> {
         let mut vs = SmallVec::new();
@@ -53,6 +57,10 @@ pub trait Inst:
         vs
     }
 }
+
+pub use equiv::{
+    BinaryInstKind, CastInstKind, InstClassKind, InstKeyExt, OwnedInstKey, UnaryInstKind,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum InstArity {

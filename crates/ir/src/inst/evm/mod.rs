@@ -4,24 +4,28 @@ pub mod inst_set;
 use crate::value::ValueId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(EvmUdiv)))]
 pub struct EvmUdiv {
     lhs: ValueId,
     rhs: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(EvmSdiv)))]
 pub struct EvmSdiv {
     lhs: ValueId,
     rhs: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(EvmUmod)))]
 pub struct EvmUmod {
     lhs: ValueId,
     rhs: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(EvmSmod)))]
 pub struct EvmSmod {
     lhs: ValueId,
     rhs: ValueId,
@@ -52,18 +56,21 @@ pub struct EvmMulMod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(EvmExp)))]
 pub struct EvmExp {
     base: ValueId,
     exponent: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(EvmByte)))]
 pub struct EvmByte {
     pos: ValueId,
     value: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(unary(EvmClz)))]
 pub struct EvmClz {
     word: ValueId,
 }

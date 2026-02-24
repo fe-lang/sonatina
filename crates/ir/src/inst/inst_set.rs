@@ -173,13 +173,20 @@ pub trait InstSetExt: InstSetBase {
 #[cfg(test)]
 mod tests {
     use arith::*;
+    use cast::Sext;
     use control_flow::*;
     use data::Gep;
     use logic::*;
     use macros::inst_set;
 
     use super::*;
-    use crate::{InstArity, InstDowncast, InstDowncastMut, ValueId};
+    use crate::{
+        BlockId, InstArity, InstDowncast, InstDowncastMut, Type, ValueId,
+        inst::{
+            BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind,
+            evm::{EvmClz, EvmSdiv, inst_set::EvmInstSet},
+        },
+    };
 
     #[inst_set(InstKind = "TestInstKind")]
     struct TestInstSet(Add, Sub, Not, Phi, Jump);
@@ -287,6 +294,41 @@ mod tests {
         let add = Add::new(&inst_set, value, value);
         let inst: &dyn Inst = &add;
         assert_eq!(inst.arity(), InstArity::Exact(2));
+    }
+
+    #[test]
+    fn inst_kind_metadata() {
+        let inst_set = TestInstSet::new();
+        let v = ValueId::from_u32(1);
+        let b0 = BlockId::from_u32(0);
+
+        assert_eq!(
+            Add::new(&inst_set, v, v).kind(),
+            InstClassKind::Binary(BinaryInstKind::Add)
+        );
+        assert_eq!(
+            Not::new(&inst_set, v).kind(),
+            InstClassKind::Unary(UnaryInstKind::Not)
+        );
+        assert_eq!(
+            Phi::new(inst_set.phi(), vec![(v, b0)]).kind(),
+            InstClassKind::Phi
+        );
+        assert_eq!(Jump::new(inst_set.jump(), b0).kind(), InstClassKind::Opaque);
+
+        let evm_inst_set = EvmInstSet::new();
+        assert_eq!(
+            Sext::new(&evm_inst_set, v, Type::I64).kind(),
+            InstClassKind::Cast(CastInstKind::Sext)
+        );
+        assert_eq!(
+            EvmSdiv::new(&evm_inst_set, v, v).kind(),
+            InstClassKind::Binary(BinaryInstKind::EvmSdiv)
+        );
+        assert_eq!(
+            EvmClz::new(&evm_inst_set, v).kind(),
+            InstClassKind::Unary(UnaryInstKind::EvmClz)
+        );
     }
 }
 
