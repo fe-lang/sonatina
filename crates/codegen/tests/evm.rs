@@ -363,12 +363,16 @@ fn test_evm(fixture: Fixture<&str>) {
         }
 
         assert_case(case, &res, fixture.path());
+        let tx_gas = initial_tx_gas_for_call(&case.calldata);
+        let runtime_gas = execution_gas_used(&res).saturating_sub(tx_gas);
         writeln!(
             &mut out,
-            "  case {}: calldata_len={} {}",
+            "  case {}: calldata_len={} {} tx_gas={} runtime_gas={}",
             case.name,
             case.calldata.len(),
-            summarize_execution_result(&res)
+            summarize_execution_result(&res),
+            tx_gas,
+            runtime_gas,
         )
         .unwrap();
     }
@@ -774,6 +778,26 @@ fn summarize_execution_result(res: &ExecutionResult) -> String {
             format!("halt reason={reason:?} gas_used={gas_used}")
         }
     }
+}
+
+fn execution_gas_used(res: &ExecutionResult) -> u64 {
+    match res {
+        ExecutionResult::Success { gas_used, .. }
+        | ExecutionResult::Revert { gas_used, .. }
+        | ExecutionResult::Halt { gas_used, .. } => *gas_used,
+    }
+}
+
+fn initial_tx_gas_for_call(calldata: &[u8]) -> u64 {
+    let mut env = Env::default();
+    env.tx.clear();
+    env.tx.transact_to = TransactTo::Call(Address::ZERO);
+    env.tx.data = Bytes::copy_from_slice(calldata);
+
+    revm::handler::mainnet::validate_initial_tx_gas::<OsakaSpec, revm::InMemoryDB>(&env)
+        .unwrap_or_else(|err| {
+            panic!("failed to compute initial tx gas for evm.case calldata: {err}")
+        })
 }
 
 fn summarize_output(output: &Output) -> String {
