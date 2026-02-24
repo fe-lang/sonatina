@@ -1,14 +1,15 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/zk.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 2351 bytes
-  section runtime: 2339 bytes
-  total: 4690 bytes
+  section init: 2400 bytes
+  section runtime: 2388 bytes
+  total: 4788 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
@@ -18,11 +19,11 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
   leanimt_root_from_calldata: ir_blocks=9 ir_insts=28 vcode_ops=84 fixups=5 imm_bytes=10
     mem: scheme=StaticArena need_words=0 locals_words=0
-  leanimt_update_root_from_calldata: ir_blocks=11 ir_insts=40 vcode_ops=107 fixups=6 imm_bytes=14
+  leanimt_update_root_from_calldata: ir_blocks=11 ir_insts=40 vcode_ops=111 fixups=6 imm_bytes=14
     mem: scheme=StaticArena need_words=0 locals_words=0
-  smt_root_from_calldata: ir_blocks=18 ir_insts=65 vcode_ops=210 fixups=13 imm_bytes=26
+  smt_root_from_calldata: ir_blocks=18 ir_insts=65 vcode_ops=228 fixups=13 imm_bytes=26
     mem: scheme=StaticArena need_words=0 locals_words=0
-  smt_update_root_from_calldata: ir_blocks=22 ir_insts=89 vcode_ops=289 fixups=15 imm_bytes=34
+  smt_update_root_from_calldata: ir_blocks=22 ir_insts=89 vcode_ops=316 fixups=15 imm_bytes=34
     mem: scheme=StaticArena need_words=0 locals_words=0
   init__StorPtr_Evm___207f35a85ac4062e: ir_blocks=1 ir_insts=4 vcode_ops=9 fixups=2 imm_bytes=2
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -34,19 +35,19 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  deploy: success reason=Return gas_used=558966 gas_refunded=0 logs=0 output=create len=2339 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=569546 gas_refunded=0 logs=0 output=create len=2388 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   case bench_lean_typical_root: calldata_len=1124 success reason=Return gas_used=30185 gas_refunded=0 logs=0 output=call len=32 tx_gas=28616 runtime_gas=1569
   case bench_lean_typical_verify: calldata_len=1156 success reason=Return gas_used=30780 gas_refunded=0 logs=0 output=call len=32 tx_gas=29128 runtime_gas=1652
-  case bench_lean_typical_update: calldata_len=1188 success reason=Return gas_used=31742 gas_refunded=0 logs=0 output=call len=32 tx_gas=29640 runtime_gas=2102
+  case bench_lean_typical_update: calldata_len=1188 success reason=Return gas_used=31754 gas_refunded=0 logs=0 output=call len=32 tx_gas=29640 runtime_gas=2114
   case bench_lean_32_root: calldata_len=1124 success reason=Return gas_used=44720 gas_refunded=0 logs=0 output=call len=32 tx_gas=38216 runtime_gas=6504
   case bench_lean_32_verify: calldata_len=1156 success reason=Return gas_used=45315 gas_refunded=0 logs=0 output=call len=32 tx_gas=38728 runtime_gas=6587
-  case bench_lean_32_update: calldata_len=1188 success reason=Return gas_used=47672 gas_refunded=0 logs=0 output=call len=32 tx_gas=39240 runtime_gas=8432
-  case bench_smt_typical_root: calldata_len=1124 success reason=Return gas_used=37922 gas_refunded=0 logs=0 output=call len=32 tx_gas=27932 runtime_gas=9990
-  case bench_smt_typical_verify: calldata_len=1156 success reason=Return gas_used=38517 gas_refunded=0 logs=0 output=call len=32 tx_gas=28444 runtime_gas=10073
-  case bench_smt_typical_update: calldata_len=1188 success reason=Return gas_used=41975 gas_refunded=0 logs=0 output=call len=32 tx_gas=28956 runtime_gas=13019
-  case bench_smt_all_enabled_root: calldata_len=1124 success reason=Return gas_used=44891 gas_refunded=0 logs=0 output=call len=32 tx_gas=38300 runtime_gas=6591
-  case bench_smt_all_enabled_verify: calldata_len=1156 success reason=Return gas_used=45486 gas_refunded=0 logs=0 output=call len=32 tx_gas=38812 runtime_gas=6674
-  case bench_smt_all_enabled_update: calldata_len=1188 success reason=Return gas_used=48356 gas_refunded=0 logs=0 output=call len=32 tx_gas=39324 runtime_gas=9032
+  case bench_lean_32_update: calldata_len=1188 success reason=Return gas_used=47684 gas_refunded=0 logs=0 output=call len=32 tx_gas=39240 runtime_gas=8444
+  case bench_smt_typical_root: calldata_len=1124 success reason=Return gas_used=38927 gas_refunded=0 logs=0 output=call len=32 tx_gas=27932 runtime_gas=10995
+  case bench_smt_typical_verify: calldata_len=1156 success reason=Return gas_used=39522 gas_refunded=0 logs=0 output=call len=32 tx_gas=28444 runtime_gas=11078
+  case bench_smt_typical_update: calldata_len=1188 success reason=Return gas_used=43115 gas_refunded=0 logs=0 output=call len=32 tx_gas=28956 runtime_gas=14159
+  case bench_smt_all_enabled_root: calldata_len=1124 success reason=Return gas_used=44894 gas_refunded=0 logs=0 output=call len=32 tx_gas=38300 runtime_gas=6594
+  case bench_smt_all_enabled_verify: calldata_len=1156 success reason=Return gas_used=45489 gas_refunded=0 logs=0 output=call len=32 tx_gas=38812 runtime_gas=6677
+  case bench_smt_all_enabled_update: calldata_len=1188 success reason=Return gas_used=48359 gas_refunded=0 logs=0 output=call len=32 tx_gas=39324 runtime_gas=9035
 
 
 --------------- DEBUG ---------------
@@ -235,7 +236,7 @@ evm:
     inherited from block0: [v0, v1, v2, v3, <RET>]
     // jump block3;
     - stack=[v0, v1, v2, v3, <RET>]
-      exit(block3): [SWAP3, SWAP1, PUSH(0), SWAP3, SWAP4]
+      exit(block3): [PUSH(0), SWAP3, SWAP4, SWAP2, SWAP1]
       jump -> block3
   block3 P=[v5, v6, v7, v8] T=[v2]
     // v9.i1 = lt v8 v2;
@@ -341,7 +342,7 @@ evm:
     inherited from block0: [v0, v1, v2, v3, v4, v5, <RET>]
     // jump block3;
     - stack=[v0, v1, v2, v3, v4, v5, <RET>]
-      exit(block3): [SWAP5, SWAP3, SWAP1, PUSH(0), SWAP3]
+      exit(block3): [PUSH(0), SWAP1, SWAP6, SWAP4, SWAP1, SWAP3, SWAP1, SWAP2, SWAP1]
       jump -> block3
   block3 P=[v7, v8, v9, v10] T=[v5, v4, v0]
     // v11.i1 = lt v10 v4;
@@ -489,7 +490,7 @@ evm:
       call []
     // jump block9;
     - stack=[v0, v1, v2, v3, <RET>]
-      exit(block9): [PUSH(0), SWAP4, PUSH(64), SWAP3]
+      exit(block9): [PUSH(0), PUSH(64), SWAP1, SWAP5, SWAP1, SWAP3]
       jump -> block9
   block9 P=[v19, v20, v21, v22, v23, v24] T=[]
     // v25.i1 = lt v24 32.i256;
@@ -527,7 +528,7 @@ evm:
       br [v27] -> [block12, block19]
   block12 P=[] T=[v30, v28, v19, v20, v21, v24]
     inherited from block10: [v30, v28, v19, v20, v21, v29x, v27x, v24, <RET>]
-    prologue: [SWAP6, POP, SWAP2, SWAP4, POP, SWAP2, SWAP4]
+    prologue: [SWAP5, POP, SWAP5, POP, SWAP2, SWAP4, SWAP1, SWAP3]
     // v31.i256 = evm_calldata_load v20;
     - stack=[v30, v28, v19, v20, v21, v24, <RET>]
       pre: [DUP4]
@@ -538,14 +539,14 @@ evm:
       add [32, v20] -> v32
     // jump block14;
     - stack=[v32, v30, v28, v19, v31, v21, v24, <RET>]
-      exit(block14): [SWAP1, SWAP2, SWAP3, SWAP4, SWAP1]
+      exit(block14): [SWAP3, SWAP4, SWAP2, SWAP3, SWAP1, SWAP2, SWAP1]
       jump -> block14
   block19 P=[] T=[v30, v28, v19, v20, v21, v29, v24]
     inherited from block10: [v30, v28, v19, v20, v21, v29, v27x, v24, <RET>]
-    prologue: [SWAP6, POP, SWAP1, SWAP2, SWAP3, SWAP4, SWAP5]
+    prologue: [SWAP6, POP, SWAP4, SWAP5, SWAP3, SWAP4, SWAP2, SWAP3, SWAP1, SWAP2, SWAP1]
     // jump block14;
     - stack=[v30, v28, v19, v20, v21, v29, v24, <RET>]
-      exit(block14): [SWAP2, SWAP4, SWAP5, SWAP1, SWAP3]
+      exit(block14): [SWAP4, SWAP5, SWAP2, SWAP4, SWAP1, SWAP3, SWAP1, SWAP2, SWAP1]
       jump -> block14
   block14 P=[v33, v34] T=[v30, v28, v19, v21, v24]
     // v49.i256 = and 1.i256 v19;
@@ -566,7 +567,7 @@ evm:
       br [v36] -> [block15, block17]
   block15 P=[] T=[v37, v33, v34, v30, v28, v21, v24]
     inherited from block14: [v37, v33, v34, v30, v28, v36x, v21, v24, <RET>]
-    prologue: [SWAP5, POP, SWAP1, SWAP2, SWAP3, SWAP4]
+    prologue: [SWAP5, POP, SWAP3, SWAP4, SWAP2, SWAP3, SWAP1, SWAP2]
     // mstore 0.i256 v34 i256;
     - stack=[v37, v33, v34, v30, v28, v21, v24, <RET>], last_use=[v34]
       pre: [SWAP2, PUSH(0)]
@@ -585,7 +586,7 @@ evm:
       jump -> block16
   block17 P=[] T=[v37, v33, v34, v30, v28, v21, v24]
     inherited from block14: [v37, v33, v34, v30, v28, v36x, v21, v24, <RET>]
-    prologue: [SWAP5, POP, SWAP1, SWAP2, SWAP3, SWAP4]
+    prologue: [SWAP5, POP, SWAP3, SWAP4, SWAP2, SWAP3, SWAP1, SWAP2]
     // mstore 0.i256 v21 i256;
     - stack=[v37, v33, v34, v30, v28, v21, v24, <RET>], last_use=[v21]
       pre: [SWAP5, PUSH(0)]
@@ -608,7 +609,7 @@ evm:
       add [1, v24] -> v40
     // jump block9;
     - stack=[v40, v33, v30, v28, v37, v39, <RET>]
-      exit(block9): [SWAP5, SWAP2, SWAP3, SWAP4]
+      exit(block9): [SWAP5, SWAP3, SWAP4, SWAP2, SWAP3, SWAP2]
       jump -> block9
   block11 P=[] T=[v21]
     inherited from block9: [v19x, v20x, v21, v22x, v23x, v24x, <RET>]
@@ -620,7 +621,7 @@ evm:
     inherited from block0: [v0, v1, v2x, v3, <RET>]
     // jump block3;
     - stack=[v0, v1, v2x, v3, <RET>]
-      exit(block3): [PUSH(0), SWAP4, SWAP3, POP]
+      exit(block3): [SWAP2, POP, PUSH(0), SWAP3, SWAP2]
       jump -> block3
   block3 P=[v5, v6, v7, v8] T=[]
     // v9.i1 = lt v8 32.i256;
@@ -724,7 +725,7 @@ evm:
       call []
     // jump block11;
     - stack=[v0, v1, v2, v3, v4, v5, <RET>]
-      exit(block11): [SWAP5, PUSH(0), SWAP5, SWAP4, PUSH(64), SWAP4]
+      exit(block11): [PUSH(0), PUSH(64), SWAP2, SWAP7, SWAP1, SWAP6, SWAP5, SWAP2, SWAP4, SWAP1, SWAP2, SWAP1]
       jump -> block11
   block11 P=[v27, v28, v29, v30, v31, v32, v33] T=[v0]
     // v34.i1 = lt v33 32.i256;
@@ -762,7 +763,7 @@ evm:
       br [v36] -> [block14, block23]
   block14 P=[] T=[v39, v37, v27, v28, v29, v30, v33, v0]
     inherited from block12: [v39, v37, v27, v28, v29, v30, v38x, v36x, v33, v0, <RET>]
-    prologue: [SWAP6, POP, SWAP6, POP, SWAP2, SWAP4, SWAP1, SWAP3, SWAP5, SWAP1]
+    prologue: [SWAP6, POP, SWAP6, POP, SWAP3, SWAP5, SWAP2, SWAP4, SWAP1, SWAP3, SWAP2, SWAP1]
     // v42.i256 = evm_calldata_load v29;
     - stack=[v39, v37, v27, v28, v29, v30, v33, v0, <RET>]
       pre: [DUP5]
@@ -773,14 +774,14 @@ evm:
       add [32, v29] -> v43
     // jump block16;
     - stack=[v43, v39, v37, v27, v28, v42, v30, v33, v0, <RET>]
-      exit(block16): [SWAP1, SWAP2, SWAP3, SWAP4, SWAP5, SWAP1]
+      exit(block16): [SWAP4, SWAP5, SWAP3, SWAP4, SWAP2, SWAP3, SWAP1, SWAP2]
       jump -> block16
   block23 P=[] T=[v39, v37, v27, v28, v29, v30, v38, v33, v0]
     inherited from block12: [v39, v37, v27, v28, v29, v30, v38, v36x, v33, v0, <RET>]
-    prologue: [SWAP7, POP, SWAP1, SWAP2, SWAP3, SWAP4, SWAP5, SWAP6]
+    prologue: [SWAP7, POP, SWAP5, SWAP6, SWAP4, SWAP5, SWAP3, SWAP4, SWAP2, SWAP3, SWAP1, SWAP2]
     // jump block16;
     - stack=[v39, v37, v27, v28, v29, v30, v38, v33, v0, <RET>]
-      exit(block16): [SWAP2, SWAP4, SWAP1, SWAP3, SWAP5, SWAP6, SWAP1]
+      exit(block16): [SWAP5, SWAP6, SWAP3, SWAP5, SWAP2, SWAP4, SWAP1, SWAP3, SWAP1]
       jump -> block16
   block16 P=[v44, v45] T=[v39, v37, v27, v28, v30, v33, v0]
     // v65.i256 = and 1.i256 v28;
@@ -801,7 +802,7 @@ evm:
       br [v47] -> [block17, block19]
   block17 P=[] T=[v48, v44, v45, v39, v37, v27, v30, v33, v0]
     inherited from block16: [v48, v44, v45, v39, v37, v27, v47x, v30, v33, v0, <RET>]
-    prologue: [SWAP6, POP, SWAP1, SWAP2, SWAP3, SWAP4, SWAP5]
+    prologue: [SWAP6, POP, SWAP4, SWAP5, SWAP3, SWAP4, SWAP2, SWAP3, SWAP1, SWAP2, SWAP1]
     // mstore 0.i256 v45 i256;
     - stack=[v48, v44, v45, v39, v37, v27, v30, v33, v0, <RET>]
       pre: [DUP3, PUSH(0)]
@@ -831,7 +832,7 @@ evm:
       jump -> block18
   block19 P=[] T=[v48, v44, v45, v39, v37, v27, v30, v33, v0]
     inherited from block16: [v48, v44, v45, v39, v37, v27, v47x, v30, v33, v0, <RET>]
-    prologue: [SWAP6, POP, SWAP1, SWAP2, SWAP3, SWAP4, SWAP5]
+    prologue: [SWAP6, POP, SWAP4, SWAP5, SWAP3, SWAP4, SWAP2, SWAP3, SWAP1, SWAP2, SWAP1]
     // mstore 0.i256 v30 i256;
     - stack=[v48, v44, v45, v39, v37, v27, v30, v33, v0, <RET>], last_use=[v30]
       pre: [SWAP6, PUSH(0)]
@@ -867,7 +868,7 @@ evm:
       add [1, v33] -> v53
     // jump block11;
     - stack=[v53, v52, v39, v37, v44, v48, v51, v0, <RET>]
-      exit(block11): [SWAP6, SWAP1, SWAP3, SWAP5, SWAP1, SWAP2, SWAP4, SWAP2]
+      exit(block11): [SWAP6, SWAP3, SWAP5, SWAP2, SWAP4, SWAP1, SWAP3, SWAP1, SWAP2, SWAP1]
       jump -> block11
   block13 P=[] T=[v27, v30, v0]
     inherited from block11: [v27, v28x, v29x, v30, v31x, v32x, v33x, v0, <RET>]
@@ -898,7 +899,7 @@ evm:
     inherited from block0: [v0, v1, v2, v3, v4x, v5, <RET>]
     // jump block3;
     - stack=[v0, v1, v2, v3, v4x, v5, <RET>]
-      exit(block3): [PUSH(0), SWAP5, POP, SWAP5, SWAP3, SWAP2]
+      exit(block3): [SWAP4, POP, PUSH(0), SWAP4, SWAP5, SWAP3, SWAP2]
       jump -> block3
   block3 P=[v7, v8, v9, v10, v11] T=[v0]
     // v12.i1 = lt v11 32.i256;
@@ -962,7 +963,7 @@ evm:
       evm_keccak256 [0, 64] -> v21
     // jump block7;
     - stack=[v21, v14, v17, v20, v11, v0, <RET>]
-      exit(block7): [SWAP1, SWAP2, SWAP3, SWAP1]
+      exit(block7): [SWAP2, SWAP3, SWAP1, SWAP2]
       jump -> block7
   block8 P=[] T=[v17, v14, v7, v8, v13, v11, v0]
     inherited from block4: [v17, v14, v7, v8, v13, v11, v0, <RET>]
@@ -1524,11 +1525,11 @@ leanimt_root_from_calldata:
     REVERT
   block9:
     JUMPDEST
-    SWAP3  // jump block3;
-    SWAP1
-    PUSH0
+    PUSH0  // jump block3;
     SWAP3
     SWAP4
+    SWAP2
+    SWAP1
   block3:
     JUMPDEST
     DUP5  // v14.i1 = lt v12 v2;
@@ -1620,11 +1621,15 @@ leanimt_update_root_from_calldata:
     REVERT
   block11:
     JUMPDEST
-    SWAP5  // jump block3;
+    PUSH0  // jump block3;
+    SWAP1
+    SWAP6
+    SWAP4
+    SWAP1
     SWAP3
     SWAP1
-    PUSH0
-    SWAP3
+    SWAP2
+    SWAP1
   block3:
     JUMPDEST
     DUP6  // v16.i1 = lt v14 v4;
@@ -1738,8 +1743,10 @@ smt_root_from_calldata:
     JUMP
     JUMPDEST
     PUSH0  // jump block9;
-    SWAP4
     PUSH1 0x40 (64)
+    SWAP1
+    SWAP5
+    SWAP1
     SWAP3
   block9:
     JUMPDEST
@@ -1768,22 +1775,25 @@ smt_root_from_calldata:
     PUSH1 block19
     JUMPI
   block12:
-    SWAP6  // v55.i256 = evm_calldata_load v92;
+    SWAP5  // v55.i256 = evm_calldata_load v92;
+    POP
+    SWAP5
     POP
     SWAP2
     SWAP4
-    POP
-    SWAP2
-    SWAP4
+    SWAP1
+    SWAP3
     DUP4
     CALLDATALOAD
     SWAP4  // v56.i256 = add 32.i256 v92;
     PUSH1 0x20 (32)
     ADD
-    SWAP1  // jump block14;
+    SWAP3  // jump block14;
+    SWAP4
     SWAP2
     SWAP3
-    SWAP4
+    SWAP1
+    SWAP2
     SWAP1
     PUSH1 block14
     JUMP
@@ -1791,16 +1801,24 @@ smt_root_from_calldata:
     JUMPDEST
     SWAP6  // jump block14;
     POP
-    SWAP1
+    SWAP4
+    SWAP5
+    SWAP3
+    SWAP4
     SWAP2
     SWAP3
+    SWAP1
+    SWAP2
+    SWAP1
     SWAP4
     SWAP5
     SWAP2
     SWAP4
-    SWAP5
     SWAP1
     SWAP3
+    SWAP1
+    SWAP2
+    SWAP1
   block14:
     JUMPDEST
     DUP5  // v49.i256 = and 1.i256 v95;
@@ -1818,11 +1836,11 @@ smt_root_from_calldata:
   block15:
     SWAP5  // mstore 0.i256 v58 i256;
     POP
-    SWAP1
-    SWAP2
     SWAP3
     SWAP4
     SWAP2
+    SWAP3
+    SWAP1
     PUSH0
     MSTORE
     SWAP4  // mstore 32.i256 v90 i256;
@@ -1840,10 +1858,12 @@ smt_root_from_calldata:
     JUMPDEST
     SWAP5  // mstore 0.i256 v90 i256;
     POP
-    SWAP1
-    SWAP2
     SWAP3
     SWAP4
+    SWAP2
+    SWAP3
+    SWAP1
+    SWAP2
     SWAP5
     PUSH0
     MSTORE
@@ -1859,9 +1879,11 @@ smt_root_from_calldata:
     PUSH1 0x1 (1)
     ADD
     SWAP5  // jump block9;
-    SWAP2
     SWAP3
     SWAP4
+    SWAP2
+    SWAP3
+    SWAP2
     PUSH1 block9
     JUMP
   block11:
@@ -1876,10 +1898,11 @@ smt_root_from_calldata:
     JUMP
   block18:
     JUMPDEST
-    PUSH0  // jump block3;
-    SWAP4
-    SWAP3
+    SWAP2  // jump block3;
     POP
+    PUSH0
+    SWAP3
+    SWAP2
   block3:
     JUMPDEST
     PUSH1 0x20 (32)  // v15.i1 = lt v13 32.i256;
@@ -1968,12 +1991,18 @@ smt_update_root_from_calldata:
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    SWAP5  // jump block11;
-    PUSH0
-    SWAP5
-    SWAP4
+    PUSH0  // jump block11;
     PUSH1 0x40 (64)
+    SWAP2
+    SWAP7
+    SWAP1
+    SWAP6
+    SWAP5
+    SWAP2
     SWAP4
+    SWAP1
+    SWAP2
+    SWAP1
   block11:
     JUMPDEST
     PUSH1 0x20 (32)  // v52.i1 = lt v51 32.i256;
@@ -2005,41 +2034,51 @@ smt_update_root_from_calldata:
     POP
     SWAP6
     POP
+    SWAP3
+    SWAP5
     SWAP2
     SWAP4
     SWAP1
     SWAP3
-    SWAP5
+    SWAP2
     SWAP1
     DUP5
     CALLDATALOAD
     SWAP5  // v73.i256 = add 32.i256 v121;
     PUSH1 0x20 (32)
     ADD
-    SWAP1  // jump block16;
-    SWAP2
+    SWAP4  // jump block16;
+    SWAP5
     SWAP3
     SWAP4
-    SWAP5
+    SWAP2
+    SWAP3
     SWAP1
+    SWAP2
     PUSH1 block16
     JUMP
   block23:
     JUMPDEST
     SWAP7  // jump block16;
     POP
-    SWAP1
-    SWAP2
-    SWAP3
-    SWAP4
     SWAP5
     SWAP6
+    SWAP4
+    SWAP5
+    SWAP3
+    SWAP4
+    SWAP2
+    SWAP3
+    SWAP1
+    SWAP2
+    SWAP5
+    SWAP6
+    SWAP3
+    SWAP5
     SWAP2
     SWAP4
     SWAP1
     SWAP3
-    SWAP5
-    SWAP6
     SWAP1
   block16:
     JUMPDEST
@@ -2058,11 +2097,15 @@ smt_update_root_from_calldata:
   block17:
     SWAP6  // mstore 0.i256 v75 i256;
     POP
-    SWAP1
-    SWAP2
-    SWAP3
     SWAP4
     SWAP5
+    SWAP3
+    SWAP4
+    SWAP2
+    SWAP3
+    SWAP1
+    SWAP2
+    SWAP1
     DUP3
     PUSH0
     MSTORE
@@ -2087,11 +2130,15 @@ smt_update_root_from_calldata:
     JUMPDEST
     SWAP6  // mstore 0.i256 v117 i256;
     POP
-    SWAP1
-    SWAP2
-    SWAP3
     SWAP4
     SWAP5
+    SWAP3
+    SWAP4
+    SWAP2
+    SWAP3
+    SWAP1
+    SWAP2
+    SWAP1
     SWAP6
     PUSH0
     MSTORE
@@ -2119,13 +2166,15 @@ smt_update_root_from_calldata:
     PUSH1 0x1 (1)
     ADD
     SWAP6  // jump block11;
-    SWAP1
     SWAP3
     SWAP5
-    SWAP1
     SWAP2
     SWAP4
+    SWAP1
+    SWAP3
+    SWAP1
     SWAP2
+    SWAP1
     PUSH1 block11
     JUMP
   block13:
@@ -2151,9 +2200,10 @@ smt_update_root_from_calldata:
     JUMP
   block22:
     JUMPDEST
-    PUSH0  // jump block3;
-    SWAP5
+    SWAP4  // jump block3;
     POP
+    PUSH0
+    SWAP4
     SWAP5
     SWAP3
     SWAP2
@@ -2205,10 +2255,10 @@ smt_update_root_from_calldata:
     PUSH1 0x40 (64)  // v165.i256 = evm_keccak256 0.i256 64.i256;
     PUSH0
     KECCAK256
-    SWAP1  // jump block7;
-    SWAP2
+    SWAP2  // jump block7;
     SWAP3
     SWAP1
+    SWAP2
     PUSH1 block7
     JUMP
   block8:

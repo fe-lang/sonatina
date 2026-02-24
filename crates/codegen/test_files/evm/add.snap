@@ -17,7 +17,7 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21132 gas_refunded=0 logs=0 output=call len=32
+  case ok: calldata_len=8 success reason=Return gas_used=21132 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=76
 
 
 --------------- DEBUG ---------------

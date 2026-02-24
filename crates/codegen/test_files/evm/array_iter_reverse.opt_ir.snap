@@ -26,14 +26,17 @@ func private %sum_last4(v0.i256) -> i256 {
     block1:
         v23.i256 = phi (0.i256 block0) (v15 block2);
         v6.i256 = phi (0.i256 block0) (v18 block2);
-        v8.i1 = lt v6 v5;
-        br v8 block2 block4;
+        v39.i1 = lt v6 v5;
+        v40.i256 = zext v39 i256;
+        v41.i1 = is_zero v40;
+        v10.i1 = is_zero v41;
+        br v10 block2 block4;
 
     block2:
         v20.i256 = mload v19 i256;
         v32.*[i256; 8] = int_to_ptr v20 *[i256; 8];
-        v38.i256 = sub 7.i256 v6;
-        v33.*i256 = gep v32 0.i256 v38;
+        v42.i256 = sub 7.i256 v6;
+        v33.*i256 = gep v32 0.i256 v42;
         v34.i256 = mload v33 i256;
         v15.i256 = add v34 v23;
         v18.i256 = add 1.i256 v6;
@@ -61,8 +64,11 @@ func private %sum_first4(v0.i256) -> i256 {
     block1:
         v22.i256 = phi (0.i256 block0) (v14 block2);
         v5.i256 = phi (0.i256 block0) (v17 block2);
-        v7.i1 = lt v5 v4;
-        br v7 block2 block4;
+        v31.i1 = lt v5 v4;
+        v32.i256 = zext v31 i256;
+        v33.i1 = is_zero v32;
+        v9.i1 = is_zero v33;
+        br v9 block2 block4;
 
     block2:
         v16.i256 = mload v15 i256;
@@ -121,8 +127,10 @@ func private %take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Rever
         v7.*@__fe_Take_0 = int_to_ptr v0 *@__fe_Take_0;
         v8.*i256 = bitcast v7 *i256;
         v9.i256 = mload v8 i256;
-        v10.i1 = lt v9 8.i256;
-        br v10 block1 block3;
+        v20.i1 = lt v9 8.i256;
+        v21.i256 = zext v20 i256;
+        v12.i1 = eq 1.i256 v21;
+        br v12 block1 block3;
 
     block1:
         v15.*@__fe_Take_0 = int_to_ptr v0 *@__fe_Take_0;
@@ -140,8 +148,10 @@ func private %take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256
         v7.*@__fe_Take_1 = int_to_ptr v0 *@__fe_Take_1;
         v8.*i256 = bitcast v7 *i256;
         v9.i256 = mload v8 i256;
-        v10.i1 = lt v9 8.i256;
-        br v10 block1 block3;
+        v20.i1 = lt v9 8.i256;
+        v21.i256 = zext v20 i256;
+        v12.i1 = eq 1.i256 v21;
+        br v12 block1 block3;
 
     block1:
         v15.*@__fe_Take_1 = int_to_ptr v0 *@__fe_Take_1;
@@ -156,8 +166,11 @@ func private %take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256
 
 func public %assert(v0.i256) {
     block0:
-        v2.i1 = is_zero v0;
-        br v2 block1 block2;
+        v6.i1 = is_zero v0;
+        v7.i256 = zext v6 i256;
+        v8.i1 = is_zero v7;
+        v4.i1 = is_zero v8;
+        br v4 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;

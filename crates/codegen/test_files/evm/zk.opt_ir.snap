@@ -1,0 +1,522 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/zk.sntn
+---
+target = "evm-ethereum-osaka"
+
+func private %smt_store_zero_table() {
+    block0:
+        mstore 64.i256 0.i256 i256;
+        mstore 96.i256 -37453343090079225298870253283504062431675071153813376750865614837522423455819.i256 i256;
+        mstore 128.i256 -34034600265668946167369876131869672461612667701450380188597304758314532270800.i256 i256;
+        mstore 160.i256 15318078431219349596458550810601853783715137025043390934891860045346920446597.i256 i256;
+        mstore 192.i256 -11973193044371643224557188981012505616950565034368544423160035732093170248892.i256 i256;
+        mstore 224.i256 6643557186572272165386791781125222564114851860249816713564307071810844872493.i256 i256;
+        mstore 256.i256 -54058213024903327044671446965980991661569243813161217853291102587873489446552.i256 i256;
+        mstore 288.i256 -72431458330187608612315519195370234032328451533895767633715748045868142717.i256 i256;
+        mstore 320.i256 -46857140474152733835478162581925829478697267612191919162455422838329093695825.i256 i256;
+        mstore 352.i256 -22172461317993688987188050699502817092981109495777092292186463744028400659232.i256 i256;
+        mstore 384.i256 -2777052230045528352023261559092679595515611932821727327952652315458996681819.i256 i256;
+        mstore 416.i256 -3305368564981684342710654695093782106785050717325665832447038405463183132526.i256 i256;
+        mstore 448.i256 23776066227960408555442663350050573210632322474046159750068788133545858423196.i256 i256;
+        mstore 480.i256 -28100799467249604310529694470663284197040358643545036925259629325714472181061.i256 i256;
+        mstore 512.i256 41795967136774531751151160252800275330951968369455451324091051563534208515788.i256 i256;
+        mstore 544.i256 -16969140002547899686153541947009563520342317448750998793329097328226334267694.i256 i256;
+        mstore 576.i256 17731891208044874401767883360076065895309462426794902601619161713826093570079.i256 i256;
+        mstore 608.i256 -13647638966524296700633995683437631099548031565249899471874841674792739213446.i256 i256;
+        mstore 640.i256 40789086534341417094260054528665434702955110631375120857190697333947836430752.i256 i256;
+        mstore 672.i256 -34188209701060988898437662622306192231448446029565427216990344490966833730912.i256 i256;
+        mstore 704.i256 -26067024460991290435024726693483644918858407552262771921373296237390110607390.i256 i256;
+        mstore 736.i256 -5311987499990654980213183594395721560905201341035457432568816979255557431335.i256 i256;
+        mstore 768.i256 40983942284295717781719199899665922938171626294587463727992251493704176952183.i256 i256;
+        mstore 800.i256 35266814394704018799091256006557626729641351797393382181664030599640521827922.i256 i256;
+        mstore 832.i256 -22716093304165204284948349606439394932576489634659815423859126485136618153489.i256 i256;
+        mstore 864.i256 4861222863608665327095617319218363246257958080729935652450678364585222758797.i256 i256;
+        mstore 896.i256 -32203520727509878132035761287272174770912103593703485696023952136342359603248.i256 i256;
+        mstore 928.i256 -56291151620665743971717505897002793305893160969771021989735088360962104638434.i256 i256;
+        mstore 960.i256 46218765081616045194940776408085931972065861961240171178274269311763532868398.i256 i256;
+        mstore 992.i256 25574573307835516458106822437639319975536011947643723545667037928024081081122.i256 i256;
+        mstore 1024.i256 -49239402855329457315000266423971498466059332253992191041483916895670249334987.i256 i256;
+        mstore 1056.i256 -55958686143921762324178078314424424685771533063046665001344371452471622478167.i256 i256;
+        return;
+}
+
+func private %abi_return_bool(v0.i256) {
+    block0:
+        v3.i1 = eq 1.i256 v0;
+        br v3 block3 block4;
+
+    block3:
+        v5.i256 = phi (1.i256 block0) (0.i256 block4);
+        mstore 0.i256 v5 i256;
+        evm_return 0.i256 32.i256;
+
+    block4:
+        jump block3;
+}
+
+func private %leanimt_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
+    block0:
+        v6.i1 = gt v2 32.i256;
+        br v6 block1 block3;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block3:
+        v43.i256 = phi (v0 block0) (v44 block7);
+        v41.i256 = phi (v1 block0) (v25 block7);
+        v39.i256 = phi (v3 block0) (v19 block7);
+        v12.i256 = phi (0.i256 block0) (v33 block7);
+        v14.i1 = lt v12 v2;
+        br v14 block4 block5;
+
+    block4:
+        v18.i256 = evm_calldata_load v39;
+        v19.i256 = add 32.i256 v39;
+        v23.i256 = and 1.i256 v41;
+        v23.i1 = eq v23 1.i256;
+        v25.i256 = shr 1.i256 v41;
+        br v23 block6 block8;
+
+    block5:
+        return v43;
+
+    block6:
+        mstore 0.i256 v18 i256;
+        mstore 32.i256 v43 i256;
+        v53.i256 = evm_keccak256 0.i256 64.i256;
+        jump block7;
+
+    block7:
+        v44.i256 = phi (v53 block6) (v55 block8);
+        v33.i256 = add 1.i256 v12;
+        jump block3;
+
+    block8:
+        mstore 0.i256 v43 i256;
+        mstore 32.i256 v18 i256;
+        v55.i256 = evm_keccak256 0.i256 64.i256;
+        jump block7;
+}
+
+func private %leanimt_update_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) -> i256 {
+    block0:
+        v8.i1 = gt v4 32.i256;
+        br v8 block1 block3;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block3:
+        v65.i256 = phi (v2 block0) (v66 block7);
+        v59.i256 = phi (v1 block0) (v60 block7);
+        v57.i256 = phi (v3 block0) (v31 block7);
+        v14.i256 = phi (0.i256 block0) (v46 block7);
+        v16.i1 = lt v14 v4;
+        br v16 block4 block5;
+
+    block4:
+        v31.i256 = mul 32.i256 v14;
+        v24.i256 = add v31 v5;
+        v25.i256 = evm_calldata_load v24;
+        v32.i256 = and 1.i256 v57;
+        v29.i1 = eq v32 1.i256;
+        v31.i256 = shr 1.i256 v57;
+        br v29 block6 block8;
+
+    block5:
+        v33.i1 = eq v0 v59;
+        v36.i1 = is_zero v33;
+        br v36 block9 block10;
+
+    block6:
+        mstore 0.i256 v25 i256;
+        mstore 32.i256 v59 i256;
+        v74.i256 = evm_keccak256 0.i256 64.i256;
+        mstore 0.i256 v25 i256;
+        mstore 32.i256 v65 i256;
+        v76.i256 = evm_keccak256 0.i256 64.i256;
+        jump block7;
+
+    block7:
+        v66.i256 = phi (v76 block6) (v80 block8);
+        v60.i256 = phi (v74 block6) (v78 block8);
+        v46.i256 = add 1.i256 v14;
+        jump block3;
+
+    block8:
+        mstore 0.i256 v59 i256;
+        mstore 32.i256 v25 i256;
+        v78.i256 = evm_keccak256 0.i256 64.i256;
+        mstore 0.i256 v65 i256;
+        mstore 32.i256 v25 i256;
+        v80.i256 = evm_keccak256 0.i256 64.i256;
+        jump block7;
+
+    block9:
+        evm_revert 0.i256 0.i256;
+
+    block10:
+        return v65;
+}
+
+func private %smt_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
+    block0:
+        v6.i1 = eq 4294967295.i256 v2;
+        br v6 block3 block2;
+
+    block2:
+        call %smt_store_zero_table;
+        jump block9;
+
+    block3:
+        v79.i256 = phi (v0 block0) (v80 block7);
+        v77.i256 = phi (v1 block0) (v26 block7);
+        v75.i256 = phi (v3 block0) (v20 block7);
+        v13.i256 = phi (0.i256 block0) (v34 block7);
+        v15.i1 = lt v13 32.i256;
+        br v15 block4 block5;
+
+    block4:
+        v19.i256 = evm_calldata_load v75;
+        v20.i256 = add 32.i256 v75;
+        v47.i256 = and 1.i256 v77;
+        v24.i1 = eq v47 1.i256;
+        v26.i256 = shr 1.i256 v77;
+        br v24 block6 block8;
+
+    block5:
+        return v79;
+
+    block6:
+        mstore 0.i256 v19 i256;
+        mstore 32.i256 v79 i256;
+        v125.i256 = evm_keccak256 0.i256 64.i256;
+        jump block7;
+
+    block7:
+        v80.i256 = phi (v125 block6) (v127 block8);
+        v34.i256 = add 1.i256 v13;
+        jump block3;
+
+    block8:
+        mstore 0.i256 v79 i256;
+        mstore 32.i256 v19 i256;
+        v127.i256 = evm_keccak256 0.i256 64.i256;
+        jump block7;
+
+    block9:
+        v95.i256 = phi (v1 block2) (v63 block16);
+        v92.i256 = phi (v3 block2) (v119 block16);
+        v90.i256 = phi (v0 block2) (v91 block16);
+        v88.i256 = phi (64.i256 block2) (v50 block16);
+        v86.i256 = phi (v2 block2) (v47 block16);
+        v39.i256 = phi (0.i256 block2) (v70 block16);
+        v40.i1 = lt v39 32.i256;
+        br v40 block10 block11;
+
+    block10:
+        v48.i256 = and 1.i256 v86;
+        v45.i1 = eq v48 1.i256;
+        v47.i256 = shr 1.i256 v86;
+        v49.i256 = mload v88 i256;
+        v50.i256 = add 32.i256 v88;
+        br v45 block12 block14;
+
+    block11:
+        return v90;
+
+    block12:
+        v55.i256 = evm_calldata_load v92;
+        v56.i256 = add 32.i256 v92;
+        jump block14;
+
+    block14:
+        v119.i256 = phi (v56 block12) (v92 block10);
+        v58.i256 = phi (v55 block12) (v49 block10);
+        v49.i256 = and 1.i256 v95;
+        v61.i1 = eq v49 1.i256;
+        v63.i256 = shr 1.i256 v95;
+        br v61 block15 block17;
+
+    block15:
+        mstore 0.i256 v58 i256;
+        mstore 32.i256 v90 i256;
+        v129.i256 = evm_keccak256 0.i256 64.i256;
+        jump block16;
+
+    block16:
+        v91.i256 = phi (v129 block15) (v131 block17);
+        v70.i256 = add 1.i256 v39;
+        jump block9;
+
+    block17:
+        mstore 0.i256 v90 i256;
+        mstore 32.i256 v58 i256;
+        v131.i256 = evm_keccak256 0.i256 64.i256;
+        jump block16;
+}
+
+func private %smt_update_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) -> i256 {
+    block0:
+        v8.i1 = eq 4294967295.i256 v4;
+        br v8 block3 block2;
+
+    block2:
+        call %smt_store_zero_table;
+        jump block11;
+
+    block3:
+        v107.i256 = phi (v2 block0) (v108 block7);
+        v101.i256 = phi (v1 block0) (v102 block7);
+        v99.i256 = phi (v3 block0) (v28 block7);
+        v97.i256 = phi (v5 block0) (v22 block7);
+        v15.i256 = phi (0.i256 block0) (v43 block7);
+        v17.i1 = lt v15 32.i256;
+        br v17 block4 block5;
+
+    block4:
+        v21.i256 = evm_calldata_load v97;
+        v22.i256 = add 32.i256 v97;
+        v61.i256 = and 1.i256 v99;
+        v26.i1 = eq v61 1.i256;
+        v28.i256 = shr 1.i256 v99;
+        br v26 block6 block8;
+
+    block5:
+        v62.i1 = eq v0 v101;
+        v33.i1 = is_zero v62;
+        br v33 block9 block10;
+
+    block6:
+        mstore 0.i256 v21 i256;
+        mstore 32.i256 v101 i256;
+        v163.i256 = evm_keccak256 0.i256 64.i256;
+        mstore 0.i256 v21 i256;
+        mstore 32.i256 v107 i256;
+        v165.i256 = evm_keccak256 0.i256 64.i256;
+        jump block7;
+
+    block7:
+        v108.i256 = phi (v165 block6) (v169 block8);
+        v102.i256 = phi (v163 block6) (v167 block8);
+        v43.i256 = add 1.i256 v15;
+        jump block3;
+
+    block8:
+        mstore 0.i256 v101 i256;
+        mstore 32.i256 v21 i256;
+        v167.i256 = evm_keccak256 0.i256 64.i256;
+        mstore 0.i256 v107 i256;
+        mstore 32.i256 v21 i256;
+        v169.i256 = evm_keccak256 0.i256 64.i256;
+        jump block7;
+
+    block9:
+        evm_revert 0.i256 0.i256;
+
+    block10:
+        return v107;
+
+    block11:
+        v137.i256 = phi (v2 block2) (v138 block18);
+        v124.i256 = phi (v3 block2) (v80 block18);
+        v121.i256 = phi (v5 block2) (v157 block18);
+        v117.i256 = phi (v1 block2) (v118 block18);
+        v115.i256 = phi (64.i256 block2) (v62 block18);
+        v113.i256 = phi (v4 block2) (v59 block18);
+        v51.i256 = phi (0.i256 block2) (v89 block18);
+        v52.i1 = lt v51 32.i256;
+        br v52 block12 block13;
+
+    block12:
+        v63.i256 = and 1.i256 v113;
+        v57.i1 = eq v63 1.i256;
+        v59.i256 = shr 1.i256 v113;
+        v61.i256 = mload v115 i256;
+        v62.i256 = add 32.i256 v115;
+        br v57 block14 block16;
+
+    block13:
+        v64.i1 = eq v0 v117;
+        v68.i1 = is_zero v64;
+        br v68 block20 block21;
+
+    block14:
+        v72.i256 = evm_calldata_load v121;
+        v73.i256 = add 32.i256 v121;
+        jump block16;
+
+    block16:
+        v157.i256 = phi (v73 block14) (v121 block12);
+        v75.i256 = phi (v72 block14) (v61 block12);
+        v65.i256 = and 1.i256 v124;
+        v78.i1 = eq v65 1.i256;
+        v80.i256 = shr 1.i256 v124;
+        br v78 block17 block19;
+
+    block17:
+        mstore 0.i256 v75 i256;
+        mstore 32.i256 v117 i256;
+        v171.i256 = evm_keccak256 0.i256 64.i256;
+        mstore 0.i256 v75 i256;
+        mstore 32.i256 v137 i256;
+        v173.i256 = evm_keccak256 0.i256 64.i256;
+        jump block18;
+
+    block18:
+        v138.i256 = phi (v173 block17) (v177 block19);
+        v118.i256 = phi (v171 block17) (v175 block19);
+        v89.i256 = add 1.i256 v51;
+        jump block11;
+
+    block19:
+        mstore 0.i256 v117 i256;
+        mstore 32.i256 v75 i256;
+        v175.i256 = evm_keccak256 0.i256 64.i256;
+        mstore 0.i256 v137 i256;
+        mstore 32.i256 v75 i256;
+        v177.i256 = evm_keccak256 0.i256 64.i256;
+        jump block18;
+
+    block20:
+        evm_revert 0.i256 0.i256;
+
+    block21:
+        return v137;
+}
+
+func private %init__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        v1.i256 = sym_size &runtime__StorPtr_Evm___207f35a85ac4062e;
+        v2.i256 = sym_addr &runtime__StorPtr_Evm___207f35a85ac4062e;
+        evm_code_copy 0.i256 v2 v1;
+        evm_return 0.i256 v1;
+}
+
+func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        v1.i256 = evm_calldata_load 0.i256;
+        v62.i256 = shr 224.i256 v1;
+        v51.i1 = eq 2251912186.i256 v62;
+        br v51 block1 block9;
+
+    block1:
+        v5.i256 = evm_calldata_load 4.i256;
+        v7.i256 = evm_calldata_load 36.i256;
+        v9.i256 = evm_calldata_load 68.i256;
+        v11.i256 = call %leanimt_root_from_calldata v5 v7 v9 100.i256;
+        mstore 0.i256 v11 i256;
+        evm_return 0.i256 32.i256;
+
+    block2:
+        v12.i256 = evm_calldata_load 4.i256;
+        v13.i256 = evm_calldata_load 36.i256;
+        v14.i256 = evm_calldata_load 68.i256;
+        v15.i256 = evm_calldata_load 100.i256;
+        v17.i256 = call %leanimt_root_from_calldata v13 v14 v15 132.i256;
+        v63.i1 = eq v17 v12;
+        v19.i256 = zext v63 i256;
+        call %abi_return_bool v19;
+        unreachable;
+
+    block3:
+        v20.i256 = evm_calldata_load 4.i256;
+        v21.i256 = evm_calldata_load 36.i256;
+        v22.i256 = evm_calldata_load 68.i256;
+        v23.i256 = evm_calldata_load 100.i256;
+        v24.i256 = evm_calldata_load 132.i256;
+        v26.i256 = call %leanimt_update_root_from_calldata v20 v21 v22 v23 v24 164.i256;
+        mstore 0.i256 v26 i256;
+        evm_return 0.i256 32.i256;
+
+    block4:
+        v27.i256 = evm_calldata_load 4.i256;
+        v28.i256 = evm_calldata_load 36.i256;
+        v29.i256 = evm_calldata_load 68.i256;
+        v30.i256 = call %smt_root_from_calldata v27 v28 v29 100.i256;
+        mstore 0.i256 v30 i256;
+        evm_return 0.i256 32.i256;
+
+    block5:
+        v31.i256 = evm_calldata_load 4.i256;
+        v32.i256 = evm_calldata_load 36.i256;
+        v33.i256 = evm_calldata_load 68.i256;
+        v34.i256 = evm_calldata_load 100.i256;
+        v35.i256 = call %smt_root_from_calldata v32 v33 v34 132.i256;
+        v64.i1 = eq v31 v35;
+        v37.i256 = zext v64 i256;
+        call %abi_return_bool v37;
+        unreachable;
+
+    block6:
+        v38.i256 = evm_calldata_load 4.i256;
+        v39.i256 = evm_calldata_load 36.i256;
+        v40.i256 = evm_calldata_load 68.i256;
+        v41.i256 = evm_calldata_load 100.i256;
+        v42.i256 = evm_calldata_load 132.i256;
+        v43.i256 = call %smt_update_root_from_calldata v38 v39 v40 v41 v42 164.i256;
+        mstore 0.i256 v43 i256;
+        evm_return 0.i256 32.i256;
+
+    block7:
+        evm_revert 0.i256 0.i256;
+
+    block9:
+        v65.i256 = shr 224.i256 v1;
+        v52.i1 = eq 3130576022.i256 v65;
+        br v52 block2 block10;
+
+    block10:
+        v66.i256 = shr 224.i256 v1;
+        v53.i1 = eq 1025915995.i256 v66;
+        br v53 block3 block11;
+
+    block11:
+        v67.i256 = shr 224.i256 v1;
+        v54.i1 = eq 1278291928.i256 v67;
+        br v54 block4 block12;
+
+    block12:
+        v68.i256 = shr 224.i256 v1;
+        v55.i1 = eq 3546668778.i256 v68;
+        br v55 block5 block13;
+
+    block13:
+        v69.i256 = shr 224.i256 v1;
+        v56.i1 = eq 3672429122.i256 v69;
+        br v56 block6 block7;
+}
+
+func public %hash2_at(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        mstore v0 v1 i256;
+        v5.i256 = add 32.i256 v0;
+        mstore v5 v2 i256;
+        v7.i256 = evm_keccak256 v0 64.i256;
+        return v7;
+}
+
+func public %hash2(v0.i256, v1.i256) -> i256 {
+    block0:
+        v4.*i8 = evm_malloc 64.i256;
+        v5.i256 = ptr_to_int v4 i256;
+        mstore v5 v0 i256;
+        v8.i256 = add 32.i256 v5;
+        mstore v8 v1 i256;
+        v9.i256 = evm_keccak256 v5 64.i256;
+        return v9;
+}
+
+
+object @Contract {
+    section init {
+        entry %init__StorPtr_Evm___207f35a85ac4062e;
+        embed .runtime as &runtime__StorPtr_Evm___207f35a85ac4062e;
+    }
+    section runtime {
+        entry %runtime__StorPtr_Evm___207f35a85ac4062e;
+    }
+}
