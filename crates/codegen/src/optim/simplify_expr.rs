@@ -1,6 +1,6 @@
 use sonatina_ir::{
     Function, Immediate, Type, ValueId,
-    inst::{BinaryInstKind, CastInstKind},
+    inst::{BinaryInstKind, CastInstKind, UnaryInstKind},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,6 +13,19 @@ pub(crate) enum SimplifyExprResult {
 impl SimplifyExprResult {
     pub(crate) fn is_no_change(&self) -> bool {
         matches!(self, Self::NoChange)
+    }
+}
+
+pub(crate) fn simplify_unary_with_same_inner(
+    kind: UnaryInstKind,
+    arg: ValueId,
+    same_inner_arg: impl Fn(ValueId, UnaryInstKind) -> Option<ValueId>,
+) -> SimplifyExprResult {
+    match kind {
+        UnaryInstKind::Not | UnaryInstKind::Neg => same_inner_arg(arg, kind)
+            .map(SimplifyExprResult::Copy)
+            .unwrap_or(SimplifyExprResult::NoChange),
+        UnaryInstKind::IsZero | UnaryInstKind::EvmClz => SimplifyExprResult::NoChange,
     }
 }
 
@@ -136,10 +149,17 @@ pub(crate) fn simplify_binary_with_known_imm(
                 return SimplifyExprResult::Const(Immediate::zero(Type::I1));
             }
         }
-        BinaryInstKind::Shl
-        | BinaryInstKind::Shr
-        | BinaryInstKind::Sar
-        | BinaryInstKind::Lt
+        BinaryInstKind::Shl | BinaryInstKind::Shr | BinaryInstKind::Sar => {
+            let value_ty = func.dfg.value_ty(rhs);
+            let value_zero = Immediate::zero(value_ty);
+            if rhs_imm == Some(value_zero) {
+                return SimplifyExprResult::Const(value_zero);
+            }
+            if lhs_imm.is_some_and(Immediate::is_zero) {
+                return SimplifyExprResult::Copy(rhs);
+            }
+        }
+        BinaryInstKind::Lt
         | BinaryInstKind::Gt
         | BinaryInstKind::Slt
         | BinaryInstKind::Sgt
@@ -164,5 +184,50 @@ pub(crate) fn simplify_cast(
         SimplifyExprResult::Copy(from)
     } else {
         SimplifyExprResult::NoChange
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sonatina_ir::{
+        I256, Immediate, Linkage, Signature, Type, builder::test_util::test_isa, module::ModuleCtx,
+    };
+
+    use super::*;
+
+    #[test]
+    fn simplify_unary_with_same_inner_folds_double_not() {
+        let arg = ValueId::from_u32(42);
+        let simplified = simplify_unary_with_same_inner(UnaryInstKind::Not, arg, |value, kind| {
+            if value == arg && kind == UnaryInstKind::Not {
+                Some(ValueId::from_u32(7))
+            } else {
+                None
+            }
+        });
+
+        assert_eq!(simplified, SimplifyExprResult::Copy(ValueId::from_u32(7)));
+    }
+
+    #[test]
+    fn simplify_binary_with_known_imm_folds_shift_identities() {
+        let isa = test_isa();
+        let ctx = ModuleCtx::new(&isa);
+        let sig = Signature::new("f", Linkage::Private, &[], Type::I256);
+        let mut func = Function::new(&ctx, &sig);
+        let bits = func.dfg.make_imm_value(Immediate::zero(Type::I8));
+        let value = func
+            .dfg
+            .make_imm_value(Immediate::from_i256(I256::from(7), Type::I256));
+
+        let simplified = simplify_binary_with_known_imm(
+            &func,
+            BinaryInstKind::Shl,
+            bits,
+            value,
+            |v| func.dfg.value_imm(v),
+            |_lhs, _rhs| false,
+        );
+        assert_eq!(simplified, SimplifyExprResult::Copy(value));
     }
 }

@@ -2,14 +2,16 @@ use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     Function, Immediate, InstId, Type, Value, ValueId,
     inst::{
-        BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, arith, cast, data, downcast,
-        inst_set::InstSetBase, logic,
+        BinaryInstKind, CastInstKind, InstClassKind, cast, data, downcast, inst_set::InstSetBase,
     },
 };
 
 use super::{
     sccp::LatticeCell,
-    simplify_expr::{SimplifyExprResult, simplify_binary_with_known_imm, simplify_cast},
+    simplify_expr::{
+        SimplifyExprResult, simplify_binary_with_known_imm, simplify_cast,
+        simplify_unary_with_same_inner,
+    },
 };
 
 pub(super) enum SimplifyResult {
@@ -188,53 +190,6 @@ fn simplify_sub(
     ))
 }
 
-fn simplify_shift(
-    func: &Function,
-    lattice: &SecondaryMap<ValueId, LatticeCell>,
-    bits: ValueId,
-    value: ValueId,
-    allow_zero_bits_copy: bool,
-) -> SimplifyResult {
-    let ty = func.dfg.value_ty(value);
-    let value_imm = known_imm(func, lattice, value);
-    let zero = Immediate::zero(ty);
-
-    if value_imm == Some(zero) {
-        return SimplifyResult::Const(zero);
-    }
-
-    let bits_imm = known_imm(func, lattice, bits);
-    if allow_zero_bits_copy && bits_imm.is_some_and(|imm| imm.is_zero()) {
-        return SimplifyResult::Copy(value);
-    }
-
-    SimplifyResult::NoChange
-}
-
-fn simplify_double_not(func: &Function, is: &dyn InstSetBase, arg: ValueId) -> SimplifyResult {
-    let Value::Inst { inst, .. } = func.dfg.value(arg) else {
-        return SimplifyResult::NoChange;
-    };
-
-    if let Some(i) = downcast::<&logic::Not>(is, func.dfg.inst(*inst)) {
-        return SimplifyResult::Copy(*i.arg());
-    }
-
-    SimplifyResult::NoChange
-}
-
-fn simplify_double_neg(func: &Function, is: &dyn InstSetBase, arg: ValueId) -> SimplifyResult {
-    let Value::Inst { inst, .. } = func.dfg.value(arg) else {
-        return SimplifyResult::NoChange;
-    };
-
-    if let Some(i) = downcast::<&arith::Neg>(is, func.dfg.inst(*inst)) {
-        return SimplifyResult::Copy(*i.arg());
-    }
-
-    SimplifyResult::NoChange
-}
-
 fn simplify_redundant_cast(
     func: &Function,
     kind: CastInstKind,
@@ -358,11 +313,25 @@ pub(super) fn simplify_inst(
                 return SimplifyResult::NoChange;
             };
 
-            match kind {
-                UnaryInstKind::Not => simplify_double_not(func, is, *arg),
-                UnaryInstKind::Neg => simplify_double_neg(func, is, *arg),
-                UnaryInstKind::IsZero | UnaryInstKind::EvmClz => SimplifyResult::NoChange,
-            }
+            from_expr_simplify_result(simplify_unary_with_same_inner(
+                kind,
+                *arg,
+                |arg, expected| {
+                    let Value::Inst { inst, .. } = func.dfg.value(arg) else {
+                        return None;
+                    };
+                    let inner = func.dfg.inst(*inst);
+                    if inner.kind() != InstClassKind::Unary(expected) {
+                        return None;
+                    }
+
+                    let values = inner.collect_values();
+                    let [arg] = values.as_slice() else {
+                        return None;
+                    };
+                    Some(*arg)
+                },
+            ))
         }
         InstClassKind::Binary(kind) => {
             let values = inst.collect_values();
@@ -392,7 +361,14 @@ pub(super) fn simplify_inst(
                 | BinaryInstKind::EvmUmod
                 | BinaryInstKind::EvmSmod => simplify_rem_by_one(func, kind, lattice, *lhs, *rhs),
                 BinaryInstKind::Shl | BinaryInstKind::Shr | BinaryInstKind::Sar => {
-                    simplify_shift(func, lattice, *lhs, *rhs, true)
+                    from_expr_simplify_result(simplify_binary_with_known_imm(
+                        func,
+                        kind,
+                        *lhs,
+                        *rhs,
+                        |v| known_imm(func, lattice, v),
+                        |_lhs, _rhs| false,
+                    ))
                 }
                 BinaryInstKind::Eq => {
                     let simplified = simplify_eq_zext_i1_one(func, is, lattice, *lhs, *rhs);

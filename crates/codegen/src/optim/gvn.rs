@@ -22,7 +22,10 @@ use sonatina_ir::{
 
 use crate::{
     domtree::{DomTree, DominatorTreeTraversable},
-    optim::simplify_expr::{SimplifyExprResult, simplify_binary_with_known_imm, simplify_cast},
+    optim::simplify_expr::{
+        SimplifyExprResult, simplify_binary_with_known_imm, simplify_cast,
+        simplify_unary_with_same_inner,
+    },
 };
 
 ///  An initial class that assigned to all values.
@@ -732,33 +735,17 @@ impl GvnSolver {
     ) -> Option<GvnInsn> {
         if let InstClassKind::Unary(kind) = insn_expr.kind() {
             let arg = insn_expr.unary_arg()?;
-            let folded = match kind {
-                UnaryInstKind::Not => {
-                    let Value::Inst { inst, .. } = func.dfg.value(arg) else {
-                        return None;
-                    };
-                    let inner = inst_to_gvn_key(func, *inst);
-                    if matches!(inner.kind(), InstClassKind::Unary(UnaryInstKind::Not)) {
-                        inner.unary_arg()
-                    } else {
-                        None
-                    }
-                }
-                UnaryInstKind::Neg => {
-                    let Value::Inst { inst, .. } = func.dfg.value(arg) else {
-                        return None;
-                    };
-                    let inner = inst_to_gvn_key(func, *inst);
-                    if matches!(inner.kind(), InstClassKind::Unary(UnaryInstKind::Neg)) {
-                        inner.unary_arg()
-                    } else {
-                        None
-                    }
-                }
-                UnaryInstKind::IsZero | UnaryInstKind::EvmClz => None,
-            };
-            if let Some(value) = folded {
-                return Some(GvnInsn::Value(value));
+            let simplified = simplify_unary_with_same_inner(kind, arg, |arg, expected| {
+                let Value::Inst { inst, .. } = func.dfg.value(arg) else {
+                    return None;
+                };
+                let inner = inst_to_gvn_key(func, *inst);
+                (inner.kind() == InstClassKind::Unary(expected))
+                    .then_some(())
+                    .and_then(|_| inner.unary_arg())
+            });
+            if !simplified.is_no_change() {
+                return Some(self.simplify_expr_result_to_gvn(func, simplified));
             }
         }
 
