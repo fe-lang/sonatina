@@ -10,7 +10,7 @@ use sonatina_ir::{
     ir_writer::{FuncWriteCtx, FunctionSignature, InstStatement, IrWrite},
     module::FuncRef,
 };
-use std::{fmt, io};
+use std::{collections::HashSet, fmt, io};
 
 // xxx offset reference graph?
 //  fn call graph
@@ -88,11 +88,16 @@ impl<Op> VCode<Op> {
     // pub fn emit(self, alloc: &sonatina_stackalloc::Output)
 }
 
-impl<Op> IrWrite<FuncWriteCtx<'_>> for VCode<Op>
+impl<Op> VCode<Op>
 where
     Op: fmt::Debug,
 {
-    fn write<W>(&self, w: &mut W, ctx: &FuncWriteCtx) -> std::io::Result<()>
+    pub fn write_with_block_order<W>(
+        &self,
+        w: &mut W,
+        ctx: &FuncWriteCtx,
+        block_order: &[BlockId],
+    ) -> io::Result<()>
     where
         W: io::Write,
     {
@@ -103,11 +108,16 @@ where
             .func_sig(ctx.func_ref, |sig| writeln!(w, "{}:", sig.name()))?;
 
         let mut cur_ir = None;
-        for block in self.blocks.keys() {
-            if self.block_insns(block).count() > 0 {
-                writeln!(w, "  block{}:", block.0)?;
+        let mut emitted_blocks = HashSet::new();
+
+        let mut write_block = |block: BlockId, cur_ir: &mut Option<InstId>| -> io::Result<()> {
+            let block_insts: Vec<_> = self.block_insns(block).collect();
+            if block_insts.is_empty() {
+                return Ok(());
             }
-            for (idx, insn) in self.block_insns(block).enumerate() {
+
+            writeln!(w, "  block{}:", block.0)?;
+            for (idx, insn) in block_insts.iter().copied().enumerate() {
                 write!(w, "    {:?}", self.insts[insn])?;
                 if let Some((_, bytes)) = self.inst_imm_bytes.get(insn) {
                     let mut be = [0; 32];
@@ -119,10 +129,10 @@ where
                 {
                     match self.labels[*label] {
                         Label::Block(BlockId(n)) => write!(w, " block{n}"),
-                        Label::Insn(insn) => {
-                            let pos = self
-                                .block_insns(block)
-                                .position(|i| i == insn)
+                        Label::Insn(target_insn) => {
+                            let pos = block_insts
+                                .iter()
+                                .position(|i| *i == target_insn)
                                 .expect("Label::Insn must be in same block");
                             let offset: i32 = pos as i32 - idx as i32;
                             write!(w, " `pc + ({offset})`")
@@ -132,16 +142,45 @@ where
                 }
 
                 if let Some(ir) = self.inst_ir[insn].expand()
-                    && cur_ir != Some(ir)
+                    && *cur_ir != Some(ir)
                 {
-                    cur_ir = Some(ir);
+                    *cur_ir = Some(ir);
                     write!(w, "  // ")?;
                     InstStatement(ir).write(w, ctx)?;
                 }
                 writeln!(w)?;
             }
+            Ok(())
+        };
+
+        for &block in block_order {
+            if self.blocks.get(block).is_none() || !emitted_blocks.insert(block) {
+                continue;
+            }
+            write_block(block, &mut cur_ir)?;
         }
+
+        for block in self.blocks.keys() {
+            if !emitted_blocks.insert(block) {
+                continue;
+            }
+            write_block(block, &mut cur_ir)?;
+        }
+
         Ok(())
+    }
+}
+
+impl<Op> IrWrite<FuncWriteCtx<'_>> for VCode<Op>
+where
+    Op: fmt::Debug,
+{
+    fn write<W>(&self, w: &mut W, ctx: &FuncWriteCtx) -> std::io::Result<()>
+    where
+        W: io::Write,
+    {
+        let block_order: Vec<_> = self.blocks.keys().collect();
+        self.write_with_block_order(w, ctx, &block_order)
     }
 }
 

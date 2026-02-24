@@ -16,7 +16,7 @@ use sonatina_codegen::{
     domtree::DomTree,
     isa::evm::{EvmBackend, PushWidthPolicy, canonicalize_alias_value},
     liveness::Liveness,
-    machinst::lower::{LowerBackend, SectionLoweringCtx},
+    machinst::lower::{LowerBackend, LoweredFunction, SectionLoweringCtx},
     object::{CompileOptions, compile_all_objects},
     optim::pipeline::Pipeline,
     stackalloc::StackifyBuilder,
@@ -226,7 +226,7 @@ fn test_evm(fixture: Fixture<&str>) {
                 }
 
                 if emit_vcode {
-                    lowered.vcode.write(&mut lowered_out, &ctx).unwrap();
+                    write_vcode_in_emitted_order(&lowered, &mut lowered_out, &ctx);
                     writeln!(&mut lowered_out).unwrap();
                 }
             }
@@ -409,6 +409,17 @@ fn test_evm(fixture: Fixture<&str>) {
     if let Some(opt_ir_snapshot) = opt_ir_snapshot {
         snap_test!(opt_ir_snapshot, fixture.path(), "opt_ir");
     }
+}
+
+fn write_vcode_in_emitted_order<Op: std::fmt::Debug>(
+    lowered: &LoweredFunction<Op>,
+    out: &mut Vec<u8>,
+    ctx: &FuncWriteCtx<'_>,
+) {
+    lowered
+        .vcode
+        .write_with_block_order(out, ctx, &lowered.block_order)
+        .unwrap();
 }
 
 fn assert_case(case: &EvmCase, res: &ExecutionResult, fixture_path: &str) {
