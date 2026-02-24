@@ -763,7 +763,7 @@ impl GvnSolver {
                 lhs,
                 rhs,
                 |value| func.dfg.value_imm(value),
-                |lhs, rhs| lhs == rhs,
+                |lhs, rhs| self.same_non_undef(func, lhs, rhs),
             );
             if !simplified.is_no_change() {
                 return Some(self.simplify_expr_result_to_gvn(func, simplified));
@@ -787,6 +787,70 @@ impl GvnSolver {
         }
 
         None
+    }
+
+    fn same_non_undef(&self, func: &Function, lhs: ValueId, rhs: ValueId) -> bool {
+        lhs == rhs && !self.may_be_undef(func, lhs)
+    }
+
+    fn may_be_undef(&self, func: &Function, value: ValueId) -> bool {
+        let mut visiting = FxHashSet::default();
+        self.may_be_undef_impl(func, value, &mut visiting)
+    }
+
+    fn may_be_undef_impl(
+        &self,
+        func: &Function,
+        value: ValueId,
+        visiting: &mut FxHashSet<ValueId>,
+    ) -> bool {
+        if !visiting.insert(value) {
+            // Be conservative for cyclic value definitions.
+            return true;
+        }
+
+        let may_be_undef = match func.dfg.value(value) {
+            Value::Undef { .. } => true,
+            Value::Immediate { .. } | Value::Arg { .. } | Value::Global { .. } => false,
+            Value::Inst { inst, .. } => self.inst_result_may_be_undef(func, *inst, visiting),
+        };
+
+        visiting.remove(&value);
+        may_be_undef
+    }
+
+    fn inst_result_may_be_undef(
+        &self,
+        func: &Function,
+        inst: InstId,
+        visiting: &mut FxHashSet<ValueId>,
+    ) -> bool {
+        let inst_data = func.dfg.inst(inst);
+        let values = inst_data.collect_values();
+        if values
+            .iter()
+            .copied()
+            .any(|value| self.may_be_undef_impl(func, value, visiting))
+        {
+            return true;
+        }
+
+        if let InstClassKind::Binary(kind) = inst_data.kind()
+            && matches!(
+                kind,
+                BinaryInstKind::Udiv
+                    | BinaryInstKind::Sdiv
+                    | BinaryInstKind::Umod
+                    | BinaryInstKind::Smod
+            )
+        {
+            let [_, rhs] = values.as_slice() else {
+                return true;
+            };
+            return !func.dfg.value_imm(*rhs).is_some_and(|imm| !imm.is_zero());
+        }
+
+        false
     }
 
     fn simplify_expr_result_to_gvn(
@@ -951,8 +1015,15 @@ impl GvnSolver {
     /// Returns the leader value of the congruent class to which `value` belongs.
     fn leader(&self, value: ValueId) -> ValueId {
         let class = self.values[value].class;
+        if class == INITIAL_CLASS {
+            return value;
+        }
 
-        self.class_data(class).values.iter().next().unwrap().1
+        self.class_data(class)
+            .values
+            .iter()
+            .next()
+            .map_or(value, |(_, leader)| *leader)
     }
 
     /// Returns the leader value of the congruent class.
