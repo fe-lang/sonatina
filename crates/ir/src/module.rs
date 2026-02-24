@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex, RwLock};
 
 use bitflags::bitflags;
-use cranelift_entity::{SecondaryMap, entity_impl};
+use cranelift_entity::entity_impl;
 use dashmap::{DashMap, ReadOnlyView};
 use rayon::{iter::IntoParallelIterator, prelude::ParallelIterator};
 use rustc_hash::FxHashMap;
@@ -163,7 +163,7 @@ pub struct ModuleCtx {
     pub inst_set: &'static dyn InstSetBase,
     pub type_layout: &'static dyn TypeLayout,
     pub declared_funcs: Arc<DashMap<FuncRef, Signature>>,
-    func_attrs: Arc<RwLock<SecondaryMap<FuncRef, FuncAttrs>>>,
+    func_attrs: Arc<RwLock<FxHashMap<FuncRef, FuncAttrs>>>,
     type_store: Arc<RwLock<TypeStore>>,
     gv_store: Arc<RwLock<GlobalVariableStore>>,
 }
@@ -181,7 +181,7 @@ impl ModuleCtx {
             type_layout: isa.type_layout(),
             type_store: Arc::new(RwLock::new(TypeStore::default())),
             declared_funcs: Arc::new(DashMap::new()),
-            func_attrs: Arc::new(RwLock::new(SecondaryMap::new())),
+            func_attrs: Arc::new(RwLock::new(FxHashMap::default())),
             gv_store: Arc::new(RwLock::new(GlobalVariableStore::default())),
         }
     }
@@ -223,17 +223,25 @@ impl ModuleCtx {
         self.func_attrs
             .read()
             .unwrap()
-            .get(func_ref)
+            .get(&func_ref)
             .copied()
             .unwrap_or_default()
     }
 
-    pub fn set_all_func_attrs(&self, new: SecondaryMap<FuncRef, FuncAttrs>) {
+    pub fn has_func_attrs(&self, func_ref: FuncRef) -> bool {
+        self.func_attrs.read().unwrap().contains_key(&func_ref)
+    }
+
+    pub fn set_all_func_attrs(&self, new: FxHashMap<FuncRef, FuncAttrs>) {
         *self.func_attrs.write().unwrap() = new;
     }
 
     pub fn set_func_attrs(&self, func_ref: FuncRef, attrs: FuncAttrs) {
-        self.func_attrs.write().unwrap()[func_ref] = attrs;
+        self.func_attrs.write().unwrap().insert(func_ref, attrs);
+    }
+
+    pub fn clear_func_attrs(&self, func_ref: FuncRef) {
+        self.func_attrs.write().unwrap().remove(&func_ref);
     }
 
     /// Updated the function signature with the given linkage.

@@ -20,7 +20,7 @@ fn has_unknown_call_attrs(func: &Function) -> bool {
     for block in func.layout.iter_block() {
         for inst_id in func.layout.iter_inst(block) {
             if let Some(call) = func.dfg.call_info(inst_id)
-                && func.ctx().func_attrs(call.callee()).is_empty()
+                && !func.ctx().has_func_attrs(call.callee())
             {
                 return true;
             }
@@ -401,9 +401,24 @@ fn is_trivially_dead_pure_inst(func: &Function, inst: InstId) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use sonatina_ir::module::{FuncAttrs, FuncRef};
     use sonatina_parser::parse_module;
 
     use super::*;
+
+    fn find_func_ref(parsed: &sonatina_parser::ParsedModule, name: &str) -> FuncRef {
+        parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| {
+                parsed
+                    .module
+                    .ctx
+                    .func_sig(func_ref, |sig| sig.name() == name)
+            })
+            .unwrap_or_else(|| panic!("function `{name}` should exist"))
+    }
 
     #[test]
     fn test_egglog_parses() {
@@ -794,9 +809,46 @@ func private %f() {
         )
         .expect("parse should succeed");
 
-        let func_ref = parsed.module.funcs()[0];
+        let func_ref = find_func_ref(&parsed, "f");
         parsed.module.func_store.modify(func_ref, |func| {
+            assert!(has_unknown_call_attrs(func));
+
+            #[cfg(debug_assertions)]
+            {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run_egraph_pass(func)
+                }));
+                assert!(result.is_err());
+            }
+
+            #[cfg(not(debug_assertions))]
             assert!(!run_egraph_pass(func));
+        });
+    }
+
+    #[test]
+    fn run_egraph_pass_allows_known_empty_call_attrs() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-london"
+
+declare private %pure();
+
+func private %f() {
+    block0:
+        call %pure;
+        return;
+}
+"#,
+        )
+        .expect("parse should succeed");
+
+        let pure = find_func_ref(&parsed, "pure");
+        let caller = find_func_ref(&parsed, "f");
+        parsed.module.ctx.set_func_attrs(pure, FuncAttrs::empty());
+
+        parsed.module.func_store.view(caller, |func| {
+            assert!(!has_unknown_call_attrs(func));
         });
     }
 }

@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use cranelift_entity::SecondaryMap;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Module,
     inst::SideEffect,
@@ -98,7 +98,11 @@ impl<'a> FuncBehaviorAnalyzer<'a> {
     fn analyze(mut self) {
         self.propagate_mem();
         self.propagate_noreturn_and_will();
-        self.module.ctx.set_all_func_attrs(self.attrs);
+        let mut attrs = FxHashMap::default();
+        for func_ref in self.module.func_store.funcs() {
+            attrs.insert(func_ref, self.attrs[func_ref]);
+        }
+        self.module.ctx.set_all_func_attrs(attrs);
     }
 
     fn propagate_mem(&mut self) {
