@@ -20,6 +20,7 @@ use super::{
     cfg_cleanup::CfgCleanup,
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
     egraph::run_egraph_pass,
+    gvn::GvnSolver,
     inliner::{Inliner, InlinerConfig},
     licm::LicmSolver,
     sccp::SccpSolver,
@@ -42,6 +43,8 @@ pub enum Pass {
     Licm,
     /// E-graph based algebraic simplification and memory forwarding.
     Egraph,
+    /// Complete Global Value Numbering (legacy sparse predicated solver).
+    Gvn,
     /// Recompute `dfg.users` from layout-inserted instructions only.
     ///
     /// Use after passes (like Egraph) that can leave stale user entries
@@ -84,7 +87,7 @@ pub struct Pipeline {
 fn pass_needs_func_behavior(pass: Pass) -> bool {
     matches!(
         pass,
-        Pass::CfgCleanup | Pass::Sccp | Pass::Adce | Pass::Egraph
+        Pass::CfgCleanup | Pass::Sccp | Pass::Adce | Pass::Egraph | Pass::Gvn
     )
 }
 
@@ -95,7 +98,7 @@ fn step_needs_func_behavior(passes: &[Pass]) -> bool {
 fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
     matches!(
         pass,
-        Pass::CfgCleanup | Pass::Sccp | Pass::Adce | Pass::Licm | Pass::Egraph
+        Pass::CfgCleanup | Pass::Sccp | Pass::Adce | Pass::Licm | Pass::Egraph | Pass::Gvn
     )
 }
 
@@ -131,6 +134,7 @@ impl Pipeline {
         p.add_step(Step::FuncPasses(vec![
             Pass::CfgCleanup,
             Pass::Sccp,
+            Pass::Gvn,
             Pass::Licm,
             Pass::CfgCleanup,
             Pass::Egraph,
@@ -151,6 +155,7 @@ impl Pipeline {
         p.add_step(Step::FuncPasses(vec![
             Pass::CfgCleanup,
             Pass::Sccp,
+            Pass::Gvn,
             Pass::Licm,
             Pass::CfgCleanup,
             Pass::Egraph,
@@ -162,6 +167,7 @@ impl Pipeline {
         p.add_step(Step::FuncPasses(vec![
             Pass::CfgCleanup,
             Pass::Sccp,
+            Pass::Gvn,
             Pass::CfgCleanup,
         ]));
         p.add_step(Step::DeadFuncElim);
@@ -175,6 +181,7 @@ impl Pipeline {
     /// 2. Per-function passes (parallel):
     ///    - `CfgCleanup` — normalize CFG before analysis-heavy passes
     ///    - `Sccp` — constant propagation + dead code elimination (composite)
+    ///    - `Gvn` — sparse predicated global value numbering with value-phi resolution
     ///    - `Licm` — loop invariant code motion
     ///    - `CfgCleanup` — clean up after LICM structural changes
     ///    - `Egraph` — algebraic simplification, memory forwarding
@@ -298,6 +305,12 @@ fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
         Pass::Egraph => {
             run_egraph_pass(func);
         }
+        Pass::Gvn => {
+            ctx.cfg.compute(func);
+            ctx.domtree.compute(&ctx.cfg);
+            let mut solver = GvnSolver::new();
+            solver.run(func, &mut ctx.cfg, &mut ctx.domtree);
+        }
         Pass::RebuildUsers => {
             func.rebuild_users();
         }
@@ -311,6 +324,7 @@ mod tests {
         Type,
         builder::test_util::*,
         inst::{arith::Add, control_flow::Return},
+        ir_writer::FuncWriter,
         prelude::*,
     };
     use sonatina_parser::parse_module;
@@ -413,5 +427,81 @@ object @O {
             .collect::<Vec<_>>();
         names.sort();
         assert_eq!(names, vec!["entry".to_string()]);
+    }
+
+    #[test]
+    fn gvn_keeps_duplicate_branch_dest_reachable() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i256 {
+    block0:
+        v0.i1 = eq 0.i256 0.i256;
+        br v0 block1 block1;
+
+    block1:
+        return 1.i256;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(
+                &[Pass::CfgCleanup, Pass::Sccp, Pass::Gvn, Pass::CfgCleanup],
+                func,
+            );
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return 1.i256;"),
+                "expected return to survive duplicate-branch GVN:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("unreachable;"),
+                "duplicate branch destination collapsed to unreachable:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_preserves_reachable_br_table_entry_with_duplicate_dest() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i32 {
+    block0:
+        br_table 0.i8 block3 (0.i8 block1) (1.i8 block2) (2.i8 block1);
+
+    block1:
+        return 11.i32;
+
+    block2:
+        return 22.i32;
+
+    block3:
+        return 33.i32;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return 11.i32;"),
+                "expected reachable br_table arm to survive duplicate-dest pruning:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("return 33.i32;"),
+                "default arm should be removed for constant scrutinee:\n{dumped}"
+            );
+        });
     }
 }
