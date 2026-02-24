@@ -95,9 +95,9 @@ impl ModuleBuilder {
         }
         let func = Function::new(&self.ctx, &sig);
         let func_ref = self.func_store.insert(func);
+        self.ctx.clear_func_attrs(func_ref);
         self.declared_funcs.insert(sig.name().to_string(), func_ref);
         self.ctx.declared_funcs.insert(func_ref, sig);
-        self.ctx.set_func_attrs(func_ref, Default::default());
         Ok(func_ref)
     }
 
@@ -197,8 +197,13 @@ impl ModuleBuilder {
 
 #[cfg(test)]
 mod tests {
+    use rustc_hash::FxHashMap;
+
     use super::*;
-    use crate::{Linkage, ObjectName, builder::test_util::test_module_builder, types::Type}; //, Signature};
+    use crate::{
+        Linkage, ObjectName, builder::test_util::test_module_builder, module::FuncAttrs,
+        types::Type,
+    };
 
     #[test]
     fn test_declare_function_success() {
@@ -263,5 +268,39 @@ mod tests {
             matches!(result, Err(BuilderError::DuplicateObjectDefinition { name }) if name == "Factory"),
             "Expected DuplicateObjectDefinition error for object 'Factory'"
         );
+    }
+
+    #[test]
+    fn test_sparse_attr_map_hole_reuse_keeps_new_function_unknown() {
+        let builder = test_module_builder();
+
+        let mut refs = Vec::new();
+        for i in 0..5 {
+            let sig = Signature::new(&format!("f{i}"), Linkage::Private, &[], Type::Unit);
+            refs.push(builder.declare_function(sig).unwrap());
+        }
+
+        builder
+            .ctx
+            .set_func_attrs(refs[3], FuncAttrs::MEM_READ | FuncAttrs::MEM_WRITE);
+
+        for &removed in &[refs[1], refs[3]] {
+            assert!(builder.func_store.remove(removed).is_some());
+            assert!(builder.ctx.declared_funcs.remove(&removed).is_some());
+        }
+
+        let mut attrs = FxHashMap::default();
+        for &func_ref in &[refs[0], refs[2], refs[4]] {
+            attrs.insert(func_ref, FuncAttrs::MEM_READ);
+        }
+        builder.ctx.set_all_func_attrs(attrs);
+
+        assert_eq!(builder.ctx.func_attrs(refs[0]), FuncAttrs::MEM_READ);
+        assert!(!builder.ctx.has_func_attrs(refs[3]));
+
+        let new_sig = Signature::new("new_func", Linkage::Private, &[], Type::Unit);
+        let new_ref = builder.declare_function(new_sig).unwrap();
+        assert_eq!(new_ref, refs[3]);
+        assert!(!builder.ctx.has_func_attrs(new_ref));
     }
 }
