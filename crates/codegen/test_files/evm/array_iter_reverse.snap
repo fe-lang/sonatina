@@ -7,26 +7,26 @@ input_file: test_files/evm/array_iter_reverse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 366 bytes
-  total: 366 bytes
+  section runtime: 374 bytes
+  total: 374 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
-  sum_last4: ir_blocks=4 ir_insts=27 vcode_ops=70 fixups=5 imm_bytes=11
+  sum_last4: ir_blocks=4 ir_insts=30 vcode_ops=74 fixups=5 imm_bytes=12
     mem: scheme=StaticArena need_words=0 locals_words=0
-  sum_first4: ir_blocks=4 ir_insts=26 vcode_ops=68 fixups=5 imm_bytes=10
+  sum_first4: ir_blocks=4 ir_insts=29 vcode_ops=72 fixups=5 imm_bytes=11
     mem: scheme=StaticArena need_words=0 locals_words=0
   test_view_param_local_ref_take_reverse: ir_blocks=1 ir_insts=35 vcode_ops=93 fixups=9 imm_bytes=24
     mem: scheme=StaticArena need_words=0 locals_words=0
-  take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Reverse_u256___u256__8____3cbd747f44bd7a69: ir_blocks=4 ir_insts=12 vcode_ops=18 fixups=2 imm_bytes=2
+  take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Reverse_u256___u256__8____3cbd747f44bd7a69: ir_blocks=4 ir_insts=14 vcode_ops=22 fixups=2 imm_bytes=4
     mem: scheme=StaticArena need_words=0 locals_words=0
-  take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93f2650f4: ir_blocks=4 ir_insts=12 vcode_ops=18 fixups=2 imm_bytes=2
+  take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93f2650f4: ir_blocks=4 ir_insts=14 vcode_ops=22 fixups=2 imm_bytes=4
     mem: scheme=StaticArena need_words=0 locals_words=0
-  assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
+  assert: ir_blocks=3 ir_insts=7 vcode_ops=14 fixups=1 imm_bytes=1
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=22512 gas_refunded=0 logs=0 output=call len=0
+  case ok: calldata_len=0 success reason=Return gas_used=22536 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1536
 
 
 --------------- DEBUG ---------------
@@ -35,7 +35,7 @@ evm:
 sum_last4:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v40.i256 = mload 64.i32 i256;
+    PUSH1 0x40 (64)  // v44.i256 = mload 64.i32 i256;
     MLOAD
     PUSH1 0x40 (64)  // v23.*i8 = evm_malloc 64.i256;
     MLOAD
@@ -71,19 +71,19 @@ sum_last4:
     PUSH0
   block1:
     JUMPDEST
-    DUP4  // v8.i1 = lt v6 v5;
+    DUP4  // v39.i1 = lt v6 v5;
     DUP3
     LT
-    ISZERO  // br v8 block2 block4;
-    PUSH1 block4
+    ISZERO  // v41.i1 = is_zero v40;
+    PUSH1 block4  // br v10 block2 block4;
     JUMPI
   block2:
     DUP3  // v20.i256 = mload v19 i256;
     MLOAD
-    DUP3  // v38.i256 = sub 7.i256 v6;
+    DUP3  // v42.i256 = sub 7.i256 v6;
     PUSH1 0x7 (7)
     SUB
-    SWAP1  // v33.*i256 = gep v32 0.i256 v38;
+    SWAP1  // v33.*i256 = gep v32 0.i256 v42;
     SWAP1
     PUSH1 0x20 (32)
     MUL
@@ -98,7 +98,7 @@ sum_last4:
     JUMP
   block4:
     JUMPDEST
-    SWAP3  // mstore 64.i32 v40 i256;
+    SWAP3  // mstore 64.i32 v44 i256;
     POP
     POP
     POP
@@ -112,7 +112,7 @@ sum_last4:
 sum_first4:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v31.i256 = mload 64.i32 i256;
+    PUSH1 0x40 (64)  // v35.i256 = mload 64.i32 i256;
     MLOAD
     PUSH1 0x40 (64)  // v19.*i8 = evm_malloc 64.i256;
     MLOAD
@@ -148,11 +148,11 @@ sum_first4:
     PUSH0
   block1:
     JUMPDEST
-    DUP4  // v7.i1 = lt v5 v4;
+    DUP4  // v31.i1 = lt v5 v4;
     DUP3
     LT
-    ISZERO  // br v7 block2 block4;
-    PUSH1 block4
+    ISZERO  // v33.i1 = is_zero v32;
+    PUSH1 block4  // br v9 block2 block4;
     JUMPI
   block2:
     DUP3  // v16.i256 = mload v15 i256;
@@ -173,7 +173,7 @@ sum_first4:
     JUMP
   block4:
     JUMPDEST
-    SWAP3  // mstore 64.i32 v31 i256;
+    SWAP3  // mstore 64.i32 v35 i256;
     POP
     POP
     POP
@@ -282,10 +282,12 @@ take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Reverse_u256___u256
     JUMPDEST
     DUP1  // v9.i256 = mload v8 i256;
     MLOAD
-    PUSH1 0x8 (8)  // v10.i1 = lt v9 8.i256;
+    PUSH1 0x8 (8)  // v20.i1 = lt v9 8.i256;
     SWAP1
     LT
-    ISZERO  // br v10 block1 block5;
+    PUSH1 0x1 (1)  // v12.i1 = eq 1.i256 v21;
+    EQ
+    ISZERO  // br v12 block1 block5;
     PUSH1 block5
     JUMPI
   block1:
@@ -307,10 +309,12 @@ take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93
     JUMPDEST
     DUP1  // v9.i256 = mload v8 i256;
     MLOAD
-    PUSH1 0x8 (8)  // v10.i1 = lt v9 8.i256;
+    PUSH1 0x8 (8)  // v20.i1 = lt v9 8.i256;
     SWAP1
     LT
-    ISZERO  // br v10 block1 block5;
+    PUSH1 0x1 (1)  // v12.i1 = eq 1.i256 v21;
+    EQ
+    ISZERO  // br v12 block1 block5;
     PUSH1 block5
     JUMPI
   block1:
@@ -330,7 +334,9 @@ take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93
 assert:
   block0:
     JUMPDEST
-    PUSH1 block2  // br v2 block1 block2;
+    ISZERO  // v6.i1 = is_zero v0;
+    ISZERO  // v8.i1 = is_zero v7;
+    PUSH1 block2  // br v4 block1 block2;
     JUMPI
   block1:
     PUSH0  // evm_revert 0.i256 0.i256;

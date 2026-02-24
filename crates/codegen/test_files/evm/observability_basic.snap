@@ -41,4 +41,4 @@ pc [16, 17) func=main block=0 vcode=2 ir=0 reason=- frontend=-
 pc [17, 18) func=main block=0 vcode=3 ir=0 reason=- frontend=-
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21044 gas_refunded=0 logs=0 output=call len=32
+  case ok: calldata_len=0 success reason=Return gas_used=21044 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=44
