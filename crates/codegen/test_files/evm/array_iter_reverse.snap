@@ -1,32 +1,32 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 408
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/array_iter_reverse.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 374 bytes
-  total: 374 bytes
+  section runtime: 362 bytes
+  total: 362 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
-  sum_last4: ir_blocks=4 ir_insts=30 vcode_ops=74 fixups=5 imm_bytes=12
+  sum_last4: ir_blocks=4 ir_insts=26 vcode_ops=70 fixups=5 imm_bytes=11
     mem: scheme=StaticArena need_words=0 locals_words=0
-  sum_first4: ir_blocks=4 ir_insts=29 vcode_ops=72 fixups=5 imm_bytes=11
+  sum_first4: ir_blocks=4 ir_insts=25 vcode_ops=68 fixups=5 imm_bytes=10
     mem: scheme=StaticArena need_words=0 locals_words=0
-  test_view_param_local_ref_take_reverse: ir_blocks=1 ir_insts=35 vcode_ops=93 fixups=9 imm_bytes=24
+  test_view_param_local_ref_take_reverse: ir_blocks=1 ir_insts=28 vcode_ops=93 fixups=9 imm_bytes=24
     mem: scheme=StaticArena need_words=0 locals_words=0
-  take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Reverse_u256___u256__8____3cbd747f44bd7a69: ir_blocks=4 ir_insts=14 vcode_ops=22 fixups=2 imm_bytes=4
+  take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Reverse_u256___u256__8____3cbd747f44bd7a69: ir_blocks=4 ir_insts=9 vcode_ops=16 fixups=2 imm_bytes=2
     mem: scheme=StaticArena need_words=0 locals_words=0
-  take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93f2650f4: ir_blocks=4 ir_insts=14 vcode_ops=22 fixups=2 imm_bytes=4
+  take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93f2650f4: ir_blocks=4 ir_insts=9 vcode_ops=16 fixups=2 imm_bytes=2
     mem: scheme=StaticArena need_words=0 locals_words=0
-  assert: ir_blocks=3 ir_insts=7 vcode_ops=14 fixups=1 imm_bytes=1
+  assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=22536 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1536
+  case ok: calldata_len=0 success reason=Return gas_used=22500 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1500
 
 
 --------------- DEBUG ---------------
@@ -35,7 +35,7 @@ evm:
 sum_last4:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v44.i256 = mload 64.i32 i256;
+    PUSH1 0x40 (64)  // v45.i256 = mload 64.i32 i256;
     MLOAD
     PUSH1 0x40 (64)  // v23.*i8 = evm_malloc 64.i256;
     MLOAD
@@ -50,7 +50,7 @@ sum_last4:
     PUSH1 0x4 (4)  // mstore v26 4.i256 i256;
     DUP2
     MSTORE
-    DUP1  // v28.*i256 = gep v37 0.i256 1.i256;
+    DUP1  // v28.*i256 = gep v41 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
     SWAP1  // mstore v28 v0 i256;
@@ -71,19 +71,19 @@ sum_last4:
     PUSH0
   block1:
     JUMPDEST
-    DUP4  // v39.i1 = lt v6 v5;
+    DUP4  // v8.i1 = lt v6 v5;
     DUP3
     LT
-    ISZERO  // v41.i1 = is_zero v40;
-    PUSH1 block4  // br v10 block2 block4;
+    ISZERO  // br v8 block2 block4;
+    PUSH1 block4
     JUMPI
   block2:
     DUP3  // v20.i256 = mload v19 i256;
     MLOAD
-    DUP3  // v42.i256 = sub 7.i256 v6;
+    DUP3  // v43.i256 = sub 7.i256 v6;
     PUSH1 0x7 (7)
     SUB
-    SWAP1  // v33.*i256 = gep v32 0.i256 v42;
+    SWAP1  // v33.*i256 = gep v32 0.i256 v43;
     SWAP1
     PUSH1 0x20 (32)
     MUL
@@ -98,7 +98,7 @@ sum_last4:
     JUMP
   block4:
     JUMPDEST
-    SWAP3  // mstore 64.i32 v44 i256;
+    SWAP3  // mstore 64.i32 v45 i256;
     POP
     POP
     POP
@@ -112,7 +112,7 @@ sum_last4:
 sum_first4:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v35.i256 = mload 64.i32 i256;
+    PUSH1 0x40 (64)  // v34.i256 = mload 64.i32 i256;
     MLOAD
     PUSH1 0x40 (64)  // v19.*i8 = evm_malloc 64.i256;
     MLOAD
@@ -127,7 +127,7 @@ sum_first4:
     PUSH1 0x4 (4)  // mstore v22 4.i256 i256;
     DUP2
     MSTORE
-    DUP1  // v24.*i256 = gep v29 0.i256 1.i256;
+    DUP1  // v24.*i256 = gep v31 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
     SWAP1  // mstore v24 v0 i256;
@@ -148,11 +148,11 @@ sum_first4:
     PUSH0
   block1:
     JUMPDEST
-    DUP4  // v31.i1 = lt v5 v4;
+    DUP4  // v7.i1 = lt v5 v4;
     DUP3
     LT
-    ISZERO  // v33.i1 = is_zero v32;
-    PUSH1 block4  // br v9 block2 block4;
+    ISZERO  // br v7 block2 block4;
+    PUSH1 block4
     JUMPI
   block2:
     DUP3  // v16.i256 = mload v15 i256;
@@ -173,7 +173,7 @@ sum_first4:
     JUMP
   block4:
     JUMPDEST
-    SWAP3  // mstore 64.i32 v35 i256;
+    SWAP3  // mstore 64.i32 v34 i256;
     POP
     POP
     POP
@@ -205,43 +205,43 @@ test_view_param_local_ref_take_reverse:
     PUSH1 0x1 (1)  // mstore v6 1.i256 i256;
     DUP2
     MSTORE
-    DUP1  // v9.*i256 = gep v37 0.i256 1.i256;
+    DUP1  // v9.*i256 = gep v36 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
     PUSH1 0x2 (2)  // mstore v9 2.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v12.*i256 = gep v38 0.i256 2.i256;
+    DUP1  // v12.*i256 = gep v36 0.i256 2.i256;
     PUSH1 0x40 (64)
     ADD
     PUSH1 0x3 (3)  // mstore v12 3.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v15.*i256 = gep v39 0.i256 3.i256;
+    DUP1  // v15.*i256 = gep v36 0.i256 3.i256;
     PUSH1 0x60 (96)
     ADD
     PUSH1 0x4 (4)  // mstore v15 4.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v18.*i256 = gep v40 0.i256 4.i256;
+    DUP1  // v18.*i256 = gep v36 0.i256 4.i256;
     PUSH1 0x80 (128)
     ADD
     PUSH1 0x5 (5)  // mstore v18 5.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v21.*i256 = gep v41 0.i256 5.i256;
+    DUP1  // v21.*i256 = gep v36 0.i256 5.i256;
     PUSH1 0xa0 (160)
     ADD
     PUSH1 0x6 (6)  // mstore v21 6.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v24.*i256 = gep v42 0.i256 6.i256;
+    DUP1  // v24.*i256 = gep v36 0.i256 6.i256;
     PUSH1 0xc0 (192)
     ADD
     PUSH1 0x7 (7)  // mstore v24 7.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v27.*i256 = gep v43 0.i256 7.i256;
+    DUP1  // v27.*i256 = gep v36 0.i256 7.i256;
     PUSH1 0xe0 (224)
     ADD
     PUSH1 0x8 (8)  // mstore v27 8.i256 i256;
@@ -280,18 +280,14 @@ test_view_param_local_ref_take_reverse:
 take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Reverse_u256___u256__8____3cbd747f44bd7a69:
   block0:
     JUMPDEST
-    DUP1  // v9.i256 = mload v8 i256;
-    MLOAD
-    PUSH1 0x8 (8)  // v20.i1 = lt v9 8.i256;
-    SWAP1
+    MLOAD  // v9.i256 = mload v8 i256;
+    PUSH1 0x8 (8)  // v10.i1 = lt v9 8.i256;
+    DUP2
     LT
-    PUSH1 0x1 (1)  // v12.i1 = eq 1.i256 v21;
-    EQ
-    ISZERO  // br v12 block1 block5;
+    ISZERO  // br v10 block1 block5;
     PUSH1 block5
     JUMPI
   block1:
-    MLOAD  // v17.i256 = mload v16 i256;
     PUSH1 block3  // jump block3;
     JUMP
   block5:
@@ -307,18 +303,14 @@ take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Reverse_u256___u256
 take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93f2650f4:
   block0:
     JUMPDEST
-    DUP1  // v9.i256 = mload v8 i256;
-    MLOAD
-    PUSH1 0x8 (8)  // v20.i1 = lt v9 8.i256;
-    SWAP1
+    MLOAD  // v9.i256 = mload v8 i256;
+    PUSH1 0x8 (8)  // v10.i1 = lt v9 8.i256;
+    DUP2
     LT
-    PUSH1 0x1 (1)  // v12.i1 = eq 1.i256 v21;
-    EQ
-    ISZERO  // br v12 block1 block5;
+    ISZERO  // br v10 block1 block5;
     PUSH1 block5
     JUMPI
   block1:
-    MLOAD  // v17.i256 = mload v16 i256;
     PUSH1 block3  // jump block3;
     JUMP
   block5:
@@ -334,9 +326,7 @@ take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93
 assert:
   block0:
     JUMPDEST
-    ISZERO  // v6.i1 = is_zero v0;
-    ISZERO  // v8.i1 = is_zero v7;
-    PUSH1 block2  // br v4 block1 block2;
+    PUSH1 block2  // br v2 block1 block2;
     JUMPI
   block1:
     PUSH0  // evm_revert 0.i256 0.i256;
