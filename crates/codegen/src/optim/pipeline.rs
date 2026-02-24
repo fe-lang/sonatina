@@ -504,4 +504,41 @@ func private %entry() -> i32 {
             );
         });
     }
+
+    #[test]
+    fn gvn_preserves_phi_arg_when_duplicate_pred_edge_remains_reachable() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i32 {
+    block0:
+        br_table 0.i8 block2 (0.i8 block1) (1.i8 block1);
+
+    block1:
+        v0.i32 = phi (7.i32 block0);
+        return v0;
+
+    block2:
+        return 9.i32;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return 7.i32;"),
+                "phi argument from block0 should remain when one duplicate edge is reachable:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("return 9.i32;"),
+                "unreachable default arm should be removed for constant scrutinee:\n{dumped}"
+            );
+        });
+    }
 }

@@ -599,14 +599,20 @@ impl GvnSolver {
             let edges = &self.blocks[block].in_edges;
             let mut canonical_phi_args = Vec::with_capacity(phi_args.len());
             for &(value, from) in phi_args {
-                let edge = self.find_edge(edges, from, block);
-                // Ignore an argument from an unreachable block.
-                if !self.edge_data(edge).reachable {
-                    continue;
+                match self.reachable_edge_state(edges, from, block) {
+                    ReachableEdgeState::None => continue,
+                    ReachableEdgeState::One(edge) => {
+                        let inferred_value = self.infer_value_at_edge(func, domtree, value, edge);
+                        canonical_phi_args.push((inferred_value, from));
+                    }
+                    // Phi arguments are keyed by predecessor block, not by edge. When multiple
+                    // reachable edges exist from the same predecessor to this block, edge-specific
+                    // predicate inference is not valid.
+                    ReachableEdgeState::Many => {
+                        let inferred_value = self.infer_value_at_block(func, domtree, value, from);
+                        canonical_phi_args.push((inferred_value, from));
+                    }
                 }
-
-                let inferred_value = self.infer_value_at_edge(func, domtree, value, edge);
-                canonical_phi_args.push((inferred_value, from));
             }
 
             // Canonicalize the argument order by block rank.
@@ -999,17 +1005,26 @@ impl GvnSolver {
         class
     }
 
-    /// Find an edge that have corresponding `from` and `to` block.
-    /// This method panics if an edge isn't found.
-    fn find_edge(&self, edges: &[Edge], from: BlockId, to: BlockId) -> Edge {
-        edges
-            .iter()
-            .find(|edge| {
-                let data = self.edge_data(**edge);
-                data.from == from && data.to == to
-            })
-            .copied()
-            .unwrap()
+    fn reachable_edge_state(
+        &self,
+        edges: &[Edge],
+        from: BlockId,
+        to: BlockId,
+    ) -> ReachableEdgeState {
+        let mut one = None;
+        for edge in edges {
+            let data = self.edge_data(*edge);
+            if data.from != from || data.to != to || !data.reachable {
+                continue;
+            }
+
+            if one.is_some() {
+                return ReachableEdgeState::Many;
+            }
+            one = Some(*edge);
+        }
+
+        one.map_or(ReachableEdgeState::None, ReachableEdgeState::One)
     }
 }
 
@@ -1403,9 +1418,11 @@ impl<'a> ValuePhiFinder<'a> {
             let in_edges = &self.solver.blocks[phi_block].in_edges;
 
             for &(value, from) in phi_args {
-                let edge = self.solver.find_edge(in_edges, from, phi_block);
-                // If the corresponding edge is reachable, then add to the result.
-                if self.solver.edges[edge].reachable {
+                // Phi arguments are keyed by predecessor block.
+                if !matches!(
+                    self.solver.reachable_edge_state(in_edges, from, phi_block),
+                    ReachableEdgeState::None
+                ) {
                     result.args.push((ValuePhi::Value(value), from))
                 }
             }
@@ -1821,14 +1838,20 @@ impl<'a> RedundantCodeRemover<'a> {
         }
 
         let edges = &self.solver.blocks[block].in_edges;
-        for &edge in edges {
-            let edge_data = self.solver.edge_data(edge);
-            // Remove phi arg if the edge is unreachable.
-            if !edge_data.reachable
-                && let Some(phi) = func.dfg.cast_phi_mut(insn)
-            {
-                phi.remove_phi_arg(edge_data.from);
-            }
+        if let Some(phi) = func.dfg.cast_phi_mut(insn) {
+            phi.retain(|from| {
+                !matches!(
+                    self.solver.reachable_edge_state(edges, from, block),
+                    ReachableEdgeState::None
+                )
+            });
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReachableEdgeState {
+    None,
+    One(Edge),
+    Many,
 }
