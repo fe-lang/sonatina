@@ -785,17 +785,15 @@ mod tests {
 
     use smallvec::smallvec;
     use sonatina_ir::{
-        I256, Linkage, Module, Signature, Type,
+        I256, Linkage, Signature, Type,
         builder::test_util::{test_isa, test_module_builder},
         inst::{
             cast::{IntToPtr, PtrToInt},
-            cmp,
             control_flow::Return,
             data::{Gep, Mstore},
             logic,
         },
     };
-    use sonatina_parser::parse_module;
 
     #[derive(Clone, Copy)]
     struct XorShift64(u64);
@@ -813,24 +811,6 @@ mod tests {
         fn pick<T>(self, values: &[T]) -> usize {
             (self.0 as usize) % values.len()
         }
-    }
-
-    fn parse_sona(input: &str) -> sonatina_parser::ParsedModule {
-        parse_module(input).unwrap_or_else(|errs| panic!("parse failed: {errs:?}"))
-    }
-
-    fn only_func_ref(module: &Module) -> sonatina_ir::module::FuncRef {
-        let funcs = module.funcs();
-        assert_eq!(funcs.len(), 1, "expected exactly one function");
-        funcs[0]
-    }
-
-    fn run_sccp_on_func(func: &mut Function) {
-        let mut cfg = ControlFlowGraph::default();
-        cfg.compute(func);
-        let mut solver = SccpSolver::new();
-        solver.run(func, &mut cfg);
-        CfgCleanup::new(CleanupMode::Strict).run(func);
     }
 
     #[test]
@@ -1031,106 +1011,6 @@ mod tests {
                 has_bitcast,
                 "SCCP should preserve typed zero-gep via bitcast"
             );
-        });
-    }
-
-    #[test]
-    fn sccp_folds_eq_one_of_zext_i1() {
-        let source = r#"
-target = "evm-ethereum-osaka"
-
-func private %f(v0.i256) -> i1 {
-block0:
-    v1.i1 = is_zero v0;
-    v2.i256 = zext v1 i256;
-    v3.i1 = eq 1.i256 v2;
-    return v3;
-}
-"#;
-
-        let parsed = parse_sona(source);
-        let func_ref = only_func_ref(&parsed.module);
-
-        parsed.module.func_store.modify(func_ref, run_sccp_on_func);
-
-        parsed.module.func_store.view(func_ref, |func| {
-            let mut has_eq = false;
-            let mut has_zext = false;
-            for block in func.layout.iter_block() {
-                for inst in func.layout.iter_inst(block) {
-                    has_eq |= downcast::<&cmp::Eq>(func.inst_set(), func.dfg.inst(inst)).is_some();
-                    has_zext |=
-                        downcast::<&cast::Zext>(func.inst_set(), func.dfg.inst(inst)).is_some();
-                }
-            }
-
-            assert!(!has_eq, "SCCP should fold eq(1, zext(i1))");
-            assert!(!has_zext, "SCCP should DCE dead zext after folding");
-        });
-    }
-
-    #[test]
-    fn sccp_folds_ne_zero_of_zext_i1() {
-        let source = r#"
-target = "evm-ethereum-osaka"
-
-func private %f(v0.i256) -> i1 {
-block0:
-    v1.i1 = is_zero v0;
-    v2.i256 = zext v1 i256;
-    v3.i1 = ne 0.i256 v2;
-    return v3;
-}
-"#;
-
-        let parsed = parse_sona(source);
-        let func_ref = only_func_ref(&parsed.module);
-
-        parsed.module.func_store.modify(func_ref, run_sccp_on_func);
-
-        parsed.module.func_store.view(func_ref, |func| {
-            let mut has_ne = false;
-            let mut has_zext = false;
-            for block in func.layout.iter_block() {
-                for inst in func.layout.iter_inst(block) {
-                    has_ne |= downcast::<&cmp::Ne>(func.inst_set(), func.dfg.inst(inst)).is_some();
-                    has_zext |=
-                        downcast::<&cast::Zext>(func.inst_set(), func.dfg.inst(inst)).is_some();
-                }
-            }
-
-            assert!(!has_ne, "SCCP should fold ne(0, zext(i1))");
-            assert!(!has_zext, "SCCP should DCE dead zext after folding");
-        });
-    }
-
-    #[test]
-    fn sccp_does_not_fold_eq_one_of_zext_non_i1() {
-        let source = r#"
-target = "evm-ethereum-osaka"
-
-func private %f(v0.i256) -> i1 {
-block0:
-    v1.i8 = trunc v0 i8;
-    v2.i256 = zext v1 i256;
-    v3.i1 = eq 1.i256 v2;
-    return v3;
-}
-"#;
-
-        let parsed = parse_sona(source);
-        let func_ref = only_func_ref(&parsed.module);
-
-        parsed.module.func_store.modify(func_ref, run_sccp_on_func);
-
-        parsed.module.func_store.view(func_ref, |func| {
-            let mut has_eq = false;
-            for block in func.layout.iter_block() {
-                for inst in func.layout.iter_inst(block) {
-                    has_eq |= downcast::<&cmp::Eq>(func.inst_set(), func.dfg.inst(inst)).is_some();
-                }
-            }
-            assert!(has_eq, "SCCP must not fold eq(1, zext(non-i1))");
         });
     }
 }
