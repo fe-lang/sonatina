@@ -8,6 +8,7 @@ use super::{
     Inst,
     cast::{Bitcast, IntToPtr, PtrToInt, Sext, Trunc, Zext},
     control_flow::{Call, Phi},
+    data::{GetFunctionPtr, SymAddr, SymSize, SymbolRef},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -79,7 +80,15 @@ pub struct OwnedInstKey {
     cast_ty: Option<Type>,
     phi_args: Vec<(ValueId, BlockId)>,
     callee: Option<FuncRef>,
+    opaque_data: Option<OpaqueInstData>,
     kind: InstClassKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum OpaqueInstData {
+    GetFunctionPtr(FuncRef),
+    SymAddr(SymbolRef),
+    SymSize(SymbolRef),
 }
 
 impl OwnedInstKey {
@@ -92,6 +101,7 @@ impl OwnedInstKey {
             cast_ty: cast_ty(inst),
             phi_args: Vec::new(),
             callee: None,
+            opaque_data: opaque_data(inst),
             kind: inst.kind(),
         };
 
@@ -260,4 +270,102 @@ fn cast_ty(inst: &dyn Inst) -> Option<Type> {
         return Some(*inst.ty());
     }
     None
+}
+
+fn opaque_data(inst: &dyn Inst) -> Option<OpaqueInstData> {
+    if let Some(inst) = downcast_ref::<GetFunctionPtr>(inst) {
+        return Some(OpaqueInstData::GetFunctionPtr(*inst.func()));
+    }
+    if let Some(inst) = downcast_ref::<SymAddr>(inst) {
+        return Some(OpaqueInstData::SymAddr(inst.sym().clone()));
+    }
+    if let Some(inst) = downcast_ref::<SymSize>(inst) {
+        return Some(OpaqueInstData::SymSize(inst.sym().clone()));
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        EmbedSymbol, GlobalVariableRef,
+        builder::test_util::test_isa,
+        inst::{
+            data::{GetFunctionPtr, SymAddr, SymSize, SymbolRef},
+            inst_set::InstSetBase,
+        },
+        isa::Isa,
+        module::FuncRef,
+    };
+
+    use super::OwnedInstKey;
+
+    #[test]
+    fn opaque_key_distinguishes_get_function_ptr_targets() {
+        let isa = test_isa();
+        let is = isa.inst_set();
+        let i1 = GetFunctionPtr::new(is.has_get_function_ptr().unwrap(), FuncRef::from_u32(1));
+        let i2 = GetFunctionPtr::new(is.has_get_function_ptr().unwrap(), FuncRef::from_u32(2));
+        let i3 = GetFunctionPtr::new(is.has_get_function_ptr().unwrap(), FuncRef::from_u32(1));
+
+        let k1 = OwnedInstKey::from_inst(&i1, None);
+        let k2 = OwnedInstKey::from_inst(&i2, None);
+        let k3 = OwnedInstKey::from_inst(&i3, None);
+        assert_ne!(k1, k2);
+        assert_eq!(k1, k3);
+    }
+
+    #[test]
+    fn opaque_key_distinguishes_sym_addr_symbol_refs() {
+        let isa = test_isa();
+        let is = isa.inst_set();
+        let by_func = SymAddr::new(
+            is.has_sym_addr().unwrap(),
+            SymbolRef::Func(FuncRef::from_u32(10)),
+        );
+        let by_global = SymAddr::new(
+            is.has_sym_addr().unwrap(),
+            SymbolRef::Global(GlobalVariableRef::from_u32(10)),
+        );
+        let by_embed = SymAddr::new(
+            is.has_sym_addr().unwrap(),
+            SymbolRef::Embed(EmbedSymbol::from("foo")),
+        );
+
+        assert_ne!(
+            OwnedInstKey::from_inst(&by_func, None),
+            OwnedInstKey::from_inst(&by_global, None)
+        );
+        assert_ne!(
+            OwnedInstKey::from_inst(&by_global, None),
+            OwnedInstKey::from_inst(&by_embed, None)
+        );
+    }
+
+    #[test]
+    fn opaque_key_distinguishes_sym_size_symbol_refs() {
+        let isa = test_isa();
+        let is = isa.inst_set();
+        let by_func = SymSize::new(
+            is.has_sym_size().unwrap(),
+            SymbolRef::Func(FuncRef::from_u32(10)),
+        );
+        let by_global = SymSize::new(
+            is.has_sym_size().unwrap(),
+            SymbolRef::Global(GlobalVariableRef::from_u32(10)),
+        );
+        let by_embed = SymSize::new(
+            is.has_sym_size().unwrap(),
+            SymbolRef::Embed(EmbedSymbol::from("foo")),
+        );
+
+        assert_ne!(
+            OwnedInstKey::from_inst(&by_func, None),
+            OwnedInstKey::from_inst(&by_global, None)
+        );
+        assert_ne!(
+            OwnedInstKey::from_inst(&by_global, None),
+            OwnedInstKey::from_inst(&by_embed, None)
+        );
+    }
 }

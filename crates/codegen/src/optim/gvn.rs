@@ -847,7 +847,7 @@ impl GvnSolver {
             let [_, rhs] = values.as_slice() else {
                 return true;
             };
-            return !func.dfg.value_imm(*rhs).is_some_and(|imm| !imm.is_zero());
+            return func.dfg.value_imm(*rhs).is_none_or(Immediate::is_zero);
         }
 
         false
