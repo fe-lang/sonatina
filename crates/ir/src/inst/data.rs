@@ -15,6 +15,7 @@ pub enum SymbolRef {
     Func(FuncRef),
     Global(GlobalVariableRef),
     Embed(EmbedSymbol),
+    CurrentSection,
 }
 
 impl<Ctx> IrWrite<Ctx> for SymbolRef
@@ -31,6 +32,7 @@ where
                 .as_ref()
                 .with_gv_store(|s| write!(w, "${}", s.gv_data(*gv).symbol)),
             Self::Embed(sym) => write!(w, "&{}", sym.0.as_str()),
+            Self::CurrentSection => write!(w, "."),
         }
     }
 }
@@ -41,6 +43,7 @@ impl Visitable for SymbolRef {
             Self::Func(f) => f.accept(visitor),
             Self::Global(gv) => gv.accept(visitor),
             Self::Embed(_) => {}
+            Self::CurrentSection => {}
         }
     }
 }
@@ -51,6 +54,7 @@ impl VisitableMut for SymbolRef {
             Self::Func(f) => f.accept_mut(visitor),
             Self::Global(gv) => gv.accept_mut(visitor),
             Self::Embed(_) => {}
+            Self::CurrentSection => {}
         }
     }
 }

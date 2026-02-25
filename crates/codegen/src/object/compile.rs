@@ -309,6 +309,7 @@ fn record_symbol(sym: &SymbolRef, membership: &mut SectionMembership, worklist: 
         SymbolRef::Embed(sym) => {
             membership.used_embed_symbols.insert(sym.clone());
         }
+        SymbolRef::CurrentSection => {}
     }
 }
 
@@ -715,6 +716,82 @@ object @Contract {
         assert_eq!(init[5], 0x63);
         assert_eq!(&init[6..10], &13u32.to_be_bytes());
         assert_eq!(&init[10..], runtime.as_slice());
+    }
+
+    #[test]
+    fn compile_object_resolves_current_section_symbols() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+global public const [i8; 3] $blob = [1, 2, 3];
+
+func public %runtime() {
+    block0:
+        v0.i256 = sym_addr $blob;
+        v1.i256 = sym_size $blob;
+        return;
+}
+
+func public %init() {
+    block0:
+        v0.i256 = sym_addr .;
+        v1.i256 = sym_size .;
+        v2.i256 = sym_addr &runtime;
+        v3.i256 = sym_size &runtime;
+        return;
+}
+
+object @Contract {
+  section init {
+    entry %init;
+    embed .runtime as &runtime;
+  }
+  section runtime {
+    entry %runtime;
+    data $blob;
+  }
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let backend = FakeBackend;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: true,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
+        };
+
+        let artifact = compile_object(&parsed.module, &backend, "Contract", &opts).unwrap();
+
+        let runtime = artifact
+            .sections
+            .iter()
+            .find(|(name, _)| name.0.as_str() == "runtime")
+            .unwrap()
+            .1
+            .bytes
+            .clone();
+        assert_eq!(runtime.len(), 13);
+
+        let init = artifact
+            .sections
+            .iter()
+            .find(|(name, _)| name.0.as_str() == "init")
+            .unwrap()
+            .1
+            .bytes
+            .clone();
+        assert_eq!(init.len(), 33);
+        assert_eq!(init[0], 0x63);
+        assert_eq!(&init[1..5], &0u32.to_be_bytes());
+        assert_eq!(init[5], 0x63);
+        assert_eq!(&init[6..10], &33u32.to_be_bytes());
+        assert_eq!(init[10], 0x63);
+        assert_eq!(&init[11..15], &20u32.to_be_bytes());
+        assert_eq!(init[15], 0x63);
+        assert_eq!(&init[16..20], &13u32.to_be_bytes());
+        assert_eq!(&init[20..], runtime.as_slice());
     }
 
     #[test]

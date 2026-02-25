@@ -70,7 +70,7 @@ pub fn link_section<B: LowerBackend>(
     for _ in 0..MAX_ITERS {
         while layout.resize(backend, 0) {}
 
-        let symtab =
+        let (symtab, section_size) =
             build_section_symtab(&layout, funcs, data, embeds).map_err(LinkSectionError::Link)?;
 
         let mut layout_changed = false;
@@ -91,8 +91,7 @@ pub fn link_section<B: LowerBackend>(
         if !layout_changed {
             while layout.resize(backend, 0) {}
 
-            let section_size: usize = symtab.values().map(|def| def.size as usize).sum();
-            let mut bytes = Vec::with_capacity(section_size);
+            let mut bytes = Vec::with_capacity(section_size as usize);
             layout.emit(backend, &mut bytes);
             for (_, blob) in data {
                 bytes.extend_from_slice(blob);
@@ -146,7 +145,7 @@ fn build_section_symtab<Op>(
     funcs: &[FuncRef],
     data: &[(GlobalVariableRef, Vec<u8>)],
     embeds: &[(EmbedSymbol, Vec<u8>)],
-) -> Result<FxHashMap<SymbolId, SymbolDef>, String> {
+) -> Result<(FxHashMap<SymbolId, SymbolDef>, u32), String> {
     let mut symtab: FxHashMap<SymbolId, SymbolDef> = FxHashMap::default();
 
     let mut code_end: u32 = 0;
@@ -188,7 +187,16 @@ fn build_section_symtab<Op>(
         symtab.insert(SymbolId::Embed(symbol.clone()), SymbolDef { offset, size });
     }
 
-    Ok(symtab)
+    let section_size = cursor;
+    symtab.insert(
+        SymbolId::CurrentSection,
+        SymbolDef {
+            offset: 0,
+            size: section_size,
+        },
+    );
+
+    Ok((symtab, section_size))
 }
 
 fn fixup_value(symtab: &FxHashMap<SymbolId, SymbolDef>, fixup: &SymFixup) -> Result<u32, String> {
@@ -207,6 +215,7 @@ fn symbol_id(sym: &SymbolRef) -> SymbolId {
         SymbolRef::Func(func) => SymbolId::Func(*func),
         SymbolRef::Global(gv) => SymbolId::Global(*gv),
         SymbolRef::Embed(sym) => SymbolId::Embed(sym.clone()),
+        SymbolRef::CurrentSection => SymbolId::CurrentSection,
     }
 }
 

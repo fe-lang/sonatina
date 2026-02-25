@@ -570,6 +570,8 @@ impl FromSyntax<Error> for InstArg {
             InstArgKind::FuncRef(func)
         } else if let Some(sym) = node.single_opt(Rule::embed_symbol) {
             InstArgKind::EmbedSymbol(sym)
+        } else if node.get_opt(Rule::current_section_symbol).is_some() {
+            InstArgKind::CurrentSection
         } else {
             unreachable!()
         };
@@ -589,6 +591,7 @@ pub enum InstArgKind {
     ValueBlockMap((Value, BlockId)),
     FuncRef(FunctionName),
     EmbedSymbol(EmbedSymbol),
+    CurrentSection,
 }
 
 impl InstArgKind {
@@ -600,6 +603,7 @@ impl InstArgKind {
             Self::ValueBlockMap(_) => "(value, block)",
             Self::FuncRef(_) => "function name",
             Self::EmbedSymbol(_) => "embed symbol",
+            Self::CurrentSection => "current section symbol",
         }
         .into()
     }

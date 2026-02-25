@@ -17,6 +17,7 @@ pub enum SymbolId {
     Func(FuncRef),
     Global(GlobalVariableRef),
     Embed(EmbedSymbol),
+    CurrentSection,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
