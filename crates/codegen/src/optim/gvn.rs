@@ -65,7 +65,7 @@ pub struct GvnSolver {
 
     value_phi_table: FxHashMap<ValuePhi, Class>,
 
-    /// Hold always available values, i.e. immediates or function arguments.
+    /// Hold always available values, i.e. immediates, globals, or function arguments.
     always_avail: Vec<ValueId>,
 }
 
@@ -102,6 +102,11 @@ impl GvnSolver {
         // Make and assign classes for immediate values.
         for &value in func.dfg.immediates.values() {
             self.assign_class_to_imm_value(value);
+        }
+
+        // Make and assign classes for global values.
+        for &value in func.dfg.globals.values() {
+            self.assign_class_to_global_value(value);
         }
 
         // Assign rank to function arguments and create class for them.
@@ -1002,6 +1007,24 @@ impl GvnSolver {
 
         // Create a congruence class for the immediate.
         let class = self.make_class(gvn_insn, None);
+        self.assign_class(value, class);
+    }
+
+    /// Make and assign class to global value.
+    fn assign_class_to_global_value(&mut self, value: ValueId) {
+        // If the congruence class for the value already exists, then return.
+        if self.values[value].class != INITIAL_CLASS {
+            return;
+        }
+
+        // Set rank.
+        self.values[value].rank = IMMEDIATE_RANK;
+
+        // Add the global to `always_avail` value.
+        self.always_avail.push(value);
+
+        // Create a congruence class for the global.
+        let class = self.make_class(GvnInsn::Value(value), None);
         self.assign_class(value, class);
     }
 

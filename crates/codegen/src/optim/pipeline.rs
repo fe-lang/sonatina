@@ -489,6 +489,48 @@ func private %entry(v0.*i256, v1.i256) -> *i256 {
     }
 
     #[test]
+    fn gvn_treats_globals_as_always_available() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+global public const i256 $G = 0;
+
+func private %entry(v0.i1) -> *i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.*i256 = phi ($G block1) ($G block2);
+        return v1;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return $G;"),
+                "expected global to be available for phi simplification:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains(" = phi "),
+                "phi over identical globals should be eliminated:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn gvn_keeps_duplicate_branch_dest_reachable() {
         let source = r#"
 target = "evm-ethereum-london"
