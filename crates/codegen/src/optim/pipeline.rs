@@ -543,6 +543,49 @@ func private %entry() -> i32 {
     }
 
     #[test]
+    fn gvn_phi_pruning_keeps_users_consistent_for_egraph_dce() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v2.i32 = add v1 3.i32;
+        br 0.i1 block3 block4;
+
+    block2:
+        jump block3;
+
+    block3:
+        v3.i32 = phi (v2 block1) (7.i32 block2);
+        return v3;
+
+    block4:
+        return 9.i32;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(
+                &[Pass::CfgCleanup, Pass::Gvn, Pass::Egraph, Pass::CfgCleanup],
+                func,
+            );
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains(" = add "),
+                "dead add should be removed after phi pruning:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn gvn_does_not_fold_self_cmp_when_value_may_be_undef() {
         let source = r#"
 target = "evm-ethereum-london"

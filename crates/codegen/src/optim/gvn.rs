@@ -381,15 +381,7 @@ impl GvnSolver {
     ) -> bool {
         let value_phi = ValuePhiFinder::new(self, inst_result).compute_value_phi(func, insn_data);
         let class = self.value_class(inst_result);
-
-        let old_value_phi = &mut self.classes[class].value_phi;
-
-        if &value_phi == old_value_phi {
-            false
-        } else {
-            *old_value_phi = value_phi;
-            true
-        }
+        self.update_class_value_phi(class, value_phi)
     }
 
     /// Mark the edge and its destinating block as reachable if they are still unreachable.
@@ -1074,6 +1066,21 @@ impl GvnSolver {
         }
 
         class
+    }
+
+    fn update_class_value_phi(&mut self, class: Class, value_phi: Option<ValuePhi>) -> bool {
+        if self.classes[class].value_phi.as_ref() == value_phi.as_ref() {
+            return false;
+        }
+
+        if let Some(old_value_phi) = self.classes[class].value_phi.take() {
+            self.value_phi_table.remove(&old_value_phi);
+        }
+        if let Some(new_value_phi) = &value_phi {
+            self.value_phi_table.insert(new_value_phi.clone(), class);
+        }
+        self.classes[class].value_phi = value_phi;
+        true
     }
 
     fn reachable_edge_state(
@@ -1909,14 +1916,15 @@ impl<'a> RedundantCodeRemover<'a> {
         }
 
         let edges = &self.solver.blocks[block].in_edges;
-        if let Some(phi) = func.dfg.cast_phi_mut(insn) {
-            phi.retain(|from| {
-                !matches!(
-                    self.solver.reachable_edge_state(edges, from, block),
-                    ReachableEdgeState::None
-                )
-            });
-        }
+        func.dfg.untrack_inst(insn);
+        let phi = func.dfg.cast_phi_mut(insn).unwrap();
+        phi.retain(|from| {
+            !matches!(
+                self.solver.reachable_edge_state(edges, from, block),
+                ReachableEdgeState::None
+            )
+        });
+        func.dfg.attach_user(insn);
     }
 }
 
@@ -1925,4 +1933,29 @@ enum ReachableEdgeState {
     None,
     One(Edge),
     Many,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GvnInsn, GvnSolver, ValuePhi};
+    use sonatina_ir::ValueId;
+
+    #[test]
+    fn update_class_value_phi_keeps_value_phi_table_synchronized() {
+        let mut solver = GvnSolver::new();
+        let class = solver.make_class(GvnInsn::Value(ValueId::from_u32(0)), None);
+
+        let phi1 = ValuePhi::Value(ValueId::from_u32(1));
+        assert!(solver.update_class_value_phi(class, Some(phi1.clone())));
+        assert_eq!(solver.value_phi_table.get(&phi1), Some(&class));
+
+        let phi2 = ValuePhi::Value(ValueId::from_u32(2));
+        assert!(solver.update_class_value_phi(class, Some(phi2.clone())));
+        assert!(!solver.value_phi_table.contains_key(&phi1));
+        assert_eq!(solver.value_phi_table.get(&phi2), Some(&class));
+
+        assert!(solver.update_class_value_phi(class, None));
+        assert!(!solver.value_phi_table.contains_key(&phi2));
+        assert!(!solver.update_class_value_phi(class, None));
+    }
 }
