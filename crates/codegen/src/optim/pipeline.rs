@@ -568,6 +568,49 @@ func private %entry() -> i256 {
     }
 
     #[test]
+    fn gvn_uses_br_table_default_when_known_scrutinee_has_no_match() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i32 {
+    block0:
+        br_table 42.i8 block3 (0.i8 block1) (1.i8 block2);
+
+    block1:
+        return 11.i32;
+
+    block2:
+        return 22.i32;
+
+    block3:
+        return 33.i32;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return 33.i32;"),
+                "expected default arm to stay reachable:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("return 11.i32;"),
+                "keyed arm with non-matching immediate scrutinee should be unreachable:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("return 22.i32;"),
+                "all non-default keyed arms should be unreachable when no key matches:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn gvn_preserves_reachable_br_table_entry_with_duplicate_dest() {
         let source = r#"
 target = "evm-ethereum-london"

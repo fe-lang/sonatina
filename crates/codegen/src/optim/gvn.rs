@@ -302,6 +302,17 @@ impl GvnSolver {
                     }
                 }
 
+                // If `cond` is a known immediate and no keyed edge is selected, the default edge
+                // is the only reachable edge.
+                if table_offset == 1
+                    && func
+                        .dfg
+                        .value_imm(self.infer_value_at_block(func, domtree, cond, block))
+                        .is_some()
+                {
+                    return self.mark_edge_reachable(out_edges[0]);
+                }
+
                 // If none of entry values is congruent to the cond, then mark all edges as
                 // reachable.
                 let mut changed = false;
