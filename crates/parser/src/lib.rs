@@ -14,6 +14,7 @@ use ir::{
 };
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smol_str::SmolStr;
+use tracing::{debug_span, info_span};
 
 pub mod ast;
 pub mod syntax;
@@ -35,95 +36,122 @@ pub struct ParsedModule {
 }
 
 pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
-    let ast = ast::parse(input)?;
+    let line_count = input.lines().count();
+    let _parse_span = info_span!(
+        "sonatina.parse_module",
+        input_bytes = input.len(),
+        line_count
+    )
+    .entered();
+    let ast = {
+        let _span = debug_span!("sonatina.parse.ast").entered();
+        ast::parse(input)?
+    };
 
     let module_ctx = module_ctx_from_triple(ast.target.unwrap());
     let mut builder = ModuleBuilder::new(module_ctx);
 
     let mut ctx = BuildCtx::default();
 
-    for st in ast.struct_types {
-        let name = &st.name.0;
-        builder.declare_struct_type(name, &[], false);
+    {
+        let _span = debug_span!("sonatina.parse.declare_structs").entered();
+        for st in ast.struct_types {
+            let name = &st.name.0;
+            builder.declare_struct_type(name, &[], false);
 
-        let fields = st
-            .fields
-            .iter()
-            .map(|t| ctx.type_(&builder, t))
-            .collect::<Vec<_>>();
-        builder.update_struct_fields(name, &fields);
-    }
-
-    for gv in ast.declared_gvs {
-        ctx.declare_gv(&builder, &gv);
-    }
-
-    for func in ast.declared_functions {
-        if !ctx.check_duplicated_func(&builder, &func.name) {
-            continue;
+            let fields = st
+                .fields
+                .iter()
+                .map(|t| ctx.type_(&builder, t))
+                .collect::<Vec<_>>();
+            builder.update_struct_fields(name, &fields);
         }
-
-        let params = func
-            .params
-            .iter()
-            .map(|t| ctx.type_(&builder, t))
-            .collect::<Vec<_>>();
-        let ret_ty = func
-            .ret_type
-            .as_ref()
-            .map(|t| ctx.type_(&builder, t))
-            .unwrap_or(ir::Type::Unit);
-
-        let sig = Signature::new(&func.name.name, func.linkage, &params, ret_ty);
-
-        // Safe to unwrap: function name checked for duplicate above
-        builder.declare_function(sig).unwrap();
     }
 
-    let func_order = ast
-        .functions
-        .iter()
-        .flat_map(|func| {
-            if !ctx.check_duplicated_func(&builder, &func.signature.name) {
-                return None;
+    {
+        let _span = debug_span!("sonatina.parse.declare_globals").entered();
+        for gv in ast.declared_gvs {
+            ctx.declare_gv(&builder, &gv);
+        }
+    }
+
+    {
+        let _span = debug_span!("sonatina.parse.declare_declared_functions").entered();
+        for func in ast.declared_functions {
+            if !ctx.check_duplicated_func(&builder, &func.name) {
+                continue;
             }
 
-            let sig = &func.signature;
-            let args = sig
+            let params = func
                 .params
                 .iter()
-                .map(|decl| ctx.type_(&builder, &decl.1))
+                .map(|t| ctx.type_(&builder, t))
                 .collect::<Vec<_>>();
-
-            let ret_ty = sig
+            let ret_ty = func
                 .ret_type
                 .as_ref()
                 .map(|t| ctx.type_(&builder, t))
                 .unwrap_or(ir::Type::Unit);
-            let sig = Signature::new(&sig.name.name, sig.linkage, &args, ret_ty);
+
+            let sig = Signature::new(&func.name.name, func.linkage, &params, ret_ty);
 
             // Safe to unwrap: function name checked for duplicate above
-            Some(builder.declare_function(sig).unwrap())
-        })
-        .collect();
+            builder.declare_function(sig).unwrap();
+        }
+    }
+
+    let func_order = {
+        let _span = debug_span!("sonatina.parse.declare_defined_functions").entered();
+        ast.functions
+            .iter()
+            .flat_map(|func| {
+                if !ctx.check_duplicated_func(&builder, &func.signature.name) {
+                    return None;
+                }
+
+                let sig = &func.signature;
+                let args = sig
+                    .params
+                    .iter()
+                    .map(|decl| ctx.type_(&builder, &decl.1))
+                    .collect::<Vec<_>>();
+
+                let ret_ty = sig
+                    .ret_type
+                    .as_ref()
+                    .map(|t| ctx.type_(&builder, t))
+                    .unwrap_or(ir::Type::Unit);
+                let sig = Signature::new(&sig.name.name, sig.linkage, &args, ret_ty);
+
+                // Safe to unwrap: function name checked for duplicate above
+                Some(builder.declare_function(sig).unwrap())
+            })
+            .collect()
+    };
 
     let mut func_comments = SecondaryMap::default();
 
-    for func in ast.functions {
-        let id = builder.lookup_func(&func.signature.name.name).unwrap();
-        ctx.build_func(builder.func_builder(id), id, &func);
+    {
+        let _span = debug_span!("sonatina.parse.build_functions").entered();
+        for func in ast.functions {
+            let id = builder.lookup_func(&func.signature.name.name).unwrap();
+            ctx.build_func(builder.func_builder(id), id, &func);
 
-        func_comments[id] = func.comments;
+            func_comments[id] = func.comments;
+        }
     }
 
-    for obj_def in ast.objects {
-        let name = obj_def.object.name.0.clone();
+    {
+        let _span = debug_span!("sonatina.parse.lower_objects").entered();
+        for obj_def in ast.objects {
+            let name = obj_def.object.name.0.clone();
 
-        if let Some(object) = ctx.lower_object(&builder, obj_def.object, obj_def.span)
-            && builder.declare_object(object).is_err()
-        {
-            ctx.errors
-                .push(Error::DuplicatedDeclaration(name, obj_def.span));
+            if let Some(object) = ctx.lower_object(&builder, obj_def.object, obj_def.span)
+                && builder.declare_object(object).is_err()
+            {
+                ctx.errors
+                    .push(Error::DuplicatedDeclaration(name, obj_def.span));
+            }
         }
     }
 
@@ -131,7 +159,10 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
         return Err(ctx.errors);
     }
 
-    let module = builder.build();
+    let module = {
+        let _span = debug_span!("sonatina.parse.build_module").entered();
+        builder.build()
+    };
     Ok(ParsedModule {
         module,
         debug: DebugInfo {
