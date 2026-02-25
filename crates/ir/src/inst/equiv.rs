@@ -124,6 +124,16 @@ impl OwnedInstKey {
         &self.values
     }
 
+    pub fn with_values(&self, values: Vec<ValueId>) -> Option<Self> {
+        if matches!(self.kind, InstClassKind::Phi) || self.values.len() != values.len() {
+            return None;
+        }
+
+        let mut key = self.clone();
+        key.values = values.into_iter().collect();
+        Some(key)
+    }
+
     pub fn result_ty(&self) -> Option<Type> {
         self.result_ty
     }

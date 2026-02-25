@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 414
 expression: opt_ir_snapshot
 input_file: test_files/evm/vault.sntn
 ---
@@ -471,11 +470,10 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h1
         v31.*@__fe_SolEncoder_4 = int_to_ptr v26 *@__fe_SolEncoder_4;
         v32.*i256 = gep v31 0.i256 1.i256;
         mstore v32 v29 i256;
-        v38.*i256 = gep v31 0.i256 1.i256;
-        v39.i256 = mload v38 i256;
+        v39.i256 = mload v32 i256;
         mstore v39 v4 i256;
         v40.i256 = add 32.i256 v39;
-        mstore v38 v40 i256;
+        mstore v32 v40 i256;
         v30.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v26;
         v8.*@__fe_tuple_5 = int_to_ptr v30 *@__fe_tuple_5;
         v9.*i256 = bitcast v8 *i256;
@@ -510,18 +508,16 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyDepos
         v34.*@__fe_ProxyDeposit_1 = int_to_ptr v4 *@__fe_ProxyDeposit_1;
         v35.*@__fe_Address_0 = bitcast v34 *@__fe_Address_0;
         v36.i256 = mload v35 i256;
-        v46.*i256 = gep v32 0.i256 1.i256;
-        v47.i256 = mload v46 i256;
+        v47.i256 = mload v33 i256;
         mstore v47 v36 i256;
         v48.i256 = add 32.i256 v47;
-        mstore v46 v48 i256;
+        mstore v33 v48 i256;
         v38.*i256 = gep v34 0.i256 1.i256;
         v39.i256 = mload v38 i256;
-        v50.*i256 = gep v32 0.i256 1.i256;
-        v51.i256 = mload v50 i256;
+        v51.i256 = mload v33 i256;
         mstore v51 v39 i256;
         v52.i256 = add 32.i256 v51;
-        mstore v50 v52 i256;
+        mstore v33 v52 i256;
         v31.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v27;
         v8.*@__fe_tuple_5 = int_to_ptr v31 *@__fe_tuple_5;
         v9.*i256 = bitcast v8 *i256;
@@ -615,11 +611,10 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h
         v31.*@__fe_SolEncoder_4 = int_to_ptr v26 *@__fe_SolEncoder_4;
         v32.*i256 = gep v31 0.i256 1.i256;
         mstore v32 v29 i256;
-        v38.*i256 = gep v31 0.i256 1.i256;
-        v39.i256 = mload v38 i256;
+        v39.i256 = mload v32 i256;
         mstore v39 v4 i256;
         v40.i256 = add 32.i256 v39;
-        mstore v38 v40 i256;
+        mstore v32 v40 i256;
         v30.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v26;
         v8.*@__fe_tuple_5 = int_to_ptr v30 *@__fe_tuple_5;
         v9.*i256 = bitcast v8 *i256;
@@ -651,11 +646,10 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h
         v32.*@__fe_SolEncoder_4 = int_to_ptr v27 *@__fe_SolEncoder_4;
         v33.*i256 = gep v32 0.i256 1.i256;
         mstore v33 v30 i256;
-        v39.*i256 = gep v32 0.i256 1.i256;
-        v40.i256 = mload v39 i256;
+        v40.i256 = mload v33 i256;
         mstore v40 v4 i256;
         v41.i256 = add 32.i256 v40;
-        mstore v39 v41 i256;
+        mstore v33 v41 i256;
         v31.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v27;
         v8.*@__fe_tuple_5 = int_to_ptr v31 *@__fe_tuple_5;
         v9.*i256 = bitcast v8 *i256;
@@ -718,11 +712,10 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyGetMy
         v32.*@__fe_SolEncoder_4 = int_to_ptr v27 *@__fe_SolEncoder_4;
         v33.*i256 = gep v32 0.i256 1.i256;
         mstore v33 v30 i256;
-        v39.*i256 = gep v32 0.i256 1.i256;
-        v40.i256 = mload v39 i256;
+        v40.i256 = mload v33 i256;
         mstore v40 v4 i256;
         v41.i256 = add 32.i256 v40;
-        mstore v39 v41 i256;
+        mstore v33 v41 i256;
         v31.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v27;
         v8.*@__fe_tuple_5 = int_to_ptr v31 *@__fe_tuple_5;
         v9.*i256 = bitcast v8 *i256;
@@ -757,18 +750,16 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyWithd
         v34.*@__fe_ProxyWithdraw_2 = int_to_ptr v4 *@__fe_ProxyWithdraw_2;
         v35.*@__fe_Address_0 = bitcast v34 *@__fe_Address_0;
         v36.i256 = mload v35 i256;
-        v46.*i256 = gep v32 0.i256 1.i256;
-        v47.i256 = mload v46 i256;
+        v47.i256 = mload v33 i256;
         mstore v47 v36 i256;
         v48.i256 = add 32.i256 v47;
-        mstore v46 v48 i256;
+        mstore v33 v48 i256;
         v38.*i256 = gep v34 0.i256 1.i256;
         v39.i256 = mload v38 i256;
-        v50.*i256 = gep v32 0.i256 1.i256;
-        v51.i256 = mload v50 i256;
+        v51.i256 = mload v33 i256;
         mstore v51 v39 i256;
         v52.i256 = add 32.i256 v51;
-        mstore v50 v52 i256;
+        mstore v33 v52 i256;
         v31.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v27;
         v8.*@__fe_tuple_5 = int_to_ptr v31 *@__fe_tuple_5;
         v9.*i256 = bitcast v8 *i256;

@@ -1,14 +1,13 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/vault.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 5192 bytes
-  total: 5192 bytes
+  section runtime: 5164 bytes
+  total: 5164 bytes
 
 object: Vault
   section init: 1065 bytes
@@ -16,9 +15,9 @@ object: Vault
   total: 1943 bytes
 
 object: VaultUser
-  section init: 1352 bytes
-  section runtime: 1340 bytes
-  total: 2692 bytes
+  section init: 1348 bytes
+  section runtime: 1336 bytes
+  total: 2684 bytes
 
 functions:
   mem: dyn_base=0x100 static_base=0xc0
@@ -44,23 +43,23 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
   create2_stor__Evm_hef0af3106e109414_VaultUser_hcb553b593515d281__151df09479dab12a: ir_blocks=3 ir_insts=23 vcode_ops=85 fixups=6 imm_bytes=16
     mem: scheme=StaticArena need_words=0 locals_words=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b: ir_blocks=3 ir_insts=30 vcode_ops=113 fixups=10 imm_bytes=15
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b: ir_blocks=3 ir_insts=29 vcode_ops=112 fixups=10 imm_bytes=14
     mem: scheme=StaticArena need_words=2 locals_words=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyDeposit_he111d05e2ced69cd__69de45b2cdda8e37: ir_blocks=3 ir_insts=40 vcode_ops=128 fixups=10 imm_bytes=18
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyDeposit_he111d05e2ced69cd__69de45b2cdda8e37: ir_blocks=3 ir_insts=38 vcode_ops=122 fixups=10 imm_bytes=16
     mem: scheme=StaticArena need_words=2 locals_words=0
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184: ir_blocks=3 ir_insts=25 vcode_ops=95 fixups=10 imm_bytes=13
     mem: scheme=StaticArena need_words=2 locals_words=0
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672: ir_blocks=3 ir_insts=25 vcode_ops=95 fixups=10 imm_bytes=13
     mem: scheme=StaticArena need_words=2 locals_words=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h1b194739dad02c6e__f712b0a646b2bb64: ir_blocks=3 ir_insts=30 vcode_ops=111 fixups=10 imm_bytes=15
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h1b194739dad02c6e__f712b0a646b2bb64: ir_blocks=3 ir_insts=29 vcode_ops=110 fixups=10 imm_bytes=14
     mem: scheme=StaticArena need_words=2 locals_words=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d: ir_blocks=3 ir_insts=30 vcode_ops=113 fixups=10 imm_bytes=15
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d: ir_blocks=3 ir_insts=29 vcode_ops=112 fixups=10 imm_bytes=14
     mem: scheme=StaticArena need_words=2 locals_words=0
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872: ir_blocks=3 ir_insts=25 vcode_ops=95 fixups=10 imm_bytes=13
     mem: scheme=StaticArena need_words=2 locals_words=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyGetMyShares_h22fbe0bf58ab85ce__459f6c55c5a1059b: ir_blocks=3 ir_insts=30 vcode_ops=113 fixups=10 imm_bytes=15
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyGetMyShares_h22fbe0bf58ab85ce__459f6c55c5a1059b: ir_blocks=3 ir_insts=29 vcode_ops=112 fixups=10 imm_bytes=14
     mem: scheme=StaticArena need_words=2 locals_words=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72: ir_blocks=3 ir_insts=40 vcode_ops=128 fixups=10 imm_bytes=18
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72: ir_blocks=3 ir_insts=38 vcode_ops=122 fixups=10 imm_bytes=16
     mem: scheme=StaticArena need_words=2 locals_words=0
   storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3: ir_blocks=1 ir_insts=8 vcode_ops=27 fixups=1 imm_bytes=5
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -98,7 +97,7 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=590534 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=569534
+  case ok: calldata_len=0 success reason=Return gas_used=589656 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=568656
 
 
 --------------- DEBUG ---------------
@@ -1373,11 +1372,10 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd
     DUP2  // v32.*i256 = gep v31 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
-    MSTORE  // mstore v32 v29 i256;
-    DUP1  // v38.*i256 = gep v31 0.i256 1.i256;
-    PUSH1 0x20 (32)
-    ADD
-    DUP1  // v39.i256 = mload v38 i256;
+    SWAP1  // mstore v32 v29 i256;
+    DUP2
+    MSTORE
+    DUP1  // v39.i256 = mload v32 i256;
     MLOAD
     SWAP7  // mstore v39 v4 i256;
     DUP8
@@ -1385,7 +1383,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd
     SWAP6  // v40.i256 = add 32.i256 v39;
     PUSH1 0x20 (32)
     ADD
-    SWAP1  // mstore v38 v40 i256;
+    SWAP1  // mstore v32 v40 i256;
     SWAP6
     MSTORE
     SWAP1  // v30.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v26;
@@ -1490,38 +1488,32 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyDeposit_he111d05e2c
     DUP2  // v33.*i256 = gep v32 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
-    MSTORE  // mstore v33 v30 i256;
-    DUP6  // v36.i256 = mload v35 i256;
-    MLOAD
-    DUP2  // v46.*i256 = gep v32 0.i256 1.i256;
-    PUSH1 0x20 (32)
-    ADD
-    DUP1  // v47.i256 = mload v46 i256;
-    MLOAD
-    SWAP2  // mstore v47 v36 i256;
-    DUP3
+    SWAP1  // mstore v33 v30 i256;
+    DUP2
     MSTORE
-    SWAP1  // v48.i256 = add 32.i256 v47;
-    PUSH1 0x20 (32)
-    ADD
-    SWAP1  // mstore v46 v48 i256;
+    DUP7  // v36.i256 = mload v35 i256;
+    MLOAD
+    DUP2  // v47.i256 = mload v33 i256;
+    MLOAD
+    SWAP1  // mstore v47 v36 i256;
+    DUP2
     MSTORE
-    DUP6  // v38.*i256 = gep v34 0.i256 1.i256;
+    PUSH1 0x20 (32)  // v48.i256 = add 32.i256 v47;
+    ADD
+    DUP2  // mstore v33 v48 i256;
+    MSTORE
+    DUP7  // v38.*i256 = gep v34 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
     MLOAD  // v39.i256 = mload v38 i256;
-    DUP2  // v50.*i256 = gep v32 0.i256 1.i256;
-    PUSH1 0x20 (32)
-    ADD
-    DUP1  // v51.i256 = mload v50 i256;
+    DUP2  // v51.i256 = mload v33 i256;
     MLOAD
-    SWAP2  // mstore v51 v39 i256;
-    DUP3
+    SWAP1  // mstore v51 v39 i256;
+    DUP2
     MSTORE
-    SWAP1  // v52.i256 = add 32.i256 v51;
-    PUSH1 0x20 (32)
+    PUSH1 0x20 (32)  // v52.i256 = add 32.i256 v51;
     ADD
-    SWAP1  // mstore v50 v52 i256;
+    SWAP1  // mstore v33 v52 i256;
     MSTORE
     PUSH1 `pc + (4)`  // v31.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v27;
     SWAP1
@@ -1820,11 +1812,10 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h1b194739dad02c
     DUP2  // v32.*i256 = gep v31 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
-    MSTORE  // mstore v32 v29 i256;
-    DUP1  // v38.*i256 = gep v31 0.i256 1.i256;
-    PUSH1 0x20 (32)
-    ADD
-    DUP1  // v39.i256 = mload v38 i256;
+    SWAP1  // mstore v32 v29 i256;
+    DUP2
+    MSTORE
+    DUP1  // v39.i256 = mload v32 i256;
     MLOAD
     SWAP7  // mstore v39 v4 i256;
     DUP8
@@ -1832,7 +1823,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h1b194739dad02c
     SWAP6  // v40.i256 = add 32.i256 v39;
     PUSH1 0x20 (32)
     ADD
-    SWAP1  // mstore v38 v40 i256;
+    SWAP1  // mstore v32 v40 i256;
     SWAP6
     MSTORE
     SWAP1  // v30.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v26;
@@ -1935,11 +1926,10 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1
     DUP2  // v33.*i256 = gep v32 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
-    MSTORE  // mstore v33 v30 i256;
-    DUP1  // v39.*i256 = gep v32 0.i256 1.i256;
-    PUSH1 0x20 (32)
-    ADD
-    DUP1  // v40.i256 = mload v39 i256;
+    SWAP1  // mstore v33 v30 i256;
+    DUP2
+    MSTORE
+    DUP1  // v40.i256 = mload v33 i256;
     MLOAD
     SWAP7  // mstore v40 v4 i256;
     DUP8
@@ -1947,7 +1937,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1
     SWAP6  // v41.i256 = add 32.i256 v40;
     PUSH1 0x20 (32)
     ADD
-    SWAP1  // mstore v39 v41 i256;
+    SWAP1  // mstore v33 v41 i256;
     SWAP6
     MSTORE
     SWAP1  // v31.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v27;
@@ -2151,11 +2141,10 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyGetMyShares_h22fbe0
     DUP2  // v33.*i256 = gep v32 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
-    MSTORE  // mstore v33 v30 i256;
-    DUP1  // v39.*i256 = gep v32 0.i256 1.i256;
-    PUSH1 0x20 (32)
-    ADD
-    DUP1  // v40.i256 = mload v39 i256;
+    SWAP1  // mstore v33 v30 i256;
+    DUP2
+    MSTORE
+    DUP1  // v40.i256 = mload v33 i256;
     MLOAD
     SWAP7  // mstore v40 v4 i256;
     DUP8
@@ -2163,7 +2152,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyGetMyShares_h22fbe0
     SWAP6  // v41.i256 = add 32.i256 v40;
     PUSH1 0x20 (32)
     ADD
-    SWAP1  // mstore v39 v41 i256;
+    SWAP1  // mstore v33 v41 i256;
     SWAP6
     MSTORE
     SWAP1  // v31.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v27;
@@ -2268,38 +2257,32 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyWithdraw_h1ed1c8511
     DUP2  // v33.*i256 = gep v32 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
-    MSTORE  // mstore v33 v30 i256;
-    DUP6  // v36.i256 = mload v35 i256;
-    MLOAD
-    DUP2  // v46.*i256 = gep v32 0.i256 1.i256;
-    PUSH1 0x20 (32)
-    ADD
-    DUP1  // v47.i256 = mload v46 i256;
-    MLOAD
-    SWAP2  // mstore v47 v36 i256;
-    DUP3
+    SWAP1  // mstore v33 v30 i256;
+    DUP2
     MSTORE
-    SWAP1  // v48.i256 = add 32.i256 v47;
-    PUSH1 0x20 (32)
-    ADD
-    SWAP1  // mstore v46 v48 i256;
+    DUP7  // v36.i256 = mload v35 i256;
+    MLOAD
+    DUP2  // v47.i256 = mload v33 i256;
+    MLOAD
+    SWAP1  // mstore v47 v36 i256;
+    DUP2
     MSTORE
-    DUP6  // v38.*i256 = gep v34 0.i256 1.i256;
+    PUSH1 0x20 (32)  // v48.i256 = add 32.i256 v47;
+    ADD
+    DUP2  // mstore v33 v48 i256;
+    MSTORE
+    DUP7  // v38.*i256 = gep v34 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
     MLOAD  // v39.i256 = mload v38 i256;
-    DUP2  // v50.*i256 = gep v32 0.i256 1.i256;
-    PUSH1 0x20 (32)
-    ADD
-    DUP1  // v51.i256 = mload v50 i256;
+    DUP2  // v51.i256 = mload v33 i256;
     MLOAD
-    SWAP2  // mstore v51 v39 i256;
-    DUP3
+    SWAP1  // mstore v51 v39 i256;
+    DUP2
     MSTORE
-    SWAP1  // v52.i256 = add 32.i256 v51;
-    PUSH1 0x20 (32)
+    PUSH1 0x20 (32)  // v52.i256 = add 32.i256 v51;
     ADD
-    SWAP1  // mstore v50 v52 i256;
+    SWAP1  // mstore v33 v52 i256;
     MSTORE
     PUSH1 `pc + (4)`  // v31.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v27;
     SWAP1

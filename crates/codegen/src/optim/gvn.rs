@@ -628,7 +628,16 @@ impl GvnSolver {
             let arg = self.infer_value_at_block(func, domtree, arg, block);
             insn_expr.with_cast_arg(arg).unwrap()
         } else {
-            insn_expr
+            let canonical_values: Vec<_> = insn_expr
+                .values()
+                .iter()
+                .map(|&value| self.infer_value_at_block(func, domtree, value, block))
+                .collect();
+            if canonical_values.as_slice() == insn_expr.values() {
+                insn_expr
+            } else {
+                insn_expr.with_values(canonical_values).unwrap_or(insn_expr)
+            }
         };
 
         if let Some(imm) = self.perform_constant_folding(func, &insn_expr) {
