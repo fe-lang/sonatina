@@ -1677,18 +1677,13 @@ impl<'a> RedundantCodeRemover<'a> {
                     let block = inserter.block(func).unwrap();
                     if let Some(inst_result) = func.dfg.inst_result(insn) {
                         let class = self.solver.value_class(inst_result);
-                        let is_opaque = matches!(
-                            &self.solver.class_data(class).gvn_insn,
-                            GvnInsn::Expr(insn) if insn.is_opaque()
-                        );
-
-                        if !is_opaque {
-                            // Use representative value if the class is in avail set.
-                            if let Some(value) = avails.get(&class) {
-                                self.change_to_alias(func, inst_result, *value);
-                                inserter.remove_inst(func);
-                                continue;
-                            }
+                        // Use representative value if the class is in avail set.
+                        if !func.dfg.side_effect(insn).has_effect()
+                            && let Some(value) = avails.get(&class)
+                        {
+                            self.change_to_alias(func, inst_result, *value);
+                            inserter.remove_inst(func);
+                            continue;
                         }
 
                         // Try rewrite phi insn to reflect edge's reachability.

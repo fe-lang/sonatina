@@ -430,6 +430,35 @@ object @O {
     }
 
     #[test]
+    fn gvn_cses_pure_opaque_gep_with_identical_operands() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.*i256) -> *i256 {
+    block0:
+        v1.*i256 = gep v0 0.i256 1.i256;
+        v2.*i256 = gep v0 0.i256 1.i256;
+        return v2;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            let gep_count = dumped.matches(" = gep ").count();
+            assert_eq!(
+                gep_count, 1,
+                "expected duplicate pure opaque geps to CSE:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn gvn_keeps_duplicate_branch_dest_reachable() {
         let source = r#"
 target = "evm-ethereum-london"
