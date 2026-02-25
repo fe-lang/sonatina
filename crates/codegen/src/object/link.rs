@@ -8,6 +8,7 @@ use rustc_hash::FxHashMap;
 use sonatina_ir::{
     BlockId, GlobalVariableRef, Module, inst::data::SymbolRef, module::FuncRef, object::EmbedSymbol,
 };
+use tracing::{debug_span, info_span, trace_span};
 
 use super::{
     CompileOptions,
@@ -45,15 +46,33 @@ pub fn link_section<B: LowerBackend>(
 ) -> Result<SectionArtifact, LinkSectionError<B::Error>> {
     const MAX_ITERS: usize = 64;
 
-    backend.prepare_section(module, funcs, section_ctx);
+    let _span = info_span!(
+        "sonatina.codegen.link_section",
+        funcs = funcs.len(),
+        data_items = data.len(),
+        embed_items = embeds.len()
+    )
+    .entered();
+
+    {
+        let _span = debug_span!("sonatina.codegen.link_section.prepare_section").entered();
+        backend.prepare_section(module, funcs, section_ctx);
+    }
 
     let mut sym_fixups: Vec<(FuncRef, VCodeInst, SymFixup)> = Vec::new();
     let mut layout_funcs = Vec::with_capacity(funcs.len());
 
     for &func in funcs {
-        let lowered = backend
-            .lower_function(module, func, section_ctx)
-            .map_err(|error| LinkSectionError::Backend { func, error })?;
+        let lowered = {
+            let _span = trace_span!(
+                "sonatina.codegen.link_section.lower_function",
+                func_ref = func.as_u32()
+            )
+            .entered();
+            backend
+                .lower_function(module, func, section_ctx)
+                .map_err(|error| LinkSectionError::Backend { func, error })?
+        };
 
         for (insn, fixup) in lowered.vcode.fixups.values() {
             let VCodeFixup::Sym(fixup) = fixup else {
@@ -67,14 +86,26 @@ pub fn link_section<B: LowerBackend>(
 
     let mut layout = ObjectLayout::new(layout_funcs, 0);
 
-    for _ in 0..MAX_ITERS {
-        while layout.resize(backend, 0) {}
+    for iter in 0..MAX_ITERS {
+        let _span = debug_span!("sonatina.codegen.link_section.relaxation_iter", iter).entered();
+        {
+            let _span = trace_span!("sonatina.codegen.link_section.resize_layout").entered();
+            while layout.resize(backend, 0) {}
+        }
 
-        let (symtab, section_size) =
-            build_section_symtab(&layout, funcs, data, embeds).map_err(LinkSectionError::Link)?;
+        let (symtab, section_size) = {
+            let _span = trace_span!("sonatina.codegen.link_section.build_symtab").entered();
+            build_section_symtab(&layout, funcs, data, embeds).map_err(LinkSectionError::Link)?
+        };
 
         let mut layout_changed = false;
         for (func, insn, fixup) in &sym_fixups {
+            let _span = trace_span!(
+                "sonatina.codegen.link_section.apply_fixup",
+                func_ref = func.as_u32(),
+                inst = insn.as_u32()
+            )
+            .entered();
             let value = fixup_value(&symtab, fixup).map_err(LinkSectionError::Link)?;
 
             let vcode = layout
@@ -89,16 +120,27 @@ pub fn link_section<B: LowerBackend>(
         }
 
         if !layout_changed {
-            while layout.resize(backend, 0) {}
+            {
+                let _span = trace_span!("sonatina.codegen.link_section.final_resize").entered();
+                while layout.resize(backend, 0) {}
+            }
 
-            let mut bytes = Vec::with_capacity(section_size as usize);
-            layout.emit(backend, &mut bytes);
-            for (_, blob) in data {
-                bytes.extend_from_slice(blob);
-            }
-            for (_, blob) in embeds {
-                bytes.extend_from_slice(blob);
-            }
+            let bytes = {
+                let _span = debug_span!(
+                    "sonatina.codegen.link_section.emit_section_bytes",
+                    section_size
+                )
+                .entered();
+                let mut bytes = Vec::with_capacity(section_size as usize);
+                layout.emit(backend, &mut bytes);
+                for (_, blob) in data {
+                    bytes.extend_from_slice(blob);
+                }
+                for (_, blob) in embeds {
+                    bytes.extend_from_slice(blob);
+                }
+                bytes
+            };
 
             let section_bytes: u32 = bytes
                 .len()
@@ -106,7 +148,9 @@ pub fn link_section<B: LowerBackend>(
                 .map_err(|_| LinkSectionError::Link("section size overflow".to_string()))?;
 
             let observability = if opts.emit_observability {
-                Some(
+                Some({
+                    let _span =
+                        debug_span!("sonatina.codegen.link_section.build_observability").entered();
                     build_section_observability(BuildSectionObservabilityInput {
                         module,
                         layout: &layout,
@@ -117,8 +161,8 @@ pub fn link_section<B: LowerBackend>(
                         section_ctx,
                         section_bytes,
                     })
-                    .map_err(LinkSectionError::Link)?,
-                )
+                    .map_err(LinkSectionError::Link)?
+                })
             } else {
                 None
             };
