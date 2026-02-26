@@ -14,7 +14,6 @@ pub(super) enum FullInlineFail {
     CalleeMismatch,
     NoBody,
     SignatureMismatch,
-    CallsiteUnreachable,
     MalformedCallee,
 }
 
@@ -61,10 +60,6 @@ pub(super) fn try_inline_callsite_full(
 
     if !module.ctx.func_linkage(callee_ref).has_definition() {
         return Err(FullInlineFail::NoBody);
-    }
-
-    if !is_callsite_reachable(caller, call_inst) {
-        return Err(FullInlineFail::CallsiteUnreachable);
     }
 
     let call_args = call.args().clone();
@@ -321,32 +316,4 @@ fn map_or_materialize(
 
     value_map.insert(old, mapped);
     Some(mapped)
-}
-
-fn is_callsite_reachable(func: &Function, call_inst: InstId) -> bool {
-    let Some(entry) = func.layout.entry_block() else {
-        return false;
-    };
-
-    let call_block = func.layout.inst_block(call_inst);
-    let mut cfg = ControlFlowGraph::default();
-    cfg.compute(func);
-
-    let mut visited: FxHashSet<BlockId> = FxHashSet::default();
-    let mut stack = vec![entry];
-    while let Some(block) = stack.pop() {
-        if !visited.insert(block) {
-            continue;
-        }
-
-        if block == call_block {
-            return true;
-        }
-
-        for &succ in cfg.succs_of(block) {
-            stack.push(succ);
-        }
-    }
-
-    false
 }

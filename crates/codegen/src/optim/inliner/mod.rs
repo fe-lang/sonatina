@@ -1,5 +1,8 @@
-use rustc_hash::FxHashMap;
-use sonatina_ir::{Function, InstDowncast, InstId, Module, inst::control_flow, module::FuncRef};
+use rustc_hash::{FxHashMap, FxHashSet};
+use sonatina_ir::{
+    BlockId, ControlFlowGraph, Function, InstDowncast, InstId, Module, inst::control_flow,
+    module::FuncRef,
+};
 
 use crate::module_analysis;
 
@@ -126,6 +129,7 @@ impl Inliner {
 
             let mut changed = false;
             for caller_ref in funcs {
+                let mut reachable_blocks: Option<FxHashSet<BlockId>> = None;
                 let sites = sites_by_caller
                     .get(&caller_ref)
                     .cloned()
@@ -161,6 +165,8 @@ impl Inliner {
                     };
                     if did_trivial {
                         changed = true;
+                        // Trivial inlining may change the caller CFG; drop cached reachability.
+                        reachable_blocks = None;
                         continue;
                     }
 
@@ -203,6 +209,21 @@ impl Inliner {
                         stats.skipped_no_body += 1;
                         continue;
                     };
+
+                    let Some(call_block) = caller_func.layout.try_inst_block(site.call_inst) else {
+                        module.func_store.restore(caller_ref, caller_func);
+                        continue;
+                    };
+
+                    if !reachable_blocks
+                        .get_or_insert_with(|| compute_reachable_blocks(&caller_func))
+                        .contains(&call_block)
+                    {
+                        stats.skipped_callsite_unreachable += 1;
+                        module.func_store.restore(caller_ref, caller_func);
+                        continue;
+                    }
+
                     let full_result = module.func_store.view(site.callee, |callee| {
                         full::try_inline_callsite_full(
                             module,
@@ -237,12 +258,13 @@ impl Inliner {
                                 .insert(caller_ref, caller_depth.max(callee_depth + 1));
 
                             let _ = plan.forced;
+
+                            // Full inlining changes the CFG, so any cached reachable-set
+                            // for this caller is now stale (new blocks inserted/split).
+                            reachable_blocks = None;
                         }
                         Err(full::FullInlineFail::SignatureMismatch) => {
                             stats.skipped_sig_mismatch += 1;
-                        }
-                        Err(full::FullInlineFail::CallsiteUnreachable) => {
-                            stats.skipped_callsite_unreachable += 1;
                         }
                         Err(full::FullInlineFail::NoBody) => {
                             stats.skipped_no_body += 1;
@@ -250,7 +272,11 @@ impl Inliner {
                         Err(full::FullInlineFail::CallGone)
                         | Err(full::FullInlineFail::NotCall)
                         | Err(full::FullInlineFail::CalleeMismatch)
-                        | Err(full::FullInlineFail::MalformedCallee) => {}
+                        | Err(full::FullInlineFail::MalformedCallee) => {
+                            // Conservatively drop reachability cache; malformed callee
+                            // indicates we may have bailed out mid-transform.
+                            reachable_blocks = None;
+                        }
                     }
                 }
             }
@@ -318,4 +344,10 @@ fn collect_iteration_call_data(
     }
 
     (sites_by_caller, counts)
+}
+
+fn compute_reachable_blocks(func: &Function) -> FxHashSet<BlockId> {
+    let mut cfg = ControlFlowGraph::default();
+    cfg.compute(func);
+    cfg.post_order().collect()
 }
