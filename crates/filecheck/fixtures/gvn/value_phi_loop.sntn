@@ -11,7 +11,6 @@ target = "evm-ethereum-london"
 # nextln:        jump block2;
 # nextln: 
 # nextln:    block2:
-# nextln:        v22.i32 = sub $var1 v101;
 # nextln:        br v102 block3 block4;
 # nextln: 
 # nextln:    block3:
@@ -20,12 +19,12 @@ target = "evm-ethereum-london"
 # nextln:        br v103 block5 block1;
 # nextln: 
 # nextln:    block4:
-# nextln:        v40.i32 = add v22 v105;
+# nextln:        v40.i32 = add v10 v105;
 # nextln:        v42.i32 = sub v40 v101;
 # nextln:        jump block5;
 # nextln: 
 # nextln:    block5:
-# nextln:        $(var2=$VALUE).i32 = phi (v22 block3) (v42 block4);
+# nextln:        $(var2=$VALUE).i32 = phi (v10 block3) (v42 block4);
 # nextln:        v50.i32 = phi ($var1 block3) (v40 block4);
 # nextln:        return $var2;
 func public %value_phi_loop(v100.i32, v101.i32, v102.i1, v103.i1, v104.i32, v105.i32) -> i32 {

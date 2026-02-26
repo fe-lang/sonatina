@@ -859,6 +859,12 @@ impl GvnSolver {
             if !simplified.is_no_change() {
                 return Some(self.simplify_expr_result_to_gvn(func, simplified));
             }
+
+            if matches!(kind, BinaryInstKind::Sub)
+                && let Some(value) = self.simplify_sub_add_cancellation(func, lhs, rhs)
+            {
+                return Some(GvnInsn::Value(value));
+            }
         }
 
         if let InstClassKind::Cast(kind) = insn_expr.kind() {
@@ -878,6 +884,57 @@ impl GvnSolver {
         }
 
         None
+    }
+
+    fn simplify_sub_add_cancellation(
+        &self,
+        func: &Function,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> Option<ValueId> {
+        self.simplify_sub_add_cancellation_impl(func, lhs, rhs)
+            .or_else(|| {
+                let leader = self.leader(lhs);
+                (leader != lhs)
+                    .then(|| self.simplify_sub_add_cancellation_impl(func, leader, rhs))
+                    .flatten()
+            })
+    }
+
+    fn simplify_sub_add_cancellation_impl(
+        &self,
+        func: &Function,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> Option<ValueId> {
+        let (add_lhs, add_rhs) = self.add_args_of_value(func, lhs)?;
+        if self.is_congruent_value(add_rhs, rhs) {
+            return Some(add_lhs);
+        }
+        if self.is_congruent_value(add_lhs, rhs) {
+            return Some(add_rhs);
+        }
+
+        None
+    }
+
+    fn add_args_of_value(&self, func: &Function, value: ValueId) -> Option<(ValueId, ValueId)> {
+        let class = self.value_class(value);
+        if class != INITIAL_CLASS
+            && let GvnInsn::Expr(insn_expr) = &self.classes[class].gvn_insn
+            && matches!(insn_expr.kind(), InstClassKind::Binary(BinaryInstKind::Add))
+            && let Some(args) = insn_expr.binary_args()
+        {
+            return Some(args);
+        }
+
+        let Value::Inst { inst, .. } = func.dfg.value(value) else {
+            return None;
+        };
+        let insn_expr = inst_to_gvn_key(func, *inst);
+        (matches!(insn_expr.kind(), InstClassKind::Binary(BinaryInstKind::Add)))
+            .then_some(())
+            .and_then(|_| insn_expr.binary_args())
     }
 
     fn same_non_undef(&self, func: &Function, lhs: ValueId, rhs: ValueId) -> bool {
