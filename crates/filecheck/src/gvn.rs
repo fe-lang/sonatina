@@ -20,6 +20,6 @@ impl FuncTransform for GvnTransform {
     }
 
     fn test_root(&self) -> PathBuf {
-        Path::new(FIXTURE_ROOT).join("gvn_port")
+        Path::new(FIXTURE_ROOT).join("gvn")
     }
 }

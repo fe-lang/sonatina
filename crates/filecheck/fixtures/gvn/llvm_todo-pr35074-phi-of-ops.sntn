@@ -8,15 +8,15 @@ target = "evm-ethereum-london"
 # nextln:      jump block1;
 # nextln: 
 # nextln:  block1:
-# nextln:      $(var=$VALUE).i32 = phi (0.i32 block0) (v2 block5);
 # nextln:      v2.i32 = phi (1.i32 block0) (v5 block5);
 # nextln:      br v1 block5 block2;
 # nextln: 
 # nextln:  block2:
+# nextln:      v3.i32 = sub v2 1.i32;
 # nextln:      jump block3;
 # nextln: 
 # nextln:  block3:
-# nextln:      v4.i1 = gt $var v2;
+# nextln:      v4.i1 = gt v3 v2;
 # nextln:      br v4 block4 block6;
 # nextln: 
 # nextln:  block4:
@@ -28,7 +28,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln:  block6:
 # nextln:      v6.i32 = add v2 1.i32;
-# nextln:      mstore v0 v6;
+# nextln:      mstore v0 v6 i32;
 # nextln:      jump block4;
 func public %llvm_crash1_pr35074(v0.*i32, v1.i1) -> unit {
     block0:
@@ -55,6 +55,6 @@ func public %llvm_crash1_pr35074(v0.*i32, v1.i1) -> unit {
 
     block6:
         v6.i32 = add v2 1.i32;
-        mstore v0 v6;
+        mstore v0 v6 i32;
         jump block4;
 }

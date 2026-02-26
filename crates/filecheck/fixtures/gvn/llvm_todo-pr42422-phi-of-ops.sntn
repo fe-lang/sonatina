@@ -12,7 +12,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln: block2:
 # nextln:     v2.i32 = phi (v10 block17) (0.i32 block1);
-# nextln:     v3.i1 = sle v2 1.i32;
+# nextln:     v3.i1 = le v2 1.i32;
 # nextln:     br v3 block3 block18;
 # nextln: 
 # nextln: block3:
@@ -35,7 +35,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln: block9:
 # nextln:     v4.i64 = phi (v6 block10) (0.i64 block8);
-# nextln:     v5.i1 = sle v4 1.i64;
+# nextln:     v5.i1 = le v4 1.i64;
 # nextln:     br v5 block10 block11;
 # nextln: 
 # nextln: block10:
@@ -83,7 +83,7 @@ func public %llvm_d(v0.i1, v1.i1) -> unit {
 
     block2:
         v2.i32 = phi (v10 block17) (0.i32 block1);
-        v3.i1 = sle v2 1.i32;
+        v3.i1 = le v2 1.i32;
         br v3 block3 block18;
 
     block3:
@@ -106,7 +106,7 @@ func public %llvm_d(v0.i1, v1.i1) -> unit {
 
     block9:
         v4.i64 = phi (v6 block10) (0.i64 block8);
-        v5.i1 = sle v4 1.i64;
+        v5.i1 = le v4 1.i64;
         br v5 block10 block11;
 
     block10:
