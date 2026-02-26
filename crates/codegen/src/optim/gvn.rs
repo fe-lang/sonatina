@@ -7,7 +7,7 @@
 //! Rekha R. Pai.: Detection of Redundant Expressions: A Complete and Polynomial-Time Algorithm in SSA:
 //! APLAS 2015 pp49-65: <https://link.springer.com/chapter/10.1007/978-3-319-26529-2_4>
 
-use std::collections::BTreeSet;
+use std::{cell::RefCell, collections::BTreeSet};
 
 use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -67,6 +67,8 @@ pub struct GvnSolver {
 
     /// Hold always available values, i.e. immediates, globals, or function arguments.
     always_avail: Vec<ValueId>,
+
+    may_be_undef_cache: RefCell<FxHashMap<ValueId, bool>>,
 }
 
 impl GvnSolver {
@@ -79,6 +81,7 @@ impl GvnSolver {
             blocks: SecondaryMap::default(),
             value_phi_table: FxHashMap::default(),
             always_avail: Vec::default(),
+            may_be_undef_cache: RefCell::default(),
         }
     }
     /// The main entry point of the struct.
@@ -192,31 +195,83 @@ impl GvnSolver {
         self.blocks[entry].reachable = true;
 
         // Reassign congruence classes until no more change happens.
-        // TODO: We don't need to iterate all insns, it's enough to iterate all `touched` insns as
-        // described in the paper.
-        let mut changed = true;
-        while changed {
-            changed = false;
+        let mut touched = SecondaryMap::<BlockId, bool>::default();
+        touched[entry] = true;
+        loop {
+            let mut changed = false;
+            let mut next_touched = SecondaryMap::<BlockId, bool>::default();
+            let mut next_touched_any = false;
+
             for &block in domtree.rpo() {
-                // If block is unreachable, skip all insns in the block.
-                if !self.blocks[block].reachable {
+                // If block is unreachable or untouched, skip all insns in the block.
+                if !self.blocks[block].reachable || !touched[block] {
                     continue;
                 }
 
+                let mut block_changed = false;
                 let mut next_insn = func.layout.first_inst_of(block);
                 while let Some(insn) = next_insn {
                     // Reassign congruence class to the result value of the insn.
                     if let Some(inst_result) = func.dfg.inst_result(insn) {
-                        changed |= self.reassign_congruence(func, domtree, insn, inst_result);
+                        let result = self.reassign_congruence(func, domtree, insn, inst_result);
+                        if result.changed {
+                            changed = true;
+                            block_changed = true;
+
+                            if result.class_changed {
+                                for &user in func.dfg.users(inst_result) {
+                                    next_touched_any |= Self::mark_touched(
+                                        &mut next_touched,
+                                        func.layout.inst_block(user),
+                                    );
+                                }
+                            } else {
+                                // Value-phi updates can affect value-phi lookups globally. Keep
+                                // this conservative until we have finer dependency tracking.
+                                for &reachable_block in domtree.rpo() {
+                                    if self.blocks[reachable_block].reachable {
+                                        next_touched_any |=
+                                            Self::mark_touched(&mut next_touched, reachable_block);
+                                    }
+                                }
+                            }
+                        }
                     }
                     next_insn = func.layout.next_inst_of(insn);
                 }
 
                 // If insn is terminator, analyze it to update edge and block reachability.
-                if let Some(last_insn) = func.layout.last_inst_of(block) {
-                    changed |= self.analyze_last_insn(func, domtree, block, last_insn);
+                if let Some(last_insn) = func.layout.last_inst_of(block)
+                    && self.analyze_last_insn(func, domtree, block, last_insn)
+                {
+                    changed = true;
+                    block_changed = true;
+                    for edge in self.blocks[block].out_edges.clone() {
+                        let edge_data = self.edge_data(edge);
+                        if edge_data.reachable {
+                            next_touched_any |= Self::mark_touched(&mut next_touched, edge_data.to);
+                        }
+                    }
+                }
+
+                if block_changed {
+                    next_touched_any |= Self::mark_touched(&mut next_touched, block);
                 }
             }
+
+            if !changed {
+                break;
+            }
+
+            if !next_touched_any {
+                for &block in domtree.rpo() {
+                    if self.blocks[block].reachable {
+                        Self::mark_touched(&mut next_touched, block);
+                    }
+                }
+            }
+
+            touched = next_touched;
         }
 
         // Remove redundant insn and unreachable block.
@@ -233,6 +288,16 @@ impl GvnSolver {
         self.blocks.clear();
         self.value_phi_table.clear();
         self.always_avail.clear();
+        self.may_be_undef_cache.borrow_mut().clear();
+    }
+
+    fn mark_touched(next_touched: &mut SecondaryMap<BlockId, bool>, block: BlockId) -> bool {
+        if next_touched[block] {
+            false
+        } else {
+            next_touched[block] = true;
+            true
+        }
     }
 
     /// Analyze the last insn of the block.
@@ -335,7 +400,7 @@ impl GvnSolver {
         domtree: &DomTree,
         insn: InstId,
         inst_result: ValueId,
-    ) -> bool {
+    ) -> ReassignResult {
         // Perform symbolic evaluation for the insn.
         let block = func.layout.inst_block(insn);
         let gvn_insn =
@@ -347,13 +412,16 @@ impl GvnSolver {
             if self.value_class(inst_result) == INITIAL_CLASS {
                 let class = self.make_class(gvn_insn, None);
                 self.assign_class(inst_result, class);
-                return true;
+                return ReassignResult {
+                    changed: true,
+                    class_changed: true,
+                };
             } else {
-                return false;
+                return ReassignResult::default();
             }
         }
 
-        let mut changed = false;
+        let mut value_phi_changed = false;
         let new_class = if let GvnInsn::Value(value) = &gvn_insn {
             // If `gvn_insn` is value itself, just use the class of the value.
             self.value_class(*value)
@@ -362,7 +430,7 @@ impl GvnSolver {
 
             // We need to recompute value phi for the class to reflect reachability changes and
             // leader changes.
-            changed |= self.recompute_value_phi(func, &gvn_insn, inst_result);
+            value_phi_changed |= self.recompute_value_phi(func, &gvn_insn, inst_result);
             class
         } else if let Some(value_phi) =
             ValuePhiFinder::new(self, inst_result).compute_value_phi(func, &gvn_insn)
@@ -378,10 +446,16 @@ impl GvnSolver {
 
         let old_class = self.value_class(inst_result);
         if old_class == new_class {
-            changed
+            ReassignResult {
+                changed: value_phi_changed,
+                class_changed: false,
+            }
         } else {
             self.assign_class(inst_result, new_class);
-            true
+            ReassignResult {
+                changed: true,
+                class_changed: true,
+            }
         }
     }
 
@@ -811,43 +885,67 @@ impl GvnSolver {
     }
 
     fn may_be_undef(&self, func: &Function, value: ValueId) -> bool {
-        let mut visiting = FxHashSet::default();
-        self.may_be_undef_impl(func, value, &mut visiting)
-    }
-
-    fn may_be_undef_impl(
-        &self,
-        func: &Function,
-        value: ValueId,
-        visiting: &mut FxHashSet<ValueId>,
-    ) -> bool {
-        if !visiting.insert(value) {
-            // Be conservative for cyclic value definitions.
-            return true;
+        if let Some(may_be_undef) = self.may_be_undef_cache.borrow().get(&value).copied() {
+            return may_be_undef;
         }
 
-        let may_be_undef = match func.dfg.value(value) {
-            Value::Undef { .. } => true,
-            Value::Immediate { .. } | Value::Arg { .. } | Value::Global { .. } => false,
-            Value::Inst { inst, .. } => self.inst_result_may_be_undef(func, *inst, visiting),
-        };
+        let mut cache = self.may_be_undef_cache.borrow_mut();
+        let mut visiting = FxHashSet::default();
+        let mut stack = vec![(value, false)];
+        while let Some((value, post_order)) = stack.pop() {
+            if cache.contains_key(&value) {
+                continue;
+            }
 
-        visiting.remove(&value);
-        may_be_undef
+            if post_order {
+                visiting.remove(&value);
+                let may_be_undef = match func.dfg.value(value) {
+                    Value::Undef { .. } => true,
+                    Value::Immediate { .. } | Value::Arg { .. } | Value::Global { .. } => false,
+                    Value::Inst { inst, .. } => self.inst_result_may_be_undef(func, *inst, &cache),
+                };
+                cache.insert(value, may_be_undef);
+                continue;
+            }
+
+            if !visiting.insert(value) {
+                // Be conservative for cyclic value definitions.
+                cache.insert(value, true);
+                continue;
+            }
+
+            stack.push((value, true));
+            if let Value::Inst { inst, .. } = func.dfg.value(value) {
+                for used in func.dfg.inst(*inst).collect_values().into_iter().rev() {
+                    if cache.contains_key(&used) {
+                        continue;
+                    }
+
+                    if visiting.contains(&used) {
+                        // Be conservative for cyclic value definitions.
+                        cache.insert(used, true);
+                    } else {
+                        stack.push((used, false));
+                    }
+                }
+            }
+        }
+
+        cache.get(&value).copied().unwrap_or(true)
     }
 
     fn inst_result_may_be_undef(
         &self,
         func: &Function,
         inst: InstId,
-        visiting: &mut FxHashSet<ValueId>,
+        cache: &FxHashMap<ValueId, bool>,
     ) -> bool {
         let inst_data = func.dfg.inst(inst);
         let values = inst_data.collect_values();
         if values
             .iter()
             .copied()
-            .any(|value| self.may_be_undef_impl(func, value, visiting))
+            .any(|value| cache.get(&value).copied().unwrap_or(true))
         {
             return true;
         }
@@ -1153,6 +1251,12 @@ impl Default for GvnSolver {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct ReassignResult {
+    changed: bool,
+    class_changed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
@@ -1611,6 +1715,12 @@ impl ValuePhiInsn {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct BlockAvailSet {
+    parent: PackedOption<BlockId>,
+    local: FxHashMap<Class, ValueId>,
+}
+
 /// A struct for redundant code/edge/block removal.
 /// This struct also resolve value phis and insert phi insns to the appropriate block.
 struct RedundantCodeRemover<'a> {
@@ -1619,7 +1729,7 @@ struct RedundantCodeRemover<'a> {
     /// Record pairs of available class and representative value in bottom of blocks.
     /// This is necessary to decide whether the args of inserted phi functions are dominated by its
     /// definitions.
-    avail_set: SecondaryMap<BlockId, FxHashMap<Class, ValueId>>,
+    avail_set: SecondaryMap<BlockId, BlockAvailSet>,
 
     /// Record resolved value phis.
     resolved_value_phis: FxHashMap<ValuePhi, ValueId>,
@@ -1650,6 +1760,30 @@ impl<'a> RedundantCodeRemover<'a> {
             }
         }
         panic!("alias loop detected");
+    }
+
+    fn lookup_avail_from(&self, mut block: Option<BlockId>, class: Class) -> Option<ValueId> {
+        while let Some(current) = block {
+            let avails = &self.avail_set[current];
+            if let Some(value) = avails.local.get(&class) {
+                return Some(*value);
+            }
+            block = avails.parent.expand();
+        }
+
+        None
+    }
+
+    fn lookup_avail_in_block(
+        &self,
+        class: Class,
+        local_avails: &FxHashMap<Class, ValueId>,
+        parent: Option<BlockId>,
+    ) -> Option<ValueId> {
+        local_avails
+            .get(&class)
+            .copied()
+            .or_else(|| self.lookup_avail_from(parent, class))
     }
 
     /// The entry function of redundant code removal.
@@ -1695,19 +1829,17 @@ impl<'a> RedundantCodeRemover<'a> {
 
     /// Remove redundant code in the block.
     fn remove_code_in_block(&mut self, func: &mut Function, domtree: &DomTree, block: BlockId) {
-        // Get avail set in the top of the block.
-        let mut avails = if block == func.layout.entry_block().unwrap() {
+        let (parent, mut local_avails) = if block == func.layout.entry_block().unwrap() {
             // Insert always available values to avail set of the entry block.
             let mut avails = FxHashMap::default();
             for &avail in &self.solver.always_avail {
                 let class = self.solver.value_class(avail);
                 avails.insert(class, avail);
             }
-            avails
+            (None, avails)
         } else {
             // Use avails of the immediate dominator.
-            let idom = domtree.idom_of(block).unwrap();
-            self.avail_set[idom].clone()
+            (Some(domtree.idom_of(block).unwrap()), FxHashMap::default())
         };
 
         let mut inserter = InstInserter::at_location(CursorLocation::BlockTop(block));
@@ -1727,16 +1859,17 @@ impl<'a> RedundantCodeRemover<'a> {
                         let class = self.solver.value_class(inst_result);
                         // Use representative value if the class is in avail set.
                         if !func.dfg.side_effect(insn).has_effect()
-                            && let Some(value) = avails.get(&class)
+                            && let Some(value) =
+                                self.lookup_avail_in_block(class, &local_avails, parent)
                         {
-                            self.change_to_alias(func, inst_result, *value);
+                            self.change_to_alias(func, inst_result, value);
                             inserter.remove_inst(func);
                             continue;
                         }
 
                         // Try rewrite phi insn to reflect edge's reachability.
                         self.rewrite_phi(func, insn, block);
-                        avails.insert(class, inst_result);
+                        local_avails.insert(class, inst_result);
                     }
 
                     inserter.proceed(func);
@@ -1745,7 +1878,10 @@ impl<'a> RedundantCodeRemover<'a> {
         }
 
         // Record avail set at the bottom of the block.
-        self.avail_set[block] = avails;
+        self.avail_set[block] = BlockAvailSet {
+            parent: parent.into(),
+            local: local_avails,
+        };
     }
 
     /// Resolve value phis in the block.
@@ -1801,7 +1937,7 @@ impl<'a> RedundantCodeRemover<'a> {
         match value_phi {
             ValuePhi::Value(value) => {
                 let class = self.solver.value_class(*value);
-                self.avail_set[block].contains_key(&class)
+                self.lookup_avail_from(Some(block), class).is_some()
             }
             ValuePhi::PhiInsn(phi_insn) => {
                 for (value_phi, phi_block) in &phi_insn.args {
@@ -1834,7 +1970,7 @@ impl<'a> RedundantCodeRemover<'a> {
         match value_phi {
             ValuePhi::Value(value) => {
                 let class = self.solver.value_class(*value);
-                self.avail_set[block].get(&class).copied().unwrap()
+                self.lookup_avail_from(Some(block), class).unwrap()
             }
 
             ValuePhi::PhiInsn(phi_insn) => {
