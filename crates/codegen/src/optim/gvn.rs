@@ -1528,35 +1528,40 @@ impl<'a> ValuePhiFinder<'a> {
             return None;
         }
 
-        let class = self.solver.value_class(value);
-        let phi_block = func.layout.inst_block(func.dfg.value_inst(value)?);
+        let value_phi = (|| {
+            let class = self.solver.value_class(value);
+            let phi_block = func.layout.inst_block(func.dfg.value_inst(value)?);
 
-        // if the gvn_insn of the value class is phi, then create `ValuePhi::PhiInsn` from its args.
-        if let GvnInsn::Expr(insn_expr) = &self.solver.classes[class].gvn_insn
-            && let Some(phi_args) = insn_expr.phi_args()
-        {
-            let mut result = ValuePhiInsn::with_capacity(phi_block, phi_args.len());
-            let in_edges = &self.solver.blocks[phi_block].in_edges;
+            // if the gvn_insn of the value class is phi, then create `ValuePhi::PhiInsn` from its args.
+            if let GvnInsn::Expr(insn_expr) = &self.solver.classes[class].gvn_insn
+                && let Some(phi_args) = insn_expr.phi_args()
+            {
+                let mut result = ValuePhiInsn::with_capacity(phi_block, phi_args.len());
+                let in_edges = &self.solver.blocks[phi_block].in_edges;
 
-            for &(value, from) in phi_args {
-                // Phi arguments are keyed by predecessor block.
-                if !matches!(
-                    self.solver.reachable_edge_state(in_edges, from, phi_block),
-                    ReachableEdgeState::None
-                ) {
-                    result.args.push((ValuePhi::Value(value), from))
+                for &(value, from) in phi_args {
+                    // Phi arguments are keyed by predecessor block.
+                    if !matches!(
+                        self.solver.reachable_edge_state(in_edges, from, phi_block),
+                        ReachableEdgeState::None
+                    ) {
+                        result.args.push((ValuePhi::Value(value), from))
+                    }
                 }
+
+                return Some(result.canonicalize());
+            };
+
+            // If the value is annotated with value phi, then return it.
+            let class = self.solver.value_class(value);
+            match &self.solver.classes[class].value_phi {
+                value_phi @ Some(ValuePhi::PhiInsn(..)) => value_phi.clone(),
+                _ => None,
             }
+        })();
 
-            return Some(result.canonicalize());
-        };
-
-        // If the value is annotated with value phi, then return it.
-        let class = self.solver.value_class(value);
-        match &self.solver.classes[class].value_phi {
-            value_phi @ Some(ValuePhi::PhiInsn(..)) => value_phi.clone(),
-            _ => None,
-        }
+        self.visited.remove(&value);
+        value_phi
     }
 }
 
@@ -1975,8 +1980,11 @@ enum ReachableEdgeState {
 
 #[cfg(test)]
 mod tests {
-    use super::{GvnInsn, GvnSolver, ValuePhi};
+    use std::collections::BTreeSet;
+
+    use super::{ClassData, GvnInsn, GvnSolver, ValuePhi, ValuePhiFinder, inst_to_gvn_key};
     use sonatina_ir::ValueId;
+    use sonatina_parser::parse_module;
 
     #[test]
     fn update_class_value_phi_keeps_value_phi_table_synchronized() {
@@ -1995,5 +2003,70 @@ mod tests {
         assert!(solver.update_class_value_phi(class, None));
         assert!(!solver.value_phi_table.contains_key(&phi2));
         assert!(!solver.update_class_value_phi(class, None));
+    }
+
+    #[test]
+    fn value_phi_finder_allows_revisiting_non_cyclic_values() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i1) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i32 = phi (1.i32 block1) (2.i32 block2);
+        v2.i32 = add v1 3.i32;
+        return v2;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut solver = GvnSolver::new();
+            solver.classes.push(ClassData {
+                values: BTreeSet::new(),
+                gvn_insn: GvnInsn::Value(ValueId(u32::MAX)),
+                value_phi: None,
+            });
+
+            let phi_inst = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find(|&inst| func.dfg.is_phi(inst))
+                .expect("test function should contain a phi instruction");
+            let phi_value = func
+                .dfg
+                .inst_result(phi_inst)
+                .expect("test function should contain a phi result");
+            let phi_block = func.layout.inst_block(phi_inst);
+            let phi_key = inst_to_gvn_key(func, phi_inst);
+            let phi_args = phi_key
+                .phi_args()
+                .expect("phi instruction should have args");
+
+            for &(_, from) in phi_args {
+                solver.add_edge_info(from, phi_block, None, None, None);
+            }
+            let in_edges = solver.blocks[phi_block].in_edges.clone();
+            for edge in in_edges {
+                solver.edges[edge].reachable = true;
+            }
+
+            let class = solver.make_class(GvnInsn::Expr(phi_key), None);
+            solver.assign_class(phi_value, class);
+
+            let mut finder = ValuePhiFinder::new(&mut solver, func.arg_values[0]);
+            assert!(finder.get_phi_of(func, phi_value).is_some());
+            assert!(finder.get_phi_of(func, phi_value).is_some());
+        });
     }
 }
