@@ -908,10 +908,10 @@ impl GvnSolver {
         rhs: ValueId,
     ) -> Option<ValueId> {
         let (add_lhs, add_rhs) = self.add_args_of_value(func, lhs)?;
-        if self.is_congruent_value(add_rhs, rhs) {
+        if self.same_congruent_non_undef(func, add_rhs, rhs) {
             return Some(add_lhs);
         }
-        if self.is_congruent_value(add_lhs, rhs) {
+        if self.same_congruent_non_undef(func, add_lhs, rhs) {
             return Some(add_rhs);
         }
 
@@ -939,6 +939,12 @@ impl GvnSolver {
 
     fn same_non_undef(&self, func: &Function, lhs: ValueId, rhs: ValueId) -> bool {
         lhs == rhs && !self.may_be_undef(func, lhs)
+    }
+
+    fn same_congruent_non_undef(&self, func: &Function, lhs: ValueId, rhs: ValueId) -> bool {
+        self.is_congruent_value(lhs, rhs)
+            && !self.may_be_undef(func, lhs)
+            && !self.may_be_undef(func, rhs)
     }
 
     fn may_be_undef(&self, func: &Function, value: ValueId) -> bool {

@@ -766,4 +766,43 @@ func private %entry() -> i256 {
             );
         });
     }
+
+    #[test]
+    fn gvn_does_not_cancel_sub_add_when_operand_may_be_undef() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i256 {
+    block0:
+        v1.i256 = add 5.i256 undef.i256;
+        v2.i256 = sub v1 undef.i256;
+        v3.i1 = eq v2 5.i256;
+        br v3 block1 block2;
+
+    block1:
+        return 1.i256;
+
+    block2:
+        return 2.i256;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return 1.i256;"),
+                "then branch should remain reachable:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("return 2.i256;"),
+                "else branch should remain reachable when sub/add cancellation operand may be undef:\n{dumped}"
+            );
+        });
+    }
 }
