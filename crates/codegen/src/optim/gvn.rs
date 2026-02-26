@@ -792,10 +792,27 @@ impl GvnSolver {
                 BinaryInstKind::And => func.dfg.value_imm(lhs)? & func.dfg.value_imm(rhs)?,
                 BinaryInstKind::Or => func.dfg.value_imm(lhs)? | func.dfg.value_imm(rhs)?,
                 BinaryInstKind::Xor => func.dfg.value_imm(lhs)? ^ func.dfg.value_imm(rhs)?,
-                BinaryInstKind::Shl
-                | BinaryInstKind::Shr
-                | BinaryInstKind::Sar
-                | BinaryInstKind::EvmUdiv
+                BinaryInstKind::Shl => {
+                    let bits = func.dfg.value_imm(lhs)?;
+                    let value = func.dfg.value_imm(rhs)?;
+                    value << bits
+                }
+                BinaryInstKind::Shr => {
+                    let bits = func.dfg.value_imm(lhs)?;
+                    let value = func.dfg.value_imm(rhs)?;
+                    value >> bits
+                }
+                BinaryInstKind::Sar => {
+                    let bits = func.dfg.value_imm(lhs)?;
+                    let value = func.dfg.value_imm(rhs)?;
+                    let shifted = value >> bits;
+                    if value.is_positive() {
+                        shifted
+                    } else {
+                        -shifted
+                    }
+                }
+                BinaryInstKind::EvmUdiv
                 | BinaryInstKind::EvmSdiv
                 | BinaryInstKind::EvmUmod
                 | BinaryInstKind::EvmSmod

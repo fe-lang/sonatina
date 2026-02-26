@@ -805,4 +805,40 @@ func private %entry() -> i256 {
             );
         });
     }
+
+    #[test]
+    fn gvn_folds_constant_shifts() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i32 {
+    block0:
+        v1.i32 = shl 2.i32 3.i32;
+        v2.i32 = shr 1.i32 v1;
+        return v2;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return 6.i32;"),
+                "expected constant-shift chain to fold:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains(" = shl "),
+                "expected shl instruction to be removed:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains(" = shr "),
+                "expected shr instruction to be removed:\n{dumped}"
+            );
+        });
+    }
 }
