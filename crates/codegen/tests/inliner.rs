@@ -94,6 +94,55 @@ func public %caller(v0.i32) -> i32 {
 }
 
 #[test]
+fn full_inliner_does_not_mutate_caller_on_malformed_callee() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %bad() -> i32 {
+    block0:
+        v0.i32 = add v1 1.i32;
+        v1.i32 = add 2.i32 3.i32;
+        return v0;
+}
+
+func public %caller() -> i32 {
+    block0:
+        v0.i32 = call %bad;
+        return v0;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let caller_ref = find_func(module, "caller");
+    let before = module.func_store.view(caller_ref, |func| {
+        FuncWriter::new(caller_ref, func).dump_string()
+    });
+
+    let mut inliner = Inliner::new(full_only_inliner_test_config());
+    let stats = inliner.run(module);
+
+    let after = module.func_store.view(caller_ref, |func| {
+        FuncWriter::new(caller_ref, func).dump_string()
+    });
+
+    assert_eq!(
+        before, after,
+        "caller should not be mutated when full inlining fails"
+    );
+    assert_eq!(stats.full_calls_inlined, 0);
+    assert_eq!(stats.skipped_cost, 0);
+    assert_eq!(stats.skipped_budget, 0);
+    assert_eq!(stats.skipped_no_body, 0);
+    assert_eq!(stats.skipped_recursive_scc, 0);
+    assert_eq!(stats.skipped_sig_mismatch, 0);
+    assert_eq!(stats.skipped_callsite_unreachable, 0);
+    assert!(after.contains("call %bad"));
+}
+
+#[test]
 fn splice_require_pure_allows_proven_pure_calls() {
     let source = r#"
 target = "evm-ethereum-london"

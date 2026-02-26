@@ -1,6 +1,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Inst, InstId, Module, Value, ValueId, module::FuncRef,
+    visitor::Visitor,
 };
 
 use crate::cfg_edit::{CfgEditor, CleanupMode};
@@ -91,9 +92,6 @@ pub(super) fn try_inline_callsite_full(
         return Err(FullInlineFail::MalformedCallee);
     };
 
-    let mut editor = CfgEditor::new(caller, CleanupMode::Strict);
-    let (callsite_block, cont_block) = editor.split_block_at(call_inst);
-
     let mut callee_cfg = ControlFlowGraph::default();
     callee_cfg.compute(callee);
     let mut rpo: Vec<BlockId> = callee_cfg.post_order().collect();
@@ -103,6 +101,10 @@ pub(super) fn try_inline_callsite_full(
     }
 
     let reachable: FxHashSet<BlockId> = rpo.iter().copied().collect();
+    validate_full_inline_callee_rewriteability(callee, &rpo, &reachable)?;
+
+    let mut editor = CfgEditor::new(caller, CleanupMode::Strict);
+    let (callsite_block, cont_block) = editor.split_block_at(call_inst);
 
     let mut block_map: FxHashMap<BlockId, BlockId> = FxHashMap::default();
     let mut insert_after = callsite_block;
@@ -120,9 +122,9 @@ pub(super) fn try_inline_callsite_full(
         block_map.insert(block, new_block);
     }
 
-    let Some(&entry_new) = block_map.get(&callee_entry) else {
-        return Err(FullInlineFail::MalformedCallee);
-    };
+    let entry_new = *block_map
+        .get(&callee_entry)
+        .expect("validated callee entry should be mapped");
 
     let mut value_map: FxHashMap<ValueId, ValueId> = FxHashMap::default();
     for (old_arg, new_arg) in callee
@@ -160,7 +162,7 @@ pub(super) fn try_inline_callsite_full(
                     OperandRewriter::new(callee, editor.func_mut(), &mut value_map, &block_map);
                 rewriter
                     .rewrite_inst_operands(cloned.as_mut(), is_phi)
-                    .map_err(|()| FullInlineFail::MalformedCallee)?
+                    .expect("validated callee should be rewriteable")
             };
 
             let (new_inst, new_result) =
@@ -206,7 +208,7 @@ pub(super) fn try_inline_callsite_full(
                     OperandRewriter::new(callee, editor.func_mut(), &mut value_map, &block_map);
                 rewriter
                     .rewrite_inst_operands(term.as_mut(), false)
-                    .map_err(|()| FullInlineFail::MalformedCallee)?;
+                    .expect("validated callee should be rewriteable");
             }
             editor.append_inst_with_result(new_block, term, None);
             inserted_insts += 1;
@@ -233,9 +235,10 @@ pub(super) fn try_inline_callsite_full(
 
     {
         let func = editor.func_mut();
-        let Some(term) = func.layout.last_inst_of(callsite_block) else {
-            return Err(FullInlineFail::MalformedCallee);
-        };
+        let term = func
+            .layout
+            .last_inst_of(callsite_block)
+            .expect("split_block_at inserts a terminator in the callsite block");
         func.dfg.rewrite_branch_dest(term, cont_block, entry_new);
     }
 
@@ -295,6 +298,123 @@ pub(super) fn try_inline_callsite_full(
         phi_fixups: phi_fixups.len(),
         net_growth: inserted_insts.saturating_sub(1),
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ValueValidationMode {
+    RequireMapped,
+    AllowForwardRefsInPhi,
+}
+
+struct OperandValidator<'a> {
+    callee: &'a Function,
+    reachable: &'a FxHashSet<BlockId>,
+    arg_values: &'a FxHashSet<ValueId>,
+    seen_values: &'a FxHashSet<ValueId>,
+    mode: ValueValidationMode,
+    ok: bool,
+}
+
+impl OperandValidator<'_> {
+    fn validate_value(&mut self, value: ValueId) {
+        match self.callee.dfg.value(value) {
+            Value::Immediate { .. } | Value::Global { .. } | Value::Undef { .. } => {}
+            Value::Arg { .. } => {
+                if !self.arg_values.contains(&value) {
+                    self.ok = false;
+                }
+            }
+            Value::Inst { .. } => match self.mode {
+                ValueValidationMode::RequireMapped => {
+                    if !self.seen_values.contains(&value) {
+                        self.ok = false;
+                    }
+                }
+                ValueValidationMode::AllowForwardRefsInPhi => {}
+            },
+        }
+    }
+}
+
+impl Visitor for OperandValidator<'_> {
+    fn visit_value_id(&mut self, item: ValueId) {
+        self.validate_value(item);
+    }
+
+    fn visit_block_id(&mut self, item: BlockId) {
+        if !self.reachable.contains(&item) {
+            self.ok = false;
+        }
+    }
+}
+
+fn validate_full_inline_callee_rewriteability(
+    callee: &Function,
+    rpo: &[BlockId],
+    reachable: &FxHashSet<BlockId>,
+) -> Result<(), FullInlineFail> {
+    let layout_blocks: FxHashSet<BlockId> = callee.layout.iter_block().collect();
+    let arg_values: FxHashSet<ValueId> = callee.arg_values.iter().copied().collect();
+    let mut seen_values: FxHashSet<ValueId> = arg_values.clone();
+
+    for &block in rpo {
+        if !layout_blocks.contains(&block) {
+            return Err(FullInlineFail::MalformedCallee);
+        }
+
+        let inst_ids: Vec<InstId> = callee.layout.iter_inst(block).collect();
+        let Some(&term_id) = inst_ids.last() else {
+            return Err(FullInlineFail::MalformedCallee);
+        };
+        if !callee.dfg.is_terminator(term_id) {
+            return Err(FullInlineFail::MalformedCallee);
+        }
+
+        let body = &inst_ids[..inst_ids.len().saturating_sub(1)];
+        for &inst_id in body {
+            let inst = callee.dfg.inst(inst_id);
+            let is_phi = callee.dfg.is_phi(inst_id);
+
+            let mut v = OperandValidator {
+                callee,
+                reachable,
+                arg_values: &arg_values,
+                seen_values: &seen_values,
+                mode: if is_phi {
+                    ValueValidationMode::AllowForwardRefsInPhi
+                } else {
+                    ValueValidationMode::RequireMapped
+                },
+                ok: true,
+            };
+            inst.accept(&mut v);
+            if !v.ok {
+                return Err(FullInlineFail::MalformedCallee);
+            }
+
+            if let Some(res) = callee.dfg.inst_result(inst_id) {
+                seen_values.insert(res);
+            }
+        }
+
+        if !callee.dfg.is_return(term_id) {
+            let inst = callee.dfg.inst(term_id);
+            let mut v = OperandValidator {
+                callee,
+                reachable,
+                arg_values: &arg_values,
+                seen_values: &seen_values,
+                mode: ValueValidationMode::RequireMapped,
+                ok: true,
+            };
+            inst.accept(&mut v);
+            if !v.ok {
+                return Err(FullInlineFail::MalformedCallee);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn map_or_materialize(

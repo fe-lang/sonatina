@@ -272,11 +272,7 @@ impl Inliner {
                         Err(full::FullInlineFail::CallGone)
                         | Err(full::FullInlineFail::NotCall)
                         | Err(full::FullInlineFail::CalleeMismatch)
-                        | Err(full::FullInlineFail::MalformedCallee) => {
-                            // Conservatively drop reachability cache; malformed callee
-                            // indicates we may have bailed out mid-transform.
-                            reachable_blocks = None;
-                        }
+                        | Err(full::FullInlineFail::MalformedCallee) => {}
                     }
                 }
             }
