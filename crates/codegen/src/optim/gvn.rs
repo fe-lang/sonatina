@@ -201,6 +201,7 @@ impl GvnSolver {
             let mut changed = false;
             let mut next_touched = SecondaryMap::<BlockId, bool>::default();
             let mut next_touched_any = false;
+            let mut retouch_all_reachable = false;
 
             for &block in domtree.rpo() {
                 // If block is unreachable or untouched, skip all insns in the block.
@@ -228,12 +229,9 @@ impl GvnSolver {
                             } else {
                                 // Value-phi updates can affect value-phi lookups globally. Keep
                                 // this conservative until we have finer dependency tracking.
-                                for &reachable_block in domtree.rpo() {
-                                    if self.blocks[reachable_block].reachable {
-                                        next_touched_any |=
-                                            Self::mark_touched(&mut next_touched, reachable_block);
-                                    }
-                                }
+                                // Defer the full scan until the end of the iteration to avoid
+                                // repeated O(#reachable blocks) sweeps per changed instruction.
+                                retouch_all_reachable = true;
                             }
                         }
                     }
@@ -256,6 +254,14 @@ impl GvnSolver {
 
                 if block_changed {
                     next_touched_any |= Self::mark_touched(&mut next_touched, block);
+                }
+            }
+
+            if retouch_all_reachable {
+                for &reachable_block in domtree.rpo() {
+                    if self.blocks[reachable_block].reachable {
+                        next_touched_any |= Self::mark_touched(&mut next_touched, reachable_block);
+                    }
                 }
             }
 
