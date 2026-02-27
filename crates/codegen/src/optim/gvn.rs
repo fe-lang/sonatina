@@ -226,7 +226,9 @@ impl GvnSolver {
                                         func.layout.inst_block(user),
                                     );
                                 }
-                            } else {
+                            }
+
+                            if result.value_phi_changed {
                                 // Value-phi updates can affect value-phi lookups globally. Keep
                                 // this conservative until we have finer dependency tracking.
                                 // Defer the full scan until the end of the iteration to avoid
@@ -421,6 +423,7 @@ impl GvnSolver {
                 return ReassignResult {
                     changed: true,
                     class_changed: true,
+                    value_phi_changed: false,
                 };
             } else {
                 return ReassignResult::default();
@@ -436,7 +439,7 @@ impl GvnSolver {
 
             // We need to recompute value phi for the class to reflect reachability changes and
             // leader changes.
-            value_phi_changed |= self.recompute_value_phi(func, &gvn_insn, inst_result);
+            value_phi_changed |= self.recompute_value_phi(func, &gvn_insn, inst_result, class);
             class
         } else if let Some(value_phi) =
             ValuePhiFinder::new(self, inst_result).compute_value_phi(func, &gvn_insn)
@@ -455,12 +458,14 @@ impl GvnSolver {
             ReassignResult {
                 changed: value_phi_changed,
                 class_changed: false,
+                value_phi_changed,
             }
         } else {
             self.assign_class(inst_result, new_class);
             ReassignResult {
                 changed: true,
                 class_changed: true,
+                value_phi_changed,
             }
         }
     }
@@ -474,9 +479,9 @@ impl GvnSolver {
         func: &mut Function,
         insn_data: &GvnInsn,
         inst_result: ValueId,
+        class: Class,
     ) -> bool {
         let value_phi = ValuePhiFinder::new(self, inst_result).compute_value_phi(func, insn_data);
-        let class = self.value_class(inst_result);
         self.update_class_value_phi(class, value_phi)
     }
 
@@ -1406,6 +1411,7 @@ impl Default for GvnSolver {
 struct ReassignResult {
     changed: bool,
     class_changed: bool,
+    value_phi_changed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
@@ -2271,7 +2277,8 @@ mod tests {
         BinaryInstKind, ClassData, GvnInsn, GvnSolver, InstClassKind, ValuePhi, ValuePhiFinder,
         inst_to_gvn_key,
     };
-    use sonatina_ir::{Immediate, ValueId};
+    use crate::domtree::DomTree;
+    use sonatina_ir::{ControlFlowGraph, Immediate, ValueId};
     use sonatina_parser::parse_module;
 
     #[test]
@@ -2328,6 +2335,65 @@ mod tests {
                 .values()
                 .all(|mapped_class| *mapped_class != class1)
         );
+    }
+
+    #[test]
+    fn reassign_congruence_updates_target_class_value_phi_before_class_move() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i32, v1.i32) -> i32 {
+    block0:
+        v2.i32 = add v0 v1;
+        return v2;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let add_inst = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find(|&inst| {
+                    matches!(
+                        inst_to_gvn_key(func, inst).kind(),
+                        InstClassKind::Binary(BinaryInstKind::Add)
+                    )
+                })
+                .expect("test function should contain an add instruction");
+            let add_result = func
+                .dfg
+                .inst_result(add_inst)
+                .expect("add instruction should produce a result");
+
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+
+            let mut solver = GvnSolver::new();
+            solver.classes.push(ClassData {
+                values: BTreeSet::new(),
+                gvn_insn: GvnInsn::Value(ValueId(u32::MAX)),
+                value_phi: None,
+            });
+
+            let stale_phi = ValuePhi::Value(func.arg_values[0]);
+            let class = solver.make_class(
+                GvnInsn::Expr(inst_to_gvn_key(func, add_inst)),
+                Some(stale_phi.clone()),
+            );
+
+            let result = solver.reassign_congruence(func, &domtree, add_inst, add_result);
+            assert!(result.changed);
+            assert!(result.class_changed);
+            assert!(result.value_phi_changed);
+            assert_eq!(solver.value_class(add_result), class);
+            assert_eq!(solver.classes[class].value_phi, None);
+            assert!(!solver.value_phi_table.contains_key(&stale_phi));
+        });
     }
 
     #[test]
