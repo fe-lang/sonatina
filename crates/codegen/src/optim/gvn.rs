@@ -888,6 +888,12 @@ impl GvnSolver {
             {
                 return Some(GvnInsn::Value(value));
             }
+
+            if matches!(kind, BinaryInstKind::Add)
+                && let Some(value) = self.simplify_add_sub_cancellation(func, lhs, rhs)
+            {
+                return Some(GvnInsn::Value(value));
+            }
         }
 
         if let InstClassKind::Cast(kind) = insn_expr.kind() {
@@ -930,7 +936,7 @@ impl GvnSolver {
         lhs: ValueId,
         rhs: ValueId,
     ) -> Option<ValueId> {
-        let (add_lhs, add_rhs) = self.add_args_of_value(func, lhs)?;
+        let (add_lhs, add_rhs) = self.binary_args_of_value(func, lhs, BinaryInstKind::Add)?;
         if self.same_congruent_non_undef(func, add_rhs, rhs) {
             return Some(add_lhs);
         }
@@ -941,11 +947,37 @@ impl GvnSolver {
         None
     }
 
-    fn add_args_of_value(&self, func: &Function, value: ValueId) -> Option<(ValueId, ValueId)> {
+    fn simplify_add_sub_cancellation(
+        &self,
+        func: &Function,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> Option<ValueId> {
+        self.simplify_add_sub_cancellation_impl(func, lhs, rhs)
+            .or_else(|| self.simplify_add_sub_cancellation_impl(func, rhs, lhs))
+    }
+
+    fn simplify_add_sub_cancellation_impl(
+        &self,
+        func: &Function,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> Option<ValueId> {
+        let (sub_lhs, sub_rhs) = self.binary_args_of_value(func, lhs, BinaryInstKind::Sub)?;
+        self.same_congruent_non_undef(func, sub_rhs, rhs)
+            .then_some(sub_lhs)
+    }
+
+    fn binary_args_of_value(
+        &self,
+        func: &Function,
+        value: ValueId,
+        kind: BinaryInstKind,
+    ) -> Option<(ValueId, ValueId)> {
         let class = self.value_class(value);
         if class != INITIAL_CLASS
             && let GvnInsn::Expr(insn_expr) = &self.classes[class].gvn_insn
-            && matches!(insn_expr.kind(), InstClassKind::Binary(BinaryInstKind::Add))
+            && matches!(insn_expr.kind(), InstClassKind::Binary(expr_kind) if expr_kind == kind)
             && let Some(args) = insn_expr.binary_args()
         {
             return Some(args);
@@ -955,7 +987,7 @@ impl GvnSolver {
             return None;
         };
         let insn_expr = inst_to_gvn_key(func, *inst);
-        (matches!(insn_expr.kind(), InstClassKind::Binary(BinaryInstKind::Add)))
+        (matches!(insn_expr.kind(), InstClassKind::Binary(expr_kind) if expr_kind == kind))
             .then_some(())
             .and_then(|_| insn_expr.binary_args())
     }

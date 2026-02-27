@@ -807,6 +807,38 @@ func private %entry() -> i256 {
     }
 
     #[test]
+    fn gvn_cancels_add_sub_when_operand_is_defined() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = sub v0 v1;
+        v3.i256 = add v1 v2;
+        return v3;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return v0;"),
+                "expected add/sub cancellation to fold to v0:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains(" = add "),
+                "expected add instruction to be removed:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn gvn_folds_constant_shifts() {
         let source = r#"
 target = "evm-ethereum-london"
