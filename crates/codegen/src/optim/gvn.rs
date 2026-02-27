@@ -1202,15 +1202,12 @@ impl GvnSolver {
         let old_class_data = &mut self.classes[old_class];
         old_class_data.values.remove(&(value_rank, value));
 
-        // Remove old insn and value phi if the class becomes empty.
-        if let Some(insn_class) = self.insn_table.get_mut(&old_class_data.gvn_insn)
-            && *insn_class == old_class
-            && old_class_data.values.is_empty()
-        {
-            self.insn_table.remove(&old_class_data.gvn_insn);
-            if let Some(value_phi) = &old_class_data.value_phi {
-                self.value_phi_table.remove(value_phi);
-            }
+        // Remove all stale indexes that still point to the emptied class.
+        if old_class_data.values.is_empty() {
+            self.insn_table
+                .retain(|_, mapped_class| *mapped_class != old_class);
+            self.value_phi_table
+                .retain(|_, mapped_class| *mapped_class != old_class);
         }
     }
 
@@ -1343,14 +1340,42 @@ impl GvnSolver {
             return false;
         }
 
-        if let Some(old_value_phi) = self.classes[class].value_phi.take() {
+        if let Some(old_value_phi) = self.classes[class].value_phi.take()
+            && self.value_phi_table.get(&old_value_phi) == Some(&class)
+        {
             self.value_phi_table.remove(&old_value_phi);
         }
+
         if let Some(new_value_phi) = &value_phi {
+            if let Some(owner_class) = self.value_phi_table.get(new_value_phi).copied()
+                && owner_class != class
+            {
+                let owner_gvn_insn = self.classes[owner_class].gvn_insn.clone();
+                self.insn_table.insert(owner_gvn_insn, class);
+                self.merge_class_into(class, owner_class);
+            }
+
             self.value_phi_table.insert(new_value_phi.clone(), class);
         }
+
         self.classes[class].value_phi = value_phi;
         true
+    }
+
+    fn merge_class_into(&mut self, dst: Class, src: Class) {
+        if dst == src {
+            return;
+        }
+
+        let src_values: Vec<_> = self.classes[src]
+            .values
+            .iter()
+            .map(|(_, value)| *value)
+            .collect();
+
+        for value in src_values {
+            self.assign_class(value, dst);
+        }
     }
 
     fn reachable_edge_state(
@@ -2268,6 +2293,43 @@ mod tests {
         assert!(solver.update_class_value_phi(class, None));
         assert!(!solver.value_phi_table.contains_key(&phi2));
         assert!(!solver.update_class_value_phi(class, None));
+    }
+
+    #[test]
+    fn update_class_value_phi_merges_existing_owner_class() {
+        let mut solver = GvnSolver::new();
+        let value0 = ValueId::from_u32(10);
+        let value1 = ValueId::from_u32(11);
+        let class0 = solver.make_class(GvnInsn::Value(value0), None);
+        let class1 = solver.make_class(GvnInsn::Value(value1), None);
+        solver.assign_class(value0, class0);
+        solver.assign_class(value1, class1);
+
+        let phi = ValuePhi::Value(ValueId::from_u32(12));
+        assert!(solver.update_class_value_phi(class1, Some(phi.clone())));
+        assert_eq!(solver.value_phi_table.get(&phi), Some(&class1));
+
+        assert!(solver.update_class_value_phi(class0, Some(phi.clone())));
+        assert_eq!(solver.value_phi_table.get(&phi), Some(&class0));
+        assert_eq!(solver.value_class(value0), class0);
+        assert_eq!(solver.value_class(value1), class0);
+        assert!(solver.classes[class1].values.is_empty());
+        assert_eq!(
+            solver.insn_table.get(&GvnInsn::Value(value1)),
+            Some(&class0)
+        );
+        assert!(
+            solver
+                .insn_table
+                .values()
+                .all(|mapped_class| *mapped_class != class1)
+        );
+        assert!(
+            solver
+                .value_phi_table
+                .values()
+                .all(|mapped_class| *mapped_class != class1)
+        );
     }
 
     #[test]
