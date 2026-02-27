@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, InstDowncast, InstId, Module, inst::control_flow,
@@ -124,11 +126,12 @@ impl Inliner {
             let funcs = module.funcs();
             let (sites_by_caller, call_counts) = collect_iteration_call_data(module, &funcs);
             let analysis = module_analysis::analyze_module(module);
+            let caller_order = caller_order_bottom_up_scc(&funcs, &analysis);
             let mut inlinee_summaries: FxHashMap<FuncRef, cost::InlineeSummary> =
                 FxHashMap::default();
 
             let mut changed = false;
-            for caller_ref in funcs {
+            for caller_ref in caller_order {
                 let mut reachable_blocks: Option<FxHashSet<BlockId>> = None;
                 let sites = sites_by_caller
                     .get(&caller_ref)
@@ -153,6 +156,9 @@ impl Inliner {
                             &mut stats,
                         )
                     });
+                    let trivial_plan_changes_cfg = trivial_plan
+                        .as_ref()
+                        .is_some_and(trivial::summary_changes_cfg);
                     let did_trivial = if let Some(plan_summary) = trivial_plan {
                         let plan = module.func_store.view(site.callee, |callee| {
                             trivial::materialize_plan(callee, &plan_summary)
@@ -165,8 +171,11 @@ impl Inliner {
                     };
                     if did_trivial {
                         changed = true;
-                        // Trivial inlining may change the caller CFG; drop cached reachability.
-                        reachable_blocks = None;
+                        // Most trivial plans don't change CFG reachability.
+                        // Terminator splicing can make reachable blocks unreachable.
+                        if trivial_plan_changes_cfg {
+                            reachable_blocks = None;
+                        }
                         continue;
                     }
 
@@ -259,9 +268,17 @@ impl Inliner {
 
                             let _ = plan.forced;
 
-                            // Full inlining changes the CFG, so any cached reachable-set
-                            // for this caller is now stale (new blocks inserted/split).
-                            reachable_blocks = None;
+                            // Full inlining always splits the callsite block. If the callee
+                            // can return, keep the cache and mark the continuation reachable
+                            // so later callsites moved into it are still visited this iteration.
+                            // If the callee never returns, old reachability may be invalid.
+                            if result.cont_reachable {
+                                if let Some(reachable_blocks) = reachable_blocks.as_mut() {
+                                    reachable_blocks.insert(result.cont_block);
+                                }
+                            } else {
+                                reachable_blocks = None;
+                            }
                         }
                         Err(full::FullInlineFail::SignatureMismatch) => {
                             stats.skipped_sig_mismatch += 1;
@@ -346,4 +363,74 @@ fn compute_reachable_blocks(func: &Function) -> FxHashSet<BlockId> {
     let mut cfg = ControlFlowGraph::default();
     cfg.compute(func);
     cfg.post_order().collect()
+}
+
+fn caller_order_bottom_up_scc(
+    funcs: &[FuncRef],
+    analysis: &module_analysis::ModuleInfo,
+) -> Vec<FuncRef> {
+    let mut funcs_by_scc: FxHashMap<module_analysis::SccRef, Vec<FuncRef>> = FxHashMap::default();
+    let mut succ_sccs: FxHashMap<module_analysis::SccRef, Vec<module_analysis::SccRef>> =
+        FxHashMap::default();
+    let mut indegree: FxHashMap<module_analysis::SccRef, usize> = FxHashMap::default();
+
+    for &func_ref in funcs {
+        let scc_ref = analysis.scc.scc_ref(func_ref);
+        funcs_by_scc.entry(scc_ref).or_default().push(func_ref);
+        succ_sccs.entry(scc_ref).or_default();
+        indegree.entry(scc_ref).or_insert(0);
+    }
+
+    for component in funcs_by_scc.values_mut() {
+        component.sort_unstable_by_key(|func_ref| func_ref.as_u32());
+    }
+
+    for &caller in funcs {
+        let from_scc = analysis.scc.scc_ref(caller);
+        for &callee in analysis.call_graph.callee_of(caller) {
+            let to_scc = analysis.scc.scc_ref(callee);
+            if from_scc == to_scc || !funcs_by_scc.contains_key(&to_scc) {
+                continue;
+            }
+            succ_sccs.entry(from_scc).or_default().push(to_scc);
+        }
+    }
+
+    for succs in succ_sccs.values_mut() {
+        succs.sort_unstable_by_key(|scc_ref| scc_ref.as_u32());
+        succs.dedup();
+        for &succ in succs.iter() {
+            *indegree
+                .get_mut(&succ)
+                .expect("all SCCs in edge list should have indegree slots") += 1;
+        }
+    }
+
+    let mut ready: BTreeSet<module_analysis::SccRef> = BTreeSet::new();
+    for (&scc_ref, &deg) in &indegree {
+        if deg == 0 {
+            ready.insert(scc_ref);
+        }
+    }
+
+    let mut topo = Vec::with_capacity(indegree.len());
+    while let Some(scc_ref) = ready.pop_first() {
+        topo.push(scc_ref);
+        for &succ in succ_sccs.get(&scc_ref).into_iter().flatten() {
+            let deg = indegree
+                .get_mut(&succ)
+                .expect("all SCC successors should have indegree slots");
+            *deg -= 1;
+            if *deg == 0 {
+                ready.insert(succ);
+            }
+        }
+    }
+    debug_assert_eq!(topo.len(), indegree.len());
+
+    let mut ordered_funcs = Vec::with_capacity(funcs.len());
+    for scc_ref in topo.into_iter().rev() {
+        ordered_funcs.extend(funcs_by_scc.get(&scc_ref).into_iter().flatten().copied());
+    }
+    ordered_funcs
 }

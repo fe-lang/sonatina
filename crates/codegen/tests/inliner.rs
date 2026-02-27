@@ -1016,7 +1016,7 @@ func public %caller(v0.i32, v1.i32) -> i32 {
 }
 
 #[test]
-fn full_inliner_keeps_per_caller_growth_across_iterations() {
+fn full_inliner_growth_cap_blocks_full_flattening() {
     let source = r#"
 target = "evm-ethereum-london"
 
@@ -1068,13 +1068,17 @@ func private %leaf(v0.i1, v1.i32) -> i32 {
     let caller_dump = module.func_store.view(caller_ref, |func| {
         FuncWriter::new(caller_ref, func).dump_string()
     });
+    let mid_ref = find_func(module, "mid");
+    let mid_dump = module
+        .func_store
+        .view(mid_ref, |func| FuncWriter::new(mid_ref, func).dump_string());
     assert!(
-        !caller_dump.contains("call %mid"),
-        "first-stage inline should remove %mid call:\n{dumped}"
+        !mid_dump.contains("call %leaf"),
+        "bottom-up processing should inline %leaf into %mid first:\n{dumped}"
     );
     assert!(
-        caller_dump.contains("call %leaf"),
-        "second-stage inline should be blocked by caller growth cap:\n{dumped}"
+        caller_dump.contains("call %mid") || caller_dump.contains("call %leaf"),
+        "caller growth cap should prevent full flattening:\n{dumped}"
     );
     assert!(stats.skipped_budget > 0);
 }
@@ -1125,6 +1129,115 @@ func public %caller(v0.i1, v1.i32) -> i32 {
     );
     assert_eq!(stats.full_calls_inlined, 0);
     assert!(stats.skipped_budget > 0);
+}
+
+#[test]
+fn full_inliner_bottom_up_order_handles_deep_single_use_chain() {
+    let depth = 10usize;
+    let mut source = String::from(
+        r#"
+target = "evm-ethereum-london"
+
+func public %caller(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %f1 v0;
+        return v1;
+}
+
+"#,
+    );
+
+    for i in 1..depth {
+        source.push_str(&format!(
+            "func private %f{i}(v0.i32) -> i32 {{
+    block0:
+        v1.i32 = call %f{} v0;
+        return v1;
+}}
+
+",
+            i + 1
+        ));
+    }
+
+    source.push_str(&format!(
+        "func private %f{depth}(v0.i32) -> i32 {{
+    block0:
+        v1.i32 = add v0 1.i32;
+        return v1;
+}}
+"
+    ));
+
+    let mut parsed = sonatina_parser::parse_module(&source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(full_only_inliner_test_config());
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let caller_ref = find_func(module, "caller");
+    let caller_dump = module.func_store.view(caller_ref, |func| {
+        FuncWriter::new(caller_ref, func).dump_string()
+    });
+    assert!(
+        !caller_dump.contains("call %f"),
+        "deep call chain should inline fully within MAX_ITERS:\n{caller_dump}"
+    );
+    assert!(stats.full_calls_inlined >= depth);
+}
+
+#[test]
+fn full_inliner_reachability_cache_tracks_split_continuations() {
+    let call_count = 10usize;
+    let mut source = String::from(
+        r#"
+target = "evm-ethereum-london"
+
+func private %multi(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 1.i32;
+        return v2;
+}
+
+func public %caller(v0.i1, v1.i32) -> i32 {
+    block0:
+"#,
+    );
+
+    let mut prev = "v1".to_string();
+    for i in 0..call_count {
+        let next = format!("v{}", i + 2);
+        source.push_str(&format!("        {next}.i32 = call %multi v0 {prev};\n"));
+        prev = next;
+    }
+    source.push_str(&format!(
+        "        return {prev};
+}}
+"
+    ));
+
+    let mut parsed = sonatina_parser::parse_module(&source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(full_only_inliner_test_config());
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %multi"),
+        "all moved continuation callsites should be inlined in one run:\n{dumped}"
+    );
+    assert!(stats.full_calls_inlined >= call_count);
 }
 
 fn dump_module(module: &sonatina_ir::Module) -> String {

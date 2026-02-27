@@ -24,6 +24,8 @@ pub(super) struct FullInlineResult {
     pub insts_cloned: usize,
     pub phi_fixups: usize,
     pub net_growth: usize,
+    pub cont_block: BlockId,
+    pub cont_reachable: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -291,12 +293,15 @@ pub(super) fn try_inline_callsite_full(
     }
 
     editor.recompute_cfg();
+    let cont_reachable = !returns.is_empty();
 
     Ok(FullInlineResult {
         blocks_cloned: block_map.len(),
         insts_cloned: inserted_insts,
         phi_fixups: phi_fixups.len(),
         net_growth: inserted_insts.saturating_sub(1),
+        cont_block,
+        cont_reachable,
     })
 }
 

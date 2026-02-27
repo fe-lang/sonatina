@@ -100,6 +100,10 @@ pub(super) enum InlinePlanSummary {
     SpliceSingleBlockTerminator(TerminatorSplicePlanSummary),
 }
 
+pub(super) fn summary_changes_cfg(summary: &InlinePlanSummary) -> bool {
+    matches!(summary, InlinePlanSummary::SpliceSingleBlockTerminator(_))
+}
+
 struct CollectedSpliceBody {
     const_values: BTreeMap<ValueId, ValueTemplate>,
     body: Vec<TemplateInstSummary>,
