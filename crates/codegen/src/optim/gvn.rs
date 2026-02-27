@@ -1091,6 +1091,29 @@ impl GvnSolver {
                 continue;
             }
 
+            if let InstClassKind::Binary(kind @ (BinaryInstKind::Eq | BinaryInstKind::Ne)) =
+                insn_expr.kind()
+                && let Some((lhs, rhs)) = insn_expr.binary_args()
+                && let Some((arg, imm)) = self.bool_compare_arg_and_const(func, lhs, rhs)
+            {
+                expected_true = match kind {
+                    BinaryInstKind::Eq => expected_true == imm,
+                    BinaryInstKind::Ne => expected_true != imm,
+                    _ => unreachable!(),
+                };
+
+                if let Some(arg_inst) = func.dfg.value_inst(arg) {
+                    insn_expr = inst_to_gvn_key(func, arg_inst);
+                    continue;
+                }
+
+                let expected = self.make_imm(&mut func.dfg, expected_true);
+                return Some(PredicateRelation::Eq {
+                    lhs: arg,
+                    rhs: expected,
+                });
+            }
+
             if let InstClassKind::Binary(BinaryInstKind::Eq) = insn_expr.kind()
                 && expected_true
             {
@@ -1109,6 +1132,26 @@ impl GvnSolver {
         }
 
         None
+    }
+
+    fn bool_compare_arg_and_const(
+        &self,
+        func: &Function,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> Option<(ValueId, bool)> {
+        match (Self::value_i1_imm(func, lhs), Self::value_i1_imm(func, rhs)) {
+            (Some(lhs_imm), None) => Some((rhs, lhs_imm)),
+            (None, Some(rhs_imm)) => Some((lhs, rhs_imm)),
+            _ => None,
+        }
+    }
+
+    fn value_i1_imm(func: &Function, value: ValueId) -> Option<bool> {
+        let Immediate::I1(imm) = func.dfg.value_imm(value)? else {
+            return None;
+        };
+        Some(imm)
     }
 
     /// Make edge data and append incoming/outgoing edges of corresponding blocks.

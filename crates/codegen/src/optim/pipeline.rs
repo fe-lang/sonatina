@@ -841,4 +841,39 @@ func private %entry() -> i32 {
             );
         });
     }
+
+    #[test]
+    fn gvn_infers_equality_through_bool_zero_compare() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i32, v1.i32) -> i32 {
+    block0:
+        v2.i1 = ne v0 v1;
+        v3.i1 = eq v2 0.i1;
+        br v3 block1 block2;
+
+    block1:
+        v4.i32 = sub v0 v1;
+        return v4;
+
+    block2:
+        return 7.i32;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return 0.i32;"),
+                "expected inferred equality from eq(ne x y, 0) to fold sub in true branch:\n{dumped}"
+            );
+        });
+    }
 }
