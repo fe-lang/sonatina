@@ -61,6 +61,7 @@ impl Pass {
             Pass::Adce => "adce",
             Pass::Licm => "licm",
             Pass::Egraph => "egraph",
+            Pass::Gvn => "gvn",
             Pass::RebuildUsers => "rebuild_users",
         }
     }
@@ -394,10 +395,20 @@ fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
             run_egraph_pass(func);
         }
         Pass::Gvn => {
-            ctx.cfg.compute(func);
-            ctx.domtree.compute(&ctx.cfg);
+            let _span = trace_span!("sonatina.optim.pipeline.pass.gvn").entered();
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.gvn.compute_cfg").entered();
+                ctx.cfg.compute(func);
+            }
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.gvn.compute_domtree").entered();
+                ctx.domtree.compute(&ctx.cfg);
+            }
             let mut solver = GvnSolver::new();
-            solver.run(func, &mut ctx.cfg, &mut ctx.domtree);
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.gvn.solve").entered();
+                solver.run(func, &mut ctx.cfg, &mut ctx.domtree);
+            }
         }
         Pass::RebuildUsers => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.rebuild_users").entered();

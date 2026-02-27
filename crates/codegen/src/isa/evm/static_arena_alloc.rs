@@ -34,6 +34,7 @@ use super::{
 pub struct StackObjId(u32);
 entity_impl!(StackObjId);
 
+#[cfg(debug_assertions)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 enum StackObjKind {
     Alloca(InstId),
@@ -49,6 +50,7 @@ struct LiveInterval {
 #[derive(Clone, Debug)]
 struct StackObj {
     id: StackObjId,
+    #[cfg(debug_assertions)]
     kind: StackObjKind,
     size_words: u32,
     interval: LiveInterval,
@@ -274,6 +276,7 @@ pub(crate) fn compute_func_stack_objects(
         let id = spill_obj[v].expect("spilled value missing stack object id");
         objects.push(StackObj {
             id,
+            #[cfg(debug_assertions)]
             kind: StackObjKind::Spill(v),
             size_words: 1,
             interval: spill_intervals
@@ -323,6 +326,7 @@ pub(crate) fn compute_func_stack_objects(
 
         objects.push(StackObj {
             id,
+            #[cfg(debug_assertions)]
             kind: StackObjKind::Alloca(inst),
             size_words,
             interval: alloca_intervals
