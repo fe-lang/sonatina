@@ -136,14 +136,7 @@ impl Interpret for Sar {
         let bits = state.lookup_val(*self.bits());
         let value = state.lookup_val(*self.value());
 
-        EvalValue::zip_with_imm(bits, value, |bits, value| {
-            let shifted = value >> bits;
-            if value.is_positive() {
-                shifted
-            } else {
-                -shifted
-            }
-        })
+        EvalValue::zip_with_imm(bits, value, |bits, value| value.ashr(bits))
     }
 }
 
@@ -238,6 +231,26 @@ mod tests {
         assert_eq!(
             Smod::new(&hi, lhs, rhs).interpret(&mut state),
             EvalValue::Undef
+        );
+    }
+
+    #[test]
+    fn shift_right_uses_expected_signedness() {
+        let hi = TestHasInst;
+        let bits = crate::ValueId::from_u32(0);
+        let value = crate::ValueId::from_u32(1);
+        let mut state = TestState::new([
+            (bits, EvalValue::Imm(Immediate::I8(1))),
+            (value, EvalValue::Imm(Immediate::I8(-8))),
+        ]);
+
+        assert_eq!(
+            Shr::new(&hi, bits, value).interpret(&mut state),
+            EvalValue::Imm(Immediate::I8(124))
+        );
+        assert_eq!(
+            Sar::new(&hi, bits, value).interpret(&mut state),
+            EvalValue::Imm(Immediate::I8(-4))
         );
     }
 }

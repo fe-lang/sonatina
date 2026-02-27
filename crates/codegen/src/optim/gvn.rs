@@ -811,12 +811,7 @@ impl GvnSolver {
                 BinaryInstKind::Sar => {
                     let bits = func.dfg.value_imm(lhs)?;
                     let value = func.dfg.value_imm(rhs)?;
-                    let shifted = value >> bits;
-                    if value.is_positive() {
-                        shifted
-                    } else {
-                        -shifted
-                    }
+                    value.ashr(bits)
                 }
                 BinaryInstKind::EvmUdiv
                 | BinaryInstKind::EvmSdiv
@@ -2272,8 +2267,11 @@ enum ReachableEdgeState {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{ClassData, GvnInsn, GvnSolver, ValuePhi, ValuePhiFinder, inst_to_gvn_key};
-    use sonatina_ir::ValueId;
+    use super::{
+        BinaryInstKind, ClassData, GvnInsn, GvnSolver, InstClassKind, ValuePhi, ValuePhiFinder,
+        inst_to_gvn_key,
+    };
+    use sonatina_ir::{Immediate, ValueId};
     use sonatina_parser::parse_module;
 
     #[test]
@@ -2394,6 +2392,41 @@ func private %entry(v0.i1) -> i32 {
             let mut finder = ValuePhiFinder::new(&mut solver, func.arg_values[0]);
             assert!(finder.get_phi_of(func, phi_value).is_some());
             assert!(finder.get_phi_of(func, phi_value).is_some());
+        });
+    }
+
+    #[test]
+    fn constant_folding_sar_uses_arithmetic_shift() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i8 {
+    block0:
+        v0.i8 = sar 1.i8 -8.i8;
+        return v0;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let sar_inst = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find(|&inst| {
+                    matches!(
+                        inst_to_gvn_key(func, inst).kind(),
+                        InstClassKind::Binary(BinaryInstKind::Sar)
+                    )
+                })
+                .expect("test function should contain a sar instruction");
+            let key = inst_to_gvn_key(func, sar_inst);
+            let mut solver = GvnSolver::new();
+            let folded = solver
+                .perform_constant_folding(func, &key)
+                .expect("sar constant folding should succeed");
+            assert_eq!(func.dfg.value_imm(folded), Some(Immediate::I8(-4)));
         });
     }
 }

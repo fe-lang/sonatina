@@ -4,7 +4,7 @@ use std::{io, ops};
 
 use super::Type;
 use crate::{
-    GlobalVariableRef, I256,
+    GlobalVariableRef, I256, U256,
     inst::InstId,
     ir_writer::{FuncWriteCtx, IrWrite},
     module::ModuleCtx,
@@ -105,7 +105,7 @@ impl Immediate {
     }
 
     pub fn udiv(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, |lhs, rhs| (lhs.to_u256() / rhs.to_u256()).into())
+        self.apply_unsigned_binop(rhs, |lhs, rhs| lhs / rhs)
     }
 
     pub fn sdiv(self, rhs: Self) -> Self {
@@ -113,7 +113,7 @@ impl Immediate {
     }
 
     pub fn urem(self, rhs: Self) -> Self {
-        self.apply_binop(rhs, |lhs, rhs| (lhs.to_u256() % rhs.to_u256()).into())
+        self.apply_unsigned_binop(rhs, |lhs, rhs| lhs % rhs)
     }
 
     pub fn srem(self, rhs: Self) -> Self {
@@ -262,6 +262,83 @@ impl Immediate {
         }
     }
 
+    pub fn lshr(self, rhs: Self) -> Self {
+        debug_assert_eq!(self.ty(), rhs.ty());
+
+        let ty = self.ty();
+        let bits = self.bit_width();
+        let shift = rhs.unsigned_value();
+        if shift >= U256::from(bits as u16) {
+            return Self::zero(ty);
+        }
+
+        Self::from_i256(I256::from(self.unsigned_value() >> shift.as_usize()), ty)
+    }
+
+    pub fn ashr(self, rhs: Self) -> Self {
+        debug_assert_eq!(self.ty(), rhs.ty());
+
+        let ty = self.ty();
+        let bits = self.bit_width();
+        let mask = self.mask_for_ty();
+        let shift = rhs.unsigned_value();
+        let value = self.unsigned_value();
+        let sign_bit = U256::one() << (bits - 1);
+        if shift >= U256::from(bits as u16) {
+            if value & sign_bit == U256::zero() {
+                return Self::zero(ty);
+            }
+            return Self::all_one(ty);
+        }
+
+        let shift = shift.as_usize();
+        let shifted = value >> shift;
+        if value & sign_bit == U256::zero() || shift == 0 {
+            return Self::from_i256(I256::from(shifted), ty);
+        }
+
+        let fill_mask = mask ^ ((U256::one() << (bits - shift)) - U256::one());
+        Self::from_i256(I256::from(shifted | fill_mask), ty)
+    }
+
+    fn bit_width(self) -> usize {
+        match self.ty() {
+            Type::I1 => 1,
+            Type::I8 => 8,
+            Type::I16 => 16,
+            Type::I32 => 32,
+            Type::I64 => 64,
+            Type::I128 => 128,
+            Type::I256 => 256,
+            _ => unreachable!(),
+        }
+    }
+
+    fn mask_for_ty(self) -> U256 {
+        let bits = self.bit_width();
+        if bits == 256 {
+            !U256::zero()
+        } else {
+            (U256::one() << bits) - U256::one()
+        }
+    }
+
+    fn unsigned_value(self) -> U256 {
+        self.as_i256().to_u256() & self.mask_for_ty()
+    }
+
+    fn apply_unsigned_binop<F>(self, rhs: Self, f: F) -> Self
+    where
+        F: FnOnce(U256, U256) -> U256,
+    {
+        debug_assert_eq!(self.ty(), rhs.ty());
+
+        let ty = self.ty();
+        let lhs = self.unsigned_value();
+        let rhs = rhs.unsigned_value();
+        Self::from_i256(I256::from(f(lhs, rhs)), ty)
+    }
+
     fn apply_binop<F>(self, rhs: Self, f: F) -> Self
     where
         F: FnOnce(I256, I256) -> I256,
@@ -375,7 +452,7 @@ impl ops::Shr for Immediate {
     type Output = Self;
 
     fn shr(self, rhs: Self) -> Self::Output {
-        self.apply_binop(rhs, ops::Shr::shr)
+        self.lshr(rhs)
     }
 }
 
@@ -447,3 +524,25 @@ imm_from_primary!(u64, i64, Immediate::I64);
 imm_from_primary!(i128, i128, Immediate::I128);
 imm_from_primary!(u128, i128, Immediate::I128);
 imm_from_primary!(I256, I256, Immediate::I256);
+
+#[cfg(test)]
+mod tests {
+    use super::Immediate;
+
+    #[test]
+    fn lshr_is_width_aware_for_negative_immediates() {
+        assert_eq!(Immediate::I8(-8) >> Immediate::I8(1), Immediate::I8(124));
+    }
+
+    #[test]
+    fn ashr_sign_extends_within_type_width() {
+        assert_eq!(Immediate::I8(-8).ashr(Immediate::I8(1)), Immediate::I8(-4));
+        assert_eq!(Immediate::I8(-8).ashr(Immediate::I8(8)), Immediate::I8(-1));
+    }
+
+    #[test]
+    fn unsigned_div_mod_are_width_aware_for_negative_immediates() {
+        assert_eq!(Immediate::I8(-8).udiv(Immediate::I8(2)), Immediate::I8(124));
+        assert_eq!(Immediate::I8(-7).urem(Immediate::I8(10)), Immediate::I8(9));
+    }
+}
