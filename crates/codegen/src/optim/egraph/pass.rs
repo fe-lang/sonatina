@@ -68,6 +68,7 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
 
     // Convert to egglog
     let program = func_to_egglog(func);
+    let load_mem_map = collect_load_mem_ids(&program);
 
     // Build extraction queries for all instruction result values
     let mut full_program = program.clone();
@@ -117,7 +118,8 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
         let original_val = value_map[name];
         let ty = type_map[name];
 
-        let Some(term) = EggTerm::parse(result, func).map(EggTerm::canonicalize) else {
+        let Some(term) = EggTerm::parse(result, func, &load_mem_map).map(EggTerm::canonicalize)
+        else {
             continue;
         };
 
@@ -131,7 +133,7 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
                     changed = true;
                 }
             }
-            EggTerm::Value(alias_val) => {
+            EggTerm::Value(alias_val) | EggTerm::LoadResult(alias_val, _) => {
                 if can_alias(func, &dom, original_val, alias_val) {
                     func.dfg.change_to_alias(original_val, alias_val);
                     changed = true;
@@ -252,6 +254,28 @@ fn extract_output_to_string(output: &CommandOutput) -> Option<String> {
         }
         _ => None,
     }
+}
+
+fn collect_load_mem_ids(program: &str) -> FxHashMap<u32, u32> {
+    let mut load_mem_ids = FxHashMap::default();
+
+    for line in program.lines() {
+        let Some((_, rest)) = line.split_once("(LoadResult ") else {
+            continue;
+        };
+
+        let mut fields = rest.split_whitespace();
+        let (Some(load_id), Some(mem_id)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+
+        let (Ok(load_id), Ok(mem_id)) = (load_id.parse::<u32>(), mem_id.parse::<u32>()) else {
+            continue;
+        };
+        load_mem_ids.insert(load_id, mem_id);
+    }
+
+    load_mem_ids
 }
 
 fn can_alias(func: &Function, dom: &DomTree, original_val: ValueId, alias_val: ValueId) -> bool {
@@ -401,7 +425,10 @@ fn is_trivially_dead_pure_inst(func: &Function, inst: InstId) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use sonatina_ir::module::{FuncAttrs, FuncRef};
+    use sonatina_ir::{
+        ir_writer::FuncWriter,
+        module::{FuncAttrs, FuncRef},
+    };
     use sonatina_parser::parse_module;
 
     use super::*;
@@ -849,6 +876,74 @@ func private %f() {
 
         parsed.module.func_store.view(caller, |func| {
             assert!(!has_unknown_call_attrs(func));
+        });
+    }
+
+    #[test]
+    fn egg_term_parse_rejects_mismatched_load_mem_states() {
+        let load_mem_ids: FxHashMap<u32, u32> = [(21, 4), (32, 6), (36, 6)].into_iter().collect();
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-london"
+
+func private %f(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+"#,
+        )
+        .expect("parse should succeed");
+
+        let func_ref = parsed.module.funcs()[0];
+        parsed.module.func_store.view(func_ref, |func| {
+            assert!(EggTerm::parse("(LoadResult 21 4 (I256))", func, &load_mem_ids).is_some());
+            assert!(EggTerm::parse(
+                "(EvmMulMod (LoadResult 32 6 (I256)) (LoadResult 36 6 (I256)) (Const (i256 1) (I256)))",
+                func,
+                &load_mem_ids
+            )
+            .is_some());
+            assert!(EggTerm::parse("(LoadResult 21 7 (I256))", func, &load_mem_ids).is_none());
+            assert!(EggTerm::parse(
+                "(EvmAddMod (LoadResult 21 4 (I256)) (LoadResult 36 99 (I256)) (Const (i256 1) (I256)))",
+                func,
+                &load_mem_ids
+            )
+            .is_none());
+        });
+    }
+
+    #[test]
+    fn egraph_does_not_alias_load_results_across_memory_states() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = int_to_ptr v0 *i256;
+        v2.i256 = ptr_to_int v1 i256;
+        v3.i256 = mload v2 i256;
+        v4.i256 = add v3 1.i256;
+        mstore v2 v4 i256;
+        return v4;
+}
+"#,
+        )
+        .expect("parse should succeed");
+
+        let func_ref = parsed.module.funcs()[0];
+        parsed.module.func_store.modify(func_ref, |func| {
+            assert!(run_egraph_pass(func), "expected egraph to change function");
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains(" = add "),
+                "cross-memory load aliasing must not eliminate add:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("return v4;"),
+                "return value must remain the post-store expression:\n{dumped}"
+            );
         });
     }
 }

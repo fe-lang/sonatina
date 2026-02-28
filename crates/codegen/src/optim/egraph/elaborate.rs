@@ -12,6 +12,7 @@ use sonatina_ir::{
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EggTerm {
     Value(ValueId),
+    LoadResult(ValueId, u32),
     Global(GlobalVariableRef, Type),
     Undef(Type),
     Const(I256, Type),
@@ -62,7 +63,7 @@ pub enum EggTerm {
 }
 
 impl EggTerm {
-    pub fn parse(s: &str, func: &Function) -> Option<Self> {
+    pub fn parse(s: &str, func: &Function, load_mem_ids: &FxHashMap<u32, u32>) -> Option<Self> {
         let tokens = tokenize(s)?;
         let mut pos = 0;
         let sexp = parse_sexp(&tokens, &mut pos)?;
@@ -70,12 +71,16 @@ impl EggTerm {
             return None;
         }
 
-        EggTerm::from_sexp(func, &sexp)
+        EggTerm::from_sexp(func, &sexp, load_mem_ids)
     }
 
     pub fn node_count(&self) -> usize {
         match self {
-            EggTerm::Value(_) | EggTerm::Global(..) | EggTerm::Undef(..) | EggTerm::Const(..) => 1,
+            EggTerm::Value(_)
+            | EggTerm::LoadResult(..)
+            | EggTerm::Global(..)
+            | EggTerm::Undef(..)
+            | EggTerm::Const(..) => 1,
             EggTerm::Neg(x)
             | EggTerm::Not(x)
             | EggTerm::IsZero(x)
@@ -127,6 +132,7 @@ impl EggTerm {
     pub fn for_each_value(&self, f: &mut impl FnMut(ValueId)) {
         match self {
             EggTerm::Value(value) => f(*value),
+            EggTerm::LoadResult(value, _) => f(*value),
             EggTerm::Global(..) | EggTerm::Undef(..) | EggTerm::Const(..) => {}
             EggTerm::Neg(x)
             | EggTerm::Not(x)
@@ -180,9 +186,11 @@ impl EggTerm {
 
     pub fn is_supported(&self, is: &dyn InstSetBase) -> bool {
         match self {
-            EggTerm::Value(_) | EggTerm::Global(..) | EggTerm::Undef(..) | EggTerm::Const(..) => {
-                true
-            }
+            EggTerm::Value(_)
+            | EggTerm::LoadResult(..)
+            | EggTerm::Global(..)
+            | EggTerm::Undef(..)
+            | EggTerm::Const(..) => true,
             EggTerm::Gep { base, indices } => {
                 is.has_gep().is_some()
                     && base.is_supported(is)
@@ -293,6 +301,10 @@ impl EggTerm {
     fn canonicalize_with_key(self) -> (Self, String) {
         match self {
             EggTerm::Value(value) => (EggTerm::Value(value), format!("v{}", value.as_u32())),
+            EggTerm::LoadResult(value, mem_id) => (
+                EggTerm::LoadResult(value, mem_id),
+                format!("load{}@{mem_id}", value.as_u32()),
+            ),
             EggTerm::Global(gv, ty) => {
                 (EggTerm::Global(gv, ty), format!("g{}:{ty:?}", gv.as_u32()))
             }
@@ -490,7 +502,7 @@ impl EggTerm {
         )
     }
 
-    fn from_sexp(func: &Function, sexp: &Sexp) -> Option<Self> {
+    fn from_sexp(func: &Function, sexp: &Sexp, load_mem_ids: &FxHashMap<u32, u32>) -> Option<Self> {
         match sexp {
             Sexp::Atom(atom) => parse_value_atom(atom).map(EggTerm::Value),
             Sexp::Str(_) => None,
@@ -528,50 +540,54 @@ impl EggTerm {
                         Some(EggTerm::Value(ValueId::from_u32(id)))
                     }
                     "LoadResult" => {
-                        let [id, _mem, _ty] = rest else { return None };
+                        let [id, mem, _ty] = rest else { return None };
                         let id = parse_u32(id)?;
-                        Some(EggTerm::Value(ValueId::from_u32(id)))
+                        let mem = parse_u32(mem)?;
+                        if load_mem_ids.get(&id) != Some(&mem) {
+                            return None;
+                        }
+                        Some(EggTerm::LoadResult(ValueId::from_u32(id), mem))
                     }
-                    "GepBase" | "GepOffset" => parse_gep(func, sexp),
+                    "GepBase" | "GepOffset" => parse_gep(func, sexp, load_mem_ids),
 
-                    "Neg" => parse_unary(func, rest, EggTerm::Neg),
-                    "Not" => parse_unary(func, rest, EggTerm::Not),
-                    "IsZero" => parse_unary(func, rest, EggTerm::IsZero),
-                    "EvmClz" => parse_unary(func, rest, EggTerm::EvmClz),
+                    "Neg" => parse_unary(func, rest, load_mem_ids, EggTerm::Neg),
+                    "Not" => parse_unary(func, rest, load_mem_ids, EggTerm::Not),
+                    "IsZero" => parse_unary(func, rest, load_mem_ids, EggTerm::IsZero),
+                    "EvmClz" => parse_unary(func, rest, load_mem_ids, EggTerm::EvmClz),
 
-                    "Add" => parse_binary(func, rest, EggTerm::Add),
-                    "Sub" => parse_binary(func, rest, EggTerm::Sub),
-                    "Mul" => parse_binary(func, rest, EggTerm::Mul),
-                    "Udiv" => parse_binary(func, rest, EggTerm::Udiv),
-                    "Sdiv" => parse_binary(func, rest, EggTerm::Sdiv),
-                    "Umod" => parse_binary(func, rest, EggTerm::Umod),
-                    "Smod" => parse_binary(func, rest, EggTerm::Smod),
-                    "Shl" => parse_binary(func, rest, EggTerm::Shl),
-                    "Shr" => parse_binary(func, rest, EggTerm::Shr),
-                    "Sar" => parse_binary(func, rest, EggTerm::Sar),
-                    "EvmExp" => parse_binary(func, rest, EggTerm::EvmExp),
-                    "EvmByte" => parse_binary(func, rest, EggTerm::EvmByte),
-                    "EvmAddMod" => parse_ternary(func, rest, EggTerm::EvmAddMod),
-                    "EvmMulMod" => parse_ternary(func, rest, EggTerm::EvmMulMod),
+                    "Add" => parse_binary(func, rest, load_mem_ids, EggTerm::Add),
+                    "Sub" => parse_binary(func, rest, load_mem_ids, EggTerm::Sub),
+                    "Mul" => parse_binary(func, rest, load_mem_ids, EggTerm::Mul),
+                    "Udiv" => parse_binary(func, rest, load_mem_ids, EggTerm::Udiv),
+                    "Sdiv" => parse_binary(func, rest, load_mem_ids, EggTerm::Sdiv),
+                    "Umod" => parse_binary(func, rest, load_mem_ids, EggTerm::Umod),
+                    "Smod" => parse_binary(func, rest, load_mem_ids, EggTerm::Smod),
+                    "Shl" => parse_binary(func, rest, load_mem_ids, EggTerm::Shl),
+                    "Shr" => parse_binary(func, rest, load_mem_ids, EggTerm::Shr),
+                    "Sar" => parse_binary(func, rest, load_mem_ids, EggTerm::Sar),
+                    "EvmExp" => parse_binary(func, rest, load_mem_ids, EggTerm::EvmExp),
+                    "EvmByte" => parse_binary(func, rest, load_mem_ids, EggTerm::EvmByte),
+                    "EvmAddMod" => parse_ternary(func, rest, load_mem_ids, EggTerm::EvmAddMod),
+                    "EvmMulMod" => parse_ternary(func, rest, load_mem_ids, EggTerm::EvmMulMod),
 
-                    "And" => parse_binary(func, rest, EggTerm::And),
-                    "Or" => parse_binary(func, rest, EggTerm::Or),
-                    "Xor" => parse_binary(func, rest, EggTerm::Xor),
+                    "And" => parse_binary(func, rest, load_mem_ids, EggTerm::And),
+                    "Or" => parse_binary(func, rest, load_mem_ids, EggTerm::Or),
+                    "Xor" => parse_binary(func, rest, load_mem_ids, EggTerm::Xor),
 
-                    "Lt" => parse_binary(func, rest, EggTerm::Lt),
-                    "Gt" => parse_binary(func, rest, EggTerm::Gt),
-                    "Le" => parse_binary(func, rest, EggTerm::Le),
-                    "Ge" => parse_binary(func, rest, EggTerm::Ge),
-                    "Slt" => parse_binary(func, rest, EggTerm::Slt),
-                    "Sgt" => parse_binary(func, rest, EggTerm::Sgt),
-                    "Sle" => parse_binary(func, rest, EggTerm::Sle),
-                    "Sge" => parse_binary(func, rest, EggTerm::Sge),
-                    "Eq" => parse_binary(func, rest, EggTerm::Eq),
-                    "Ne" => parse_binary(func, rest, EggTerm::Ne),
-                    "Sext" => parse_unary_with_type(func, rest, EggTerm::Sext),
-                    "Zext" => parse_unary_with_type(func, rest, EggTerm::Zext),
-                    "Trunc" => parse_unary_with_type(func, rest, EggTerm::Trunc),
-                    "Bitcast" => parse_unary_with_type(func, rest, EggTerm::Bitcast),
+                    "Lt" => parse_binary(func, rest, load_mem_ids, EggTerm::Lt),
+                    "Gt" => parse_binary(func, rest, load_mem_ids, EggTerm::Gt),
+                    "Le" => parse_binary(func, rest, load_mem_ids, EggTerm::Le),
+                    "Ge" => parse_binary(func, rest, load_mem_ids, EggTerm::Ge),
+                    "Slt" => parse_binary(func, rest, load_mem_ids, EggTerm::Slt),
+                    "Sgt" => parse_binary(func, rest, load_mem_ids, EggTerm::Sgt),
+                    "Sle" => parse_binary(func, rest, load_mem_ids, EggTerm::Sle),
+                    "Sge" => parse_binary(func, rest, load_mem_ids, EggTerm::Sge),
+                    "Eq" => parse_binary(func, rest, load_mem_ids, EggTerm::Eq),
+                    "Ne" => parse_binary(func, rest, load_mem_ids, EggTerm::Ne),
+                    "Sext" => parse_unary_with_type(func, rest, load_mem_ids, EggTerm::Sext),
+                    "Zext" => parse_unary_with_type(func, rest, load_mem_ids, EggTerm::Zext),
+                    "Trunc" => parse_unary_with_type(func, rest, load_mem_ids, EggTerm::Trunc),
+                    "Bitcast" => parse_unary_with_type(func, rest, load_mem_ids, EggTerm::Bitcast),
 
                     _ => None,
                 }
@@ -583,32 +599,35 @@ impl EggTerm {
 fn parse_unary(
     func: &Function,
     args: &[Sexp],
+    load_mem_ids: &FxHashMap<u32, u32>,
     ctor: fn(Box<EggTerm>) -> EggTerm,
 ) -> Option<EggTerm> {
     let [arg] = args else { return None };
-    Some(ctor(Box::new(EggTerm::from_sexp(func, arg)?)))
+    Some(ctor(Box::new(EggTerm::from_sexp(func, arg, load_mem_ids)?)))
 }
 
 fn parse_binary(
     func: &Function,
     args: &[Sexp],
+    load_mem_ids: &FxHashMap<u32, u32>,
     ctor: fn(Box<EggTerm>, Box<EggTerm>) -> EggTerm,
 ) -> Option<EggTerm> {
     let [lhs, rhs] = args else { return None };
     Some(ctor(
-        Box::new(EggTerm::from_sexp(func, lhs)?),
-        Box::new(EggTerm::from_sexp(func, rhs)?),
+        Box::new(EggTerm::from_sexp(func, lhs, load_mem_ids)?),
+        Box::new(EggTerm::from_sexp(func, rhs, load_mem_ids)?),
     ))
 }
 
 fn parse_unary_with_type(
     func: &Function,
     args: &[Sexp],
+    load_mem_ids: &FxHashMap<u32, u32>,
     ctor: fn(Box<EggTerm>, Type) -> EggTerm,
 ) -> Option<EggTerm> {
     let [arg, ty] = args else { return None };
     Some(ctor(
-        Box::new(EggTerm::from_sexp(func, arg)?),
+        Box::new(EggTerm::from_sexp(func, arg, load_mem_ids)?),
         parse_type(ty)?,
     ))
 }
@@ -616,25 +635,30 @@ fn parse_unary_with_type(
 fn parse_ternary(
     func: &Function,
     args: &[Sexp],
+    load_mem_ids: &FxHashMap<u32, u32>,
     ctor: fn(Box<EggTerm>, Box<EggTerm>, Box<EggTerm>) -> EggTerm,
 ) -> Option<EggTerm> {
     let [a, b, c] = args else { return None };
     Some(ctor(
-        Box::new(EggTerm::from_sexp(func, a)?),
-        Box::new(EggTerm::from_sexp(func, b)?),
-        Box::new(EggTerm::from_sexp(func, c)?),
+        Box::new(EggTerm::from_sexp(func, a, load_mem_ids)?),
+        Box::new(EggTerm::from_sexp(func, b, load_mem_ids)?),
+        Box::new(EggTerm::from_sexp(func, c, load_mem_ids)?),
     ))
 }
 
-fn parse_gep(func: &Function, sexp: &Sexp) -> Option<EggTerm> {
-    let (base, indices) = parse_gep_chain(func, sexp)?;
+fn parse_gep(func: &Function, sexp: &Sexp, load_mem_ids: &FxHashMap<u32, u32>) -> Option<EggTerm> {
+    let (base, indices) = parse_gep_chain(func, sexp, load_mem_ids)?;
     Some(EggTerm::Gep {
         base: Box::new(base),
         indices,
     })
 }
 
-fn parse_gep_chain(func: &Function, sexp: &Sexp) -> Option<(EggTerm, Vec<EggTerm>)> {
+fn parse_gep_chain(
+    func: &Function,
+    sexp: &Sexp,
+    load_mem_ids: &FxHashMap<u32, u32>,
+) -> Option<(EggTerm, Vec<EggTerm>)> {
     let Sexp::List(list) = sexp else { return None };
     let (head, rest) = list.split_first()?;
     let Sexp::Atom(head) = head else { return None };
@@ -642,14 +666,14 @@ fn parse_gep_chain(func: &Function, sexp: &Sexp) -> Option<(EggTerm, Vec<EggTerm
     match head.as_str() {
         "GepBase" => {
             let [base] = rest else { return None };
-            Some((EggTerm::from_sexp(func, base)?, Vec::new()))
+            Some((EggTerm::from_sexp(func, base, load_mem_ids)?, Vec::new()))
         }
         "GepOffset" => {
             let [prev, index, _field_idx] = rest else {
                 return None;
             };
-            let (base, mut indices) = parse_gep_chain(func, prev)?;
-            indices.push(EggTerm::from_sexp(func, index)?);
+            let (base, mut indices) = parse_gep_chain(func, prev, load_mem_ids)?;
+            indices.push(EggTerm::from_sexp(func, index, load_mem_ids)?);
             Some((base, indices))
         }
         _ => None,
@@ -1061,6 +1085,7 @@ impl<'a> Elaborator<'a> {
 
         let value = match term {
             EggTerm::Value(value) => *value,
+            EggTerm::LoadResult(value, _) => *value,
             EggTerm::Global(gv, _ty) => self.func.dfg.make_global_value(*gv),
             EggTerm::Undef(ty) => self.func.dfg.make_undef_value(*ty),
             EggTerm::Const(val, ty) => self
@@ -1211,9 +1236,11 @@ impl<'a> Elaborator<'a> {
             EggTerm::Bitcast(arg, ty) => {
                 Box::new(Bitcast::new(is.has_bitcast()?, self.val(arg)?, *ty))
             }
-            EggTerm::Value(_) | EggTerm::Global(..) | EggTerm::Undef(..) | EggTerm::Const(..) => {
-                return None;
-            }
+            EggTerm::Value(_)
+            | EggTerm::LoadResult(..)
+            | EggTerm::Global(..)
+            | EggTerm::Undef(..)
+            | EggTerm::Const(..) => return None,
         })
     }
 

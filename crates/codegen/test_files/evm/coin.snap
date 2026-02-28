@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/coin.sntn
 ---
@@ -332,7 +333,7 @@ evm:
     - stack=[v7, v1, <RET>]
       pre: [DUP2]
       evm_sload [v1] -> v11
-    // v12.i256 = add v11 v7;
+    // v12.i256 = add v7 v11;
     - stack=[v11, v7, v1, <RET>], last_use=[v11]
       pre: [DUP2]
       add [v7, v11] -> v12
@@ -348,7 +349,7 @@ evm:
     - stack=[v13, v7, v1, <RET>]
       pre: [DUP1]
       evm_sload [v13] -> v14
-    // v15.i256 = add v14 v7;
+    // v15.i256 = add v7 v14;
     - stack=[v14, v13, v7, v1, <RET>], last_use=[v7, v14]
       pre: [SWAP1, SWAP2]
       add [v7, v14] -> v15
@@ -372,7 +373,7 @@ evm:
     - stack=[v18, v7, v1, <RET>]
       pre: [DUP1]
       evm_sload [v18] -> v19
-    // v20.i256 = add v19 v7;
+    // v20.i256 = add v7 v19;
     - stack=[v19, v18, v7, v1, <RET>], last_use=[v19]
       pre: [DUP3]
       add [v7, v19] -> v20
@@ -388,7 +389,7 @@ evm:
     - stack=[v22, v7, v18, <RET>]
       pre: [DUP1]
       evm_sload [v22] -> v23
-    // v24.i256 = add v23 v7;
+    // v24.i256 = add v7 v23;
     - stack=[v23, v22, v7, v18, <RET>], last_use=[v7, v23]
       pre: [SWAP1, SWAP2]
       add [v7, v23] -> v24
@@ -471,7 +472,7 @@ evm:
     - stack=[v22, v7, <RET>]
       pre: [DUP1]
       evm_sload [v22] -> v23
-    // v24.i256 = add v23 v7;
+    // v24.i256 = add v7 v23;
     - stack=[v23, v22, v7, <RET>], last_use=[v7, v23]
       pre: [SWAP1, SWAP2]
       add [v7, v23] -> v24
@@ -525,7 +526,7 @@ evm:
     - stack=[v7, v1, <RET>]
       pre: [DUP2]
       evm_sload [v1] -> v30
-    // v31.i256 = add v30 v7;
+    // v31.i256 = add v7 v30;
     - stack=[v30, v7, v1, <RET>], last_use=[v7, v30]
       add [v30, v7] -> v31
     // evm_sstore v1 v31;
@@ -2695,7 +2696,7 @@ __Coin_recv_0_0:
   block1:
     DUP2  // v15.i256 = evm_sload v1;
     SLOAD
-    DUP2  // v17.i256 = add v15 v9;
+    DUP2  // v17.i256 = add v9 v15;
     ADD
     DUP3  // evm_sstore v1 v17;
     SSTORE
@@ -2704,7 +2705,7 @@ __Coin_recv_0_0:
     ADD
     DUP1  // v20.i256 = evm_sload v19;
     SLOAD
-    SWAP1  // v21.i256 = add v20 v9;
+    SWAP1  // v21.i256 = add v9 v20;
     SWAP2
     ADD
     SWAP1  // evm_sstore v19 v21;
@@ -2719,7 +2720,7 @@ __Coin_recv_0_0:
     ADD
     DUP1  // v26.i256 = evm_sload v25;
     SLOAD
-    DUP3  // v28.i256 = add v26 v9;
+    DUP3  // v28.i256 = add v9 v26;
     ADD
     DUP2  // evm_sstore v25 v28;
     SSTORE
@@ -2728,7 +2729,7 @@ __Coin_recv_0_0:
     ADD
     DUP1  // v31.i256 = evm_sload v30;
     SLOAD
-    SWAP1  // v32.i256 = add v31 v9;
+    SWAP1  // v32.i256 = add v9 v31;
     SWAP2
     ADD
     SWAP1  // evm_sstore v30 v32;
@@ -2779,7 +2780,7 @@ __Coin_recv_0_1:
     ADD
     DUP1  // v32.i256 = evm_sload v31;
     SLOAD
-    SWAP1  // v33.i256 = add v32 v9;
+    SWAP1  // v33.i256 = add v9 v32;
     SWAP2
     ADD
     SWAP1  // evm_sstore v31 v33;
@@ -2818,7 +2819,7 @@ __Coin_recv_0_1:
     SSTORE
     DUP2  // v41.i256 = evm_sload v1;
     SLOAD
-    ADD  // v42.i256 = add v41 v9;
+    ADD  // v42.i256 = add v9 v41;
     SWAP1  // evm_sstore v1 v42;
     SSTORE
     PUSH0  // return 0.i256;
