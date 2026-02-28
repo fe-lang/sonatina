@@ -1,0 +1,26 @@
+target = "evm-ethereum-london"
+
+# regex: PHI=\bv\d+\b
+# check: block3:
+# nextln:     $(sum=$PHI).i32 = phi (v5 block1) (v6 block2);
+# nextln:     v7.i32 = phi (v1 block1) (v2 block2);
+# nextln:     v8.i32 = phi (v3 block1) (v4 block2);
+# nextln:     return $sum;
+func public %binary_two_phi_operands(v0.i1, v1.i32, v2.i32, v3.i32, v4.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v5.i32 = add v1 v3;
+        jump block3;
+
+    block2:
+        v6.i32 = add v2 v4;
+        jump block3;
+
+    block3:
+        v7.i32 = phi (v1 block1) (v2 block2);
+        v8.i32 = phi (v3 block1) (v4 block2);
+        v9.i32 = add v7 v8;
+        return v9;
+}

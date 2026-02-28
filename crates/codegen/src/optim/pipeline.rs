@@ -20,6 +20,7 @@ use super::{
     cfg_cleanup::CfgCleanup,
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
     egraph::run_egraph_pass,
+    gvn::GvnSolver,
     inliner::{Inliner, InlinerConfig},
     licm::LicmSolver,
     sccp::SccpSolver,
@@ -42,6 +43,8 @@ pub enum Pass {
     Licm,
     /// E-graph based algebraic simplification and memory forwarding.
     Egraph,
+    /// Complete Global Value Numbering (legacy sparse predicated solver).
+    Gvn,
     /// Recompute `dfg.users` from layout-inserted instructions only.
     ///
     /// Use after passes (like Egraph) that can leave stale user entries
@@ -84,7 +87,7 @@ pub struct Pipeline {
 fn pass_needs_func_behavior(pass: Pass) -> bool {
     matches!(
         pass,
-        Pass::CfgCleanup | Pass::Sccp | Pass::Adce | Pass::Egraph
+        Pass::CfgCleanup | Pass::Sccp | Pass::Adce | Pass::Egraph | Pass::Gvn
     )
 }
 
@@ -95,7 +98,7 @@ fn step_needs_func_behavior(passes: &[Pass]) -> bool {
 fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
     matches!(
         pass,
-        Pass::CfgCleanup | Pass::Sccp | Pass::Adce | Pass::Licm | Pass::Egraph
+        Pass::CfgCleanup | Pass::Sccp | Pass::Adce | Pass::Licm | Pass::Egraph | Pass::Gvn
     )
 }
 
@@ -131,6 +134,7 @@ impl Pipeline {
         p.add_step(Step::FuncPasses(vec![
             Pass::CfgCleanup,
             Pass::Sccp,
+            Pass::Gvn,
             Pass::Licm,
             Pass::CfgCleanup,
             Pass::Egraph,
@@ -151,6 +155,7 @@ impl Pipeline {
         p.add_step(Step::FuncPasses(vec![
             Pass::CfgCleanup,
             Pass::Sccp,
+            Pass::Gvn,
             Pass::Licm,
             Pass::CfgCleanup,
             Pass::Egraph,
@@ -162,6 +167,7 @@ impl Pipeline {
         p.add_step(Step::FuncPasses(vec![
             Pass::CfgCleanup,
             Pass::Sccp,
+            Pass::Gvn,
             Pass::CfgCleanup,
         ]));
         p.add_step(Step::DeadFuncElim);
@@ -175,6 +181,7 @@ impl Pipeline {
     /// 2. Per-function passes (parallel):
     ///    - `CfgCleanup` — normalize CFG before analysis-heavy passes
     ///    - `Sccp` — constant propagation + dead code elimination (composite)
+    ///    - `Gvn` — sparse predicated global value numbering with value-phi resolution
     ///    - `Licm` — loop invariant code motion
     ///    - `CfgCleanup` — clean up after LICM structural changes
     ///    - `Egraph` — algebraic simplification, memory forwarding
@@ -298,6 +305,12 @@ fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
         Pass::Egraph => {
             run_egraph_pass(func);
         }
+        Pass::Gvn => {
+            ctx.cfg.compute(func);
+            ctx.domtree.compute(&ctx.cfg);
+            let mut solver = GvnSolver::new();
+            solver.run(func, &mut ctx.cfg, &mut ctx.domtree);
+        }
         Pass::RebuildUsers => {
             func.rebuild_users();
         }
@@ -311,6 +324,7 @@ mod tests {
         Type,
         builder::test_util::*,
         inst::{arith::Add, control_flow::Return},
+        ir_writer::FuncWriter,
         prelude::*,
     };
     use sonatina_parser::parse_module;
@@ -413,5 +427,485 @@ object @O {
             .collect::<Vec<_>>();
         names.sort();
         assert_eq!(names, vec!["entry".to_string()]);
+    }
+
+    #[test]
+    fn gvn_cses_pure_opaque_gep_with_identical_operands() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.*i256) -> *i256 {
+    block0:
+        v1.*i256 = gep v0 0.i256 1.i256;
+        v2.*i256 = gep v0 0.i256 1.i256;
+        return v2;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            let gep_count = dumped.matches(" = gep ").count();
+            assert_eq!(
+                gep_count, 1,
+                "expected duplicate pure opaque geps to CSE:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_canonicalizes_non_binary_operands_before_cse() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.*i256, v1.i256) -> *i256 {
+    block0:
+        v2.i256 = add v1 0.i256;
+        v3.*i256 = gep v0 0.i256 v2;
+        v4.*i256 = gep v0 0.i256 v1;
+        return v4;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            let gep_count = dumped.matches(" = gep ").count();
+            assert_eq!(
+                gep_count, 1,
+                "expected congruent n-ary operands to canonicalize before CSE:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_treats_globals_as_always_available() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+global public const i256 $G = 0;
+
+func private %entry(v0.i1) -> *i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.*i256 = phi ($G block1) ($G block2);
+        return v1;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return $G;"),
+                "expected global to be available for phi simplification:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains(" = phi "),
+                "phi over identical globals should be eliminated:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_keeps_duplicate_branch_dest_reachable() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i256 {
+    block0:
+        v0.i1 = eq 0.i256 0.i256;
+        br v0 block1 block1;
+
+    block1:
+        return 1.i256;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(
+                &[Pass::CfgCleanup, Pass::Sccp, Pass::Gvn, Pass::CfgCleanup],
+                func,
+            );
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return 1.i256;"),
+                "expected return to survive duplicate-branch GVN:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("unreachable;"),
+                "duplicate branch destination collapsed to unreachable:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_uses_br_table_default_when_known_scrutinee_has_no_match() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i32 {
+    block0:
+        br_table 42.i8 block3 (0.i8 block1) (1.i8 block2);
+
+    block1:
+        return 11.i32;
+
+    block2:
+        return 22.i32;
+
+    block3:
+        return 33.i32;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return 33.i32;"),
+                "expected default arm to stay reachable:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("return 11.i32;"),
+                "keyed arm with non-matching immediate scrutinee should be unreachable:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("return 22.i32;"),
+                "all non-default keyed arms should be unreachable when no key matches:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_preserves_reachable_br_table_entry_with_duplicate_dest() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i32 {
+    block0:
+        br_table 0.i8 block3 (0.i8 block1) (1.i8 block2) (2.i8 block1);
+
+    block1:
+        return 11.i32;
+
+    block2:
+        return 22.i32;
+
+    block3:
+        return 33.i32;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return 11.i32;"),
+                "expected reachable br_table arm to survive duplicate-dest pruning:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("return 33.i32;"),
+                "default arm should be removed for constant scrutinee:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_preserves_phi_arg_when_duplicate_pred_edge_remains_reachable() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i32 {
+    block0:
+        br_table 0.i8 block2 (0.i8 block1) (1.i8 block1);
+
+    block1:
+        v0.i32 = phi (7.i32 block0);
+        return v0;
+
+    block2:
+        return 9.i32;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return 7.i32;"),
+                "phi argument from block0 should remain when one duplicate edge is reachable:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("return 9.i32;"),
+                "unreachable default arm should be removed for constant scrutinee:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_phi_pruning_keeps_users_consistent_for_egraph_dce() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v2.i32 = add v1 3.i32;
+        br 0.i1 block3 block4;
+
+    block2:
+        jump block3;
+
+    block3:
+        v3.i32 = phi (v2 block1) (7.i32 block2);
+        return v3;
+
+    block4:
+        return 9.i32;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(
+                &[Pass::CfgCleanup, Pass::Gvn, Pass::Egraph, Pass::CfgCleanup],
+                func,
+            );
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains(" = add "),
+                "dead add should be removed after phi pruning:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_does_not_fold_self_cmp_when_value_may_be_undef() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i256 {
+    block0:
+        v1.i256 = add undef.i256 1.i256;
+        v2.i1 = eq v1 v1;
+        br v2 block1 block2;
+
+    block1:
+        return 1.i256;
+
+    block2:
+        return 2.i256;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return 1.i256;"),
+                "then branch should remain reachable:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("return 2.i256;"),
+                "else branch should remain reachable when eq compares maybe-undef value:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_does_not_cancel_sub_add_when_operand_may_be_undef() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i256 {
+    block0:
+        v1.i256 = add 5.i256 undef.i256;
+        v2.i256 = sub v1 undef.i256;
+        v3.i1 = eq v2 5.i256;
+        br v3 block1 block2;
+
+    block1:
+        return 1.i256;
+
+    block2:
+        return 2.i256;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return 1.i256;"),
+                "then branch should remain reachable:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("return 2.i256;"),
+                "else branch should remain reachable when sub/add cancellation operand may be undef:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_cancels_add_sub_when_operand_is_defined() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = sub v0 v1;
+        v3.i256 = add v1 v2;
+        return v3;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return v0;"),
+                "expected add/sub cancellation to fold to v0:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains(" = add "),
+                "expected add instruction to be removed:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_folds_constant_shifts() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i32 {
+    block0:
+        v1.i32 = shl 2.i32 3.i32;
+        v2.i32 = shr 1.i32 v1;
+        return v2;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return 6.i32;"),
+                "expected constant-shift chain to fold:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains(" = shl "),
+                "expected shl instruction to be removed:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains(" = shr "),
+                "expected shr instruction to be removed:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_infers_equality_through_bool_zero_compare() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i32, v1.i32) -> i32 {
+    block0:
+        v2.i1 = ne v0 v1;
+        v3.i1 = eq v2 0.i1;
+        br v3 block1 block2;
+
+    block1:
+        v4.i32 = sub v0 v1;
+        return v4;
+
+    block2:
+        return 7.i32;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("return 0.i32;"),
+                "expected inferred equality from eq(ne x y, 0) to fold sub in true branch:\n{dumped}"
+            );
+        });
     }
 }

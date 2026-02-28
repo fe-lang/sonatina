@@ -29,6 +29,7 @@ pub struct BrTable {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(arity(at_least(1)))]
+#[inst(kind(phi))]
 pub struct Phi {
     args: Vec<(ValueId, BlockId)>,
 }

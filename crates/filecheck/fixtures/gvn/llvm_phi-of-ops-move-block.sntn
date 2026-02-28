@@ -14,7 +14,7 @@ target = "evm-ethereum-london"
 # nextln:     br v2 block2 block4;
 # nextln: 
 # nextln: block2:
-# nextln:     v3.i64 = mload v100;
+# nextln:     v3.i64 = mload v100 i64;
 # nextln:     v4.i1 = eq v3 0.i64;
 # nextln:     br v4 block3 block4;
 # nextln: 
@@ -41,7 +41,7 @@ func public %llvm_test(v0.*i32, v100.*i64) -> unit {
         br v2 block2 block4;
 
     block2:
-        v3.i64 = mload v100;
+        v3.i64 = mload v100 i64;
         v4.i1 = eq v3 0.i64;
         br v4 block3 block4;
 

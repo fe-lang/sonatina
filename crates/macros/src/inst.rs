@@ -21,6 +21,7 @@ struct InstStruct {
     side_effect: Option<syn::Path>,
     is_terminator: bool,
     arity: InstAritySpec,
+    kind: InstKindSpec,
     fields: Vec<InstField>,
 }
 
@@ -29,11 +30,73 @@ struct InstField {
     ty: syn::Type,
 }
 
+struct InstAttrs {
+    side_effect: Option<syn::Path>,
+    is_terminator: bool,
+    arity: Option<InstAritySpec>,
+    kind: Option<InstKindSpec>,
+}
+
 enum InstAritySpec {
     Exact(usize),
     AtLeast(usize),
     AtMost(usize),
     Range { min: usize, max: usize },
+}
+
+enum InstKindSpec {
+    Opaque,
+    Unary(syn::Ident),
+    Binary(syn::Ident),
+    Cast(syn::Ident),
+    Phi,
+}
+
+impl InstKindSpec {
+    fn parse(meta: &syn::MetaList) -> syn::Result<Self> {
+        const USAGE: &str = "expected `kind(unary(Name))`, `kind(binary(Name))`, `kind(cast(Name))`, or `kind(phi)`";
+
+        let inner = syn::parse2::<syn::Meta>(meta.tokens.clone())
+            .map_err(|_| syn::Error::new_spanned(meta, USAGE))?;
+        match inner {
+            syn::Meta::Path(path) if path.is_ident("phi") => Ok(Self::Phi),
+            syn::Meta::List(list) => {
+                let Some(kind) = list.path.get_ident().map(ToString::to_string) else {
+                    return Err(syn::Error::new_spanned(list.path, USAGE));
+                };
+
+                let member = syn::parse2::<syn::Path>(list.tokens.clone())
+                    .map_err(|_| syn::Error::new_spanned(&list, USAGE))?;
+                let Some(member) = member.get_ident() else {
+                    return Err(syn::Error::new_spanned(member, USAGE));
+                };
+
+                match kind.as_str() {
+                    "unary" => Ok(Self::Unary(member.clone())),
+                    "binary" => Ok(Self::Binary(member.clone())),
+                    "cast" => Ok(Self::Cast(member.clone())),
+                    _ => Err(syn::Error::new_spanned(list.path, USAGE)),
+                }
+            }
+            _ => Err(syn::Error::new_spanned(inner, USAGE)),
+        }
+    }
+
+    fn to_tokens(&self) -> proc_macro2::TokenStream {
+        match self {
+            Self::Opaque => quote!(crate::inst::InstClassKind::Opaque),
+            Self::Unary(kind) => {
+                quote!(crate::inst::InstClassKind::Unary(crate::inst::UnaryInstKind::#kind))
+            }
+            Self::Binary(kind) => {
+                quote!(crate::inst::InstClassKind::Binary(crate::inst::BinaryInstKind::#kind))
+            }
+            Self::Cast(kind) => {
+                quote!(crate::inst::InstClassKind::Cast(crate::inst::CastInstKind::#kind))
+            }
+            Self::Phi => quote!(crate::inst::InstClassKind::Phi),
+        }
+    }
 }
 
 impl InstAritySpec {
@@ -154,7 +217,12 @@ impl InstAritySpec {
 
 impl InstStruct {
     fn new(item_struct: syn::ItemStruct) -> syn::Result<Self> {
-        let (side_effect, is_terminator, arity) = Self::check_attr(&item_struct)?;
+        let InstAttrs {
+            side_effect,
+            is_terminator,
+            arity,
+            kind,
+        } = Self::check_attr(&item_struct)?;
 
         let struct_ident = item_struct.ident;
 
@@ -173,6 +241,7 @@ impl InstStruct {
             side_effect,
             is_terminator,
             arity,
+            kind: kind.unwrap_or(InstKindSpec::Opaque),
             fields,
         })
     }
@@ -194,12 +263,11 @@ impl InstStruct {
         })
     }
 
-    fn check_attr(
-        item_struct: &syn::ItemStruct,
-    ) -> syn::Result<(Option<syn::Path>, bool, Option<InstAritySpec>)> {
+    fn check_attr(item_struct: &syn::ItemStruct) -> syn::Result<InstAttrs> {
         let mut side_effect = None;
         let mut is_terminator = false;
         let mut arity = None;
+        let mut kind = None;
 
         for attr in &item_struct.attrs {
             if attr.path().is_ident("inst") {
@@ -231,10 +299,27 @@ impl InstStruct {
                     let expr = syn::parse2(ml.tokens.clone())?;
                     arity = Some(InstAritySpec::parse(expr)?);
                 }
+                if let syn::Meta::List(ml) = &meta
+                    && ml.path.is_ident("kind")
+                {
+                    if kind.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            ml,
+                            "duplicate `kind(...)` attribute",
+                        ));
+                    }
+
+                    kind = Some(InstKindSpec::parse(ml)?);
+                }
             }
         }
 
-        Ok((side_effect, is_terminator, arity))
+        Ok(InstAttrs {
+            side_effect,
+            is_terminator,
+            arity,
+            kind,
+        })
     }
 
     fn parse_fields(fields: &syn::Fields) -> syn::Result<Vec<InstField>> {
@@ -377,6 +462,7 @@ impl InstStruct {
             None => quote!(crate::inst::SideEffect::None),
         };
         let is_terminator = self.is_terminator;
+        let kind = self.kind.to_tokens();
         quote! {
             impl crate::Inst for #struct_name {
                 fn side_effect(&self) -> crate::inst::SideEffect {
@@ -393,6 +479,10 @@ impl InstStruct {
 
                 fn as_text(&self) -> &'static str {
                     Self::inst_name()
+                }
+
+                fn kind(&self) -> crate::inst::InstClassKind {
+                    #kind
                 }
             }
         }

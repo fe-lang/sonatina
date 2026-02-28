@@ -1,0 +1,17 @@
+target = "evm-ethereum-london"
+
+# check: block1:
+# nextln:     return 1.i32;
+func public %predicated_value_inference(v0.i32) -> i32 {
+    block0:
+        v1.i1 = eq v0 0.i32;
+        br v1 block1 block2;
+
+    block1:
+        v2.i32 = add v0 1.i32;
+        return v2;
+
+    block2:
+        v3.i32 = add v0 1.i32;
+        return v3;
+}

@@ -29,7 +29,7 @@ target = "evm-ethereum-london"
 # nextln: 
 # nextln: block6:
 # nextln:     v5.i32 = add v1 1.i32;
-# nextln:     mstore v10 v5;
+# nextln:     mstore v10 v5 i32;
 # nextln:     jump block4;
 func public %llvm_test1(v0.i1, v10.*i32) -> unit {
     block0:
@@ -56,7 +56,7 @@ func public %llvm_test1(v0.i1, v10.*i32) -> unit {
 
     block6:
         v5.i32 = add v1 1.i32;
-        mstore v10 v5;
+        mstore v10 v5 i32;
         jump block4;
 }
 
@@ -75,11 +75,11 @@ func public %llvm_test1(v0.i1, v10.*i32) -> unit {
 # nextln: 
 # nextln: block3:
 # nextln:     v5.i64 = add v3 1.i64;
-# nextln:     mstore v1 v5;
+# nextln:     mstore v1 v5 i64;
 # nextln:     return;
 # nextln: 
 # nextln: block4:
-# nextln:     mstore v1 $var1;
+# nextln:     mstore v1 $var1 i64;
 # nextln:     jump block5;
 # nextln: 
 # nextln: block5:
@@ -103,12 +103,12 @@ func public %llvm_test2(v0.i1, v1.*i64, v2.i64) -> unit {
 
     block3:
         v5.i64 = add v3 1.i64;
-        mstore v1 v5;
+        mstore v1 v5 i64;
         return;
 
     block4:
         v6.i64 = sub v3 1.i64;
-        mstore v1 v6;
+        mstore v1 v6 i64;
         jump block5;
 
     block5:
