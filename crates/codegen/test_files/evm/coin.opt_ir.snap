@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 414
 expression: opt_ir_snapshot
 input_file: test_files/evm/coin.sntn
 ---
@@ -94,11 +95,11 @@ func private %__Coin_recv_0_0(v0.i256, v1.i256) -> i256 {
 
     block1:
         v15.i256 = evm_sload v1;
-        v17.i256 = add v15 v9;
+        v17.i256 = add v9 v15;
         evm_sstore v1 v17;
         v19.i256 = add 2.i256 v1;
         v20.i256 = evm_sload v19;
-        v21.i256 = add v20 v9;
+        v21.i256 = add v9 v20;
         evm_sstore v19 v21;
         v23.i256 = evm_sload v1;
         return v23;
@@ -106,11 +107,11 @@ func private %__Coin_recv_0_0(v0.i256, v1.i256) -> i256 {
     block2:
         v25.i256 = add 1.i256 v1;
         v26.i256 = evm_sload v25;
-        v28.i256 = add v26 v9;
+        v28.i256 = add v9 v26;
         evm_sstore v25 v28;
         v30.i256 = add 2.i256 v1;
         v31.i256 = evm_sload v30;
-        v32.i256 = add v31 v9;
+        v32.i256 = add v9 v31;
         evm_sstore v30 v32;
         v35.i256 = evm_sload v25;
         return v35;
@@ -146,7 +147,7 @@ func private %__Coin_recv_0_1(v0.i256, v1.i256) -> i256 {
         evm_sstore v1 v30;
         v31.i256 = add 1.i256 v1;
         v32.i256 = evm_sload v31;
-        v33.i256 = add v32 v9;
+        v33.i256 = add v9 v32;
         evm_sstore v31 v33;
         return 0.i256;
 
@@ -158,7 +159,7 @@ func private %__Coin_recv_0_1(v0.i256, v1.i256) -> i256 {
         v39.i256 = sub v37 v9;
         evm_sstore v21 v39;
         v41.i256 = evm_sload v1;
-        v42.i256 = add v41 v9;
+        v42.i256 = add v9 v41;
         evm_sstore v1 v42;
         return 0.i256;
 }
