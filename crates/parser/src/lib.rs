@@ -725,6 +725,8 @@ func public %main() {
         v3.i256 = sym_size $foo;
         v4.i256 = sym_addr &runtime;
         v5.i256 = sym_size &runtime;
+        v6.i256 = sym_addr .;
+        v7.i256 = sym_size .;
         return;
 }
 "#;
@@ -738,6 +740,8 @@ func public %main() {
         assert!(printed.contains("sym_size $foo"));
         assert!(printed.contains("sym_addr &runtime"));
         assert!(printed.contains("sym_size &runtime"));
+        assert!(printed.contains("sym_addr ."));
+        assert!(printed.contains("sym_size ."));
     }
 
     #[test]

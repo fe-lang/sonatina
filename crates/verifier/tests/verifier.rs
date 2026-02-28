@@ -796,6 +796,32 @@ object @Contract {
 }
 
 #[test]
+fn current_section_symbols_are_accepted_without_embed_declaration() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %entry() -> unit {
+    block0:
+        v0.i256 = sym_addr .;
+        v1.i256 = sym_size .;
+        return;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
 fn undeclared_embed_symbols_are_rejected_even_without_objects() {
     let src = r#"
 target = "evm-ethereum-london"

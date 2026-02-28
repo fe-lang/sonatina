@@ -46,6 +46,7 @@ fn build_symbol_ref(
         }
 
         ast::InstArgKind::EmbedSymbol(sym) => Ok(SymbolRef::Embed(sym.clone())),
+        ast::InstArgKind::CurrentSection => Ok(SymbolRef::CurrentSection),
 
         ast::InstArgKind::Value(value) => match &value.kind {
             ast::ValueKind::Global(name) => {
@@ -60,14 +61,15 @@ fn build_symbol_ref(
             }
 
             _ => Err(Box::new(Error::InstArgKindMismatch {
-                expected: "function name, embed symbol, or global value".into(),
+                expected: "function name, embed symbol, current section symbol, or global value"
+                    .into(),
                 actual: Some("value".into()),
                 span: arg.span,
             })),
         },
 
         other => Err(Box::new(Error::InstArgKindMismatch {
-            expected: "function name, embed symbol, or global value".into(),
+            expected: "function name, embed symbol, current section symbol, or global value".into(),
             actual: Some(
                 match other {
                     ast::InstArgKind::Value(_) => "value",
@@ -76,6 +78,7 @@ fn build_symbol_ref(
                     ast::InstArgKind::ValueBlockMap(_) => "(value, block)",
                     ast::InstArgKind::FuncRef(_) => "function name",
                     ast::InstArgKind::EmbedSymbol(_) => "embed symbol",
+                    ast::InstArgKind::CurrentSection => "current section symbol",
                 }
                 .into(),
             ),

@@ -517,6 +517,7 @@ impl FunctionVerifier<'_> {
                     );
                 }
             }
+            SymbolRef::CurrentSection => {}
         }
     }
 }

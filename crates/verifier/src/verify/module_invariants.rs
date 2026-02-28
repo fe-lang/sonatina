@@ -729,6 +729,7 @@ fn record_symbol_membership(
         SymbolRef::Embed(embed) => {
             used_embed_symbols.insert(embed.0.to_string());
         }
+        SymbolRef::CurrentSection => {}
     }
 }
 
