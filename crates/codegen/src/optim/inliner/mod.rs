@@ -2,8 +2,9 @@ use std::collections::BTreeSet;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, InstDowncast, InstId, Module, inst::control_flow,
-    module::FuncRef,
+    BlockId, ControlFlowGraph, Function, InstDowncast, InstId, Module,
+    inst::control_flow,
+    module::{FuncAttrs, FuncRef},
 };
 
 use crate::module_analysis;
@@ -100,6 +101,7 @@ pub struct InlineStats {
     pub skipped_recursive_scc: usize,
     pub skipped_budget: usize,
     pub skipped_cost: usize,
+    pub skipped_noinline_attr: usize,
     pub skipped_sig_mismatch: usize,
     pub skipped_callsite_unreachable: usize,
 }
@@ -139,6 +141,15 @@ impl Inliner {
                     .unwrap_or_default();
 
                 for site in sites {
+                    if module
+                        .ctx
+                        .func_attrs(site.callee)
+                        .contains(FuncAttrs::NOINLINE)
+                    {
+                        stats.skipped_noinline_attr += 1;
+                        continue;
+                    }
+
                     if site.callee == caller_ref && !self.config.allow_inline_recursive {
                         stats.skipped_recursive_scc += 1;
                         continue;
@@ -315,7 +326,7 @@ fn apply_inline_skip(decision: cost::InlineDecision, stats: &mut InlineStats) {
         cost::InlineSkipReason::RecursiveScc => stats.skipped_recursive_scc += 1,
         cost::InlineSkipReason::Budget => stats.skipped_budget += 1,
         cost::InlineSkipReason::Cost => stats.skipped_cost += 1,
-        cost::InlineSkipReason::NoInlineAttr => stats.skipped_cost += 1,
+        cost::InlineSkipReason::NoInlineAttr => stats.skipped_noinline_attr += 1,
     }
 }
 

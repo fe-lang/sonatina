@@ -11,7 +11,7 @@ use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/test_files/inliner/",
-    glob: "*.sntn"
+    glob: "*.sntn",
     loader: common::parse_module,
 )]
 fn test(fixture: Fixture<ParsedModule>) {
@@ -35,7 +35,7 @@ fn test(fixture: Fixture<ParsedModule>) {
 
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/test_files/inliner_full/",
-    glob: "*.sntn"
+    glob: "*.sntn",
     loader: common::parse_module,
 )]
 fn test_full(fixture: Fixture<ParsedModule>) {
@@ -91,6 +91,43 @@ func public %caller(v0.i32) -> i32 {
 
     assert_eq!(stats.calls_rewritten, 0);
     assert_eq!(before, dump_module(module));
+}
+
+#[test]
+fn noinline_blocks_trivial_inlining() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %id(v0.i32) -> i32 {
+    block0:
+        return v0;
+}
+
+func public %caller(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %id v0;
+        return v1;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+    let id_ref = find_func(module, "id");
+    module.ctx.set_func_attrs(id_ref, FuncAttrs::NOINLINE);
+
+    let mut inliner = Inliner::new(InlinerConfig::default());
+    let stats = inliner.run(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        dumped.contains("call %id"),
+        "NOINLINE callee should not be trivially inlined:\n{dumped}"
+    );
+    assert_eq!(stats.calls_removed, 0);
+    assert_eq!(stats.calls_rewritten, 0);
+    assert_eq!(stats.calls_spliced, 0);
+    assert!(stats.skipped_noinline_attr > 0);
 }
 
 #[test]
