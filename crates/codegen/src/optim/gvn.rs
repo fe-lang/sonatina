@@ -1556,15 +1556,22 @@ struct GvnBlock {
 /// `Detection of Redundant Expressions: A Complete and Polynomial-Time Algorithm in SSA`.
 struct ValuePhiFinder<'a> {
     solver: &'a mut GvnSolver,
-    /// Hold visited values to prevent infinite loop.
+    /// Hold visited values to prevent infinite loop in `get_phi_of`.
     visited: FxHashSet<ValueId>,
+    /// Hold visited queries to prevent infinite recursion in
+    /// `lookup_value_phi_arg` → `compute_value_phi` cycles.
+    visited_queries: FxHashSet<GvnInsn>,
 }
 
 impl<'a> ValuePhiFinder<'a> {
     fn new(solver: &'a mut GvnSolver, inst_result: ValueId) -> Self {
         let mut visited = FxHashSet::default();
         visited.insert(inst_result);
-        Self { solver, visited }
+        Self {
+            solver,
+            visited,
+            visited_queries: FxHashSet::default(),
+        }
     }
 
     /// Main entry of this struct.
@@ -1803,8 +1810,22 @@ impl<'a> ValuePhiFinder<'a> {
             return Some(ValuePhi::Value(leader));
         }
 
+        // Break cycle: if we are already computing a value phi for this
+        // exact query higher up the call stack, bail out to avoid infinite
+        // recursion through lookup_value_phi_arg → compute_value_phi →
+        // compute_value_phi_for_binary → lookup_value_phi_arg.
+        //
+        // Use backtracking (remove after the call) so that the same query
+        // reached through a different non-cyclic branch is not incorrectly
+        // suppressed.
+        if !self.visited_queries.insert(query.clone()) {
+            return None;
+        }
+
         // Try to further compute value phi for the query insn.
-        self.compute_value_phi(func, &query)
+        let result = self.compute_value_phi(func, &query);
+        self.visited_queries.remove(&query);
+        result
     }
 
     /// Returns the `ValuePhi` if the value is defined by the phi insn or the class of the value
