@@ -9,6 +9,7 @@ use sonatina_ir::{
 use sonatina_verifier::{
     VerificationLevel, VerifierConfig, verify_module, verify_module_invariants,
 };
+use tracing::{debug_span, info_span, trace_span};
 
 use super::{
     CompileOptions,
@@ -25,11 +26,25 @@ fn compile_required_sections_into_cache<B: LowerBackend>(
     required: Option<&FxHashSet<SectionId>>,
     opts: &CompileOptions<B::FixupPolicy>,
 ) -> Result<FxHashMap<SectionId, super::artifact::SectionArtifact>, Vec<ObjectCompileError>> {
-    let order = topo_sort_sections(program);
+    let _span = debug_span!(
+        "sonatina.codegen.object.compile_required_sections_into_cache",
+        required_len = ?required.map(|required| required.len())
+    )
+    .entered();
+    let order = {
+        let _span = trace_span!("sonatina.codegen.object.topo_sort_sections").entered();
+        topo_sort_sections(program)
+    };
 
     let mut cache: FxHashMap<SectionId, super::artifact::SectionArtifact> = FxHashMap::default();
     for section_id in order {
         if required.is_none_or(|required| required.contains(&section_id)) {
+            let _span = trace_span!(
+                "sonatina.codegen.object.compile_section_if_required",
+                section_object = section_id.object.0,
+                section = section_id.section
+            )
+            .entered();
             compile_section(program, backend, section_id, &mut cache, opts)?;
         }
     }
@@ -41,6 +56,11 @@ fn verify_module_for_codegen(
     module: &Module,
     cfg: &VerifierConfig,
 ) -> Result<(), Vec<ObjectCompileError>> {
+    let _span = debug_span!(
+        "sonatina.codegen.object.verify_module_for_codegen",
+        verification_level = ?cfg.level
+    )
+    .entered();
     let fast_invariants_only = matches!(cfg.level, VerificationLevel::Fast)
         && !cfg.should_check_dominance()
         && !cfg.should_check_users()
@@ -61,10 +81,29 @@ pub fn compile_all_objects<B: LowerBackend>(
     backend: &B,
     opts: &CompileOptions<B::FixupPolicy>,
 ) -> Result<Vec<ObjectArtifact>, Vec<ObjectCompileError>> {
-    verify_module_for_codegen(module, &opts.verifier_cfg)?;
-    let program = ResolvedProgram::resolve(module)?;
-    let mut cache = compile_required_sections_into_cache(&program, backend, None, opts)?;
+    let _span = info_span!("sonatina.codegen.object.compile_all_objects").entered();
+    {
+        let _span = debug_span!("sonatina.codegen.object.verify").entered();
+        verify_module_for_codegen(module, &opts.verifier_cfg)?;
+    }
+    let program = {
+        let _span = debug_span!("sonatina.codegen.object.resolve_program").entered();
+        ResolvedProgram::resolve(module)?
+    };
+    let mut cache = {
+        let _span = debug_span!(
+            "sonatina.codegen.object.compile_required_sections",
+            object_count = program.objects.len()
+        )
+        .entered();
+        compile_required_sections_into_cache(&program, backend, None, opts)?
+    };
 
+    let _span = debug_span!(
+        "sonatina.codegen.object.materialize_object_artifacts",
+        object_count = program.objects.len()
+    )
+    .entered();
     let mut artifacts = Vec::new();
     for (idx, obj) in program.objects.iter().enumerate() {
         let object_id = ObjectId(idx as u32);
@@ -98,8 +137,15 @@ pub fn compile_object<B: LowerBackend>(
     object: &str,
     opts: &CompileOptions<B::FixupPolicy>,
 ) -> Result<ObjectArtifact, Vec<ObjectCompileError>> {
-    verify_module_for_codegen(module, &opts.verifier_cfg)?;
-    let program = ResolvedProgram::resolve(module)?;
+    let _span = info_span!("sonatina.codegen.object.compile_object", object).entered();
+    {
+        let _span = debug_span!("sonatina.codegen.object.verify").entered();
+        verify_module_for_codegen(module, &opts.verifier_cfg)?;
+    }
+    let program = {
+        let _span = debug_span!("sonatina.codegen.object.resolve_program").entered();
+        ResolvedProgram::resolve(module)?
+    };
 
     let Some((object_idx, obj)) = program
         .objects
@@ -114,16 +160,27 @@ pub fn compile_object<B: LowerBackend>(
 
     let object_id = ObjectId(object_idx as u32);
     let mut required: FxHashSet<SectionId> = FxHashSet::default();
-    for (section_idx, _) in obj.sections.iter().enumerate() {
-        let id = SectionId {
-            object: object_id,
-            section: section_idx as u32,
-        };
-        collect_embed_deps(&program, id, &mut required);
+    {
+        let _span = debug_span!("sonatina.codegen.object.collect_embed_deps").entered();
+        for (section_idx, _) in obj.sections.iter().enumerate() {
+            let id = SectionId {
+                object: object_id,
+                section: section_idx as u32,
+            };
+            collect_embed_deps(&program, id, &mut required);
+        }
     }
 
-    let mut cache = compile_required_sections_into_cache(&program, backend, Some(&required), opts)?;
+    let mut cache = {
+        let _span = debug_span!(
+            "sonatina.codegen.object.compile_required_sections",
+            required_len = required.len()
+        )
+        .entered();
+        compile_required_sections_into_cache(&program, backend, Some(&required), opts)?
+    };
 
+    let _span = debug_span!("sonatina.codegen.object.materialize_object").entered();
     let mut sections = IndexMap::new();
     for (section_idx, section) in obj.sections.iter().enumerate() {
         let id = SectionId {
@@ -153,6 +210,12 @@ fn compile_section<B: LowerBackend>(
     cache: &mut FxHashMap<SectionId, super::artifact::SectionArtifact>,
     opts: &CompileOptions<B::FixupPolicy>,
 ) -> Result<(), Vec<ObjectCompileError>> {
+    let _span = trace_span!(
+        "sonatina.codegen.object.compile_section",
+        section_object = section_id.object.0,
+        section = section_id.section
+    )
+    .entered();
     if cache.contains_key(&section_id) {
         return Ok(());
     }
@@ -165,7 +228,10 @@ fn compile_section<B: LowerBackend>(
     let defined_embed_symbol_set: FxHashSet<EmbedSymbol> =
         defined_embed_symbols.iter().cloned().collect();
 
-    let membership = build_membership(program, section_id);
+    let membership = {
+        let _span = trace_span!("sonatina.codegen.object.build_membership").entered();
+        build_membership(program, section_id)
+    };
     for used in &membership.used_embed_symbols {
         if !defined_embed_symbol_set.contains(used) {
             return Err(vec![ObjectCompileError::UndefinedEmbedSymbol {
@@ -182,58 +248,84 @@ fn compile_section<B: LowerBackend>(
         embed_symbols: &defined_embed_symbols,
     };
 
-    let funcs = compute_function_emission_order(program, section, &membership);
+    let funcs = {
+        let _span =
+            trace_span!("sonatina.codegen.object.compute_function_emission_order").entered();
+        compute_function_emission_order(program, section, &membership)
+    };
 
     let mut data: Vec<(GlobalVariableRef, Vec<u8>)> = Vec::new();
     let mut gvs: Vec<GlobalVariableRef> = membership.globals.iter().copied().collect();
     gvs.sort_unstable();
-    for gv in gvs {
-        let bytes =
-            super::data::encode_gv_initializer_to_bytes(&program.module.ctx, gv).map_err(|e| {
-                vec![ObjectCompileError::InvalidGlobalForData {
-                    object: object_name.clone(),
-                    section: section_name.clone(),
-                    gv,
-                    reason: format!("{e:?}"),
-                }]
-            })?;
-        data.push((gv, bytes));
+    {
+        let _span = trace_span!(
+            "sonatina.codegen.object.encode_global_initializers",
+            global_count = gvs.len()
+        )
+        .entered();
+        for gv in gvs {
+            let bytes = super::data::encode_gv_initializer_to_bytes(&program.module.ctx, gv)
+                .map_err(|e| {
+                    vec![ObjectCompileError::InvalidGlobalForData {
+                        object: object_name.clone(),
+                        section: section_name.clone(),
+                        gv,
+                        reason: format!("{e:?}"),
+                    }]
+                })?;
+            data.push((gv, bytes));
+        }
     }
 
     let mut embeds: Vec<(EmbedSymbol, Vec<u8>)> = Vec::new();
-    for embed in &section.embeds {
-        let source = cache.get(&embed.source).ok_or_else(|| {
-            vec![ObjectCompileError::LinkError {
-                object: object_name.clone(),
-                section: section_name.clone(),
-                message: "missing embedded section artifact".to_string(),
-            }]
-        })?;
-        embeds.push((embed.as_symbol.clone(), source.bytes.clone()));
+    {
+        let _span = trace_span!(
+            "sonatina.codegen.object.collect_embeds",
+            embed_count = section.embeds.len()
+        )
+        .entered();
+        for embed in &section.embeds {
+            let source = cache.get(&embed.source).ok_or_else(|| {
+                vec![ObjectCompileError::LinkError {
+                    object: object_name.clone(),
+                    section: section_name.clone(),
+                    message: "missing embedded section artifact".to_string(),
+                }]
+            })?;
+            embeds.push((embed.as_symbol.clone(), source.bytes.clone()));
+        }
     }
 
-    let artifact = link_section(
-        program.module,
-        backend,
-        &funcs,
-        &data,
-        &embeds,
-        &section_ctx,
-        opts,
-    )
-    .map_err(|e| match e {
-        LinkSectionError::Backend { func, error } => vec![ObjectCompileError::BackendError {
-            object: object_name.clone(),
-            section: section_name.clone(),
-            func,
-            message: error.to_string(),
-        }],
-        LinkSectionError::Link(message) => vec![ObjectCompileError::LinkError {
-            object: object_name.clone(),
-            section: section_name.clone(),
-            message,
-        }],
-    })?;
+    let artifact = {
+        let _span = trace_span!(
+            "sonatina.codegen.object.link_section",
+            object = %object_name.0,
+            section = %section_name.0
+        )
+        .entered();
+        link_section(
+            program.module,
+            backend,
+            &funcs,
+            &data,
+            &embeds,
+            &section_ctx,
+            opts,
+        )
+        .map_err(|e| match e {
+            LinkSectionError::Backend { func, error } => vec![ObjectCompileError::BackendError {
+                object: object_name.clone(),
+                section: section_name.clone(),
+                func,
+                message: error.to_string(),
+            }],
+            LinkSectionError::Link(message) => vec![ObjectCompileError::LinkError {
+                object: object_name.clone(),
+                section: section_name.clone(),
+                message,
+            }],
+        })?
+    };
 
     cache.insert(section_id, artifact);
     Ok(())

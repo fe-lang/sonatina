@@ -15,6 +15,7 @@ pub(crate) mod static_arena_alloc;
 use opcode::OpCode;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::RefCell;
+use tracing::{debug_span, info_span, trace_span};
 
 use crate::{
     critical_edge::CriticalEdgeSplitter,
@@ -441,18 +442,32 @@ impl EvmBackend {
         prepared: PreparedLowering,
     ) -> Result<LoweredFunction<OpCode>, String> {
         let mem_plan = prepared.mem_plan;
-
         let block_order = prepared.block_order;
-        let mut vcode = module.func_store.view(func, |function| {
-            let _plan_guard = CurrentMemPlanGuard::new(&self.current_mem_plan, mem_plan.clone());
-            let jump_targets = compute_explicit_jump_targets(function, &block_order);
-            let _jump_targets_guard =
-                CurrentJumpTargetsGuard::new(&self.current_jump_targets, jump_targets);
-            let mut alloc = FinalAlloc::new(prepared.alloc, mem_plan);
-            let lower = Lower::new(&module.ctx, function, &block_order);
-            lower.lower(self, &mut alloc).map_err(|e| format!("{e:?}"))
-        })?;
-        prune_redundant_opcode_sequences(&mut vcode, &block_order);
+        let _span = trace_span!(
+            "sonatina.codegen.evm.lower_prepared_function",
+            func_ref = func.as_u32(),
+            blocks = block_order.len()
+        )
+        .entered();
+        let mut vcode = {
+            let _span = trace_span!("sonatina.codegen.evm.lower_prepared_function.lower").entered();
+            module.func_store.view(func, |function| {
+                let _plan_guard =
+                    CurrentMemPlanGuard::new(&self.current_mem_plan, mem_plan.clone());
+                let jump_targets = compute_explicit_jump_targets(function, &block_order);
+                let _jump_targets_guard =
+                    CurrentJumpTargetsGuard::new(&self.current_jump_targets, jump_targets);
+                let mut alloc = FinalAlloc::new(prepared.alloc, mem_plan);
+                let lower = Lower::new(&module.ctx, function, &block_order);
+                lower.lower(self, &mut alloc).map_err(|e| format!("{e:?}"))
+            })?
+        };
+        {
+            let _span =
+                trace_span!("sonatina.codegen.evm.lower_prepared_function.prune_redundant_opcodes")
+                    .entered();
+            prune_redundant_opcode_sequences(&mut vcode, &block_order);
+        }
 
         Ok(LoweredFunction { vcode, block_order })
     }
@@ -940,31 +955,50 @@ impl LowerBackend for EvmBackend {
         funcs: &[FuncRef],
         _section_ctx: &SectionLoweringCtx<'_>,
     ) {
-        let ptr_escape = compute_ptr_escape_summaries(module, funcs, &self.isa);
+        let _span =
+            info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
+        let ptr_escape = {
+            let _span = debug_span!("sonatina.codegen.evm.compute_ptr_escape_summaries").entered();
+            compute_ptr_escape_summaries(module, funcs, &self.isa)
+        };
 
         // Pre-pass: insert free-ptr restore (conservative: treat all calls as barriers).
-        for &func in funcs {
-            module.func_store.modify(func, |function| {
-                prepare_free_ptr_restore(function, &module.ctx, self, &ptr_escape);
-            });
+        {
+            let _span = debug_span!("sonatina.codegen.evm.prepare_free_ptr_restore").entered();
+            for &func in funcs {
+                let _span = trace_span!(
+                    "sonatina.codegen.evm.prepare_free_ptr_restore.func",
+                    func_ref = func.as_u32()
+                )
+                .entered();
+                module.func_store.modify(func, |function| {
+                    prepare_free_ptr_restore(function, &module.ctx, self, &ptr_escape);
+                });
+            }
         }
 
         // Scratch fixed point: scratch spills depend on transitive scratch barriers.
         let mut scratch_spill_funcs: FxHashSet<FuncRef> = FxHashSet::default();
-        let mut scratch_effects = scratch_effects::compute_scratch_effects(
-            module,
-            funcs,
-            &scratch_spill_funcs,
-            &self.isa,
-        );
+        let mut scratch_effects = {
+            let _span =
+                debug_span!("sonatina.codegen.evm.compute_scratch_effects_initial").entered();
+            scratch_effects::compute_scratch_effects(module, funcs, &scratch_spill_funcs, &self.isa)
+        };
 
         let mut analyses: FxHashMap<FuncRef, memory_plan::FuncAnalysis> = FxHashMap::default();
-
+        let mut iter = 0usize;
         loop {
+            let _span =
+                debug_span!("sonatina.codegen.evm.scratch_fixed_point_iter", iter).entered();
             analyses.clear();
             let mut new_scratch_spill_funcs: FxHashSet<FuncRef> = FxHashSet::default();
 
             for &func in funcs {
+                let _span = trace_span!(
+                    "sonatina.codegen.evm.prepare_stackify_analysis",
+                    func_ref = func.as_u32()
+                )
+                .entered();
                 let analysis = module.func_store.modify(func, |function| {
                     prepare_stackify_analysis(
                         function,
@@ -985,29 +1019,45 @@ impl LowerBackend for EvmBackend {
             }
 
             scratch_spill_funcs = new_scratch_spill_funcs;
-            scratch_effects = scratch_effects::compute_scratch_effects(
-                module,
-                funcs,
-                &scratch_spill_funcs,
-                &self.isa,
-            );
+            scratch_effects = {
+                let _span = trace_span!("sonatina.codegen.evm.recompute_scratch_effects").entered();
+                scratch_effects::compute_scratch_effects(
+                    module,
+                    funcs,
+                    &scratch_spill_funcs,
+                    &self.isa,
+                )
+            };
+            iter += 1;
         }
 
-        let mut plan = compute_program_memory_plan(
-            module,
-            funcs,
-            &analyses,
-            &ptr_escape,
-            &self.isa,
-            &self.arena_cost_model,
-        );
+        let mut plan = {
+            let _span = debug_span!("sonatina.codegen.evm.compute_program_memory_plan").entered();
+            compute_program_memory_plan(
+                module,
+                funcs,
+                &analyses,
+                &ptr_escape,
+                &self.isa,
+                &self.arena_cost_model,
+            )
+        };
 
-        let mem_effects =
-            compute_func_mem_effects(module, funcs, &plan, &scratch_effects, &self.isa);
-        let return_escape_caller_clamp_words =
-            compute_return_escape_caller_clamp_words(module, funcs, &plan);
+        let mem_effects = {
+            let _span = trace_span!("sonatina.codegen.evm.compute_func_mem_effects").entered();
+            compute_func_mem_effects(module, funcs, &plan, &scratch_effects, &self.isa)
+        };
+        let return_escape_caller_clamp_words = {
+            let _span = trace_span!("sonatina.codegen.evm.compute_return_escape_clamps").entered();
+            compute_return_escape_caller_clamp_words(module, funcs, &plan)
+        };
 
         for &func in funcs {
+            let _span = trace_span!(
+                "sonatina.codegen.evm.annotate_mem_plan_for_func",
+                func_ref = func.as_u32()
+            )
+            .entered();
             let analysis = analyses.get(&func).expect("missing analysis");
             let (malloc_escape_kinds, transient_mallocs) =
                 module.func_store.view(func, |function| {
@@ -1037,9 +1087,13 @@ impl LowerBackend for EvmBackend {
             }
         }
 
-        let malloc_bounds = heap_plan::compute_malloc_future_static_words(
-            module, funcs, &plan, &analyses, &self.isa,
-        );
+        let malloc_bounds = {
+            let _span =
+                debug_span!("sonatina.codegen.evm.compute_malloc_future_static_words").entered();
+            heap_plan::compute_malloc_future_static_words(
+                module, funcs, &plan, &analyses, &self.isa,
+            )
+        };
         for (func, bounds) in malloc_bounds {
             if let Some(mem_plan) = plan.funcs.get_mut(&func) {
                 mem_plan.malloc_future_static_words = bounds;
@@ -1049,63 +1103,83 @@ impl LowerBackend for EvmBackend {
         if std::env::var_os("SONATINA_EVM_MEM_DEBUG").is_some() {
             debug_print_mem_plan(module, funcs, &plan);
         }
-        let has_persistent_mallocs = funcs.iter().copied().any(|func| {
-            let Some(mem_plan) = plan.funcs.get(&func) else {
-                return false;
-            };
-            module.func_store.view(func, |function| {
-                function.layout.iter_block().any(|block| {
-                    function.layout.iter_inst(block).any(|inst| {
-                        matches!(
-                            self.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
-                            EvmInstKind::EvmMalloc(_)
-                        ) && !mem_plan.transient_mallocs.contains(&inst)
+        let has_persistent_mallocs = {
+            let _span = trace_span!("sonatina.codegen.evm.detect_persistent_mallocs").entered();
+            funcs.iter().copied().any(|func| {
+                let Some(mem_plan) = plan.funcs.get(&func) else {
+                    return false;
+                };
+                module.func_store.view(func, |function| {
+                    function.layout.iter_block().any(|block| {
+                        function.layout.iter_inst(block).any(|inst| {
+                            matches!(
+                                self.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                                EvmInstKind::EvmMalloc(_)
+                            ) && !mem_plan.transient_mallocs.contains(&inst)
+                        })
                     })
                 })
             })
-        });
-        let has_explicit_free_ptr_writes = funcs.iter().copied().any(|func| {
-            module.func_store.view(func, |function| {
-                function.layout.iter_block().any(|block| {
-                    function.layout.iter_inst(block).any(|inst| {
-                        match self.isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
-                            EvmInstKind::Mstore(mstore) => function
-                                .dfg
-                                .value_imm(*mstore.addr())
-                                .and_then(immediate_u32)
-                                .is_some_and(|addr| addr == u32::from(FREE_PTR_SLOT)),
-                            EvmInstKind::EvmMstore8(mstore8) => function
-                                .dfg
-                                .value_imm(*mstore8.addr())
-                                .and_then(immediate_u32)
-                                .is_some_and(|addr| addr == u32::from(FREE_PTR_SLOT)),
-                            _ => false,
-                        }
+        };
+        let has_explicit_free_ptr_writes = {
+            let _span =
+                trace_span!("sonatina.codegen.evm.detect_explicit_free_ptr_writes").entered();
+            funcs.iter().copied().any(|func| {
+                module.func_store.view(func, |function| {
+                    function.layout.iter_block().any(|block| {
+                        function.layout.iter_inst(block).any(|inst| {
+                            match self.isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
+                                EvmInstKind::Mstore(mstore) => function
+                                    .dfg
+                                    .value_imm(*mstore.addr())
+                                    .and_then(immediate_u32)
+                                    .is_some_and(|addr| addr == u32::from(FREE_PTR_SLOT)),
+                                EvmInstKind::EvmMstore8(mstore8) => function
+                                    .dfg
+                                    .value_imm(*mstore8.addr())
+                                    .and_then(immediate_u32)
+                                    .is_some_and(|addr| addr == u32::from(FREE_PTR_SLOT)),
+                                _ => false,
+                            }
+                        })
                     })
                 })
             })
-        });
+        };
 
         let has_dynamic_frames = plan
             .funcs
             .values()
             .any(|func_plan| matches!(&func_plan.scheme, MemScheme::DynamicFrame));
 
-        let mut allocs: FxHashMap<FuncRef, StackifyAlloc> = FxHashMap::default();
-        let mut block_orders: FxHashMap<FuncRef, Vec<BlockId>> = FxHashMap::default();
-        for (func, analysis) in analyses {
-            allocs.insert(func, analysis.alloc);
-            block_orders.insert(func, analysis.block_order);
-        }
+        let (allocs, block_orders) = {
+            let _span = trace_span!("sonatina.codegen.evm.extract_lowering_state").entered();
+            let mut allocs: FxHashMap<FuncRef, StackifyAlloc> = FxHashMap::default();
+            let mut block_orders: FxHashMap<FuncRef, Vec<BlockId>> = FxHashMap::default();
+            for (func, analysis) in analyses {
+                allocs.insert(func, analysis.alloc);
+                block_orders.insert(func, analysis.block_order);
+            }
+            (allocs, block_orders)
+        };
 
-        *self.section_state.borrow_mut() = Some(PreparedSection {
-            plan,
-            has_dynamic_frames,
-            has_persistent_mallocs,
-            has_explicit_free_ptr_writes,
-            allocs,
-            block_orders,
-        });
+        {
+            let _span = debug_span!(
+                "sonatina.codegen.evm.prepare_section_summary",
+                has_dynamic_frames,
+                has_persistent_mallocs,
+                has_explicit_free_ptr_writes
+            )
+            .entered();
+            *self.section_state.borrow_mut() = Some(PreparedSection {
+                plan,
+                has_dynamic_frames,
+                has_persistent_mallocs,
+                has_explicit_free_ptr_writes,
+                allocs,
+                block_orders,
+            });
+        }
     }
 
     fn lower_function(
@@ -1116,26 +1190,49 @@ impl LowerBackend for EvmBackend {
     ) -> Result<LoweredFunction<Self::MInst>, Self::Error> {
         let _ = section_ctx;
 
-        if let Some(prepared) = self.take_prepared_function(func) {
+        let prepared = self.take_prepared_function(func);
+        let _span = debug_span!(
+            "sonatina.codegen.evm.lower_function",
+            func_ref = func.as_u32(),
+            prepared_path = prepared.is_some()
+        )
+        .entered();
+        if let Some(prepared) = prepared {
             return self.lower_prepared_function(module, func, prepared);
         }
 
-        let ptr_escape =
-            compute_ptr_escape_summaries(module, std::slice::from_ref(&func), &self.isa);
+        let ptr_escape = {
+            let _span =
+                trace_span!("sonatina.codegen.evm.lower_function.compute_ptr_escape").entered();
+            compute_ptr_escape_summaries(module, std::slice::from_ref(&func), &self.isa)
+        };
 
-        module.func_store.modify(func, |function| {
-            prepare_free_ptr_restore(function, &module.ctx, self, &ptr_escape);
-        });
+        {
+            let _span = trace_span!("sonatina.codegen.evm.lower_function.prepare_free_ptr_restore")
+                .entered();
+            module.func_store.modify(func, |function| {
+                prepare_free_ptr_restore(function, &module.ctx, self, &ptr_escape);
+            });
+        }
 
-        let analysis = module.func_store.modify(func, |function| {
-            prepare_stackify_analysis(function, &module.ctx, self, &ptr_escape, None)
-        });
+        let analysis = {
+            let _span =
+                trace_span!("sonatina.codegen.evm.lower_function.prepare_stackify_analysis")
+                    .entered();
+            module.func_store.modify(func, |function| {
+                prepare_stackify_analysis(function, &module.ctx, self, &ptr_escape, None)
+            })
+        };
 
         let alloc_ctx =
             static_arena_alloc::StaticArenaAllocCtx::new(&module.ctx, &self.isa, &ptr_escape);
-        let layout = module.func_store.view(func, |function| {
-            alloc_ctx.plan_func_objects(func, function, &analysis)
-        });
+        let layout = {
+            let _span =
+                trace_span!("sonatina.codegen.evm.lower_function.plan_func_objects").entered();
+            module.func_store.view(func, |function| {
+                alloc_ctx.plan_func_objects(func, function, &analysis)
+            })
+        };
 
         let lowering = PreparedLowering {
             alloc: analysis.alloc,
@@ -2640,6 +2737,7 @@ fn prepare_free_ptr_restore(
     backend: &EvmBackend,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
 ) {
+    let _span = trace_span!("sonatina.codegen.evm.prepare_free_ptr_restore").entered();
     let mut did_insert = false;
     loop {
         let mut cfg = ControlFlowGraph::new();
@@ -2688,55 +2786,76 @@ fn prepare_stackify_analysis(
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
     scratch_effects: Option<&FxHashSet<FuncRef>>,
 ) -> memory_plan::FuncAnalysis {
+    let _span = trace_span!("sonatina.codegen.evm.prepare_stackify_analysis").entered();
     let mut cfg = ControlFlowGraph::new();
-    cfg.compute(function);
-
-    let mut splitter = CriticalEdgeSplitter::new();
-    splitter.run(function, &mut cfg);
-
-    let mut dom = DomTree::new();
-    dom.compute(&cfg);
-
-    let block_order = dom.rpo().to_owned();
-
-    let mut liveness = Liveness::new();
-    liveness.compute(function, &cfg);
-
-    let mut inst_liveness = InstLiveness::new();
-    inst_liveness.compute(function, &cfg, &liveness);
-
-    let value_aliases = backend.compute_stackify_value_aliases(function, module);
-
-    let mut stack_liveness = Liveness::new();
-    stack_liveness.compute_with_value_normalizer(function, &cfg, |v| {
-        canonicalize_alias_value(&value_aliases, v)
-    });
-
-    let scratch_live_values = scratch_plan::compute_scratch_live_values(
-        function,
-        module,
-        &backend.isa,
-        ptr_escape,
-        scratch_effects,
-        &inst_liveness,
-    );
-    let mut canonical_scratch_live_values: crate::bitset::BitSet<ValueId> =
-        crate::bitset::BitSet::default();
-    for v in scratch_live_values.iter() {
-        canonical_scratch_live_values.insert(canonicalize_alias_value(&value_aliases, v));
+    {
+        let _span = trace_span!("sonatina.codegen.evm.stackify.compute_cfg").entered();
+        cfg.compute(function);
     }
 
-    let alloc = StackifyBuilder::new(
-        function,
-        &cfg,
-        &dom,
-        &stack_liveness,
-        backend.stackify_reach_depth,
-    )
-    .with_scratch_live_values(canonical_scratch_live_values)
-    .with_scratch_spills(scratch_plan::SCRATCH_SPILL_SLOTS)
-    .with_value_aliases(&value_aliases)
-    .compute();
+    {
+        let _span = trace_span!("sonatina.codegen.evm.stackify.split_critical_edges").entered();
+        let mut splitter = CriticalEdgeSplitter::new();
+        splitter.run(function, &mut cfg);
+    }
+
+    let (dom, block_order) = {
+        let _span = trace_span!("sonatina.codegen.evm.stackify.compute_domtree").entered();
+        let mut dom = DomTree::new();
+        dom.compute(&cfg);
+        let block_order = dom.rpo().to_owned();
+        (dom, block_order)
+    };
+
+    let inst_liveness = {
+        let _span = trace_span!("sonatina.codegen.evm.stackify.compute_liveness").entered();
+        let mut liveness = Liveness::new();
+        liveness.compute(function, &cfg);
+
+        let mut inst_liveness = InstLiveness::new();
+        inst_liveness.compute(function, &cfg, &liveness);
+        inst_liveness
+    };
+
+    let (value_aliases, stack_liveness, canonical_scratch_live_values) = {
+        let _span = trace_span!("sonatina.codegen.evm.stackify.canonicalize_aliases").entered();
+        let value_aliases = backend.compute_stackify_value_aliases(function, module);
+
+        let mut stack_liveness = Liveness::new();
+        stack_liveness.compute_with_value_normalizer(function, &cfg, |v| {
+            canonicalize_alias_value(&value_aliases, v)
+        });
+
+        let scratch_live_values = scratch_plan::compute_scratch_live_values(
+            function,
+            module,
+            &backend.isa,
+            ptr_escape,
+            scratch_effects,
+            &inst_liveness,
+        );
+        let mut canonical_scratch_live_values: crate::bitset::BitSet<ValueId> =
+            crate::bitset::BitSet::default();
+        for v in scratch_live_values.iter() {
+            canonical_scratch_live_values.insert(canonicalize_alias_value(&value_aliases, v));
+        }
+        (value_aliases, stack_liveness, canonical_scratch_live_values)
+    };
+
+    let alloc = {
+        let _span = trace_span!("sonatina.codegen.evm.stackify.compute_alloc").entered();
+        StackifyBuilder::new(
+            function,
+            &cfg,
+            &dom,
+            &stack_liveness,
+            backend.stackify_reach_depth,
+        )
+        .with_scratch_live_values(canonical_scratch_live_values)
+        .with_scratch_spills(scratch_plan::SCRATCH_SPILL_SLOTS)
+        .with_value_aliases(&value_aliases)
+        .compute()
+    };
 
     memory_plan::FuncAnalysis {
         alloc,

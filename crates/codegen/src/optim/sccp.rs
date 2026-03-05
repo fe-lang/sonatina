@@ -677,6 +677,7 @@ impl LatticeCell {
         }
     }
 
+    #[cfg(debug_assertions)]
     fn is_bot(self) -> bool {
         matches!(self, Self::Bot)
     }

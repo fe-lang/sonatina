@@ -10,6 +10,7 @@
 //! an ordered sequence of steps and executes them against a module.
 
 use sonatina_ir::{ControlFlowGraph, Function, module::Module};
+use tracing::{debug_span, info_span, trace_span};
 
 use crate::{
     analysis::func_behavior, cfg_edit::CleanupMode, domtree::DomTree, loop_analysis::LoopTree,
@@ -52,6 +53,20 @@ pub enum Pass {
     RebuildUsers,
 }
 
+impl Pass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Pass::CfgCleanup => "cfg_cleanup",
+            Pass::Sccp => "sccp",
+            Pass::Adce => "adce",
+            Pass::Licm => "licm",
+            Pass::Egraph => "egraph",
+            Pass::Gvn => "gvn",
+            Pass::RebuildUsers => "rebuild_users",
+        }
+    }
+}
+
 /// A step in the module-level optimization pipeline.
 ///
 /// Steps execute sequentially. [`Step::Inline`] operates on the whole module;
@@ -65,6 +80,16 @@ pub enum Step {
     FuncPasses(Vec<Pass>),
     /// Remove unreachable function definitions rooted at object `entry`/`include` directives.
     DeadFuncElim,
+}
+
+impl Step {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Step::Inline => "inline",
+            Step::FuncPasses(_) => "func_passes",
+            Step::DeadFuncElim => "dead_func_elim",
+        }
+    }
 }
 
 /// An ordered sequence of optimization steps.
@@ -212,21 +237,49 @@ impl Pipeline {
     /// The invalidation boundary is per [`Step::FuncPasses`], because function
     /// rounds execute function-major in parallel.
     pub fn run(&self, module: &mut Module) {
+        let _run_span = info_span!(
+            "sonatina.optim.pipeline.run",
+            steps_len = self.steps.len(),
+            func_count = module.funcs().len()
+        )
+        .entered();
         let mut func_behavior_dirty = true;
 
-        for step in &self.steps {
+        for (step_index, step) in self.steps.iter().enumerate() {
+            let _step_span = debug_span!(
+                "sonatina.optim.pipeline.step",
+                step_index,
+                step = step.as_str()
+            )
+            .entered();
             match step {
                 Step::Inline => {
+                    let _span = debug_span!("sonatina.optim.pipeline.inline").entered();
                     let mut inliner = Inliner::new(self.inliner_config);
-                    inliner.run(module);
+                    {
+                        let _span = trace_span!("sonatina.optim.pipeline.pass.inliner").entered();
+                        inliner.run(module);
+                    }
                     func_behavior_dirty = true;
                 }
                 Step::FuncPasses(passes) => {
+                    let _span = debug_span!(
+                        "sonatina.optim.pipeline.func_passes",
+                        pass_count = passes.len()
+                    )
+                    .entered();
                     if func_behavior_dirty && step_needs_func_behavior(passes) {
+                        let _span =
+                            trace_span!("sonatina.optim.pipeline.func_behavior_analyze").entered();
                         func_behavior::analyze_module(module);
                         func_behavior_dirty = false;
                     }
-                    module.func_store.par_for_each(|_func_ref, func| {
+                    module.func_store.par_for_each(|func_ref, func| {
+                        let _span = debug_span!(
+                            "sonatina.optim.pipeline.function",
+                            func_ref = func_ref.as_u32()
+                        )
+                        .entered();
                         run_func_passes(passes, func);
                     });
                     if step_may_invalidate_func_behavior(passes) {
@@ -234,6 +287,7 @@ impl Pipeline {
                     }
                 }
                 Step::DeadFuncElim => {
+                    let _span = debug_span!("sonatina.optim.pipeline.dead_func_elim").entered();
                     let roots = collect_object_roots(module);
                     run_dead_func_elim(module, &roots, DeadFuncElimConfig::default());
                     func_behavior_dirty = true;
@@ -258,6 +312,11 @@ impl Default for Pipeline {
 /// This helper cannot run module-level analyses. Callers that include
 /// attribute-dependent passes must ensure function attrs are computed first.
 pub fn run_func_passes(passes: &[Pass], func: &mut Function) {
+    let _span = debug_span!(
+        "sonatina.optim.pipeline.run_func_passes",
+        pass_count = passes.len()
+    )
+    .entered();
     let mut ctx = PassContext::default();
     for &pass in passes {
         run_pass(pass, func, &mut ctx);
@@ -279,39 +338,80 @@ struct PassContext {
 /// Dispatch a single pass, recomputing any required analyses from the
 /// current function state.
 fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
+    let _span = trace_span!("sonatina.optim.pipeline.pass", pass = pass.as_str()).entered();
     match pass {
         Pass::CfgCleanup => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.cfg_cleanup").entered();
             CfgCleanup::new(CleanupMode::Strict).run(func);
         }
         Pass::Sccp => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.sccp").entered();
             // SccpSolver::run is composite: internally does
             //   CfgCleanup → SCCP solving → CfgCleanup → ADCE.
-            ctx.cfg.compute(func);
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.sccp.compute_cfg").entered();
+                ctx.cfg.compute(func);
+            }
             let mut solver = SccpSolver::new();
-            solver.run(func, &mut ctx.cfg);
-            CfgCleanup::new(CleanupMode::Strict).run(func);
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.sccp.solve").entered();
+                solver.run(func, &mut ctx.cfg);
+            }
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.sccp.cleanup").entered();
+                CfgCleanup::new(CleanupMode::Strict).run(func);
+            }
         }
         Pass::Adce => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.adce").entered();
             AdceSolver::new().run(func);
         }
         Pass::Licm => {
-            ctx.cfg.compute(func);
-            ctx.domtree.compute(&ctx.cfg);
-            ctx.lpt.compute(&ctx.cfg, &ctx.domtree);
+            let _span = trace_span!("sonatina.optim.pipeline.pass.licm").entered();
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.licm.compute_cfg").entered();
+                ctx.cfg.compute(func);
+            }
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.licm.compute_domtree").entered();
+                ctx.domtree.compute(&ctx.cfg);
+            }
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.licm.compute_looptree").entered();
+                ctx.lpt.compute(&ctx.cfg, &ctx.domtree);
+            }
             let mut solver = LicmSolver::new();
-            solver.run(func, &mut ctx.cfg, &mut ctx.lpt);
-            CfgCleanup::new(CleanupMode::Strict).run(func);
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.licm.solve").entered();
+                solver.run(func, &mut ctx.cfg, &mut ctx.lpt);
+            }
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.licm.cleanup").entered();
+                CfgCleanup::new(CleanupMode::Strict).run(func);
+            }
         }
         Pass::Egraph => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.egraph").entered();
             run_egraph_pass(func);
         }
         Pass::Gvn => {
-            ctx.cfg.compute(func);
-            ctx.domtree.compute(&ctx.cfg);
+            let _span = trace_span!("sonatina.optim.pipeline.pass.gvn").entered();
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.gvn.compute_cfg").entered();
+                ctx.cfg.compute(func);
+            }
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.gvn.compute_domtree").entered();
+                ctx.domtree.compute(&ctx.cfg);
+            }
             let mut solver = GvnSolver::new();
-            solver.run(func, &mut ctx.cfg, &mut ctx.domtree);
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.gvn.solve").entered();
+                solver.run(func, &mut ctx.cfg, &mut ctx.domtree);
+            }
         }
         Pass::RebuildUsers => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.rebuild_users").entered();
             func.rebuild_users();
         }
     }

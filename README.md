@@ -25,3 +25,6 @@ Sonatina is really early stage in development, so do NOT use it for production!
 
 ## Test
 Run `test_all.sh`.
+
+## Profiling
+Sonatina emits `tracing` spans across parsing, verification, optimization, object compilation/linking, and EVM lowering. See [docs/profiling.md](docs/profiling.md) for setup and usage.
