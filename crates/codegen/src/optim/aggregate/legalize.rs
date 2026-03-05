@@ -649,7 +649,11 @@ impl AggregateLowerToMemoryLegalize {
         dst_ptr: ValueId,
         dst_leaves: &[shape::AggregateLeaf],
     ) {
-        debug_assert_eq!(src_leaves.len(), dst_leaves.len());
+        assert_eq!(
+            src_leaves.len(),
+            dst_leaves.len(),
+            "copy leaf slice length mismatch during legalization"
+        );
         for (src_leaf, dst_leaf) in src_leaves.iter().zip(dst_leaves) {
             if dst_leaf.size_bytes == 0 {
                 continue;
