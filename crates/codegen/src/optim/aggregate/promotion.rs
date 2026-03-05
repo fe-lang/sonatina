@@ -1,1 +1,1 @@
-pub use sonatina_ir::builder::PromotionSsaBuilder;
+pub use sonatina_ir::builder::SsaBuilder;

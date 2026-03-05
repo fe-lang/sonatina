@@ -1,4 +1,5 @@
 use cranelift_entity::SecondaryMap;
+use rustc_hash::FxHashSet;
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     Function, Inst, InstId, Type, Value, ValueId,
@@ -9,7 +10,9 @@ use sonatina_ir::{
     types::CompoundType,
 };
 
-use crate::critical_edge::CriticalEdgeSplitter;
+use crate::{
+    cfg_edit::CleanupMode, critical_edge::CriticalEdgeSplitter, optim::cfg_cleanup::CfgCleanup,
+};
 
 use super::shape;
 
@@ -46,6 +49,11 @@ impl AggregateLowerToMemoryLegalize {
         }
 
         if self.changed {
+            self.changed |= self.remove_dead_materialized_slots(func);
+            self.changed |= self.remove_dead_pure_insts(func);
+            self.changed |= CfgCleanup::new(CleanupMode::Strict).run(func);
+            self.changed |= self.remove_dead_materialized_slots(func);
+            self.changed |= self.remove_dead_pure_insts(func);
             func.rebuild_users();
         }
         assert_aggregate_legalized(func, module);
@@ -237,7 +245,7 @@ impl AggregateLowerToMemoryLegalize {
             );
         }
 
-        // Aggregate -> aggregate: same bits, so share backing storage.
+        // Aggregate -> aggregate: copy between layout-compatible leaf views.
         if from_is_agg && to_is_agg {
             if is_explicit_undef(func, from) {
                 let undef = func.dfg.make_undef_value(to_ty);
@@ -246,7 +254,20 @@ impl AggregateLowerToMemoryLegalize {
             }
 
             let src_ptr = self.materialized_ptr(func, from, module);
-            self.materialized_addr[result] = Some(src_ptr);
+            let dst_ptr = self.materialized_addr[result]
+                .unwrap_or_else(|| self.create_temp_alloca(func, to_ty));
+            self.materialized_addr[result] = Some(dst_ptr);
+            let (src_leaves, dst_leaves) =
+                self.aggregate_bitcast_leaf_layout(module, from_ty, to_ty);
+            let mut builder = BeforeCursor::new_before_inst(func, inst);
+            self.emit_copy_leaf_slices_ptr_to_ptr(
+                func,
+                &mut builder,
+                src_ptr,
+                &src_leaves,
+                dst_ptr,
+                &dst_leaves,
+            );
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             return true;
         }
@@ -333,31 +354,14 @@ impl AggregateLowerToMemoryLegalize {
         let idx_value = *insert.idx();
         let idx_const = shape::const_u32(&func.dfg, idx_value);
         if idx_const.is_none() {
-            let Some(CompoundType::Array { elem, .. }) = result_ty.resolve_compound(module) else {
-                panic!("insert_value dynamic index is only supported for arrays");
-            };
-            let elem_ptr =
-                self.emit_gep_array_element_ptr(func, &mut builder, dst_ptr, idx_value, elem);
-            if shape::is_supported_aggregate_ty(module, elem) {
-                self.emit_copy_aggregate_value_to_ptr(
-                    func,
-                    module,
-                    &mut builder,
-                    *insert.value(),
-                    elem_ptr,
-                    elem,
-                );
-            } else {
-                self.emit_store_scalar_to_path(
-                    func,
-                    &mut builder,
-                    elem_ptr,
-                    &[],
-                    *insert.value(),
-                    elem,
-                );
-            }
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            self.rewrite_insert_value_dynamic_array_index(
+                func,
+                module,
+                inst,
+                &mut builder,
+                dst_ptr,
+                &insert,
+            );
             return;
         }
 
@@ -392,6 +396,37 @@ impl AggregateLowerToMemoryLegalize {
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
     }
 
+    fn rewrite_insert_value_dynamic_array_index(
+        &mut self,
+        func: &mut Function,
+        module: &ModuleCtx,
+        inst: InstId,
+        builder: &mut BeforeCursor,
+        dst_ptr: ValueId,
+        insert: &data::InsertValue,
+    ) {
+        let dst_ty = func
+            .dfg
+            .inst_result(inst)
+            .map(|v| func.dfg.value_ty(v))
+            .expect("insert_value must have result");
+        let elem = self.array_elem_ty_or_panic(module, dst_ty, "insert_value");
+        let elem_ptr = self.emit_gep_array_element_ptr(func, builder, dst_ptr, *insert.idx(), elem);
+        if shape::is_supported_aggregate_ty(module, elem) {
+            self.emit_copy_aggregate_value_to_ptr(
+                func,
+                module,
+                builder,
+                *insert.value(),
+                elem_ptr,
+                elem,
+            );
+        } else {
+            self.emit_store_scalar_to_path(func, builder, elem_ptr, &[], *insert.value(), elem);
+        }
+        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+    }
+
     fn rewrite_extract_value(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) {
         let extract = downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst))
             .expect("expected extract_value")
@@ -405,58 +440,7 @@ impl AggregateLowerToMemoryLegalize {
         let idx_value = *extract.idx();
         let idx_const = shape::const_u32(&func.dfg, idx_value);
         if idx_const.is_none() {
-            let Some(CompoundType::Array { elem, .. }) = agg_ty.resolve_compound(module) else {
-                panic!("extract_value dynamic index is only supported for arrays");
-            };
-
-            if shape::is_supported_aggregate_ty(module, result_ty) {
-                let dst_ptr = self.materialized_ptr(func, result, module);
-                let mut builder = BeforeCursor::new_before_inst(func, inst);
-                if is_explicit_undef(func, *extract.dest()) {
-                    let undef = func.dfg.make_undef_value(elem);
-                    self.emit_copy_aggregate_value_to_ptr(
-                        func,
-                        module,
-                        &mut builder,
-                        undef,
-                        dst_ptr,
-                        elem,
-                    );
-                } else {
-                    let src_ptr = self.materialized_ptr(func, *extract.dest(), module);
-                    let elem_ptr = self.emit_gep_array_element_ptr(
-                        func,
-                        &mut builder,
-                        src_ptr,
-                        idx_value,
-                        elem,
-                    );
-                    self.emit_copy_aggregate_ptr_to_ptr(
-                        func,
-                        module,
-                        &mut builder,
-                        elem_ptr,
-                        dst_ptr,
-                        elem,
-                    );
-                }
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-                return;
-            }
-
-            if is_explicit_undef(func, *extract.dest()) {
-                let undef = func.dfg.make_undef_value(result_ty);
-                self.alias_and_remove(func, inst, result, undef);
-                return;
-            }
-
-            let src_ptr = self.materialized_ptr(func, *extract.dest(), module);
-            let mut builder = BeforeCursor::new_before_inst(func, inst);
-            let elem_ptr =
-                self.emit_gep_array_element_ptr(func, &mut builder, src_ptr, idx_value, elem);
-            let loaded =
-                self.emit_load_scalar_from_path(func, &mut builder, elem_ptr, &[], result_ty);
-            self.alias_and_remove(func, inst, result, loaded);
+            self.rewrite_extract_value_dynamic_array_index(func, module, inst, result, &extract);
             return;
         }
 
@@ -506,6 +490,66 @@ impl AggregateLowerToMemoryLegalize {
             panic!("extract_value type mismatch after legalization");
         }
         self.alias_and_remove(func, inst, result, load);
+    }
+
+    fn rewrite_extract_value_dynamic_array_index(
+        &mut self,
+        func: &mut Function,
+        module: &ModuleCtx,
+        inst: InstId,
+        result: ValueId,
+        extract: &data::ExtractValue,
+    ) {
+        let result_ty = func.dfg.value_ty(result);
+        let src_value = *extract.dest();
+        let src_agg_ty = func.dfg.value_ty(src_value);
+        let idx_value = *extract.idx();
+        let elem = self.array_elem_ty_or_panic(module, src_agg_ty, "extract_value");
+        if elem != result_ty {
+            panic!("extract_value result type mismatch for dynamic array index");
+        }
+        if shape::is_supported_aggregate_ty(module, result_ty) {
+            let dst_ptr = self.materialized_ptr(func, result, module);
+            let mut builder = BeforeCursor::new_before_inst(func, inst);
+            if is_explicit_undef(func, src_value) {
+                let undef = func.dfg.make_undef_value(result_ty);
+                self.emit_copy_aggregate_value_to_ptr(
+                    func,
+                    module,
+                    &mut builder,
+                    undef,
+                    dst_ptr,
+                    result_ty,
+                );
+            } else {
+                let src_ptr = self.materialized_ptr(func, src_value, module);
+                let elem_ptr =
+                    self.emit_gep_array_element_ptr(func, &mut builder, src_ptr, idx_value, elem);
+                self.emit_copy_aggregate_ptr_to_ptr(
+                    func,
+                    module,
+                    &mut builder,
+                    elem_ptr,
+                    dst_ptr,
+                    result_ty,
+                );
+            }
+            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            return;
+        }
+
+        if is_explicit_undef(func, src_value) {
+            let undef = func.dfg.make_undef_value(result_ty);
+            self.alias_and_remove(func, inst, result, undef);
+            return;
+        }
+
+        let src_ptr = self.materialized_ptr(func, src_value, module);
+        let mut builder = BeforeCursor::new_before_inst(func, inst);
+        let elem_ptr =
+            self.emit_gep_array_element_ptr(func, &mut builder, src_ptr, idx_value, elem);
+        let loaded = self.emit_load_scalar_from_path(func, &mut builder, elem_ptr, &[], result_ty);
+        self.alias_and_remove(func, inst, result, loaded);
     }
 
     fn rewrite_aggregate_phi(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) {
@@ -579,6 +623,53 @@ impl AggregateLowerToMemoryLegalize {
             .unwrap_or_else(|| panic!("unsupported aggregate type in legalizer: {ty:?}"))
     }
 
+    fn array_elem_ty_or_panic(&self, module: &ModuleCtx, ty: Type, ctx: &str) -> Type {
+        let Some(CompoundType::Array { elem, .. }) = ty.resolve_compound(module) else {
+            panic!("{ctx} dynamic index is only supported for arrays");
+        };
+        elem
+    }
+
+    fn aggregate_bitcast_leaf_layout(
+        &self,
+        module: &ModuleCtx,
+        from_ty: Type,
+        to_ty: Type,
+    ) -> (Vec<shape::AggregateLeaf>, Vec<shape::AggregateLeaf>) {
+        let src_shape = self.shape_or_panic(module, from_ty);
+        let dst_shape = self.shape_or_panic(module, to_ty);
+        let src_leaves: Vec<_> = src_shape
+            .leaves
+            .into_iter()
+            .filter(|leaf| leaf.size_bytes != 0)
+            .collect();
+        let dst_leaves: Vec<_> = dst_shape
+            .leaves
+            .into_iter()
+            .filter(|leaf| leaf.size_bytes != 0)
+            .collect();
+
+        if src_leaves.len() != dst_leaves.len() {
+            panic!(
+                "aggregate bitcast leaf count mismatch: {from_ty:?} ({}) -> {to_ty:?} ({})",
+                src_leaves.len(),
+                dst_leaves.len()
+            );
+        }
+
+        for (src_leaf, dst_leaf) in src_leaves.iter().zip(&dst_leaves) {
+            if src_leaf.offset_bytes != dst_leaf.offset_bytes
+                || src_leaf.size_bytes != dst_leaf.size_bytes
+            {
+                panic!(
+                    "aggregate bitcast leaf layout mismatch: {from_ty:?} ({src_leaf:?}) -> {to_ty:?} ({dst_leaf:?})"
+                );
+            }
+        }
+
+        (src_leaves, dst_leaves)
+    }
+
     fn materialized_ptr(&self, func: &Function, value: ValueId, module: &ModuleCtx) -> ValueId {
         if is_explicit_undef(func, value) {
             panic!("explicit undef aggregate has no materialized pointer");
@@ -595,6 +686,22 @@ impl AggregateLowerToMemoryLegalize {
         })
     }
 
+    fn emit_store_undef_to_leaves(
+        &self,
+        func: &mut Function,
+        builder: &mut BeforeCursor,
+        dst_ptr: ValueId,
+        leaves: &[shape::AggregateLeaf],
+    ) {
+        for leaf in leaves {
+            if leaf.size_bytes == 0 {
+                continue;
+            }
+            let undef = func.dfg.make_undef_value(leaf.ty);
+            self.emit_store_scalar_to_path(func, builder, dst_ptr, &leaf.path, undef, leaf.ty);
+        }
+    }
+
     fn emit_copy_aggregate_value_to_ptr(
         &self,
         func: &mut Function,
@@ -606,13 +713,7 @@ impl AggregateLowerToMemoryLegalize {
     ) {
         let shape = self.shape_or_panic(module, agg_ty);
         if is_explicit_undef(func, value) {
-            for leaf in &shape.leaves {
-                if leaf.size_bytes == 0 {
-                    continue;
-                }
-                let undef = func.dfg.make_undef_value(leaf.ty);
-                self.emit_store_scalar_to_path(func, builder, dst_ptr, &leaf.path, undef, leaf.ty);
-            }
+            self.emit_store_undef_to_leaves(func, builder, dst_ptr, &shape.leaves);
             return;
         }
 
@@ -655,6 +756,10 @@ impl AggregateLowerToMemoryLegalize {
             "copy leaf slice length mismatch during legalization"
         );
         for (src_leaf, dst_leaf) in src_leaves.iter().zip(dst_leaves) {
+            assert_eq!(
+                src_leaf.size_bytes, dst_leaf.size_bytes,
+                "copy leaf size mismatch during legalization"
+            );
             if dst_leaf.size_bytes == 0 {
                 continue;
             }
@@ -665,12 +770,21 @@ impl AggregateLowerToMemoryLegalize {
                 &src_leaf.path,
                 src_leaf.ty,
             );
+            let stored = if src_leaf.ty == dst_leaf.ty {
+                loaded
+            } else {
+                builder.insert_with_result(
+                    func,
+                    cast::Bitcast::new_unchecked(func.inst_set(), loaded, dst_leaf.ty),
+                    dst_leaf.ty,
+                )
+            };
             self.emit_store_scalar_to_path(
                 func,
                 builder,
                 dst_ptr,
                 &dst_leaf.path,
-                loaded,
+                stored,
                 dst_leaf.ty,
             );
         }
@@ -692,21 +806,9 @@ impl AggregateLowerToMemoryLegalize {
         }
 
         if is_explicit_undef(func, value) {
-            for i in 0..dst.slice.leaf_count {
-                let dst_leaf = &dst_shape.leaves[dst.slice.first_leaf + i];
-                if dst_leaf.size_bytes == 0 {
-                    continue;
-                }
-                let undef = func.dfg.make_undef_value(dst_leaf.ty);
-                self.emit_store_scalar_to_path(
-                    func,
-                    builder,
-                    dst.ptr,
-                    &dst_leaf.path,
-                    undef,
-                    dst_leaf.ty,
-                );
-            }
+            let dst_leaves = &dst_shape.leaves
+                [dst.slice.first_leaf..dst.slice.first_leaf + dst.slice.leaf_count];
+            self.emit_store_undef_to_leaves(func, builder, dst.ptr, dst_leaves);
             return;
         }
 
@@ -823,6 +925,157 @@ impl AggregateLowerToMemoryLegalize {
             data::Gep::new_unchecked(func.inst_set(), values),
             ptr_ty,
         )
+    }
+
+    fn remove_dead_pure_insts(&self, func: &mut Function) -> bool {
+        let mut changed = false;
+
+        loop {
+            func.rebuild_users();
+            let mut removed_any = false;
+            let blocks: Vec<_> = func.layout.iter_block().collect();
+            for block in blocks {
+                let insts: Vec<_> = func.layout.iter_inst(block).collect();
+                for inst in insts {
+                    if !func.layout.is_inst_inserted(inst)
+                        || func.dfg.side_effect(inst).has_effect()
+                    {
+                        continue;
+                    }
+                    let Some(result) = func.dfg.inst_result(inst) else {
+                        continue;
+                    };
+                    if func
+                        .dfg
+                        .users(result)
+                        .copied()
+                        .any(|user| func.layout.is_inst_inserted(user))
+                    {
+                        continue;
+                    }
+
+                    InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+                    removed_any = true;
+                    changed = true;
+                }
+            }
+
+            if !removed_any {
+                break;
+            }
+        }
+
+        changed
+    }
+
+    fn remove_dead_materialized_slots(&self, func: &mut Function) -> bool {
+        let mut changed = false;
+
+        loop {
+            func.rebuild_users();
+            let slot_ptrs: Vec<_> = func
+                .dfg
+                .values
+                .keys()
+                .filter_map(|value| self.materialized_addr[value])
+                .collect();
+            let mut removed_any = false;
+
+            for slot_ptr in slot_ptrs {
+                let Some(mut insts) = self.collect_dead_materialized_slot_insts(func, slot_ptr)
+                else {
+                    continue;
+                };
+                insts.reverse();
+                let mut seen = FxHashSet::default();
+                for inst in insts {
+                    if !seen.insert(inst) || !func.layout.is_inst_inserted(inst) {
+                        continue;
+                    }
+                    InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+                    removed_any = true;
+                    changed = true;
+                }
+            }
+
+            if !removed_any {
+                break;
+            }
+        }
+
+        changed
+    }
+
+    fn collect_dead_materialized_slot_insts(
+        &self,
+        func: &Function,
+        slot_ptr: ValueId,
+    ) -> Option<Vec<InstId>> {
+        let alloca_inst = func.dfg.value_inst(slot_ptr)?;
+        let mut insts = vec![alloca_inst];
+        let mut seen_values = FxHashSet::default();
+        let mut queue = vec![slot_ptr];
+
+        while let Some(value) = queue.pop() {
+            if !seen_values.insert(value) {
+                continue;
+            }
+
+            for &user in func.dfg.users(value) {
+                if !func.layout.is_inst_inserted(user) {
+                    continue;
+                }
+
+                if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(user))
+                    && gep.values().first().copied() == Some(value)
+                {
+                    insts.push(user);
+                    if let Some(result) = func.dfg.inst_result(user) {
+                        queue.push(result);
+                    }
+                    continue;
+                }
+
+                if let Some(bitcast) =
+                    downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(user))
+                    && *bitcast.from() == value
+                {
+                    insts.push(user);
+                    if let Some(result) = func.dfg.inst_result(user) {
+                        queue.push(result);
+                    }
+                    continue;
+                }
+
+                if let Some(mstore) =
+                    downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(user))
+                    && *mstore.addr() == value
+                {
+                    insts.push(user);
+                    continue;
+                }
+
+                if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(user))
+                    && *mload.addr() == value
+                {
+                    let result = func.dfg.inst_result(user)?;
+                    if func
+                        .dfg
+                        .users(result)
+                        .copied()
+                        .any(|load_user| func.layout.is_inst_inserted(load_user))
+                    {
+                        return None;
+                    }
+                    insts.push(user);
+                    continue;
+                }
+
+                return None;
+            }
+        }
+
+        Some(insts)
     }
 }
 
@@ -953,5 +1206,180 @@ pub fn assert_aggregate_legalized(function: &Function, module: &ModuleCtx) {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        isa::evm::{EvmBackend, PushWidthPolicy},
+        object::{CompileOptions, compile_all_objects},
+    };
+    use sonatina_ir::{Module, isa::evm::Evm, module::FuncRef};
+    use sonatina_parser::parse_module;
+    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+    use sonatina_verifier::{VerificationLevel, VerifierConfig};
+
+    fn parse_test_module(src: &str) -> Module {
+        parse_module(src).expect("parse should succeed").module
+    }
+
+    fn lookup_func(module: &Module, name: &str) -> FuncRef {
+        module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
+            .expect("function should exist")
+    }
+
+    fn test_backend() -> EvmBackend {
+        let triple = TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::Osaka),
+        );
+        EvmBackend::new(Evm::new(triple))
+    }
+
+    #[test]
+    fn aggregate_bitcast_across_compatible_shapes_compiles() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @inner = { i256 };
+type @pair = { i256, i256 };
+type @nested = { @inner, i256 };
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = evm_calldata_load 32.i32;
+        v2.@pair = insert_value undef.@pair 0.i8 v0;
+        v3.@pair = insert_value v2 1.i8 v1;
+        v4.@nested = bitcast v3 @nested;
+        v5.@inner = extract_value v4 0.i8;
+        v6.i256 = extract_value v5 0.i8;
+        mstore 0.i32 v6 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        );
+
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::MinimalRelax,
+            emit_symtab: false,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
+        };
+        compile_all_objects(&module, &test_backend(), &opts).expect("compile should succeed");
+    }
+
+    #[test]
+    fn late_legalizer_removes_aggregate_ops_and_scalarizes_memory_types() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @inner = { i256 };
+type @pair = { i256, i256 };
+type @nested = { @inner, i256 };
+
+func private %f(v0.i1, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.@pair = insert_value undef.@pair 0.i8 v1;
+        v4.@pair = insert_value v3 1.i8 v2;
+        v5.*@pair = alloca @pair;
+        mstore v5 v4 @pair;
+        br v0 block1 block2;
+
+    block1:
+        v6.@nested = bitcast v4 @nested;
+        jump block3;
+
+    block2:
+        v7.@pair = mload v5 @pair;
+        v8.@nested = bitcast v7 @nested;
+        jump block3;
+
+    block3:
+        v9.@nested = phi (v6 block1) (v8 block2);
+        v10.@inner = extract_value v9 0.i8;
+        v11.i256 = extract_value v10 0.i8;
+        return v11;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            assert_aggregate_legalized(func, &ctx);
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    if let Some(mload) =
+                        downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
+                    {
+                        assert!(
+                            !shape::is_supported_aggregate_ty(&ctx, *mload.ty()),
+                            "aggregate mload should be gone"
+                        );
+                    }
+                    if let Some(mstore) =
+                        downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst))
+                    {
+                        assert!(
+                            !shape::is_supported_aggregate_ty(&ctx, *mstore.ty()),
+                            "aggregate mstore should be gone"
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn late_legalizer_drops_dead_materialization_slots() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %f(v0.i256) -> i256 {
+    block0:
+        v1.@pair = insert_value undef.@pair 0.i8 v0;
+        v2.@pair = insert_value v1 1.i8 9.i256;
+        return 0.i256;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            assert_aggregate_legalized(func, &ctx);
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    assert!(
+                        downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                        "dead materialization alloca should be removed"
+                    );
+                }
+            }
+        });
     }
 }

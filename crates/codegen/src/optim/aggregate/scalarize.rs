@@ -7,7 +7,7 @@ use sonatina_ir::{
     inst::{control_flow, data, downcast},
 };
 
-use super::{promotion::PromotionSsaBuilder, shape};
+use super::{promotion::SsaBuilder, shape};
 
 type LeafValues = SmallVec<[ValueId; 4]>;
 
@@ -55,7 +55,7 @@ impl AggregateScalarize {
             return false;
         }
 
-        let mut ssa = PromotionSsaBuilder::new();
+        let mut ssa = SsaBuilder::new();
         self.append_block_preds(func, &mut ssa);
         self.setup_promoted_leaf_vars(func, &mut ssa, &mut promoted_allocas);
 
@@ -117,6 +117,7 @@ impl AggregateScalarize {
         );
         ssa.seal_all(func);
         self.cleanup_dead_promoted_allocas(func, &projection_of, &promoted_by_inst);
+        self.changed |= self.remove_dead_pure_insts(func);
 
         if self.changed {
             func.rebuild_users();
@@ -124,7 +125,7 @@ impl AggregateScalarize {
         self.changed
     }
 
-    fn append_block_preds(&self, func: &Function, ssa: &mut PromotionSsaBuilder) {
+    fn append_block_preds(&self, func: &Function, ssa: &mut SsaBuilder) {
         for block in func.layout.iter_block() {
             let Some(term) = func.layout.last_inst_of(block) else {
                 continue;
@@ -141,7 +142,7 @@ impl AggregateScalarize {
     fn setup_promoted_leaf_vars(
         &self,
         func: &mut Function,
-        ssa: &mut PromotionSsaBuilder,
+        ssa: &mut SsaBuilder,
         promoted_allocas: &mut [PromotedAlloca],
     ) {
         let entry = func
@@ -207,6 +208,7 @@ impl AggregateScalarize {
             );
             let mut queue = vec![ptr_value];
             let mut rejected = false;
+            let mut dead_use_cache: FxHashMap<InstId, bool> = FxHashMap::default();
 
             while let Some(ptr) = queue.pop() {
                 let projection = local_projection
@@ -293,6 +295,11 @@ impl AggregateScalarize {
                             rejected = true;
                             break;
                         }
+                        continue;
+                    }
+
+                    if is_dead_inst_tree(func, user, &mut dead_use_cache, &mut FxHashSet::default())
+                    {
                         continue;
                     }
 
@@ -668,7 +675,7 @@ impl AggregateScalarize {
         promoted_by_inst: &FxHashMap<InstId, PromotedAlloca>,
         scalarizable: &SecondaryMap<ValueId, bool>,
         scalarized_agg: &mut SecondaryMap<ValueId, Option<LeafValues>>,
-        ssa: &mut PromotionSsaBuilder,
+        ssa: &mut SsaBuilder,
     ) {
         if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst)).cloned()
         {
@@ -864,7 +871,7 @@ impl AggregateScalarize {
             else {
                 continue;
             };
-            let Some(leaf_phis) = scalar_phi_results[result].clone() else {
+            let Some(mut leaf_phis) = scalar_phi_results[result].clone() else {
                 continue;
             };
 
@@ -886,8 +893,24 @@ impl AggregateScalarize {
                 }
             }
 
+            self.simplify_scalar_leaf_phis(func, &mut leaf_phis);
             scalarized_agg[result] = Some(leaf_phis);
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        }
+    }
+
+    fn simplify_scalar_leaf_phis(&mut self, func: &mut Function, leaf_phis: &mut LeafValues) {
+        for leaf_phi in leaf_phis.iter_mut() {
+            let Some(phi_inst) = func.dfg.value_inst(*leaf_phi) else {
+                continue;
+            };
+            let Some(replacement) = trivial_phi_replacement(func, phi_inst) else {
+                continue;
+            };
+            func.dfg.change_to_alias(*leaf_phi, replacement);
+            InstInserter::at_location(CursorLocation::At(phi_inst)).remove_inst(func);
+            *leaf_phi = replacement;
+            self.changed = true;
         }
     }
 
@@ -942,6 +965,47 @@ impl AggregateScalarize {
         }
     }
 
+    fn remove_dead_pure_insts(&self, func: &mut Function) -> bool {
+        let mut changed = false;
+
+        loop {
+            func.rebuild_users();
+            let mut removed_any = false;
+            let blocks: Vec<_> = func.layout.iter_block().collect();
+            for block in blocks {
+                let insts: Vec<_> = func.layout.iter_inst(block).collect();
+                for inst in insts {
+                    if !func.layout.is_inst_inserted(inst)
+                        || func.dfg.side_effect(inst).has_effect()
+                    {
+                        continue;
+                    }
+                    let Some(result) = func.dfg.inst_result(inst) else {
+                        continue;
+                    };
+                    if func
+                        .dfg
+                        .users(result)
+                        .copied()
+                        .any(|user| func.layout.is_inst_inserted(user))
+                    {
+                        continue;
+                    }
+
+                    InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+                    removed_any = true;
+                    changed = true;
+                }
+            }
+
+            if !removed_any {
+                break;
+            }
+        }
+
+        changed
+    }
+
     fn scalarized_leaves_of_value(
         &self,
         func: &mut Function,
@@ -969,4 +1033,68 @@ impl AggregateScalarize {
 
 fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
     matches!(func.dfg.value(value), Value::Undef { .. })
+}
+
+fn trivial_phi_replacement(func: &mut Function, phi_inst: InstId) -> Option<ValueId> {
+    let phi_value = func.dfg.inst_result(phi_inst)?;
+    let ty = func.dfg.value_ty(phi_value);
+    let phi = func.dfg.cast_phi(phi_inst)?;
+
+    let replacement = match phi.args().first() {
+        None => func.dfg.make_undef_value(ty),
+        Some(&(first, _)) if phi.args().iter().all(|(value, _)| *value == first) => {
+            if first == phi_value {
+                func.dfg.make_undef_value(ty)
+            } else {
+                first
+            }
+        }
+        Some(_) => {
+            let mut non_self = None;
+            for &(value, _) in phi.args() {
+                if value == phi_value {
+                    continue;
+                }
+
+                match non_self {
+                    Some(existing) if existing != value => return None,
+                    Some(_) => {}
+                    None => non_self = Some(value),
+                }
+            }
+
+            non_self.unwrap_or_else(|| func.dfg.make_undef_value(ty))
+        }
+    };
+
+    Some(replacement)
+}
+
+fn is_dead_inst_tree(
+    func: &Function,
+    inst: InstId,
+    memo: &mut FxHashMap<InstId, bool>,
+    visiting: &mut FxHashSet<InstId>,
+) -> bool {
+    if let Some(&cached) = memo.get(&inst) {
+        return cached;
+    }
+    if !visiting.insert(inst)
+        || func.dfg.side_effect(inst).has_effect()
+        || func.dfg.is_terminator(inst)
+    {
+        memo.insert(inst, false);
+        return false;
+    }
+
+    let dead = func.dfg.inst_result(inst).is_some_and(|result| {
+        func.dfg
+            .users(result)
+            .copied()
+            .filter(|user| func.layout.is_inst_inserted(*user))
+            .all(|user| is_dead_inst_tree(func, user, memo, visiting))
+    });
+    visiting.remove(&inst);
+    memo.insert(inst, dead);
+    dead
 }

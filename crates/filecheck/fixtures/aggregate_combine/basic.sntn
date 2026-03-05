@@ -47,6 +47,25 @@ func public %ac_reconstruct(v0.@slice) -> i256 {
         return v5;
 }
 
+# sameln: func public %ac_extract_undef() -> i256 {
+# check:     block0:
+# check:         return undef.i256;
+func public %ac_extract_undef() -> i256 {
+    block0:
+        v0.i256 = extract_value undef.@slice 1.i8;
+        return v0;
+}
+
+# sameln: func public %ac_insert_identical_field(v0.@slice) -> @slice {
+# check:     block0:
+# check:         return v0;
+func public %ac_insert_identical_field(v0.@slice) -> @slice {
+    block0:
+        v1.i256 = extract_value v0 1.i8;
+        v2.@slice = insert_value v0 1.i8 v1;
+        return v2;
+}
+
 # sameln: func public %ac_phi_extract(v0.i1, v1.@slice, v2.@slice) -> i256 {
 # check:     block3:
 # check:         phi (v1 block1) (v2 block2);
