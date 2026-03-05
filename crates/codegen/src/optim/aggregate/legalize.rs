@@ -425,27 +425,14 @@ impl AggregateLowerToMemoryLegalize {
                         idx_value,
                         elem,
                     );
-                    let elem_shape = self.shape_or_panic(module, elem);
-                    for leaf in &elem_shape.leaves {
-                        if leaf.size_bytes == 0 {
-                            continue;
-                        }
-                        let loaded = self.emit_load_scalar_from_path(
-                            func,
-                            &mut builder,
-                            elem_ptr,
-                            &leaf.path,
-                            leaf.ty,
-                        );
-                        self.emit_store_scalar_to_path(
-                            func,
-                            &mut builder,
-                            dst_ptr,
-                            &leaf.path,
-                            loaded,
-                            leaf.ty,
-                        );
-                    }
+                    self.emit_copy_aggregate_ptr_to_ptr(
+                        func,
+                        module,
+                        &mut builder,
+                        elem_ptr,
+                        dst_ptr,
+                        elem,
+                    );
                 }
                 InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
                 return;
@@ -555,29 +542,16 @@ impl AggregateLowerToMemoryLegalize {
             .expect("aggregate mload must have result");
         let agg_ty = *mload.ty();
         let dst_ptr = self.materialized_ptr(func, result, module);
-        let shape = self.shape_or_panic(module, agg_ty);
 
         let mut builder = BeforeCursor::new_before_inst(func, inst);
-        for leaf in &shape.leaves {
-            if leaf.size_bytes == 0 {
-                continue;
-            }
-            let loaded = self.emit_load_scalar_from_path(
-                func,
-                &mut builder,
-                *mload.addr(),
-                &leaf.path,
-                leaf.ty,
-            );
-            self.emit_store_scalar_to_path(
-                func,
-                &mut builder,
-                dst_ptr,
-                &leaf.path,
-                loaded,
-                leaf.ty,
-            );
-        }
+        self.emit_copy_aggregate_ptr_to_ptr(
+            func,
+            module,
+            &mut builder,
+            *mload.addr(),
+            dst_ptr,
+            agg_ty,
+        );
 
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
     }
@@ -641,6 +615,19 @@ impl AggregateLowerToMemoryLegalize {
         }
 
         let src_ptr = self.materialized_ptr(func, value, module);
+        self.emit_copy_aggregate_ptr_to_ptr(func, module, builder, src_ptr, dst_ptr, agg_ty);
+    }
+
+    fn emit_copy_aggregate_ptr_to_ptr(
+        &self,
+        func: &mut Function,
+        module: &ModuleCtx,
+        builder: &mut BeforeCursor,
+        src_ptr: ValueId,
+        dst_ptr: ValueId,
+        agg_ty: Type,
+    ) {
+        let shape = self.shape_or_panic(module, agg_ty);
         for leaf in &shape.leaves {
             if leaf.size_bytes == 0 {
                 continue;
