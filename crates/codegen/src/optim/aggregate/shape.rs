@@ -224,8 +224,7 @@ fn flatten_aggregate(
             }
             Some(())
         }
-        Some(CompoundType::Ptr(_)) | Some(CompoundType::Func { .. }) => None,
-        None => {
+        Some(CompoundType::Ptr(_)) | None => {
             let size = u32::try_from(module.size_of_unchecked(ty)).ok()?;
             out.push(AggregateLeaf {
                 path: path.clone(),
@@ -235,6 +234,7 @@ fn flatten_aggregate(
             });
             Some(())
         }
+        Some(CompoundType::Func { .. }) => None,
     }
 }
 
@@ -318,5 +318,60 @@ block0:
         assert!(
             aggregate_slice_for_gep_path(&module.ctx, pair, &[zero, one, dyn_idx], &dfg).is_none()
         );
+    }
+
+    #[test]
+    fn flattens_pointer_leaves_in_structs() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-london"
+
+type @pair = { *i8, i256 };
+
+func private %f() {
+block0:
+    return;
+}
+"#,
+        );
+        let pair = module
+            .ctx
+            .with_ty_store(|s| Type::Compound(s.lookup_struct("pair").unwrap()));
+        let ptr_i8 = Type::I8.to_ptr(&module.ctx);
+        let shape = aggregate_shape(&module.ctx, pair).expect("shape");
+        assert_eq!(shape.leaves.len(), 2);
+        assert_eq!(shape.leaves[0].path.as_slice(), &[0]);
+        assert_eq!(shape.leaves[0].ty, ptr_i8);
+        assert_eq!(shape.leaves[0].offset_bytes, 0);
+        assert_eq!(shape.leaves[0].size_bytes, 32);
+        assert_eq!(shape.leaves[1].path.as_slice(), &[1]);
+        assert_eq!(shape.leaves[1].ty, Type::I256);
+        assert_eq!(shape.leaves[1].offset_bytes, 32);
+        assert_eq!(shape.leaves[1].size_bytes, 32);
+    }
+
+    #[test]
+    fn flattens_pointer_leaves_in_arrays() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-london"
+
+func private %f() {
+block0:
+    return;
+}
+"#,
+        );
+        let ptr_i8 = Type::I8.to_ptr(&module.ctx);
+        let ptrs = module.ctx.with_ty_store_mut(|s| s.make_array(ptr_i8, 2));
+        let shape = aggregate_shape(&module.ctx, ptrs).expect("shape");
+        assert_eq!(shape.leaves.len(), 2);
+        assert_eq!(shape.leaves[0].path.as_slice(), &[0]);
+        assert_eq!(shape.leaves[0].ty, ptr_i8);
+        assert_eq!(shape.leaves[0].offset_bytes, 0);
+        assert_eq!(shape.leaves[1].path.as_slice(), &[1]);
+        assert_eq!(shape.leaves[1].ty, ptr_i8);
+        assert_eq!(shape.leaves[1].offset_bytes, 32);
+        assert_eq!(shape.leaves[1].size_bytes, 32);
     }
 }

@@ -1382,4 +1382,66 @@ func private %f(v0.i256) -> i256 {
             }
         });
     }
+
+    #[test]
+    fn late_legalizer_handles_pointer_valued_aggregates() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { *i8, i256 };
+
+func private %f(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.*i8 = int_to_ptr v0 *i8;
+        v3.*i8 = int_to_ptr v1 *i8;
+        v4.@pair = insert_value undef.@pair 0.i8 v2;
+        v5.@pair = insert_value v4 1.i8 9.i256;
+        v6.*@pair = alloca @pair;
+        mstore v6 v5 @pair;
+        v7.@pair = mload v6 @pair;
+        v8.*i8 = extract_value v7 0.i8;
+        v9.i256 = ptr_to_int v8 i256;
+        v10.[*i8; 2] = insert_value undef.[*i8; 2] 0.i8 v2;
+        v11.[*i8; 2] = insert_value v10 1.i8 v3;
+        v12.*[*i8; 2] = alloca [*i8; 2];
+        mstore v12 v11 [*i8; 2];
+        v13.[*i8; 2] = mload v12 [*i8; 2];
+        v14.*i8 = extract_value v13 1.i8;
+        v15.i256 = ptr_to_int v14 i256;
+        v16.i256 = add v9 v15;
+        return v16;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            assert_aggregate_legalized(func, &ctx);
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    if let Some(mload) =
+                        downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
+                    {
+                        assert!(
+                            !shape::is_supported_aggregate_ty(&ctx, *mload.ty()),
+                            "aggregate mload should be gone"
+                        );
+                    }
+                    if let Some(mstore) =
+                        downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst))
+                    {
+                        assert!(
+                            !shape::is_supported_aggregate_ty(&ctx, *mstore.ty()),
+                            "aggregate mstore should be gone"
+                        );
+                    }
+                }
+            }
+        });
+    }
 }
