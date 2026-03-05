@@ -1,0 +1,83 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/aggregate_legalize_bitcast.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 85 bytes
+  total: 85 bytes
+
+functions:
+  mem: dyn_base=0x180 static_base=0xc0
+  entry: ir_blocks=1 ir_insts=25 vcode_ops=58 fixups=0 imm_bytes=16
+    mem: scheme=StaticArena need_words=6 locals_words=6
+
+evm:
+  case ok: calldata_len=64 success reason=Return gas_used=21472 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=192
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    JUMPDEST
+    PUSH1 0xc0 (192)  // v14.*[i256; 2] = alloca [i256; 2];
+    POP  // v13.*@pair = alloca @pair;
+    PUSH2 0x100 (256)
+    PUSH2 0x140 (320)  // v12.*@pair = alloca @pair;
+    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
+    CALLDATALOAD
+    PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i32;
+    CALLDATALOAD
+    DUP3  // v17.*i256 = gep v12 0.i64 0.i64;
+    POP
+    PUSH2 0x140 (320)
+    PUSH1 0xc0 (192)  // mstore v17 undef.i256 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    DUP3  // v20.*i256 = gep v12 0.i64 1.i64;
+    POP
+    PUSH2 0x160 (352)
+    PUSH1 0xe0 (224)  // mstore v20 undef.i256 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    DUP3  // v21.*i256 = gep v12 0.i64 0.i64;
+    POP
+    PUSH2 0x140 (320)
+    SWAP1  // mstore v21 v0 i256;
+    SWAP2
+    SWAP1
+    MSTORE
+    DUP2  // v22.*i256 = gep v12 0.i64 0.i64;
+    POP
+    PUSH2 0x140 (320)
+    MLOAD  // v23.i256 = mload v22 i256;
+    DUP4  // v24.*i256 = gep v13 0.i64 0.i64;
+    POP
+    PUSH2 0x100 (256)
+    MSTORE  // mstore v24 v23 i256;
+    SWAP1  // v25.*i256 = gep v12 0.i64 1.i64;
+    POP
+    PUSH2 0x160 (352)
+    MLOAD  // v26.i256 = mload v25 i256;
+    DUP3  // v27.*i256 = gep v13 0.i64 1.i64;
+    POP
+    PUSH2 0x120 (288)
+    MSTORE  // mstore v27 v26 i256;
+    DUP2  // v28.*i256 = gep v13 0.i64 1.i64;
+    POP
+    PUSH2 0x120 (288)
+    MSTORE  // mstore v28 v1 i256;
+    POP  // v29.*i256 = gep v13 0.i64 1.i64;
+    PUSH2 0x120 (288)
+    MLOAD  // v30.i256 = mload v29 i256;
+    PUSH0  // mstore 0.i32 v30 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH0
+    RETURN

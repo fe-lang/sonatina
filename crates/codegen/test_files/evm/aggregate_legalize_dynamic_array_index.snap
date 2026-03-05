@@ -1,0 +1,63 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/aggregate_legalize_dynamic_array_index.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 50 bytes
+  total: 50 bytes
+
+functions:
+  mem: dyn_base=0x140 static_base=0xc0
+  entry: ir_blocks=1 ir_insts=13 vcode_ops=38 fixups=0 imm_bytes=9
+    mem: scheme=StaticArena need_words=4 locals_words=4
+
+evm:
+  case ok: calldata_len=64 success reason=Return gas_used=21418 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=138
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    JUMPDEST
+    PUSH2 0x100 (256)  // v9.*[i256; 2] = alloca [i256; 2];
+    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
+    CALLDATALOAD
+    PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i32;
+    CALLDATALOAD
+    DUP3  // v12.*i256 = gep v9 0.i64 0.i64;
+    POP
+    PUSH2 0x100 (256)
+    PUSH1 0xc0 (192)  // mstore v12 undef.i256 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    DUP3  // v15.*i256 = gep v9 0.i64 1.i64;
+    POP
+    PUSH2 0x120 (288)
+    PUSH1 0xe0 (224)  // mstore v15 undef.i256 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    DUP2  // v16.*i256 = gep v9 0.i64 v0;
+    DUP4
+    SWAP1
+    PUSH1 0x20 (32)
+    MUL
+    ADD
+    MSTORE  // mstore v16 v1 i256;
+    SWAP1  // v17.*i256 = gep v9 0.i64 v0;
+    SWAP1
+    PUSH1 0x20 (32)
+    MUL
+    ADD
+    MLOAD  // v18.i256 = mload v17 i256;
+    PUSH0  // mstore 0.i32 v18 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH0
+    RETURN
