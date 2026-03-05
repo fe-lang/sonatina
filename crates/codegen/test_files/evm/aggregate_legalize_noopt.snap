@@ -1,0 +1,139 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/aggregate_legalize_noopt.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 153 bytes
+  total: 153 bytes
+
+functions:
+  mem: dyn_base=0x1c0 static_base=0xc0
+  entry: ir_blocks=1 ir_insts=5 vcode_ops=15 fixups=2 imm_bytes=2
+    mem: scheme=StaticArena need_words=8 locals_words=0
+  agg_noopt: ir_blocks=1 ir_insts=42 vcode_ops=93 fixups=0 imm_bytes=24
+    mem: scheme=StaticArena need_words=8 locals_words=8
+
+evm:
+  case ok: calldata_len=64 success reason=Return gas_used=21626 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=346
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    JUMPDEST
+    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
+    CALLDATALOAD
+    PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i32;
+    CALLDATALOAD
+    PUSH1 `pc + (4)`  // v2.i256 = call %agg_noopt v0 v1;
+    SWAP2
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH0  // mstore 0.i32 v2 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH0
+    RETURN
+
+// func private %agg_noopt(v0.i256, v1.i256) -> i256
+agg_noopt:
+  block0:
+    JUMPDEST
+    PUSH2 0x100 (256)  // v14.*@slice = alloca @slice;
+    PUSH2 0x140 (320)  // v13.*@slice = alloca @slice;
+    PUSH2 0x180 (384)  // v12.*@slice = alloca @slice;
+    DUP1  // v17.*i256 = gep v12 0.i64 0.i64;
+    POP
+    PUSH2 0x180 (384)
+    PUSH1 0xc0 (192)  // mstore v17 undef.i256 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    DUP1  // v20.*i256 = gep v12 0.i64 1.i64;
+    POP
+    PUSH2 0x1a0 (416)
+    PUSH1 0xe0 (224)  // mstore v20 undef.i256 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    DUP1  // v21.*i256 = gep v12 0.i64 0.i64;
+    POP
+    PUSH2 0x180 (384)
+    SWAP1  // mstore v21 v0 i256;
+    SWAP4
+    SWAP1
+    MSTORE
+    DUP3  // v22.*i256 = gep v12 0.i64 0.i64;
+    POP
+    PUSH2 0x180 (384)
+    MLOAD  // v23.i256 = mload v22 i256;
+    DUP2  // v24.*i256 = gep v13 0.i64 0.i64;
+    POP
+    PUSH2 0x140 (320)
+    MSTORE  // mstore v24 v23 i256;
+    SWAP1  // v25.*i256 = gep v12 0.i64 1.i64;
+    SWAP2
+    POP
+    PUSH2 0x1a0 (416)
+    MLOAD  // v26.i256 = mload v25 i256;
+    DUP2  // v27.*i256 = gep v13 0.i64 1.i64;
+    POP
+    PUSH2 0x160 (352)
+    MSTORE  // mstore v27 v26 i256;
+    DUP1  // v28.*i256 = gep v13 0.i64 1.i64;
+    POP
+    PUSH2 0x160 (352)
+    SWAP1  // mstore v28 v1 i256;
+    SWAP3
+    SWAP1
+    MSTORE
+    PUSH1 0xc0 (192)  // v4.*@slice = alloca @slice;
+    DUP3  // v29.*i256 = gep v13 0.i64 0.i64;
+    POP
+    PUSH2 0x140 (320)
+    MLOAD  // v30.i256 = mload v29 i256;
+    DUP2  // v31.*i256 = gep v4 0.i64 0.i64;
+    POP
+    PUSH1 0xc0 (192)
+    MSTORE  // mstore v31 v30 i256;
+    SWAP1  // v32.*i256 = gep v13 0.i64 1.i64;
+    SWAP2
+    POP
+    PUSH2 0x160 (352)
+    MLOAD  // v33.i256 = mload v32 i256;
+    DUP2  // v34.*i256 = gep v4 0.i64 1.i64;
+    POP
+    PUSH1 0xe0 (224)
+    MSTORE  // mstore v34 v33 i256;
+    DUP1  // v35.*i256 = gep v4 0.i64 0.i64;
+    POP
+    PUSH1 0xc0 (192)
+    MLOAD  // v36.i256 = mload v35 i256;
+    DUP3  // v37.*i256 = gep v14 0.i64 0.i64;
+    POP
+    PUSH2 0x100 (256)
+    MSTORE  // mstore v37 v36 i256;
+    POP  // v38.*i256 = gep v4 0.i64 1.i64;
+    PUSH1 0xe0 (224)
+    MLOAD  // v39.i256 = mload v38 i256;
+    DUP2  // v40.*i256 = gep v14 0.i64 1.i64;
+    POP
+    PUSH2 0x120 (288)
+    MSTORE  // mstore v40 v39 i256;
+    DUP1  // v41.*i256 = gep v14 0.i64 0.i64;
+    POP
+    PUSH2 0x100 (256)
+    MLOAD  // v42.i256 = mload v41 i256;
+    SWAP1  // v43.*i256 = gep v14 0.i64 1.i64;
+    POP
+    PUSH2 0x120 (288)
+    MLOAD  // v44.i256 = mload v43 i256;
+    ADD  // v8.i256 = add v42 v44;
+    SWAP1  // return v8;
+    JUMP

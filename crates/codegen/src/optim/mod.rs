@@ -1,4 +1,5 @@
 pub mod adce;
+pub mod aggregate;
 pub(crate) mod call_purity;
 pub mod cfg_cleanup;
 pub mod dead_func;

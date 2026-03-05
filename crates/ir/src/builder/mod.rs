@@ -6,7 +6,7 @@ mod ssa;
 pub use func_builder::FunctionBuilder;
 pub use module_builder::{BuilderError, ModuleBuilder};
 pub use object_builder::{DeclareObjectError, ObjectBuilder, ObjectBuilderError, SectionBuilder};
-pub use ssa::Variable;
+pub use ssa::{PromotionSsaBuilder, Variable};
 
 pub mod test_util {
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};

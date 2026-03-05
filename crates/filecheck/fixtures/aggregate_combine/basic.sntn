@@ -1,0 +1,132 @@
+target = "evm-ethereum-london"
+
+type @slice = { i256, i256 };
+# sameln: func public %ac_same_index(v0.@slice, v1.i256) -> i256 {
+# check:     block0:
+# check:         return v1;
+func public %ac_same_index(v0.@slice, v1.i256) -> i256 {
+    block0:
+        v2.@slice = insert_value v0 1.i8 v1;
+        v3.i256 = extract_value v2 1.i8;
+        return v3;
+}
+
+# sameln: func public %ac_different_index(v0.@slice, v1.i256) -> i256 {
+# check:     block0:
+# check:         extract_value v0 1.i8;
+# check:         return v3;
+func public %ac_different_index(v0.@slice, v1.i256) -> i256 {
+    block0:
+        v2.@slice = insert_value v0 0.i8 v1;
+        v3.i256 = extract_value v2 1.i8;
+        return v3;
+}
+
+# sameln: func public %ac_overwrite(v0.@slice, v1.i256, v2.i256) -> i256 {
+# check:     block0:
+# check:         return v2;
+func public %ac_overwrite(v0.@slice, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.@slice = insert_value v0 0.i8 v1;
+        v4.@slice = insert_value v3 0.i8 v2;
+        v5.i256 = extract_value v4 0.i8;
+        return v5;
+}
+
+# sameln: func public %ac_reconstruct(v0.@slice) -> i256 {
+# check:     block0:
+# check:         v5.i256 = extract_value v0 1.i8;
+# check:         return v5;
+func public %ac_reconstruct(v0.@slice) -> i256 {
+    block0:
+        v1.i256 = extract_value v0 0.i8;
+        v2.i256 = extract_value v0 1.i8;
+        v3.@slice = insert_value undef.@slice 0.i8 v1;
+        v4.@slice = insert_value v3 1.i8 v2;
+        v5.i256 = extract_value v4 1.i8;
+        return v5;
+}
+
+# sameln: func public %ac_phi_extract(v0.i1, v1.@slice, v2.@slice) -> i256 {
+# check:     block3:
+# check:         phi (v1 block1) (v2 block2);
+# check:         extract_value
+# check:         return v8;
+func public %ac_phi_extract(v0.i1, v1.@slice, v2.@slice) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v3.i256 = extract_value v1 1.i8;
+        jump block3;
+
+    block2:
+        v4.i256 = extract_value v2 1.i8;
+        jump block3;
+
+    block3:
+        v5.i256 = phi (v3 block1) (v4 block2);
+        return v5;
+}
+
+# sameln: func public %ac_phi_insert(v0.i1, v1.@slice, v2.@slice) -> i256 {
+# check:     block3:
+# check:         phi (10.i256 block1) (20.i256 block2);
+# check:         return v11;
+func public %ac_phi_insert(v0.i1, v1.@slice, v2.@slice) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v3.@slice = insert_value v1 0.i8 10.i256;
+        jump block3;
+
+    block2:
+        v4.@slice = insert_value v2 0.i8 20.i256;
+        jump block3;
+
+    block3:
+        v5.@slice = phi (v3 block1) (v4 block2);
+        v6.i256 = extract_value v5 0.i8;
+        return v6;
+}
+
+# sameln: func public %ac_nested_chain() -> i256 {
+# check:     block0:
+# check:         return 2.i256;
+func public %ac_nested_chain() -> i256 {
+    block0:
+        v0.@slice = insert_value undef.@slice 0.i8 1.i256;
+        v1.@slice = insert_value v0 1.i8 2.i256;
+        v2.@slice = insert_value v1 0.i8 3.i256;
+        v3.i256 = extract_value v2 1.i8;
+        return v3;
+}
+
+# sameln: func public %ac_dynamic_insert_extract_no_fold(v0.[i256; 2], v1.i8, v2.i8) -> i256 {
+# check:     block0:
+# check:         v3.i256 = extract_value v0 v1;
+# check:         v4.[i256; 2] = insert_value v0 v2 v3;
+# check:         v5.i256 = extract_value v4 v2;
+# check:         return v5;
+func public %ac_dynamic_insert_extract_no_fold(v0.[i256; 2], v1.i8, v2.i8) -> i256 {
+    block0:
+        v3.i256 = extract_value v0 v1;
+        v4.[i256; 2] = insert_value v0 v2 v3;
+        v5.i256 = extract_value v4 v2;
+        return v5;
+}
+
+# sameln: func public %ac_dynamic_overwrite_no_fold(v0.[i256; 2], v1.i8, v2.i8) -> i256 {
+# check:     block0:
+# check:         v3.[i256; 2] = insert_value v0 v1 10.i256;
+# check:         v4.[i256; 2] = insert_value v3 v2 20.i256;
+# check:         v5.i256 = extract_value v4 v1;
+# check:         return v5;
+func public %ac_dynamic_overwrite_no_fold(v0.[i256; 2], v1.i8, v2.i8) -> i256 {
+    block0:
+        v3.[i256; 2] = insert_value v0 v1 10.i256;
+        v4.[i256; 2] = insert_value v3 v2 20.i256;
+        v5.i256 = extract_value v4 v1;
+        return v5;
+}

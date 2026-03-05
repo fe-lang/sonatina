@@ -243,6 +243,56 @@ impl SsaBuilder {
     }
 }
 
+/// Reusable SSA promotion builder for optimizer passes.
+///
+/// This wraps the same sealed-block SSA construction engine used by
+/// `FunctionBuilder`, including trivial-phi cleanup.
+pub struct PromotionSsaBuilder {
+    inner: SsaBuilder,
+}
+
+impl PromotionSsaBuilder {
+    pub fn new() -> Self {
+        Self {
+            inner: SsaBuilder::new(),
+        }
+    }
+
+    pub fn declare_var(&mut self, ty: Type) -> Variable {
+        self.inner.declare_var(ty)
+    }
+
+    pub fn append_pred(&mut self, block: BlockId, pred: BlockId) {
+        self.inner.append_pred(block, pred);
+    }
+
+    pub fn def_var(&mut self, var: Variable, value: ValueId, block: BlockId) {
+        self.inner.def_var(var, value, block);
+    }
+
+    pub fn use_var(&mut self, func: &mut Function, var: Variable, block: BlockId) -> ValueId {
+        self.inner.use_var(func, var, block)
+    }
+
+    pub fn seal_block(&mut self, func: &mut Function, block: BlockId) {
+        self.inner.seal_block(func, block);
+    }
+
+    pub fn seal_all(&mut self, func: &mut Function) {
+        self.inner.seal_all(func);
+    }
+
+    pub fn resolve_alias(&self, value: ValueId) -> ValueId {
+        self.inner.resolve_alias(value)
+    }
+}
+
+impl Default for PromotionSsaBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Default, Clone)]
 struct SsaBlock {
     /// Records all predecessors of a block.

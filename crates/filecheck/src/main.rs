@@ -1,5 +1,6 @@
 use sonatina_filecheck::{
-    FileCheckRunner, adce::AdceTransform, cfg_cleanup::CfgCleanupTransform,
+    FileCheckRunner, adce::AdceTransform, aggregate_combine::AggregateCombineTransform,
+    aggregate_scalarize::AggregateScalarizeTransform, cfg_cleanup::CfgCleanupTransform,
     egraph::EgraphTransform, gvn::GvnTransform, licm::LicmTransformer, sccp::SccpTransform,
 };
 
@@ -8,6 +9,12 @@ fn main() {
     runner.run();
 
     runner.attach_transformer(CfgCleanupTransform::default());
+    runner.run();
+
+    runner.attach_transformer(AggregateCombineTransform);
+    runner.run();
+
+    runner.attach_transformer(AggregateScalarizeTransform);
     runner.run();
 
     runner.attach_transformer(AdceTransform::default());

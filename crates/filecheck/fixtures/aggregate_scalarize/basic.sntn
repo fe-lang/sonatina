@@ -1,0 +1,149 @@
+target = "evm-ethereum-london"
+
+type @slice = { i256, i256 };
+type @one = { i256 };
+# sameln: func public %scalarize_insert_extract(v0.i256, v1.i256) -> i256 {
+# check:     block0:
+# check:         add v0 v1;
+# check:         return v6;
+func public %scalarize_insert_extract(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.@slice = insert_value undef.@slice 0.i8 v0;
+        v3.@slice = insert_value v2 1.i8 v1;
+        v4.i256 = extract_value v3 0.i8;
+        v5.i256 = extract_value v3 1.i8;
+        v6.i256 = add v4 v5;
+        return v6;
+}
+
+# sameln: func public %scalarize_diamond(v0.i1, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
+# check:     block3:
+# check:         v21.i256 = phi (v1 block0) (v3 block2);
+# check:         v18.i256 = phi (v2 block0) (v4 block2);
+# check:         v12.i256 = add v21 v18;
+# check:         return v12;
+func public %scalarize_diamond(v0.i1, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v5.@slice = insert_value undef.@slice 0.i8 v1;
+        v6.@slice = insert_value v5 1.i8 v2;
+        jump block3;
+
+    block2:
+        v7.@slice = insert_value undef.@slice 0.i8 v3;
+        v8.@slice = insert_value v7 1.i8 v4;
+        jump block3;
+
+    block3:
+        v9.@slice = phi (v6 block1) (v8 block2);
+        v10.i256 = extract_value v9 0.i8;
+        v11.i256 = extract_value v9 1.i8;
+        v12.i256 = add v10 v11;
+        return v12;
+}
+
+# sameln: func public %scalarize_promote_alloca(v0.i256, v1.i256) -> i256 {
+# check:     block0:
+# check:         add v0 v1;
+# check:         return v7;
+func public %scalarize_promote_alloca(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.*@slice = alloca @slice;
+        v3.*i256 = gep v2 0.i8 0.i8;
+        v4.*i256 = gep v2 0.i8 1.i8;
+        mstore v3 v0 i256;
+        mstore v4 v1 i256;
+        v5.i256 = mload v3 i256;
+        v6.i256 = mload v4 i256;
+        v7.i256 = add v5 v6;
+        return v7;
+}
+
+# sameln: func public %scalarize_promote_whole_load_store(v0.i256, v1.i256) -> i256 {
+# check:     block0:
+# check:         return v1;
+func public %scalarize_promote_whole_load_store(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.@slice = insert_value undef.@slice 0.i8 v0;
+        v3.@slice = insert_value v2 1.i8 v1;
+        v4.*@slice = alloca @slice;
+        mstore v4 v3 @slice;
+        v5.@slice = mload v4 @slice;
+        v6.i256 = extract_value v5 1.i8;
+        return v6;
+}
+
+# sameln: func public %scalarize_reject_dynamic_index(v0.i8) -> i256 {
+# check:         v2.*i256 = gep v1 0.i8 v0;
+# check:         mstore v2 7.i256 i256;
+# check:         v3.i256 = mload v2 i256;
+func public %scalarize_reject_dynamic_index(v0.i8) -> i256 {
+    block0:
+        v1.*[i256; 2] = alloca [i256; 2];
+        v2.*i256 = gep v1 0.i8 v0;
+        mstore v2 7.i256 i256;
+        v3.i256 = mload v2 i256;
+        return v3;
+}
+
+# sameln: func public %scalarize_skip_aggregate_store_from_arg(v0.@slice) -> i256 {
+# check:     block0:
+# check:         v1.*@slice = alloca @slice;
+# check:         mstore v1 v0 @slice;
+# check:         v2.@slice = mload v1 @slice;
+# check:         v3.i256 = extract_value v2 0.i8;
+# check:         return v3;
+func public %scalarize_skip_aggregate_store_from_arg(v0.@slice) -> i256 {
+    block0:
+        v1.*@slice = alloca @slice;
+        mstore v1 v0 @slice;
+        v2.@slice = mload v1 @slice;
+        v3.i256 = extract_value v2 0.i8;
+        return v3;
+}
+
+# sameln: func public %scalarize_phi_with_nonscalar_incoming(v0.i1, v1.@slice, v2.i256) -> i256 {
+# check:     block3:
+# check:         v5.@slice = phi (v4 block0) (v1 block2);
+# check:         v6.i256 = extract_value v5 0.i8;
+# check:         return v6;
+func public %scalarize_phi_with_nonscalar_incoming(v0.i1, v1.@slice, v2.i256) -> i256 {
+    block0:
+        v3.@slice = insert_value undef.@slice 0.i8 v2;
+        v4.@slice = insert_value v3 1.i8 9.i256;
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v5.@slice = phi (v4 block1) (v1 block2);
+        v6.i256 = extract_value v5 0.i8;
+        return v6;
+}
+
+# sameln: func public %scalarize_loop_carried_phi(v0.i1, v1.i256) -> i256 {
+# check:     block1:
+# check:         phi (v1 block0) (42.i256 block2);
+func public %scalarize_loop_carried_phi(v0.i1, v1.i256) -> i256 {
+    block0:
+        v2.@one = insert_value undef.@one 0.i8 v1;
+        jump block1;
+
+    block1:
+        v3.@one = phi (v2 block0) (v5 block2);
+        v4.i256 = extract_value v3 0.i8;
+        br v0 block3 block2;
+
+    block2:
+        v5.@one = insert_value v3 0.i8 42.i256;
+        jump block1;
+
+    block3:
+        return v4;
+}

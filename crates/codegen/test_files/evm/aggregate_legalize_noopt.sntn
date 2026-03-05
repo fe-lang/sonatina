@@ -1,0 +1,37 @@
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: false, evm_trace: false, opt: 0 }
+#! evm.case: ok
+#!   calldata: u256(3) u256(9)
+#!   expect: return u256(12)
+
+target = "evm-ethereum-osaka"
+
+type @slice = { i256, i256 };
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = evm_calldata_load 32.i32;
+        v2.i256 = call %agg_noopt v0 v1;
+        mstore 0.i32 v2 i256;
+        evm_return 0.i8 32.i8;
+}
+
+func private %agg_noopt(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.@slice = insert_value undef.@slice 0.i8 v0;
+        v3.@slice = insert_value v2 1.i8 v1;
+        v4.*@slice = alloca @slice;
+        mstore v4 v3 @slice;
+        v5.@slice = mload v4 @slice;
+        v6.i256 = extract_value v5 0.i8;
+        v7.i256 = extract_value v5 1.i8;
+        v8.i256 = add v6 v7;
+        return v8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+
