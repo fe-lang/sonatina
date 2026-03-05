@@ -52,18 +52,12 @@ pub fn aggregate_slice_for_path(
     root_ty: Type,
     path: &[u32],
 ) -> Option<AggregateSlice> {
-    let shape = aggregate_shape(module, root_ty)?;
-    let ty = aggregate_ty_at_path(module, root_ty, path)?;
+    if !is_supported_aggregate_ty(module, root_ty) {
+        return None;
+    }
 
-    let first_leaf = shape
-        .leaves
-        .iter()
-        .position(|leaf| leaf.path.starts_with(path))?;
-    let leaf_count = shape.leaves[first_leaf..]
-        .iter()
-        .take_while(|leaf| leaf.path.starts_with(path))
-        .count();
-    (leaf_count != 0).then_some(AggregateSlice {
+    let (ty, first_leaf, leaf_count) = aggregate_slice_info(module, root_ty, path)?;
+    Some(AggregateSlice {
         ty,
         first_leaf,
         leaf_count,
@@ -181,12 +175,74 @@ pub fn is_supported_aggregate_ty(module: &ModuleCtx, ty: Type) -> bool {
     }
 }
 
-fn aggregate_ty_at_path(module: &ModuleCtx, root_ty: Type, path: &[u32]) -> Option<Type> {
-    let mut cur = root_ty;
-    for &idx in path {
-        cur = aggregate_child_ty(module, cur, idx)?;
+fn aggregate_slice_info(
+    module: &ModuleCtx,
+    ty: Type,
+    path: &[u32],
+) -> Option<(Type, usize, usize)> {
+    if path.is_empty() {
+        return Some((ty, 0, flattened_leaf_count(module, ty)?));
     }
-    Some(cur)
+
+    let idx = usize::try_from(path[0]).ok()?;
+    match ty.resolve_compound(module)? {
+        CompoundType::Struct(s) => {
+            if s.packed {
+                return None;
+            }
+
+            let child_ty = *s.fields.get(idx)?;
+            let mut first_leaf = 0usize;
+            for &field_ty in s.fields.iter().take(idx) {
+                first_leaf = first_leaf.checked_add(flattened_leaf_count(module, field_ty)?)?;
+            }
+
+            let (nested_ty, nested_first_leaf, leaf_count) =
+                aggregate_slice_info(module, child_ty, &path[1..])?;
+            Some((
+                nested_ty,
+                first_leaf.checked_add(nested_first_leaf)?,
+                leaf_count,
+            ))
+        }
+        CompoundType::Array { elem, len } => {
+            if idx >= len {
+                return None;
+            }
+
+            let elem_leaf_count = flattened_leaf_count(module, elem)?;
+            let first_leaf = elem_leaf_count.checked_mul(idx)?;
+            let (nested_ty, nested_first_leaf, leaf_count) =
+                aggregate_slice_info(module, elem, &path[1..])?;
+            Some((
+                nested_ty,
+                first_leaf.checked_add(nested_first_leaf)?,
+                leaf_count,
+            ))
+        }
+        CompoundType::Ptr(_) | CompoundType::Func { .. } => None,
+    }
+}
+
+fn flattened_leaf_count(module: &ModuleCtx, ty: Type) -> Option<usize> {
+    match ty.resolve_compound(module) {
+        Some(CompoundType::Struct(s)) => {
+            if s.packed {
+                return None;
+            }
+
+            let mut count = 0usize;
+            for &field_ty in &s.fields {
+                count = count.checked_add(flattened_leaf_count(module, field_ty)?)?;
+            }
+            Some(count)
+        }
+        Some(CompoundType::Array { elem, len }) => {
+            flattened_leaf_count(module, elem)?.checked_mul(len)
+        }
+        Some(CompoundType::Func { .. }) => None,
+        Some(CompoundType::Ptr(_)) | None => Some(1),
+    }
 }
 
 fn flatten_aggregate(
@@ -318,6 +374,45 @@ block0:
         assert!(
             aggregate_slice_for_gep_path(&module.ctx, pair, &[zero, one, dyn_idx], &dfg).is_none()
         );
+    }
+
+    #[test]
+    fn computes_empty_subaggregate_slice() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-london"
+
+type @empty = {};
+type @outer = { @empty, i256 };
+
+func private %f() {
+block0:
+    return;
+}
+"#,
+        );
+        let empty = module
+            .ctx
+            .with_ty_store(|s| Type::Compound(s.lookup_struct("empty").unwrap()));
+        let outer = module
+            .ctx
+            .with_ty_store(|s| Type::Compound(s.lookup_struct("outer").unwrap()));
+
+        let empty_slice = aggregate_slice_for_index(&module.ctx, outer, 0).expect("empty slice");
+        assert_eq!(empty_slice.ty, empty);
+        assert_eq!(empty_slice.first_leaf, 0);
+        assert_eq!(empty_slice.leaf_count, 0);
+
+        let payload_slice =
+            aggregate_slice_for_index(&module.ctx, outer, 1).expect("payload slice");
+        assert_eq!(payload_slice.ty, Type::I256);
+        assert_eq!(payload_slice.first_leaf, 0);
+        assert_eq!(payload_slice.leaf_count, 1);
+
+        let whole_empty = aggregate_slice_for_path(&module.ctx, empty, &[]).expect("whole empty");
+        assert_eq!(whole_empty.ty, empty);
+        assert_eq!(whole_empty.first_leaf, 0);
+        assert_eq!(whole_empty.leaf_count, 0);
     }
 
     #[test]

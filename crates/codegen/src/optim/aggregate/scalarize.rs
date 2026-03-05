@@ -34,6 +34,7 @@ impl AggregateScalarize {
         self.changed = false;
         let module = func.ctx().clone();
         func.rebuild_users();
+        self.assert_cfg_cleaned_up(func);
 
         let (mut promoted_allocas, mut projection_of) = self.find_promotable_allocas(func, &module);
         let scalarizable = loop {
@@ -116,6 +117,7 @@ impl AggregateScalarize {
             &mut scalarized_agg,
         );
         ssa.seal_all(func);
+        self.simplify_scalar_phi_results(func, &mut scalar_phi_results);
         self.cleanup_dead_promoted_allocas(func, &projection_of, &promoted_by_inst);
         self.changed |= self.remove_dead_pure_insts(func);
 
@@ -123,6 +125,38 @@ impl AggregateScalarize {
             func.rebuild_users();
         }
         self.changed
+    }
+
+    fn assert_cfg_cleaned_up(&self, func: &Function) {
+        let Some(entry) = func.layout.entry_block() else {
+            return;
+        };
+
+        let mut reachable = FxHashSet::default();
+        let mut worklist = vec![entry];
+        while let Some(block) = worklist.pop() {
+            if !reachable.insert(block) {
+                continue;
+            }
+            let Some(term) = func.layout.last_inst_of(block) else {
+                continue;
+            };
+            let Some(branch) = func.dfg.branch_info(term) else {
+                continue;
+            };
+            worklist.extend(branch.dests());
+        }
+
+        if let Some(block) = func
+            .layout
+            .iter_block()
+            .find(|block| !reachable.contains(block))
+        {
+            panic!(
+                "AggregateScalarize requires CfgCleanup to remove unreachable blocks first (found unreachable block {})",
+                block.as_u32()
+            );
+        }
     }
 
     fn append_block_preds(&self, func: &Function, ssa: &mut SsaBuilder) {
@@ -871,7 +905,7 @@ impl AggregateScalarize {
             else {
                 continue;
             };
-            let Some(mut leaf_phis) = scalar_phi_results[result].clone() else {
+            let Some(leaf_phis) = scalar_phi_results[result].clone() else {
                 continue;
             };
 
@@ -893,23 +927,56 @@ impl AggregateScalarize {
                 }
             }
 
-            self.simplify_scalar_leaf_phis(func, &mut leaf_phis);
             scalarized_agg[result] = Some(leaf_phis);
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
         }
     }
 
+    fn simplify_scalar_phi_results(
+        &mut self,
+        func: &mut Function,
+        scalar_phi_results: &mut SecondaryMap<ValueId, Option<LeafValues>>,
+    ) {
+        let values: Vec<_> = func.dfg.values.keys().collect();
+        for value in values {
+            let Some(leaf_phis) = scalar_phi_results[value].as_mut() else {
+                continue;
+            };
+            self.simplify_scalar_leaf_phis(func, leaf_phis);
+        }
+    }
+
     fn simplify_scalar_leaf_phis(&mut self, func: &mut Function, leaf_phis: &mut LeafValues) {
-        for leaf_phi in leaf_phis.iter_mut() {
-            let Some(phi_inst) = func.dfg.value_inst(*leaf_phi) else {
+        let mut worklist: Vec<_> = leaf_phis.iter().copied().collect();
+        let mut queued = FxHashSet::default();
+        while let Some(leaf_phi) = worklist.pop() {
+            let Some(phi_inst) = func.dfg.value_inst(leaf_phi) else {
                 continue;
             };
             let Some(replacement) = trivial_phi_replacement(func, phi_inst) else {
                 continue;
             };
-            func.dfg.change_to_alias(*leaf_phi, replacement);
+            let phi_users: Vec<_> = func
+                .dfg
+                .users(leaf_phi)
+                .copied()
+                .filter(|user| func.layout.is_inst_inserted(*user) && func.dfg.is_phi(*user))
+                .collect();
+            func.dfg.change_to_alias(leaf_phi, replacement);
             InstInserter::at_location(CursorLocation::At(phi_inst)).remove_inst(func);
-            *leaf_phi = replacement;
+            for current in leaf_phis.iter_mut() {
+                if *current == leaf_phi {
+                    *current = replacement;
+                }
+            }
+            for user in phi_users {
+                let Some(user_value) = func.dfg.inst_result(user) else {
+                    continue;
+                };
+                if queued.insert(user_value) {
+                    worklist.push(user_value);
+                }
+            }
             self.changed = true;
         }
     }
@@ -1097,4 +1164,140 @@ fn is_dead_inst_tree(
     visiting.remove(&inst);
     memo.insert(inst, dead);
     dead
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sonatina_ir::{InstDowncast, Module, module::FuncRef};
+    use sonatina_parser::parse_module;
+
+    fn parse_test_module(src: &str) -> Module {
+        parse_module(src).expect("parse should succeed").module
+    }
+
+    fn lookup_func(module: &Module, name: &str) -> FuncRef {
+        module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
+            .expect("function should exist")
+    }
+
+    #[test]
+    fn scalarize_does_not_leave_removed_leaf_phi_uses() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @slice = { i256, i256 };
+
+func private %f(v0.i1, v1.i1, v2.i256) -> i256 {
+    block0:
+        v3.*@slice = alloca @slice;
+        br v0 block1 block2;
+
+    block1:
+        v4.@slice = insert_value undef.@slice 0.i8 v2;
+        v5.@slice = insert_value v4 1.i8 11.i256;
+        jump block3;
+
+    block2:
+        v6.@slice = insert_value undef.@slice 0.i8 v2;
+        v7.@slice = insert_value v6 1.i8 22.i256;
+        jump block3;
+
+    block3:
+        v8.@slice = phi (v5 block1) (v7 block2);
+        mstore v3 v8 @slice;
+        br v1 block4 block5;
+
+    block4:
+        v9.@slice = insert_value undef.@slice 0.i8 99.i256;
+        v10.@slice = insert_value v9 1.i8 33.i256;
+        mstore v3 v10 @slice;
+        jump block5;
+
+    block5:
+        v11.@slice = mload v3 @slice;
+        v12.i256 = extract_value v11 0.i8;
+        return v12;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    func.dfg.inst(inst).for_each_value(&mut |value| {
+                        if let Some(def_inst) = func.dfg.value_inst(value) {
+                            assert!(
+                                func.layout.is_inst_inserted(def_inst),
+                                "inst {} uses value v{} from removed inst {}",
+                                inst.as_u32(),
+                                value.as_u32(),
+                                def_inst.as_u32()
+                            );
+                        }
+                    });
+                }
+            }
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    if let Some(mload) = <&data::Mload as InstDowncast>::downcast(
+                        func.inst_set(),
+                        func.dfg.inst(inst),
+                    ) {
+                        assert!(
+                            !shape::is_supported_aggregate_ty(&ctx, *mload.ty()),
+                            "aggregate mload should be gone after scalarization"
+                        );
+                    }
+                    if let Some(mstore) = <&data::Mstore as InstDowncast>::downcast(
+                        func.inst_set(),
+                        func.dfg.inst(inst),
+                    ) {
+                        assert!(
+                            !shape::is_supported_aggregate_ty(&ctx, *mstore.ty()),
+                            "aggregate mstore should be gone after scalarization"
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "AggregateScalarize requires CfgCleanup to remove unreachable blocks first"
+    )]
+    fn scalarize_requires_cfg_cleanup_for_unreachable_blocks() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @slice = { i256, i256 };
+
+func private %f() -> i256 {
+    block0:
+        v0.*@slice = alloca @slice;
+        return 0.i256;
+
+    block1:
+        v1.@slice = mload v0 @slice;
+        v2.i256 = extract_value v1 0.i8;
+        return v2;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+    }
 }
