@@ -14,7 +14,7 @@ use crate::{
     cfg_edit::CleanupMode, critical_edge::CriticalEdgeSplitter, optim::cfg_cleanup::CfgCleanup,
 };
 
-use super::shape;
+use super::{cleanup::remove_dead_pure_insts, shape};
 
 #[derive(Default)]
 pub struct AggregateLowerToMemoryLegalize {
@@ -35,7 +35,6 @@ impl AggregateLowerToMemoryLegalize {
 
         self.validate_unsupported_boundaries(func, module);
         self.split_critical_edges_for_aggregate_phi(func, module);
-        self.preallocate_materialized_slots(func, module);
 
         let blocks: Vec<_> = func.layout.iter_block().collect();
         for block in blocks {
@@ -50,10 +49,10 @@ impl AggregateLowerToMemoryLegalize {
 
         if self.changed {
             self.changed |= self.remove_dead_materialized_slots(func);
-            self.changed |= self.remove_dead_pure_insts(func);
+            self.changed |= remove_dead_pure_insts(func);
             self.changed |= CfgCleanup::new(CleanupMode::Strict).run(func);
             self.changed |= self.remove_dead_materialized_slots(func);
-            self.changed |= self.remove_dead_pure_insts(func);
+            self.changed |= remove_dead_pure_insts(func);
             func.rebuild_users();
         }
         assert_aggregate_legalized(func, module);
@@ -113,30 +112,6 @@ impl AggregateLowerToMemoryLegalize {
         cfg.compute(func);
         CriticalEdgeSplitter::new().run(func, &mut cfg);
         self.changed = true;
-    }
-
-    fn preallocate_materialized_slots(&mut self, func: &mut Function, module: &ModuleCtx) {
-        let mut aggregate_results: Vec<(ValueId, Type)> = Vec::new();
-        for block in func.layout.iter_block() {
-            for inst in func.layout.iter_inst(block) {
-                let Some(result) = func.dfg.inst_result(inst) else {
-                    continue;
-                };
-                let ty = func.dfg.value_ty(result);
-                if !shape::is_supported_aggregate_ty(module, ty) {
-                    continue;
-                }
-                aggregate_results.push((result, ty));
-            }
-        }
-
-        for (result, ty) in aggregate_results {
-            if self.materialized_addr[result].is_some() {
-                continue;
-            }
-            let addr = self.create_temp_alloca(func, ty);
-            self.materialized_addr[result] = Some(addr);
-        }
     }
 
     fn create_temp_alloca(&mut self, func: &mut Function, ty: Type) -> ValueId {
@@ -259,9 +234,7 @@ impl AggregateLowerToMemoryLegalize {
             }
 
             let src_ptr = self.materialized_ptr(func, from, module);
-            let dst_ptr = self.materialized_addr[result]
-                .unwrap_or_else(|| self.create_temp_alloca(func, to_ty));
-            self.materialized_addr[result] = Some(dst_ptr);
+            let dst_ptr = self.materialized_ptr(func, result, module);
             let (src_leaves, dst_leaves) =
                 self.aggregate_bitcast_leaf_layout(module, from_ty, to_ty);
             let mut builder = BeforeCursor::new_before_inst(func, inst);
@@ -281,9 +254,7 @@ impl AggregateLowerToMemoryLegalize {
         if to_is_agg {
             let leaf = self.single_word_leaf(module, to_ty, "scalar-to-aggregate");
 
-            let dst_ptr = self.materialized_addr[result]
-                .unwrap_or_else(|| self.create_temp_alloca(func, to_ty));
-            self.materialized_addr[result] = Some(dst_ptr);
+            let dst_ptr = self.materialized_ptr(func, result, module);
 
             let mut builder = BeforeCursor::new_before_inst(func, inst);
             let payload = if leaf.ty == from_ty {
@@ -675,7 +646,12 @@ impl AggregateLowerToMemoryLegalize {
         (src_leaves, dst_leaves)
     }
 
-    fn materialized_ptr(&self, func: &Function, value: ValueId, module: &ModuleCtx) -> ValueId {
+    fn materialized_ptr(
+        &mut self,
+        func: &mut Function,
+        value: ValueId,
+        module: &ModuleCtx,
+    ) -> ValueId {
         if is_explicit_undef(func, value) {
             panic!("explicit undef aggregate has no materialized pointer");
         }
@@ -683,12 +659,12 @@ impl AggregateLowerToMemoryLegalize {
         if !shape::is_supported_aggregate_ty(module, ty) {
             panic!("expected aggregate value, got {ty:?}");
         }
-        self.materialized_addr[value].unwrap_or_else(|| {
-            panic!(
-                "aggregate value missing materialized slot v{}",
-                value.as_u32()
-            )
-        })
+        if let Some(ptr) = self.materialized_addr[value] {
+            return ptr;
+        }
+        let ptr = self.create_temp_alloca(func, ty);
+        self.materialized_addr[value] = Some(ptr);
+        ptr
     }
 
     fn emit_store_undef_to_leaves(
@@ -708,7 +684,7 @@ impl AggregateLowerToMemoryLegalize {
     }
 
     fn emit_copy_aggregate_value_to_ptr(
-        &self,
+        &mut self,
         func: &mut Function,
         module: &ModuleCtx,
         builder: &mut BeforeCursor,
@@ -796,7 +772,7 @@ impl AggregateLowerToMemoryLegalize {
     }
 
     fn emit_copy_subaggregate_value_to_slice(
-        &self,
+        &mut self,
         func: &mut Function,
         module: &ModuleCtx,
         builder: &mut BeforeCursor,
@@ -827,7 +803,7 @@ impl AggregateLowerToMemoryLegalize {
     }
 
     fn emit_copy_from_aggregate_slice(
-        &self,
+        &mut self,
         func: &mut Function,
         module: &ModuleCtx,
         builder: &mut BeforeCursor,
@@ -930,47 +906,6 @@ impl AggregateLowerToMemoryLegalize {
             data::Gep::new_unchecked(func.inst_set(), values),
             ptr_ty,
         )
-    }
-
-    fn remove_dead_pure_insts(&self, func: &mut Function) -> bool {
-        let mut changed = false;
-
-        loop {
-            func.rebuild_users();
-            let mut removed_any = false;
-            let blocks: Vec<_> = func.layout.iter_block().collect();
-            for block in blocks {
-                let insts: Vec<_> = func.layout.iter_inst(block).collect();
-                for inst in insts {
-                    if !func.layout.is_inst_inserted(inst)
-                        || func.dfg.side_effect(inst).has_effect()
-                    {
-                        continue;
-                    }
-                    let Some(result) = func.dfg.inst_result(inst) else {
-                        continue;
-                    };
-                    if func
-                        .dfg
-                        .users(result)
-                        .copied()
-                        .any(|user| func.layout.is_inst_inserted(user))
-                    {
-                        continue;
-                    }
-
-                    InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-                    removed_any = true;
-                    changed = true;
-                }
-            }
-
-            if !removed_any {
-                break;
-            }
-        }
-
-        changed
     }
 
     fn remove_dead_materialized_slots(&self, func: &mut Function) -> bool {

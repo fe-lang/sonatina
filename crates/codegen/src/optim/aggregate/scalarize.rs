@@ -7,7 +7,7 @@ use sonatina_ir::{
     inst::{control_flow, data, downcast},
 };
 
-use super::{promotion::SsaBuilder, shape};
+use super::{cleanup::remove_dead_pure_insts, promotion::SsaBuilder, shape};
 
 type LeafValues = SmallVec<[ValueId; 4]>;
 
@@ -118,8 +118,7 @@ impl AggregateScalarize {
         );
         ssa.seal_all(func);
         self.simplify_scalar_phi_results(func, &mut scalar_phi_results);
-        self.cleanup_dead_promoted_allocas(func, &projection_of, &promoted_by_inst);
-        self.changed |= self.remove_dead_pure_insts(func);
+        self.changed |= self.cleanup_scalarized_artifacts(func, &projection_of, &promoted_by_inst);
 
         if self.changed {
             func.rebuild_users();
@@ -981,16 +980,35 @@ impl AggregateScalarize {
         }
     }
 
-    fn cleanup_dead_promoted_allocas(
-        &mut self,
+    fn cleanup_scalarized_artifacts(
+        &self,
         func: &mut Function,
         projection_of: &SecondaryMap<ValueId, Option<Projection>>,
         promoted_by_inst: &FxHashMap<InstId, PromotedAlloca>,
-    ) {
+    ) -> bool {
+        let mut changed = false;
+        loop {
+            let removed_allocas =
+                self.cleanup_dead_promoted_allocas(func, projection_of, promoted_by_inst);
+            let removed_pure = remove_dead_pure_insts(func);
+            if !removed_allocas && !removed_pure {
+                return changed;
+            }
+            changed = true;
+        }
+    }
+
+    fn cleanup_dead_promoted_allocas(
+        &self,
+        func: &mut Function,
+        projection_of: &SecondaryMap<ValueId, Option<Projection>>,
+        promoted_by_inst: &FxHashMap<InstId, PromotedAlloca>,
+    ) -> bool {
         if promoted_by_inst.is_empty() {
-            return;
+            return false;
         }
         let promoted_insts: FxHashSet<InstId> = promoted_by_inst.keys().copied().collect();
+        let mut changed = false;
 
         loop {
             let mut removed_any = false;
@@ -1026,51 +1044,10 @@ impl AggregateScalarize {
                 removed_any = true;
             }
             if !removed_any {
-                break;
+                return changed;
             }
-            self.changed = true;
+            changed = true;
         }
-    }
-
-    fn remove_dead_pure_insts(&self, func: &mut Function) -> bool {
-        let mut changed = false;
-
-        loop {
-            func.rebuild_users();
-            let mut removed_any = false;
-            let blocks: Vec<_> = func.layout.iter_block().collect();
-            for block in blocks {
-                let insts: Vec<_> = func.layout.iter_inst(block).collect();
-                for inst in insts {
-                    if !func.layout.is_inst_inserted(inst)
-                        || func.dfg.side_effect(inst).has_effect()
-                    {
-                        continue;
-                    }
-                    let Some(result) = func.dfg.inst_result(inst) else {
-                        continue;
-                    };
-                    if func
-                        .dfg
-                        .users(result)
-                        .copied()
-                        .any(|user| func.layout.is_inst_inserted(user))
-                    {
-                        continue;
-                    }
-
-                    InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-                    removed_any = true;
-                    changed = true;
-                }
-            }
-
-            if !removed_any {
-                break;
-            }
-        }
-
-        changed
     }
 
     fn scalarized_leaves_of_value(
@@ -1169,7 +1146,7 @@ fn is_dead_inst_tree(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonatina_ir::{InstDowncast, Module, module::FuncRef};
+    use sonatina_ir::{InstDowncast, Module, inst::cast, module::FuncRef};
     use sonatina_parser::parse_module;
 
     fn parse_test_module(src: &str) -> Module {
@@ -1298,6 +1275,48 @@ func private %f() -> i256 {
         let func_ref = lookup_func(&module, "f");
         module.func_store.modify(func_ref, |func| {
             AggregateScalarize::default().run(func);
+        });
+    }
+
+    #[test]
+    fn scalarize_cleans_up_dead_promoted_pointer_trees() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @slice = { i256, i256 };
+
+func private %f() -> i256 {
+    block0:
+        v0.*@slice = alloca @slice;
+        v1.*i256 = gep v0 0.i8 0.i8;
+        v2.*i256 = bitcast v1 *i256;
+        return 0.i256;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    assert!(
+                        downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                        "dead promoted alloca should be removed"
+                    );
+                    assert!(
+                        downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                        "dead promoted gep should be removed"
+                    );
+                    assert!(
+                        downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                        "dead promoted bitcast should be removed"
+                    );
+                }
+            }
         });
     }
 }

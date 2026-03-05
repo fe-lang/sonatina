@@ -1,3 +1,4 @@
+mod cleanup;
 pub mod combine;
 pub mod legalize;
 pub mod promotion;
