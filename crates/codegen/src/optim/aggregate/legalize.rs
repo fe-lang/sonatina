@@ -145,6 +145,39 @@ impl AggregateLowerToMemoryLegalize {
         ptr
     }
 
+    fn alias_and_remove(
+        &self,
+        func: &mut Function,
+        inst: InstId,
+        result: ValueId,
+        replacement: ValueId,
+    ) {
+        func.dfg.change_to_alias(result, replacement);
+        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+    }
+
+    fn single_word_leaf(
+        &self,
+        module: &ModuleCtx,
+        agg_ty: Type,
+        ctx: &str,
+    ) -> shape::AggregateLeaf {
+        let shape = self.shape_or_panic(module, agg_ty);
+        let [leaf] = shape.leaves.as_slice() else {
+            panic!(
+                "{ctx} bitcast requires single-leaf aggregate (got {})",
+                shape.leaves.len()
+            );
+        };
+        if leaf.size_bytes != 32 {
+            panic!(
+                "{ctx} bitcast requires 32-byte leaf (got {})",
+                leaf.size_bytes
+            );
+        }
+        leaf.clone()
+    }
+
     fn rewrite_inst(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) -> bool {
         if downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)).is_some() {
             return self.rewrite_bitcast(func, module, inst);
@@ -208,8 +241,7 @@ impl AggregateLowerToMemoryLegalize {
         if from_is_agg && to_is_agg {
             if is_explicit_undef(func, from) {
                 let undef = func.dfg.make_undef_value(to_ty);
-                func.dfg.change_to_alias(result, undef);
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+                self.alias_and_remove(func, inst, result, undef);
                 return true;
             }
 
@@ -221,19 +253,7 @@ impl AggregateLowerToMemoryLegalize {
 
         // Scalar -> aggregate: only legal for single-word aggregates on EVM.
         if to_is_agg {
-            let shape = self.shape_or_panic(module, to_ty);
-            let [leaf] = shape.leaves.as_slice() else {
-                panic!(
-                    "scalar-to-aggregate bitcast requires single-leaf aggregate (got {})",
-                    shape.leaves.len()
-                );
-            };
-            if leaf.size_bytes != 32 {
-                panic!(
-                    "scalar-to-aggregate bitcast requires 32-byte leaf (got {})",
-                    leaf.size_bytes
-                );
-            }
+            let leaf = self.single_word_leaf(module, to_ty, "scalar-to-aggregate");
 
             let dst_ptr = self.materialized_addr[result]
                 .unwrap_or_else(|| self.create_temp_alloca(func, to_ty));
@@ -262,23 +282,10 @@ impl AggregateLowerToMemoryLegalize {
         }
 
         // Aggregate -> scalar: only legal for single-word aggregates on EVM.
-        let shape = self.shape_or_panic(module, from_ty);
-        let [leaf] = shape.leaves.as_slice() else {
-            panic!(
-                "aggregate-to-scalar bitcast requires single-leaf aggregate (got {})",
-                shape.leaves.len()
-            );
-        };
-        if leaf.size_bytes != 32 {
-            panic!(
-                "aggregate-to-scalar bitcast requires 32-byte leaf (got {})",
-                leaf.size_bytes
-            );
-        }
+        let leaf = self.single_word_leaf(module, from_ty, "aggregate-to-scalar");
         if is_explicit_undef(func, from) {
             let undef = func.dfg.make_undef_value(to_ty);
-            func.dfg.change_to_alias(result, undef);
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            self.alias_and_remove(func, inst, result, undef);
             return true;
         }
 
@@ -295,8 +302,7 @@ impl AggregateLowerToMemoryLegalize {
                 to_ty,
             )
         };
-        func.dfg.change_to_alias(result, replacement);
-        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        self.alias_and_remove(func, inst, result, replacement);
         true
     }
 
@@ -440,8 +446,7 @@ impl AggregateLowerToMemoryLegalize {
 
             if is_explicit_undef(func, *extract.dest()) {
                 let undef = func.dfg.make_undef_value(result_ty);
-                func.dfg.change_to_alias(result, undef);
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+                self.alias_and_remove(func, inst, result, undef);
                 return;
             }
 
@@ -451,8 +456,7 @@ impl AggregateLowerToMemoryLegalize {
                 self.emit_gep_array_element_ptr(func, &mut builder, src_ptr, idx_value, elem);
             let loaded =
                 self.emit_load_scalar_from_path(func, &mut builder, elem_ptr, &[], result_ty);
-            func.dfg.change_to_alias(result, loaded);
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            self.alias_and_remove(func, inst, result, loaded);
             return;
         }
 
@@ -483,8 +487,7 @@ impl AggregateLowerToMemoryLegalize {
 
         if is_explicit_undef(func, *extract.dest()) {
             let undef = func.dfg.make_undef_value(result_ty);
-            func.dfg.change_to_alias(result, undef);
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            self.alias_and_remove(func, inst, result, undef);
             return;
         }
 
@@ -502,8 +505,7 @@ impl AggregateLowerToMemoryLegalize {
         if func.dfg.value_ty(load) != result_ty {
             panic!("extract_value type mismatch after legalization");
         }
-        func.dfg.change_to_alias(result, load);
-        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        self.alias_and_remove(func, inst, result, load);
     }
 
     fn rewrite_aggregate_phi(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) {
@@ -628,13 +630,45 @@ impl AggregateLowerToMemoryLegalize {
         agg_ty: Type,
     ) {
         let shape = self.shape_or_panic(module, agg_ty);
-        for leaf in &shape.leaves {
-            if leaf.size_bytes == 0 {
+        self.emit_copy_leaf_slices_ptr_to_ptr(
+            func,
+            builder,
+            src_ptr,
+            &shape.leaves,
+            dst_ptr,
+            &shape.leaves,
+        );
+    }
+
+    fn emit_copy_leaf_slices_ptr_to_ptr(
+        &self,
+        func: &mut Function,
+        builder: &mut BeforeCursor,
+        src_ptr: ValueId,
+        src_leaves: &[shape::AggregateLeaf],
+        dst_ptr: ValueId,
+        dst_leaves: &[shape::AggregateLeaf],
+    ) {
+        debug_assert_eq!(src_leaves.len(), dst_leaves.len());
+        for (src_leaf, dst_leaf) in src_leaves.iter().zip(dst_leaves) {
+            if dst_leaf.size_bytes == 0 {
                 continue;
             }
-            let loaded =
-                self.emit_load_scalar_from_path(func, builder, src_ptr, &leaf.path, leaf.ty);
-            self.emit_store_scalar_to_path(func, builder, dst_ptr, &leaf.path, loaded, leaf.ty);
+            let loaded = self.emit_load_scalar_from_path(
+                func,
+                builder,
+                src_ptr,
+                &src_leaf.path,
+                src_leaf.ty,
+            );
+            self.emit_store_scalar_to_path(
+                func,
+                builder,
+                dst_ptr,
+                &dst_leaf.path,
+                loaded,
+                dst_leaf.ty,
+            );
         }
     }
 
@@ -673,28 +707,12 @@ impl AggregateLowerToMemoryLegalize {
         }
 
         let src_ptr = self.materialized_ptr(func, value, module);
-        for i in 0..dst.slice.leaf_count {
-            let src_leaf = &payload_shape.leaves[i];
-            let dst_leaf = &dst_shape.leaves[dst.slice.first_leaf + i];
-            if dst_leaf.size_bytes == 0 {
-                continue;
-            }
-            let loaded = self.emit_load_scalar_from_path(
-                func,
-                builder,
-                src_ptr,
-                &src_leaf.path,
-                src_leaf.ty,
-            );
-            self.emit_store_scalar_to_path(
-                func,
-                builder,
-                dst.ptr,
-                &dst_leaf.path,
-                loaded,
-                dst_leaf.ty,
-            );
-        }
+        let src_leaves = &payload_shape.leaves[..dst.slice.leaf_count];
+        let dst_leaves =
+            &dst_shape.leaves[dst.slice.first_leaf..dst.slice.first_leaf + dst.slice.leaf_count];
+        self.emit_copy_leaf_slices_ptr_to_ptr(
+            func, builder, src_ptr, src_leaves, dst.ptr, dst_leaves,
+        );
     }
 
     fn emit_copy_from_aggregate_slice(
@@ -711,40 +729,23 @@ impl AggregateLowerToMemoryLegalize {
         }
 
         if is_explicit_undef(func, src.value) {
-            for leaf in &dst_shape.leaves {
-                if leaf.size_bytes == 0 {
-                    continue;
-                }
-                let undef = func.dfg.make_undef_value(leaf.ty);
-                self.emit_store_scalar_to_path(func, builder, dst.ptr, &leaf.path, undef, leaf.ty);
-            }
+            let undef = func.dfg.make_undef_value(dst.ty);
+            self.emit_copy_aggregate_value_to_ptr(func, module, builder, undef, dst.ptr, dst.ty);
             return;
         }
 
         let src_ptr = self.materialized_ptr(func, src.value, module);
         let src_shape = self.shape_or_panic(module, src.root_ty);
-        for i in 0..src.slice.leaf_count {
-            let src_leaf = &src_shape.leaves[src.slice.first_leaf + i];
-            let dst_leaf = &dst_shape.leaves[i];
-            if dst_leaf.size_bytes == 0 {
-                continue;
-            }
-            let loaded = self.emit_load_scalar_from_path(
-                func,
-                builder,
-                src_ptr,
-                &src_leaf.path,
-                src_leaf.ty,
-            );
-            self.emit_store_scalar_to_path(
-                func,
-                builder,
-                dst.ptr,
-                &dst_leaf.path,
-                loaded,
-                dst_leaf.ty,
-            );
-        }
+        let src_leaves =
+            &src_shape.leaves[src.slice.first_leaf..src.slice.first_leaf + src.slice.leaf_count];
+        self.emit_copy_leaf_slices_ptr_to_ptr(
+            func,
+            builder,
+            src_ptr,
+            src_leaves,
+            dst.ptr,
+            &dst_shape.leaves,
+        );
     }
 
     fn emit_load_scalar_from_path(
