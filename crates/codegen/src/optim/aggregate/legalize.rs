@@ -145,12 +145,8 @@ impl AggregateLowerToMemoryLegalize {
         agg_ty: Type,
         ctx: &str,
     ) -> shape::AggregateLeaf {
-        let shape = self.shape_or_panic(module, agg_ty);
-        let runtime_leaves: Vec<_> = shape
-            .leaves
-            .into_iter()
-            .filter(|leaf| leaf.size_bytes != 0)
-            .collect();
+        let runtime_leaves = shape::aggregate_runtime_leaves(module, agg_ty)
+            .unwrap_or_else(|| panic!("unsupported aggregate type in legalizer: {agg_ty:?}"));
         let [leaf] = runtime_leaves.as_slice() else {
             panic!(
                 "{ctx} bitcast requires single-leaf aggregate (got {})",
@@ -612,17 +608,13 @@ impl AggregateLowerToMemoryLegalize {
         from_ty: Type,
         to_ty: Type,
     ) -> (Vec<shape::AggregateLeaf>, Vec<shape::AggregateLeaf>) {
-        let src_shape = self.shape_or_panic(module, from_ty);
-        let dst_shape = self.shape_or_panic(module, to_ty);
-        let src_leaves: Vec<_> = src_shape
-            .leaves
+        let src_leaves: Vec<_> = shape::aggregate_runtime_leaves(module, from_ty)
+            .unwrap_or_else(|| panic!("unsupported aggregate type in legalizer: {from_ty:?}"))
             .into_iter()
-            .filter(|leaf| leaf.size_bytes != 0)
             .collect();
-        let dst_leaves: Vec<_> = dst_shape
-            .leaves
+        let dst_leaves: Vec<_> = shape::aggregate_runtime_leaves(module, to_ty)
+            .unwrap_or_else(|| panic!("unsupported aggregate type in legalizer: {to_ty:?}"))
             .into_iter()
-            .filter(|leaf| leaf.size_bytes != 0)
             .collect();
 
         if src_leaves.len() != dst_leaves.len() {

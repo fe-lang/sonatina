@@ -129,7 +129,7 @@ impl AggregateCombine {
         }
 
         // AC5: insert identical field back into aggregate.
-        if !is_explicit_undef(func, *insert.dest())
+        if is_plain_non_undef_aggregate_source(func, *insert.dest())
             && let Some(src_inst) = func.dfg.value_inst(*insert.value())
             && let Some(extract) =
                 downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(src_inst))
@@ -345,6 +345,10 @@ fn equivalent_indices(func: &Function, lhs: ValueId, rhs: ValueId) -> bool {
 
 fn is_explicit_undef(func: &Function, v: ValueId) -> bool {
     matches!(func.dfg.value(v), Value::Undef { .. })
+}
+
+fn is_plain_non_undef_aggregate_source(func: &Function, v: ValueId) -> bool {
+    !is_explicit_undef(func, v) && func.dfg.value_inst(v).is_none()
 }
 
 fn walk_insert_chain_for_field(

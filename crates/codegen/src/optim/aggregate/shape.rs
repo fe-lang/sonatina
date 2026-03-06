@@ -2,6 +2,7 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{DataFlowGraph, Type, U256, ValueId, module::ModuleCtx, types::CompoundType};
 
 pub type FieldPath = SmallVec<[u32; 4]>;
+pub type RuntimeLeaves = SmallVec<[AggregateLeaf; 4]>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AggregateLeaf {
@@ -37,6 +38,44 @@ pub fn aggregate_shape(module: &ModuleCtx, ty: Type) -> Option<AggregateShape> {
         root_ty: ty,
         leaves,
     })
+}
+
+pub fn aggregate_runtime_leaves(module: &ModuleCtx, ty: Type) -> Option<RuntimeLeaves> {
+    Some(
+        aggregate_shape(module, ty)?
+            .leaves
+            .into_iter()
+            .filter(|leaf| leaf.size_bytes != 0)
+            .collect(),
+    )
+}
+
+pub fn aggregate_single_runtime_word_leaf(module: &ModuleCtx, ty: Type) -> Option<AggregateLeaf> {
+    let runtime_leaves = aggregate_runtime_leaves(module, ty)?;
+    let [leaf] = runtime_leaves.as_slice() else {
+        return None;
+    };
+    (leaf.size_bytes == 32).then(|| leaf.clone())
+}
+
+pub fn compatible_aggregate_bitcast_runtime_leaves(
+    module: &ModuleCtx,
+    from_ty: Type,
+    to_ty: Type,
+) -> Option<(RuntimeLeaves, RuntimeLeaves)> {
+    let src_leaves = aggregate_runtime_leaves(module, from_ty)?;
+    let dst_leaves = aggregate_runtime_leaves(module, to_ty)?;
+    if src_leaves.len() != dst_leaves.len() {
+        return None;
+    }
+    src_leaves
+        .iter()
+        .zip(&dst_leaves)
+        .all(|(src_leaf, dst_leaf)| {
+            src_leaf.offset_bytes == dst_leaf.offset_bytes
+                && src_leaf.size_bytes == dst_leaf.size_bytes
+        })
+        .then_some((src_leaves, dst_leaves))
 }
 
 pub fn aggregate_slice_for_index(

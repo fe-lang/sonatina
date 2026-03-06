@@ -4,7 +4,7 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::{control_flow, data, downcast},
+    inst::{cast, control_flow, data, downcast},
 };
 
 use super::{cleanup::remove_dead_pure_insts, promotion::SsaBuilder, shape};
@@ -98,6 +98,16 @@ impl AggregateScalarize {
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
                 }
+                self.rewrite_scalarizable_bitcast(
+                    func,
+                    &module,
+                    inst,
+                    &scalarizable,
+                    &mut scalarized_agg,
+                );
+                if !func.layout.is_inst_inserted(inst) {
+                    continue;
+                }
                 self.rewrite_scalarizable_insert_extract(
                     func,
                     &module,
@@ -166,8 +176,11 @@ impl AggregateScalarize {
             let Some(branch) = func.dfg.branch_info(term) else {
                 continue;
             };
+            let mut seen = FxHashSet::default();
             for dest in branch.dests() {
-                ssa.append_pred(dest, block);
+                if seen.insert(dest) {
+                    ssa.append_pred(dest, block);
+                }
             }
         }
     }
@@ -284,6 +297,32 @@ impl AggregateScalarize {
                                 first_leaf: projection.slice.first_leaf + sub.first_leaf,
                                 leaf_count: sub.leaf_count,
                             },
+                        };
+                        if let Some(prev) = local_projection.insert(result, composed)
+                            && (prev.slice.first_leaf != composed.slice.first_leaf
+                                || prev.slice.leaf_count != composed.slice.leaf_count
+                                || prev.slice.ty != composed.slice.ty)
+                        {
+                            rejected = true;
+                            break;
+                        }
+                        queue.push(result);
+                        continue;
+                    }
+
+                    if let Some(bitcast) =
+                        downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(user))
+                        && *bitcast.from() == ptr
+                        && let Some(result) = func.dfg.inst_result(user)
+                        && let Some(slice) = bitcast_projection_slice(
+                            module,
+                            projection.slice,
+                            func.dfg.value_ty(result),
+                        )
+                    {
+                        let composed = Projection {
+                            alloca_inst: inst,
+                            slice,
                         };
                         if let Some(prev) = local_projection.insert(result, composed)
                             && (prev.slice.first_leaf != composed.slice.first_leaf
@@ -468,6 +507,14 @@ impl AggregateScalarize {
                             .is_some()
                     {
                         true
+                    } else if let Some(bitcast) =
+                        downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(*inst))
+                    {
+                        aggregate_bitcast_is_scalarizable(
+                            module,
+                            func.dfg.value_ty(*bitcast.from()),
+                            ty,
+                        )
                     } else if let Some(mload) =
                         downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(*inst))
                     {
@@ -575,6 +622,19 @@ impl AggregateScalarize {
                     shape::is_supported_aggregate_ty(module, *mload.ty())
                         && projection_of[*mload.addr()].is_some()
                         && *mload.ty() == func.dfg.value_ty(value)
+                } else if let Some(bitcast) =
+                    downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(*inst))
+                {
+                    let from_ty = func.dfg.value_ty(*bitcast.from());
+                    if !aggregate_bitcast_is_scalarizable(module, from_ty, func.dfg.value_ty(value))
+                    {
+                        return false;
+                    }
+                    if shape::is_supported_aggregate_ty(module, from_ty) {
+                        scalarizable[*bitcast.from()]
+                    } else {
+                        true
+                    }
                 } else {
                     false
                 }
@@ -641,6 +701,22 @@ impl AggregateScalarize {
                     return false;
                 }
                 if projection_of[*mstore.addr()].is_none() {
+                    return false;
+                }
+                continue;
+            }
+
+            if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(user))
+                && *bitcast.from() == value
+            {
+                let Some(res) = func.dfg.inst_result(user) else {
+                    return false;
+                };
+                let res_ty = func.dfg.value_ty(res);
+                if !aggregate_bitcast_is_scalarizable(module, func.dfg.value_ty(value), res_ty) {
+                    return false;
+                }
+                if shape::is_supported_aggregate_ty(module, res_ty) && !scalarizable[res] {
                     return false;
                 }
                 continue;
@@ -783,6 +859,133 @@ impl AggregateScalarize {
         }
         let var = promoted.leaf_vars[projection.slice.first_leaf];
         ssa.def_var(var, *mstore.value(), block);
+        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+    }
+
+    fn rewrite_scalarizable_bitcast(
+        &mut self,
+        func: &mut Function,
+        module: &sonatina_ir::module::ModuleCtx,
+        inst: InstId,
+        scalarizable: &SecondaryMap<ValueId, bool>,
+        scalarized_agg: &mut SecondaryMap<ValueId, Option<LeafValues>>,
+    ) {
+        let Some(bitcast) =
+            downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)).cloned()
+        else {
+            return;
+        };
+        let Some(result) = func.dfg.inst_result(inst) else {
+            return;
+        };
+        let from = *bitcast.from();
+        let from_ty = func.dfg.value_ty(from);
+        let result_ty = func.dfg.value_ty(result);
+        let from_is_agg = shape::is_supported_aggregate_ty(module, from_ty);
+        let result_is_agg = shape::is_supported_aggregate_ty(module, result_ty);
+        if !from_is_agg && !result_is_agg {
+            return;
+        }
+
+        if from_is_agg && result_is_agg {
+            if !scalarizable[result] {
+                return;
+            }
+            let Some((src_leaves, dst_leaves)) =
+                shape::compatible_aggregate_bitcast_runtime_leaves(module, from_ty, result_ty)
+            else {
+                return;
+            };
+            let Some(source_leaves) =
+                self.scalarized_leaves_of_value(func, module, from, from_ty, scalarized_agg)
+            else {
+                return;
+            };
+            if source_leaves.len() != src_leaves.len() {
+                return;
+            }
+
+            let mut mapped = LeafValues::new();
+            let mut builder = InstInserter::at_location(CursorLocation::At(inst));
+            for (source, dst_leaf) in source_leaves.into_iter().zip(dst_leaves) {
+                let value = if func.dfg.value_ty(source) == dst_leaf.ty {
+                    source
+                } else {
+                    let bitcast_inst = builder.insert_inst_data(
+                        func,
+                        cast::Bitcast::new_unchecked(func.inst_set(), source, dst_leaf.ty),
+                    );
+                    let bitcast_value = func.dfg.make_value(Value::Inst {
+                        inst: bitcast_inst,
+                        ty: dst_leaf.ty,
+                    });
+                    builder.attach_result(func, bitcast_inst, bitcast_value);
+                    bitcast_value
+                };
+                mapped.push(value);
+            }
+            scalarized_agg[result] = Some(mapped);
+            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            return;
+        }
+
+        if result_is_agg {
+            if !scalarizable[result] {
+                return;
+            }
+            let Some(dst_leaf) = shape::aggregate_single_runtime_word_leaf(module, result_ty)
+            else {
+                return;
+            };
+            let mut leaves = LeafValues::new();
+            let value = if from_ty == dst_leaf.ty {
+                from
+            } else {
+                let mut builder = InstInserter::at_location(CursorLocation::At(inst));
+                let bitcast_inst = builder.insert_inst_data(
+                    func,
+                    cast::Bitcast::new_unchecked(func.inst_set(), from, dst_leaf.ty),
+                );
+                let bitcast_value = func.dfg.make_value(Value::Inst {
+                    inst: bitcast_inst,
+                    ty: dst_leaf.ty,
+                });
+                builder.attach_result(func, bitcast_inst, bitcast_value);
+                bitcast_value
+            };
+            leaves.push(value);
+            scalarized_agg[result] = Some(leaves);
+            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            return;
+        }
+
+        let Some(src_leaf) = shape::aggregate_single_runtime_word_leaf(module, from_ty) else {
+            return;
+        };
+        let Some(source_leaves) =
+            self.scalarized_leaves_of_value(func, module, from, from_ty, scalarized_agg)
+        else {
+            return;
+        };
+        let [source] = source_leaves.as_slice() else {
+            return;
+        };
+        let replacement = if src_leaf.ty == result_ty {
+            *source
+        } else {
+            let mut builder = InstInserter::at_location(CursorLocation::At(inst));
+            let bitcast_inst = builder.insert_inst_data(
+                func,
+                cast::Bitcast::new_unchecked(func.inst_set(), *source, result_ty),
+            );
+            let bitcast_value = func.dfg.make_value(Value::Inst {
+                inst: bitcast_inst,
+                ty: result_ty,
+            });
+            builder.attach_result(func, bitcast_inst, bitcast_value);
+            bitcast_value
+        };
+        func.dfg.change_to_alias(result, replacement);
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
     }
 
@@ -938,20 +1141,29 @@ impl AggregateScalarize {
     ) {
         let values: Vec<_> = func.dfg.values.keys().collect();
         for value in values {
-            let Some(leaf_phis) = scalar_phi_results[value].as_mut() else {
+            let Some(mut leaf_phis) = scalar_phi_results[value].take() else {
                 continue;
             };
-            self.simplify_scalar_leaf_phis(func, leaf_phis);
+            self.simplify_scalar_leaf_phis(func, &mut leaf_phis, scalar_phi_results);
+            scalar_phi_results[value] = Some(leaf_phis);
         }
     }
 
-    fn simplify_scalar_leaf_phis(&mut self, func: &mut Function, leaf_phis: &mut LeafValues) {
+    fn simplify_scalar_leaf_phis(
+        &mut self,
+        func: &mut Function,
+        leaf_phis: &mut LeafValues,
+        scalar_phi_results: &mut SecondaryMap<ValueId, Option<LeafValues>>,
+    ) {
         let mut worklist: Vec<_> = leaf_phis.iter().copied().collect();
         let mut queued = FxHashSet::default();
         while let Some(leaf_phi) = worklist.pop() {
             let Some(phi_inst) = func.dfg.value_inst(leaf_phi) else {
                 continue;
             };
+            if !func.layout.is_inst_inserted(phi_inst) {
+                continue;
+            }
             let Some(replacement) = trivial_phi_replacement(func, phi_inst) else {
                 continue;
             };
@@ -962,12 +1174,13 @@ impl AggregateScalarize {
                 .filter(|user| func.layout.is_inst_inserted(*user) && func.dfg.is_phi(*user))
                 .collect();
             func.dfg.change_to_alias(leaf_phi, replacement);
-            InstInserter::at_location(CursorLocation::At(phi_inst)).remove_inst(func);
             for current in leaf_phis.iter_mut() {
                 if *current == leaf_phi {
                     *current = replacement;
                 }
             }
+            replace_scalar_phi_value(scalar_phi_results, leaf_phi, replacement);
+            InstInserter::at_location(CursorLocation::At(phi_inst)).remove_inst(func);
             for user in phi_users {
                 let Some(user_value) = func.dfg.inst_result(user) else {
                     continue;
@@ -1079,6 +1292,46 @@ fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
     matches!(func.dfg.value(value), Value::Undef { .. })
 }
 
+fn bitcast_projection_slice(
+    module: &sonatina_ir::module::ModuleCtx,
+    slice: shape::AggregateSlice,
+    ptr_ty: Type,
+) -> Option<shape::AggregateSlice> {
+    let pointee_ty = module.with_ty_store(|s| s.deref(ptr_ty))?;
+    (pointee_ty == slice.ty
+        || shape::is_supported_aggregate_ty(module, slice.ty)
+            && shape::is_supported_aggregate_ty(module, pointee_ty)
+            && shape::compatible_aggregate_bitcast_runtime_leaves(module, slice.ty, pointee_ty)
+                .is_some())
+    .then_some(shape::AggregateSlice {
+        ty: pointee_ty,
+        ..slice
+    })
+}
+
+fn aggregate_bitcast_is_scalarizable(
+    module: &sonatina_ir::module::ModuleCtx,
+    from_ty: Type,
+    to_ty: Type,
+) -> bool {
+    if module.size_of_unchecked(from_ty) != module.size_of_unchecked(to_ty) {
+        return false;
+    }
+    let from_is_agg = shape::is_supported_aggregate_ty(module, from_ty);
+    let to_is_agg = shape::is_supported_aggregate_ty(module, to_ty);
+    if from_is_agg && to_is_agg {
+        return shape::compatible_aggregate_bitcast_runtime_leaves(module, from_ty, to_ty)
+            .is_some();
+    }
+    if to_is_agg {
+        return shape::aggregate_single_runtime_word_leaf(module, to_ty).is_some();
+    }
+    if from_is_agg {
+        return shape::aggregate_single_runtime_word_leaf(module, from_ty).is_some();
+    }
+    false
+}
+
 fn trivial_phi_replacement(func: &mut Function, phi_inst: InstId) -> Option<ValueId> {
     let phi_value = func.dfg.inst_result(phi_inst)?;
     let ty = func.dfg.value_ty(phi_value);
@@ -1112,6 +1365,23 @@ fn trivial_phi_replacement(func: &mut Function, phi_inst: InstId) -> Option<Valu
     };
 
     Some(replacement)
+}
+
+fn replace_scalar_phi_value(
+    scalar_phi_results: &mut SecondaryMap<ValueId, Option<LeafValues>>,
+    from: ValueId,
+    to: ValueId,
+) {
+    for value in scalar_phi_results.keys() {
+        let Some(leaf_phis) = scalar_phi_results[value].as_mut() else {
+            continue;
+        };
+        for leaf_phi in leaf_phis {
+            if *leaf_phi == from {
+                *leaf_phi = to;
+            }
+        }
+    }
 }
 
 fn is_dead_inst_tree(
@@ -1315,6 +1585,142 @@ func private %f() -> i256 {
                         downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)).is_none(),
                         "dead promoted bitcast should be removed"
                     );
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn scalarize_simplifies_transitive_scalar_phi_users_without_stale_entries() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @slice = { i256, i256 };
+
+func private %f(v0.i1, v1.i1, v2.i256, v3.i256) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v4.@slice = insert_value undef.@slice 0.i8 v2;
+        v5.@slice = insert_value v4 1.i8 v3;
+        v6.@slice = phi (v5 block1) (v5 block2);
+        br v1 block4 block5;
+
+    block4:
+        jump block6;
+
+    block5:
+        jump block6;
+
+    block6:
+        v7.@slice = phi (v6 block4) (v6 block5);
+        v8.i256 = extract_value v7 0.i8;
+        return v8;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    func.dfg.inst(inst).for_each_value(&mut |value| {
+                        if let Some(def_inst) = func.dfg.value_inst(value) {
+                            assert!(
+                                func.layout.is_inst_inserted(def_inst),
+                                "inst {} uses value v{} from removed inst {}",
+                                inst.as_u32(),
+                                value.as_u32(),
+                                def_inst.as_u32()
+                            );
+                        }
+                    });
+                }
+            }
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    if let Some(mload) = <&data::Mload as InstDowncast>::downcast(
+                        func.inst_set(),
+                        func.dfg.inst(inst),
+                    ) {
+                        assert!(
+                            !shape::is_supported_aggregate_ty(&ctx, *mload.ty()),
+                            "aggregate mload should be gone after scalarization"
+                        );
+                    }
+                    if let Some(mstore) = <&data::Mstore as InstDowncast>::downcast(
+                        func.inst_set(),
+                        func.dfg.inst(inst),
+                    ) {
+                        assert!(
+                            !shape::is_supported_aggregate_ty(&ctx, *mstore.ty()),
+                            "aggregate mstore should be gone after scalarization"
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn scalarize_deduplicates_duplicate_successor_edges() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @slice = { i256, i256 };
+
+func private %f(v0.i1) -> i256 {
+    block0:
+        v1.*@slice = alloca @slice;
+        br v0 block1 block1;
+
+    block1:
+        v2.@slice = mload v1 @slice;
+        v3.i256 = extract_value v2 0.i8;
+        return v3;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    if let Some(mload) = <&data::Mload as InstDowncast>::downcast(
+                        func.inst_set(),
+                        func.dfg.inst(inst),
+                    ) {
+                        assert!(
+                            !shape::is_supported_aggregate_ty(&ctx, *mload.ty()),
+                            "aggregate mload should be gone after scalarization"
+                        );
+                    }
+                    if let Some(phi) = <&control_flow::Phi as InstDowncast>::downcast(
+                        func.inst_set(),
+                        func.dfg.inst(inst),
+                    ) {
+                        let mut preds = FxHashSet::default();
+                        for &(_, pred) in phi.args() {
+                            assert!(preds.insert(pred), "phi should not retain duplicate preds");
+                        }
+                    }
                 }
             }
         });

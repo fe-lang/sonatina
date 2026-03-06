@@ -3,6 +3,7 @@ target = "evm-ethereum-london"
 type @slice = { i256, i256 };
 type @nested = { @slice, i256 };
 type @one = { i256 };
+type @pair_bitcast = { @one, i256 };
 # sameln: func public %scalarize_insert_extract(v0.i256, v1.i256) -> i256 {
 # check:     block0:
 # check:         add v0 v1;
@@ -14,6 +15,19 @@ func public %scalarize_insert_extract(v0.i256, v1.i256) -> i256 {
         v4.i256 = extract_value v3 0.i8;
         v5.i256 = extract_value v3 1.i8;
         v6.i256 = add v4 v5;
+        return v6;
+}
+
+# sameln: func public %scalarize_aggregate_bitcast(v0.i256, v1.i256) -> i256 {
+# check:     block0:
+# check:         return v0;
+func public %scalarize_aggregate_bitcast(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.@slice = insert_value undef.@slice 0.i8 v0;
+        v3.@slice = insert_value v2 1.i8 v1;
+        v4.@pair_bitcast = bitcast v3 @pair_bitcast;
+        v5.@one = extract_value v4 0.i8;
+        v6.i256 = extract_value v5 0.i8;
         return v6;
 }
 
@@ -60,6 +74,19 @@ func public %scalarize_promote_alloca(v0.i256, v1.i256) -> i256 {
         v6.i256 = mload v4 i256;
         v7.i256 = add v5 v6;
         return v7;
+}
+
+# sameln: func public %scalarize_promote_live_bitcast_projection(v0.i256) -> i256 {
+# check:     block0:
+# check:         return v0;
+func public %scalarize_promote_live_bitcast_projection(v0.i256) -> i256 {
+    block0:
+        v1.*@one = alloca @one;
+        v2.*i256 = gep v1 0.i8 0.i8;
+        v3.*i256 = bitcast v2 *i256;
+        mstore v3 v0 i256;
+        v4.i256 = mload v3 i256;
+        return v4;
 }
 
 # sameln: func public %scalarize_promote_whole_load_store(v0.i256, v1.i256) -> i256 {
