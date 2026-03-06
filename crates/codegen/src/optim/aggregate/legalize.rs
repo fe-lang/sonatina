@@ -1,7 +1,7 @@
 use std::mem;
 
 use cranelift_entity::SecondaryMap;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, Inst, InstId, Type, Value, ValueId,
@@ -22,6 +22,7 @@ use super::{cleanup::DeadPureInstCleanup, shape};
 enum AggregateAddrStep {
     Const(u32),
     Dynamic(ValueId),
+    Reinterpret(Type),
 }
 
 #[derive(Clone)]
@@ -37,8 +38,7 @@ pub struct AggregateLowerToMemoryLegalize {
     changed: bool,
     materialized_addr: SecondaryMap<ValueId, Option<ValueId>>,
     materialized_slots: Vec<ValueId>,
-    shape_cache: FxHashMap<Type, shape::AggregateShape>,
-    runtime_leaf_cache: FxHashMap<Type, shape::RuntimeLeaves>,
+    layout_cache: shape::AggregateLayoutCache,
     slot_tree_insts: Vec<InstId>,
     slot_tree_queue: Vec<ValueId>,
     slot_tree_seen_insts: FxHashSet<InstId>,
@@ -58,8 +58,7 @@ impl AggregateLowerToMemoryLegalize {
         self.changed = false;
         self.materialized_addr.clear();
         self.materialized_slots.clear();
-        self.shape_cache.clear();
-        self.runtime_leaf_cache.clear();
+        self.layout_cache.clear();
         self.slot_tree_insts.clear();
         self.slot_tree_queue.clear();
         self.slot_tree_seen_insts.clear();
@@ -612,7 +611,7 @@ impl AggregateLowerToMemoryLegalize {
     ) {
         let mut views: SecondaryMap<ValueId, Option<AggregateAddrView>> = SecondaryMap::default();
         let mut worklist = vec![root_value];
-        let mut aggregate_extracts = Vec::new();
+        let mut transparent_insts = Vec::new();
         views[root_value] = Some(AggregateAddrView {
             root_addr: src_addr,
             root_ty: src_agg_ty,
@@ -625,7 +624,7 @@ impl AggregateLowerToMemoryLegalize {
                 continue;
             };
             let users: Vec<_> = func.dfg.users(value).copied().collect();
-            for user in users {
+            for &user in &users {
                 if !func.layout.is_inst_inserted(user) {
                     continue;
                 }
@@ -648,7 +647,7 @@ impl AggregateLowerToMemoryLegalize {
                         continue;
                     };
                     views[extract_result] = Some(child_view);
-                    aggregate_extracts.push(user);
+                    transparent_insts.push(user);
                     worklist.push(extract_result);
                     continue;
                 }
@@ -657,9 +656,44 @@ impl AggregateLowerToMemoryLegalize {
                     func, module, user, &extract, &view,
                 );
             }
+
+            for &user in &users {
+                if !func.layout.is_inst_inserted(user) {
+                    continue;
+                }
+                let Some(bitcast) =
+                    downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(user)).cloned()
+                else {
+                    continue;
+                };
+                if *bitcast.from() != value {
+                    continue;
+                }
+                let Some(bitcast_result) = func.dfg.inst_result(user) else {
+                    continue;
+                };
+                let bitcast_ty = func.dfg.value_ty(bitcast_result);
+                if !shape::is_supported_aggregate_ty(module, bitcast_ty)
+                    || self
+                        .layout_cache
+                        .compatible_bitcast_runtime_leaves(module, view.agg_ty, bitcast_ty)
+                        .is_none()
+                {
+                    continue;
+                }
+
+                let mut bitcast_view = view.clone();
+                bitcast_view
+                    .steps
+                    .push(AggregateAddrStep::Reinterpret(bitcast_ty));
+                bitcast_view.agg_ty = bitcast_ty;
+                views[bitcast_result] = Some(bitcast_view);
+                transparent_insts.push(user);
+                worklist.push(bitcast_result);
+            }
         }
 
-        for inst in aggregate_extracts.into_iter().rev() {
+        for inst in transparent_insts.into_iter().rev() {
             if !func.layout.is_inst_inserted(inst) {
                 continue;
             }
@@ -731,29 +765,15 @@ impl AggregateLowerToMemoryLegalize {
     }
 
     fn shape_or_panic(&mut self, module: &ModuleCtx, ty: Type) -> shape::AggregateShape {
-        if let Some(shape) = self.shape_cache.get(&ty) {
-            return shape.clone();
-        }
-
-        let shape = shape::aggregate_shape(module, ty)
-            .unwrap_or_else(|| panic!("unsupported aggregate type in legalizer: {ty:?}"));
-        self.shape_cache.insert(ty, shape.clone());
-        shape
+        self.layout_cache
+            .shape(module, ty)
+            .unwrap_or_else(|| panic!("unsupported aggregate type in legalizer: {ty:?}"))
     }
 
     fn runtime_leaves_or_panic(&mut self, module: &ModuleCtx, ty: Type) -> shape::RuntimeLeaves {
-        if let Some(leaves) = self.runtime_leaf_cache.get(&ty) {
-            return leaves.clone();
-        }
-
-        let leaves: shape::RuntimeLeaves = self
-            .shape_or_panic(module, ty)
-            .leaves
-            .into_iter()
-            .filter(|leaf| leaf.size_bytes != 0)
-            .collect();
-        self.runtime_leaf_cache.insert(ty, leaves.clone());
-        leaves
+        self.layout_cache
+            .runtime_leaves(module, ty)
+            .unwrap_or_else(|| panic!("unsupported aggregate type in legalizer: {ty:?}"))
     }
 
     fn array_elem_ty_or_panic(&self, module: &ModuleCtx, ty: Type, ctx: &str) -> Type {
@@ -1065,6 +1085,17 @@ impl AggregateLowerToMemoryLegalize {
                     let elem = self.array_elem_ty_or_panic(module, current_ty, "extract_value");
                     ptr = self.emit_gep_array_element_ptr(func, builder, ptr, *idx_value, elem);
                     current_ty = elem;
+                }
+                AggregateAddrStep::Reinterpret(ty) => {
+                    let ptr_ty = ty.to_ptr(func.ctx());
+                    if func.dfg.value_ty(ptr) != ptr_ty {
+                        ptr = builder.insert_with_result(
+                            func,
+                            cast::Bitcast::new_unchecked(func.inst_set(), ptr, ptr_ty),
+                            ptr_ty,
+                        );
+                    }
+                    current_ty = *ty;
                 }
             }
         }
@@ -1987,6 +2018,59 @@ object @Contract {
                     assert!(
                         downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none(),
                         "nested scalar extracts from aggregate loads should not materialize temps"
+                    );
+                }
+            }
+        });
+
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::MinimalRelax,
+            emit_symtab: false,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
+        };
+        compile_all_objects(&module, &test_backend(), &opts).expect("compile should succeed");
+    }
+
+    #[test]
+    fn late_legalizer_sinks_scalar_extracts_through_aggregate_bitcasts_from_raw_address() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @inner = { i256 };
+type @pair = { i256, i256 };
+type @nested = { @inner, i256 };
+
+func public %entry(v0.i256) -> i256 {
+    block0:
+        v1.@pair = mload v0 @pair;
+        v2.@nested = bitcast v1 @nested;
+        v3.@inner = extract_value v2 0.i8;
+        v4.i256 = extract_value v3 0.i8;
+        return v4;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "entry");
+        module.func_store.modify(func_ref, |func| {
+            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            assert_aggregate_legalized(func, &ctx);
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    assert!(
+                        downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                        "bitcasted scalar extracts from aggregate loads should not materialize temps"
                     );
                 }
             }

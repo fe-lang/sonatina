@@ -27,6 +27,7 @@ impl DeadPureInstCleanup {
 
         let mut changed = false;
         while let Some(inst) = self.worklist.pop() {
+            self.queued.remove(&inst);
             if !is_dead_pure_inst(func, inst) {
                 continue;
             }
@@ -71,4 +72,68 @@ fn inst_operands(func: &Function, inst: InstId) -> SmallVec<[ValueId; 8]> {
         .inst(inst)
         .for_each_value(&mut |value| operands.push(value));
     operands
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sonatina_ir::{InstDowncast, Module, module::FuncRef};
+    use sonatina_parser::parse_module;
+
+    fn parse_test_module(src: &str) -> Module {
+        parse_module(src).expect("parse should succeed").module
+    }
+
+    fn lookup_func(module: &Module, name: &str) -> FuncRef {
+        module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
+            .expect("function should exist")
+    }
+
+    #[test]
+    fn dead_pure_cleanup_requeues_transitively_dead_defs() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-london"
+
+func private %f() {
+block0:
+    v0.i256 = add 1.i256 2.i256;
+    v1.i256 = add v0 3.i256;
+    v2.i256 = sub v0 4.i256;
+    return;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            func.rebuild_users();
+            assert!(DeadPureInstCleanup::default().run_with_current_users(func));
+        });
+
+        module.func_store.view(func_ref, |func| {
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    assert!(
+                        <&sonatina_ir::inst::arith::Add as InstDowncast>::downcast(
+                            func.inst_set(),
+                            func.dfg.inst(inst),
+                        )
+                        .is_none(),
+                        "dead add should be removed"
+                    );
+                    assert!(
+                        <&sonatina_ir::inst::arith::Sub as InstDowncast>::downcast(
+                            func.inst_set(),
+                            func.dfg.inst(inst),
+                        )
+                        .is_none(),
+                        "dead sub should be removed"
+                    );
+                }
+            }
+        });
+    }
 }

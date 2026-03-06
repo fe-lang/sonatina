@@ -1,3 +1,4 @@
+use rustc_hash::FxHashMap;
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{DataFlowGraph, Type, U256, ValueId, module::ModuleCtx, types::CompoundType};
 
@@ -23,6 +24,88 @@ pub struct AggregateSlice {
     pub ty: Type,
     pub first_leaf: usize,
     pub leaf_count: usize,
+}
+
+#[derive(Default)]
+pub struct AggregateLayoutCache {
+    shape_cache: FxHashMap<Type, AggregateShape>,
+    runtime_leaf_cache: FxHashMap<Type, RuntimeLeaves>,
+}
+
+impl AggregateLayoutCache {
+    pub fn clear(&mut self) {
+        self.shape_cache.clear();
+        self.runtime_leaf_cache.clear();
+    }
+
+    pub fn shape(&mut self, module: &ModuleCtx, ty: Type) -> Option<AggregateShape> {
+        if let Some(shape) = self.shape_cache.get(&ty) {
+            return Some(shape.clone());
+        }
+
+        let shape = aggregate_shape(module, ty)?;
+        self.shape_cache.insert(ty, shape.clone());
+        Some(shape)
+    }
+
+    pub fn runtime_leaves(&mut self, module: &ModuleCtx, ty: Type) -> Option<RuntimeLeaves> {
+        if let Some(leaves) = self.runtime_leaf_cache.get(&ty) {
+            return Some(leaves.clone());
+        }
+
+        let leaves: RuntimeLeaves = self
+            .shape(module, ty)?
+            .leaves
+            .into_iter()
+            .filter(|leaf| leaf.size_bytes != 0)
+            .collect();
+        self.runtime_leaf_cache.insert(ty, leaves.clone());
+        Some(leaves)
+    }
+
+    pub fn single_runtime_word_leaf(
+        &mut self,
+        module: &ModuleCtx,
+        ty: Type,
+    ) -> Option<AggregateLeaf> {
+        let runtime_leaves = self.runtime_leaves(module, ty)?;
+        let [leaf] = runtime_leaves.as_slice() else {
+            return None;
+        };
+        (leaf.size_bytes == 32).then(|| leaf.clone())
+    }
+
+    pub fn compatible_bitcast_runtime_leaves(
+        &mut self,
+        module: &ModuleCtx,
+        from_ty: Type,
+        to_ty: Type,
+    ) -> Option<(RuntimeLeaves, RuntimeLeaves)> {
+        let src_leaves = self.runtime_leaves(module, from_ty)?;
+        let dst_leaves = self.runtime_leaves(module, to_ty)?;
+        if src_leaves.len() != dst_leaves.len() {
+            return None;
+        }
+        src_leaves
+            .iter()
+            .zip(&dst_leaves)
+            .all(|(src_leaf, dst_leaf)| {
+                src_leaf.offset_bytes == dst_leaf.offset_bytes
+                    && src_leaf.size_bytes == dst_leaf.size_bytes
+            })
+            .then_some((src_leaves, dst_leaves))
+    }
+
+    pub fn compatible_bitcast_source_slice(
+        &mut self,
+        module: &ModuleCtx,
+        from_ty: Type,
+        to_ty: Type,
+        to_slice: AggregateSlice,
+    ) -> Option<AggregateSlice> {
+        self.compatible_bitcast_runtime_leaves(module, from_ty, to_ty)?;
+        aggregate_slice_for_leaf_range(module, from_ty, to_slice.first_leaf, to_slice.leaf_count)
+    }
 }
 
 pub fn aggregate_shape(module: &ModuleCtx, ty: Type) -> Option<AggregateShape> {
@@ -101,6 +184,31 @@ pub fn aggregate_slice_for_path(
         first_leaf,
         leaf_count,
     })
+}
+
+pub fn aggregate_slice_for_leaf_range(
+    module: &ModuleCtx,
+    root_ty: Type,
+    first_leaf: usize,
+    leaf_count: usize,
+) -> Option<AggregateSlice> {
+    if !is_supported_aggregate_ty(module, root_ty) {
+        return None;
+    }
+
+    let total_leaf_count = flattened_leaf_count(module, root_ty)?;
+    if first_leaf.checked_add(leaf_count)? > total_leaf_count {
+        return None;
+    }
+    if first_leaf == 0 && leaf_count == total_leaf_count {
+        return Some(AggregateSlice {
+            ty: root_ty,
+            first_leaf: 0,
+            leaf_count,
+        });
+    }
+
+    aggregate_slice_for_leaf_range_impl(module, root_ty, first_leaf, leaf_count, 0)
 }
 
 pub fn aggregate_slice_for_gep_path(
@@ -258,6 +366,76 @@ fn aggregate_slice_info(
                 first_leaf.checked_add(nested_first_leaf)?,
                 leaf_count,
             ))
+        }
+        CompoundType::Ptr(_) | CompoundType::Func { .. } => None,
+    }
+}
+
+fn aggregate_slice_for_leaf_range_impl(
+    module: &ModuleCtx,
+    ty: Type,
+    target_first_leaf: usize,
+    target_leaf_count: usize,
+    base_first_leaf: usize,
+) -> Option<AggregateSlice> {
+    match ty.resolve_compound(module)? {
+        CompoundType::Struct(s) => {
+            if s.packed {
+                return None;
+            }
+
+            let mut child_first_leaf = base_first_leaf;
+            for &field_ty in &s.fields {
+                let child_leaf_count = flattened_leaf_count(module, field_ty)?;
+                if child_first_leaf == target_first_leaf && child_leaf_count == target_leaf_count {
+                    return Some(AggregateSlice {
+                        ty: field_ty,
+                        first_leaf: target_first_leaf,
+                        leaf_count: target_leaf_count,
+                    });
+                }
+                if target_first_leaf >= child_first_leaf
+                    && target_first_leaf + target_leaf_count <= child_first_leaf + child_leaf_count
+                    && let Some(slice) = aggregate_slice_for_leaf_range_impl(
+                        module,
+                        field_ty,
+                        target_first_leaf,
+                        target_leaf_count,
+                        child_first_leaf,
+                    )
+                {
+                    return Some(slice);
+                }
+                child_first_leaf = child_first_leaf.checked_add(child_leaf_count)?;
+            }
+            None
+        }
+        CompoundType::Array { elem, len } => {
+            let elem_leaf_count = flattened_leaf_count(module, elem)?;
+            let mut child_first_leaf = base_first_leaf;
+            for _ in 0..len {
+                if child_first_leaf == target_first_leaf && elem_leaf_count == target_leaf_count {
+                    return Some(AggregateSlice {
+                        ty: elem,
+                        first_leaf: target_first_leaf,
+                        leaf_count: target_leaf_count,
+                    });
+                }
+                if target_first_leaf >= child_first_leaf
+                    && target_first_leaf + target_leaf_count <= child_first_leaf + elem_leaf_count
+                    && let Some(slice) = aggregate_slice_for_leaf_range_impl(
+                        module,
+                        elem,
+                        target_first_leaf,
+                        target_leaf_count,
+                        child_first_leaf,
+                    )
+                {
+                    return Some(slice);
+                }
+                child_first_leaf = child_first_leaf.checked_add(elem_leaf_count)?;
+            }
+            None
         }
         CompoundType::Ptr(_) | CompoundType::Func { .. } => None,
     }
@@ -507,5 +685,45 @@ block0:
         assert_eq!(shape.leaves[1].ty, ptr_i8);
         assert_eq!(shape.leaves[1].offset_bytes, 32);
         assert_eq!(shape.leaves[1].size_bytes, 32);
+    }
+
+    #[test]
+    fn maps_compatible_bitcast_slices_back_to_source_layout() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-london"
+
+type @inner = { i256 };
+type @pair = { i256, i256 };
+type @nested = { @inner, i256 };
+
+func private %f() {
+block0:
+    return;
+}
+"#,
+        );
+        let pair = module
+            .ctx
+            .with_ty_store(|s| Type::Compound(s.lookup_struct("pair").unwrap()));
+        let nested = module
+            .ctx
+            .with_ty_store(|s| Type::Compound(s.lookup_struct("nested").unwrap()));
+        let inner = module
+            .ctx
+            .with_ty_store(|s| Type::Compound(s.lookup_struct("inner").unwrap()));
+
+        let nested_inner = aggregate_slice_for_index(&module.ctx, nested, 0).expect("nested field");
+        assert_eq!(nested_inner.ty, inner);
+        assert_eq!(nested_inner.first_leaf, 0);
+        assert_eq!(nested_inner.leaf_count, 1);
+
+        let mut cache = AggregateLayoutCache::default();
+        let source_slice = cache
+            .compatible_bitcast_source_slice(&module.ctx, pair, nested, nested_inner)
+            .expect("source slice");
+        assert_eq!(source_slice.ty, Type::I256);
+        assert_eq!(source_slice.first_leaf, 0);
+        assert_eq!(source_slice.leaf_count, 1);
     }
 }

@@ -28,15 +28,13 @@ struct PromotedAlloca {
 pub struct AggregateScalarize {
     changed: bool,
     dead_pure_cleanup: DeadPureInstCleanup,
-    shape_cache: FxHashMap<Type, shape::AggregateShape>,
-    runtime_leaf_cache: FxHashMap<Type, shape::RuntimeLeaves>,
+    layout_cache: shape::AggregateLayoutCache,
 }
 
 impl AggregateScalarize {
     pub fn run(&mut self, func: &mut Function) -> bool {
         self.changed = false;
-        self.shape_cache.clear();
-        self.runtime_leaf_cache.clear();
+        self.layout_cache.clear();
         let module = func.ctx().clone();
         func.rebuild_users();
         self.assert_cfg_cleaned_up(func);
@@ -1304,32 +1302,7 @@ impl AggregateScalarize {
         module: &sonatina_ir::module::ModuleCtx,
         ty: Type,
     ) -> Option<shape::AggregateShape> {
-        if let Some(shape) = self.shape_cache.get(&ty) {
-            return Some(shape.clone());
-        }
-
-        let shape = shape::aggregate_shape(module, ty)?;
-        self.shape_cache.insert(ty, shape.clone());
-        Some(shape)
-    }
-
-    fn runtime_leaves(
-        &mut self,
-        module: &sonatina_ir::module::ModuleCtx,
-        ty: Type,
-    ) -> Option<shape::RuntimeLeaves> {
-        if let Some(leaves) = self.runtime_leaf_cache.get(&ty) {
-            return Some(leaves.clone());
-        }
-
-        let leaves: shape::RuntimeLeaves = self
-            .aggregate_shape(module, ty)?
-            .leaves
-            .into_iter()
-            .filter(|leaf| leaf.size_bytes != 0)
-            .collect();
-        self.runtime_leaf_cache.insert(ty, leaves.clone());
-        Some(leaves)
+        self.layout_cache.shape(module, ty)
     }
 
     fn aggregate_single_runtime_word_leaf(
@@ -1337,11 +1310,7 @@ impl AggregateScalarize {
         module: &sonatina_ir::module::ModuleCtx,
         ty: Type,
     ) -> Option<shape::AggregateLeaf> {
-        let runtime_leaves = self.runtime_leaves(module, ty)?;
-        let [leaf] = runtime_leaves.as_slice() else {
-            return None;
-        };
-        (leaf.size_bytes == 32).then(|| leaf.clone())
+        self.layout_cache.single_runtime_word_leaf(module, ty)
     }
 
     fn compatible_aggregate_bitcast_runtime_leaves(
@@ -1350,20 +1319,8 @@ impl AggregateScalarize {
         from_ty: Type,
         to_ty: Type,
     ) -> Option<(shape::RuntimeLeaves, shape::RuntimeLeaves)> {
-        let src_leaves = self.runtime_leaves(module, from_ty)?;
-        let dst_leaves = self.runtime_leaves(module, to_ty)?;
-        if src_leaves.len() != dst_leaves.len() {
-            return None;
-        }
-
-        src_leaves
-            .iter()
-            .zip(&dst_leaves)
-            .all(|(src_leaf, dst_leaf)| {
-                src_leaf.offset_bytes == dst_leaf.offset_bytes
-                    && src_leaf.size_bytes == dst_leaf.size_bytes
-            })
-            .then_some((src_leaves, dst_leaves))
+        self.layout_cache
+            .compatible_bitcast_runtime_leaves(module, from_ty, to_ty)
     }
 
     fn projection_view_leaf_tys(
