@@ -117,9 +117,10 @@ fn trim_after_noreturn_call(func: &mut Function) -> bool {
                 cursor = func.layout.next_inst_of(after);
             }
 
-            for inst in to_remove {
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            for &inst in &to_remove {
+                func.layout.remove_inst(inst);
             }
+            func.erase_insts(&to_remove);
 
             let unreachable = Unreachable::new_unchecked(func.inst_set());
             InstInserter::at_location(CursorLocation::BlockBottom(block))

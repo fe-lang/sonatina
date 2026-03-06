@@ -63,8 +63,8 @@ pub fn legalize_multi_result(func: &mut Function) {
 
             func.dfg.change_to_alias(results[0], add_result);
             func.dfg.change_to_alias(results[1], lt_result);
-            func.dfg.untrack_inst(inst);
             func.layout.remove_inst(inst);
+            func.erase_inst(inst);
         }
     }
 }

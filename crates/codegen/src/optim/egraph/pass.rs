@@ -365,8 +365,8 @@ fn eliminate_adjacent_dead_stores(func: &mut Function) -> bool {
                     && prev_addr == addr
                     && prev_ty == ty
                 {
-                    func.dfg.untrack_inst(prev_id);
                     func.layout.remove_inst(prev_id);
+                    func.erase_inst(prev_id);
                     changed = true;
                 }
 
@@ -397,8 +397,8 @@ fn eliminate_dead_pure_insts(func: &mut Function) -> bool {
         }
 
         let operands = func.dfg.inst(inst).collect_values();
-        func.dfg.untrack_inst(inst);
         func.layout.remove_inst(inst);
+        func.erase_inst(inst);
         changed = true;
 
         for operand in operands {

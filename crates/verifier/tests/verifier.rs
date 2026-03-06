@@ -1057,6 +1057,52 @@ func public %entry() -> unit {
 }
 
 #[test]
+fn deleted_result_used_by_live_inst_is_reported() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %entry(v0.i32, v1.i32) -> i32 {
+    block0:
+        v2.i32 = add v0 v1;
+        return v0;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let module = parsed.module;
+    let func_ref = module.funcs()[0];
+    let deleted_value = parsed.debug.value(func_ref, "v2").expect("v2 should exist");
+
+    module.func_store.modify(func_ref, |func| {
+        let deleted_inst = func
+            .dfg
+            .value_inst(deleted_value)
+            .expect("v2 should be defined by an instruction");
+        let block = func.layout.entry_block().expect("entry block should exist");
+        let ret_inst = func
+            .layout
+            .last_inst_of(block)
+            .expect("return should exist");
+
+        func.layout.remove_inst(deleted_inst);
+        func.erase_inst(deleted_inst);
+
+        func.dfg.untrack_inst(ret_inst);
+        func.dfg
+            .inst_mut(ret_inst)
+            .for_each_value_mut(&mut |value| {
+                *value = deleted_value;
+            });
+        func.dfg.attach_user(ret_inst);
+    });
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&module, &cfg);
+
+    assert!(has_code(&report, "IR0001"), "expected IR0001, got {report}");
+}
+
+#[test]
 fn inst_diagnostic_includes_function_name_and_opcode_context() {
     let src = r#"
 target = "evm-ethereum-london"

@@ -21,10 +21,13 @@ pub struct DataFlowGraph {
     pub ctx: ModuleCtx,
     #[doc(hidden)]
     pub blocks: PrimaryMap<BlockId, Block>,
+    live_blocks: SecondaryMap<BlockId, bool>,
     #[doc(hidden)]
     pub values: PrimaryMap<ValueId, Value>,
+    live_values: SecondaryMap<ValueId, bool>,
     #[doc(hidden)]
     pub insts: PrimaryMap<InstId, Box<dyn Inst>>,
+    live_insts: SecondaryMap<InstId, bool>,
     inst_results: SecondaryMap<InstId, SmallVec<[ValueId; 1]>>,
     #[doc(hidden)]
     pub immediates: FxHashMap<Immediate, ValueId>,
@@ -38,8 +41,11 @@ impl DataFlowGraph {
         Self {
             ctx,
             blocks: PrimaryMap::default(),
+            live_blocks: SecondaryMap::default(),
             values: PrimaryMap::default(),
+            live_values: SecondaryMap::default(),
             insts: PrimaryMap::default(),
+            live_insts: SecondaryMap::default(),
             inst_results: SecondaryMap::default(),
             immediates: FxHashMap::default(),
             globals: FxHashMap::default(),
@@ -48,11 +54,15 @@ impl DataFlowGraph {
     }
 
     pub fn make_block(&mut self) -> BlockId {
-        self.blocks.push(Block::new())
+        let block = self.blocks.push(Block::new());
+        self.live_blocks[block] = true;
+        block
     }
 
     pub fn make_value(&mut self, value: Value) -> ValueId {
-        self.values.push(value)
+        let value_id = self.values.push(value);
+        self.live_values[value_id] = true;
+        value_id
     }
 
     pub fn make_inst<I: Inst>(&mut self, inst: I) -> InstId {
@@ -61,6 +71,7 @@ impl DataFlowGraph {
 
     pub fn make_inst_dyn(&mut self, inst: Box<dyn Inst>) -> InstId {
         let inst_id = self.insts.push(inst);
+        self.live_insts[inst_id] = true;
         self.attach_user(inst_id);
         inst_id
     }
@@ -200,43 +211,85 @@ impl DataFlowGraph {
     }
 
     pub fn has_block(&self, block: BlockId) -> bool {
+        self.has_block_slot(block) && self.live_blocks[block]
+    }
+
+    pub fn has_block_slot(&self, block: BlockId) -> bool {
         (block.as_u32() as usize) < self.blocks.len()
     }
 
     pub fn has_value(&self, value: ValueId) -> bool {
+        self.has_value_slot(value) && self.live_values[value]
+    }
+
+    pub fn has_value_slot(&self, value: ValueId) -> bool {
         (value.as_u32() as usize) < self.values.len()
     }
 
     pub fn has_inst(&self, inst: InstId) -> bool {
+        self.has_inst_slot(inst) && self.live_insts[inst]
+    }
+
+    pub fn has_inst_slot(&self, inst: InstId) -> bool {
         (inst.as_u32() as usize) < self.insts.len()
     }
 
+    pub fn block_ids(&self) -> impl Iterator<Item = BlockId> + '_ {
+        self.blocks.keys().filter(|block| self.live_blocks[*block])
+    }
+
+    pub fn value_ids(&self) -> impl Iterator<Item = ValueId> + '_ {
+        self.values.keys().filter(|value| self.live_values[*value])
+    }
+
+    pub fn inst_ids(&self) -> impl Iterator<Item = InstId> + '_ {
+        self.insts.keys().filter(|inst| self.live_insts[*inst])
+    }
+
+    pub fn values_iter(&self) -> impl Iterator<Item = (ValueId, &Value)> + '_ {
+        self.values
+            .iter()
+            .filter(|(value, _)| self.live_values[*value])
+    }
+
     pub fn get_inst(&self, inst_id: InstId) -> Option<&dyn Inst> {
-        self.insts.get(inst_id).map(|inst| inst.as_ref())
+        if !self.has_inst(inst_id) {
+            return None;
+        }
+        Some(self.insts[inst_id].as_ref())
     }
 
     pub fn inst(&self, inst_id: InstId) -> &dyn Inst {
+        debug_assert!(self.has_inst(inst_id));
         self.insts[inst_id].as_ref()
     }
 
     pub fn inst_mut(&mut self, inst_id: InstId) -> &mut dyn Inst {
+        debug_assert!(self.has_inst(inst_id));
         self.insts[inst_id].as_mut()
     }
 
     pub fn get_inst_mut(&mut self, inst_id: InstId) -> Option<&mut dyn Inst> {
-        self.insts.get_mut(inst_id).map(|inst| inst.as_mut())
+        if !self.has_inst(inst_id) {
+            return None;
+        }
+        Some(self.insts[inst_id].as_mut())
     }
 
     pub fn get_value(&self, value_id: ValueId) -> Option<&Value> {
-        self.values.get(value_id)
+        if !self.has_value(value_id) {
+            return None;
+        }
+        Some(&self.values[value_id])
     }
 
     pub fn value(&self, value_id: ValueId) -> &Value {
+        debug_assert!(self.has_value(value_id));
         &self.values[value_id]
     }
 
     pub fn value_ty(&self, value_id: ValueId) -> Type {
-        match &self.values[value_id] {
+        match self.value(value_id) {
             Value::Inst { ty, .. }
             | Value::Arg { ty, .. }
             | Value::Immediate { ty, .. }
@@ -246,7 +299,7 @@ impl DataFlowGraph {
     }
 
     pub fn value_is_imm(&self, value_id: ValueId) -> bool {
-        matches!(self.values[value_id], Value::Immediate { .. })
+        matches!(self.value(value_id), Value::Immediate { .. })
     }
 
     pub fn attach_user(&mut self, inst_id: InstId) {
@@ -287,11 +340,15 @@ impl DataFlowGraph {
     }
 
     pub fn inst_results(&self, inst_id: InstId) -> &[ValueId] {
+        debug_assert!(self.has_inst(inst_id));
         self.inst_results[inst_id].as_slice()
     }
 
     pub fn try_inst_results(&self, inst_id: InstId) -> Option<&[ValueId]> {
-        self.inst_results.get(inst_id).map(SmallVec::as_slice)
+        if !self.has_inst(inst_id) {
+            return None;
+        }
+        Some(self.inst_results[inst_id].as_slice())
     }
 
     pub fn inst_result_at(&self, inst_id: InstId, idx: usize) -> Option<ValueId> {
@@ -411,6 +468,57 @@ impl DataFlowGraph {
         self.users[alias].append(&mut users);
     }
 
+    pub fn delete_inst(&mut self, inst_id: InstId) {
+        assert!(
+            self.has_inst(inst_id),
+            "cannot delete missing inst {inst_id:?}"
+        );
+
+        self.untrack_inst(inst_id);
+
+        let results = std::mem::take(&mut self.inst_results[inst_id]);
+        for value_id in results {
+            assert!(
+                self.users_num(value_id) == 0,
+                "cannot delete inst {inst_id:?} with live result users"
+            );
+            self.delete_value(value_id);
+        }
+
+        self.live_insts[inst_id] = false;
+    }
+
+    pub fn delete_block(&mut self, block: BlockId) {
+        assert!(
+            self.has_block(block),
+            "cannot delete missing block {block:?}"
+        );
+        self.live_blocks[block] = false;
+    }
+
+    fn delete_value(&mut self, value_id: ValueId) {
+        assert!(
+            self.has_value(value_id),
+            "cannot delete missing value {value_id:?}"
+        );
+        assert!(
+            self.users_num(value_id) == 0,
+            "cannot delete value {value_id:?} with live users"
+        );
+
+        match self.values[value_id] {
+            Value::Immediate { imm, .. } => {
+                self.immediates.remove(&imm);
+            }
+            Value::Global { gv, .. } => {
+                self.globals.remove(&gv);
+            }
+            _ => {}
+        }
+
+        self.live_values[value_id] = false;
+    }
+
     pub fn num_blocks(&self) -> usize {
         self.blocks.len()
     }
@@ -426,8 +534,9 @@ impl DataFlowGraph {
     pub fn rebuild_value_caches(&mut self) {
         self.immediates.clear();
         self.globals.clear();
-        for (value_id, value) in self.values.iter() {
-            match value {
+        let value_ids: Vec<_> = self.value_ids().collect();
+        for value_id in value_ids {
+            match &self.values[value_id] {
                 Value::Immediate { imm, .. } => {
                     self.immediates.insert(*imm, value_id);
                 }
@@ -555,7 +664,12 @@ impl Block {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Type, builder::test_util::test_isa, inst::arith::Uaddo, module::ModuleCtx};
+    use crate::{
+        Type,
+        builder::test_util::test_isa,
+        inst::arith::{Add, Uaddo},
+        module::ModuleCtx,
+    };
 
     #[test]
     fn inst_results_track_order_and_result_slots() {
@@ -609,5 +723,81 @@ mod tests {
         dfg.attach_results(inst, &[sum, overflow]);
 
         let _ = dfg.single_inst_result(inst);
+    }
+
+    #[test]
+    fn delete_inst_tombstones_results_and_live_iterators_skip_deleted_entities() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let live_block = dfg.make_block();
+        let dead_block = dfg.make_block();
+        let lhs = dfg.make_imm_value(Immediate::I32(1));
+        let rhs = dfg.make_imm_value(Immediate::I32(2));
+        let inst = dfg.make_inst(Uaddo::new(dfg.inst_set().has_uaddo().unwrap(), lhs, rhs));
+        let sum = dfg.make_value(Value::Inst {
+            inst,
+            result_idx: 0,
+            ty: Type::I32,
+        });
+        let overflow = dfg.make_value(Value::Inst {
+            inst,
+            result_idx: 1,
+            ty: Type::I1,
+        });
+        dfg.attach_results(inst, &[sum, overflow]);
+
+        dfg.delete_block(dead_block);
+        dfg.delete_inst(inst);
+
+        assert!(dfg.has_block(live_block));
+        assert!(!dfg.has_block(dead_block));
+        assert!(dfg.has_block_slot(dead_block));
+        assert_eq!(dfg.block_ids().collect::<Vec<_>>(), vec![live_block]);
+
+        assert!(!dfg.has_inst(inst));
+        assert!(dfg.has_inst_slot(inst));
+        assert!(dfg.get_inst(inst).is_none());
+        assert!(dfg.try_inst_results(inst).is_none());
+        assert!(dfg.inst_ids().next().is_none());
+
+        assert!(dfg.has_value(lhs));
+        assert!(dfg.has_value(rhs));
+        assert!(!dfg.has_value(sum));
+        assert!(!dfg.has_value(overflow));
+        assert!(dfg.has_value_slot(sum));
+        assert!(dfg.has_value_slot(overflow));
+        assert!(dfg.get_value(sum).is_none());
+
+        let live_values: Vec<_> = dfg.value_ids().collect();
+        assert_eq!(live_values, vec![lhs, rhs]);
+        let iterated_values: Vec<_> = dfg.values_iter().map(|(value, _)| value).collect();
+        assert_eq!(iterated_values, live_values);
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot delete inst")]
+    fn delete_inst_rejects_live_result_users() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let lhs = dfg.make_imm_value(Immediate::I32(1));
+        let rhs = dfg.make_imm_value(Immediate::I32(2));
+
+        let producer = dfg.make_inst(Add::new(dfg.inst_set().has_add().unwrap(), lhs, rhs));
+        let produced = dfg.make_value(Value::Inst {
+            inst: producer,
+            result_idx: 0,
+            ty: Type::I32,
+        });
+        dfg.attach_result(producer, produced);
+
+        let consumer = dfg.make_inst(Add::new(dfg.inst_set().has_add().unwrap(), produced, lhs));
+        let consumer_result = dfg.make_value(Value::Inst {
+            inst: consumer,
+            result_idx: 0,
+            ty: Type::I32,
+        });
+        dfg.attach_result(consumer, consumer_result);
+
+        dfg.delete_inst(producer);
     }
 }

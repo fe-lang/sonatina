@@ -85,12 +85,12 @@ fn compute_future_bounds_for_func(
 
     let mut value_alloca_bound: SecondaryMap<ValueId, u32> = SecondaryMap::new();
     let mut value_spill_bound: SecondaryMap<ValueId, u32> = SecondaryMap::new();
-    for value in function.dfg.values.keys() {
+    for value in function.dfg.value_ids() {
         let _ = &mut value_alloca_bound[value];
         let _ = &mut value_spill_bound[value];
     }
 
-    for value in function.dfg.values.keys() {
+    for value in function.dfg.value_ids() {
         let mut max_end: u32 = 0;
         for base in prov[value].alloca_insts() {
             if let Some(end) = alloca_end_words.get(&base) {

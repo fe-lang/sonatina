@@ -153,38 +153,34 @@ impl AdceSolver {
     }
 
     fn eliminate_dead_code(&mut self, func: &mut Function) -> bool {
-        let entry = if let Some(entry) = func.layout.entry_block() {
-            entry
-        } else {
+        if func.layout.entry_block().is_none() {
             return false;
-        };
+        }
 
-        let mut inserter = InstInserter::at_location(CursorLocation::BlockTop(entry));
-        loop {
-            match inserter.loc() {
-                CursorLocation::At(inst) => {
-                    if self.does_inst_live(inst) {
-                        inserter.proceed(func);
-                    } else {
-                        inserter.remove_inst(func)
-                    }
-                }
+        let blocks: Vec<_> = func.layout.iter_block().collect();
+        let mut dead_insts = Vec::new();
+        for block in blocks {
+            if !func.layout.is_block_inserted(block) {
+                continue;
+            }
+            if !self.does_block_live(block) {
+                InstInserter::at_location(CursorLocation::BlockTop(block)).remove_block(func);
+                continue;
+            }
 
-                CursorLocation::BlockTop(block) => {
-                    if self.does_block_live(block) {
-                        inserter.proceed(func)
-                    } else {
-                        inserter.remove_block(func)
-                    }
-                }
+            dead_insts.extend(
+                func.layout
+                    .iter_inst(block)
+                    .filter(|inst| !self.does_inst_live(*inst)),
+            );
+        }
 
-                CursorLocation::BlockBottom(_) => {
-                    inserter.proceed(func);
-                }
-
-                CursorLocation::NoWhere => break,
+        for &inst in &dead_insts {
+            if func.layout.is_inst_inserted(inst) {
+                func.layout.remove_inst(inst);
             }
         }
+        func.erase_insts(&dead_insts);
 
         // Modify branch insts to remove unreachable edges via CfgEditor.
         let mut editor = CfgEditor::new(func, CleanupMode::RepairWithUndef);

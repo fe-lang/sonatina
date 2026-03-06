@@ -27,7 +27,7 @@ use sonatina_ir::{
     module::FuncRef,
 };
 use sonatina_parser::parse_module;
-use sonatina_verifier::{DiagnosticCode, VerificationLevel, VerifierConfig, verify_module};
+use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
 const MAX_POLISH_ITERS: usize = 2;
 const MAX_OPT_PIPELINE_ITERS: usize = 4;
@@ -274,18 +274,5 @@ fn assert_func_not_contains(module: &Module, func_ref: FuncRef, needle: &str) {
 
 fn assert_fast_verified(module: &Module) {
     let report = verify_module(module, &VerifierConfig::for_level(VerificationLevel::Fast));
-    let unexpected: Vec<_> = report
-        .diagnostics
-        .iter()
-        .filter(|diagnostic| {
-            !matches!(
-                diagnostic.code,
-                DiagnosticCode::InsertedButUnlisted | DiagnosticCode::UnlistedButInserted
-            )
-        })
-        .collect();
-    assert!(
-        unexpected.is_empty(),
-        "module failed verification: {report:?}"
-    );
+    assert!(report.is_ok(), "module failed verification: {report:?}");
 }

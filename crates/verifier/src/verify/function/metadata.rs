@@ -9,7 +9,7 @@ use super::FunctionVerifier;
 
 impl FunctionVerifier<'_> {
     pub(super) fn check_metadata_consistency(&mut self) {
-        for inst in self.func.dfg.insts.keys() {
+        for inst in self.func.dfg.inst_ids() {
             for (result_idx, result) in self.func.dfg.inst_results(inst).iter().enumerate() {
                 let Some(value_data) = self.func.dfg.get_value(*result) else {
                     self.emit(
@@ -54,7 +54,7 @@ impl FunctionVerifier<'_> {
             }
         }
 
-        for (value_id, value_data) in self.func.dfg.values.iter() {
+        for (value_id, value_data) in self.func.dfg.values_iter() {
             if let Value::Inst {
                 inst, result_idx, ..
             } = value_data
@@ -97,7 +97,7 @@ impl FunctionVerifier<'_> {
                 }
             }
 
-            for value_id in self.func.dfg.values.keys() {
+            for value_id in self.func.dfg.value_ids() {
                 let expected_users = expected.remove(&value_id).unwrap_or_default();
                 let actual_users = self
                     .func
@@ -191,7 +191,7 @@ impl FunctionVerifier<'_> {
                 }
             }
 
-            for (value_id, value_data) in self.func.dfg.values.iter() {
+            for (value_id, value_data) in self.func.dfg.values_iter() {
                 if let Value::Immediate { imm, .. } = value_data
                     && self.func.dfg.immediates.get(imm) != Some(&value_id)
                 {
@@ -255,7 +255,7 @@ impl FunctionVerifier<'_> {
                 }
             }
 
-            for (value_id, value_data) in self.func.dfg.values.iter() {
+            for (value_id, value_data) in self.func.dfg.values_iter() {
                 if let Value::Global { gv, .. } = value_data
                     && self.func.dfg.globals.get(gv) != Some(&value_id)
                 {

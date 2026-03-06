@@ -121,7 +121,7 @@ impl FunctionVerifier<'_> {
             }
         }
 
-        for (value_id, value_data) in self.func.dfg.values.iter() {
+        for (value_id, value_data) in self.func.dfg.values_iter() {
             match value_data {
                 Value::Immediate { imm, ty } => {
                     if imm.ty() != *ty {

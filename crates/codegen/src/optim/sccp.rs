@@ -418,8 +418,8 @@ impl SccpSolver {
             let result_ty = func.dfg.value_ty(inst_result);
             let src_ty = func.dfg.value_ty(src);
             if src_ty == result_ty {
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
                 func.dfg.change_to_alias(inst_result, src);
+                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             } else if let Some(bitcast) = func.inst_set().has_bitcast()
                 && func.dfg.ctx.size_of(src_ty).ok() == func.dfg.ctx.size_of(result_ty).ok()
             {
@@ -441,9 +441,9 @@ impl SccpSolver {
                     return;
                 }
 
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
                 let new_value = func.dfg.make_imm_value(imm);
                 func.dfg.change_to_alias(inst_result, new_value);
+                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             }
             None => {
                 if func.dfg.is_phi(inst) {

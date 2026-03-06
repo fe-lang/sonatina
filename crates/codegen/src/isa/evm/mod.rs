@@ -298,7 +298,7 @@ impl EvmBackend {
                 let mut scratch_spills: Vec<(ValueId, u32)> = Vec::new();
                 if let Some(alloc) = section.allocs.get(&func) {
                     module.func_store.view(func, |function| {
-                        for v in function.dfg.values.keys() {
+                        for v in function.dfg.value_ids() {
                             let Some(slot) = alloc.scratch_slot_of_value[v] else {
                                 continue;
                             };
@@ -322,7 +322,7 @@ impl EvmBackend {
 
                 let mut spills: Vec<(ValueId, u32, String)> = Vec::new();
                 module.func_store.view(func, |function| {
-                    for v in function.dfg.values.keys() {
+                    for v in function.dfg.value_ids() {
                         let Some(obj) = func_plan.spill_obj[v] else {
                             continue;
                         };

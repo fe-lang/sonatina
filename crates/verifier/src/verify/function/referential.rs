@@ -19,7 +19,7 @@ impl FunctionVerifier<'_> {
             .collect();
 
         if !self.cfg.allow_detached_entities {
-            for inst in self.func.dfg.insts.keys() {
+            for inst in self.func.dfg.inst_ids() {
                 if !self.inst_to_block.contains_key(&inst) {
                     insts_to_scan.push(inst);
                 }

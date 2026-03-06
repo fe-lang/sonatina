@@ -101,8 +101,8 @@ pub trait FuncCursor {
         let inst_id = self.expect_inst();
         let next_loc = self.next_loc(func);
 
-        func.dfg.untrack_inst(inst_id);
         func.layout.remove_inst(inst_id);
+        func.erase_inst(inst_id);
 
         self.set_location(next_loc);
     }
@@ -129,15 +129,15 @@ pub trait FuncCursor {
         // Store next block of the current block for later use.
         let next_block = func.layout.next_block_of(block);
 
-        // Remove all insts in the current block.
-        if let Some(first_inst) = func.layout.first_inst_of(block) {
-            self.set_location(CursorLocation::At(first_inst));
-            while matches!(self.loc(), CursorLocation::At(..)) {
-                self.remove_inst(func);
-            }
+        let insts: Vec<_> = func.layout.iter_inst(block).collect();
+        for &inst in &insts {
+            func.layout.remove_inst(inst);
         }
+        func.erase_insts(&insts);
+
         // Remove current block.
         func.layout.remove_block(block);
+        func.erase_block(block);
 
         // Set cursor location to next block if exists.
         if let Some(next_block) = next_block {

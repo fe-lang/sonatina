@@ -51,11 +51,17 @@ impl<'f> CfgEditor<'f> {
         assert!(self.func.layout.is_inst_inserted(first_inst));
         let block = self.func.layout.inst_block(first_inst);
 
+        let mut insts = Vec::new();
         let mut current = Some(first_inst);
         while let Some(inst_id) = current {
+            insts.push(inst_id);
             current = self.func.layout.next_inst_of(inst_id);
-            InstInserter::at_location(CursorLocation::At(inst_id)).remove_inst(self.func);
         }
+
+        for &inst_id in &insts {
+            self.func.layout.remove_inst(inst_id);
+        }
+        self.func.erase_insts(&insts);
 
         block
     }
@@ -106,18 +112,24 @@ impl<'f> CfgEditor<'f> {
 
         let blocks: Vec<_> = self.func.layout.iter_block().collect();
         for block in blocks {
+            let mut to_remove = Vec::new();
             let mut found_term = false;
             let mut next_inst = self.func.layout.first_inst_of(block);
             while let Some(inst) = next_inst {
                 next_inst = self.func.layout.next_inst_of(inst);
                 if found_term {
-                    InstInserter::at_location(CursorLocation::At(inst)).remove_inst(self.func);
+                    to_remove.push(inst);
                     changed = true;
                     continue;
                 }
 
                 found_term = self.func.dfg.is_terminator(inst);
             }
+
+            for &inst in &to_remove {
+                self.func.layout.remove_inst(inst);
+            }
+            self.func.erase_insts(&to_remove);
         }
 
         if changed {

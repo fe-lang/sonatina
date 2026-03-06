@@ -229,7 +229,7 @@ pub(crate) fn compute_provenance(
     callee_arg_may_be_returned: impl Fn(FuncRef) -> Vec<bool>,
 ) -> ProvenanceInfo {
     let mut prov: SecondaryMap<ValueId, Provenance> = SecondaryMap::new();
-    for value in function.dfg.values.keys() {
+    for value in function.dfg.value_ids() {
         let _ = &mut prov[value];
     }
 

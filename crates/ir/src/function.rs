@@ -2,7 +2,7 @@ use std::io;
 
 use smallvec::SmallVec;
 
-use super::{DataFlowGraph, Layout, Type, ValueId};
+use super::{BlockId, DataFlowGraph, InstId, Layout, Type, ValueId};
 use crate::{InstSetBase, Linkage, ir_writer::IrWrite, module::ModuleCtx};
 
 pub struct Function {
@@ -37,6 +37,43 @@ impl Function {
 
     pub fn inst_set(&self) -> &'static dyn InstSetBase {
         self.dfg.inst_set()
+    }
+
+    pub fn erase_inst(&mut self, inst: InstId) {
+        assert!(self.layout.has_inst_slot(inst));
+        assert!(
+            !self.layout.is_inst_inserted(inst),
+            "instruction {inst:?} must be detached before erase"
+        );
+        self.dfg.delete_inst(inst);
+    }
+
+    pub fn erase_insts(&mut self, insts: &[InstId]) {
+        for &inst in insts {
+            assert!(self.layout.has_inst_slot(inst));
+            assert!(
+                !self.layout.is_inst_inserted(inst),
+                "instruction {inst:?} must be detached before erase"
+            );
+            self.dfg.untrack_inst(inst);
+        }
+
+        for &inst in insts {
+            self.dfg.delete_inst(inst);
+        }
+    }
+
+    pub fn erase_block(&mut self, block: BlockId) {
+        assert!(self.layout.has_block_slot(block));
+        assert!(
+            !self.layout.is_block_inserted(block),
+            "block {block:?} must be detached before erase"
+        );
+        assert!(
+            self.layout.try_first_inst_of(block) == Some(None),
+            "block {block:?} must be empty before erase"
+        );
+        self.dfg.delete_block(block);
     }
 
     /// Recompute `dfg.users` from scratch using only layout-inserted instructions.

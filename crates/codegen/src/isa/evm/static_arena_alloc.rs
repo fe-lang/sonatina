@@ -246,7 +246,7 @@ pub(crate) fn compute_func_stack_objects(
     }
 
     let mut spill_obj: SecondaryMap<ValueId, Option<StackObjId>> = SecondaryMap::new();
-    for v in function.dfg.values.keys() {
+    for v in function.dfg.value_ids() {
         let _ = &mut spill_obj[v];
     }
 

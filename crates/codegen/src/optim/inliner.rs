@@ -604,8 +604,8 @@ fn apply_plan(
                 caller.dfg.change_to_alias(call_res, alias);
             }
 
-            caller.dfg.untrack_inst(call_inst_id);
             caller.layout.remove_inst(call_inst_id);
+            caller.erase_inst(call_inst_id);
             stats.calls_removed += 1;
             true
         }
@@ -701,8 +701,8 @@ fn apply_splice_single_block(
         caller.dfg.change_to_alias(call_res, new_ret);
     }
 
-    caller.dfg.untrack_inst(call_inst_id);
     caller.layout.remove_inst(call_inst_id);
+    caller.erase_inst(call_inst_id);
     stats.calls_spliced += 1;
     true
 }

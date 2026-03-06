@@ -219,7 +219,7 @@ block0:
             let v4 = parsed.debug.value(fref, "v4").expect("v4");
 
             let mut value_aliases: SecondaryMap<ValueId, Option<ValueId>> = SecondaryMap::new();
-            for v in function.dfg.values.keys() {
+            for v in function.dfg.value_ids() {
                 value_aliases[v] = Some(v);
             }
             value_aliases[v2] = Some(v0);
