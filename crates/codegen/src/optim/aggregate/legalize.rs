@@ -1,3 +1,5 @@
+use std::mem;
+
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
@@ -20,8 +22,13 @@ use super::{cleanup::remove_dead_pure_insts_with_current_users, shape};
 pub struct AggregateLowerToMemoryLegalize {
     changed: bool,
     materialized_addr: SecondaryMap<ValueId, Option<ValueId>>,
+    materialized_slots: Vec<ValueId>,
     shape_cache: FxHashMap<Type, shape::AggregateShape>,
     runtime_leaf_cache: FxHashMap<Type, shape::RuntimeLeaves>,
+    slot_tree_insts: Vec<InstId>,
+    slot_tree_queue: Vec<ValueId>,
+    slot_tree_seen_insts: FxHashSet<InstId>,
+    slot_tree_seen_values: FxHashSet<ValueId>,
 }
 
 #[derive(Default)]
@@ -35,8 +42,13 @@ impl AggregateLowerToMemoryLegalize {
     pub fn run(&mut self, func: &mut Function, module: &ModuleCtx) -> bool {
         self.changed = false;
         self.materialized_addr.clear();
+        self.materialized_slots.clear();
         self.shape_cache.clear();
         self.runtime_leaf_cache.clear();
+        self.slot_tree_insts.clear();
+        self.slot_tree_queue.clear();
+        self.slot_tree_seen_insts.clear();
+        self.slot_tree_seen_values.clear();
         if func.layout.entry_block().is_none() {
             return false;
         }
@@ -92,7 +104,7 @@ impl AggregateLowerToMemoryLegalize {
         (aggregate_legalize_block_order(func, &cfg), changed)
     }
 
-    fn cleanup_legalized_artifacts(&self, func: &mut Function, split_edges: bool) -> bool {
+    fn cleanup_legalized_artifacts(&mut self, func: &mut Function, split_edges: bool) -> bool {
         // User sets stay current through legalization and CFG cleanup, so the cleanup
         // phases can share the single rebuild done before rewriting starts.
         let removed_slots = self.remove_dead_materialized_slots(func);
@@ -701,6 +713,7 @@ impl AggregateLowerToMemoryLegalize {
         }
         let ptr = self.create_temp_alloca(func, ty);
         self.materialized_addr[value] = Some(ptr);
+        self.materialized_slots.push(ptr);
         ptr
     }
 
@@ -1018,32 +1031,30 @@ impl AggregateLowerToMemoryLegalize {
         )
     }
 
-    fn remove_dead_materialized_slots(&self, func: &mut Function) -> bool {
-        let slot_ptrs: Vec<_> = func
-            .dfg
-            .values
-            .keys()
-            .filter_map(|value| self.materialized_addr[value])
-            .filter(|&slot_ptr| {
-                func.dfg
-                    .value_inst(slot_ptr)
-                    .is_some_and(|inst| func.layout.is_inst_inserted(inst))
-            })
-            .collect();
+    fn remove_dead_materialized_slots(&mut self, func: &mut Function) -> bool {
+        let slot_ptrs = mem::take(&mut self.materialized_slots);
         let mut changed = false;
 
         loop {
             let mut removed_any = false;
 
             for &slot_ptr in &slot_ptrs {
-                let Some(mut insts) = self.collect_dead_materialized_slot_insts(func, slot_ptr)
-                else {
+                if !func
+                    .dfg
+                    .value_inst(slot_ptr)
+                    .is_some_and(|inst| func.layout.is_inst_inserted(inst))
+                {
                     continue;
-                };
-                insts.reverse();
-                let mut seen = FxHashSet::default();
-                for inst in insts {
-                    if !seen.insert(inst) || !func.layout.is_inst_inserted(inst) {
+                }
+                if !self.collect_dead_materialized_slot_insts(func, slot_ptr) {
+                    continue;
+                }
+
+                self.slot_tree_seen_insts.clear();
+                for &inst in self.slot_tree_insts.iter().rev() {
+                    if !self.slot_tree_seen_insts.insert(inst)
+                        || !func.layout.is_inst_inserted(inst)
+                    {
                         continue;
                     }
                     InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
@@ -1053,23 +1064,25 @@ impl AggregateLowerToMemoryLegalize {
             }
 
             if !removed_any {
+                self.materialized_slots = slot_ptrs;
                 return changed;
             }
         }
     }
 
-    fn collect_dead_materialized_slot_insts(
-        &self,
-        func: &Function,
-        slot_ptr: ValueId,
-    ) -> Option<Vec<InstId>> {
-        let alloca_inst = func.dfg.value_inst(slot_ptr)?;
-        let mut insts = vec![alloca_inst];
-        let mut seen_values = FxHashSet::default();
-        let mut queue = vec![slot_ptr];
+    fn collect_dead_materialized_slot_insts(&mut self, func: &Function, slot_ptr: ValueId) -> bool {
+        self.slot_tree_insts.clear();
+        self.slot_tree_queue.clear();
+        self.slot_tree_seen_values.clear();
 
-        while let Some(value) = queue.pop() {
-            if !seen_values.insert(value) {
+        let Some(alloca_inst) = func.dfg.value_inst(slot_ptr) else {
+            return false;
+        };
+        self.slot_tree_insts.push(alloca_inst);
+        self.slot_tree_queue.push(slot_ptr);
+
+        while let Some(value) = self.slot_tree_queue.pop() {
+            if !self.slot_tree_seen_values.insert(value) {
                 continue;
             }
 
@@ -1081,9 +1094,9 @@ impl AggregateLowerToMemoryLegalize {
                 if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(user))
                     && gep.values().first().copied() == Some(value)
                 {
-                    insts.push(user);
+                    self.slot_tree_insts.push(user);
                     if let Some(result) = func.dfg.inst_result(user) {
-                        queue.push(result);
+                        self.slot_tree_queue.push(result);
                     }
                     continue;
                 }
@@ -1092,9 +1105,9 @@ impl AggregateLowerToMemoryLegalize {
                     downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(user))
                     && *bitcast.from() == value
                 {
-                    insts.push(user);
+                    self.slot_tree_insts.push(user);
                     if let Some(result) = func.dfg.inst_result(user) {
-                        queue.push(result);
+                        self.slot_tree_queue.push(result);
                     }
                     continue;
                 }
@@ -1103,31 +1116,33 @@ impl AggregateLowerToMemoryLegalize {
                     downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(user))
                     && *mstore.addr() == value
                 {
-                    insts.push(user);
+                    self.slot_tree_insts.push(user);
                     continue;
                 }
 
                 if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(user))
                     && *mload.addr() == value
                 {
-                    let result = func.dfg.inst_result(user)?;
+                    let Some(result) = func.dfg.inst_result(user) else {
+                        return false;
+                    };
                     if func
                         .dfg
                         .users(result)
                         .copied()
                         .any(|load_user| func.layout.is_inst_inserted(load_user))
                     {
-                        return None;
+                        return false;
                     }
-                    insts.push(user);
+                    self.slot_tree_insts.push(user);
                     continue;
                 }
 
-                return None;
+                return false;
             }
         }
 
-        Some(insts)
+        true
     }
 }
 
