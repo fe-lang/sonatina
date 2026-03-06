@@ -6,17 +6,17 @@ input_file: test_files/evm/spill.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 185 bytes
-  total: 185 bytes
+  section runtime: 179 bytes
+  total: 179 bytes
 
 functions:
   mem: dyn_base=0xe0 static_base=0xc0
-  entry: ir_blocks=1 ir_insts=7 vcode_ops=31 fixups=2 imm_bytes=5
+  entry: ir_blocks=1 ir_insts=7 vcode_ops=28 fixups=2 imm_bytes=5
     mem: scheme=StaticArena need_words=1 locals_words=0
   sum8: ir_blocks=1 ir_insts=8 vcode_ops=19 fixups=0 imm_bytes=0
     mem: scheme=StaticArena need_words=0 locals_words=0
-  spill: ir_blocks=4 ir_insts=17 vcode_ops=116 fixups=6 imm_bytes=5
+  spill: ir_blocks=4 ir_insts=17 vcode_ops=113 fixups=6 imm_bytes=5
     mem: scheme=StaticArena need_words=1 locals_words=1
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21608 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=552
+  case ok: calldata_len=8 success reason=Return gas_used=21591 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=535

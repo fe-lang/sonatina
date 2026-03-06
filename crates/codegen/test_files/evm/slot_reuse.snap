@@ -6,13 +6,13 @@ input_file: test_files/evm/slot_reuse.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 126 bytes
-  total: 126 bytes
+  section runtime: 121 bytes
+  total: 121 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
-  entry: ir_blocks=1 ir_insts=71 vcode_ops=124 fixups=0 imm_bytes=2
+  entry: ir_blocks=1 ir_insts=71 vcode_ops=119 fixups=0 imm_bytes=2
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21417 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=361
+  case ok: calldata_len=8 success reason=Return gas_used=21405 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=349

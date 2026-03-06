@@ -198,18 +198,6 @@ impl SymStack {
         }
     }
 
-    pub(super) fn replace_above_func_ret(&mut self, above: Vec<StackItem>) {
-        let Some(ret_pos) = self.func_ret_index() else {
-            self.items = above.into_iter().collect();
-            return;
-        };
-
-        let suffix = self.items.split_off(ret_pos);
-        let mut items: VecDeque<StackItem> = above.into_iter().collect();
-        items.extend(suffix);
-        self.items = items;
-    }
-
     pub(super) fn push_call_ret_addr(&mut self) {
         self.items.push_front(StackItem::CallRetAddr);
     }

@@ -6,19 +6,19 @@ input_file: test_files/evm/arena_alloc_recursion_spills.sntn
 evm.config: stack_reach=4 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 225 bytes
-  total: 225 bytes
+  section runtime: 207 bytes
+  total: 207 bytes
 
 functions:
-  mem: dyn_base=0x160 static_base=0xc0
-  f: ir_blocks=3 ir_insts=28 vcode_ops=142 fixups=5 imm_bytes=28
-    mem: scheme=StaticArena need_words=5 locals_words=5
+  mem: dyn_base=0x140 static_base=0xc0
+  f: ir_blocks=3 ir_insts=28 vcode_ops=128 fixups=5 imm_bytes=26
+    mem: scheme=StaticArena need_words=4 locals_words=4
   sink8: ir_blocks=1 ir_insts=8 vcode_ops=19 fixups=0 imm_bytes=0
     mem: scheme=StaticArena need_words=0 locals_words=0
   a: ir_blocks=1 ir_insts=2 vcode_ops=9 fixups=2 imm_bytes=1
-    mem: scheme=StaticArena need_words=5 locals_words=0
+    mem: scheme=StaticArena need_words=4 locals_words=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
-    mem: scheme=StaticArena need_words=5 locals_words=0
+    mem: scheme=StaticArena need_words=4 locals_words=0
 
 evm:
   <no evm.case directives>

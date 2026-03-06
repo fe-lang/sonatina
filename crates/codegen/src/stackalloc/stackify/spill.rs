@@ -61,6 +61,10 @@ impl<'a> SpillDiscovery<'a> {
     }
 
     pub(super) fn spill_requests(&self) -> &BitSet<ValueId> {
-        &*self.spill_requests
+        self.spill_requests
+    }
+
+    pub(super) fn restore_spill_requests(&mut self, spill_requests: BitSet<ValueId>) {
+        *self.spill_requests = spill_requests;
     }
 }

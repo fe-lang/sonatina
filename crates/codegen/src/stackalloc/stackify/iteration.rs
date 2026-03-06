@@ -29,6 +29,7 @@ pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
     alloc: &'a mut StackifyAlloc,
     spill_requests: &'a mut BitSet<ValueId>,
     inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
+    planned_blocks: BitSet<BlockId>,
     observer: &'a mut O,
 }
 
@@ -68,6 +69,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             alloc,
             spill_requests,
             inherited_stack,
+            planned_blocks: BitSet::default(),
             observer,
         }
     }
@@ -147,6 +149,8 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         let mut free_slots: FreeSlotPools = FreeSlotPools::default();
         let mut prologue: Actions = Actions::new();
         let injected_prologue = false;
+
+        self.planned_blocks.insert(block);
 
         // Track per-block remaining uses to implement `PopDeadTops`.
         let (remaining_uses, live_future) =
@@ -334,19 +338,35 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         if let Some(branch) = self.ctx.func.dfg.branch_info(inst) {
             match branch.branch_kind() {
                 BranchKind::Jump(jump) => {
-                    // Fix up the stack so the successor observes its chosen entry template
-                    // (including any phi results).
                     let dest = *jump.dest();
-                    let templates = self.templates;
-                    let src = state.block;
-                    self.with_pre_actions_planner(
-                        &mut state.stack,
-                        inst,
-                        &mut state.free_slots,
-                        |p| {
-                            p.plan_edge_fixup(templates, src, dest);
-                        },
-                    );
+                    if self.ctx.cfg.pred_num_of(dest) == 1
+                        && dest != self.ctx.entry
+                        && !self.planned_blocks.contains(dest)
+                    {
+                        // Match `br` lowering: single-predecessor blocks can inherit the
+                        // predecessor stack directly, and will normalize in a block prologue
+                        // only when required (phis/cycles). If the destination block has
+                        // already been planned, we must fix up the edge directly because there
+                        // will be no future block prologue to consume this inherited stack.
+                        self.inherited_stack
+                            .entry(dest)
+                            .or_insert_with(|| (state.block, state.stack.clone()));
+                    } else {
+                        // Multi-predecessor blocks, the already-planned entry block, and any
+                        // other already-planned destination must observe a single chosen entry
+                        // template at the edge. Fix up the predecessor stack to that template
+                        // (including per-edge phi sources).
+                        let templates = self.templates;
+                        let src = state.block;
+                        self.with_pre_actions_planner(
+                            &mut state.stack,
+                            inst,
+                            &mut state.free_slots,
+                            |p| {
+                                p.plan_edge_fixup(templates, src, dest);
+                            },
+                        );
+                    }
 
                     self.observer.on_inst_actions(
                         "exit",
@@ -450,7 +470,11 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                             &mut state.free_slots,
                             |p| {
                                 let consume_last_use = BitSet::<ValueId>::default();
-                                p.prepare_operands(&[scrutinee, case_val], &consume_last_use);
+                                let mut compare_args = smallvec::smallvec![scrutinee, case_val];
+                                p.prepare_operands_for_commutative_pair(
+                                    &mut compare_args,
+                                    &consume_last_use,
+                                );
                             },
                         );
                         self.alloc

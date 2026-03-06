@@ -60,7 +60,12 @@ pub(super) fn solve_templates_from_flow(
         if block == ctx.entry {
             params.extend(ctx.func.arg_values.iter().copied());
         }
-        params.extend(ctx.phi_results[block].iter().copied());
+        params.extend(
+            ctx.phi_results[block]
+                .iter()
+                .copied()
+                .filter(|v| !spill.contains(*v)),
+        );
         params_map[block] = params;
 
         let carry = live_in_non_params(
