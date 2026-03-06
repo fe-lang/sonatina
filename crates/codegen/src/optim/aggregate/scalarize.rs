@@ -799,16 +799,32 @@ impl AggregateScalarize {
             let Some(result) = func.dfg.inst_result(inst) else {
                 return;
             };
+            let leaf_range = projection.slice.first_leaf
+                ..projection.slice.first_leaf + projection.slice.leaf_count;
+            let underlying_leaves = &promoted.shape.leaves[leaf_range.clone()];
             if shape::is_supported_aggregate_ty(module, ty) {
                 if !scalarizable[result] {
                     return;
                 }
+                let Some(view_leaf_tys) = projection_view_leaf_tys(module, ty) else {
+                    return;
+                };
+                if view_leaf_tys.len() != underlying_leaves.len() {
+                    return;
+                }
                 let mut leaves: LeafValues = SmallVec::new();
-                for idx in projection.slice.first_leaf
-                    ..projection.slice.first_leaf + projection.slice.leaf_count
+                for (i, (underlying_leaf, view_ty)) in
+                    underlying_leaves.iter().zip(view_leaf_tys).enumerate()
                 {
-                    let var = promoted.leaf_vars[idx];
-                    leaves.push(ssa.use_var(func, var, block));
+                    let var = promoted.leaf_vars[projection.slice.first_leaf + i];
+                    let value = ssa.use_var(func, var, block);
+                    leaves.push(bitcast_before_inst(
+                        func,
+                        inst,
+                        value,
+                        underlying_leaf.ty,
+                        view_ty,
+                    ));
                 }
                 scalarized_agg[result] = Some(leaves);
                 InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
@@ -818,8 +834,10 @@ impl AggregateScalarize {
             if projection.slice.leaf_count != 1 {
                 return;
             }
+            let underlying_leaf = &underlying_leaves[0];
             let var = promoted.leaf_vars[projection.slice.first_leaf];
             let val = ssa.use_var(func, var, block);
+            let val = bitcast_before_inst(func, inst, val, underlying_leaf.ty, ty);
             func.dfg.change_to_alias(result, val);
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             return;
@@ -836,6 +854,9 @@ impl AggregateScalarize {
             return;
         };
         let ty = *mstore.ty();
+        let leaf_range =
+            projection.slice.first_leaf..projection.slice.first_leaf + projection.slice.leaf_count;
+        let underlying_leaves = &promoted.shape.leaves[leaf_range.clone()];
 
         if shape::is_supported_aggregate_ty(module, ty) {
             let Some(payload_leaves) =
@@ -843,12 +864,23 @@ impl AggregateScalarize {
             else {
                 return;
             };
-            if payload_leaves.len() != projection.slice.leaf_count {
+            let Some(view_leaf_tys) = projection_view_leaf_tys(module, ty) else {
+                return;
+            };
+            if payload_leaves.len() != projection.slice.leaf_count
+                || view_leaf_tys.len() != underlying_leaves.len()
+            {
                 return;
             }
-            for (i, val) in payload_leaves.into_iter().enumerate() {
+            for (i, ((val, view_ty), underlying_leaf)) in payload_leaves
+                .into_iter()
+                .zip(view_leaf_tys)
+                .zip(underlying_leaves.iter())
+                .enumerate()
+            {
                 let var = promoted.leaf_vars[projection.slice.first_leaf + i];
-                ssa.def_var(var, val, block);
+                let stored = bitcast_before_inst(func, inst, val, view_ty, underlying_leaf.ty);
+                ssa.def_var(var, stored, block);
             }
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             return;
@@ -857,8 +889,10 @@ impl AggregateScalarize {
         if projection.slice.leaf_count != 1 {
             return;
         }
+        let underlying_leaf = &underlying_leaves[0];
         let var = promoted.leaf_vars[projection.slice.first_leaf];
-        ssa.def_var(var, *mstore.value(), block);
+        let stored = bitcast_before_inst(func, inst, *mstore.value(), ty, underlying_leaf.ty);
+        ssa.def_var(var, stored, block);
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
     }
 
@@ -1292,17 +1326,71 @@ fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
     matches!(func.dfg.value(value), Value::Undef { .. })
 }
 
+fn projection_view_leaf_tys(
+    module: &sonatina_ir::module::ModuleCtx,
+    ty: Type,
+) -> Option<SmallVec<[Type; 4]>> {
+    if shape::is_supported_aggregate_ty(module, ty) {
+        return Some(
+            shape::aggregate_shape(module, ty)?
+                .leaves
+                .into_iter()
+                .map(|leaf| leaf.ty)
+                .collect(),
+        );
+    }
+    Some(smallvec![ty])
+}
+
+fn bitcast_before_inst(
+    func: &mut Function,
+    inst: InstId,
+    value: ValueId,
+    from_ty: Type,
+    to_ty: Type,
+) -> ValueId {
+    if from_ty == to_ty {
+        return value;
+    }
+
+    let block = func.layout.inst_block(inst);
+    let loc = func
+        .layout
+        .prev_inst_of(inst)
+        .map_or(CursorLocation::BlockTop(block), CursorLocation::At);
+    let mut cursor = InstInserter::at_location(loc);
+    let bitcast_inst = cursor.insert_inst_data(
+        func,
+        cast::Bitcast::new_unchecked(func.inst_set(), value, to_ty),
+    );
+    let cast_value = func.dfg.make_value(Value::Inst {
+        inst: bitcast_inst,
+        ty: to_ty,
+    });
+    cursor.attach_result(func, bitcast_inst, cast_value);
+    cast_value
+}
+
 fn bitcast_projection_slice(
     module: &sonatina_ir::module::ModuleCtx,
     slice: shape::AggregateSlice,
     ptr_ty: Type,
 ) -> Option<shape::AggregateSlice> {
     let pointee_ty = module.with_ty_store(|s| s.deref(ptr_ty))?;
-    (pointee_ty == slice.ty
-        || shape::is_supported_aggregate_ty(module, slice.ty)
-            && shape::is_supported_aggregate_ty(module, pointee_ty)
-            && shape::compatible_aggregate_bitcast_runtime_leaves(module, slice.ty, pointee_ty)
-                .is_some())
+    let from_leaf_tys = projection_view_leaf_tys(module, slice.ty)?;
+    let to_leaf_tys = projection_view_leaf_tys(module, pointee_ty)?;
+    (from_leaf_tys.len() == slice.leaf_count
+        && from_leaf_tys.len() == to_leaf_tys.len()
+        && (pointee_ty == slice.ty
+            || from_leaf_tys.len() == 1
+                && module.size_of_unchecked(from_leaf_tys[0])
+                    == module.size_of_unchecked(to_leaf_tys[0])
+            || shape::is_supported_aggregate_ty(module, slice.ty)
+                && shape::is_supported_aggregate_ty(module, pointee_ty)
+                && shape::compatible_aggregate_bitcast_runtime_leaves(
+                    module, slice.ty, pointee_ty,
+                )
+                .is_some()))
     .then_some(shape::AggregateSlice {
         ty: pointee_ty,
         ..slice

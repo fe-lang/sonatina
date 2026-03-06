@@ -2,7 +2,7 @@ use rustc_hash::FxHashMap;
 use sonatina_ir::{
     BlockId, Function, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::{control_flow, data, downcast},
+    inst::{cast, control_flow, data, downcast},
 };
 
 use super::shape;
@@ -112,6 +112,31 @@ impl AggregateCombine {
             return false;
         };
 
+        // AC5: insert identical field back into aggregate.
+        if is_definitely_non_undef_aggregate(func, *insert.dest())
+            && let Some(idx) = inst_const_index(func, *insert.idx())
+            && (matches!(
+                walk_insert_chain_for_field(func, *insert.dest(), idx),
+                AggregateFieldLookup::Found(found) if found == *insert.value()
+            ) || func
+                .dfg
+                .value_inst(*insert.value())
+                .is_some_and(|src_inst| {
+                    downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(src_inst))
+                        .is_some_and(|extract| {
+                            *extract.dest() == *insert.dest()
+                                && inst_const_index(func, *extract.idx()) == Some(idx)
+                        })
+                }))
+        {
+            if func.dfg.value_ty(*insert.dest()) != func.dfg.value_ty(result) {
+                return false;
+            }
+            func.dfg.change_to_alias(result, *insert.dest());
+            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            return true;
+        }
+
         // AC3: overwrite collapse.
         if let Some(prev_inst) = func.dfg.value_inst(*insert.dest())
             && let Some(prev) =
@@ -125,22 +150,6 @@ impl AggregateCombine {
                 *insert.value(),
             );
             func.dfg.replace_inst(inst, Box::new(rewritten));
-            return true;
-        }
-
-        // AC5: insert identical field back into aggregate.
-        if is_plain_non_undef_aggregate_source(func, *insert.dest())
-            && let Some(src_inst) = func.dfg.value_inst(*insert.value())
-            && let Some(extract) =
-                downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(src_inst))
-            && *extract.dest() == *insert.dest()
-            && equivalent_indices(func, *extract.idx(), *insert.idx())
-        {
-            if func.dfg.value_ty(*insert.dest()) != func.dfg.value_ty(result) {
-                return false;
-            }
-            func.dfg.change_to_alias(result, *insert.dest());
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             return true;
         }
 
@@ -347,8 +356,104 @@ fn is_explicit_undef(func: &Function, v: ValueId) -> bool {
     matches!(func.dfg.value(v), Value::Undef { .. })
 }
 
-fn is_plain_non_undef_aggregate_source(func: &Function, v: ValueId) -> bool {
-    !is_explicit_undef(func, v) && func.dfg.value_inst(v).is_none()
+fn is_definitely_non_undef_aggregate(func: &Function, value: ValueId) -> bool {
+    let mut memo = FxHashMap::default();
+    let mut visiting = rustc_hash::FxHashSet::default();
+    definitely_non_undef_value(func, value, &mut memo, &mut visiting)
+}
+
+fn definitely_non_undef_value(
+    func: &Function,
+    value: ValueId,
+    memo: &mut FxHashMap<ValueId, bool>,
+    visiting: &mut rustc_hash::FxHashSet<ValueId>,
+) -> bool {
+    if let Some(&cached) = memo.get(&value) {
+        return cached;
+    }
+    if !visiting.insert(value) {
+        memo.insert(value, false);
+        return false;
+    }
+
+    let ty = func.dfg.value_ty(value);
+    let non_undef = if is_explicit_undef(func, value) {
+        false
+    } else if !shape::is_supported_aggregate_ty(func.ctx(), ty) {
+        true
+    } else if let Some(inst) = func.dfg.value_inst(value) {
+        if downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+            let base = insert_chain_base(func, value);
+            if definitely_non_undef_value(func, base, memo, visiting) {
+                true
+            } else {
+                let Some(field_count) = shape::aggregate_child_count(func.ctx(), ty) else {
+                    visiting.remove(&value);
+                    memo.insert(value, false);
+                    return false;
+                };
+                let Some(assignments) = collect_insert_assignments(func, value) else {
+                    visiting.remove(&value);
+                    memo.insert(value, false);
+                    return false;
+                };
+                assignments.len() == field_count
+                    && (0..field_count).all(|idx| {
+                        let idx_u32 = u32::try_from(idx).ok();
+                        idx_u32
+                            .and_then(|idx_u32| {
+                                let field = *assignments.get(&idx_u32)?;
+                                let field_ty = shape::aggregate_child_ty(func.ctx(), ty, idx_u32)?;
+                                (func.dfg.value_ty(field) == field_ty).then_some((field, field_ty))
+                            })
+                            .is_some_and(|(field, field_ty)| {
+                                if shape::is_supported_aggregate_ty(func.ctx(), field_ty) {
+                                    definitely_non_undef_value(func, field, memo, visiting)
+                                } else {
+                                    !is_explicit_undef(func, field)
+                                }
+                            })
+                    })
+            }
+        } else if let Some(phi) =
+            downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
+        {
+            phi.args().iter().all(|&(arg, _)| {
+                func.dfg.value_ty(arg) == ty
+                    && definitely_non_undef_value(func, arg, memo, visiting)
+            })
+        } else if let Some(extract) =
+            downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst))
+        {
+            definitely_non_undef_value(func, *extract.dest(), memo, visiting)
+        } else if let Some(bitcast) =
+            downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst))
+        {
+            definitely_non_undef_value(func, *bitcast.from(), memo, visiting)
+        } else {
+            false
+        }
+    } else {
+        true
+    };
+
+    visiting.remove(&value);
+    memo.insert(value, non_undef);
+    non_undef
+}
+
+fn insert_chain_base(func: &Function, value: ValueId) -> ValueId {
+    let mut current = value;
+    loop {
+        let Some(inst) = func.dfg.value_inst(current) else {
+            return current;
+        };
+        let Some(insert) = downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst))
+        else {
+            return current;
+        };
+        current = *insert.dest();
+    }
 }
 
 fn walk_insert_chain_for_field(

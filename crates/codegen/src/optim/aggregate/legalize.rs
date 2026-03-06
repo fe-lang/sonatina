@@ -2,7 +2,7 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashSet;
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    Function, Inst, InstId, Type, Value, ValueId,
+    BlockId, Function, Inst, InstId, Type, Value, ValueId,
     cfg::ControlFlowGraph,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{cast, control_flow, data, downcast},
@@ -36,7 +36,7 @@ impl AggregateLowerToMemoryLegalize {
         self.validate_unsupported_boundaries(func, module);
         self.split_critical_edges_for_aggregate_phi(func, module);
 
-        let blocks: Vec<_> = func.layout.iter_block().collect();
+        let blocks = aggregate_legalize_block_order(func);
         for block in blocks {
             let insts: Vec<_> = func.layout.iter_inst(block).collect();
             for inst in insts {
@@ -48,11 +48,15 @@ impl AggregateLowerToMemoryLegalize {
         }
 
         if self.changed {
-            self.changed |= self.remove_dead_materialized_slots(func);
-            self.changed |= remove_dead_pure_insts(func);
-            self.changed |= CfgCleanup::new(CleanupMode::Strict).run(func);
-            self.changed |= self.remove_dead_materialized_slots(func);
-            self.changed |= remove_dead_pure_insts(func);
+            loop {
+                let removed_slots = self.remove_dead_materialized_slots(func);
+                let removed_pure = remove_dead_pure_insts(func);
+                let cleaned_cfg = CfgCleanup::new(CleanupMode::Strict).run(func);
+                if !removed_slots && !removed_pure && !cleaned_cfg {
+                    break;
+                }
+                self.changed = true;
+            }
             func.rebuild_users();
         }
         assert_aggregate_legalized(func, module);
@@ -1067,6 +1071,26 @@ impl BeforeCursor {
     }
 }
 
+fn aggregate_legalize_block_order(func: &Function) -> Vec<BlockId> {
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(func);
+
+    let mut blocks: Vec<_> = cfg.post_order().collect();
+    blocks.reverse();
+
+    let mut seen = FxHashSet::default();
+    for &block in &blocks {
+        seen.insert(block);
+    }
+    for block in func.layout.iter_block() {
+        if seen.insert(block) {
+            blocks.push(block);
+        }
+    }
+
+    blocks
+}
+
 fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
     matches!(func.dfg.value(value), Value::Undef { .. })
 }
@@ -1393,6 +1417,59 @@ func private %f(v0.i256) -> i256 {
         v3.@empty = extract_value v2 0.i8;
         v4.i256 = extract_value v2 1.i8;
         return v4;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            assert_aggregate_legalized(func, &ctx);
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    if let Some(mload) =
+                        downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
+                    {
+                        assert!(
+                            !shape::is_supported_aggregate_ty(&ctx, *mload.ty()),
+                            "aggregate mload should be gone"
+                        );
+                    }
+                    if let Some(mstore) =
+                        downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst))
+                    {
+                        assert!(
+                            !shape::is_supported_aggregate_ty(&ctx, *mstore.ty()),
+                            "aggregate mstore should be gone"
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn late_legalizer_handles_dominating_defs_after_uses_in_layout_order() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @one = { i256 };
+
+func private %f(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block2:
+        v2.i256 = extract_value v1 0.i8;
+        return v2;
+
+    block1:
+        v1.@one = insert_value undef.@one 0.i8 v0;
+        jump block2;
 }
 "#,
         );

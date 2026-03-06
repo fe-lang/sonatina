@@ -4,6 +4,8 @@ type @slice = { i256, i256 };
 type @nested = { @slice, i256 };
 type @one = { i256 };
 type @pair_bitcast = { @one, i256 };
+type @ptr_one = { *i8 };
+type @int_one = { i256 };
 # sameln: func public %scalarize_insert_extract(v0.i256, v1.i256) -> i256 {
 # check:     block0:
 # check:         add v0 v1;
@@ -87,6 +89,37 @@ func public %scalarize_promote_live_bitcast_projection(v0.i256) -> i256 {
         mstore v3 v0 i256;
         v4.i256 = mload v3 i256;
         return v4;
+}
+
+# sameln: func public %scalarize_promote_root_bitcast_projection(v0.i256) -> i256 {
+# check:     block0:
+# check:         return v0;
+func public %scalarize_promote_root_bitcast_projection(v0.i256) -> i256 {
+    block0:
+        v1.*@one = alloca @one;
+        v2.*i256 = bitcast v1 *i256;
+        mstore v2 v0 i256;
+        v3.i256 = mload v2 i256;
+        return v3;
+}
+
+# sameln: func public %scalarize_promote_aggregate_pointer_bitcast(v0.*i8) -> i256 {
+# check:     block0:
+# check:         v3.i256 = ptr_to_int v0 i256;
+# check:         v12.*i8 = bitcast v3 *i8;
+# check:         v7.i256 = ptr_to_int v12 i256;
+# check:         return v7;
+func public %scalarize_promote_aggregate_pointer_bitcast(v0.*i8) -> i256 {
+    block0:
+        v1.*@ptr_one = alloca @ptr_one;
+        v2.*@int_one = bitcast v1 *@int_one;
+        v3.i256 = ptr_to_int v0 i256;
+        v4.@int_one = insert_value undef.@int_one 0.i8 v3;
+        mstore v2 v4 @int_one;
+        v5.@ptr_one = mload v1 @ptr_one;
+        v6.*i8 = extract_value v5 0.i8;
+        v7.i256 = ptr_to_int v6 i256;
+        return v7;
 }
 
 # sameln: func public %scalarize_promote_whole_load_store(v0.i256, v1.i256) -> i256 {
