@@ -27,6 +27,7 @@ egglog = { git = "https://github.com/sbillig/egglog", rev = "ba6d7081a0a788a3a1c
 bit-set = "0.8.0"
 indexmap = { version = "2.12" }
 tracing = "0.1"
+vec-collections = { version = "0.4.3", default-features = false }
 
 [dev-dependencies]
 hex = "0.4.3"

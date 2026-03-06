@@ -2601,6 +2601,7 @@ dependencies = [
  "sonatina-triple",
  "sonatina-verifier",
  "tracing",
+ "vec-collections",
 ]
 
 [[package]]

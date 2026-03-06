@@ -7,6 +7,7 @@ use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::control_flow::Jump,
 };
+use vec_collections::VecSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CleanupMode {
@@ -191,11 +192,11 @@ impl<'f> CfgEditor<'f> {
             "block {from:?} does not end with a terminator"
         );
 
-        let succs: Vec<_> = self
+        let succs: VecSet<[BlockId; 4]> = self
             .func
             .dfg
             .branch_info(term)
-            .map_or_else(Vec::new, |bi| bi.dests().into_iter().collect());
+            .map_or_else(VecSet::empty, |bi| bi.dests().into_iter().collect());
 
         let new_block = self.func.dfg.make_block();
         InstInserter::at_location(CursorLocation::BlockTop(from))
@@ -818,7 +819,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use sonatina_ir::{
-        Type,
+        Module, Type,
         builder::test_util::{dump_func, test_func_builder, test_module_builder},
         inst::{
             arith::{Add, Sub},
@@ -827,8 +828,13 @@ mod tests {
         },
         isa::Isa,
     };
+    use sonatina_parser::parse_module;
 
     use super::{CfgEditor, CleanupMode, simplify_trivial_phis_in_block};
+
+    fn parse_test_module(src: &str) -> Module {
+        parse_module(src).expect("parse should succeed").module
+    }
 
     #[test]
     fn replace_succ_allow_existing_pred_does_not_duplicate_phi_inputs() {
@@ -1241,6 +1247,49 @@ mod tests {
 
             let b0_succs: Vec<_> = editor.cfg().succs_of(b0).copied().collect();
             assert!(b0_succs.is_empty());
+        });
+    }
+
+    #[test]
+    fn split_block_at_deduplicates_duplicate_successors_before_phi_rewrite() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i1, v1.i32) -> i32 {
+block0:
+    br v0 block1 block1;
+
+block1:
+    v2.i32 = phi (v1 block0) (9.i32 block2);
+    return v2;
+
+block2:
+    jump block1;
+}
+"#,
+        );
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let blocks: Vec<_> = func.layout.iter_block().collect();
+            let [b0, b1, b2] = blocks.as_slice() else {
+                panic!("expected three blocks");
+            };
+            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let term = editor.func().layout.last_inst_of(*b0).unwrap();
+            let (old_block, new_block) = editor.split_block_at(term);
+            assert_eq!(old_block, *b0);
+
+            let phi_inst = editor.func().layout.first_inst_of(*b1).unwrap();
+            let phi = editor.func().dfg.cast_phi(phi_inst).unwrap();
+            assert_eq!(phi.args().len(), 2);
+            assert!(phi.args().iter().any(|(_, pred)| *pred == new_block));
+            assert!(phi.args().iter().any(|(_, pred)| *pred == *b2));
+
+            let new_term = editor.func().layout.last_inst_of(new_block).unwrap();
+            let branch_info = editor.func().dfg.branch_info(new_term).unwrap();
+            let branch_succs: Vec<_> = branch_info.dests().into_iter().collect();
+            assert_eq!(branch_succs, vec![*b1, *b1]);
         });
     }
 }
