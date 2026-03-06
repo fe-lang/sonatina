@@ -103,6 +103,7 @@ pub struct InlineStats {
     pub full_insts_cloned: usize,
     pub full_phi_fixups: usize,
     pub skipped_recursive_scc: usize,
+    pub skipped_recursive_guard: usize,
     pub skipped_budget: usize,
     pub skipped_cost: usize,
     pub skipped_noinline_hint: usize,
@@ -126,6 +127,7 @@ impl Inliner {
         let mut total_growth = 0usize;
         let mut inline_depth_by_func: FxHashMap<FuncRef, usize> = FxHashMap::default();
         let mut growth_by_caller: FxHashMap<FuncRef, usize> = FxHashMap::default();
+        let mut forced_recursive_callers: FxHashSet<FuncRef> = FxHashSet::default();
 
         let mut iter = 0;
         while iter < MAX_ITERS {
@@ -133,35 +135,50 @@ impl Inliner {
             let (sites_by_caller, call_counts) = collect_iteration_call_data(module, &funcs);
             let analysis = module_analysis::analyze_module(module);
             let caller_order = caller_order_bottom_up_scc(&funcs, &analysis);
-            let mut inlinee_summaries: FxHashMap<FuncRef, cost::InlineeSummary> =
+            let recursive_snapshots = collect_recursive_snapshots(module, &funcs, &analysis);
+            let depth_at_iter_start = inline_depth_by_func.clone();
+            let mut inlinee_summaries: FxHashMap<cost::SummaryKey, cost::InlineeSummary> =
                 FxHashMap::default();
 
             let mut changed = false;
             for caller_ref in caller_order {
                 let mut reachable_blocks: Option<FxHashSet<BlockId>> = None;
+                let mut forced_recursive_inline_succeeded = false;
                 let sites = sites_by_caller
                     .get(&caller_ref)
                     .cloned()
                     .unwrap_or_default();
 
                 for site in sites {
-                    if module
-                        .ctx
-                        .func_hints(site.callee)
-                        .contains(FuncHints::NOINLINE)
-                    {
+                    let hints = module.ctx.func_hints(site.callee);
+                    if hints.contains(FuncHints::NOINLINE) {
                         stats.skipped_noinline_hint += 1;
                         continue;
                     }
 
-                    if site.callee == caller_ref && !self.config.allow_inline_recursive {
+                    let recursive_callsite =
+                        is_recursive_callsite(&analysis, caller_ref, site.callee);
+                    let always_inline = hints.contains(FuncHints::ALWAYSINLINE);
+                    if recursive_callsite
+                        && always_inline
+                        && forced_recursive_callers.contains(&caller_ref)
+                    {
+                        stats.skipped_recursive_guard += 1;
+                        continue;
+                    }
+                    if recursive_callsite && !self.config.allow_inline_recursive && !always_inline {
                         stats.skipped_recursive_scc += 1;
                         continue;
                     }
+                    let snapshot_callee = recursive_callsite.then(|| {
+                        recursive_snapshots
+                            .get(&site.callee)
+                            .expect("recursive callsites should have iteration snapshots")
+                    });
 
                     let callee_calls = call_counts.get(&site.callee).copied().unwrap_or(0);
 
-                    let trivial_plan = module.func_store.view(site.callee, |callee| {
+                    let trivial_plan = if let Some(callee) = snapshot_callee {
                         trivial::analyze_callee(
                             module,
                             site.callee,
@@ -170,14 +187,30 @@ impl Inliner {
                             &self.config,
                             &mut stats,
                         )
-                    });
+                    } else {
+                        module.func_store.view(site.callee, |callee| {
+                            trivial::analyze_callee(
+                                module,
+                                site.callee,
+                                callee,
+                                callee_calls,
+                                &self.config,
+                                &mut stats,
+                            )
+                        })
+                    };
                     let trivial_plan_changes_cfg = trivial_plan
                         .as_ref()
                         .is_some_and(trivial::summary_changes_cfg);
                     let did_trivial = if let Some(plan_summary) = trivial_plan {
-                        let plan = module.func_store.view(site.callee, |callee| {
-                            trivial::materialize_plan(callee, &plan_summary)
-                        });
+                        let plan = snapshot_callee.map_or_else(
+                            || {
+                                module.func_store.view(site.callee, |callee| {
+                                    trivial::materialize_plan(callee, &plan_summary)
+                                })
+                            },
+                            |callee| trivial::materialize_plan(callee, &plan_summary),
+                        );
                         module.func_store.modify(caller_ref, |caller| {
                             trivial::apply_plan(caller, site.call_inst, plan, &mut stats)
                         })
@@ -186,6 +219,7 @@ impl Inliner {
                     };
                     if did_trivial {
                         changed = true;
+                        forced_recursive_inline_succeeded |= recursive_callsite && always_inline;
                         // Most trivial plans don't change CFG reachability.
                         // Terminator splicing can make reachable blocks unreachable.
                         if trivial_plan_changes_cfg {
@@ -202,16 +236,18 @@ impl Inliner {
                         module,
                         &analysis,
                         &mut inlinee_summaries,
+                        snapshot_callee,
+                        recursive_callsite,
                         cost::InlineRequest {
-                            caller_ref,
                             callee_ref: site.callee,
                             callee_call_count: callee_calls,
                             caller_growth: growth_by_caller.get(&caller_ref).copied().unwrap_or(0),
                             total_growth,
-                            callee_depth: inline_depth_by_func
-                                .get(&site.callee)
-                                .copied()
-                                .unwrap_or(0),
+                            callee_depth: if recursive_callsite {
+                                depth_at_iter_start.get(&site.callee).copied().unwrap_or(0)
+                            } else {
+                                inline_depth_by_func.get(&site.callee).copied().unwrap_or(0)
+                            },
                             call_has_result: site.has_result,
                         },
                         &self.config,
@@ -241,15 +277,14 @@ impl Inliner {
                         continue;
                     }
 
-                    let full_result = if site.callee == caller_ref {
-                        let callee = caller_func.clone();
+                    let full_result = if let Some(callee) = snapshot_callee {
                         full::try_inline_callsite_full(
                             module,
                             caller_ref,
                             &mut caller_func,
                             site.call_inst,
                             site.callee,
-                            &callee,
+                            callee,
                             &self.config,
                         )
                     } else {
@@ -271,6 +306,8 @@ impl Inliner {
                         Ok(result) => {
                             changed = true;
                             let _ = (plan.summary.blocks, plan.predicted_growth, plan.score);
+                            forced_recursive_inline_succeeded |=
+                                recursive_callsite && always_inline;
 
                             stats.full_calls_inlined += 1;
                             stats.full_blocks_cloned += result.blocks_cloned;
@@ -312,6 +349,10 @@ impl Inliner {
                         | Err(full::FullInlineFail::CalleeMismatch)
                         | Err(full::FullInlineFail::MalformedCallee) => {}
                     }
+                }
+
+                if forced_recursive_inline_succeeded {
+                    forced_recursive_callers.insert(caller_ref);
                 }
             }
 
@@ -384,6 +425,36 @@ fn compute_reachable_blocks(func: &Function) -> FxHashSet<BlockId> {
     let mut cfg = ControlFlowGraph::default();
     cfg.compute(func);
     cfg.post_order().collect()
+}
+
+fn is_recursive_callsite(
+    analysis: &module_analysis::ModuleInfo,
+    caller_ref: FuncRef,
+    callee_ref: FuncRef,
+) -> bool {
+    let caller_scc = analysis.scc.scc_ref(caller_ref);
+    caller_scc == analysis.scc.scc_ref(callee_ref) && analysis.scc.scc_info(caller_scc).is_cycle
+}
+
+fn collect_recursive_snapshots(
+    module: &Module,
+    funcs: &[FuncRef],
+    analysis: &module_analysis::ModuleInfo,
+) -> FxHashMap<FuncRef, Function> {
+    let mut snapshots = FxHashMap::default();
+    for &func_ref in funcs {
+        if !analysis
+            .scc
+            .scc_info(analysis.scc.scc_ref(func_ref))
+            .is_cycle
+        {
+            continue;
+        }
+
+        let func = module.func_store.view(func_ref, |func| func.clone());
+        snapshots.insert(func_ref, func);
+    }
+    snapshots
 }
 
 fn caller_order_bottom_up_scc(

@@ -854,6 +854,98 @@ func public %self(v0.i1, v1.i32) -> i32 {
 }
 
 #[test]
+fn full_inliner_uses_iteration_snapshot_for_recursive_self_calls() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func public %self(v0.i1, v1.i1, v2.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v3.i32 = call %self v1 0.i1 v2;
+        return v3;
+
+    block2:
+        v4.i32 = call %self 0.i1 v1 v2;
+        return v4;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut cfg = full_only_inliner_test_config();
+    cfg.allow_inline_recursive = true;
+    cfg.max_inline_depth = 1;
+    cfg.max_growth_per_caller = 10;
+    cfg.max_total_growth = 64;
+
+    let mut inliner = Inliner::new(cfg);
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert_eq!(stats.full_calls_inlined, 2);
+    assert_eq!(
+        stats.full_insts_cloned, 12,
+        "recursive self-call cloning should use the frozen iteration snapshot:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("call %self"),
+        "depth cap should leave the next recursive generation in place:\n{dumped}"
+    );
+}
+
+#[test]
+fn full_inliner_alwaysinline_recursive_calls_expand_once_per_generation() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func public %self(v0.i1, v1.i1, v2.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v3.i32 = call %self v1 0.i1 v2;
+        return v3;
+
+    block2:
+        v4.i32 = call %self 0.i1 v1 v2;
+        return v4;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+    let self_ref = find_func(module, "self");
+    module.ctx.set_func_hints(self_ref, FuncHints::ALWAYSINLINE);
+
+    let mut cfg = full_only_inliner_test_config();
+    cfg.max_inlinee_blocks = 1;
+    cfg.max_inlinee_insts = 1;
+    cfg.max_growth_per_caller = 1;
+    cfg.max_total_growth = 1;
+    cfg.max_inline_depth = 1;
+    cfg.inline_threshold = -1000;
+    cfg.inline_threshold_cold = -1000;
+
+    let mut inliner = Inliner::new(cfg);
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert_eq!(stats.full_calls_inlined, 2);
+    assert!(stats.skipped_recursive_guard > 0);
+    assert!(
+        dumped.contains("call %self"),
+        "forced recursive inlining should stop after expanding the original generation:\n{dumped}"
+    );
+}
+
+#[test]
 fn full_inliner_honors_noinline_and_alwaysinline_hints() {
     let source = r#"
 target = "evm-ethereum-london"

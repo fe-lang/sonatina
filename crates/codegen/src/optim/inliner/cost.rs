@@ -46,7 +46,6 @@ pub(super) struct InlineeSummary {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct InlineRequest {
-    pub caller_ref: FuncRef,
     pub callee_ref: FuncRef,
     pub callee_call_count: usize,
     pub caller_growth: usize,
@@ -55,10 +54,18 @@ pub(super) struct InlineRequest {
     pub call_has_result: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum SummaryKey {
+    Live(FuncRef),
+    Snapshot(FuncRef),
+}
+
 pub(super) fn decide_inline(
     module: &Module,
     module_info: &ModuleInfo,
-    summary_cache: &mut FxHashMap<FuncRef, InlineeSummary>,
+    summary_cache: &mut FxHashMap<SummaryKey, InlineeSummary>,
+    callee: Option<&Function>,
+    recursive_callsite: bool,
     request: InlineRequest,
     config: &InlinerConfig,
 ) -> InlineDecision {
@@ -71,20 +78,29 @@ pub(super) fn decide_inline(
         return InlineDecision::Skip(InlineSkipReason::NoBody);
     }
 
-    if !config.allow_inline_recursive {
-        let caller_scc = module_info.scc.scc_ref(request.caller_ref);
-        let callee_scc = module_info.scc.scc_ref(request.callee_ref);
-        if caller_scc == callee_scc && module_info.scc.scc_info(caller_scc).is_cycle {
-            return InlineDecision::Skip(InlineSkipReason::RecursiveScc);
-        }
+    if recursive_callsite
+        && !config.allow_inline_recursive
+        && !hints.contains(FuncHints::ALWAYSINLINE)
+    {
+        return InlineDecision::Skip(InlineSkipReason::RecursiveScc);
     }
 
-    let summary = *summary_cache.entry(request.callee_ref).or_insert_with(|| {
-        module
-            .func_store
-            .try_view(request.callee_ref, compute_inlinee_summary)
-            .unwrap_or_default()
-    });
+    let summary = *summary_cache
+        .entry(match callee {
+            Some(_) => SummaryKey::Snapshot(request.callee_ref),
+            None => SummaryKey::Live(request.callee_ref),
+        })
+        .or_insert_with(|| {
+            callee.map_or_else(
+                || {
+                    module
+                        .func_store
+                        .try_view(request.callee_ref, compute_inlinee_summary)
+                        .unwrap_or_default()
+                },
+                compute_inlinee_summary,
+            )
+        });
 
     if !summary.has_body {
         return InlineDecision::Skip(InlineSkipReason::NoBody);

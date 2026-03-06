@@ -387,4 +387,18 @@ mod tests {
             assert_eq!(func.dfg.side_effect(call_inst), SideEffect::Read);
         });
     }
+
+    #[test]
+    fn set_func_hints_merges_bits() {
+        let builder = test_module_builder();
+        let sig = Signature::new("f", Linkage::Private, &[], Type::Unit);
+        let func_ref = builder.declare_function(sig).unwrap();
+
+        builder.ctx.set_func_hints(func_ref, FuncHints::NOINLINE);
+        builder.ctx.set_func_hints(func_ref, FuncHints::INLINEHINT);
+
+        let hints = builder.ctx.func_hints(func_ref);
+        assert!(hints.contains(FuncHints::NOINLINE));
+        assert!(hints.contains(FuncHints::INLINEHINT));
+    }
 }

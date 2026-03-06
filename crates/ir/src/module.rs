@@ -333,7 +333,12 @@ impl ModuleCtx {
     }
 
     pub fn set_func_hints(&self, func_ref: FuncRef, hints: FuncHints) {
-        self.func_hints.write().unwrap().insert(func_ref, hints);
+        self.func_hints
+            .write()
+            .unwrap()
+            .entry(func_ref)
+            .and_modify(|entry| *entry |= hints)
+            .or_insert(hints);
     }
 
     pub fn clear_func_hints(&self, func_ref: FuncRef) {
