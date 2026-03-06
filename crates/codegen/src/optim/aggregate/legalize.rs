@@ -1,5 +1,5 @@
 use cranelift_entity::SecondaryMap;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, Inst, InstId, Type, Value, ValueId,
@@ -14,24 +14,29 @@ use crate::{
     cfg_edit::CleanupMode, critical_edge::CriticalEdgeSplitter, optim::cfg_cleanup::CfgCleanup,
 };
 
-use super::{cleanup::remove_dead_pure_insts, shape};
+use super::{cleanup::remove_dead_pure_insts_with_current_users, shape};
 
 #[derive(Default)]
 pub struct AggregateLowerToMemoryLegalize {
     changed: bool,
     materialized_addr: SecondaryMap<ValueId, Option<ValueId>>,
+    shape_cache: FxHashMap<Type, shape::AggregateShape>,
+    runtime_leaf_cache: FxHashMap<Type, shape::RuntimeLeaves>,
 }
 
 #[derive(Default)]
 struct AggregateLegalizeScan {
     has_work: bool,
     has_agg_phi: bool,
+    candidates: SecondaryMap<BlockId, SmallVec<[InstId; 8]>>,
 }
 
 impl AggregateLowerToMemoryLegalize {
     pub fn run(&mut self, func: &mut Function, module: &ModuleCtx) -> bool {
         self.changed = false;
         self.materialized_addr.clear();
+        self.shape_cache.clear();
+        self.runtime_leaf_cache.clear();
         if func.layout.entry_block().is_none() {
             return false;
         }
@@ -44,12 +49,9 @@ impl AggregateLowerToMemoryLegalize {
         // Legalization uses `dfg.change_to_alias`, which requires up-to-date user sets.
         func.rebuild_users();
 
-        let split_edges = self.split_critical_edges_for_aggregate_phi(func, scan.has_agg_phi);
-
-        let blocks = aggregate_legalize_block_order(func);
+        let (blocks, split_edges) = self.prepare_legalize_block_order(func, scan.has_agg_phi);
         for block in blocks {
-            let insts: Vec<_> = func.layout.iter_inst(block).collect();
-            for inst in insts {
+            for &inst in &scan.candidates[block] {
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
                 }
@@ -58,41 +60,54 @@ impl AggregateLowerToMemoryLegalize {
         }
 
         if self.changed {
-            let removed_slots = self.remove_dead_materialized_slots(func);
-            let removed_pure = remove_dead_pure_insts(func);
-            let cleaned_cfg = split_edges.then(|| CfgCleanup::new(CleanupMode::Strict).run(func));
-            if removed_slots || removed_pure || cleaned_cfg == Some(true) {
-                self.changed = true;
-            }
-
-            if cleaned_cfg == Some(true) {
-                let removed_slots = self.remove_dead_materialized_slots(func);
-                let removed_pure = remove_dead_pure_insts(func);
-                if removed_slots || removed_pure {
-                    self.changed = true;
-                }
-            }
-            func.rebuild_users();
+            self.changed |= self.cleanup_legalized_artifacts(func, split_edges);
         }
         assert_aggregate_legalized(func, module);
         self.changed
     }
 
-    fn split_critical_edges_for_aggregate_phi(
+    fn prepare_legalize_block_order(
         &mut self,
         func: &mut Function,
         has_agg_phi: bool,
-    ) -> bool {
+    ) -> (SmallVec<[BlockId; 16]>, bool) {
+        let entry = func
+            .layout
+            .entry_block()
+            .expect("function must have entry block");
+        if func.layout.next_block_of(entry).is_none() {
+            return (smallvec![entry], false);
+        }
+
+        let mut cfg = ControlFlowGraph::new();
+        cfg.compute(func);
         if !has_agg_phi {
-            return false;
+            return (aggregate_legalize_block_order(func, &cfg), false);
         }
 
         let block_count = func.layout.iter_block().count();
-        let mut cfg = ControlFlowGraph::new();
-        cfg.compute(func);
         CriticalEdgeSplitter::new().run(func, &mut cfg);
         let changed = func.layout.iter_block().count() != block_count;
         self.changed |= changed;
+        (aggregate_legalize_block_order(func, &cfg), changed)
+    }
+
+    fn cleanup_legalized_artifacts(&self, func: &mut Function, split_edges: bool) -> bool {
+        // User sets stay current through legalization and CFG cleanup, so the cleanup
+        // phases can share the single rebuild done before rewriting starts.
+        let removed_slots = self.remove_dead_materialized_slots(func);
+        let removed_pure = remove_dead_pure_insts_with_current_users(func);
+        let mut changed = removed_slots || removed_pure;
+
+        if split_edges {
+            let cleaned_cfg = CfgCleanup::new(CleanupMode::Strict).run(func);
+            changed |= cleaned_cfg;
+            if cleaned_cfg {
+                changed |= self.remove_dead_materialized_slots(func);
+                changed |= remove_dead_pure_insts_with_current_users(func);
+            }
+        }
+
         changed
     }
 
@@ -122,13 +137,12 @@ impl AggregateLowerToMemoryLegalize {
     }
 
     fn single_word_leaf(
-        &self,
+        &mut self,
         module: &ModuleCtx,
         agg_ty: Type,
         ctx: &str,
     ) -> shape::AggregateLeaf {
-        let runtime_leaves = shape::aggregate_runtime_leaves(module, agg_ty)
-            .unwrap_or_else(|| panic!("unsupported aggregate type in legalizer: {agg_ty:?}"));
+        let runtime_leaves = self.runtime_leaves_or_panic(module, agg_ty);
         let [leaf] = runtime_leaves.as_slice() else {
             panic!(
                 "{ctx} bitcast requires single-leaf aggregate (got {})",
@@ -606,9 +620,30 @@ impl AggregateLowerToMemoryLegalize {
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
     }
 
-    fn shape_or_panic(&self, module: &ModuleCtx, ty: Type) -> shape::AggregateShape {
-        shape::aggregate_shape(module, ty)
-            .unwrap_or_else(|| panic!("unsupported aggregate type in legalizer: {ty:?}"))
+    fn shape_or_panic(&mut self, module: &ModuleCtx, ty: Type) -> shape::AggregateShape {
+        if let Some(shape) = self.shape_cache.get(&ty) {
+            return shape.clone();
+        }
+
+        let shape = shape::aggregate_shape(module, ty)
+            .unwrap_or_else(|| panic!("unsupported aggregate type in legalizer: {ty:?}"));
+        self.shape_cache.insert(ty, shape.clone());
+        shape
+    }
+
+    fn runtime_leaves_or_panic(&mut self, module: &ModuleCtx, ty: Type) -> shape::RuntimeLeaves {
+        if let Some(leaves) = self.runtime_leaf_cache.get(&ty) {
+            return leaves.clone();
+        }
+
+        let leaves: shape::RuntimeLeaves = self
+            .shape_or_panic(module, ty)
+            .leaves
+            .into_iter()
+            .filter(|leaf| leaf.size_bytes != 0)
+            .collect();
+        self.runtime_leaf_cache.insert(ty, leaves.clone());
+        leaves
     }
 
     fn array_elem_ty_or_panic(&self, module: &ModuleCtx, ty: Type, ctx: &str) -> Type {
@@ -619,19 +654,13 @@ impl AggregateLowerToMemoryLegalize {
     }
 
     fn aggregate_bitcast_leaf_layout(
-        &self,
+        &mut self,
         module: &ModuleCtx,
         from_ty: Type,
         to_ty: Type,
-    ) -> (Vec<shape::AggregateLeaf>, Vec<shape::AggregateLeaf>) {
-        let src_leaves: Vec<_> = shape::aggregate_runtime_leaves(module, from_ty)
-            .unwrap_or_else(|| panic!("unsupported aggregate type in legalizer: {from_ty:?}"))
-            .into_iter()
-            .collect();
-        let dst_leaves: Vec<_> = shape::aggregate_runtime_leaves(module, to_ty)
-            .unwrap_or_else(|| panic!("unsupported aggregate type in legalizer: {to_ty:?}"))
-            .into_iter()
-            .collect();
+    ) -> (shape::RuntimeLeaves, shape::RuntimeLeaves) {
+        let src_leaves = self.runtime_leaves_or_panic(module, from_ty);
+        let dst_leaves = self.runtime_leaves_or_panic(module, to_ty);
 
         if src_leaves.len() != dst_leaves.len() {
             panic!(
@@ -711,7 +740,7 @@ impl AggregateLowerToMemoryLegalize {
     }
 
     fn emit_copy_aggregate_ptr_to_ptr(
-        &self,
+        &mut self,
         func: &mut Function,
         module: &ModuleCtx,
         builder: &mut BeforeCursor,
@@ -905,7 +934,7 @@ impl AggregateLowerToMemoryLegalize {
     }
 
     fn rewrite_scalar_extract_from_aggregate_addr(
-        &self,
+        &mut self,
         func: &mut Function,
         module: &ModuleCtx,
         inst: InstId,
@@ -990,8 +1019,6 @@ impl AggregateLowerToMemoryLegalize {
     }
 
     fn remove_dead_materialized_slots(&self, func: &mut Function) -> bool {
-        func.rebuild_users();
-
         let slot_ptrs: Vec<_> = func
             .dfg
             .values
@@ -1205,23 +1232,32 @@ fn scan_aggregate_legalize_needs(func: &Function, module: &ModuleCtx) -> Aggrega
                     .inst_result(inst)
                     .map(|value| func.dfg.value_ty(value))
                     .unwrap_or(Type::Unit);
-                scan.has_work |= shape::is_supported_aggregate_ty(module, from_ty)
-                    || shape::is_supported_aggregate_ty(module, to_ty);
+                if shape::is_supported_aggregate_ty(module, from_ty)
+                    || shape::is_supported_aggregate_ty(module, to_ty)
+                {
+                    scan.has_work = true;
+                    scan.candidates[block].push(inst);
+                }
                 continue;
             }
 
             if downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst)).is_some() {
-                scan.has_work |= func.dfg.inst_result(inst).is_some_and(|value| {
+                if func.dfg.inst_result(inst).is_some_and(|value| {
                     shape::is_supported_aggregate_ty(module, func.dfg.value_ty(value))
-                });
+                }) {
+                    scan.has_work = true;
+                    scan.candidates[block].push(inst);
+                }
                 continue;
             }
 
             if let Some(extract) =
                 downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst))
             {
-                scan.has_work |=
-                    shape::is_supported_aggregate_ty(module, func.dfg.value_ty(*extract.dest()));
+                if shape::is_supported_aggregate_ty(module, func.dfg.value_ty(*extract.dest())) {
+                    scan.has_work = true;
+                    scan.candidates[block].push(inst);
+                }
                 continue;
             }
 
@@ -1229,18 +1265,27 @@ fn scan_aggregate_legalize_needs(func: &Function, module: &ModuleCtx) -> Aggrega
                 let has_agg_phi = func.dfg.inst_result(inst).is_some_and(|value| {
                     shape::is_supported_aggregate_ty(module, func.dfg.value_ty(value))
                 });
-                scan.has_work |= has_agg_phi;
-                scan.has_agg_phi |= has_agg_phi;
+                if has_agg_phi {
+                    scan.has_work = true;
+                    scan.has_agg_phi = true;
+                    scan.candidates[block].push(inst);
+                }
                 continue;
             }
 
             if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst)) {
-                scan.has_work |= shape::is_supported_aggregate_ty(module, *mload.ty());
+                if shape::is_supported_aggregate_ty(module, *mload.ty()) {
+                    scan.has_work = true;
+                    scan.candidates[block].push(inst);
+                }
                 continue;
             }
 
-            if let Some(mstore) = downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst)) {
-                scan.has_work |= shape::is_supported_aggregate_ty(module, *mstore.ty());
+            if let Some(mstore) = downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst))
+                && shape::is_supported_aggregate_ty(module, *mstore.ty())
+            {
+                scan.has_work = true;
+                scan.candidates[block].push(inst);
             }
         }
     }
@@ -1248,18 +1293,18 @@ fn scan_aggregate_legalize_needs(func: &Function, module: &ModuleCtx) -> Aggrega
     scan
 }
 
-fn aggregate_legalize_block_order(func: &Function) -> Vec<BlockId> {
-    let mut cfg = ControlFlowGraph::new();
-    cfg.compute(func);
-
-    let mut blocks = Vec::new();
+fn aggregate_legalize_block_order(
+    func: &Function,
+    cfg: &ControlFlowGraph,
+) -> SmallVec<[BlockId; 16]> {
+    let mut blocks = SmallVec::new();
     let mut seen = FxHashSet::default();
     if let Some(entry) = func.layout.entry_block() {
-        append_component_rpo(&cfg, entry, &mut seen, &mut blocks);
+        append_component_rpo(cfg, entry, &mut seen, &mut blocks);
     }
     for block in func.layout.iter_block() {
         if !seen.contains(&block) {
-            append_component_rpo(&cfg, block, &mut seen, &mut blocks);
+            append_component_rpo(cfg, block, &mut seen, &mut blocks);
         }
     }
 
@@ -1270,10 +1315,11 @@ fn append_component_rpo(
     cfg: &ControlFlowGraph,
     start: BlockId,
     seen: &mut FxHashSet<BlockId>,
-    blocks: &mut Vec<BlockId>,
+    blocks: &mut SmallVec<[BlockId; 16]>,
 ) {
-    let mut post_order = Vec::new();
-    let mut stack = vec![(start, false)];
+    let mut post_order = SmallVec::<[BlockId; 16]>::new();
+    let mut stack = SmallVec::<[(BlockId, bool); 16]>::new();
+    stack.push((start, false));
 
     while let Some((block, expanded)) = stack.pop() {
         if expanded {

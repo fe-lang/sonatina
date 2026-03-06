@@ -7,7 +7,10 @@ use sonatina_ir::{
 
 pub(crate) fn remove_dead_pure_insts(func: &mut Function) -> bool {
     func.rebuild_users();
+    remove_dead_pure_insts_with_current_users(func)
+}
 
+pub(crate) fn remove_dead_pure_insts_with_current_users(func: &mut Function) -> bool {
     let mut worklist = Vec::new();
     let mut queued = FxHashSet::default();
     let blocks: Vec<_> = func.layout.iter_block().collect();
