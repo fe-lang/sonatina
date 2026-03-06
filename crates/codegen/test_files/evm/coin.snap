@@ -12,8 +12,8 @@ object: Coin
   total: 1730 bytes
 
 object: Contract
-  section runtime: 2499 bytes
-  total: 2499 bytes
+  section runtime: 2467 bytes
+  total: 2467 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
@@ -71,7 +71,7 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=293504 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=272504
+  case ok: calldata_len=0 success reason=Return gas_used=293079 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=272079
 
 
 --------------- DEBUG ---------------

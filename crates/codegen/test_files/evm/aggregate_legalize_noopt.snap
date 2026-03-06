@@ -65,9 +65,9 @@ agg_noopt:
     DUP1  // v19.*i256 = gep v12 0.i64 0.i64;
     POP
     PUSH2 0x140 (320)
-    SWAP1  // mstore v19 v0 i256;
-    SWAP3
+    SWAP3  // mstore v19 v0 i256;
     SWAP1
+    SWAP3
     MSTORE
     DUP2  // v21.*i256 = gep v12 0.i64 0.i64;
     POP
