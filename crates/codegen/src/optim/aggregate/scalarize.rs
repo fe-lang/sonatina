@@ -341,12 +341,7 @@ impl AggregateScalarize {
                         && *mload.addr() == ptr
                     {
                         let ty = *mload.ty();
-                        let ok = if shape::is_supported_aggregate_ty(module, ty) {
-                            ty == projection.slice.ty
-                        } else {
-                            projection.slice.leaf_count == 1 && ty == projection.slice.ty
-                        };
-                        if !ok {
+                        if !projection_slice_can_view_as(module, projection.slice, ty) {
                             rejected = true;
                             break;
                         }
@@ -358,12 +353,7 @@ impl AggregateScalarize {
                         && *mstore.addr() == ptr
                     {
                         let ty = *mstore.ty();
-                        let ok = if shape::is_supported_aggregate_ty(module, ty) {
-                            ty == projection.slice.ty
-                        } else {
-                            projection.slice.leaf_count == 1 && ty == projection.slice.ty
-                        };
-                        if !ok {
+                        if !projection_slice_can_view_as(module, projection.slice, ty) {
                             rejected = true;
                             break;
                         }
@@ -1377,24 +1367,34 @@ fn bitcast_projection_slice(
     ptr_ty: Type,
 ) -> Option<shape::AggregateSlice> {
     let pointee_ty = module.with_ty_store(|s| s.deref(ptr_ty))?;
-    let from_leaf_tys = projection_view_leaf_tys(module, slice.ty)?;
-    let to_leaf_tys = projection_view_leaf_tys(module, pointee_ty)?;
-    (from_leaf_tys.len() == slice.leaf_count
+    projection_slice_can_view_as(module, slice, pointee_ty).then_some(shape::AggregateSlice {
+        ty: pointee_ty,
+        ..slice
+    })
+}
+
+fn projection_slice_can_view_as(
+    module: &sonatina_ir::module::ModuleCtx,
+    slice: shape::AggregateSlice,
+    view_ty: Type,
+) -> bool {
+    let Some(from_leaf_tys) = projection_view_leaf_tys(module, slice.ty) else {
+        return false;
+    };
+    let Some(to_leaf_tys) = projection_view_leaf_tys(module, view_ty) else {
+        return false;
+    };
+
+    from_leaf_tys.len() == slice.leaf_count
         && from_leaf_tys.len() == to_leaf_tys.len()
-        && (pointee_ty == slice.ty
+        && (view_ty == slice.ty
             || from_leaf_tys.len() == 1
                 && module.size_of_unchecked(from_leaf_tys[0])
                     == module.size_of_unchecked(to_leaf_tys[0])
             || shape::is_supported_aggregate_ty(module, slice.ty)
-                && shape::is_supported_aggregate_ty(module, pointee_ty)
-                && shape::compatible_aggregate_bitcast_runtime_leaves(
-                    module, slice.ty, pointee_ty,
-                )
-                .is_some()))
-    .then_some(shape::AggregateSlice {
-        ty: pointee_ty,
-        ..slice
-    })
+                && shape::is_supported_aggregate_ty(module, view_ty)
+                && shape::compatible_aggregate_bitcast_runtime_leaves(module, slice.ty, view_ty)
+                    .is_some())
 }
 
 fn aggregate_bitcast_is_scalarizable(

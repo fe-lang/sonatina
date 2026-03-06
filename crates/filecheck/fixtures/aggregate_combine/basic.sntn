@@ -103,6 +103,29 @@ func public %ac_insert_identical_field_maybe_undef(v0.i1, v1.@slice, v2.i256) ->
         return v6;
 }
 
+# sameln: func public %ac_loop_insert_identical_field_fully_initialized(v0.i1, v1.i256, v2.i256) -> @slice {
+# check:     block3:
+# check:         return v4;
+func public %ac_loop_insert_identical_field_fully_initialized(v0.i1, v1.i256, v2.i256) -> @slice {
+    block0:
+        v3.@slice = insert_value undef.@slice 0.i8 v1;
+        v4.@slice = insert_value v3 1.i8 v2;
+        jump block1;
+
+    block1:
+        v5.@slice = phi (v4 block0) (v8 block2);
+        v6.i256 = extract_value v5 1.i8;
+        br v0 block2 block3;
+
+    block2:
+        v8.@slice = insert_value v5 1.i8 v6;
+        jump block1;
+
+    block3:
+        v9.@slice = insert_value v5 1.i8 v6;
+        return v9;
+}
+
 # sameln: func public %ac_phi_extract(v0.i1, v1.@slice, v2.@slice) -> i256 {
 # check:     block3:
 # check:         phi (v1 block1) (v2 block2);

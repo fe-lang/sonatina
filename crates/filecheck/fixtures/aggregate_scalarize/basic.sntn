@@ -103,6 +103,17 @@ func public %scalarize_promote_root_bitcast_projection(v0.i256) -> i256 {
         return v3;
 }
 
+# sameln: func public %scalarize_promote_direct_root_scalar_view(v0.i256) -> i256 {
+# check:     block0:
+# check:         return v0;
+func public %scalarize_promote_direct_root_scalar_view(v0.i256) -> i256 {
+    block0:
+        v1.*@one = alloca @one;
+        mstore v1 v0 i256;
+        v2.i256 = mload v1 i256;
+        return v2;
+}
+
 # sameln: func public %scalarize_promote_aggregate_pointer_bitcast(v0.*i8) -> i256 {
 # check:     block0:
 # check:         v3.i256 = ptr_to_int v0 i256;
@@ -120,6 +131,24 @@ func public %scalarize_promote_aggregate_pointer_bitcast(v0.*i8) -> i256 {
         v6.*i8 = extract_value v5 0.i8;
         v7.i256 = ptr_to_int v6 i256;
         return v7;
+}
+
+# sameln: func public %scalarize_promote_direct_aggregate_view(v0.*i8) -> i256 {
+# check:     block0:
+# check:         v2.i256 = ptr_to_int v0 i256;
+# check:         bitcast v2 *i8;
+# check:         ptr_to_int
+# check:         return
+func public %scalarize_promote_direct_aggregate_view(v0.*i8) -> i256 {
+    block0:
+        v1.*@ptr_one = alloca @ptr_one;
+        v2.i256 = ptr_to_int v0 i256;
+        v3.@int_one = insert_value undef.@int_one 0.i8 v2;
+        mstore v1 v3 @int_one;
+        v4.@ptr_one = mload v1 @ptr_one;
+        v5.*i8 = extract_value v4 0.i8;
+        v6.i256 = ptr_to_int v5 i256;
+        return v6;
 }
 
 # sameln: func public %scalarize_promote_whole_load_store(v0.i256, v1.i256) -> i256 {

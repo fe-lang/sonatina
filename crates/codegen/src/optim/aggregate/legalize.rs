@@ -22,6 +22,12 @@ pub struct AggregateLowerToMemoryLegalize {
     materialized_addr: SecondaryMap<ValueId, Option<ValueId>>,
 }
 
+#[derive(Default)]
+struct AggregateLegalizeScan {
+    has_work: bool,
+    has_agg_phi: bool,
+}
+
 impl AggregateLowerToMemoryLegalize {
     pub fn run(&mut self, func: &mut Function, module: &ModuleCtx) -> bool {
         self.changed = false;
@@ -30,11 +36,15 @@ impl AggregateLowerToMemoryLegalize {
             return false;
         }
 
+        let scan = scan_aggregate_legalize_needs(func, module);
+        if !scan.has_work {
+            return false;
+        }
+
         // Legalization uses `dfg.change_to_alias`, which requires up-to-date user sets.
         func.rebuild_users();
 
-        self.validate_unsupported_boundaries(func, module);
-        self.split_critical_edges_for_aggregate_phi(func, module);
+        let split_edges = self.split_critical_edges_for_aggregate_phi(func, scan.has_agg_phi);
 
         let blocks = aggregate_legalize_block_order(func);
         for block in blocks {
@@ -48,14 +58,19 @@ impl AggregateLowerToMemoryLegalize {
         }
 
         if self.changed {
-            loop {
+            let removed_slots = self.remove_dead_materialized_slots(func);
+            let removed_pure = remove_dead_pure_insts(func);
+            let cleaned_cfg = split_edges.then(|| CfgCleanup::new(CleanupMode::Strict).run(func));
+            if removed_slots || removed_pure || cleaned_cfg == Some(true) {
+                self.changed = true;
+            }
+
+            if cleaned_cfg == Some(true) {
                 let removed_slots = self.remove_dead_materialized_slots(func);
                 let removed_pure = remove_dead_pure_insts(func);
-                let cleaned_cfg = CfgCleanup::new(CleanupMode::Strict).run(func);
-                if !removed_slots && !removed_pure && !cleaned_cfg {
-                    break;
+                if removed_slots || removed_pure {
+                    self.changed = true;
                 }
-                self.changed = true;
             }
             func.rebuild_users();
         }
@@ -63,59 +78,22 @@ impl AggregateLowerToMemoryLegalize {
         self.changed
     }
 
-    fn validate_unsupported_boundaries(&self, func: &Function, module: &ModuleCtx) {
-        for &arg in &func.arg_values {
-            let ty = func.dfg.value_ty(arg);
-            if shape::is_supported_aggregate_ty(module, ty) {
-                panic!("aggregate function arguments are unsupported before phase 3");
-            }
-        }
-
-        for block in func.layout.iter_block() {
-            for inst in func.layout.iter_inst(block) {
-                if let Some(call) =
-                    downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
-                {
-                    if call.args().iter().any(|&arg| {
-                        shape::is_supported_aggregate_ty(module, func.dfg.value_ty(arg))
-                    }) {
-                        panic!("aggregate call arguments are unsupported before phase 3");
-                    }
-                    if let Some(res) = func.dfg.inst_result(inst)
-                        && shape::is_supported_aggregate_ty(module, func.dfg.value_ty(res))
-                    {
-                        panic!("aggregate call results are unsupported before phase 3");
-                    }
-                }
-
-                if let Some(ret) =
-                    downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(inst))
-                    && let Some(arg) = ret.arg()
-                    && shape::is_supported_aggregate_ty(module, func.dfg.value_ty(*arg))
-                {
-                    panic!("aggregate return values are unsupported before phase 3");
-                }
-            }
-        }
-    }
-
-    fn split_critical_edges_for_aggregate_phi(&mut self, func: &mut Function, module: &ModuleCtx) {
-        let has_agg_phi = func.layout.iter_block().any(|block| {
-            func.layout.iter_inst(block).any(|inst| {
-                downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                    && func.dfg.inst_result(inst).is_some_and(|v| {
-                        shape::is_supported_aggregate_ty(module, func.dfg.value_ty(v))
-                    })
-            })
-        });
+    fn split_critical_edges_for_aggregate_phi(
+        &mut self,
+        func: &mut Function,
+        has_agg_phi: bool,
+    ) -> bool {
         if !has_agg_phi {
-            return;
+            return false;
         }
 
+        let block_count = func.layout.iter_block().count();
         let mut cfg = ControlFlowGraph::new();
         cfg.compute(func);
         CriticalEdgeSplitter::new().run(func, &mut cfg);
-        self.changed = true;
+        let changed = func.layout.iter_block().count() != block_count;
+        self.changed |= changed;
+        changed
     }
 
     fn create_temp_alloca(&mut self, func: &mut Function, ty: Type) -> ValueId {
@@ -563,17 +541,50 @@ impl AggregateLowerToMemoryLegalize {
             .inst_result(inst)
             .expect("aggregate mload must have result");
         let agg_ty = *mload.ty();
-        let dst_ptr = self.materialized_ptr(func, result, module);
+        let users: Vec<_> = func.dfg.users(result).copied().collect();
+        for user in users {
+            if !func.layout.is_inst_inserted(user) {
+                continue;
+            }
+            let Some(extract) =
+                downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(user))
+            else {
+                continue;
+            };
+            let extract = extract.clone();
+            if *extract.dest() != result {
+                continue;
+            }
+            let Some(extract_result) = func.dfg.inst_result(user) else {
+                continue;
+            };
+            if shape::is_supported_aggregate_ty(module, func.dfg.value_ty(extract_result)) {
+                continue;
+            }
+            self.rewrite_scalar_extract_from_aggregate_addr(
+                func,
+                module,
+                user,
+                &extract,
+                *mload.addr(),
+                agg_ty,
+            );
+        }
+
+        if !func
+            .dfg
+            .users(result)
+            .copied()
+            .any(|user| func.layout.is_inst_inserted(user))
+        {
+            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            return;
+        }
 
         let mut builder = BeforeCursor::new_before_inst(func, inst);
-        self.emit_copy_aggregate_ptr_to_ptr(
-            func,
-            module,
-            &mut builder,
-            *mload.addr(),
-            dst_ptr,
-            agg_ty,
-        );
+        let src_ptr = self.aggregate_addr_as_typed_ptr(func, &mut builder, *mload.addr(), agg_ty);
+        let dst_ptr = self.materialized_ptr(func, result, module);
+        self.emit_copy_aggregate_ptr_to_ptr(func, module, &mut builder, src_ptr, dst_ptr, agg_ty);
 
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
     }
@@ -583,12 +594,13 @@ impl AggregateLowerToMemoryLegalize {
             .expect("expected mstore");
         let agg_ty = *mstore.ty();
         let mut builder = BeforeCursor::new_before_inst(func, inst);
+        let dst_ptr = self.aggregate_addr_as_typed_ptr(func, &mut builder, *mstore.addr(), agg_ty);
         self.emit_copy_aggregate_value_to_ptr(
             func,
             module,
             &mut builder,
             *mstore.value(),
-            *mstore.addr(),
+            dst_ptr,
             agg_ty,
         );
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
@@ -863,6 +875,79 @@ impl AggregateLowerToMemoryLegalize {
         );
     }
 
+    fn aggregate_addr_as_typed_ptr(
+        &self,
+        func: &mut Function,
+        builder: &mut BeforeCursor,
+        addr: ValueId,
+        agg_ty: Type,
+    ) -> ValueId {
+        let ptr_ty = agg_ty.to_ptr(func.ctx());
+        let addr_ty = func.dfg.value_ty(addr);
+        if addr_ty == ptr_ty {
+            return addr;
+        }
+        if addr_ty.is_pointer(func.ctx()) {
+            return builder.insert_with_result(
+                func,
+                cast::Bitcast::new_unchecked(func.inst_set(), addr, ptr_ty),
+                ptr_ty,
+            );
+        }
+        if addr_ty.is_integral() {
+            return builder.insert_with_result(
+                func,
+                cast::IntToPtr::new_unchecked(func.inst_set(), addr, ptr_ty),
+                ptr_ty,
+            );
+        }
+        panic!("aggregate memory address must be integral or pointer (got {addr_ty:?})");
+    }
+
+    fn rewrite_scalar_extract_from_aggregate_addr(
+        &self,
+        func: &mut Function,
+        module: &ModuleCtx,
+        inst: InstId,
+        extract: &data::ExtractValue,
+        src_addr: ValueId,
+        src_agg_ty: Type,
+    ) {
+        let result = func
+            .dfg
+            .inst_result(inst)
+            .expect("extract_value must have result");
+        let result_ty = func.dfg.value_ty(result);
+        let mut builder = BeforeCursor::new_before_inst(func, inst);
+        let src_ptr = self.aggregate_addr_as_typed_ptr(func, &mut builder, src_addr, src_agg_ty);
+
+        let replacement = if let Some(idx) = shape::const_u32(&func.dfg, *extract.idx()) {
+            let slice = shape::aggregate_slice_for_index(module, src_agg_ty, idx)
+                .unwrap_or_else(|| panic!("extract_value index out of bounds"));
+            let src_shape = self.shape_or_panic(module, src_agg_ty);
+            let src_leaf = &src_shape.leaves[slice.first_leaf];
+            self.emit_load_scalar_from_path(
+                func,
+                &mut builder,
+                src_ptr,
+                &src_leaf.path,
+                src_leaf.ty,
+            )
+        } else {
+            let elem = self.array_elem_ty_or_panic(module, src_agg_ty, "extract_value");
+            if elem != result_ty {
+                panic!("extract_value result type mismatch for dynamic array index");
+            }
+            let elem_ptr =
+                self.emit_gep_array_element_ptr(func, &mut builder, src_ptr, *extract.idx(), elem);
+            self.emit_load_scalar_from_path(func, &mut builder, elem_ptr, &[], result_ty)
+        };
+        if func.dfg.value_ty(replacement) != result_ty {
+            panic!("extract_value type mismatch after aggregate load legalization");
+        }
+        self.alias_and_remove(func, inst, result, replacement);
+    }
+
     fn emit_gep_to_path(
         &self,
         func: &mut Function,
@@ -905,19 +990,25 @@ impl AggregateLowerToMemoryLegalize {
     }
 
     fn remove_dead_materialized_slots(&self, func: &mut Function) -> bool {
+        func.rebuild_users();
+
+        let slot_ptrs: Vec<_> = func
+            .dfg
+            .values
+            .keys()
+            .filter_map(|value| self.materialized_addr[value])
+            .filter(|&slot_ptr| {
+                func.dfg
+                    .value_inst(slot_ptr)
+                    .is_some_and(|inst| func.layout.is_inst_inserted(inst))
+            })
+            .collect();
         let mut changed = false;
 
         loop {
-            func.rebuild_users();
-            let slot_ptrs: Vec<_> = func
-                .dfg
-                .values
-                .keys()
-                .filter_map(|value| self.materialized_addr[value])
-                .collect();
             let mut removed_any = false;
 
-            for slot_ptr in slot_ptrs {
+            for &slot_ptr in &slot_ptrs {
                 let Some(mut insts) = self.collect_dead_materialized_slot_insts(func, slot_ptr)
                 else {
                     continue;
@@ -935,11 +1026,9 @@ impl AggregateLowerToMemoryLegalize {
             }
 
             if !removed_any {
-                break;
+                return changed;
             }
         }
-
-        changed
     }
 
     fn collect_dead_materialized_slot_insts(
@@ -1071,24 +1160,142 @@ impl BeforeCursor {
     }
 }
 
+fn scan_aggregate_legalize_needs(func: &Function, module: &ModuleCtx) -> AggregateLegalizeScan {
+    let mut scan = AggregateLegalizeScan::default();
+
+    for &arg in &func.arg_values {
+        let ty = func.dfg.value_ty(arg);
+        if shape::is_supported_aggregate_ty(module, ty) {
+            panic!("aggregate function arguments are unsupported before phase 3");
+        }
+    }
+
+    for block in func.layout.iter_block() {
+        for inst in func.layout.iter_inst(block) {
+            if let Some(call) =
+                downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+            {
+                if call
+                    .args()
+                    .iter()
+                    .any(|&arg| shape::is_supported_aggregate_ty(module, func.dfg.value_ty(arg)))
+                {
+                    panic!("aggregate call arguments are unsupported before phase 3");
+                }
+                if let Some(result) = func.dfg.inst_result(inst)
+                    && shape::is_supported_aggregate_ty(module, func.dfg.value_ty(result))
+                {
+                    panic!("aggregate call results are unsupported before phase 3");
+                }
+            }
+
+            if let Some(ret) =
+                downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(inst))
+                && let Some(arg) = ret.arg()
+                && shape::is_supported_aggregate_ty(module, func.dfg.value_ty(*arg))
+            {
+                panic!("aggregate return values are unsupported before phase 3");
+            }
+
+            if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst))
+            {
+                let from_ty = func.dfg.value_ty(*bitcast.from());
+                let to_ty = func
+                    .dfg
+                    .inst_result(inst)
+                    .map(|value| func.dfg.value_ty(value))
+                    .unwrap_or(Type::Unit);
+                scan.has_work |= shape::is_supported_aggregate_ty(module, from_ty)
+                    || shape::is_supported_aggregate_ty(module, to_ty);
+                continue;
+            }
+
+            if downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+                scan.has_work |= func.dfg.inst_result(inst).is_some_and(|value| {
+                    shape::is_supported_aggregate_ty(module, func.dfg.value_ty(value))
+                });
+                continue;
+            }
+
+            if let Some(extract) =
+                downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst))
+            {
+                scan.has_work |=
+                    shape::is_supported_aggregate_ty(module, func.dfg.value_ty(*extract.dest()));
+                continue;
+            }
+
+            if downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+                let has_agg_phi = func.dfg.inst_result(inst).is_some_and(|value| {
+                    shape::is_supported_aggregate_ty(module, func.dfg.value_ty(value))
+                });
+                scan.has_work |= has_agg_phi;
+                scan.has_agg_phi |= has_agg_phi;
+                continue;
+            }
+
+            if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst)) {
+                scan.has_work |= shape::is_supported_aggregate_ty(module, *mload.ty());
+                continue;
+            }
+
+            if let Some(mstore) = downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst)) {
+                scan.has_work |= shape::is_supported_aggregate_ty(module, *mstore.ty());
+            }
+        }
+    }
+
+    scan
+}
+
 fn aggregate_legalize_block_order(func: &Function) -> Vec<BlockId> {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(func);
 
-    let mut blocks: Vec<_> = cfg.post_order().collect();
-    blocks.reverse();
-
+    let mut blocks = Vec::new();
     let mut seen = FxHashSet::default();
-    for &block in &blocks {
-        seen.insert(block);
+    if let Some(entry) = func.layout.entry_block() {
+        append_component_rpo(&cfg, entry, &mut seen, &mut blocks);
     }
     for block in func.layout.iter_block() {
-        if seen.insert(block) {
-            blocks.push(block);
+        if !seen.contains(&block) {
+            append_component_rpo(&cfg, block, &mut seen, &mut blocks);
         }
     }
 
     blocks
+}
+
+fn append_component_rpo(
+    cfg: &ControlFlowGraph,
+    start: BlockId,
+    seen: &mut FxHashSet<BlockId>,
+    blocks: &mut Vec<BlockId>,
+) {
+    let mut post_order = Vec::new();
+    let mut stack = vec![(start, false)];
+
+    while let Some((block, expanded)) = stack.pop() {
+        if expanded {
+            post_order.push(block);
+            continue;
+        }
+        if !seen.insert(block) {
+            continue;
+        }
+
+        stack.push((block, true));
+        let mut succs: Vec<_> = cfg.succs_of(block).copied().collect();
+        succs.reverse();
+        for succ in succs {
+            if !seen.contains(&succ) {
+                stack.push((succ, false));
+            }
+        }
+    }
+
+    post_order.reverse();
+    blocks.extend(post_order);
 }
 
 fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
@@ -1502,5 +1709,57 @@ func private %f(v0.i256) -> i256 {
                 }
             }
         });
+    }
+
+    #[test]
+    fn late_legalizer_handles_raw_aggregate_addresses_and_scalar_extracts_without_temps() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @slice = { i256, i256 };
+
+func public %entry(v0.i256, v1.*i8) -> i256 {
+    block0:
+        v2.@slice = mload v0 @slice;
+        v3.i256 = extract_value v2 1.i8;
+        v4.@slice = mload v1 @slice;
+        v5.i256 = extract_value v4 0.i8;
+        v6.i256 = add v3 v5;
+        return v6;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "entry");
+        module.func_store.modify(func_ref, |func| {
+            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            assert_aggregate_legalized(func, &ctx);
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    assert!(
+                        downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                        "direct scalar extracts from aggregate loads should not materialize temps"
+                    );
+                }
+            }
+        });
+
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::MinimalRelax,
+            emit_symtab: false,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
+        };
+        compile_all_objects(&module, &test_backend(), &opts).expect("compile should succeed");
     }
 }
