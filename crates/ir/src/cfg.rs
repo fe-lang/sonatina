@@ -1,8 +1,9 @@
-use std::collections::BTreeSet;
-
 use cranelift_entity::{SecondaryMap, packed_option::PackedOption};
+use vec_collections::VecSet;
 
 use crate::{BlockId, Function};
+
+type BlockSet = VecSet<[BlockId; 4]>;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct ControlFlowGraph {
@@ -93,10 +94,19 @@ impl ControlFlowGraph {
     }
 }
 
-#[derive(Default, Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct BlockNode {
-    preds: BTreeSet<BlockId>,
-    succs: BTreeSet<BlockId>,
+    preds: BlockSet,
+    succs: BlockSet,
+}
+
+impl Default for BlockNode {
+    fn default() -> Self {
+        Self {
+            preds: VecSet::empty(),
+            succs: VecSet::empty(),
+        }
+    }
 }
 
 impl BlockNode {

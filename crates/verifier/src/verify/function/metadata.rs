@@ -98,12 +98,16 @@ impl FunctionVerifier<'_> {
             }
 
             for value_id in self.func.dfg.value_ids() {
-                let expected_users = expected.remove(&value_id).unwrap_or_default();
+                let expected_users: Vec<_> = expected
+                    .remove(&value_id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
                 let actual_users = self
                     .func
                     .dfg
                     .users_set(value_id)
-                    .cloned()
+                    .map(|users| users.to_vec())
                     .unwrap_or_default();
 
                 if actual_users != expected_users {
