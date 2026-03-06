@@ -7,7 +7,7 @@ use sonatina_ir::{
     inst::{cast, control_flow, data, downcast},
 };
 
-use super::{cleanup::remove_dead_pure_insts, promotion::SsaBuilder, shape};
+use super::{cleanup::DeadPureInstCleanup, promotion::SsaBuilder, shape};
 
 type LeafValues = SmallVec<[ValueId; 4]>;
 
@@ -27,11 +27,16 @@ struct PromotedAlloca {
 #[derive(Default)]
 pub struct AggregateScalarize {
     changed: bool,
+    dead_pure_cleanup: DeadPureInstCleanup,
+    shape_cache: FxHashMap<Type, shape::AggregateShape>,
+    runtime_leaf_cache: FxHashMap<Type, shape::RuntimeLeaves>,
 }
 
 impl AggregateScalarize {
     pub fn run(&mut self, func: &mut Function) -> bool {
         self.changed = false;
+        self.shape_cache.clear();
+        self.runtime_leaf_cache.clear();
         let module = func.ctx().clone();
         func.rebuild_users();
         self.assert_cfg_cleaned_up(func);
@@ -206,7 +211,7 @@ impl AggregateScalarize {
     }
 
     fn find_promotable_allocas(
-        &self,
+        &mut self,
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
     ) -> (
@@ -229,7 +234,7 @@ impl AggregateScalarize {
                 continue;
             };
             let ty = *alloca.ty();
-            let Some(shape) = shape::aggregate_shape(module, ty) else {
+            let Some(shape) = self.aggregate_shape(module, ty) else {
                 continue;
             };
             if shape.leaves.len() > 4 {
@@ -314,7 +319,7 @@ impl AggregateScalarize {
                         downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(user))
                         && *bitcast.from() == ptr
                         && let Some(result) = func.dfg.inst_result(user)
-                        && let Some(slice) = bitcast_projection_slice(
+                        && let Some(slice) = self.bitcast_projection_slice(
                             module,
                             projection.slice,
                             func.dfg.value_ty(result),
@@ -341,7 +346,7 @@ impl AggregateScalarize {
                         && *mload.addr() == ptr
                     {
                         let ty = *mload.ty();
-                        if !projection_slice_can_view_as(module, projection.slice, ty) {
+                        if !self.projection_slice_can_view_as(module, projection.slice, ty) {
                             rejected = true;
                             break;
                         }
@@ -353,7 +358,7 @@ impl AggregateScalarize {
                         && *mstore.addr() == ptr
                     {
                         let ty = *mstore.ty();
-                        if !projection_slice_can_view_as(module, projection.slice, ty) {
+                        if !self.projection_slice_can_view_as(module, projection.slice, ty) {
                             rejected = true;
                             break;
                         }
@@ -392,7 +397,7 @@ impl AggregateScalarize {
     }
 
     fn filter_promotable_allocas(
-        &self,
+        &mut self,
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
         promoted_allocas: &mut Vec<PromotedAlloca>,
@@ -425,7 +430,7 @@ impl AggregateScalarize {
     }
 
     fn promoted_alloca_can_scalarize(
-        &self,
+        &mut self,
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
         alloca_inst: InstId,
@@ -470,7 +475,7 @@ impl AggregateScalarize {
     }
 
     fn compute_scalarizable_aggregates(
-        &self,
+        &mut self,
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
         projection_of: &SecondaryMap<ValueId, Option<Projection>>,
@@ -500,7 +505,7 @@ impl AggregateScalarize {
                     } else if let Some(bitcast) =
                         downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(*inst))
                     {
-                        aggregate_bitcast_is_scalarizable(
+                        self.aggregate_bitcast_is_scalarizable(
                             module,
                             func.dfg.value_ty(*bitcast.from()),
                             ty,
@@ -549,7 +554,7 @@ impl AggregateScalarize {
     }
 
     fn scalarizable_definition_is_closed(
-        &self,
+        &mut self,
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
         projection_of: &SecondaryMap<ValueId, Option<Projection>>,
@@ -616,8 +621,11 @@ impl AggregateScalarize {
                     downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(*inst))
                 {
                     let from_ty = func.dfg.value_ty(*bitcast.from());
-                    if !aggregate_bitcast_is_scalarizable(module, from_ty, func.dfg.value_ty(value))
-                    {
+                    if !self.aggregate_bitcast_is_scalarizable(
+                        module,
+                        from_ty,
+                        func.dfg.value_ty(value),
+                    ) {
                         return false;
                     }
                     if shape::is_supported_aggregate_ty(module, from_ty) {
@@ -633,7 +641,7 @@ impl AggregateScalarize {
     }
 
     fn scalarizable_uses_are_closed(
-        &self,
+        &mut self,
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
         projection_of: &SecondaryMap<ValueId, Option<Projection>>,
@@ -703,7 +711,8 @@ impl AggregateScalarize {
                     return false;
                 };
                 let res_ty = func.dfg.value_ty(res);
-                if !aggregate_bitcast_is_scalarizable(module, func.dfg.value_ty(value), res_ty) {
+                if !self.aggregate_bitcast_is_scalarizable(module, func.dfg.value_ty(value), res_ty)
+                {
                     return false;
                 }
                 if shape::is_supported_aggregate_ty(module, res_ty) && !scalarizable[res] {
@@ -740,7 +749,8 @@ impl AggregateScalarize {
                     continue;
                 }
                 let agg_ty = func.dfg.value_ty(result);
-                let shape = shape::aggregate_shape(module, agg_ty)
+                let shape = self
+                    .aggregate_shape(module, agg_ty)
                     .unwrap_or_else(|| panic!("missing aggregate shape for scalarizable phi"));
 
                 let mut leaf_phis: LeafValues = SmallVec::new();
@@ -796,7 +806,7 @@ impl AggregateScalarize {
                 if !scalarizable[result] {
                     return;
                 }
-                let Some(view_leaf_tys) = projection_view_leaf_tys(module, ty) else {
+                let Some(view_leaf_tys) = self.projection_view_leaf_tys(module, ty) else {
                     return;
                 };
                 if view_leaf_tys.len() != underlying_leaves.len() {
@@ -854,7 +864,7 @@ impl AggregateScalarize {
             else {
                 return;
             };
-            let Some(view_leaf_tys) = projection_view_leaf_tys(module, ty) else {
+            let Some(view_leaf_tys) = self.projection_view_leaf_tys(module, ty) else {
                 return;
             };
             if payload_leaves.len() != projection.slice.leaf_count
@@ -916,7 +926,7 @@ impl AggregateScalarize {
                 return;
             }
             let Some((src_leaves, dst_leaves)) =
-                shape::compatible_aggregate_bitcast_runtime_leaves(module, from_ty, result_ty)
+                self.compatible_aggregate_bitcast_runtime_leaves(module, from_ty, result_ty)
             else {
                 return;
             };
@@ -957,8 +967,7 @@ impl AggregateScalarize {
             if !scalarizable[result] {
                 return;
             }
-            let Some(dst_leaf) = shape::aggregate_single_runtime_word_leaf(module, result_ty)
-            else {
+            let Some(dst_leaf) = self.aggregate_single_runtime_word_leaf(module, result_ty) else {
                 return;
             };
             let mut leaves = LeafValues::new();
@@ -983,7 +992,7 @@ impl AggregateScalarize {
             return;
         }
 
-        let Some(src_leaf) = shape::aggregate_single_runtime_word_leaf(module, from_ty) else {
+        let Some(src_leaf) = self.aggregate_single_runtime_word_leaf(module, from_ty) else {
             return;
         };
         let Some(source_leaves) =
@@ -1218,16 +1227,20 @@ impl AggregateScalarize {
     }
 
     fn cleanup_scalarized_artifacts(
-        &self,
+        &mut self,
         func: &mut Function,
         projection_of: &SecondaryMap<ValueId, Option<Projection>>,
         promoted_by_inst: &FxHashMap<InstId, PromotedAlloca>,
     ) -> bool {
         let mut changed = false;
         loop {
-            let removed_allocas =
-                self.cleanup_dead_promoted_allocas(func, projection_of, promoted_by_inst);
-            let removed_pure = remove_dead_pure_insts(func);
+            func.rebuild_users();
+            let removed_allocas = self.cleanup_dead_promoted_allocas_with_current_users(
+                func,
+                projection_of,
+                promoted_by_inst,
+            );
+            let removed_pure = self.dead_pure_cleanup.run_with_current_users(func);
             if !removed_allocas && !removed_pure {
                 return changed;
             }
@@ -1235,7 +1248,7 @@ impl AggregateScalarize {
         }
     }
 
-    fn cleanup_dead_promoted_allocas(
+    fn cleanup_dead_promoted_allocas_with_current_users(
         &self,
         func: &mut Function,
         projection_of: &SecondaryMap<ValueId, Option<Projection>>,
@@ -1244,17 +1257,15 @@ impl AggregateScalarize {
         if promoted_by_inst.is_empty() {
             return false;
         }
-        let promoted_insts: FxHashSet<InstId> = promoted_by_inst.keys().copied().collect();
         let mut changed = false;
 
         loop {
             let mut removed_any = false;
-            func.rebuild_users();
             for value in func.dfg.values.keys() {
                 let Some(projection) = projection_of[value] else {
                     continue;
                 };
-                if !promoted_insts.contains(&projection.alloca_inst) {
+                if !promoted_by_inst.contains_key(&projection.alloca_inst) {
                     continue;
                 }
                 let Some(inst) = func.dfg.value_inst(value) else {
@@ -1284,11 +1295,165 @@ impl AggregateScalarize {
                 return changed;
             }
             changed = true;
+            func.rebuild_users();
         }
     }
 
+    fn aggregate_shape(
+        &mut self,
+        module: &sonatina_ir::module::ModuleCtx,
+        ty: Type,
+    ) -> Option<shape::AggregateShape> {
+        if let Some(shape) = self.shape_cache.get(&ty) {
+            return Some(shape.clone());
+        }
+
+        let shape = shape::aggregate_shape(module, ty)?;
+        self.shape_cache.insert(ty, shape.clone());
+        Some(shape)
+    }
+
+    fn runtime_leaves(
+        &mut self,
+        module: &sonatina_ir::module::ModuleCtx,
+        ty: Type,
+    ) -> Option<shape::RuntimeLeaves> {
+        if let Some(leaves) = self.runtime_leaf_cache.get(&ty) {
+            return Some(leaves.clone());
+        }
+
+        let leaves: shape::RuntimeLeaves = self
+            .aggregate_shape(module, ty)?
+            .leaves
+            .into_iter()
+            .filter(|leaf| leaf.size_bytes != 0)
+            .collect();
+        self.runtime_leaf_cache.insert(ty, leaves.clone());
+        Some(leaves)
+    }
+
+    fn aggregate_single_runtime_word_leaf(
+        &mut self,
+        module: &sonatina_ir::module::ModuleCtx,
+        ty: Type,
+    ) -> Option<shape::AggregateLeaf> {
+        let runtime_leaves = self.runtime_leaves(module, ty)?;
+        let [leaf] = runtime_leaves.as_slice() else {
+            return None;
+        };
+        (leaf.size_bytes == 32).then(|| leaf.clone())
+    }
+
+    fn compatible_aggregate_bitcast_runtime_leaves(
+        &mut self,
+        module: &sonatina_ir::module::ModuleCtx,
+        from_ty: Type,
+        to_ty: Type,
+    ) -> Option<(shape::RuntimeLeaves, shape::RuntimeLeaves)> {
+        let src_leaves = self.runtime_leaves(module, from_ty)?;
+        let dst_leaves = self.runtime_leaves(module, to_ty)?;
+        if src_leaves.len() != dst_leaves.len() {
+            return None;
+        }
+
+        src_leaves
+            .iter()
+            .zip(&dst_leaves)
+            .all(|(src_leaf, dst_leaf)| {
+                src_leaf.offset_bytes == dst_leaf.offset_bytes
+                    && src_leaf.size_bytes == dst_leaf.size_bytes
+            })
+            .then_some((src_leaves, dst_leaves))
+    }
+
+    fn projection_view_leaf_tys(
+        &mut self,
+        module: &sonatina_ir::module::ModuleCtx,
+        ty: Type,
+    ) -> Option<SmallVec<[Type; 4]>> {
+        if shape::is_supported_aggregate_ty(module, ty) {
+            return Some(
+                self.aggregate_shape(module, ty)?
+                    .leaves
+                    .into_iter()
+                    .map(|leaf| leaf.ty)
+                    .collect(),
+            );
+        }
+        Some(smallvec![ty])
+    }
+
+    fn bitcast_projection_slice(
+        &mut self,
+        module: &sonatina_ir::module::ModuleCtx,
+        slice: shape::AggregateSlice,
+        ptr_ty: Type,
+    ) -> Option<shape::AggregateSlice> {
+        let pointee_ty = module.with_ty_store(|s| s.deref(ptr_ty))?;
+        self.projection_slice_can_view_as(module, slice, pointee_ty)
+            .then_some(shape::AggregateSlice {
+                ty: pointee_ty,
+                ..slice
+            })
+    }
+
+    fn projection_slice_can_view_as(
+        &mut self,
+        module: &sonatina_ir::module::ModuleCtx,
+        slice: shape::AggregateSlice,
+        view_ty: Type,
+    ) -> bool {
+        let Some(from_leaf_tys) = self.projection_view_leaf_tys(module, slice.ty) else {
+            return false;
+        };
+        let Some(to_leaf_tys) = self.projection_view_leaf_tys(module, view_ty) else {
+            return false;
+        };
+
+        from_leaf_tys.len() == slice.leaf_count
+            && from_leaf_tys.len() == to_leaf_tys.len()
+            && (view_ty == slice.ty
+                || from_leaf_tys.len() == 1
+                    && module.size_of_unchecked(from_leaf_tys[0])
+                        == module.size_of_unchecked(to_leaf_tys[0])
+                || shape::is_supported_aggregate_ty(module, slice.ty)
+                    && shape::is_supported_aggregate_ty(module, view_ty)
+                    && self
+                        .compatible_aggregate_bitcast_runtime_leaves(module, slice.ty, view_ty)
+                        .is_some())
+    }
+
+    fn aggregate_bitcast_is_scalarizable(
+        &mut self,
+        module: &sonatina_ir::module::ModuleCtx,
+        from_ty: Type,
+        to_ty: Type,
+    ) -> bool {
+        if module.size_of_unchecked(from_ty) != module.size_of_unchecked(to_ty) {
+            return false;
+        }
+        let from_is_agg = shape::is_supported_aggregate_ty(module, from_ty);
+        let to_is_agg = shape::is_supported_aggregate_ty(module, to_ty);
+        if from_is_agg && to_is_agg {
+            return self
+                .compatible_aggregate_bitcast_runtime_leaves(module, from_ty, to_ty)
+                .is_some();
+        }
+        if to_is_agg {
+            return self
+                .aggregate_single_runtime_word_leaf(module, to_ty)
+                .is_some();
+        }
+        if from_is_agg {
+            return self
+                .aggregate_single_runtime_word_leaf(module, from_ty)
+                .is_some();
+        }
+        false
+    }
+
     fn scalarized_leaves_of_value(
-        &self,
+        &mut self,
         func: &mut Function,
         module: &sonatina_ir::module::ModuleCtx,
         value: ValueId,
@@ -1300,7 +1465,7 @@ impl AggregateScalarize {
         }
 
         if is_explicit_undef(func, value) {
-            let agg_shape = shape::aggregate_shape(module, ty)?;
+            let agg_shape = self.aggregate_shape(module, ty)?;
             let mut leaves = LeafValues::new();
             for leaf in agg_shape.leaves {
                 leaves.push(func.dfg.make_undef_value(leaf.ty));
@@ -1314,22 +1479,6 @@ impl AggregateScalarize {
 
 fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
     matches!(func.dfg.value(value), Value::Undef { .. })
-}
-
-fn projection_view_leaf_tys(
-    module: &sonatina_ir::module::ModuleCtx,
-    ty: Type,
-) -> Option<SmallVec<[Type; 4]>> {
-    if shape::is_supported_aggregate_ty(module, ty) {
-        return Some(
-            shape::aggregate_shape(module, ty)?
-                .leaves
-                .into_iter()
-                .map(|leaf| leaf.ty)
-                .collect(),
-        );
-    }
-    Some(smallvec![ty])
 }
 
 fn bitcast_before_inst(
@@ -1359,65 +1508,6 @@ fn bitcast_before_inst(
     });
     cursor.attach_result(func, bitcast_inst, cast_value);
     cast_value
-}
-
-fn bitcast_projection_slice(
-    module: &sonatina_ir::module::ModuleCtx,
-    slice: shape::AggregateSlice,
-    ptr_ty: Type,
-) -> Option<shape::AggregateSlice> {
-    let pointee_ty = module.with_ty_store(|s| s.deref(ptr_ty))?;
-    projection_slice_can_view_as(module, slice, pointee_ty).then_some(shape::AggregateSlice {
-        ty: pointee_ty,
-        ..slice
-    })
-}
-
-fn projection_slice_can_view_as(
-    module: &sonatina_ir::module::ModuleCtx,
-    slice: shape::AggregateSlice,
-    view_ty: Type,
-) -> bool {
-    let Some(from_leaf_tys) = projection_view_leaf_tys(module, slice.ty) else {
-        return false;
-    };
-    let Some(to_leaf_tys) = projection_view_leaf_tys(module, view_ty) else {
-        return false;
-    };
-
-    from_leaf_tys.len() == slice.leaf_count
-        && from_leaf_tys.len() == to_leaf_tys.len()
-        && (view_ty == slice.ty
-            || from_leaf_tys.len() == 1
-                && module.size_of_unchecked(from_leaf_tys[0])
-                    == module.size_of_unchecked(to_leaf_tys[0])
-            || shape::is_supported_aggregate_ty(module, slice.ty)
-                && shape::is_supported_aggregate_ty(module, view_ty)
-                && shape::compatible_aggregate_bitcast_runtime_leaves(module, slice.ty, view_ty)
-                    .is_some())
-}
-
-fn aggregate_bitcast_is_scalarizable(
-    module: &sonatina_ir::module::ModuleCtx,
-    from_ty: Type,
-    to_ty: Type,
-) -> bool {
-    if module.size_of_unchecked(from_ty) != module.size_of_unchecked(to_ty) {
-        return false;
-    }
-    let from_is_agg = shape::is_supported_aggregate_ty(module, from_ty);
-    let to_is_agg = shape::is_supported_aggregate_ty(module, to_ty);
-    if from_is_agg && to_is_agg {
-        return shape::compatible_aggregate_bitcast_runtime_leaves(module, from_ty, to_ty)
-            .is_some();
-    }
-    if to_is_agg {
-        return shape::aggregate_single_runtime_word_leaf(module, to_ty).is_some();
-    }
-    if from_is_agg {
-        return shape::aggregate_single_runtime_word_leaf(module, from_ty).is_some();
-    }
-    false
 }
 
 fn trivial_phi_replacement(func: &mut Function, phi_inst: InstId) -> Option<ValueId> {

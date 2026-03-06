@@ -16,7 +16,21 @@ use crate::{
     cfg_edit::CleanupMode, critical_edge::CriticalEdgeSplitter, optim::cfg_cleanup::CfgCleanup,
 };
 
-use super::{cleanup::remove_dead_pure_insts_with_current_users, shape};
+use super::{cleanup::DeadPureInstCleanup, shape};
+
+#[derive(Clone)]
+enum AggregateAddrStep {
+    Const(u32),
+    Dynamic(ValueId),
+}
+
+#[derive(Clone)]
+struct AggregateAddrView {
+    root_addr: ValueId,
+    root_ty: Type,
+    agg_ty: Type,
+    steps: SmallVec<[AggregateAddrStep; 4]>,
+}
 
 #[derive(Default)]
 pub struct AggregateLowerToMemoryLegalize {
@@ -29,6 +43,7 @@ pub struct AggregateLowerToMemoryLegalize {
     slot_tree_queue: Vec<ValueId>,
     slot_tree_seen_insts: FxHashSet<InstId>,
     slot_tree_seen_values: FxHashSet<ValueId>,
+    dead_pure_cleanup: DeadPureInstCleanup,
 }
 
 #[derive(Default)]
@@ -108,7 +123,7 @@ impl AggregateLowerToMemoryLegalize {
         // User sets stay current through legalization and CFG cleanup, so the cleanup
         // phases can share the single rebuild done before rewriting starts.
         let removed_slots = self.remove_dead_materialized_slots(func);
-        let removed_pure = remove_dead_pure_insts_with_current_users(func);
+        let removed_pure = self.dead_pure_cleanup.run_with_current_users(func);
         let mut changed = removed_slots || removed_pure;
 
         if split_edges {
@@ -116,7 +131,7 @@ impl AggregateLowerToMemoryLegalize {
             changed |= cleaned_cfg;
             if cleaned_cfg {
                 changed |= self.remove_dead_materialized_slots(func);
-                changed |= remove_dead_pure_insts_with_current_users(func);
+                changed |= self.dead_pure_cleanup.run_with_current_users(func);
             }
         }
 
@@ -567,35 +582,7 @@ impl AggregateLowerToMemoryLegalize {
             .inst_result(inst)
             .expect("aggregate mload must have result");
         let agg_ty = *mload.ty();
-        let users: Vec<_> = func.dfg.users(result).copied().collect();
-        for user in users {
-            if !func.layout.is_inst_inserted(user) {
-                continue;
-            }
-            let Some(extract) =
-                downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(user))
-            else {
-                continue;
-            };
-            let extract = extract.clone();
-            if *extract.dest() != result {
-                continue;
-            }
-            let Some(extract_result) = func.dfg.inst_result(user) else {
-                continue;
-            };
-            if shape::is_supported_aggregate_ty(module, func.dfg.value_ty(extract_result)) {
-                continue;
-            }
-            self.rewrite_scalar_extract_from_aggregate_addr(
-                func,
-                module,
-                user,
-                &extract,
-                *mload.addr(),
-                agg_ty,
-            );
-        }
+        self.rewrite_extract_tree_from_aggregate_addr(func, module, result, *mload.addr(), agg_ty);
 
         if !func
             .dfg
@@ -613,6 +600,117 @@ impl AggregateLowerToMemoryLegalize {
         self.emit_copy_aggregate_ptr_to_ptr(func, module, &mut builder, src_ptr, dst_ptr, agg_ty);
 
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+    }
+
+    fn rewrite_extract_tree_from_aggregate_addr(
+        &mut self,
+        func: &mut Function,
+        module: &ModuleCtx,
+        root_value: ValueId,
+        src_addr: ValueId,
+        src_agg_ty: Type,
+    ) {
+        let mut views: SecondaryMap<ValueId, Option<AggregateAddrView>> = SecondaryMap::default();
+        let mut worklist = vec![root_value];
+        let mut aggregate_extracts = Vec::new();
+        views[root_value] = Some(AggregateAddrView {
+            root_addr: src_addr,
+            root_ty: src_agg_ty,
+            agg_ty: src_agg_ty,
+            steps: SmallVec::new(),
+        });
+
+        while let Some(value) = worklist.pop() {
+            let Some(view) = views[value].clone() else {
+                continue;
+            };
+            let users: Vec<_> = func.dfg.users(value).copied().collect();
+            for user in users {
+                if !func.layout.is_inst_inserted(user) {
+                    continue;
+                }
+                let Some(extract) =
+                    downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(user)).cloned()
+                else {
+                    continue;
+                };
+                if *extract.dest() != value {
+                    continue;
+                }
+                let Some(extract_result) = func.dfg.inst_result(user) else {
+                    continue;
+                };
+                let result_ty = func.dfg.value_ty(extract_result);
+                if shape::is_supported_aggregate_ty(module, result_ty) {
+                    let Some(child_view) = self
+                        .aggregate_addr_view_for_extract(func, module, &view, &extract, result_ty)
+                    else {
+                        continue;
+                    };
+                    views[extract_result] = Some(child_view);
+                    aggregate_extracts.push(user);
+                    worklist.push(extract_result);
+                    continue;
+                }
+
+                self.rewrite_scalar_extract_from_aggregate_view(
+                    func, module, user, &extract, &view,
+                );
+            }
+        }
+
+        for inst in aggregate_extracts.into_iter().rev() {
+            if !func.layout.is_inst_inserted(inst) {
+                continue;
+            }
+            let Some(result) = func.dfg.inst_result(inst) else {
+                continue;
+            };
+            if !func
+                .dfg
+                .users(result)
+                .copied()
+                .any(|user| func.layout.is_inst_inserted(user))
+            {
+                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            }
+        }
+    }
+
+    fn aggregate_addr_view_for_extract(
+        &self,
+        func: &Function,
+        module: &ModuleCtx,
+        view: &AggregateAddrView,
+        extract: &data::ExtractValue,
+        result_ty: Type,
+    ) -> Option<AggregateAddrView> {
+        let mut steps = view.steps.clone();
+        if let Some(idx) = shape::const_u32(&func.dfg, *extract.idx()) {
+            let slice = shape::aggregate_slice_for_index(module, view.agg_ty, idx)?;
+            if slice.ty != result_ty {
+                return None;
+            }
+            steps.push(AggregateAddrStep::Const(idx));
+            return Some(AggregateAddrView {
+                root_addr: view.root_addr,
+                root_ty: view.root_ty,
+                agg_ty: result_ty,
+                steps,
+            });
+        }
+
+        let elem = self.array_elem_ty_or_panic(module, view.agg_ty, "extract_value");
+        if elem != result_ty {
+            return None;
+        }
+        steps.push(AggregateAddrStep::Dynamic(*extract.idx()));
+        Some(AggregateAddrView {
+            root_addr: view.root_addr,
+            root_ty: view.root_ty,
+            agg_ty: result_ty,
+            steps,
+        })
     }
 
     fn rewrite_aggregate_mstore(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) {
@@ -946,14 +1044,43 @@ impl AggregateLowerToMemoryLegalize {
         panic!("aggregate memory address must be integral or pointer (got {addr_ty:?})");
     }
 
-    fn rewrite_scalar_extract_from_aggregate_addr(
+    fn aggregate_addr_view_as_typed_ptr(
+        &self,
+        func: &mut Function,
+        builder: &mut BeforeCursor,
+        module: &ModuleCtx,
+        view: &AggregateAddrView,
+    ) -> ValueId {
+        let mut ptr = self.aggregate_addr_as_typed_ptr(func, builder, view.root_addr, view.root_ty);
+        let mut current_ty = view.root_ty;
+        for step in &view.steps {
+            match step {
+                AggregateAddrStep::Const(idx) => {
+                    let slice = shape::aggregate_slice_for_index(module, current_ty, *idx)
+                        .unwrap_or_else(|| panic!("extract_value index out of bounds"));
+                    ptr = self.emit_gep_to_path(func, builder, ptr, &[*idx], slice.ty);
+                    current_ty = slice.ty;
+                }
+                AggregateAddrStep::Dynamic(idx_value) => {
+                    let elem = self.array_elem_ty_or_panic(module, current_ty, "extract_value");
+                    ptr = self.emit_gep_array_element_ptr(func, builder, ptr, *idx_value, elem);
+                    current_ty = elem;
+                }
+            }
+        }
+        if current_ty != view.agg_ty {
+            panic!("aggregate address view type mismatch during legalization");
+        }
+        ptr
+    }
+
+    fn rewrite_scalar_extract_from_aggregate_view(
         &mut self,
         func: &mut Function,
         module: &ModuleCtx,
         inst: InstId,
         extract: &data::ExtractValue,
-        src_addr: ValueId,
-        src_agg_ty: Type,
+        view: &AggregateAddrView,
     ) {
         let result = func
             .dfg
@@ -961,12 +1088,11 @@ impl AggregateLowerToMemoryLegalize {
             .expect("extract_value must have result");
         let result_ty = func.dfg.value_ty(result);
         let mut builder = BeforeCursor::new_before_inst(func, inst);
-        let src_ptr = self.aggregate_addr_as_typed_ptr(func, &mut builder, src_addr, src_agg_ty);
-
+        let src_ptr = self.aggregate_addr_view_as_typed_ptr(func, &mut builder, module, view);
         let replacement = if let Some(idx) = shape::const_u32(&func.dfg, *extract.idx()) {
-            let slice = shape::aggregate_slice_for_index(module, src_agg_ty, idx)
+            let slice = shape::aggregate_slice_for_index(module, view.agg_ty, idx)
                 .unwrap_or_else(|| panic!("extract_value index out of bounds"));
-            let src_shape = self.shape_or_panic(module, src_agg_ty);
+            let src_shape = self.shape_or_panic(module, view.agg_ty);
             let src_leaf = &src_shape.leaves[slice.first_leaf];
             self.emit_load_scalar_from_path(
                 func,
@@ -976,7 +1102,7 @@ impl AggregateLowerToMemoryLegalize {
                 src_leaf.ty,
             )
         } else {
-            let elem = self.array_elem_ty_or_panic(module, src_agg_ty, "extract_value");
+            let elem = self.array_elem_ty_or_panic(module, view.agg_ty, "extract_value");
             if elem != result_ty {
                 panic!("extract_value result type mismatch for dynamic array index");
             }
@@ -1810,6 +1936,57 @@ object @Contract {
                     assert!(
                         downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none(),
                         "direct scalar extracts from aggregate loads should not materialize temps"
+                    );
+                }
+            }
+        });
+
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::MinimalRelax,
+            emit_symtab: false,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
+        };
+        compile_all_objects(&module, &test_backend(), &opts).expect("compile should succeed");
+    }
+
+    #[test]
+    fn late_legalizer_sinks_nested_scalar_extracts_from_raw_aggregate_addresses() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @inner = { i256, i256 };
+type @outer = { @inner, i256 };
+
+func public %entry(v0.i256) -> i256 {
+    block0:
+        v1.@outer = mload v0 @outer;
+        v2.@inner = extract_value v1 0.i8;
+        v3.i256 = extract_value v2 1.i8;
+        return v3;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "entry");
+        module.func_store.modify(func_ref, |func| {
+            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            assert_aggregate_legalized(func, &ctx);
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    assert!(
+                        downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                        "nested scalar extracts from aggregate loads should not materialize temps"
                     );
                 }
             }

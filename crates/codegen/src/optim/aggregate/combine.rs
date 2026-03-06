@@ -45,9 +45,6 @@ impl AggregateCombine {
             func.rebuild_users();
         }
 
-        if self.changed {
-            func.rebuild_users();
-        }
         self.changed
     }
 
