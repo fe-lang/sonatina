@@ -238,17 +238,17 @@ fn has_noreturn_call(
 }
 
 fn compute_local_facts(func: &Function) -> LocalFacts {
-    let Some(entry) = func.layout.entry_block() else {
+    if func.layout.entry_block().is_none() {
         return LocalFacts {
             has_body: false,
             ..Default::default()
         };
-    };
+    }
 
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(func);
 
-    let reachable = compute_reachable(&cfg, entry);
+    let reachable = cfg.reachable_blocks();
 
     let mut cfg_scc = CfgSccAnalysis::new();
     cfg_scc.compute(&cfg);
@@ -262,7 +262,7 @@ fn compute_local_facts(func: &Function) -> LocalFacts {
     let mut callees = FxHashSet::default();
 
     for block in func.layout.iter_block() {
-        if !reachable.contains(&block) {
+        if !reachable[block] {
             continue;
         }
 
@@ -289,7 +289,7 @@ fn compute_local_facts(func: &Function) -> LocalFacts {
     let mut has_any_return_like_exit = false;
 
     for &exit in &cfg.exits {
-        if !reachable.contains(&exit) {
+        if !reachable[exit] {
             continue;
         }
         reachable_exit_count += 1;
@@ -318,22 +318,6 @@ fn compute_local_facts(func: &Function) -> LocalFacts {
         exits_all_terminate_like,
         has_any_return_like_exit,
     }
-}
-
-fn compute_reachable(cfg: &ControlFlowGraph, entry: BlockId) -> BTreeSet<BlockId> {
-    let mut reachable = BTreeSet::new();
-    let mut stack = vec![entry];
-
-    while let Some(block) = stack.pop() {
-        if !reachable.insert(block) {
-            continue;
-        }
-        for &succ in cfg.succs_of(block) {
-            stack.push(succ);
-        }
-    }
-
-    reachable
 }
 
 fn topo_sort_sccs(

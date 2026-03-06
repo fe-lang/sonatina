@@ -1,5 +1,4 @@
-use std::collections::BTreeSet;
-
+use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
@@ -7,7 +6,7 @@ use sonatina_ir::{
     module::FuncAttrs,
 };
 
-use crate::cfg_edit::{CfgEditor, CleanupMode, prune_phi_to_preds};
+use crate::cfg_edit::{CfgEditor, CleanupMode};
 
 pub struct CfgCleanup {
     mode: CleanupMode,
@@ -19,9 +18,9 @@ impl CfgCleanup {
     }
 
     pub fn run(&mut self, func: &mut Function) -> bool {
-        let Some(entry) = func.layout.entry_block() else {
+        if func.layout.entry_block().is_none() {
             return false;
-        };
+        }
 
         let mut editor = CfgEditor::new(func, self.mode);
 
@@ -32,7 +31,7 @@ impl CfgCleanup {
             editor.recompute_cfg();
         }
 
-        let reachable = compute_reachable(editor.cfg(), entry);
+        let reachable = editor.cfg().reachable_blocks();
         let pruned_unreachable = prune_unreachable(editor.func_mut(), &reachable);
         changed |= pruned_unreachable;
         if pruned_unreachable {
@@ -42,9 +41,7 @@ impl CfgCleanup {
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();
         for block in blocks {
             assert_phis_leading(editor.func(), block);
-
-            let preds: BTreeSet<_> = editor.cfg().preds_of(block).copied().collect();
-            changed |= prune_phi_to_preds(editor.func_mut(), block, &preds, self.mode);
+            changed |= editor.prune_phi_to_current_preds(block);
             changed |= crate::cfg_edit::simplify_trivial_phis_in_block(editor.func_mut(), block);
         }
 
@@ -54,9 +51,7 @@ impl CfgCleanup {
             let blocks: Vec<_> = editor.func().layout.iter_block().collect();
             for block in blocks {
                 assert_phis_leading(editor.func(), block);
-
-                let preds: BTreeSet<_> = editor.cfg().preds_of(block).copied().collect();
-                changed |= prune_phi_to_preds(editor.func_mut(), block, &preds, self.mode);
+                changed |= editor.prune_phi_to_current_preds(block);
                 changed |=
                     crate::cfg_edit::simplify_trivial_phis_in_block(editor.func_mut(), block);
             }
@@ -138,32 +133,15 @@ fn trim_after_noreturn_call(func: &mut Function) -> bool {
     changed
 }
 
-fn compute_reachable(cfg: &ControlFlowGraph, entry: BlockId) -> BTreeSet<BlockId> {
-    let mut reachable = BTreeSet::new();
-    let mut stack = vec![entry];
-
-    while let Some(block) = stack.pop() {
-        if !reachable.insert(block) {
-            continue;
-        }
-        for &succ in cfg.succs_of(block) {
-            stack.push(succ);
-        }
-    }
-
-    reachable
-}
-
-fn prune_unreachable(func: &mut Function, reachable: &BTreeSet<BlockId>) -> bool {
-    let blocks: Vec<_> = func
-        .layout
-        .iter_block()
-        .filter(|block| !reachable.contains(block))
-        .collect();
+fn prune_unreachable(func: &mut Function, reachable: &SecondaryMap<BlockId, bool>) -> bool {
+    let blocks: Vec<_> = func.layout.iter_block().collect();
     let mut changed = false;
     let mut editor = CfgEditor::new(func, CleanupMode::RepairWithUndef);
 
     for block in blocks {
+        if reachable[block] {
+            continue;
+        }
         changed |= editor.delete_block_unreachable(block);
     }
 
@@ -257,7 +235,7 @@ fn assert_ir_invariants(func: &Function, cfg: &ControlFlowGraph) {
 
         assert_phis_leading(func, block);
 
-        let preds: BTreeSet<_> = cfg.preds_of(block).copied().collect();
+        let preds = cfg.preds_as_slice(block);
         let mut next_inst = func.layout.first_inst_of(block);
         while let Some(inst) = next_inst {
             next_inst = func.layout.next_inst_of(inst);
@@ -265,14 +243,20 @@ fn assert_ir_invariants(func: &Function, cfg: &ControlFlowGraph) {
                 break;
             };
 
-            let mut seen = BTreeSet::new();
+            let mut seen = Vec::with_capacity(phi.args().len());
             for &(_, pred) in phi.args() {
-                assert!(seen.insert(pred), "phi {inst:?} has duplicate {pred:?}");
-                assert!(preds.contains(&pred), "phi {inst:?} has stale {pred:?}");
+                assert!(!seen.contains(&pred), "phi {inst:?} has duplicate {pred:?}");
+                assert!(
+                    preds.binary_search(&pred).is_ok(),
+                    "phi {inst:?} has stale {pred:?}"
+                );
+                seen.push(pred);
             }
+            seen.sort_unstable();
 
             assert_eq!(
-                seen, preds,
+                seen.as_slice(),
+                preds,
                 "phi {inst:?} incoming set does not match predecessors"
             );
         }

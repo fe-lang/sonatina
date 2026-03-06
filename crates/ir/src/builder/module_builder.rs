@@ -198,10 +198,18 @@ impl ModuleBuilder {
 #[cfg(test)]
 mod tests {
     use rustc_hash::FxHashMap;
+    use smallvec::smallvec;
 
     use super::*;
     use crate::{
-        Linkage, ObjectName, builder::test_util::test_module_builder, module::FuncAttrs,
+        Linkage, ObjectName,
+        builder::test_util::{test_isa, test_module_builder},
+        inst::{
+            SideEffect,
+            control_flow::{Call, Return},
+        },
+        isa::Isa,
+        module::FuncAttrs,
         types::Type,
     };
 
@@ -302,5 +310,75 @@ mod tests {
         let new_ref = builder.declare_function(new_sig).unwrap();
         assert_eq!(new_ref, refs[3]);
         assert!(!builder.ctx.has_func_attrs(new_ref));
+    }
+
+    #[test]
+    fn test_call_side_effect_cache_tracks_attr_updates() {
+        let builder = test_module_builder();
+        let callee = builder
+            .declare_function(Signature::new("callee", Linkage::Private, &[], Type::Unit))
+            .unwrap();
+        let caller = builder
+            .declare_function(Signature::new("caller", Linkage::Private, &[], Type::Unit))
+            .unwrap();
+
+        let evm = test_isa();
+        let is = evm.inst_set();
+        let mut func_builder = builder.func_builder::<crate::func_cursor::InstInserter>(caller);
+        let entry = func_builder.append_block();
+        func_builder.switch_to_block(entry);
+        func_builder.insert_inst_no_result_with(|| {
+            Call::new(
+                is.has_call().expect("target ISA must support `call`"),
+                callee,
+                smallvec![],
+            )
+        });
+        func_builder.insert_inst_no_result_with(|| Return::new(is, None));
+        func_builder.seal_all();
+        func_builder.finish();
+
+        let module = builder.build();
+        let call_inst = module.func_store.view(caller, |func| {
+            func.layout
+                .iter_inst(entry)
+                .find(|&inst| func.dfg.cast_call(inst).is_some())
+                .expect("caller must contain a call")
+        });
+
+        module.func_store.view(caller, |func| {
+            assert_eq!(func.dfg.side_effect(call_inst), SideEffect::Control);
+        });
+
+        module
+            .ctx
+            .set_func_attrs(callee, FuncAttrs::WILLRETURN | FuncAttrs::MEM_READ);
+        module.func_store.view(caller, |func| {
+            assert_eq!(func.dfg.side_effect(call_inst), SideEffect::Read);
+        });
+
+        module
+            .ctx
+            .set_func_attrs(callee, FuncAttrs::WILLRETURN | FuncAttrs::MEM_WRITE);
+        module.func_store.view(caller, |func| {
+            assert_eq!(func.dfg.side_effect(call_inst), SideEffect::Write);
+        });
+
+        module.ctx.set_func_attrs(callee, FuncAttrs::WILLRETURN);
+        module.func_store.view(caller, |func| {
+            assert_eq!(func.dfg.side_effect(call_inst), SideEffect::None);
+        });
+
+        module.ctx.clear_func_attrs(callee);
+        module.func_store.view(caller, |func| {
+            assert_eq!(func.dfg.side_effect(call_inst), SideEffect::Control);
+        });
+
+        let mut attrs = FxHashMap::default();
+        attrs.insert(callee, FuncAttrs::WILLRETURN | FuncAttrs::MEM_READ);
+        module.ctx.set_all_func_attrs(attrs);
+        module.func_store.view(caller, |func| {
+            assert_eq!(func.dfg.side_effect(call_inst), SideEffect::Read);
+        });
     }
 }

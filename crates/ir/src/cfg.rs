@@ -33,8 +33,16 @@ impl ControlFlowGraph {
         self.blocks[block].preds()
     }
 
+    pub fn preds_as_slice(&self, block: BlockId) -> &[BlockId] {
+        self.blocks[block].preds_slice()
+    }
+
     pub fn succs_of(&self, block: BlockId) -> impl Iterator<Item = &BlockId> {
         self.blocks[block].succs()
+    }
+
+    pub fn succs_as_slice(&self, block: BlockId) -> &[BlockId] {
+        self.blocks[block].succs_slice()
     }
 
     pub fn pred_num_of(&self, block: BlockId) -> usize {
@@ -51,6 +59,30 @@ impl ControlFlowGraph {
 
     pub fn post_order(&self) -> CfgPostOrder<'_> {
         CfgPostOrder::new(self)
+    }
+
+    pub fn reachable_blocks(&self) -> SecondaryMap<BlockId, bool> {
+        let mut reachable = SecondaryMap::default();
+        let Some(entry) = self.entry() else {
+            return reachable;
+        };
+
+        let mut stack = vec![entry];
+        while let Some(block) = stack.pop() {
+            if reachable[block] {
+                continue;
+            }
+
+            reachable[block] = true;
+            stack.extend(
+                self.succs_as_slice(block)
+                    .iter()
+                    .copied()
+                    .filter(|succ| !reachable[*succ]),
+            );
+        }
+
+        reachable
     }
 
     pub fn add_edge(&mut self, from: BlockId, to: BlockId) {
@@ -150,8 +182,16 @@ impl BlockNode {
         self.preds.iter()
     }
 
+    fn preds_slice(&self) -> &[BlockId] {
+        self.preds.as_ref()
+    }
+
     fn succs(&self) -> impl Iterator<Item = &BlockId> {
         self.succs.iter()
+    }
+
+    fn succs_slice(&self) -> &[BlockId] {
+        self.succs.as_ref()
     }
 
     fn pred_num(&self) -> usize {

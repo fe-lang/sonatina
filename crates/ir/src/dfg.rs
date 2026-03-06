@@ -15,7 +15,7 @@ use crate::{
         control_flow::{self, BranchInfo, CallInfo, Jump, Phi},
     },
     ir_writer::{FuncWriteCtx, IrWrite},
-    module::{FuncAttrs, ModuleCtx},
+    module::ModuleCtx,
 };
 
 type UserSet = VecSet<[InstId; 2]>;
@@ -587,24 +587,14 @@ impl DataFlowGraph {
     }
 
     pub fn side_effect(&self, inst_id: InstId) -> SideEffect {
-        if let Some(call_info) = self.call_info(inst_id) {
-            let callee = call_info.callee();
-            let attrs = self.ctx.func_attrs(callee);
-
-            if attrs.contains(FuncAttrs::NORETURN) || !attrs.contains(FuncAttrs::WILLRETURN) {
-                return SideEffect::Control;
-            }
-
-            if attrs.contains(FuncAttrs::MEM_WRITE) {
-                SideEffect::Write
-            } else if attrs.contains(FuncAttrs::MEM_READ) {
-                SideEffect::Read
-            } else {
-                SideEffect::None
-            }
-        } else {
-            self.inst(inst_id).side_effect()
+        let side_effect = self.inst(inst_id).side_effect();
+        if side_effect != SideEffect::Write {
+            return side_effect;
         }
+
+        self.cast_call(inst_id).map_or(side_effect, |call| {
+            self.ctx.call_side_effect(*call.callee())
+        })
     }
 
     pub fn is_branch(&self, inst_id: InstId) -> bool {

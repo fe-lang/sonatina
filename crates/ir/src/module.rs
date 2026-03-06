@@ -10,6 +10,7 @@ use sonatina_triple::TargetTriple;
 use crate::{
     Function, InstSetBase, Linkage, Signature, Type,
     global_variable::GlobalVariableStore,
+    inst::SideEffect,
     ir_writer::IrWrite,
     isa::{Endian, Isa, TypeLayout, TypeLayoutError},
     object::Object,
@@ -164,6 +165,7 @@ pub struct ModuleCtx {
     pub type_layout: &'static dyn TypeLayout,
     pub declared_funcs: Arc<DashMap<FuncRef, Signature>>,
     func_attrs: Arc<RwLock<FxHashMap<FuncRef, FuncAttrs>>>,
+    call_side_effects: Arc<RwLock<FxHashMap<FuncRef, SideEffect>>>,
     type_store: Arc<RwLock<TypeStore>>,
     gv_store: Arc<RwLock<GlobalVariableStore>>,
 }
@@ -182,6 +184,7 @@ impl ModuleCtx {
             type_store: Arc::new(RwLock::new(TypeStore::default())),
             declared_funcs: Arc::new(DashMap::new()),
             func_attrs: Arc::new(RwLock::new(FxHashMap::default())),
+            call_side_effects: Arc::new(RwLock::new(FxHashMap::default())),
             gv_store: Arc::new(RwLock::new(GlobalVariableStore::default())),
         }
     }
@@ -233,15 +236,33 @@ impl ModuleCtx {
     }
 
     pub fn set_all_func_attrs(&self, new: FxHashMap<FuncRef, FuncAttrs>) {
+        *self.call_side_effects.write().unwrap() = new
+            .iter()
+            .map(|(&func_ref, &attrs)| (func_ref, attrs_to_call_side_effect(attrs)))
+            .collect();
         *self.func_attrs.write().unwrap() = new;
     }
 
     pub fn set_func_attrs(&self, func_ref: FuncRef, attrs: FuncAttrs) {
+        self.call_side_effects
+            .write()
+            .unwrap()
+            .insert(func_ref, attrs_to_call_side_effect(attrs));
         self.func_attrs.write().unwrap().insert(func_ref, attrs);
     }
 
     pub fn clear_func_attrs(&self, func_ref: FuncRef) {
+        self.call_side_effects.write().unwrap().remove(&func_ref);
         self.func_attrs.write().unwrap().remove(&func_ref);
+    }
+
+    pub fn call_side_effect(&self, func_ref: FuncRef) -> SideEffect {
+        self.call_side_effects
+            .read()
+            .unwrap()
+            .get(&func_ref)
+            .copied()
+            .unwrap_or_else(|| attrs_to_call_side_effect(FuncAttrs::empty()))
     }
 
     /// Updated the function signature with the given linkage.
@@ -286,6 +307,18 @@ impl ModuleCtx {
         F: FnOnce(&mut GlobalVariableStore) -> R,
     {
         f(&mut self.gv_store.write().unwrap())
+    }
+}
+
+fn attrs_to_call_side_effect(attrs: FuncAttrs) -> SideEffect {
+    if attrs.contains(FuncAttrs::NORETURN) || !attrs.contains(FuncAttrs::WILLRETURN) {
+        SideEffect::Control
+    } else if attrs.contains(FuncAttrs::MEM_WRITE) {
+        SideEffect::Write
+    } else if attrs.contains(FuncAttrs::MEM_READ) {
+        SideEffect::Read
+    } else {
+        SideEffect::None
     }
 }
 

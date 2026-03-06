@@ -173,6 +173,11 @@ impl<'f> CfgEditor<'f> {
         self.remove_succ(from, to)
     }
 
+    pub fn prune_phi_to_current_preds(&mut self, block: BlockId) -> bool {
+        let preds = self.cfg.preds_as_slice(block);
+        prune_phi_to_preds(self.func, block, preds, self.mode)
+    }
+
     pub fn split_block_at(&mut self, at: InstId) -> (BlockId, BlockId) {
         assert!(self.func.layout.is_inst_inserted(at));
         assert!(!self.func.dfg.is_phi(at), "cannot split at a phi");
@@ -186,11 +191,11 @@ impl<'f> CfgEditor<'f> {
             "block {from:?} does not end with a terminator"
         );
 
-        let succs: BTreeSet<_> = self
+        let succs: Vec<_> = self
             .func
             .dfg
             .branch_info(term)
-            .map_or_else(BTreeSet::new, |bi| bi.dests().into_iter().collect());
+            .map_or_else(Vec::new, |bi| bi.dests().into_iter().collect());
 
         let new_block = self.func.dfg.make_block();
         InstInserter::at_location(CursorLocation::BlockTop(from))
@@ -753,7 +758,7 @@ pub(crate) fn simplify_trivial_phi(func: &mut Function, phi_inst: InstId) -> boo
 pub fn prune_phi_to_preds(
     func: &mut Function,
     block: BlockId,
-    preds: &BTreeSet<BlockId>,
+    preds: &[BlockId],
     mode: CleanupMode,
 ) -> bool {
     let mut changed = false;
@@ -766,19 +771,21 @@ pub fn prune_phi_to_preds(
         {
             let phi = func.dfg.cast_phi_mut(phi_inst).unwrap();
             let old_len = phi.args().len();
-            phi.retain(|pred| preds.contains(&pred));
+            phi.retain(|pred| preds.binary_search(&pred).is_ok());
             changed |= phi.args().len() != old_len;
 
-            let mut seen = BTreeSet::new();
+            let mut seen = Vec::with_capacity(phi.args().len());
             for &(_, pred) in phi.args() {
                 assert!(
-                    seen.insert(pred),
+                    !seen.contains(&pred),
                     "phi {phi_inst:?} in {block:?} has duplicate incoming from {pred:?}"
                 );
+                seen.push(pred);
             }
+            seen.sort_unstable();
 
             for &pred in preds {
-                if seen.contains(&pred) {
+                if seen.binary_search(&pred).is_ok() {
                     continue;
                 }
 
