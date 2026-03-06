@@ -4,7 +4,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, InstDowncast, InstId, Module,
     inst::control_flow,
-    module::{FuncAttrs, FuncRef},
+    module::{FuncHints, FuncRef},
 };
 
 use crate::module_analysis;
@@ -35,6 +35,8 @@ pub struct InlinerConfig {
 
     pub max_inlinee_blocks: usize,
     pub max_inlinee_insts: usize,
+    pub max_multi_use_inlinee_blocks: usize,
+    pub max_multi_use_inlinee_insts: usize,
     pub max_growth_per_caller: usize,
     pub max_total_growth: usize,
     pub max_inline_depth: usize,
@@ -65,6 +67,8 @@ impl Default for InlinerConfig {
 
             max_inlinee_blocks: 0,
             max_inlinee_insts: 0,
+            max_multi_use_inlinee_blocks: 0,
+            max_multi_use_inlinee_insts: 0,
             max_growth_per_caller: 0,
             max_total_growth: 0,
             max_inline_depth: 8,
@@ -101,7 +105,7 @@ pub struct InlineStats {
     pub skipped_recursive_scc: usize,
     pub skipped_budget: usize,
     pub skipped_cost: usize,
-    pub skipped_noinline_attr: usize,
+    pub skipped_noinline_hint: usize,
     pub skipped_sig_mismatch: usize,
     pub skipped_callsite_unreachable: usize,
 }
@@ -143,10 +147,10 @@ impl Inliner {
                 for site in sites {
                     if module
                         .ctx
-                        .func_attrs(site.callee)
-                        .contains(FuncAttrs::NOINLINE)
+                        .func_hints(site.callee)
+                        .contains(FuncHints::NOINLINE)
                     {
-                        stats.skipped_noinline_attr += 1;
+                        stats.skipped_noinline_hint += 1;
                         continue;
                     }
 
@@ -194,13 +198,6 @@ impl Inliner {
                         continue;
                     }
 
-                    // Avoid nested `view` + `modify` locks. With DashMap sharding, those can
-                    // deadlock when caller/callee hash to the same shard.
-                    if site.callee == caller_ref {
-                        stats.skipped_recursive_scc += 1;
-                        continue;
-                    }
-
                     let decision = cost::decide_inline(
                         module,
                         &analysis,
@@ -244,17 +241,30 @@ impl Inliner {
                         continue;
                     }
 
-                    let full_result = module.func_store.view(site.callee, |callee| {
+                    let full_result = if site.callee == caller_ref {
+                        let callee = caller_func.clone();
                         full::try_inline_callsite_full(
                             module,
                             caller_ref,
                             &mut caller_func,
                             site.call_inst,
                             site.callee,
-                            callee,
+                            &callee,
                             &self.config,
                         )
-                    });
+                    } else {
+                        module.func_store.view(site.callee, |callee| {
+                            full::try_inline_callsite_full(
+                                module,
+                                caller_ref,
+                                &mut caller_func,
+                                site.call_inst,
+                                site.callee,
+                                callee,
+                                &self.config,
+                            )
+                        })
+                    };
                     module.func_store.restore(caller_ref, caller_func);
 
                     match full_result {
@@ -326,7 +336,7 @@ fn apply_inline_skip(decision: cost::InlineDecision, stats: &mut InlineStats) {
         cost::InlineSkipReason::RecursiveScc => stats.skipped_recursive_scc += 1,
         cost::InlineSkipReason::Budget => stats.skipped_budget += 1,
         cost::InlineSkipReason::Cost => stats.skipped_cost += 1,
-        cost::InlineSkipReason::NoInlineAttr => stats.skipped_noinline_attr += 1,
+        cost::InlineSkipReason::NoInlineHint => stats.skipped_noinline_hint += 1,
     }
 }
 

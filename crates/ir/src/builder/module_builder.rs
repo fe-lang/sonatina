@@ -95,7 +95,7 @@ impl ModuleBuilder {
         }
         let func = Function::new(&self.ctx, &sig);
         let func_ref = self.func_store.insert(func);
-        self.ctx.clear_func_attrs(func_ref);
+        self.ctx.clear_func_metadata(func_ref);
         self.declared_funcs.insert(sig.name().to_string(), func_ref);
         self.ctx.declared_funcs.insert(func_ref, sig);
         Ok(func_ref)
@@ -209,7 +209,7 @@ mod tests {
             control_flow::{Call, Return},
         },
         isa::Isa,
-        module::FuncAttrs,
+        module::{FuncAttrs, FuncHints},
         types::Type,
     };
 
@@ -291,6 +291,7 @@ mod tests {
         builder
             .ctx
             .set_func_attrs(refs[3], FuncAttrs::MEM_READ | FuncAttrs::MEM_WRITE);
+        builder.ctx.set_func_hints(refs[3], FuncHints::NOINLINE);
 
         for &removed in &[refs[1], refs[3]] {
             assert!(builder.func_store.remove(removed).is_some());
@@ -298,18 +299,23 @@ mod tests {
         }
 
         let mut attrs = FxHashMap::default();
+        let mut hints = FxHashMap::default();
         for &func_ref in &[refs[0], refs[2], refs[4]] {
             attrs.insert(func_ref, FuncAttrs::MEM_READ);
+            hints.insert(func_ref, FuncHints::INLINEHINT);
         }
         builder.ctx.set_all_func_attrs(attrs);
+        builder.ctx.set_all_func_hints(hints);
 
         assert_eq!(builder.ctx.func_attrs(refs[0]), FuncAttrs::MEM_READ);
         assert!(!builder.ctx.has_func_attrs(refs[3]));
+        assert!(!builder.ctx.has_func_hints(refs[3]));
 
         let new_sig = Signature::new_unit("new_func", Linkage::Private, &[]);
         let new_ref = builder.declare_function(new_sig).unwrap();
         assert_eq!(new_ref, refs[3]);
         assert!(!builder.ctx.has_func_attrs(new_ref));
+        assert!(!builder.ctx.has_func_hints(new_ref));
     }
 
     #[test]

@@ -2,7 +2,7 @@ use rustc_hash::FxHashMap;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Module,
     inst::SideEffect,
-    module::{FuncAttrs, FuncRef},
+    module::{FuncHints, FuncRef},
 };
 
 use crate::{cfg_scc::CfgSccAnalysis, module_analysis::ModuleInfo};
@@ -15,7 +15,7 @@ pub(super) enum InlineSkipReason {
     RecursiveScc,
     Budget,
     Cost,
-    NoInlineAttr,
+    NoInlineHint,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -62,9 +62,9 @@ pub(super) fn decide_inline(
     request: InlineRequest,
     config: &InlinerConfig,
 ) -> InlineDecision {
-    let attrs = module.ctx.func_attrs(request.callee_ref);
-    if attrs.contains(FuncAttrs::NOINLINE) {
-        return InlineDecision::Skip(InlineSkipReason::NoInlineAttr);
+    let hints = module.ctx.func_hints(request.callee_ref);
+    if hints.contains(FuncHints::NOINLINE) {
+        return InlineDecision::Skip(InlineSkipReason::NoInlineHint);
     }
 
     if !module.ctx.func_linkage(request.callee_ref).has_definition() {
@@ -94,10 +94,11 @@ pub(super) fn decide_inline(
     if request.call_has_result && summary.returns > 1 {
         predicted_growth = predicted_growth.saturating_add(1);
     }
-    if config.always_inline_single_use && request.callee_call_count == 1 && summary.blocks > 1 {
+
+    if hints.contains(FuncHints::ALWAYSINLINE) {
         return InlineDecision::Inline(InlinePlan {
             summary,
-            score: i32::MIN + 1,
+            score: i32::MIN,
             predicted_growth,
             forced: true,
         });
@@ -108,6 +109,16 @@ pub(super) fn decide_inline(
     {
         return InlineDecision::Skip(InlineSkipReason::Budget);
     }
+
+    if request.callee_call_count > 1
+        && (exceeds_cap(summary.blocks, config.max_multi_use_inlinee_blocks)
+            || exceeds_cap(summary.insts, config.max_multi_use_inlinee_insts))
+    {
+        return InlineDecision::Skip(InlineSkipReason::Budget);
+    }
+
+    let should_force_single_use =
+        config.always_inline_single_use && request.callee_call_count == 1 && summary.blocks > 1;
 
     if exceeds_budget(
         request.caller_growth,
@@ -125,10 +136,10 @@ pub(super) fn decide_inline(
         return InlineDecision::Skip(InlineSkipReason::Budget);
     }
 
-    if attrs.contains(FuncAttrs::ALWAYSINLINE) {
+    if should_force_single_use {
         return InlineDecision::Inline(InlinePlan {
             summary,
-            score: i32::MIN,
+            score: i32::MIN + 1,
             predicted_growth,
             forced: true,
         });
@@ -168,7 +179,7 @@ pub(super) fn decide_inline(
     if is_leaf {
         score -= config.leaf_bonus;
     }
-    if attrs.contains(FuncAttrs::INLINEHINT) {
+    if hints.contains(FuncHints::INLINEHINT) {
         score -= 2;
     }
 

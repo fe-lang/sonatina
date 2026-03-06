@@ -158,18 +158,29 @@ fn step_may_invalidate_func_behavior(passes: &[Pass]) -> bool {
 
 fn balanced_inliner_config() -> InlinerConfig {
     InlinerConfig {
-        // Keep balanced mode conservative but still allow constrained full
-        // CFG inlining in addition to trivial fast paths.
+        // Keep balanced mode conservative:
+        // - Strongly prefer single-use inlining (handled in inliner policy),
+        // - Be reluctant to inline multi-use callees unless they are very small,
+        // - Preserve trivial fast paths.
         enable_full_inliner: true,
-        splice_max_insts: 8,
-        max_inlinee_blocks: 2,
-        max_inlinee_insts: 12,
-        max_growth_per_caller: 12,
-        max_total_growth: 48,
-        max_inline_depth: 2,
-        inline_threshold: 6,
-        inline_threshold_cold: 3,
-        single_use_bonus: 4,
+        // Trivial single-block splice limit for multi-use callees. Single-use
+        // splicing is allowed regardless of this cap.
+        splice_max_insts: 4,
+        // General full-inliner caps (apply to all non-ALWAYSINLINE candidates,
+        // including forced single-use inlining).
+        // Keep single-use inlining biased but bounded to avoid large code size
+        // growth from forced inlining.
+        max_inlinee_blocks: 6,
+        max_inlinee_insts: 32,
+        // Additional stricter caps for multi-use callees.
+        max_multi_use_inlinee_blocks: 1,
+        max_multi_use_inlinee_insts: 6,
+        max_growth_per_caller: 24,
+        max_total_growth: 128,
+        max_inline_depth: 3,
+        inline_threshold: 8,
+        inline_threshold_cold: 4,
+        single_use_bonus: 8,
         leaf_bonus: 2,
         loop_penalty: 32,
         ..InlinerConfig::default()
@@ -178,18 +189,20 @@ fn balanced_inliner_config() -> InlinerConfig {
 
 fn aggressive_inliner_config() -> InlinerConfig {
     InlinerConfig {
-        // Aggressive mode enables full CFG inlining with constrained budgets,
-        // plus a larger trivial-inliner profile and extra inline/SCCP rounds.
+        // Aggressive mode keeps the same multi-use guardrails as balanced, but
+        // allows a slightly larger trivial profile and additional rounds.
         enable_full_inliner: true,
-        splice_max_insts: 12,
-        max_inlinee_blocks: 2,
-        max_inlinee_insts: 12,
-        max_growth_per_caller: 16,
-        max_total_growth: 64,
-        max_inline_depth: 2,
-        inline_threshold: 8,
-        inline_threshold_cold: 4,
-        single_use_bonus: 4,
+        splice_max_insts: 6,
+        max_inlinee_blocks: 6,
+        max_inlinee_insts: 32,
+        max_multi_use_inlinee_blocks: 1,
+        max_multi_use_inlinee_insts: 6,
+        max_growth_per_caller: 32,
+        max_total_growth: 160,
+        max_inline_depth: 3,
+        inline_threshold: 10,
+        inline_threshold_cold: 5,
+        single_use_bonus: 8,
         leaf_bonus: 2,
         loop_penalty: 32,
         ..InlinerConfig::default()
@@ -524,6 +537,7 @@ mod tests {
         builder::test_util::*,
         inst::{arith::Add, control_flow::Return},
         ir_writer::FuncWriter,
+        module::FuncHints,
         prelude::*,
     };
     use sonatina_parser::parse_module;
@@ -1112,7 +1126,9 @@ func private %entry(v0.i32, v1.i32) -> i32 {
     fn balanced_and_aggressive_use_distinct_inliner_profiles() {
         let balanced = Pipeline::balanced();
         assert!(balanced.inliner_config.enable_full_inliner);
-        assert_eq!(balanced.inliner_config.splice_max_insts, 8);
+        assert_eq!(balanced.inliner_config.splice_max_insts, 4);
+        assert_eq!(balanced.inliner_config.max_multi_use_inlinee_blocks, 1);
+        assert_eq!(balanced.inliner_config.max_multi_use_inlinee_insts, 6);
 
         let aggressive = Pipeline::aggressive();
         assert!(aggressive.inliner_config.enable_full_inliner);
@@ -1155,5 +1171,47 @@ func private %entry(v0.i32, v1.i32) -> i32 {
 
         assert_eq!(balanced_inline_steps, 1);
         assert_eq!(aggressive_inline_steps, 2);
+    }
+
+    #[test]
+    fn aggressive_pipeline_preserves_noinline_hint_across_second_inline_round() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %id(v0.i32) -> i32 {
+    block0:
+        return v0;
+}
+
+func public %caller(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %id v0;
+        return v1;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let id = module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == "id"))
+            .expect("id function should exist");
+        let caller = module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == "caller"))
+            .expect("caller function should exist");
+
+        module.ctx.set_func_hints(id, FuncHints::NOINLINE);
+
+        Pipeline::aggressive().run(&mut module);
+
+        module.func_store.view(caller, |func| {
+            let dumped = FuncWriter::new(caller, func).dump_string();
+            assert!(
+                dumped.contains("call %id"),
+                "NOINLINE hint should survive the aggressive pipeline:\n{dumped}"
+            );
+        });
     }
 }

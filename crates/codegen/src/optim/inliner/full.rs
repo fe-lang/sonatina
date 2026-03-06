@@ -3,6 +3,7 @@ use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Inst, InstId, Module, Value, ValueId, module::FuncRef,
     visitor::Visitor,
 };
+use sonatina_verifier::{VerifierConfig, verify_function};
 
 use crate::cfg_edit::{CfgEditor, CleanupMode};
 
@@ -76,6 +77,14 @@ pub(super) fn try_inline_callsite_full(
         if sig.args().len() != call_args.len() {
             return true;
         }
+        if sig
+            .args()
+            .iter()
+            .zip(call_args.iter())
+            .any(|(expected_ty, &arg)| caller.dfg.value_ty(arg) != *expected_ty)
+        {
+            return true;
+        }
 
         if sig.ret_ty().is_unit() {
             call_res.is_some()
@@ -103,7 +112,7 @@ pub(super) fn try_inline_callsite_full(
     }
 
     let reachable: FxHashSet<BlockId> = rpo.iter().copied().collect();
-    validate_full_inline_callee_rewriteability(callee, &rpo, &reachable)?;
+    validate_full_inline_callee_rewriteability(module, callee_ref, callee, &rpo, &reachable)?;
 
     let mut editor = CfgEditor::new(caller, CleanupMode::Strict);
     let (callsite_block, cont_block) = editor.split_block_at(call_inst);
@@ -193,7 +202,10 @@ pub(super) fn try_inline_callsite_full(
                 .dfg
                 .return_args(term_id)
                 .and_then(|args| args.first().copied())
-                .and_then(|value| map_or_materialize(callee, editor.func_mut(), &mut value_map, value));
+                .map(|value| {
+                    map_or_materialize(callee, editor.func_mut(), &mut value_map, value)
+                        .expect("verified return value should rewrite")
+                });
 
             let jump = editor.func_mut().dfg.make_jump(cont_block);
             editor.append_inst_with_result(new_block, Box::new(jump), None);
@@ -218,12 +230,9 @@ pub(super) fn try_inline_callsite_full(
     }
 
     for fixup in &phi_fixups {
-        let mapped = if let Some(&mapped) = value_map.get(&fixup.old_value) {
-            mapped
-        } else {
-            let ty = callee.dfg.value_ty(fixup.old_value);
-            editor.func_mut().dfg.make_undef_value(ty)
-        };
+        let mapped = *value_map
+            .get(&fixup.old_value)
+            .expect("verified phi fixup should resolve");
 
         let func = editor.func_mut();
         func.dfg.untrack_inst(fixup.phi_inst);
@@ -354,10 +363,26 @@ impl Visitor for OperandValidator<'_> {
 }
 
 fn validate_full_inline_callee_rewriteability(
+    module: &Module,
+    callee_ref: FuncRef,
     callee: &Function,
     rpo: &[BlockId],
     reachable: &FxHashSet<BlockId>,
 ) -> Result<(), FullInlineFail> {
+    if verify_function(
+        &module.ctx,
+        callee_ref,
+        callee,
+        &VerifierConfig {
+            check_dominance: true,
+            ..VerifierConfig::default()
+        },
+    )
+    .has_errors()
+    {
+        return Err(FullInlineFail::MalformedCallee);
+    }
+
     let layout_blocks: FxHashSet<BlockId> = callee.layout.iter_block().collect();
     let arg_values: FxHashSet<ValueId> = callee.arg_values.iter().copied().collect();
     let mut seen_values: FxHashSet<ValueId> = arg_values.clone();
@@ -402,20 +427,18 @@ fn validate_full_inline_callee_rewriteability(
             }
         }
 
-        if !callee.dfg.is_return(term_id) {
-            let inst = callee.dfg.inst(term_id);
-            let mut v = OperandValidator {
-                callee,
-                reachable,
-                arg_values: &arg_values,
-                seen_values: &seen_values,
-                mode: ValueValidationMode::RequireMapped,
-                ok: true,
-            };
-            inst.accept(&mut v);
-            if !v.ok {
-                return Err(FullInlineFail::MalformedCallee);
-            }
+        let inst = callee.dfg.inst(term_id);
+        let mut v = OperandValidator {
+            callee,
+            reachable,
+            arg_values: &arg_values,
+            seen_values: &seen_values,
+            mode: ValueValidationMode::RequireMapped,
+            ok: true,
+        };
+        inst.accept(&mut v);
+        if !v.ok {
+            return Err(FullInlineFail::MalformedCallee);
         }
     }
 

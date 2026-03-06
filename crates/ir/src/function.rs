@@ -5,6 +5,7 @@ use smallvec::SmallVec;
 use super::{BlockId, DataFlowGraph, InstId, Layout, Type, ValueId};
 use crate::{InstSetBase, Linkage, ir_writer::IrWrite, module::ModuleCtx};
 
+#[derive(Clone)]
 pub struct Function {
     pub arg_values: smallvec::SmallVec<[ValueId; 8]>,
     pub dfg: DataFlowGraph,

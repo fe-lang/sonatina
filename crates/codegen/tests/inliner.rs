@@ -5,7 +5,7 @@ use sonatina_codegen::{
     analysis::func_behavior,
     optim::inliner::{Inliner, InlinerConfig},
 };
-use sonatina_ir::{ir_writer::FuncWriter, module::FuncAttrs};
+use sonatina_ir::{ir_writer::FuncWriter, module::FuncHints};
 use sonatina_parser::ParsedModule;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
@@ -114,7 +114,7 @@ func public %caller(v0.i32) -> i32 {
         .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
     let module = &mut parsed.module;
     let id_ref = find_func(module, "id");
-    module.ctx.set_func_attrs(id_ref, FuncAttrs::NOINLINE);
+    module.ctx.set_func_hints(id_ref, FuncHints::NOINLINE);
 
     let mut inliner = Inliner::new(InlinerConfig::default());
     let stats = inliner.run(module);
@@ -127,7 +127,7 @@ func public %caller(v0.i32) -> i32 {
     assert_eq!(stats.calls_removed, 0);
     assert_eq!(stats.calls_rewritten, 0);
     assert_eq!(stats.calls_spliced, 0);
-    assert!(stats.skipped_noinline_attr > 0);
+    assert!(stats.skipped_noinline_hint > 0);
 }
 
 #[test]
@@ -176,6 +176,54 @@ func public %caller() -> i32 {
     assert_eq!(stats.skipped_recursive_scc, 0);
     assert_eq!(stats.skipped_sig_mismatch, 0);
     assert_eq!(stats.skipped_callsite_unreachable, 0);
+    assert!(after.contains("call %bad"));
+}
+
+#[test]
+fn full_inliner_does_not_mutate_caller_on_malformed_return() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %bad(v0.i1) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v1.i32 = add 2.i32 3.i32;
+        return v1;
+}
+
+func public %caller(v0.i1) -> i32 {
+    block0:
+        v1.i32 = call %bad v0;
+        return v1;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let caller_ref = find_func(module, "caller");
+    let before = module.func_store.view(caller_ref, |func| {
+        FuncWriter::new(caller_ref, func).dump_string()
+    });
+
+    let mut inliner = Inliner::new(full_only_inliner_test_config());
+    let stats = inliner.run(module);
+
+    let after = module.func_store.view(caller_ref, |func| {
+        FuncWriter::new(caller_ref, func).dump_string()
+    });
+
+    assert_eq!(
+        before, after,
+        "caller should not be mutated when full inlining sees a malformed return"
+    );
+    assert_eq!(stats.full_calls_inlined, 0);
     assert!(after.contains("call %bad"));
 }
 
@@ -763,7 +811,50 @@ func public %caller(v0.i1, v1.i32) -> i32 {
 }
 
 #[test]
-fn full_inliner_honors_noinline_and_alwaysinline_attrs() {
+fn full_inliner_allows_direct_self_recursion_when_enabled() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func public %self(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = call %self v0 v1;
+        return v2;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+    let before = dump_module(module);
+
+    let mut inliner = Inliner::new(InlinerConfig {
+        enable_full_inliner: true,
+        allow_inline_recursive: true,
+        max_inlinee_blocks: 64,
+        max_inlinee_insts: 256,
+        max_growth_per_caller: 64,
+        max_total_growth: 64,
+        max_inline_depth: 1,
+        inline_threshold: 1000,
+        inline_threshold_cold: 1000,
+        ..Default::default()
+    });
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    assert_eq!(stats.full_calls_inlined, 1);
+    assert_eq!(stats.skipped_recursive_scc, 0);
+    assert_ne!(before, dump_module(module));
+}
+
+#[test]
+fn full_inliner_honors_noinline_and_alwaysinline_hints() {
     let source = r#"
 target = "evm-ethereum-london"
 
@@ -805,13 +896,15 @@ func public %caller(v0.i1, v1.i32) -> i32 {
 
     let forced = find_func(module, "forced");
     let blocked = find_func(module, "blocked");
-    module.ctx.set_func_attrs(forced, FuncAttrs::ALWAYSINLINE);
-    module.ctx.set_func_attrs(blocked, FuncAttrs::NOINLINE);
+    module.ctx.set_func_hints(forced, FuncHints::ALWAYSINLINE);
+    module.ctx.set_func_hints(blocked, FuncHints::NOINLINE);
 
     let mut inliner = Inliner::new(InlinerConfig {
         enable_full_inliner: true,
-        max_inlinee_blocks: 64,
-        max_inlinee_insts: 256,
+        max_inlinee_blocks: 1,
+        max_inlinee_insts: 1,
+        max_growth_per_caller: 1,
+        max_total_growth: 1,
         inline_threshold: -1000,
         inline_threshold_cold: -1000,
         ..Default::default()
@@ -876,7 +969,7 @@ func public %caller(v0.i1, v1.i32) -> i32 {
 }
 
 #[test]
-fn full_inliner_single_use_multi_block_bypasses_size_and_growth_caps() {
+fn full_inliner_single_use_multi_block_respects_size_and_growth_caps() {
     let source = r#"
 target = "evm-ethereum-london"
 
@@ -917,10 +1010,11 @@ func public %caller(v0.i1, v1.i32) -> i32 {
 
     let dumped = dump_module(module);
     assert!(
-        !dumped.contains("call %once"),
-        "single-use multi-block callee should bypass size/growth caps:\n{dumped}"
+        dumped.contains("call %once"),
+        "single-use multi-block callee should respect size/growth caps:\n{dumped}"
     );
-    assert!(stats.full_calls_inlined > 0);
+    assert_eq!(stats.full_calls_inlined, 0);
+    assert!(stats.skipped_budget > 0);
 }
 
 #[test]
@@ -1169,63 +1263,6 @@ func public %caller(v0.i1, v1.i32) -> i32 {
 }
 
 #[test]
-fn full_inliner_bottom_up_order_handles_deep_single_use_chain() {
-    let depth = 10usize;
-    let mut source = String::from(
-        r#"
-target = "evm-ethereum-london"
-
-func public %caller(v0.i32) -> i32 {
-    block0:
-        v1.i32 = call %f1 v0;
-        return v1;
-}
-
-"#,
-    );
-
-    for i in 1..depth {
-        source.push_str(&format!(
-            "func private %f{i}(v0.i32) -> i32 {{
-    block0:
-        v1.i32 = call %f{} v0;
-        return v1;
-}}
-
-",
-            i + 1
-        ));
-    }
-
-    source.push_str(&format!(
-        "func private %f{depth}(v0.i32) -> i32 {{
-    block0:
-        v1.i32 = add v0 1.i32;
-        return v1;
-}}
-"
-    ));
-
-    let mut parsed = sonatina_parser::parse_module(&source)
-        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
-    let module = &mut parsed.module;
-
-    let mut inliner = Inliner::new(full_only_inliner_test_config());
-    let stats = inliner.run(module);
-    assert_module_verified(module);
-
-    let caller_ref = find_func(module, "caller");
-    let caller_dump = module.func_store.view(caller_ref, |func| {
-        FuncWriter::new(caller_ref, func).dump_string()
-    });
-    assert!(
-        !caller_dump.contains("call %f"),
-        "deep call chain should inline fully within MAX_ITERS:\n{caller_dump}"
-    );
-    assert!(stats.full_calls_inlined >= depth);
-}
-
-#[test]
 fn full_inliner_reachability_cache_tracks_split_continuations() {
     let call_count = 10usize;
     let mut source = String::from(
@@ -1302,6 +1339,8 @@ fn full_inliner_test_config() -> InlinerConfig {
         max_inlinee_insts: 1024,
         max_growth_per_caller: 4096,
         max_total_growth: 1 << 20,
+        max_inline_depth: 1,
+        allow_inline_recursive: true,
         inline_threshold: 1000,
         inline_threshold_cold: 1000,
         ..Default::default()

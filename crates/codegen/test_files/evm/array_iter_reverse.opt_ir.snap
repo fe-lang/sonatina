@@ -8,87 +8,99 @@ target = "evm-ethereum-osaka"
 type @__fe_Take_0 = {i256, i256};
 type @__fe_Take_1 = {i256, i256};
 
+func private %sum_last4(v0.i256) -> i256 {
+    block0:
+        v16.*i8 = evm_malloc 64.i256;
+        v17.i256 = ptr_to_int v16 i256;
+        v54.*@__fe_Take_0 = bitcast v16 *@__fe_Take_0;
+        v19.*i256 = bitcast v54 *i256;
+        mstore v19 4.i256 i256;
+        v21.*i256 = gep v54 0.i256 1.i256;
+        mstore v21 v0 i256;
+        v37.*@__fe_Take_0 = int_to_ptr v17 *@__fe_Take_0;
+        v38.*i256 = gep v37 0.i256 1.i256;
+        jump block1;
+
+    block1:
+        v23.i256 = phi (0.i256 block0) (v15 block2);
+        v6.i256 = phi (0.i256 block0) (v18 block2);
+        v8.i1 = lt v6 4.i256;
+        br v8 block2 block4;
+
+    block2:
+        v39.i256 = mload v38 i256;
+        v45.*[i256; 8] = int_to_ptr v39 *[i256; 8];
+        v56.i256 = sub 7.i256 v6;
+        v46.*i256 = gep v45 0.i256 v56;
+        v47.i256 = mload v46 i256;
+        v15.i256 = add v47 v23;
+        v18.i256 = add 1.i256 v6;
+        jump block1;
+
+    block4:
+        return v23;
+}
+
+func private %sum_first4(v0.i256) -> i256 {
+    block0:
+        v15.*i8 = evm_malloc 64.i256;
+        v16.i256 = ptr_to_int v15 i256;
+        v45.*@__fe_Take_1 = bitcast v15 *@__fe_Take_1;
+        v18.*i256 = bitcast v45 *i256;
+        mstore v18 4.i256 i256;
+        v20.*i256 = gep v45 0.i256 1.i256;
+        mstore v20 v0 i256;
+        v36.*@__fe_Take_1 = int_to_ptr v16 *@__fe_Take_1;
+        v37.*i256 = gep v36 0.i256 1.i256;
+        jump block1;
+
+    block1:
+        v22.i256 = phi (0.i256 block0) (v14 block2);
+        v5.i256 = phi (0.i256 block0) (v17 block2);
+        v7.i1 = lt v5 4.i256;
+        br v7 block2 block4;
+
+    block2:
+        v38.i256 = mload v37 i256;
+        v39.*[i256; 8] = int_to_ptr v38 *[i256; 8];
+        v40.*i256 = gep v39 0.i256 v5;
+        v41.i256 = mload v40 i256;
+        v14.i256 = add v41 v22;
+        v17.i256 = add 1.i256 v5;
+        jump block1;
+
+    block4:
+        return v22;
+}
+
 func private %test_view_param_local_ref_take_reverse() {
     block0:
         v2.*i8 = evm_malloc 256.i256;
         v3.i256 = ptr_to_int v2 i256;
-        v114.*[i256; 8] = bitcast v2 *[i256; 8];
-        v6.*i256 = bitcast v114 *i256;
+        v36.*[i256; 8] = bitcast v2 *[i256; 8];
+        v6.*i256 = bitcast v36 *i256;
         mstore v6 1.i256 i256;
-        v9.*i256 = gep v114 0.i256 1.i256;
+        v9.*i256 = gep v36 0.i256 1.i256;
         mstore v9 2.i256 i256;
-        v12.*i256 = gep v114 0.i256 2.i256;
+        v12.*i256 = gep v36 0.i256 2.i256;
         mstore v12 3.i256 i256;
-        v15.*i256 = gep v114 0.i256 3.i256;
+        v15.*i256 = gep v36 0.i256 3.i256;
         mstore v15 4.i256 i256;
-        v18.*i256 = gep v114 0.i256 4.i256;
+        v18.*i256 = gep v36 0.i256 4.i256;
         mstore v18 5.i256 i256;
-        v21.*i256 = gep v114 0.i256 5.i256;
+        v21.*i256 = gep v36 0.i256 5.i256;
         mstore v21 6.i256 i256;
-        v24.*i256 = gep v114 0.i256 6.i256;
+        v24.*i256 = gep v36 0.i256 6.i256;
         mstore v24 7.i256 i256;
-        v27.*i256 = gep v114 0.i256 7.i256;
+        v27.*i256 = gep v36 0.i256 7.i256;
         mstore v27 8.i256 i256;
-        v37.*i8 = evm_malloc 64.i256;
-        v38.i256 = ptr_to_int v37 i256;
-        v122.*@__fe_Take_0 = bitcast v37 *@__fe_Take_0;
-        v40.*i256 = bitcast v122 *i256;
-        mstore v40 4.i256 i256;
-        v42.*i256 = gep v122 0.i256 1.i256;
-        mstore v42 v3 i256;
-        v64.*@__fe_Take_0 = int_to_ptr v38 *@__fe_Take_0;
-        v65.*i256 = gep v64 0.i256 1.i256;
-        jump block9;
-
-    block9:
-        v58.i256 = phi (0.i256 block0) (v75 block10);
-        v60.i256 = phi (0.i256 block0) (v76 block10);
-        v61.i1 = lt v60 4.i256;
-        br v61 block10 block1;
-
-    block10:
-        v66.i256 = mload v65 i256;
-        v72.*[i256; 8] = int_to_ptr v66 *[i256; 8];
-        v124.i256 = sub 7.i256 v60;
-        v73.*i256 = gep v72 0.i256 v124;
-        v74.i256 = mload v73 i256;
-        v75.i256 = add v74 v58;
-        v76.i256 = add 1.i256 v60;
-        jump block9;
-
-    block1:
-        v125.i1 = eq 26.i256 v58;
-        v31.i256 = zext v125 i256;
+        v28.i256 = call %sum_last4 v3;
+        v44.i1 = eq 26.i256 v28;
+        v31.i256 = zext v44 i256;
         call %assert v31;
-        v77.*i8 = evm_malloc 64.i256;
-        v78.i256 = ptr_to_int v77 i256;
-        v126.*@__fe_Take_1 = bitcast v77 *@__fe_Take_1;
-        v80.*i256 = bitcast v126 *i256;
-        mstore v80 4.i256 i256;
-        v82.*i256 = gep v126 0.i256 1.i256;
-        mstore v82 v3 i256;
-        v104.*@__fe_Take_1 = int_to_ptr v78 *@__fe_Take_1;
-        v105.*i256 = gep v104 0.i256 1.i256;
-        jump block21;
-
-    block21:
-        v98.i256 = phi (0.i256 block1) (v110 block22);
-        v100.i256 = phi (0.i256 block1) (v111 block22);
-        v101.i1 = lt v100 4.i256;
-        br v101 block22 block13;
-
-    block22:
-        v106.i256 = mload v105 i256;
-        v107.*[i256; 8] = int_to_ptr v106 *[i256; 8];
-        v108.*i256 = gep v107 0.i256 v100;
-        v109.i256 = mload v108 i256;
-        v110.i256 = add v109 v98;
-        v111.i256 = add 1.i256 v100;
-        jump block21;
-
-    block13:
-        v128.i1 = eq 10.i256 v98;
-        v35.i256 = zext v128 i256;
+        v32.i256 = call %sum_first4 v3;
+        v45.i1 = eq 10.i256 v32;
+        v35.i256 = zext v45 i256;
         call %assert v35;
         evm_return 0.i256 0.i256;
 }

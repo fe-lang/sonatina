@@ -6,21 +6,149 @@ input_file: test_files/evm/array_iter_reverse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 241 bytes
-  total: 241 bytes
+  section runtime: 266 bytes
+  total: 266 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
-  test_view_param_local_ref_take_reverse: ir_blocks=7 ir_insts=69 vcode_ops=179 fixups=11 imm_bytes=41
+  sum_last4: ir_blocks=4 ir_insts=23 vcode_ops=56 fixups=3 imm_bytes=10
+    mem: scheme=StaticArena need_words=0 locals_words=0
+  sum_first4: ir_blocks=4 ir_insts=22 vcode_ops=54 fixups=3 imm_bytes=9
+    mem: scheme=StaticArena need_words=0 locals_words=0
+  test_view_param_local_ref_take_reverse: ir_blocks=1 ir_insts=28 vcode_ops=89 fixups=9 imm_bytes=22
     mem: scheme=StaticArena need_words=0 locals_words=0
   assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=22182 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1182
+  case ok: calldata_len=0 success reason=Return gas_used=22272 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1272
 
 
 --------------- DEBUG ---------------
+
+// func private %sum_last4(v0.i256) -> i256
+sum_last4:
+  block0:
+    JUMPDEST
+    PUSH1 0x40 (64)  // v16.*i256 = evm_malloc 64.i256;
+    MLOAD
+    PUSH1 0xbf (191)
+    DUP2
+    GT
+    PUSH1 `pc + (4)`
+    JUMPI
+    POP
+    PUSH1 0xc0 (192)
+    JUMPDEST
+    PUSH1 0x4 (4)  // mstore v19 4.i256 i256;
+    DUP2
+    MSTORE
+    DUP1  // v21.*i256 = gep v54 0.i256 1.i256;
+    PUSH1 0x20 (32)
+    ADD
+    SWAP1  // mstore v21 v0 i256;
+    SWAP2
+    SWAP1
+    MSTORE
+    PUSH1 0x20 (32)  // v38.*i256 = gep v37 0.i256 1.i256;
+    ADD
+    PUSH0  // jump block1;
+    PUSH0
+  block1:
+    JUMPDEST
+    PUSH1 0x4 (4)  // v8.i1 = lt v6 4.i256;
+    DUP3
+    LT
+    ISZERO  // br v8 block2 block4;
+    PUSH1 block4
+    JUMPI
+  block2:
+    DUP3  // v39.i256 = mload v38 i256;
+    MLOAD
+    DUP3  // v56.i256 = sub 7.i256 v6;
+    PUSH1 0x7 (7)
+    SUB
+    SWAP1  // v46.*i256 = gep v45 0.i256 v56;
+    SWAP1
+    PUSH1 0x20 (32)
+    MUL
+    ADD
+    MLOAD  // v47.i256 = mload v46 i256;
+    ADD  // v15.i256 = add v47 v23;
+    SWAP1  // v18.i256 = add 1.i256 v6;
+    PUSH1 0x1 (1)
+    ADD
+    SWAP1  // jump block1;
+    PUSH1 block1
+    JUMP
+  block4:
+    JUMPDEST
+    SWAP2  // return v23;
+    POP
+    POP
+    SWAP1
+    JUMP
+
+// func private %sum_first4(v0.i256) -> i256
+sum_first4:
+  block0:
+    JUMPDEST
+    PUSH1 0x40 (64)  // v15.*i256 = evm_malloc 64.i256;
+    MLOAD
+    PUSH1 0xbf (191)
+    DUP2
+    GT
+    PUSH1 `pc + (4)`
+    JUMPI
+    POP
+    PUSH1 0xc0 (192)
+    JUMPDEST
+    PUSH1 0x4 (4)  // mstore v18 4.i256 i256;
+    DUP2
+    MSTORE
+    DUP1  // v20.*i256 = gep v45 0.i256 1.i256;
+    PUSH1 0x20 (32)
+    ADD
+    SWAP1  // mstore v20 v0 i256;
+    SWAP2
+    SWAP1
+    MSTORE
+    PUSH1 0x20 (32)  // v37.*i256 = gep v36 0.i256 1.i256;
+    ADD
+    PUSH0  // jump block1;
+    PUSH0
+  block1:
+    JUMPDEST
+    PUSH1 0x4 (4)  // v7.i1 = lt v5 4.i256;
+    DUP3
+    LT
+    ISZERO  // br v7 block2 block4;
+    PUSH1 block4
+    JUMPI
+  block2:
+    DUP3  // v38.i256 = mload v37 i256;
+    MLOAD
+    DUP3  // v40.*i256 = gep v39 0.i256 v5;
+    SWAP1
+    SWAP1
+    PUSH1 0x20 (32)
+    MUL
+    ADD
+    MLOAD  // v41.i256 = mload v40 i256;
+    ADD  // v14.i256 = add v41 v22;
+    SWAP1  // v17.i256 = add 1.i256 v5;
+    PUSH1 0x1 (1)
+    ADD
+    SWAP1  // jump block1;
+    PUSH1 block1
+    JUMP
+  block4:
+    JUMPDEST
+    SWAP2  // return v22;
+    POP
+    POP
+    SWAP1
+    JUMP
 
 // func private %test_view_param_local_ref_take_reverse()
 test_view_param_local_ref_take_reverse:
@@ -44,127 +172,69 @@ test_view_param_local_ref_take_reverse:
     PUSH1 0x1 (1)  // mstore v6 1.i256 i256;
     DUP2
     MSTORE
-    DUP1  // v9.*i256 = gep v114 0.i256 1.i256;
+    DUP1  // v9.*i256 = gep v36 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
     PUSH1 0x2 (2)  // mstore v9 2.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v12.*i256 = gep v114 0.i256 2.i256;
+    DUP1  // v12.*i256 = gep v36 0.i256 2.i256;
     PUSH1 0x40 (64)
     ADD
     PUSH1 0x3 (3)  // mstore v12 3.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v15.*i256 = gep v114 0.i256 3.i256;
+    DUP1  // v15.*i256 = gep v36 0.i256 3.i256;
     PUSH1 0x60 (96)
     ADD
     PUSH1 0x4 (4)  // mstore v15 4.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v18.*i256 = gep v114 0.i256 4.i256;
+    DUP1  // v18.*i256 = gep v36 0.i256 4.i256;
     PUSH1 0x80 (128)
     ADD
     PUSH1 0x5 (5)  // mstore v18 5.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v21.*i256 = gep v114 0.i256 5.i256;
+    DUP1  // v21.*i256 = gep v36 0.i256 5.i256;
     PUSH1 0xa0 (160)
     ADD
     PUSH1 0x6 (6)  // mstore v21 6.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v24.*i256 = gep v114 0.i256 6.i256;
+    DUP1  // v24.*i256 = gep v36 0.i256 6.i256;
     PUSH1 0xc0 (192)
     ADD
     PUSH1 0x7 (7)  // mstore v24 7.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v27.*i256 = gep v114 0.i256 7.i256;
+    DUP1  // v27.*i256 = gep v36 0.i256 7.i256;
     PUSH1 0xe0 (224)
     ADD
     PUSH1 0x8 (8)  // mstore v27 8.i256 i256;
     SWAP1
     MSTORE
-    PUSH1 0x40 (64)  // v37.*i256 = evm_malloc 64.i256;
-    MLOAD
-    PUSH1 0xbf (191)
-    DUP2
-    GT
+    DUP1  // v28.i256 = call %sum_last4 v3;
     PUSH1 `pc + (4)`
-    JUMPI
-    POP
-    PUSH1 0xc0 (192)
-    JUMPDEST
-    PUSH1 0x4 (4)  // mstore v40 4.i256 i256;
-    DUP2
-    MSTORE
-    DUP1  // v42.*i256 = gep v122 0.i256 1.i256;
-    PUSH1 0x20 (32)
-    ADD
-    DUP3  // mstore v42 v3 i256;
     SWAP1
-    MSTORE
-    PUSH1 0x20 (32)  // v65.*i256 = gep v64 0.i256 1.i256;
-    ADD
-    PUSH0  // jump block9;
-    PUSH0
-  block9:
+    PUSH1 FuncRef(0)
+    JUMP
     JUMPDEST
-    PUSH1 0x4 (4)  // v61.i1 = lt v60 4.i256;
-    DUP3
-    LT
-    PUSH1 block10  // br v61 block10 block1;
-    JUMPI
-  block1:
-    SWAP2  // v125.i1 = eq 26.i256 v58;
-    POP
-    POP
-    PUSH1 0x1a (26)
+    PUSH1 0x1a (26)  // v44.i1 = eq 26.i256 v28;
     EQ
-    PUSH1 `pc + (4)`  // call %assert v129;
+    PUSH1 `pc + (4)`  // call %assert v46;
     SWAP1
     PUSH1 FuncRef(10)
     JUMP
     JUMPDEST
-    PUSH1 0x40 (64)  // v77.*i256 = evm_malloc 64.i256;
-    MLOAD
-    PUSH1 0xbf (191)
-    DUP2
-    GT
-    PUSH1 `pc + (4)`
-    JUMPI
-    POP
-    PUSH1 0xc0 (192)
-    JUMPDEST
-    PUSH1 0x4 (4)  // mstore v80 4.i256 i256;
-    DUP2
-    MSTORE
-    DUP1  // v82.*i256 = gep v126 0.i256 1.i256;
-    PUSH1 0x20 (32)
-    ADD
-    SWAP1  // mstore v82 v3 i256;
-    SWAP2
+    PUSH1 `pc + (4)`  // v32.i256 = call %sum_first4 v3;
     SWAP1
-    MSTORE
-    PUSH1 0x20 (32)  // v105.*i256 = gep v104 0.i256 1.i256;
-    ADD
-    PUSH0  // jump block21;
-    PUSH0
-  block21:
+    PUSH1 FuncRef(1)
+    JUMP
     JUMPDEST
-    PUSH1 0x4 (4)  // v101.i1 = lt v100 4.i256;
-    DUP3
-    LT
-    PUSH1 block22  // br v101 block22 block13;
-    JUMPI
-  block13:
-    SWAP2  // v128.i1 = eq 10.i256 v98;
-    POP
-    POP
-    PUSH1 0xa (10)
+    PUSH1 0xa (10)  // v45.i1 = eq 10.i256 v32;
     EQ
-    PUSH1 `pc + (4)`  // call %assert v130;
+    PUSH1 `pc + (4)`  // call %assert v47;
     SWAP1
     PUSH1 FuncRef(10)
     JUMP
@@ -172,44 +242,6 @@ test_view_param_local_ref_take_reverse:
     PUSH0  // evm_return 0.i256 0.i256;
     PUSH0
     RETURN
-  block22:
-    JUMPDEST
-    DUP3  // v106.i256 = mload v105 i256;
-    MLOAD
-    DUP3  // v108.*i256 = gep v107 0.i256 v100;
-    SWAP1
-    SWAP1
-    PUSH1 0x20 (32)
-    MUL
-    ADD
-    MLOAD  // v109.i256 = mload v108 i256;
-    ADD  // v110.i256 = add v109 v98;
-    SWAP1  // v111.i256 = add 1.i256 v100;
-    PUSH1 0x1 (1)
-    ADD
-    SWAP1  // jump block21;
-    PUSH1 block21
-    JUMP
-  block10:
-    JUMPDEST
-    DUP3  // v66.i256 = mload v65 i256;
-    MLOAD
-    DUP3  // v124.i256 = sub 7.i256 v60;
-    PUSH1 0x7 (7)
-    SUB
-    SWAP1  // v73.*i256 = gep v72 0.i256 v124;
-    SWAP1
-    PUSH1 0x20 (32)
-    MUL
-    ADD
-    MLOAD  // v74.i256 = mload v73 i256;
-    ADD  // v75.i256 = add v74 v58;
-    SWAP1  // v76.i256 = add 1.i256 v60;
-    PUSH1 0x1 (1)
-    ADD
-    SWAP1  // jump block9;
-    PUSH1 block9
-    JUMP
 
 // func public %assert(v0.i256)
 assert:
