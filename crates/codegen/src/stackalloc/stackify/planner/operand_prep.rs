@@ -1,39 +1,30 @@
-use crate::{
-    bitset::BitSet,
-    stackalloc::{Action, Actions},
-};
+use crate::bitset::BitSet;
 use smallvec::SmallVec;
 use sonatina_ir::{InstId, ValueId};
-use std::collections::{BTreeMap, BinaryHeap, HashMap};
 
 use super::{
-    super::{CONSUME_LAST_USE_MAX_SWAPS, sym_stack::StackItem},
-    MemPlan, Planner,
+    Planner,
+    normalize::SpillAwareCostModel,
+    normalize_search::{
+        CostModel, NormalizePlan, SearchCfg, cost_for_steps, solve_optimal_operand_prep_plan,
+    },
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct OperandPrepMetric {
-    /// Newly-discovered spill-set values (preferred to minimize).
-    spill_requests: usize,
-    /// Number of frame-slot loads emitted by operand preparation (preferred to minimize).
-    mem_loads: usize,
-    /// Total actions emitted by operand preparation (preferred to minimize).
-    actions: usize,
-    /// Number of `SWAP*` actions emitted by operand preparation (tie-breaker).
-    swaps: usize,
-}
+use super::super::{CONSUME_LAST_USE_MAX_SWAPS, sym_stack::StackItem};
 
-struct SearchOperandPrepPlan {
-    actions: Actions,
-    /// Stack above the function return barrier, after applying `actions`.
-    final_stack: Vec<StackItem>,
-    metric: OperandPrepMetric,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct OperandRequirement {
-    needed_total: usize,
-    is_immediate: bool,
+fn commutative_plan_cmp_key(
+    plan: &NormalizePlan,
+    cost: &impl CostModel,
+) -> (
+    super::normalize_search::Cost,
+    super::normalize_search::Cost,
+    usize,
+) {
+    (
+        cost_for_steps(&plan.steps, &plan.key_infos, cost),
+        plan.cost,
+        plan.steps.len(),
+    )
 }
 
 impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
@@ -55,11 +46,11 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             || <&cmp::Ne as InstDowncast>::downcast(isb, inst).is_some()
     }
 
-    pub(in super::super) fn prepare_operands_for_inst(
+    fn prepare_operands_maybe_commutative(
         &mut self,
-        inst: InstId,
         args: &mut SmallVec<[ValueId; 8]>,
         consume_last_use: &BitSet<ValueId>,
+        commutative_pair: bool,
     ) {
         // If all operands are last-use values that are already in the required order on the
         // current stack top, avoid the operand-preparation machinery entirely. The instruction
@@ -71,20 +62,10 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             return;
         }
 
-        // For small arities, solve operand preparation via a bounded exact search over
-        // `DUP*`/`SWAP*`/`PUSH*`. This models "consume in place" correctly and avoids redundant
-        // swap chains (common with greedy per-operand preparation), especially around calls.
-        if (2..=5).contains(&args.len()) {
-            let commutative = self.inst_is_commutative(inst);
-            if self.try_prepare_operands_small_via_search(args, consume_last_use, commutative) {
-                return;
-            }
-        }
-
         // For commutative binary ops, try both operand orders and choose the cheaper
         // operand-preparation plan. This is purely a bytecode optimization (SSA semantics are
         // unchanged).
-        if args.len() == 2 && args[0] != args[1] && self.inst_is_commutative(inst) {
+        if commutative_pair && args.len() == 2 && args[0] != args[1] {
             // Fast path: if the operands are last-use and already occupy the top two stack slots
             // (in either order), use that order and consume them as-is.
             if consume_last_use.contains(args[0]) && consume_last_use.contains(args[1]) {
@@ -99,341 +80,74 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 }
             }
 
-            let original = self.simulate_operand_prep_metric(args, consume_last_use);
+            let cost = SpillAwareCostModel::new(self.mem.spill_set());
+            let search_cfg = self.operand_prep_search_cfg(args.len());
 
-            let mut swapped: SmallVec<[ValueId; 8]> = args.clone();
-            swapped.swap(0, 1);
-            let swapped_metric = self.simulate_operand_prep_metric(&swapped, consume_last_use);
+            let original_plan = solve_optimal_operand_prep_plan(
+                self.ctx,
+                self.stack,
+                args.as_slice(),
+                consume_last_use,
+                &cost,
+                search_cfg,
+            );
 
-            if swapped_metric < original {
+            let mut swapped_args = args.clone();
+            swapped_args.swap(0, 1);
+            let swapped_plan = solve_optimal_operand_prep_plan(
+                self.ctx,
+                self.stack,
+                swapped_args.as_slice(),
+                consume_last_use,
+                &cost,
+                search_cfg,
+            );
+
+            let (plan, swapped) = match (original_plan, swapped_plan) {
+                (Some(p), None) => (p, false),
+                (None, Some(p)) => (p, true),
+                (Some(p0), Some(p1)) => {
+                    let c0 = commutative_plan_cmp_key(&p0, &cost);
+                    let c1 = commutative_plan_cmp_key(&p1, &cost);
+                    if c1 < c0 { (p1, true) } else { (p0, false) }
+                }
+                (None, None) => {
+                    self.prepare_operands_greedy(args.as_slice(), consume_last_use);
+                    return;
+                }
+            };
+
+            if swapped {
                 args.swap(0, 1);
             }
+            if !self.apply_operand_prep_plan(&plan, args.as_slice()) {
+                self.prepare_operands_greedy(args.as_slice(), consume_last_use);
+            }
+            return;
         }
-        self.prepare_operands(args, consume_last_use);
+
+        self.prepare_operands(args.as_slice(), consume_last_use);
     }
 
-    fn try_prepare_operands_small_via_search(
+    pub(in super::super) fn prepare_operands_for_inst(
+        &mut self,
+        inst: InstId,
+        args: &mut SmallVec<[ValueId; 8]>,
+        consume_last_use: &BitSet<ValueId>,
+    ) {
+        self.prepare_operands_maybe_commutative(
+            args,
+            consume_last_use,
+            self.inst_is_commutative(inst),
+        );
+    }
+
+    pub(in super::super) fn prepare_operands_for_commutative_pair(
         &mut self,
         args: &mut SmallVec<[ValueId; 8]>,
         consume_last_use: &BitSet<ValueId>,
-        commutative: bool,
-    ) -> bool {
-        debug_assert!((2..=5).contains(&args.len()));
-
-        let order: SmallVec<[ValueId; 4]> = args.iter().copied().collect();
-        let mut best: Option<(SearchOperandPrepPlan, bool)> = self
-            .search_small_operand_prep(&order, consume_last_use)
-            .map(|p| (p, false));
-
-        if commutative && args.len() == 2 && args[0] != args[1] {
-            let mut swapped_order = order.clone();
-            swapped_order.swap(0, 1);
-            if let Some(swapped) = self.search_small_operand_prep(&swapped_order, consume_last_use)
-            {
-                let better = match &best {
-                    None => true,
-                    Some((cur, _)) => swapped.metric < cur.metric,
-                };
-                if better {
-                    best = Some((swapped, true));
-                }
-            }
-        }
-
-        let Some((plan, swapped)) = best else {
-            return false;
-        };
-
-        if swapped {
-            args.swap(0, 1);
-        }
-        self.actions.extend_from_slice(&plan.actions);
-        self.stack.replace_above_func_ret(plan.final_stack);
-        true
-    }
-
-    fn search_small_operand_prep(
-        &self,
-        target: &[ValueId],
-        consume_last_use: &BitSet<ValueId>,
-    ) -> Option<SearchOperandPrepPlan> {
-        let max_actions = match target.len() {
-            2 => 12,
-            3 => 14,
-            4 => 16,
-            5 => 18,
-            _ => return None,
-        };
-
-        let above_len = self.stack.len_above_func_ret();
-        let initial: Vec<StackItem> = self.stack.iter().take(above_len).cloned().collect();
-        let requirements = self.target_requirements(target, consume_last_use);
-
-        // Only optimize when all non-immediate operands can be produced without touching memory.
-        let max_dup = self.ctx.reach.dup_max.min(initial.len());
-        for (&v, req) in &requirements {
-            if req.is_immediate {
-                continue;
-            }
-
-            let total_existing = initial
-                .iter()
-                .filter(|i| matches!(i, StackItem::Value(x) if *x == v))
-                .count();
-            let reachable_by_swap = initial
-                .iter()
-                .take(self.ctx.reach.swap_max)
-                .any(|i| matches!(i, StackItem::Value(x) if *x == v));
-            if !reachable_by_swap {
-                return None;
-            }
-
-            if total_existing < req.needed_total {
-                let reachable_by_dup = (0..max_dup).any(|i| initial[i] == StackItem::Value(v));
-                if !reachable_by_dup {
-                    return None;
-                }
-            }
-        }
-
-        let metric0 = OperandPrepMetric {
-            spill_requests: 0,
-            mem_loads: 0,
-            actions: 0,
-            swaps: 0,
-        };
-
-        fn is_goal(
-            state: &[StackItem],
-            target: &[ValueId],
-            requirements: &BTreeMap<ValueId, OperandRequirement>,
-        ) -> bool {
-            if state.len() < target.len() {
-                return false;
-            }
-            if !state
-                .iter()
-                .take(target.len())
-                .zip(target.iter().copied())
-                .all(|(item, want)| item == &StackItem::Value(want))
-            {
-                return false;
-            }
-
-            for (&v, req) in requirements {
-                let copies = state
-                    .iter()
-                    .filter(|i| matches!(i, StackItem::Value(x) if *x == v))
-                    .count();
-                if copies < req.needed_total {
-                    return false;
-                }
-            }
-            true
-        }
-
-        #[derive(Clone)]
-        struct HeapItem {
-            metric: OperandPrepMetric,
-            id: u64,
-            state: Vec<StackItem>,
-        }
-
-        impl PartialEq for HeapItem {
-            fn eq(&self, other: &Self) -> bool {
-                self.metric == other.metric && self.id == other.id
-            }
-        }
-
-        impl Eq for HeapItem {}
-
-        impl PartialOrd for HeapItem {
-            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-                Some(self.cmp(other))
-            }
-        }
-
-        impl Ord for HeapItem {
-            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                // Reverse the order for a min-heap; use a deterministic FIFO-ish tie-break.
-                other
-                    .metric
-                    .cmp(&self.metric)
-                    .then_with(|| other.id.cmp(&self.id))
-            }
-        }
-
-        let mut best: HashMap<Vec<StackItem>, OperandPrepMetric> = HashMap::new();
-        let mut prev: HashMap<Vec<StackItem>, (Vec<StackItem>, Action)> = HashMap::new();
-        let mut heap: BinaryHeap<HeapItem> = BinaryHeap::new();
-
-        best.insert(initial.clone(), metric0);
-        heap.push(HeapItem {
-            metric: metric0,
-            id: 0,
-            state: initial.clone(),
-        });
-        let mut next_id: u64 = 1;
-
-        while let Some(item) = heap.pop() {
-            let Some(&cur_best) = best.get(&item.state) else {
-                continue;
-            };
-            if item.metric != cur_best || item.metric.actions > max_actions {
-                continue;
-            }
-
-            if is_goal(&item.state, target, &requirements) {
-                let mut actions: Vec<Action> = Vec::new();
-                let mut cur = item.state.clone();
-                while let Some((p, a)) = prev.get(&cur) {
-                    actions.push(*a);
-                    cur = p.clone();
-                }
-                actions.reverse();
-                let mut out: Actions = Actions::new();
-                out.extend(actions.into_iter());
-                return Some(SearchOperandPrepPlan {
-                    actions: out,
-                    final_stack: item.state,
-                    metric: item.metric,
-                });
-            }
-
-            // Neighbors: DUP* for non-last-use operands, PUSH for immediates, then SWAP*.
-            for (&v, req) in &requirements {
-                let current_copies = item
-                    .state
-                    .iter()
-                    .filter(|i| matches!(i, StackItem::Value(x) if *x == v))
-                    .count();
-                if current_copies >= req.needed_total {
-                    continue;
-                }
-
-                if req.is_immediate {
-                    let imm = self
-                        .ctx
-                        .func
-                        .dfg
-                        .value_imm(v)
-                        .expect("imm value missing payload");
-                    let mut next_state = item.state.clone();
-                    next_state.insert(0, StackItem::Value(v));
-
-                    let next_metric = OperandPrepMetric {
-                        actions: item.metric.actions + 1,
-                        ..item.metric
-                    };
-                    let update = best
-                        .get(&next_state)
-                        .map(|m| next_metric < *m)
-                        .unwrap_or(true);
-                    if update {
-                        best.insert(next_state.clone(), next_metric);
-                        prev.insert(next_state.clone(), (item.state.clone(), Action::Push(imm)));
-                        heap.push(HeapItem {
-                            metric: next_metric,
-                            id: next_id,
-                            state: next_state,
-                        });
-                        next_id += 1;
-                    }
-                    continue;
-                }
-
-                let max_dup = self.ctx.reach.dup_max.min(item.state.len());
-                if let Some(pos) = (0..max_dup).find(|&i| item.state[i] == StackItem::Value(v)) {
-                    let mut next_state = item.state.clone();
-                    next_state.insert(0, StackItem::Value(v));
-
-                    let next_metric = OperandPrepMetric {
-                        actions: item.metric.actions + 1,
-                        ..item.metric
-                    };
-                    let update = best
-                        .get(&next_state)
-                        .map(|m| next_metric < *m)
-                        .unwrap_or(true);
-                    if update {
-                        best.insert(next_state.clone(), next_metric);
-                        prev.insert(
-                            next_state.clone(),
-                            (item.state.clone(), Action::StackDup(pos as u8)),
-                        );
-                        heap.push(HeapItem {
-                            metric: next_metric,
-                            id: next_id,
-                            state: next_state,
-                        });
-                        next_id += 1;
-                    }
-                }
-            }
-
-            let max_swap = self
-                .ctx
-                .reach
-                .swap_max
-                .saturating_sub(1)
-                .min(item.state.len().saturating_sub(1));
-            for k in 1..=max_swap {
-                let mut next_state = item.state.clone();
-                next_state.swap(0, k);
-
-                let next_metric = OperandPrepMetric {
-                    actions: item.metric.actions + 1,
-                    swaps: item.metric.swaps + 1,
-                    ..item.metric
-                };
-
-                let update = best
-                    .get(&next_state)
-                    .map(|m| next_metric < *m)
-                    .unwrap_or(true);
-                if update {
-                    best.insert(next_state.clone(), next_metric);
-                    prev.insert(
-                        next_state.clone(),
-                        (item.state.clone(), Action::StackSwap(k as u8)),
-                    );
-                    heap.push(HeapItem {
-                        metric: next_metric,
-                        id: next_id,
-                        state: next_state,
-                    });
-                    next_id += 1;
-                }
-            }
-        }
-
-        None
-    }
-
-    fn target_requirements(
-        &self,
-        target: &[ValueId],
-        consume_last_use: &BitSet<ValueId>,
-    ) -> BTreeMap<ValueId, OperandRequirement> {
-        let mut top_counts: BTreeMap<ValueId, usize> = BTreeMap::new();
-        for &v in target {
-            *top_counts.entry(v).or_insert(0) += 1;
-        }
-
-        top_counts
-            .into_iter()
-            .map(|(v, top_count)| {
-                let is_immediate = self.ctx.func.dfg.value_is_imm(v);
-                let preserve_needed = !is_immediate && !consume_last_use.contains(v);
-                (
-                    v,
-                    OperandRequirement {
-                        needed_total: top_count + usize::from(preserve_needed),
-                        is_immediate,
-                    },
-                )
-            })
-            .collect()
+    ) {
+        self.prepare_operands_maybe_commutative(args, consume_last_use, true);
     }
 
     fn stack_prefix_matches(&self, args: &[ValueId]) -> bool {
@@ -447,49 +161,46 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             .all(|(item, arg)| item == &StackItem::Value(arg))
     }
 
-    fn simulate_operand_prep_metric(
-        &self,
+    fn operand_prep_search_cfg(&self, args_len: usize) -> SearchCfg {
+        let max_len = if args_len > self.ctx.reach.swap_max {
+            args_len.min(21)
+        } else {
+            self.ctx.reach.swap_max
+        };
+        SearchCfg {
+            dup_max: self.ctx.reach.dup_max,
+            swap_max: self.ctx.reach.swap_max,
+            max_len,
+            max_expansions: 50_000,
+        }
+    }
+
+    pub(super) fn apply_operand_prep_plan(
+        &mut self,
+        plan: &super::normalize_search::NormalizePlan,
         args: &[ValueId],
-        consume_last_use: &BitSet<ValueId>,
-    ) -> OperandPrepMetric {
-        let mut sim_stack = (*self.stack).clone();
-        let mut sim_actions: Actions = Actions::new();
-        let mut sim_spill_requests = self.mem.spill_requests().clone();
-        let before_spill_requests = sim_spill_requests.len();
+    ) -> bool {
+        let stack_before = self.stack.clone();
+        let actions_before = self.actions.len();
+        let mem_before = self.mem.snapshot();
 
-        let mut sim_free_slots = self.mem.free_slots().clone();
-        let mut sim_slots = self.mem.slot_state().clone();
-
-        {
-            let mem = MemPlan::new(
-                self.mem.spill_set(),
-                &mut sim_spill_requests,
-                self.ctx,
-                self.mem.spill_obj,
-                &mut sim_free_slots,
-                &mut sim_slots,
-            );
-            let mut planner = Planner::new(self.ctx, &mut sim_stack, &mut sim_actions, mem);
-            planner.prepare_operands(args, consume_last_use);
+        for step in plan.steps.iter().copied() {
+            if !self.replay_normalize_step(step, &plan.key_infos) {
+                *self.stack = stack_before;
+                self.actions.truncate(actions_before);
+                self.mem.restore(mem_before);
+                return false;
+            }
         }
 
-        let mem_loads = sim_actions
-            .iter()
-            .filter(|a| matches!(a, Action::MemLoadAbs(_) | Action::MemLoadObj(_)))
-            .count();
-        let swaps = sim_actions
-            .iter()
-            .filter(|a| matches!(a, Action::StackSwap(_)))
-            .count();
-
-        OperandPrepMetric {
-            spill_requests: sim_spill_requests
-                .len()
-                .saturating_sub(before_spill_requests),
-            mem_loads,
-            actions: sim_actions.len(),
-            swaps,
+        if !self.rename_immediate_slots_to_match(args) || !self.stack_prefix_matches(args) {
+            *self.stack = stack_before;
+            self.actions.truncate(actions_before);
+            self.mem.restore(mem_before);
+            return false;
         }
+
+        true
     }
 
     pub(in super::super) fn prepare_operands(
@@ -497,6 +208,31 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         args: &[ValueId],
         consume_last_use: &BitSet<ValueId>,
     ) {
+        if args.is_empty() {
+            return;
+        }
+
+        let cost = SpillAwareCostModel::new(self.mem.spill_set());
+        let search_cfg = self.operand_prep_search_cfg(args.len());
+
+        let Some(plan) = solve_optimal_operand_prep_plan(
+            self.ctx,
+            self.stack,
+            args,
+            consume_last_use,
+            &cost,
+            search_cfg,
+        ) else {
+            self.prepare_operands_greedy(args, consume_last_use);
+            return;
+        };
+
+        if !self.apply_operand_prep_plan(&plan, args) {
+            self.prepare_operands_greedy(args, consume_last_use);
+        }
+    }
+
+    fn prepare_operands_greedy(&mut self, args: &[ValueId], consume_last_use: &BitSet<ValueId>) {
         // Iterate in reverse so the final stack order is `args[0]` on top, then `args[1]`, ...
         let mut prepared: usize = 0;
         let mut consumed_from_stack: BitSet<ValueId> = BitSet::default();
@@ -534,10 +270,45 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             if let Some(pos) = self.stack.find_reachable_value(v, self.ctx.reach.dup_max) {
                 self.stack.dup(pos, self.actions);
                 prepared += 1;
+            } else if let Some(pos) =
+                self.stack
+                    .find_reachable_value_from(v, prepared, self.ctx.reach.swap_max)
+            {
+                self.stack.stable_rotate_to_top(pos, self.actions);
+                self.stack.dup(0, self.actions);
+                prepared += 1;
             } else {
                 self.push_value_from_spill_slot_or_mark(v, v);
                 prepared += 1;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stackalloc::stackify::planner::normalize_search::{Cost, EstimatedCostModel, Step};
+
+    #[test]
+    fn commutative_plan_comparison_uses_emitted_step_cost() {
+        let cost = EstimatedCostModel::default();
+        let cheaper_emitted = NormalizePlan {
+            cost: Cost { gas: 99, bytes: 99 },
+            steps: vec![Step::Dup(0)],
+            key_infos: Vec::new(),
+            goal_keys: Vec::new(),
+        };
+        let pricier_emitted = NormalizePlan {
+            cost: Cost::default(),
+            steps: vec![Step::Swap(1), Step::Swap(1)],
+            key_infos: Vec::new(),
+            goal_keys: Vec::new(),
+        };
+
+        assert!(
+            commutative_plan_cmp_key(&cheaper_emitted, &cost)
+                < commutative_plan_cmp_key(&pricier_emitted, &cost)
+        );
     }
 }

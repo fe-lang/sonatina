@@ -15,7 +15,7 @@ pub(super) struct DefInfo {
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct BlockTemplate {
-    /// Parameter prefix (phi results; plus function args for the entry block).
+    /// Stack-resident parameter prefix (entry args; non-spilled phi results elsewhere).
     pub(super) params: SmallVec<[ValueId; 4]>,
     /// Canonical transfer region (top-first).
     pub(super) transfer: SmallVec<[ValueId; 8]>,

@@ -1,11 +1,15 @@
 //! Stack allocation via deterministic block-entry templates and edge fixups.
 //!
 //! - Each block `B` has a unique entry template `StackIn(B) = P(B) ++ T(B)`.
-//!   - `P(B)` is a parameter prefix (phi results; plus function args for the entry block).
+//!   - `P(B)` is a stack-resident parameter prefix:
+//!     - function args for the entry block
+//!     - non-spilled phi results for other blocks
 //!   - `T(B)` is a transfer region: live-in, non-phi values in a chosen order.
 //!     - `T(B)` is derived from simulated predecessor stacks (`cand(pred→B)`), not heuristics.
 //!     - Layouts are solved in reachable-CFG SCC topo order; cyclic SCCs use a fixed point.
-//! - For merge blocks, all incoming edges are normalized to the same `StackIn(B)` (often a no-op).
+//! - For merge blocks, all incoming edges are normalized to the same `StackIn(B)` (often a no-op);
+//!   spilled phi results are stored directly on the incoming edge instead of being carried in
+//!   `P(B)`.
 //! - When a value cannot be duplicated from within `DUP16` reach, it is added to `spill_set`,
 //!   assigned a stack object, and reloaded from memory; `spill_set` is discovered via a
 //!   monotone fixed point.
@@ -49,11 +53,15 @@ mod tests {
         domtree::DomTree,
         isa::evm::{EvmBackend, canonicalize_alias_value},
         liveness::{InstLiveness, Liveness},
+        stackalloc::Action,
     };
     use cranelift_entity::SecondaryMap;
-    use sonatina_ir::{ValueId, cfg::ControlFlowGraph, isa::evm::Evm};
+    use sonatina_ir::{
+        ValueId, cfg::ControlFlowGraph, inst::control_flow::BranchKind, isa::evm::Evm,
+    };
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+    use std::fmt::Write;
 
     #[test]
     fn scratch_spills_respect_scratch_live_values() {
@@ -238,6 +246,187 @@ block0:
                     );
                 }
             }
+        });
+    }
+
+    #[test]
+    fn entry_backedge_jump_emits_fixup_at_terminator() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %loop(v0.i256, v1.i256) -> i256 {
+block0:
+    v2.i1 = eq v0 0.i256;
+    br v2 block2 block1;
+
+block1:
+    v3.i256 = add v0 1.i256;
+    jump block0;
+
+block2:
+    return v0;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let fref = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&f| parsed.module.ctx.func_sig(f, |sig| sig.name() == "loop"))
+            .expect("missing loop");
+
+        parsed.module.func_store.view(fref, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+
+            let mut liveness = Liveness::new();
+            liveness.compute(function, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let v1 = parsed.debug.value(fref, "v1").expect("v1 exists");
+            let entry = cfg.entry().expect("entry block exists");
+            let backedge_block = function
+                .layout
+                .iter_block()
+                .find(|&block| block != entry)
+                .expect("backedge block exists");
+            let jump_inst = function
+                .layout
+                .last_inst_of(backedge_block)
+                .expect("backedge terminator exists");
+
+            let branch = function
+                .dfg
+                .branch_info(jump_inst)
+                .expect("terminator is control flow");
+            assert!(
+                matches!(branch.branch_kind(), BranchKind::Jump(_)),
+                "expected unconditional backedge"
+            );
+
+            let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute();
+
+            assert!(
+                alloc.pre_actions[jump_inst]
+                    .iter()
+                    .any(|action| matches!(action, Action::MemLoadObj(_) | Action::MemLoadAbs(_))),
+                "expected backedge to entry to reload the dropped entry arg:\npre_actions={:?}",
+                alloc.pre_actions[jump_inst]
+            );
+            assert!(
+                alloc.spill_obj[v1].is_some(),
+                "expected dropped entry arg to become spill-reloadable on the backedge"
+            );
+        });
+    }
+
+    #[test]
+    fn spilled_merge_phi_store_avoids_out_of_range_dup() {
+        let mut src = String::from(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1) -> i32 {
+block0:
+    br v0 block1 block2;
+
+block1:
+"#,
+        );
+        for i in 0..18 {
+            let _ = writeln!(&mut src, "    v{}.i32 = add {i}.i32 1.i32;", i + 1);
+        }
+        src.push_str(
+            r#"
+    jump block3;
+
+block2:
+"#,
+        );
+        for i in 0..18 {
+            let _ = writeln!(&mut src, "    v{}.i32 = add {}.i32 1.i32;", i + 19, 100 + i);
+        }
+        src.push_str(
+            r#"
+    jump block3;
+
+block3:
+"#,
+        );
+        for i in 0..18 {
+            let _ = writeln!(
+                &mut src,
+                "    v{}.i32 = phi (v{} block1) (v{} block2);",
+                i + 37,
+                i + 1,
+                i + 19
+            );
+        }
+        src.push_str(
+            r#"
+    v55.i32 = add v54 1.i32;
+"#,
+        );
+        for (idx, phi) in (37..54).enumerate() {
+            let acc = 55 + idx;
+            let next = acc + 1;
+            let _ = writeln!(&mut src, "    v{next}.i32 = add v{acc} v{phi};");
+        }
+        src.push_str(
+            r#"
+    return v72;
+}
+"#,
+        );
+
+        let parsed = parse_module(&src).expect("module parses");
+        let fref = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&f| parsed.module.ctx.func_sig(f, |sig| sig.name() == "f"))
+            .expect("missing f");
+
+        parsed.module.func_store.modify(fref, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+
+            let mut splitter = CriticalEdgeSplitter::new();
+            splitter.run(function, &mut cfg);
+
+            let mut liveness = Liveness::new();
+            liveness.compute(function, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let deep_phi = parsed.debug.value(fref, "v54").expect("v54 exists");
+            let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute();
+
+            assert!(
+                alloc.spill_obj[deep_phi].is_some(),
+                "expected deepest phi to spill so merge repair must store it"
+            );
+            assert!(
+                alloc.pre_actions.values().any(|actions| {
+                    actions
+                        .iter()
+                        .any(|action| matches!(action, Action::MemStoreObj(_) | Action::MemStoreAbs(_)))
+                }),
+                "expected merge repair to emit at least one spill store"
+            );
+            assert!(
+                alloc.pre_actions.values().all(|actions| {
+                    actions
+                        .iter()
+                        .all(|action| !matches!(action, Action::StackDup(slot) if *slot >= super::DUP_MAX as u8))
+                }),
+                "unexpected out-of-range DUP in merge repair: {:?}",
+                alloc.pre_actions
+            );
         });
     }
 }

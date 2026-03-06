@@ -30,35 +30,55 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             "phi source/result arity mismatch for edge {pred:?}->{succ:?}"
         );
 
+        let mut stack_phi_pairs: SmallVec<[(ValueId, ValueId); 4]> = SmallVec::new();
+        let mut spilled_phi_pairs: SmallVec<[(ValueId, ValueId); 4]> = SmallVec::new();
+        for (&phi_res, &src) in phi_results.iter().zip(phi_srcs.iter()) {
+            if self.mem.spill_set().contains(phi_res) {
+                spilled_phi_pairs.push((phi_res, src));
+            } else {
+                stack_phi_pairs.push((phi_res, src));
+            }
+        }
+
+        // Memory-only phi results do not participate in the successor's stack template: store
+        // them directly from the incoming source, then normalize only the stack-resident prefix.
+        for &(phi_res, src) in &spilled_phi_pairs {
+            self.emit_store_spilled_value_from_source(phi_res, src);
+        }
+
         // Normalize the predecessor stack directly to the successor entry template:
         //
         //   StackIn(succ) = P(succ) ++ T(succ)
         //
         // Where `P(succ)` includes:
         // - function args (entry block only)
-        // - phi results (replaced here by per-edge phi sources, then renamed in-place)
-        let phi_count = phi_results.len();
+        // - stack-resident phi results (replaced here by per-edge phi sources, then renamed
+        //   in-place; spilled phis were stored directly above and are omitted from `P(succ)`)
+        let phi_count = stack_phi_pairs.len();
         debug_assert!(
             phi_count <= tmpl.params.len(),
             "template params missing phi results for block {succ:?}"
         );
         let args_prefix_len = tmpl.params.len() - phi_count;
+        let expected_phi_params: SmallVec<[ValueId; 4]> = stack_phi_pairs
+            .iter()
+            .map(|(phi_res, _)| *phi_res)
+            .collect();
         debug_assert_eq!(
             &tmpl.params.as_slice()[args_prefix_len..],
-            phi_results.as_slice(),
+            expected_phi_params.as_slice(),
             "template phi prefix mismatch for block {succ:?}"
         );
 
         let mut desired: SmallVec<[ValueId; 16]> = SmallVec::new();
         desired.extend(tmpl.params.iter().take(args_prefix_len).copied());
-        desired.extend(phi_srcs.iter().copied());
+        desired.extend(stack_phi_pairs.iter().map(|(_, src)| *src));
         desired.extend(tmpl.transfer.iter().copied());
 
         self.normalize_to_exact(desired.as_slice());
 
-        // Rename phi-source placeholders to phi results, then emit spill stores without
-        // disturbing the final entry layout.
-        for (idx, (&phi_res, &src)) in phi_results.iter().zip(phi_srcs.iter()).enumerate() {
+        // Rename stack-resident phi-source placeholders to phi results.
+        for (idx, &(phi_res, src)) in stack_phi_pairs.iter().enumerate() {
             let depth = args_prefix_len + idx;
             debug_assert_eq!(
                 self.stack.item_at(depth),
@@ -66,7 +86,6 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 "edge normalization failed to place phi source at depth {depth} for {pred:?}->{succ:?}"
             );
             self.stack.rename_value_at_depth(depth, phi_res);
-            self.emit_store_if_spilled_at_depth(phi_res, depth);
         }
     }
 
