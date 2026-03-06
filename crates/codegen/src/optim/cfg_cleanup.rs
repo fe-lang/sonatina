@@ -28,11 +28,16 @@ impl CfgCleanup {
         let mut changed = editor.trim_after_terminator();
         changed |= ensure_blocks_terminated(editor.func_mut(), self.mode);
         changed |= trim_after_noreturn_call(editor.func_mut());
-        editor.recompute_cfg();
+        if changed {
+            editor.recompute_cfg();
+        }
 
         let reachable = compute_reachable(editor.cfg(), entry);
-        changed |= prune_unreachable(editor.func_mut(), &reachable);
-        editor.recompute_cfg();
+        let pruned_unreachable = prune_unreachable(editor.func_mut(), &reachable);
+        changed |= pruned_unreachable;
+        if pruned_unreachable {
+            editor.recompute_cfg();
+        }
 
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();
         for block in blocks {

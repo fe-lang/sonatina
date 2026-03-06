@@ -58,9 +58,29 @@ impl ControlFlowGraph {
         self.blocks[from].push_succ(to);
     }
 
+    pub fn replace_edge(&mut self, from: BlockId, old_to: BlockId, new_to: BlockId) {
+        self.remove_edge(from, old_to);
+        self.add_edge(from, new_to);
+    }
+
     pub fn remove_edge(&mut self, from: BlockId, to: BlockId) {
         self.blocks[to].remove_pred(from);
         self.blocks[from].remove_succ(to);
+    }
+
+    pub fn add_exit(&mut self, block: BlockId) {
+        if !self.exits.contains(&block) {
+            self.exits.push(block);
+        }
+    }
+
+    pub fn remove_exit(&mut self, block: BlockId) {
+        self.exits.retain(|exit| *exit != block);
+    }
+
+    pub fn replace_exit(&mut self, old: BlockId, new: BlockId) {
+        self.remove_exit(old);
+        self.add_exit(new);
     }
 
     pub fn reverse_edges(&mut self, new_entry: BlockId, new_exits: &[BlockId]) {

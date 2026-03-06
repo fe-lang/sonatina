@@ -132,9 +132,6 @@ impl<'f> CfgEditor<'f> {
             self.func.erase_insts(&to_remove);
         }
 
-        if changed {
-            self.recompute_cfg();
-        }
         changed
     }
 
@@ -403,8 +400,8 @@ impl<'f> CfgEditor<'f> {
         replace_phi_incoming_block(self.func, succ, block, pred);
         simplify_trivial_phis_in_block(self.func, succ);
         InstInserter::at_location(CursorLocation::BlockTop(block)).remove_block(self.func);
-
-        self.recompute_cfg();
+        self.cfg.replace_edge(pred, block, succ);
+        self.cfg.remove_edge(block, succ);
         true
     }
 
@@ -451,7 +448,7 @@ impl<'f> CfgEditor<'f> {
             self.func.layout.append_inst(inst, block);
         }
 
-        for succ_succ in succ_succs {
+        for &succ_succ in &succ_succs {
             if !self.func.layout.is_block_inserted(succ_succ) {
                 continue;
             }
@@ -460,7 +457,18 @@ impl<'f> CfgEditor<'f> {
         }
 
         InstInserter::at_location(CursorLocation::BlockTop(succ)).remove_block(self.func);
-        self.recompute_cfg();
+        self.cfg.remove_edge(block, succ);
+        for succ_succ in succ_succs {
+            self.cfg.remove_edge(succ, succ_succ);
+            self.cfg.add_edge(block, succ_succ);
+        }
+        if self
+            .func
+            .dfg
+            .is_exit(self.func.layout.last_inst_of(block).unwrap())
+        {
+            self.cfg.replace_exit(succ, block);
+        }
         true
     }
 
@@ -1173,6 +1181,59 @@ mod tests {
             assert!(phi.args().iter().any(|(_, pred)| *pred == b1));
             assert!(phi.args().iter().any(|(_, pred)| *pred == b4));
             assert!(!phi.args().iter().any(|(_, pred)| *pred == b2));
+
+            let b1_succs: Vec<_> = editor.cfg().succs_of(b1).copied().collect();
+            assert_eq!(b1_succs, vec![b3]);
+
+            let b3_preds: Vec<_> = editor.cfg().preds_of(b3).copied().collect();
+            assert_eq!(b3_preds, vec![b1, b4]);
+        });
+    }
+
+    #[test]
+    fn fold_trampoline_then_merge_linear_successor_uses_updated_cfg() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I32);
+        let is = evm.inst_set();
+
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+        let b2 = builder.append_block();
+
+        builder.switch_to_block(b0);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b1));
+
+        builder.switch_to_block(b1);
+        builder.insert_inst_no_result_with(|| Jump::new(is, b2));
+
+        builder.switch_to_block(b2);
+        let one = builder.make_imm_value(1i32);
+        builder.insert_inst_no_result_with(|| Return::new(is, Some(one)));
+
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            assert!(editor.fold_trampoline_block(b1));
+
+            let b0_succs: Vec<_> = editor.cfg().succs_of(b0).copied().collect();
+            assert_eq!(b0_succs, vec![b2]);
+
+            let b2_preds: Vec<_> = editor.cfg().preds_of(b2).copied().collect();
+            assert_eq!(b2_preds, vec![b0]);
+
+            assert!(editor.merge_linear_successor(b0));
+            assert!(!editor.func().layout.is_block_inserted(b2));
+
+            let b0_term = editor.func().layout.last_inst_of(b0).unwrap();
+            assert!(editor.func().dfg.as_return(b0_term).is_some());
+            assert_eq!(editor.cfg().exits.as_slice(), [b0]);
+
+            let b0_succs: Vec<_> = editor.cfg().succs_of(b0).copied().collect();
+            assert!(b0_succs.is_empty());
         });
     }
 }
