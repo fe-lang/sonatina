@@ -2,6 +2,7 @@ mod cleanup;
 pub mod combine;
 pub mod legalize;
 pub mod promotion;
+mod reconstruct;
 pub mod scalarize;
 pub mod shape;
 

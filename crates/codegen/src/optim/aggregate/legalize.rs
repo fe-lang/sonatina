@@ -1365,7 +1365,7 @@ fn scan_aggregate_legalize_needs(func: &Function, module: &ModuleCtx) -> Aggrega
     for &arg in &func.arg_values {
         let ty = func.dfg.value_ty(arg);
         if shape::is_supported_aggregate_ty(module, ty) {
-            panic!("aggregate function arguments are unsupported before phase 3");
+            panic!("aggregate function arguments are unsupported by aggregate legalization");
         }
     }
 
@@ -1379,12 +1379,12 @@ fn scan_aggregate_legalize_needs(func: &Function, module: &ModuleCtx) -> Aggrega
                     .iter()
                     .any(|&arg| shape::is_supported_aggregate_ty(module, func.dfg.value_ty(arg)))
                 {
-                    panic!("aggregate call arguments are unsupported before phase 3");
+                    panic!("aggregate call arguments are unsupported by aggregate legalization");
                 }
                 if let Some(result) = func.dfg.inst_result(inst)
                     && shape::is_supported_aggregate_ty(module, func.dfg.value_ty(result))
                 {
-                    panic!("aggregate call results are unsupported before phase 3");
+                    panic!("aggregate call results are unsupported by aggregate legalization");
                 }
             }
 
@@ -1393,7 +1393,7 @@ fn scan_aggregate_legalize_needs(func: &Function, module: &ModuleCtx) -> Aggrega
                 && let Some(arg) = ret.arg()
                 && shape::is_supported_aggregate_ty(module, func.dfg.value_ty(*arg))
             {
-                panic!("aggregate return values are unsupported before phase 3");
+                panic!("aggregate return values are unsupported by aggregate legalization");
             }
 
             if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst))

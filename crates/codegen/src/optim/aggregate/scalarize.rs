@@ -7,7 +7,9 @@ use sonatina_ir::{
     inst::{cast, control_flow, data, downcast},
 };
 
-use super::{cleanup::DeadPureInstCleanup, promotion::SsaBuilder, shape};
+use super::{
+    cleanup::DeadPureInstCleanup, promotion::SsaBuilder, reconstruct::bitcast_before_inst, shape,
+};
 
 type LeafValues = SmallVec<[ValueId; 4]>;
 
@@ -938,22 +940,10 @@ impl AggregateScalarize {
             }
 
             let mut mapped = LeafValues::new();
-            let mut builder = InstInserter::at_location(CursorLocation::At(inst));
-            for (source, dst_leaf) in source_leaves.into_iter().zip(dst_leaves) {
-                let value = if func.dfg.value_ty(source) == dst_leaf.ty {
-                    source
-                } else {
-                    let bitcast_inst = builder.insert_inst_data(
-                        func,
-                        cast::Bitcast::new_unchecked(func.inst_set(), source, dst_leaf.ty),
-                    );
-                    let bitcast_value = func.dfg.make_value(Value::Inst {
-                        inst: bitcast_inst,
-                        ty: dst_leaf.ty,
-                    });
-                    builder.attach_result(func, bitcast_inst, bitcast_value);
-                    bitcast_value
-                };
+            for ((source, src_leaf), dst_leaf) in
+                source_leaves.into_iter().zip(src_leaves).zip(dst_leaves)
+            {
+                let value = bitcast_before_inst(func, inst, source, src_leaf.ty, dst_leaf.ty);
                 mapped.push(value);
             }
             scalarized_agg[result] = Some(mapped);
@@ -969,21 +959,7 @@ impl AggregateScalarize {
                 return;
             };
             let mut leaves = LeafValues::new();
-            let value = if from_ty == dst_leaf.ty {
-                from
-            } else {
-                let mut builder = InstInserter::at_location(CursorLocation::At(inst));
-                let bitcast_inst = builder.insert_inst_data(
-                    func,
-                    cast::Bitcast::new_unchecked(func.inst_set(), from, dst_leaf.ty),
-                );
-                let bitcast_value = func.dfg.make_value(Value::Inst {
-                    inst: bitcast_inst,
-                    ty: dst_leaf.ty,
-                });
-                builder.attach_result(func, bitcast_inst, bitcast_value);
-                bitcast_value
-            };
+            let value = bitcast_before_inst(func, inst, from, from_ty, dst_leaf.ty);
             leaves.push(value);
             scalarized_agg[result] = Some(leaves);
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
@@ -1001,21 +977,7 @@ impl AggregateScalarize {
         let [source] = source_leaves.as_slice() else {
             return;
         };
-        let replacement = if src_leaf.ty == result_ty {
-            *source
-        } else {
-            let mut builder = InstInserter::at_location(CursorLocation::At(inst));
-            let bitcast_inst = builder.insert_inst_data(
-                func,
-                cast::Bitcast::new_unchecked(func.inst_set(), *source, result_ty),
-            );
-            let bitcast_value = func.dfg.make_value(Value::Inst {
-                inst: bitcast_inst,
-                ty: result_ty,
-            });
-            builder.attach_result(func, bitcast_inst, bitcast_value);
-            bitcast_value
-        };
+        let replacement = bitcast_before_inst(func, inst, *source, src_leaf.ty, result_ty);
         func.dfg.change_to_alias(result, replacement);
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
     }
@@ -1436,35 +1398,6 @@ impl AggregateScalarize {
 
 fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
     matches!(func.dfg.value(value), Value::Undef { .. })
-}
-
-fn bitcast_before_inst(
-    func: &mut Function,
-    inst: InstId,
-    value: ValueId,
-    from_ty: Type,
-    to_ty: Type,
-) -> ValueId {
-    if from_ty == to_ty {
-        return value;
-    }
-
-    let block = func.layout.inst_block(inst);
-    let loc = func
-        .layout
-        .prev_inst_of(inst)
-        .map_or(CursorLocation::BlockTop(block), CursorLocation::At);
-    let mut cursor = InstInserter::at_location(loc);
-    let bitcast_inst = cursor.insert_inst_data(
-        func,
-        cast::Bitcast::new_unchecked(func.inst_set(), value, to_ty),
-    );
-    let cast_value = func.dfg.make_value(Value::Inst {
-        inst: bitcast_inst,
-        ty: to_ty,
-    });
-    cursor.attach_result(func, bitcast_inst, cast_value);
-    cast_value
 }
 
 fn trivial_phi_replacement(func: &mut Function, phi_inst: InstId) -> Option<ValueId> {
