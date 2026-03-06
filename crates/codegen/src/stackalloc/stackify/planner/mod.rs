@@ -2,6 +2,8 @@ mod control_flow;
 mod normalize;
 mod normalize_search;
 mod operand_prep;
+#[cfg(test)]
+mod test_utils;
 
 use crate::{
     bitset::BitSet,

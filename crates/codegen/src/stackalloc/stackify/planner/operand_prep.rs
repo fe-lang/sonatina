@@ -274,8 +274,17 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 self.stack
                     .find_reachable_value_from(v, prepared, self.ctx.reach.swap_max)
             {
-                self.stack.stable_rotate_to_top(pos, self.actions);
-                self.stack.dup(0, self.actions);
+                if prepared == 0 {
+                    self.stack.stable_rotate_to_top(pos, self.actions);
+                    self.stack.dup(0, self.actions);
+                } else {
+                    // `find_reachable_value_from(..., swap_max)` can only expose the single
+                    // SWAP-only slot beyond DUP reach. Once a prepared prefix already exists,
+                    // restoring that prefix after rotating the source to the top would require
+                    // one more SWAP level than the source itself provides, so a stack-only
+                    // fallback would corrupt operand order.
+                    self.push_value_from_spill_slot_or_mark(v, v);
+                }
                 prepared += 1;
             } else {
                 self.push_value_from_spill_slot_or_mark(v, v);
@@ -288,7 +297,28 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stackalloc::stackify::planner::normalize_search::{Cost, EstimatedCostModel, Step};
+    use crate::{
+        cfg_scc::CfgSccAnalysis,
+        domtree::DomTree,
+        liveness::Liveness,
+        stackalloc::{
+            Action,
+            stackify::{
+                builder::StackifyReachability,
+                planner::{
+                    MemPlan, Planner,
+                    normalize_search::{Cost, EstimatedCostModel, Step},
+                    test_utils::build_stackify_test_context,
+                },
+                slots::{FreeSlotPools, SpillSlotPools},
+                spill::SpillSet,
+                sym_stack::SymStack,
+            },
+        },
+    };
+    use cranelift_entity::SecondaryMap;
+    use sonatina_ir::cfg::ControlFlowGraph;
+    use sonatina_parser::parse_module;
 
     #[test]
     fn commutative_plan_comparison_uses_emitted_step_cost() {
@@ -310,5 +340,148 @@ mod tests {
             commutative_plan_cmp_key(&cheaper_emitted, &cost)
                 < commutative_plan_cmp_key(&pricier_emitted, &cost)
         );
+    }
+
+    #[test]
+    fn greedy_swap_fallback_spills_instead_of_rotating_prepared_prefix() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256, v1.i256, v2.i256) {
+block0:
+    return;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(2);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+
+            let spill_set = BitSet::default();
+            let mut spill_requests = BitSet::default();
+            let spill_obj = SecondaryMap::new();
+            let mut free_slots = FreeSlotPools::default();
+            let mut slots = SpillSlotPools::default();
+            let mem = MemPlan::new(
+                SpillSet::new(&spill_set),
+                &mut spill_requests,
+                &ctx,
+                &spill_obj,
+                &mut free_slots,
+                &mut slots,
+            );
+
+            let args = [func.arg_values[1], func.arg_values[0]];
+            let mut stack = SymStack::entry_stack(func, false);
+            let mut actions = crate::stackalloc::Actions::new();
+            {
+                let mut planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+                planner.prepare_operands_greedy(&args, &BitSet::default());
+                assert!(planner.stack_prefix_matches(&args));
+            }
+
+            assert!(
+                !actions
+                    .iter()
+                    .any(|action| matches!(action, Action::StackSwap(_))),
+                "prepared-prefix fallback must not rotate the existing prefix: {actions:?}"
+            );
+            assert!(
+                actions
+                    .iter()
+                    .any(|action| matches!(action, Action::MemLoadObj(_))),
+                "expected greedy fallback to materialize the second operand from spill/load state: {actions:?}"
+            );
+            assert!(
+                spill_requests.contains(func.arg_values[1]),
+                "expected deep prepared operand to request a spill"
+            );
+        });
+    }
+
+    #[test]
+    fn greedy_swap_fallback_still_dupes_when_no_prefix_is_prepared() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256, v1.i256, v2.i256) {
+block0:
+    return;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(2);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+
+            let spill_set = BitSet::default();
+            let mut spill_requests = BitSet::default();
+            let spill_obj = SecondaryMap::new();
+            let mut free_slots = FreeSlotPools::default();
+            let mut slots = SpillSlotPools::default();
+            let mem = MemPlan::new(
+                SpillSet::new(&spill_set),
+                &mut spill_requests,
+                &ctx,
+                &spill_obj,
+                &mut free_slots,
+                &mut slots,
+            );
+
+            let args = [func.arg_values[2]];
+            let mut stack = SymStack::entry_stack(func, false);
+            let mut actions = crate::stackalloc::Actions::new();
+            {
+                let mut planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+                planner.prepare_operands_greedy(&args, &BitSet::default());
+                assert!(planner.stack_prefix_matches(&args));
+            }
+
+            assert_eq!(
+                actions.as_slice(),
+                &[
+                    Action::StackSwap(1),
+                    Action::StackSwap(2),
+                    Action::StackDup(0)
+                ],
+                "expected prefix-free greedy fallback to keep using SWAP + DUP"
+            );
+            assert!(
+                spill_requests.is_empty(),
+                "prefix-free SWAP fallback must not request a spill"
+            );
+        });
     }
 }
