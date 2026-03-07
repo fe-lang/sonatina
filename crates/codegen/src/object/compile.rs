@@ -3,8 +3,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     GlobalVariableRef, InstDowncast, Module,
     inst::{
-        arith::Uaddo,
         data::{GetFunctionPtr, SymAddr, SymSize, SymbolRef},
+        equiv::{BinaryInstKind, InstClassKind, UnaryInstKind},
     },
     module::FuncRef,
     object::EmbedSymbol,
@@ -100,9 +100,27 @@ fn diagnostic_targets_multi_result_inst(module: &Module, location: &Location) ->
 
     module.func_store.view(func, |function| {
         let inst_data = function.dfg.inst(inst);
-        function.dfg.inst_results(inst).len() != 1
-            || <&Uaddo as InstDowncast>::downcast(function.inst_set(), inst_data).is_some()
+        function.dfg.inst_results(inst).len() != 1 || is_checked_multi_result_inst(inst_data.kind())
     })
+}
+
+fn is_checked_multi_result_inst(kind: InstClassKind) -> bool {
+    matches!(
+        kind,
+        InstClassKind::Unary(UnaryInstKind::Snego)
+            | InstClassKind::Binary(
+                BinaryInstKind::Uaddo
+                    | BinaryInstKind::Saddo
+                    | BinaryInstKind::Usubo
+                    | BinaryInstKind::Ssubo
+                    | BinaryInstKind::Umulo
+                    | BinaryInstKind::Smulo
+                    | BinaryInstKind::EvmUdivo
+                    | BinaryInstKind::EvmSdivo
+                    | BinaryInstKind::EvmUmodo
+                    | BinaryInstKind::EvmSmodo
+            )
+    )
 }
 
 fn reject_unsupported_evm_multi_return(
@@ -1560,6 +1578,47 @@ object @O {
 
         let errs = compile_object(&parsed.module, &backend, "O", &opts)
             .expect_err("bad multi-result IR should fail verifier preflight");
+        let [ObjectCompileError::VerifierFailed { report }] = errs.as_slice() else {
+            panic!("expected verifier failure, got {errs:?}");
+        };
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code.as_str() == "IR0601"),
+            "expected IR0601, got {report}"
+        );
+    }
+
+    #[test]
+    fn compile_object_fast_rejects_bad_snego_result_shape() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %main(v0.i32) -> i32 {
+    block0:
+        v1.i32 = snego v0;
+        return v1;
+}
+
+object @O {
+  section runtime {
+    entry %main;
+  }
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let backend = FakeBackend;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: false,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
+        };
+
+        let errs = compile_object(&parsed.module, &backend, "O", &opts)
+            .expect_err("bad checked-overflow IR should fail verifier preflight");
         let [ObjectCompileError::VerifierFailed { report }] = errs.as_slice() else {
             panic!("expected verifier failure, got {errs:?}");
         };
