@@ -21,7 +21,7 @@ use sonatina_ir::{
 };
 
 use crate::{
-    cfg_edit::{CfgEditor, CleanupMode},
+    cfg_edit::{CfgEditor, CleanupMode, remove_phi_incoming_from, simplify_trivial_phis_in_block},
     domtree::{DomTree, DominatorTreeTraversable},
     optim::simplify_expr::{
         SimplifyExprResult, simplify_binary_with_known_imm, simplify_cast,
@@ -2569,17 +2569,37 @@ impl<'a> RedundantCodeRemover<'a> {
         }
     }
 
+    fn delete_unreachable_block(func: &mut Function, block: BlockId) -> CursorLocation {
+        let succs: Vec<_> = func
+            .layout
+            .last_inst_of(block)
+            .and_then(|inst| func.dfg.branch_info(inst).map(|branch| branch.dests()))
+            .unwrap_or_default()
+            .to_vec();
+        for succ in succs {
+            if func.layout.is_block_inserted(succ) {
+                remove_phi_incoming_from(func, succ, block);
+                simplify_trivial_phis_in_block(func, succ);
+            }
+        }
+
+        let next_loc = func
+            .layout
+            .next_block_of(block)
+            .map_or(CursorLocation::NoWhere, CursorLocation::BlockTop);
+        let insts: Vec<_> = func.layout.iter_inst(block).collect();
+        for &inst in &insts {
+            func.layout.remove_inst(inst);
+        }
+        func.erase_insts(&insts);
+        func.layout.remove_block(block);
+        func.erase_block(block);
+        next_loc
+    }
+
     /// Remove unreachable edges and blocks.
     fn remove_unreachable_edges(&self, func: &mut Function) {
-        let unreachable_blocks: Vec<_> = func
-            .layout
-            .iter_block()
-            .filter(|&block| !self.solver.blocks[block].reachable)
-            .collect();
         let mut editor = CfgEditor::new(func, CleanupMode::RepairWithUndef);
-        for block in unreachable_blocks {
-            editor.delete_block_unreachable(block);
-        }
 
         let entry_block = editor.func().layout.entry_block().unwrap();
         let mut inserter = InstInserter::at_location(CursorLocation::BlockTop(entry_block));
@@ -2589,8 +2609,8 @@ impl<'a> RedundantCodeRemover<'a> {
             match inserter.loc() {
                 CursorLocation::BlockTop(block) => {
                     if !self.solver.blocks[block].reachable {
-                        editor.delete_block_unreachable(block);
-                        inserter.set_location(CursorLocation::BlockTop(entry_block));
+                        let next_loc = Self::delete_unreachable_block(editor.func_mut(), block);
+                        inserter.set_location(next_loc);
                     } else {
                         inserter.proceed(editor.func());
                     }
