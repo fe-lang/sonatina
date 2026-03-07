@@ -6,6 +6,7 @@ pub mod egraph;
 pub mod gvn;
 pub mod inliner;
 pub mod licm;
+pub mod multi_result_legalize;
 pub mod pipeline;
 pub mod sccp;
 mod sccp_simplify;

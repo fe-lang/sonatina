@@ -1419,7 +1419,11 @@ impl<'a> Elaborator<'a> {
 
     fn make_inst_value_dyn(&mut self, inst: Box<dyn Inst>, ty: Type) -> ValueId {
         let inst_id = self.func.dfg.make_inst_dyn(inst);
-        let value = Value::Inst { inst: inst_id, ty };
+        let value = Value::Inst {
+            inst: inst_id,
+            result_idx: 0,
+            ty,
+        };
         let value_id = self.func.dfg.make_value(value);
         self.func.dfg.attach_result(inst_id, value_id);
         self.func

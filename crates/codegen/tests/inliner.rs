@@ -339,6 +339,38 @@ func public %caller(v0.i32, v1.i32) -> i32 {
     );
 }
 
+#[test]
+fn inliner_legalizes_multi_result_callees_before_analysis() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %leaf(v0.i256, v1.i256) -> i256 {
+    block0:
+        (v2.i256, v3.i1) = uaddo v0 v1;
+        return v2;
+}
+
+func public %caller(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = call %leaf v0 v1;
+        return v2;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(InlinerConfig::default());
+    inliner.run(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("uaddo"),
+        "inliner should legalize multi-result instructions before analyzing callees:\n{dumped}"
+    );
+}
+
 fn dump_module(module: &sonatina_ir::Module) -> String {
     let mut result = String::new();
     for func_ref in module.funcs() {

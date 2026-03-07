@@ -372,18 +372,20 @@ Module {
                     stmts: [
                         Stmt {
                             kind: Assign(
-                                ValueDeclaration(
-                                    ValueName {
-                                        string: "v0",
-                                        ..
-                                    },
-                                    Type {
-                                        kind: Int(
-                                            I256,
-                                        ),
-                                        ..
-                                    },
-                                ),
+                                [
+                                    ValueDeclaration(
+                                        ValueName {
+                                            string: "v0",
+                                            ..
+                                        },
+                                        Type {
+                                            kind: Int(
+                                                I256,
+                                            ),
+                                            ..
+                                        },
+                                    ),
+                                ],
                                 Inst {
                                     name: InstName {
                                         name: "mload",

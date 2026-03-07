@@ -17,7 +17,7 @@ use sonatina_ir::{
 
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
-    optim::call_purity::is_removable_pure_call,
+    optim::{call_purity::is_removable_pure_call, multi_result_legalize::legalize_multi_result},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,6 +170,10 @@ impl Inliner {
     pub fn run(&mut self, module: &mut Module) -> InlineStats {
         const MAX_ITERS: usize = 8;
         let mut stats = InlineStats::default();
+
+        for func_ref in module.funcs() {
+            module.func_store.modify(func_ref, legalize_multi_result);
+        }
 
         let mut iter = 0;
         while iter < MAX_ITERS {
@@ -681,6 +685,7 @@ fn apply_splice_single_block(
         result_ty.map(|ty| {
             let new_res = caller.dfg.make_value(Value::Inst {
                 inst: new_inst_id,
+                result_idx: 0,
                 ty,
             });
             caller.dfg.attach_result(new_inst_id, new_res);

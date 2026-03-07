@@ -116,7 +116,7 @@ pub(crate) fn compute_evm_late_aliases(
 
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
-            let Some(result) = function.dfg.inst_result(inst) else {
+            let [result] = function.dfg.inst_results(inst) else {
                 continue;
             };
 
@@ -139,7 +139,7 @@ pub(crate) fn compute_evm_late_aliases(
             };
 
             let from_rep = aliases.rep(from);
-            aliases.rep_of[result] = Some(from_rep);
+            aliases.rep_of[*result] = Some(from_rep);
         }
     }
 

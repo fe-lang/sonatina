@@ -446,11 +446,23 @@ impl IrWrite<FuncWriteCtx<'_>> for InstStatement {
     where
         W: io::Write,
     {
-        if let Some(result) = ctx.func.dfg.inst_result(self.0) {
-            let result_with_ty = ValueWithTy(result);
-            result_with_ty.write(w, ctx)?;
-            write!(w, " = ")?;
-        };
+        match ctx.func.dfg.inst_results(self.0) {
+            [] => {}
+            [result] => {
+                ValueWithTy(*result).write(w, ctx)?;
+                write!(w, " = ")?;
+            }
+            results => {
+                write!(w, "(")?;
+                for (idx, result) in results.iter().enumerate() {
+                    if idx != 0 {
+                        write!(w, ", ")?;
+                    }
+                    ValueWithTy(*result).write(w, ctx)?;
+                }
+                write!(w, ") = ")?;
+            }
+        }
 
         self.0.write(w, ctx)?;
         write!(w, ";")

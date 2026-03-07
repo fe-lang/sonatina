@@ -101,7 +101,7 @@ pub fn func_to_egglog(func: &Function) -> String {
                 &known_values,
             ) {
                 writeln!(&mut body, "{}", s).unwrap();
-                if let Some(result) = func.dfg.inst_result(inst_id) {
+                if let Some(result) = single_result_value(func, inst_id) {
                     known_values.insert(result);
                 }
                 if let Some(m) = new_mem {
@@ -154,7 +154,7 @@ fn inst_to_egglog(
 ) -> Option<String> {
     let inst = func.dfg.inst(inst_id);
     let is = func.inst_set();
-    let result = func.dfg.inst_result(inst_id);
+    let result = single_result_value(func, inst_id);
 
     macro_rules! try_binary {
         ($inst_ty:ty, $op:literal) => {
@@ -440,7 +440,7 @@ fn inst_to_egglog_with_mem(
 ) -> Option<(String, Option<String>)> {
     let inst = func.dfg.inst(inst_id);
     let is = func.inst_set();
-    let result = func.dfg.inst_result(inst_id);
+    let result = single_result_value(func, inst_id);
 
     // Mload - load from memory, creates a LoadResult with unique ID
     // Also sets the load-addr function for this load
@@ -528,6 +528,13 @@ fn inst_writes_memory(func: &Function, inst_id: InstId) -> bool {
 
 fn value_name(v: ValueId) -> String {
     format!("v{}", v.as_u32())
+}
+
+fn single_result_value(func: &Function, inst_id: InstId) -> Option<ValueId> {
+    match func.dfg.inst_results(inst_id) {
+        [result] => Some(*result),
+        _ => None,
+    }
 }
 
 fn value_to_egglog(func: &Function, v: ValueId) -> String {

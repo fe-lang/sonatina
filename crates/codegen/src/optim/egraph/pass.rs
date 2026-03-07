@@ -9,6 +9,8 @@ use sonatina_ir::{
     ControlFlowGraph, Function, InstDowncast, InstId, Type, Value, ValueId, inst::data::Mstore,
 };
 
+use crate::optim::multi_result_legalize::legalize_multi_result;
+
 use super::{EggTerm, Elaborator, func_to_egglog};
 
 const TYPES: &str = include_str!("types.egg");
@@ -33,6 +35,7 @@ fn has_unknown_call_attrs(func: &Function) -> bool {
 /// Run e-graph optimization pass on a function.
 /// Returns true if the function was modified.
 pub fn run_egraph_pass(func: &mut Function) -> bool {
+    legalize_multi_result(func);
     if has_unknown_call_attrs(func) {
         debug_assert!(
             false,

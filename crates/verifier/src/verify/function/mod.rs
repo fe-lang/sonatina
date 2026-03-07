@@ -1,6 +1,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, Function, Immediate, Inst, InstId, Signature, Type, Value, ValueId,
     module::{FuncRef, ModuleCtx},
@@ -125,10 +126,6 @@ impl FunctionPass for DominancePass {
 }
 
 impl FunctionPass for MetadataPass {
-    fn enabled(cfg: &VerifierConfig) -> bool {
-        cfg.should_check_users() || cfg.should_check_value_caches()
-    }
-
     fn run(verifier: &mut FunctionVerifier<'_>) {
         verifier.check_metadata_consistency();
     }
@@ -227,12 +224,75 @@ impl<'a> FunctionVerifier<'a> {
         }
     }
 
+    pub(super) fn ensure_result_count(
+        &mut self,
+        inst: InstId,
+        expected: usize,
+        location: Location,
+    ) -> bool {
+        let actual = self.func.dfg.inst_results(inst).len();
+        if actual == expected {
+            return true;
+        }
+
+        self.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstResultTypeMismatch,
+                "instruction result count does not match expected count",
+                location,
+            )
+            .with_note(format!("expected {expected}, found {actual}")),
+        );
+        false
+    }
+
+    pub(super) fn expect_result_count(
+        &mut self,
+        inst: InstId,
+        expected: usize,
+        location: Location,
+    ) {
+        let _ = self.ensure_result_count(inst, expected, location);
+    }
+
+    pub(super) fn expect_result_tys(
+        &mut self,
+        inst: InstId,
+        expected_tys: &[Type],
+        location: Location,
+    ) {
+        if !self.ensure_result_count(inst, expected_tys.len(), location.clone()) {
+            return;
+        }
+
+        let actual_tys = self.inst_result_tys(inst);
+        if actual_tys.as_slice() == expected_tys {
+            return;
+        }
+
+        self.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstResultTypeMismatch,
+                "instruction result types do not match expected types",
+                location,
+            )
+            .with_note(format!(
+                "expected {:?}, found {:?}",
+                expected_tys, actual_tys
+            )),
+        );
+    }
+
     pub(super) fn ensure_result_exists(
         &mut self,
         inst: InstId,
         location: Location,
     ) -> Option<Type> {
-        let Some(value_id) = self.func.dfg.try_inst_result(inst).flatten() else {
+        if !self.ensure_result_count(inst, 1, location.clone()) {
+            return None;
+        }
+
+        let Some(value_id) = self.func.dfg.inst_result_at(inst, 0) else {
             self.emit(Diagnostic::error(
                 DiagnosticCode::InstResultTypeMismatch,
                 "instruction is expected to produce a result value",
@@ -245,35 +305,38 @@ impl<'a> FunctionVerifier<'a> {
     }
 
     pub(super) fn expect_no_result(&mut self, inst: InstId, location: Location) {
-        if self.func.dfg.try_inst_result(inst).flatten().is_some() {
-            self.emit(Diagnostic::error(
-                DiagnosticCode::InstResultTypeMismatch,
-                "instruction must not produce a result value",
-                location,
-            ));
-        }
+        self.expect_result_count(inst, 0, location);
+    }
+
+    pub(super) fn expect_single_result_ty(
+        &mut self,
+        inst: InstId,
+        expected_ty: Type,
+        location: Location,
+    ) {
+        self.expect_result_tys(inst, &[expected_ty], location);
     }
 
     pub(super) fn expect_result_ty(&mut self, inst: InstId, expected_ty: Type, location: Location) {
-        let Some(actual_ty) = self.ensure_result_exists(inst, location.clone()) else {
-            return;
-        };
+        self.expect_single_result_ty(inst, expected_ty, location);
+    }
 
-        if actual_ty != expected_ty {
-            self.emit(
-                Diagnostic::error(
-                    DiagnosticCode::InstResultTypeMismatch,
-                    "instruction result type does not match expected type",
-                    location,
-                )
-                .with_note(format!("expected {:?}, found {:?}", expected_ty, actual_ty)),
-            );
-        }
+    pub(super) fn inst_result_tys(&self, inst: InstId) -> SmallVec<[Type; 2]> {
+        self.func
+            .dfg
+            .inst_results(inst)
+            .iter()
+            .filter_map(|value_id| self.value_ty(*value_id))
+            .collect()
     }
 
     pub(super) fn inst_result_ty(&self, inst: InstId) -> Option<Type> {
-        let value_id = self.func.dfg.try_inst_result(inst).flatten()?;
-        self.value_ty(value_id)
+        let result_tys = self.inst_result_tys(inst);
+        assert!(
+            result_tys.len() <= 1,
+            "inst_result_ty called on multi-result instruction {inst:?}"
+        );
+        result_tys.first().copied()
     }
 
     pub(super) fn value_ty(&self, value: ValueId) -> Option<Type> {

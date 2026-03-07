@@ -2,12 +2,15 @@ use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     GlobalVariableRef, InstDowncast, Module,
-    inst::data::{GetFunctionPtr, SymAddr, SymSize, SymbolRef},
+    inst::{
+        arith::Uaddo,
+        data::{GetFunctionPtr, SymAddr, SymSize, SymbolRef},
+    },
     module::FuncRef,
     object::EmbedSymbol,
 };
 use sonatina_verifier::{
-    VerificationLevel, VerifierConfig, verify_module, verify_module_invariants,
+    Location, VerificationLevel, VerifierConfig, verify_module, verify_module_invariants,
 };
 use tracing::{debug_span, info_span, trace_span};
 
@@ -73,7 +76,32 @@ fn verify_module_for_codegen(
     if report.has_errors() {
         return Err(vec![ObjectCompileError::VerifierFailed { report }]);
     }
+
+    if !cfg.should_check_types() {
+        let mut type_cfg = cfg.clone();
+        type_cfg.level = VerificationLevel::Standard;
+        let mut report = verify_module(module, &type_cfg);
+        report
+            .diagnostics
+            .retain(|diagnostic| diagnostic_targets_multi_result_inst(module, &diagnostic.primary));
+        if report.has_errors() {
+            return Err(vec![ObjectCompileError::VerifierFailed { report }]);
+        }
+    }
+
     Ok(())
+}
+
+fn diagnostic_targets_multi_result_inst(module: &Module, location: &Location) -> bool {
+    let Location::Inst { func, inst, .. } = *location else {
+        return false;
+    };
+
+    module.func_store.view(func, |function| {
+        let inst_data = function.dfg.inst(inst);
+        function.dfg.inst_results(inst).len() != 1
+            || <&Uaddo as InstDowncast>::downcast(function.inst_set(), inst_data).is_some()
+    })
 }
 
 pub fn compile_all_objects<B: LowerBackend>(
@@ -1339,6 +1367,47 @@ object @O {
                 .iter()
                 .any(|diagnostic| diagnostic.code.as_str() == "IR0700"),
             "expected IR0700 users mismatch diagnostic, got {report}"
+        );
+    }
+
+    #[test]
+    fn compile_object_fast_rejects_bad_uaddo_result_shape() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %main(v0.i32, v1.i32) -> i32 {
+    block0:
+        v2.i32 = uaddo v0 v1;
+        return v2;
+}
+
+object @O {
+  section runtime {
+    entry %main;
+  }
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let backend = FakeBackend;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: false,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
+        };
+
+        let errs = compile_object(&parsed.module, &backend, "O", &opts)
+            .expect_err("bad multi-result IR should fail verifier preflight");
+        let [ObjectCompileError::VerifierFailed { report }] = errs.as_slice() else {
+            panic!("expected verifier failure, got {errs:?}");
+        };
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code.as_str() == "IR0601"),
+            "expected IR0601, got {report}"
         );
     }
 

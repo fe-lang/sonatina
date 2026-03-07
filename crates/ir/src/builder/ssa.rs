@@ -5,7 +5,7 @@ use cranelift_entity::{PrimaryMap, SecondaryMap, SparseSet, packed_option::Packe
 use rustc_hash::FxHashMap;
 
 use crate::{
-    BlockId, Function, InstId, Type, Value, ValueId,
+    BlockId, Function, InstId, Type, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::control_flow,
 };
@@ -194,7 +194,7 @@ impl SsaBuilder {
         let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(block));
 
         let inst = cursor.prepend_inst_data(func, phi);
-        let value = func.dfg.make_value(Value::Inst { inst, ty });
+        let value = cursor.make_result(func, inst, ty);
         cursor.attach_result(func, inst, value);
         (inst, value)
     }

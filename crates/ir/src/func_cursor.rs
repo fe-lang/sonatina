@@ -1,5 +1,6 @@
 use super::{BlockId, Function, ValueId};
 use crate::{Inst, InstId, Type, Value};
+use smallvec::SmallVec;
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CursorLocation {
@@ -54,9 +55,29 @@ pub trait FuncCursor {
         inst
     }
 
+    fn make_results(
+        &self,
+        func: &mut Function,
+        inst_id: InstId,
+        tys: &[Type],
+    ) -> SmallVec<[ValueId; 2]> {
+        tys.iter()
+            .enumerate()
+            .map(|(result_idx, ty)| {
+                let result = Value::Inst {
+                    inst: inst_id,
+                    result_idx: result_idx.try_into().expect("too many instruction results"),
+                    ty: *ty,
+                };
+                func.dfg.make_value(result)
+            })
+            .collect()
+    }
+
     fn make_result(&self, func: &mut Function, inst_id: InstId, ty: Type) -> ValueId {
-        let result = Value::Inst { inst: inst_id, ty };
-        func.dfg.make_value(result)
+        let results = self.make_results(func, inst_id, &[ty]);
+        debug_assert_eq!(results.len(), 1);
+        results[0]
     }
 
     fn append_inst_data<I: Inst>(&mut self, func: &mut Function, data: I) -> InstId {
@@ -86,8 +107,12 @@ pub trait FuncCursor {
         self.set_location(next_loc);
     }
 
+    fn attach_results(&mut self, func: &mut Function, inst: InstId, values: &[ValueId]) {
+        func.dfg.attach_results(inst, values)
+    }
+
     fn attach_result(&mut self, func: &mut Function, inst: InstId, value: ValueId) {
-        func.dfg.attach_result(inst, value)
+        self.attach_results(func, inst, &[value])
     }
 
     fn make_block(&mut self, func: &mut Function) -> BlockId {

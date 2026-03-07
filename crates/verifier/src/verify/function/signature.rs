@@ -197,7 +197,7 @@ impl FunctionVerifier<'_> {
                         );
                     }
                 }
-                Value::Inst { inst, ty } => {
+                Value::Inst { inst, ty, .. } => {
                     if !self.func.dfg.has_inst(*inst) {
                         self.emit(
                             Diagnostic::error(

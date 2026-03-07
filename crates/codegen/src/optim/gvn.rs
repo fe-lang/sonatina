@@ -22,9 +22,12 @@ use sonatina_ir::{
 
 use crate::{
     domtree::{DomTree, DominatorTreeTraversable},
-    optim::simplify_expr::{
-        SimplifyExprResult, simplify_binary_with_known_imm, simplify_cast,
-        simplify_unary_with_same_inner,
+    optim::{
+        multi_result_legalize::legalize_multi_result,
+        simplify_expr::{
+            SimplifyExprResult, simplify_binary_with_known_imm, simplify_cast,
+            simplify_unary_with_same_inner,
+        },
     },
 };
 
@@ -38,11 +41,13 @@ const IMMEDIATE_RANK: u32 = 0;
 
 fn inst_to_gvn_key(func: &Function, inst_id: InstId) -> OwnedInstKey {
     let inst = func.dfg.inst(inst_id);
-    let result_ty = func
+    let result_tys: Vec<_> = func
         .dfg
-        .inst_result(inst_id)
-        .map(|result| func.dfg.value_ty(result));
-    inst.owned_key(result_ty)
+        .inst_results(inst_id)
+        .iter()
+        .map(|result| func.dfg.value_ty(*result))
+        .collect();
+    inst.owned_key(&result_tys)
 }
 
 /// A GVN solver.
@@ -88,6 +93,9 @@ impl GvnSolver {
     /// `cfg` and `domtree` is modified to reflect graph structure change.
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph, domtree: &mut DomTree) {
         self.clear();
+        legalize_multi_result(func);
+        cfg.compute(func);
+        domtree.compute(cfg);
 
         // Return if the function has no blocks.
         if func.layout.entry_block().is_none() {

@@ -23,6 +23,7 @@ use sonatina_ir::{
 use super::{
     adce::AdceSolver,
     cfg_cleanup::CfgCleanup,
+    multi_result_legalize::legalize_multi_result,
     sccp_simplify::{SimplifyResult, simplify_inst},
 };
 use crate::cfg_edit::{CfgEditor, CleanupMode};
@@ -56,6 +57,7 @@ impl SccpSolver {
     }
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) {
         self.clear();
+        legalize_multi_result(func);
 
         let cleanup_mode = if cfg!(debug_assertions) {
             CleanupMode::Strict
@@ -254,9 +256,15 @@ impl SccpSolver {
             i.interpret(&mut cell_state)
         });
 
-        let cell = match value {
+        let cell = match value.as_ref().and_then(|results| {
+            debug_assert!(
+                results.len() <= 1,
+                "SCCP evaluated a multi-result instruction without legalization"
+            );
+            results.first()
+        }) {
             Some(EvalValue::Imm(value)) => self
-                .normalize_const_imm_for_value(func, inst_result, value)
+                .normalize_const_imm_for_value(func, inst_result, *value)
                 .map(LatticeCell::Const)
                 .unwrap_or(LatticeCell::Top),
             Some(_) => cell_state.nonconst_result_cell(),

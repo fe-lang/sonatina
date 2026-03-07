@@ -1,4 +1,4 @@
-use super::{Action, EvalValue, Interpret, State};
+use super::{Action, EvalValue, Interpret, State, single_result};
 use crate::{I256, Immediate, Type, U256, inst::evm::*};
 
 fn bits_for_ty(ty: Type) -> u32 {
@@ -100,75 +100,59 @@ fn evm_byte(pos: U256, value: U256, value_bytes: usize) -> U256 {
 }
 
 impl Interpret for EvmUdiv {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
 
-        EvalValue::zip_with_imm(
-            lhs,
-            rhs,
-            |lhs, rhs| {
-                if rhs.is_zero() { rhs } else { lhs.udiv(rhs) }
-            },
-        )
+        single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
+            if rhs.is_zero() { rhs } else { lhs.udiv(rhs) }
+        }))
     }
 }
 
 impl Interpret for EvmSdiv {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
 
-        EvalValue::zip_with_imm(
-            lhs,
-            rhs,
-            |lhs, rhs| {
-                if rhs.is_zero() { rhs } else { lhs.sdiv(rhs) }
-            },
-        )
+        single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
+            if rhs.is_zero() { rhs } else { lhs.sdiv(rhs) }
+        }))
     }
 }
 
 impl Interpret for EvmUmod {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
 
-        EvalValue::zip_with_imm(
-            lhs,
-            rhs,
-            |lhs, rhs| {
-                if rhs.is_zero() { rhs } else { lhs.urem(rhs) }
-            },
-        )
+        single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
+            if rhs.is_zero() { rhs } else { lhs.urem(rhs) }
+        }))
     }
 }
 
 impl Interpret for EvmSmod {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
 
-        EvalValue::zip_with_imm(
-            lhs,
-            rhs,
-            |lhs, rhs| {
-                if rhs.is_zero() { rhs } else { lhs.srem(rhs) }
-            },
-        )
+        single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
+            if rhs.is_zero() { rhs } else { lhs.srem(rhs) }
+        }))
     }
 }
 
 impl Interpret for EvmAddMod {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let lhs = state.lookup_val(*self.lhs());
@@ -178,7 +162,7 @@ impl Interpret for EvmAddMod {
         let (EvalValue::Imm(lhs), EvalValue::Imm(rhs), EvalValue::Imm(modulus)) =
             (lhs, rhs, modulus)
         else {
-            return EvalValue::Undef;
+            return single_result(EvalValue::Undef);
         };
 
         debug_assert_eq!(lhs.ty(), rhs.ty());
@@ -186,12 +170,12 @@ impl Interpret for EvmAddMod {
 
         let ty = lhs.ty();
         let result = evm_addmod(imm_to_u256(lhs), imm_to_u256(rhs), imm_to_u256(modulus));
-        EvalValue::Imm(u256_to_imm(result, ty))
+        single_result(EvalValue::Imm(u256_to_imm(result, ty)))
     }
 }
 
 impl Interpret for EvmMulMod {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let lhs = state.lookup_val(*self.lhs());
@@ -201,7 +185,7 @@ impl Interpret for EvmMulMod {
         let (EvalValue::Imm(lhs), EvalValue::Imm(rhs), EvalValue::Imm(modulus)) =
             (lhs, rhs, modulus)
         else {
-            return EvalValue::Undef;
+            return single_result(EvalValue::Undef);
         };
 
         debug_assert_eq!(lhs.ty(), rhs.ty());
@@ -209,19 +193,19 @@ impl Interpret for EvmMulMod {
 
         let ty = lhs.ty();
         let result = evm_mulmod(imm_to_u256(lhs), imm_to_u256(rhs), imm_to_u256(modulus));
-        EvalValue::Imm(u256_to_imm(result, ty))
+        single_result(EvalValue::Imm(u256_to_imm(result, ty)))
     }
 }
 
 impl Interpret for EvmExp {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let base = state.lookup_val(*self.base());
         let exponent = state.lookup_val(*self.exponent());
 
         let (EvalValue::Imm(base), EvalValue::Imm(exponent)) = (base, exponent) else {
-            return EvalValue::Undef;
+            return single_result(EvalValue::Undef);
         };
 
         debug_assert_eq!(base.ty(), exponent.ty());
@@ -229,19 +213,19 @@ impl Interpret for EvmExp {
         let ty = base.ty();
         let mask = mask_for_ty(ty);
         let result = evm_exp(imm_to_u256(base), imm_to_u256(exponent), mask);
-        EvalValue::Imm(u256_to_imm(result, ty))
+        single_result(EvalValue::Imm(u256_to_imm(result, ty)))
     }
 }
 
 impl Interpret for EvmByte {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let pos = state.lookup_val(*self.pos());
         let value = state.lookup_val(*self.value());
 
         let (EvalValue::Imm(pos), EvalValue::Imm(value)) = (pos, value) else {
-            return EvalValue::Undef;
+            return single_result(EvalValue::Undef);
         };
 
         debug_assert_eq!(pos.ty(), value.ty());
@@ -250,6 +234,6 @@ impl Interpret for EvmByte {
         let value_bytes = bits_for_ty(ty).div_ceil(8) as usize;
 
         let result = evm_byte(imm_to_u256(pos), imm_to_u256(value), value_bytes);
-        EvalValue::Imm(u256_to_imm(result, ty))
+        single_result(EvalValue::Imm(u256_to_imm(result, ty)))
     }
 }

@@ -25,6 +25,7 @@ use crate::{
         lower::{FixupUpdate, Lower, LowerBackend, LoweredFunction, SectionLoweringCtx},
         vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
     },
+    optim::multi_result_legalize::legalize_multi_result,
     stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyBuilder},
 };
 use smallvec::{SmallVec, smallvec};
@@ -944,6 +945,19 @@ impl Drop for CurrentJumpTargetsGuard<'_> {
     }
 }
 
+fn assert_single_result_lowering_ir(func: &Function) {
+    for block in func.layout.iter_block() {
+        for inst in func.layout.iter_inst(block) {
+            let results = func.dfg.inst_results(inst);
+            assert!(
+                results.len() <= 1,
+                "multi-result instruction `{}` must be legalized before EVM lowering",
+                func.dfg.inst(inst).as_text()
+            );
+        }
+    }
+}
+
 impl LowerBackend for EvmBackend {
     type MInst = OpCode;
     type Error = String;
@@ -957,6 +971,12 @@ impl LowerBackend for EvmBackend {
     ) {
         let _span =
             info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
+        for &func in funcs {
+            module.func_store.modify(func, |function| {
+                legalize_multi_result(function);
+                assert_single_result_lowering_ir(function);
+            });
+        }
         let ptr_escape = {
             let _span = debug_span!("sonatina.codegen.evm.compute_ptr_escape_summaries").entered();
             compute_ptr_escape_summaries(module, funcs, &self.isa)
@@ -1201,6 +1221,11 @@ impl LowerBackend for EvmBackend {
             return self.lower_prepared_function(module, func, prepared);
         }
 
+        module.func_store.modify(func, |function| {
+            legalize_multi_result(function);
+            assert_single_result_lowering_ir(function);
+        });
+
         let ptr_escape = {
             let _span =
                 trace_span!("sonatina.codegen.evm.lower_function.compute_ptr_escape").entered();
@@ -1330,6 +1355,7 @@ impl LowerBackend for EvmBackend {
         match &data {
             EvmInstKind::Neg(_) => basic_op(ctx, &[OpCode::PUSH0, OpCode::SUB]),
             EvmInstKind::Add(_) => basic_op(ctx, &[OpCode::ADD]),
+            EvmInstKind::Uaddo(_) => panic!("uaddo must be legalized before EVM lowering"),
             EvmInstKind::Mul(_) => basic_op(ctx, &[OpCode::MUL]),
             EvmInstKind::Sub(_) => basic_op(ctx, &[OpCode::SUB]),
             EvmInstKind::Shl(_) => basic_op(ctx, &[OpCode::SHL]),

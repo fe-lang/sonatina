@@ -242,12 +242,13 @@ pub(crate) fn compute_provenance(
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
-            if let Some(def) = function.dfg.inst_result(inst) {
-                match data {
-                    EvmInstKind::Alloca(_) => prov[def].bases.push(PtrBase::Alloca(inst)),
-                    EvmInstKind::EvmMalloc(_) => prov[def].bases.push(PtrBase::Malloc(inst)),
-                    _ => {}
-                }
+            let [def] = function.dfg.inst_results(inst) else {
+                continue;
+            };
+            match data {
+                EvmInstKind::Alloca(_) => prov[*def].bases.push(PtrBase::Alloca(inst)),
+                EvmInstKind::EvmMalloc(_) => prov[*def].bases.push(PtrBase::Malloc(inst)),
+                _ => {}
             }
         }
     }
@@ -271,7 +272,7 @@ pub(crate) fn compute_provenance(
                     changed |= poison_local_mem(&mut mem, &prov[dst]);
                 }
 
-                let Some(def) = function.dfg.inst_result(inst) else {
+                let [def] = function.dfg.inst_results(inst) else {
                     continue;
                 };
 
@@ -322,7 +323,7 @@ pub(crate) fn compute_provenance(
                                 let _ = next.union_with(&prov[arg]);
                             }
                         }
-                        if function.dfg.value_ty(def).is_pointer(module)
+                        if function.dfg.value_ty(*def).is_pointer(module)
                             && next.bases.is_empty()
                             && !next.is_unknown_ptr()
                         {
@@ -361,7 +362,7 @@ pub(crate) fn compute_provenance(
                     _ => {}
                 }
 
-                let cur = &mut prov[def];
+                let cur = &mut prov[*def];
                 if *cur != next {
                     *cur = next;
                     changed = true;

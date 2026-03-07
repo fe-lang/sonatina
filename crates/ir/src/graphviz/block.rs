@@ -51,14 +51,28 @@ impl BlockNode<'_> {
         write!(label, r#"<tr><td align="left" balign="left">"#).unwrap();
         for inst in ctx.func.layout.iter_inst(self.block) {
             let mut inst_string = String::new();
-            if let Some(result) = self.ctx.func.dfg.inst_result(inst) {
-                let result_with_ty = ValueWithTy(result);
-                write!(
-                    &mut inst_string,
-                    "{} = ",
-                    result_with_ty.dump_string(self.ctx)
-                )
-                .unwrap();
+            match self.ctx.func.dfg.inst_results(inst) {
+                [] => {}
+                [result] => {
+                    let result_with_ty = ValueWithTy(*result);
+                    write!(
+                        &mut inst_string,
+                        "{} = ",
+                        result_with_ty.dump_string(self.ctx)
+                    )
+                    .unwrap();
+                }
+                results => {
+                    inst_string.push('(');
+                    for (idx, result) in results.iter().enumerate() {
+                        if idx != 0 {
+                            inst_string.push_str(", ");
+                        }
+                        let result_with_ty = ValueWithTy(*result);
+                        inst_string.push_str(&result_with_ty.dump_string(self.ctx));
+                    }
+                    inst_string.push_str(") = ");
+                }
             }
             let inst = inst.dump_string(self.ctx);
             write!(&mut inst_string, "{inst};").unwrap();

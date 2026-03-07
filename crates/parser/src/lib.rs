@@ -13,6 +13,7 @@ use ir::{
     module::{FuncRef, Module, ModuleCtx},
 };
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
+use smallvec::SmallVec;
 use smol_str::SmolStr;
 use tracing::{debug_span, info_span};
 
@@ -100,11 +101,11 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
         }
     }
 
-    let func_order = {
+    let defined_func_ids = {
         let _span = debug_span!("sonatina.parse.declare_defined_functions").entered();
         ast.functions
             .iter()
-            .flat_map(|func| {
+            .map(|func| {
                 if !ctx.check_duplicated_func(&builder, &func.signature.name) {
                     return None;
                 }
@@ -126,15 +127,18 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
                 // Safe to unwrap: function name checked for duplicate above
                 Some(builder.declare_function(sig).unwrap())
             })
-            .collect()
+            .collect::<Vec<_>>()
     };
+    let func_order = defined_func_ids.iter().flatten().copied().collect();
 
     let mut func_comments = SecondaryMap::default();
 
     {
         let _span = debug_span!("sonatina.parse.build_functions").entered();
-        for func in ast.functions {
-            let id = builder.lookup_func(&func.signature.name.name).unwrap();
+        for (func, id) in ast.functions.into_iter().zip(defined_func_ids) {
+            let Some(id) = id else {
+                continue;
+            };
             ctx.build_func(builder.func_builder(id), id, &func);
 
             func_comments[id] = func.comments;
@@ -210,6 +214,7 @@ impl BuildCtx {
         func: &ast::Func,
     ) {
         self.blocks.clear();
+        let mut assign_result_values: Vec<SmallVec<[Option<ir::ValueId>; 2]>> = Vec::new();
 
         for (i, ValueDeclaration(name, _ty)) in func.signature.params.iter().enumerate() {
             let value = fb.func.arg_values[i];
@@ -217,11 +222,18 @@ impl BuildCtx {
         }
 
         for stmt in func.blocks.iter().flat_map(|b| b.stmts.iter()) {
-            if let StmtKind::Assign(ValueDeclaration(name, ty), _) = &stmt.kind {
-                let ty = self.type_(&fb.module_builder, ty);
-                self.declare_value(&mut fb.func, name, ty);
+            if let StmtKind::Assign(values, _) = &stmt.kind {
+                let declared_values: SmallVec<[Option<ir::ValueId>; 2]> = values
+                    .iter()
+                    .map(|ValueDeclaration(name, ty)| {
+                        let ty = self.type_(&fb.module_builder, ty);
+                        self.declare_value(&mut fb.func, name, ty)
+                    })
+                    .collect();
+                assign_result_values.push(declared_values);
             }
         }
+        let mut assign_result_values = assign_result_values.into_iter();
 
         // collect all defined block ids
         self.blocks
@@ -239,7 +251,10 @@ impl BuildCtx {
 
             for stmt in &block.stmts {
                 let inst_id = match &stmt.kind {
-                    ast::StmtKind::Assign(ValueDeclaration(name, type_), ast_inst) => {
+                    ast::StmtKind::Assign(values, ast_inst) => {
+                        let declared_values = assign_result_values
+                            .next()
+                            .expect("predeclared assignment values must exist");
                         let inst: Box<dyn ir::Inst> =
                             match InstBuild::build(self, &mut fb, ast_inst) {
                                 Ok(inst) => inst,
@@ -249,11 +264,26 @@ impl BuildCtx {
                                 }
                             };
 
-                        let ty = self.type_(&fb.module_builder, type_);
-                        let value = *self.func_value_names.get_by_right(&name.string).unwrap();
                         let inst_id = fb.cursor.insert_inst_data_dyn(&mut fb.func, inst);
-                        fb.func.dfg.values[value] = ir::Value::Inst { inst: inst_id, ty };
-                        fb.cursor.attach_result(&mut fb.func, inst_id, value);
+                        let result_values: SmallVec<[ir::ValueId; 2]> = values
+                            .iter()
+                            .zip(declared_values)
+                            .enumerate()
+                            .filter_map(|(result_idx, (ValueDeclaration(_, type_), value))| {
+                                let value = value?;
+                                let ty = self.type_(&fb.module_builder, type_);
+                                fb.func.dfg.values[value] = ir::Value::Inst {
+                                    inst: inst_id,
+                                    result_idx: result_idx
+                                        .try_into()
+                                        .expect("too many instruction results"),
+                                    ty,
+                                };
+                                Some(value)
+                            })
+                            .collect();
+                        fb.cursor
+                            .attach_results(&mut fb.func, inst_id, &result_values);
                         inst_id
                     }
 
@@ -298,7 +328,12 @@ impl BuildCtx {
         block
     }
 
-    fn declare_value(&mut self, func: &mut ir::Function, name: &ast::ValueName, ty: ir::Type) {
+    fn declare_value(
+        &mut self,
+        func: &mut ir::Function,
+        name: &ast::ValueName,
+        ty: ir::Type,
+    ) -> Option<ir::ValueId> {
         // Abusing Immediate here; we just need a dummy value with a given type.
         // The Value will be replaced when create the Inst that defines the value.
         let value = func.dfg.make_value(ir::Value::Immediate {
@@ -312,6 +347,9 @@ impl BuildCtx {
         {
             self.errors
                 .push(Error::DuplicateValueName(name.string.clone(), name.span));
+            None
+        } else {
+            Some(value)
         }
     }
 
@@ -650,19 +688,7 @@ func public %foo(v0.i8) -> i8 {
 }
 "#;
 
-        // Temporarily catch panic to avoid test failure due to known issue
-        // TODO: Investigate and fix why parse_module panics on this input
-        let result = std::panic::catch_unwind(|| parse_module(s));
-
-        match result {
-            Ok(Ok(_)) => panic!("Expected parse_module to error, but got Ok."),
-            Ok(Err(_)) => {
-                // Got error as expected, test passed
-            }
-            Err(_) => {
-                // Panicked - currently happens, but silenced.
-            }
-        }
+        assert!(parse_module(s).is_err());
     }
 
     #[test]
@@ -681,6 +707,21 @@ func public %foo() -> unit {
         return;
 }
 "#;
+        assert!(parse_module(s).is_err());
+    }
+
+    #[test]
+    fn test_duplicate_tuple_result_names_should_fail_without_panicking() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %foo(v0.i8, v1.i8) -> i8 {
+    block0:
+        (v2.i8, v2.i1) = uaddo v0, v1;
+        return v0;
+}
+"#;
+
         assert!(parse_module(s).is_err());
     }
 

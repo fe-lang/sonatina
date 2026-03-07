@@ -72,10 +72,17 @@ impl Machine {
                 panic!("`Intepret is not yet implemented for `{}`", inst.as_text());
             };
 
-            let e_val = interpretable.interpret(self);
-            if let Some(inst_result) = self.top_func().dfg.inst_result(self.pc) {
-                self.top_frame_mut().map_val(inst_result, e_val);
-            };
+            let eval_results = interpretable.interpret(self);
+            let ir_results = self.top_func().dfg.inst_results(self.pc).to_vec();
+            assert_eq!(
+                eval_results.len(),
+                ir_results.len(),
+                "interpreter result count mismatch for {:?}",
+                self.pc
+            );
+            for (value, eval) in ir_results.iter().zip(eval_results) {
+                self.top_frame_mut().map_val(*value, eval);
+            }
 
             match self.action.clone() {
                 Action::Continue => {

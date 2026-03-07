@@ -117,8 +117,8 @@ pub(crate) fn compute_scratch_live_values(
 
             if is_barrier {
                 scratch_live_values.union_with(inst_liveness.live_out(inst));
-                if let Some(def) = function.dfg.inst_result(inst) {
-                    scratch_live_values.remove(def);
+                for def in function.dfg.inst_results(inst) {
+                    scratch_live_values.remove(*def);
                 }
             }
         }

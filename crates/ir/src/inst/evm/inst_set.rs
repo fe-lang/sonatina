@@ -6,6 +6,7 @@ use crate::inst::*;
 pub struct EvmInstSet(
     arith::Neg,
     arith::Add,
+    arith::Uaddo,
     arith::Mul,
     arith::Sub,
     arith::Shl,

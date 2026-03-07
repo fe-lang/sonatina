@@ -1,18 +1,18 @@
-use super::{Action, EvalValue, Interpret, State};
+use super::{Action, EvalValue, Interpret, State, no_result, single_result};
 use crate::inst::control_flow::*;
 
 impl Interpret for Jump {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::JumpTo(*self.dest()));
-        EvalValue::Undef
+        no_result()
     }
 }
 
 impl Interpret for Br {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         let Some(cond) = state.lookup_val(*self.cond()).as_imm() else {
             state.set_action(Action::FallThrough);
-            return EvalValue::Undef;
+            return no_result();
         };
 
         let dest = if cond.is_zero() {
@@ -22,15 +22,15 @@ impl Interpret for Br {
         };
 
         state.set_action(Action::JumpTo(dest));
-        EvalValue::Undef
+        no_result()
     }
 }
 
 impl Interpret for BrTable {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         let Some(scrutinee) = state.lookup_val(*self.scrutinee()).as_imm() else {
             state.set_action(Action::FallThrough);
-            return EvalValue::Undef;
+            return no_result();
         };
 
         for (value, block) in self.table() {
@@ -40,7 +40,7 @@ impl Interpret for BrTable {
 
             if scrutinee == value {
                 state.set_action(Action::JumpTo(*block));
-                return EvalValue::Undef;
+                return no_result();
             }
         }
 
@@ -50,26 +50,26 @@ impl Interpret for BrTable {
             state.set_action(Action::FallThrough)
         }
 
-        EvalValue::Undef
+        no_result()
     }
 }
 
 impl Interpret for Phi {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         let prev_block = state.prev_block();
         state.set_action(Action::Continue);
         for (value, block) in self.args() {
             if prev_block == *block {
-                return state.lookup_val(*value);
+                return single_result(state.lookup_val(*value));
             }
         }
 
-        EvalValue::Undef
+        single_result(EvalValue::Undef)
     }
 }
 
 impl Interpret for Call {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         let func = *self.callee();
         let args = self
             .args()
@@ -79,12 +79,21 @@ impl Interpret for Call {
 
         let val = state.call_func(func, args);
         state.set_action(Action::Continue);
-        val
+        if state
+            .dfg()
+            .ctx
+            .get_sig(func)
+            .is_some_and(|sig| sig.ret_ty().is_unit())
+        {
+            no_result()
+        } else {
+            single_result(val)
+        }
     }
 }
 
 impl Interpret for Return {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         let ret_val = if let Some(val) = self.arg() {
             state.lookup_val(*val)
         } else {
@@ -92,12 +101,12 @@ impl Interpret for Return {
         };
 
         state.set_action(Action::Return(ret_val));
-        EvalValue::Undef
+        no_result()
     }
 }
 
 impl Interpret for Unreachable {
-    fn interpret(&self, _state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, _state: &mut dyn State) -> super::EvalResults {
         panic!("unreachable executed")
     }
 }

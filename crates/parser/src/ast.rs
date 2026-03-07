@@ -398,10 +398,9 @@ impl FromSyntax<Error> for Stmt {
     fn from_syntax(node: &mut Node<Error>) -> Self {
         node.descend();
         let kind = match node.rule {
-            Rule::assign_stmt => StmtKind::Assign(
-                node.single(Rule::value_declaration),
-                node.single(Rule::inst),
-            ),
+            Rule::assign_stmt => {
+                StmtKind::Assign(node.multi(Rule::value_declaration), node.single(Rule::inst))
+            }
             Rule::inst_stmt => StmtKind::Inst(node.single(Rule::inst)),
             _ => unreachable!(),
         };
@@ -415,7 +414,7 @@ impl FromSyntax<Error> for Stmt {
 
 #[derive(Debug)]
 pub enum StmtKind {
-    Assign(ValueDeclaration, Inst),
+    Assign(Vec<ValueDeclaration>, Inst),
     Inst(Inst),
 }
 

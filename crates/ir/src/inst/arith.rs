@@ -16,6 +16,12 @@ pub struct Add {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct Uaddo {
+    lhs: ValueId,
+    rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(kind(binary(Mul)))]
 pub struct Mul {
     lhs: ValueId,

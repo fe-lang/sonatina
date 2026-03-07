@@ -80,7 +80,9 @@ current_section_symbol = { "." }
 
 // Stmts
 stmt        = { (assign_stmt | inst_stmt) ~ ";" }
-assign_stmt = { value_declaration ~ "=" ~ inst }
+assign_stmt = { assign_lhs ~ "=" ~ inst }
+assign_lhs = _{ value_declaration | multi_value_declaration }
+multi_value_declaration = _{ "(" ~ value_declaration ~ ("," ~ value_declaration)+ ~ ")" }
 inst_stmt   = { inst }
 
 inst            = { inst_name ~ inst_arg* }

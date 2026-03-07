@@ -15,6 +15,7 @@ define_inst_set_base! {
     trait InstSetBase {
         arith::Neg,
         arith::Add,
+        arith::Uaddo,
         arith::Mul,
         arith::Sub,
         arith::Sdiv,

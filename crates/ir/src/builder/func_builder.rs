@@ -3,11 +3,11 @@ use super::{
     ssa::{SsaBuilder, Variable},
 };
 use crate::{
-    BlockId, Function, GlobalVariableRef, Immediate, Inst, InstId, InstSetBase, Type, Value,
-    ValueId,
+    BlockId, Function, GlobalVariableRef, Immediate, Inst, InstId, InstSetBase, Type, ValueId,
     func_cursor::{CursorLocation, FuncCursor},
     module::{FuncRef, ModuleCtx},
 };
+use smallvec::SmallVec;
 
 pub struct FunctionBuilder<C> {
     pub module_builder: ModuleBuilder,
@@ -118,39 +118,19 @@ where
             .declare_struct_type(name, fields, packed)
     }
 
-    /// Inserts an instruction into the current position and returns a `ValueId`
-    /// for the result.
-    ///
-    /// # Parameters
-    /// - `inst`: The instruction to insert, which must implement the `Inst`
-    ///   trait.
-    /// - `ret_ty`: The return type of the instruction. A result value will be
-    ///   created with this type and associated with the instruction.
-    ///
-    /// # Returns
-    /// - `ValueId`: The ID of the result value associated with the inserted
-    ///   instruction.
-    pub fn insert_inst<I: Inst>(&mut self, inst: I, ret_ty: Type) -> ValueId {
-        let mut inst = inst;
-        inst.for_each_value_mut(&mut |v| {
-            *v = self.ssa_builder.resolve_alias(*v);
-        });
-
-        let inst_id = self.cursor.insert_inst_data(&mut self.func, inst);
-        self.append_pred(inst_id);
-
-        let result = Value::Inst {
-            inst: inst_id,
-            ty: ret_ty,
-        };
-        let result = self.func.dfg.make_value(result);
-        self.func.dfg.attach_result(inst_id, result);
-
-        self.cursor.set_location(CursorLocation::At(inst_id));
-        result
+    pub fn insert_inst_results<I: Inst>(
+        &mut self,
+        inst: I,
+        ret_tys: &[Type],
+    ) -> SmallVec<[ValueId; 2]> {
+        self.insert_inst_dyn_results(Box::new(inst), ret_tys)
     }
 
-    pub fn insert_inst_dyn(&mut self, inst: Box<dyn Inst>, ret_ty: Type) -> ValueId {
+    pub fn insert_inst_dyn_results(
+        &mut self,
+        inst: Box<dyn Inst>,
+        ret_tys: &[Type],
+    ) -> SmallVec<[ValueId; 2]> {
         let mut inst = inst;
         inst.for_each_value_mut(&mut |v| {
             *v = self.ssa_builder.resolve_alias(*v);
@@ -158,16 +138,41 @@ where
 
         let inst_id = self.cursor.insert_inst_data_dyn(&mut self.func, inst);
         self.append_pred(inst_id);
-
-        let result = Value::Inst {
-            inst: inst_id,
-            ty: ret_ty,
-        };
-        let result = self.func.dfg.make_value(result);
-        self.func.dfg.attach_result(inst_id, result);
+        let results = self.cursor.make_results(&mut self.func, inst_id, ret_tys);
+        self.cursor
+            .attach_results(&mut self.func, inst_id, &results);
 
         self.cursor.set_location(CursorLocation::At(inst_id));
-        result
+        results
+    }
+
+    /// Inserts an instruction into the current position and returns a `ValueId`
+    /// for the result.
+    ///
+    /// This is a strict single-result convenience wrapper over
+    /// [`Self::insert_inst_results`].
+    pub fn insert_inst<I: Inst>(&mut self, inst: I, ret_ty: Type) -> ValueId {
+        let results = self.insert_inst_results(inst, &[ret_ty]);
+        debug_assert_eq!(results.len(), 1);
+        results[0]
+    }
+
+    pub fn insert_inst_dyn(&mut self, inst: Box<dyn Inst>, ret_ty: Type) -> ValueId {
+        let results = self.insert_inst_dyn_results(inst, &[ret_ty]);
+        debug_assert_eq!(results.len(), 1);
+        results[0]
+    }
+
+    pub fn insert_inst_results_with<F, I>(
+        &mut self,
+        f: F,
+        ret_tys: &[Type],
+    ) -> SmallVec<[ValueId; 2]>
+    where
+        F: FnOnce() -> I,
+        I: Inst,
+    {
+        self.insert_inst_results(f(), ret_tys)
     }
 
     pub fn insert_inst_with<F, I>(&mut self, f: F, ret_ty: Type) -> ValueId
@@ -175,8 +180,9 @@ where
         F: FnOnce() -> I,
         I: Inst,
     {
-        let i = f();
-        self.insert_inst(i, ret_ty)
+        let results = self.insert_inst_results_with(f, &[ret_ty]);
+        debug_assert_eq!(results.len(), 1);
+        results[0]
     }
 
     /// Inserts an instruction into the function without creating a result value
@@ -188,25 +194,11 @@ where
     /// - `inst`: The instruction to insert, which must implement the `Inst`
     ///   trait.
     pub fn insert_inst_no_result<I: Inst>(&mut self, inst: I) {
-        let mut inst = inst;
-        inst.for_each_value_mut(&mut |v| {
-            *v = self.ssa_builder.resolve_alias(*v);
-        });
-
-        let inst_id = self.cursor.insert_inst_data(&mut self.func, inst);
-        self.append_pred(inst_id);
-        self.cursor.set_location(CursorLocation::At(inst_id));
+        let _ = self.insert_inst_results(inst, &[]);
     }
 
     pub fn insert_inst_no_result_dyn(&mut self, inst: Box<dyn Inst>) {
-        let mut inst = inst;
-        inst.for_each_value_mut(&mut |v| {
-            *v = self.ssa_builder.resolve_alias(*v);
-        });
-
-        let inst_id = self.cursor.insert_inst_data_dyn(&mut self.func, inst);
-        self.append_pred(inst_id);
-        self.cursor.set_location(CursorLocation::At(inst_id));
+        let _ = self.insert_inst_dyn_results(inst, &[]);
     }
 
     pub fn insert_inst_no_result_with<F, I>(&mut self, f: F)
@@ -296,8 +288,9 @@ where
 mod tests {
     use super::{super::test_util::*, *};
     use crate::{
+        Value,
         inst::{
-            arith::{Add, Mul, Sub},
+            arith::{Add, Mul, Sub, Uaddo},
             cast::Sext,
             control_flow::{Br, Jump, Phi, Return},
         },
@@ -460,5 +453,59 @@ mod tests {
 }
 "
         );
+    }
+
+    #[test]
+    fn insert_inst_results_tracks_result_order() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I32, Type::I32], Type::Unit);
+        let is = evm.inst_set();
+
+        let entry_block = builder.append_block();
+        builder.switch_to_block(entry_block);
+
+        let args = builder.args();
+        let results =
+            builder.insert_inst_results(Uaddo::new(is, args[0], args[1]), &[Type::I32, Type::I1]);
+        let ret = Return::new(is, None);
+        builder.insert_inst_no_result(ret);
+
+        assert_eq!(results.len(), 2);
+        let inst = builder.func.dfg.value_inst(results[0]).unwrap();
+        assert_eq!(builder.func.dfg.inst_results(inst), results.as_slice());
+        assert_eq!(
+            builder.func.dfg.value_inst_result(results[0]),
+            Some((inst, 0))
+        );
+        assert_eq!(
+            builder.func.dfg.value_inst_result(results[1]),
+            Some((inst, 1))
+        );
+
+        match builder.func.dfg.value(results[0]) {
+            Value::Inst {
+                inst: owner,
+                result_idx,
+                ty,
+            } => {
+                assert_eq!(*owner, inst);
+                assert_eq!(*result_idx, 0);
+                assert_eq!(*ty, Type::I32);
+            }
+            other => panic!("unexpected first result value: {other:?}"),
+        }
+
+        match builder.func.dfg.value(results[1]) {
+            Value::Inst {
+                inst: owner,
+                result_idx,
+                ty,
+            } => {
+                assert_eq!(*owner, inst);
+                assert_eq!(*result_idx, 1);
+                assert_eq!(*ty, Type::I1);
+            }
+            other => panic!("unexpected second result value: {other:?}"),
+        }
     }
 }

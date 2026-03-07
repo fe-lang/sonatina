@@ -248,8 +248,8 @@ pub(crate) fn compute_transient_mallocs(
 
             if matches!(data, EvmInstKind::EvmMalloc(_)) {
                 let mut live = inst_liveness.live_out(inst).clone();
-                if let Some(def) = function.dfg.inst_result(inst) {
-                    live.remove(def);
+                for def in function.dfg.inst_results(inst) {
+                    live.remove(*def);
                 }
 
                 remove_live_mallocs(&mut mallocs, &live, prov, local_mem, &seen_mallocs);

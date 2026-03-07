@@ -1,9 +1,10 @@
 //! This module contains Sonatine IR data flow graph.
 use std::{collections::BTreeSet, io};
 
-use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption};
+use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl};
 use dyn_clone::clone_box;
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 
 use super::{Immediate, Type, Value, ValueId};
 use crate::{
@@ -24,7 +25,7 @@ pub struct DataFlowGraph {
     pub values: PrimaryMap<ValueId, Value>,
     #[doc(hidden)]
     pub insts: PrimaryMap<InstId, Box<dyn Inst>>,
-    inst_results: SecondaryMap<InstId, PackedOption<ValueId>>,
+    inst_results: SecondaryMap<InstId, SmallVec<[ValueId; 1]>>,
     #[doc(hidden)]
     pub immediates: FxHashMap<Immediate, ValueId>,
     #[doc(hidden)]
@@ -97,6 +98,21 @@ impl DataFlowGraph {
         }
     }
 
+    /// Returns `(inst, result_idx)` if the value is defined by an instruction result.
+    pub fn value_inst_result(&self, value: ValueId) -> Option<(InstId, usize)> {
+        match self.value(value) {
+            Value::Inst {
+                inst, result_idx, ..
+            } => Some((*inst, usize::from(*result_idx))),
+            _ => None,
+        }
+    }
+
+    pub fn value_result_idx(&self, value: ValueId) -> Option<usize> {
+        self.value_inst_result(value)
+            .map(|(_, result_idx)| result_idx)
+    }
+
     /// Returns immediate if the value is immediate value.
     pub fn value_imm(&self, value: ValueId) -> Option<Immediate> {
         match self.value(value) {
@@ -119,6 +135,13 @@ impl DataFlowGraph {
     }
 
     pub fn replace_inst(&mut self, inst_id: InstId, new: Box<dyn Inst>) {
+        self.replace_inst_preserving_results(inst_id, new);
+    }
+
+    /// Replaces an instruction in place while preserving the existing result mapping.
+    ///
+    /// Callers must ensure the replacement preserves result count, ordering, and types.
+    pub fn replace_inst_preserving_results(&mut self, inst_id: InstId, new: Box<dyn Inst>) {
         let slot = &mut self.insts[inst_id];
         let old = &mut std::mem::replace(slot, new);
 
@@ -131,9 +154,45 @@ impl DataFlowGraph {
         self.attach_user(inst_id);
     }
 
+    pub fn attach_results(&mut self, inst_id: InstId, values: &[ValueId]) {
+        debug_assert!(
+            self.inst_results[inst_id].is_empty(),
+            "results for {inst_id:?} are already attached"
+        );
+        for (result_idx, value_id) in values.iter().copied().enumerate() {
+            debug_assert!(
+                matches!(
+                    self.value(value_id),
+                    Value::Inst {
+                        inst,
+                        result_idx: value_result_idx,
+                        ..
+                    } if *inst == inst_id && usize::from(*value_result_idx) == result_idx
+                ),
+                "attached result value {value_id:?} does not match {inst_id:?}[{result_idx}]"
+            );
+        }
+        self.inst_results[inst_id] = SmallVec::from_slice(values);
+    }
+
+    pub fn append_result(&mut self, inst_id: InstId, value_id: ValueId) {
+        let result_idx = self.inst_results[inst_id].len();
+        debug_assert!(
+            matches!(
+                self.value(value_id),
+                Value::Inst {
+                    inst,
+                    result_idx: value_result_idx,
+                    ..
+                } if *inst == inst_id && usize::from(*value_result_idx) == result_idx
+            ),
+            "appended result value {value_id:?} does not match {inst_id:?}[{result_idx}]"
+        );
+        self.inst_results[inst_id].push(value_id);
+    }
+
     pub fn attach_result(&mut self, inst_id: InstId, value_id: ValueId) {
-        debug_assert!(self.inst_results[inst_id].is_none());
-        self.inst_results[inst_id] = value_id.into();
+        self.attach_results(inst_id, &[value_id]);
     }
 
     pub fn make_arg_value(&mut self, ty: Type, idx: usize) -> Value {
@@ -227,12 +286,43 @@ impl DataFlowGraph {
         self.users.get(value_id)
     }
 
+    pub fn inst_results(&self, inst_id: InstId) -> &[ValueId] {
+        self.inst_results[inst_id].as_slice()
+    }
+
+    pub fn try_inst_results(&self, inst_id: InstId) -> Option<&[ValueId]> {
+        self.inst_results.get(inst_id).map(SmallVec::as_slice)
+    }
+
+    pub fn inst_result_at(&self, inst_id: InstId, idx: usize) -> Option<ValueId> {
+        self.inst_results(inst_id).get(idx).copied()
+    }
+
+    pub fn single_inst_result(&self, inst_id: InstId) -> Option<ValueId> {
+        let results = self.inst_results(inst_id);
+        assert!(
+            results.len() <= 1,
+            "single_inst_result called on multi-result instruction {inst_id:?}"
+        );
+        results.first().copied()
+    }
+
+    pub fn try_single_inst_result(&self, inst_id: InstId) -> Option<Option<ValueId>> {
+        self.try_inst_results(inst_id).map(|results| {
+            assert!(
+                results.len() <= 1,
+                "try_single_inst_result called on multi-result instruction {inst_id:?}"
+            );
+            results.first().copied()
+        })
+    }
+
     pub fn inst_result(&self, inst_id: InstId) -> Option<ValueId> {
-        self.inst_results[inst_id].expand()
+        self.single_inst_result(inst_id)
     }
 
     pub fn try_inst_result(&self, inst_id: InstId) -> Option<Option<ValueId>> {
-        self.inst_results.get(inst_id).map(|result| result.expand())
+        self.try_single_inst_result(inst_id)
     }
 
     pub fn branch_info(&self, inst_id: InstId) -> Option<&dyn BranchInfo> {
@@ -459,5 +549,65 @@ pub struct Block {}
 impl Block {
     pub fn new() -> Self {
         Self::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Type, builder::test_util::test_isa, inst::arith::Uaddo, module::ModuleCtx};
+
+    #[test]
+    fn inst_results_track_order_and_result_slots() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let lhs = dfg.make_imm_value(Immediate::I32(1));
+        let rhs = dfg.make_imm_value(Immediate::I32(2));
+        let inst = dfg.make_inst(Uaddo::new(dfg.inst_set().has_uaddo().unwrap(), lhs, rhs));
+
+        assert!(dfg.inst_results(inst).is_empty());
+
+        let sum = dfg.make_value(Value::Inst {
+            inst,
+            result_idx: 0,
+            ty: Type::I32,
+        });
+        let overflow = dfg.make_value(Value::Inst {
+            inst,
+            result_idx: 1,
+            ty: Type::I1,
+        });
+        dfg.attach_results(inst, &[sum, overflow]);
+
+        assert_eq!(dfg.inst_results(inst), &[sum, overflow]);
+        assert_eq!(dfg.inst_result_at(inst, 0), Some(sum));
+        assert_eq!(dfg.inst_result_at(inst, 1), Some(overflow));
+        assert_eq!(dfg.value_inst_result(sum), Some((inst, 0)));
+        assert_eq!(dfg.value_inst_result(overflow), Some((inst, 1)));
+        assert_eq!(dfg.value_result_idx(sum), Some(0));
+        assert_eq!(dfg.value_result_idx(overflow), Some(1));
+    }
+
+    #[test]
+    #[should_panic(expected = "single_inst_result called on multi-result instruction")]
+    fn single_inst_result_panics_on_multi_result() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let lhs = dfg.make_imm_value(Immediate::I32(1));
+        let rhs = dfg.make_imm_value(Immediate::I32(2));
+        let inst = dfg.make_inst(Uaddo::new(dfg.inst_set().has_uaddo().unwrap(), lhs, rhs));
+        let sum = dfg.make_value(Value::Inst {
+            inst,
+            result_idx: 0,
+            ty: Type::I32,
+        });
+        let overflow = dfg.make_value(Value::Inst {
+            inst,
+            result_idx: 1,
+            ty: Type::I1,
+        });
+        dfg.attach_results(inst, &[sum, overflow]);
+
+        let _ = dfg.single_inst_result(inst);
     }
 }

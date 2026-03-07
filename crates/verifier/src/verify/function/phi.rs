@@ -53,6 +53,7 @@ impl FunctionVerifier<'_> {
                     ));
                 }
 
+                self.expect_result_count(inst, 1, self.inst_location(inst));
                 let mut seen_incomings = FxHashSet::default();
                 let result_ty = self.inst_result_ty(inst);
 

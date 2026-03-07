@@ -194,15 +194,30 @@ impl<'a, Op: Default> Lower<'a, Op> {
         self.function.dfg.value_ty(value)
     }
 
+    pub fn insn_results(&self, inst: InstId) -> &[ValueId] {
+        self.function.dfg.inst_results(inst)
+    }
+
+    pub fn insn_result_at(&self, inst: InstId, idx: usize) -> Option<ValueId> {
+        self.function.dfg.inst_result_at(inst, idx)
+    }
+
     pub fn insn_result(&self, inst: InstId) -> Option<ValueId> {
-        self.function.dfg.inst_result(inst)
+        self.function.dfg.single_inst_result(inst)
     }
 
     pub fn value_def_inst(&self, value: ValueId) -> Option<InstId> {
-        let Value::Inst { inst, .. } = self.function.dfg.value(value) else {
+        self.value_def_inst_result(value).map(|(inst, _)| inst)
+    }
+
+    pub fn value_def_inst_result(&self, value: ValueId) -> Option<(InstId, usize)> {
+        let Value::Inst {
+            inst, result_idx, ..
+        } = self.function.dfg.value(value)
+        else {
             return None;
         };
-        Some(*inst)
+        Some((*inst, usize::from(*result_idx)))
     }
 
     pub fn insn_block(&self, inst: InstId) -> BlockId {

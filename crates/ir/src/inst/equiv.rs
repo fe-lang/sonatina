@@ -76,7 +76,7 @@ pub struct OwnedInstKey {
     opcode: TypeId,
     opcode_text: &'static str,
     values: SmallVec<[ValueId; 2]>,
-    result_ty: Option<Type>,
+    result_tys: SmallVec<[Type; 1]>,
     cast_ty: Option<Type>,
     phi_args: Vec<(ValueId, BlockId)>,
     callee: Option<FuncRef>,
@@ -92,12 +92,12 @@ enum OpaqueInstData {
 }
 
 impl OwnedInstKey {
-    pub fn from_inst(inst: &dyn Inst, result_ty: Option<Type>) -> Self {
+    pub fn from_inst(inst: &dyn Inst, result_tys: &[Type]) -> Self {
         let mut key = Self {
             opcode: inst.type_id(),
             opcode_text: inst.as_text(),
             values: inst.collect_values(),
-            result_ty,
+            result_tys: result_tys.iter().copied().collect(),
             cast_ty: cast_ty(inst),
             phi_args: Vec::new(),
             callee: None,
@@ -134,8 +134,8 @@ impl OwnedInstKey {
         Some(key)
     }
 
-    pub fn result_ty(&self) -> Option<Type> {
-        self.result_ty
+    pub fn result_tys(&self) -> &[Type] {
+        &self.result_tys
     }
 
     pub fn callee(&self) -> Option<FuncRef> {
@@ -240,18 +240,18 @@ impl OwnedInstKey {
 }
 
 pub trait InstKeyExt {
-    fn owned_key(&self, result_ty: Option<Type>) -> OwnedInstKey;
+    fn owned_key(&self, result_tys: &[Type]) -> OwnedInstKey;
 }
 
 impl InstKeyExt for dyn Inst {
-    fn owned_key(&self, result_ty: Option<Type>) -> OwnedInstKey {
-        OwnedInstKey::from_inst(self, result_ty)
+    fn owned_key(&self, result_tys: &[Type]) -> OwnedInstKey {
+        OwnedInstKey::from_inst(self, result_tys)
     }
 }
 
 impl<T: Inst> InstKeyExt for T {
-    fn owned_key(&self, result_ty: Option<Type>) -> OwnedInstKey {
-        OwnedInstKey::from_inst(self, result_ty)
+    fn owned_key(&self, result_tys: &[Type]) -> OwnedInstKey {
+        OwnedInstKey::from_inst(self, result_tys)
     }
 }
 
@@ -318,9 +318,9 @@ mod tests {
         let i2 = GetFunctionPtr::new(is.has_get_function_ptr().unwrap(), FuncRef::from_u32(2));
         let i3 = GetFunctionPtr::new(is.has_get_function_ptr().unwrap(), FuncRef::from_u32(1));
 
-        let k1 = OwnedInstKey::from_inst(&i1, None);
-        let k2 = OwnedInstKey::from_inst(&i2, None);
-        let k3 = OwnedInstKey::from_inst(&i3, None);
+        let k1 = OwnedInstKey::from_inst(&i1, &[]);
+        let k2 = OwnedInstKey::from_inst(&i2, &[]);
+        let k3 = OwnedInstKey::from_inst(&i3, &[]);
         assert_ne!(k1, k2);
         assert_eq!(k1, k3);
     }
@@ -343,12 +343,12 @@ mod tests {
         );
 
         assert_ne!(
-            OwnedInstKey::from_inst(&by_func, None),
-            OwnedInstKey::from_inst(&by_global, None)
+            OwnedInstKey::from_inst(&by_func, &[]),
+            OwnedInstKey::from_inst(&by_global, &[])
         );
         assert_ne!(
-            OwnedInstKey::from_inst(&by_global, None),
-            OwnedInstKey::from_inst(&by_embed, None)
+            OwnedInstKey::from_inst(&by_global, &[]),
+            OwnedInstKey::from_inst(&by_embed, &[])
         );
     }
 
@@ -370,12 +370,12 @@ mod tests {
         );
 
         assert_ne!(
-            OwnedInstKey::from_inst(&by_func, None),
-            OwnedInstKey::from_inst(&by_global, None)
+            OwnedInstKey::from_inst(&by_func, &[]),
+            OwnedInstKey::from_inst(&by_global, &[])
         );
         assert_ne!(
-            OwnedInstKey::from_inst(&by_global, None),
-            OwnedInstKey::from_inst(&by_embed, None)
+            OwnedInstKey::from_inst(&by_global, &[]),
+            OwnedInstKey::from_inst(&by_embed, &[])
         );
     }
 }

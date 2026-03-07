@@ -14,6 +14,7 @@ use sonatina_codegen::{
         cfg_cleanup::CfgCleanup,
         dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
         egraph::run_egraph_pass,
+        gvn::GvnSolver,
         inliner::{Inliner, InlinerConfig},
         licm::LicmSolver,
         sccp::SccpSolver,
@@ -25,6 +26,8 @@ use sonatina_ir::{
     ir_writer::{FuncWriter, ModuleWriter},
     module::FuncRef,
 };
+use sonatina_parser::parse_module;
+use sonatina_verifier::{DiagnosticCode, VerificationLevel, VerifierConfig, verify_module};
 
 const MAX_POLISH_ITERS: usize = 2;
 const MAX_OPT_PIPELINE_ITERS: usize = 4;
@@ -200,4 +203,89 @@ fn enqueue_reachable(
     if module.ctx.declared_funcs.contains_key(&func_ref) && reachable.insert(func_ref) {
         worklist.push(func_ref);
     }
+}
+
+#[test]
+fn standalone_function_passes_legalize_multi_result_input() {
+    let (sccp_module, sccp_func) = parse_test_module(STANDALONE_MULTI_RESULT_SRC);
+    sccp_module.func_store.modify(sccp_func, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    assert_func_not_contains(&sccp_module, sccp_func, "uaddo");
+    assert_fast_verified(&sccp_module);
+
+    let (gvn_module, gvn_func) = parse_test_module(STANDALONE_MULTI_RESULT_SRC);
+    gvn_module.func_store.modify(gvn_func, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        let mut domtree = DomTree::new();
+        GvnSolver::new().run(func, &mut cfg, &mut domtree);
+    });
+    assert_func_not_contains(&gvn_module, gvn_func, "uaddo");
+    assert_fast_verified(&gvn_module);
+
+    let (licm_module, licm_func) = parse_test_module(STANDALONE_MULTI_RESULT_SRC);
+    licm_module.func_store.modify(licm_func, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        let mut lpt = LoopTree::new();
+        LicmSolver::new().run(func, &mut cfg, &mut lpt);
+    });
+    assert_func_not_contains(&licm_module, licm_func, "uaddo");
+    assert_fast_verified(&licm_module);
+
+    let (egraph_module, egraph_func) = parse_test_module(STANDALONE_MULTI_RESULT_SRC);
+    egraph_module
+        .func_store
+        .modify(egraph_func, run_egraph_pass);
+    assert_func_not_contains(&egraph_module, egraph_func, "uaddo");
+    assert_fast_verified(&egraph_module);
+}
+
+const STANDALONE_MULTI_RESULT_SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256, v1.i256) -> i256 {
+    block0:
+        (v2.i256, v3.i1) = uaddo v0 v1;
+        return v2;
+}
+"#;
+
+fn parse_test_module(src: &str) -> (Module, FuncRef) {
+    let parsed = parse_module(src).unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let func_ref = parsed
+        .module
+        .funcs()
+        .into_iter()
+        .next()
+        .expect("test module must contain a function");
+    (parsed.module, func_ref)
+}
+
+fn assert_func_not_contains(module: &Module, func_ref: FuncRef, needle: &str) {
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        !dumped.contains(needle),
+        "function still contains `{needle}`:\n{dumped}"
+    );
+}
+
+fn assert_fast_verified(module: &Module) {
+    let report = verify_module(module, &VerifierConfig::for_level(VerificationLevel::Fast));
+    let unexpected: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            !matches!(
+                diagnostic.code,
+                DiagnosticCode::InsertedButUnlisted | DiagnosticCode::UnlistedButInserted
+            )
+        })
+        .collect();
+    assert!(
+        unexpected.is_empty(),
+        "module failed verification: {report:?}"
+    );
 }

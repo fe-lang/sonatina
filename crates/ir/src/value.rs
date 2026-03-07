@@ -54,6 +54,7 @@ pub enum Value {
     /// The value is defined by an instruction.
     Inst {
         inst: InstId,
+        result_idx: u16,
         ty: Type,
     },
 
@@ -188,6 +189,16 @@ impl Immediate {
         debug_assert_eq!(self.ty(), rhs.ty());
 
         (self != rhs).into()
+    }
+
+    pub fn overflowing_uadd(self, rhs: Self) -> (Self, bool) {
+        debug_assert_eq!(self.ty(), rhs.ty());
+
+        let ty = self.ty();
+        let mask = self.mask_for_ty();
+        let (sum, carry) = self.unsigned_value().overflowing_add(rhs.unsigned_value());
+        let overflow = carry || sum > mask;
+        (Self::from_i256(I256::from(sum & mask), ty), overflow)
     }
 
     pub fn zero(ty: Type) -> Self {

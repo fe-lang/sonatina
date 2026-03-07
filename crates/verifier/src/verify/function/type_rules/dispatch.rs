@@ -70,6 +70,41 @@ impl_binary_integral_same_rule!(
     logic::Xor => "xor",
 );
 
+impl VerifyInst for arith::Uaddo {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let Some(lhs_ty) = verifier.value_ty(*self.lhs()) else {
+            return;
+        };
+        let Some(rhs_ty) = verifier.value_ty(*self.rhs()) else {
+            return;
+        };
+
+        if !lhs_ty.is_integral() || !rhs_ty.is_integral() {
+            verifier.emit(
+                Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    "uaddo operands must be integral",
+                    location.clone(),
+                )
+                .with_note(format!("lhs {:?}, rhs {:?}", lhs_ty, rhs_ty)),
+            );
+        }
+        if lhs_ty != rhs_ty {
+            verifier.emit(
+                Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    "uaddo operands must have identical types",
+                    location.clone(),
+                )
+                .with_note(format!("lhs {:?}, rhs {:?}", lhs_ty, rhs_ty)),
+            );
+        }
+
+        verifier.expect_result_tys(inst_id, &[lhs_ty, Type::I1], location);
+    }
+}
+
 macro_rules! impl_shift_rule {
     ($($ty:ty => $opname:literal),+ $(,)?) => {
         $(

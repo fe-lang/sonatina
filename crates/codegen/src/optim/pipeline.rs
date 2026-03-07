@@ -24,6 +24,7 @@ use super::{
     gvn::GvnSolver,
     inliner::{Inliner, InlinerConfig},
     licm::LicmSolver,
+    multi_result_legalize::legalize_multi_result,
     sccp::SccpSolver,
 };
 
@@ -34,6 +35,7 @@ use super::{
 /// where standalone dead code elimination is needed without constant propagation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Pass {
+    LegalizeMultiResult,
     /// Control flow graph cleanup (dead block removal, phi pruning, terminator repair).
     CfgCleanup,
     /// Sparse conditional constant propagation (composite: CfgCleanup + SCCP + CfgCleanup + ADCE).
@@ -56,6 +58,7 @@ pub enum Pass {
 impl Pass {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Pass::LegalizeMultiResult => "legalize_multi_result",
             Pass::CfgCleanup => "cfg_cleanup",
             Pass::Sccp => "sccp",
             Pass::Adce => "adce",
@@ -155,6 +158,7 @@ impl Pipeline {
     /// This is the recommended baseline (O1-style) pipeline.
     pub fn balanced() -> Self {
         let mut p = Self::new();
+        p.add_step(Step::FuncPasses(vec![Pass::LegalizeMultiResult]));
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(vec![
             Pass::CfgCleanup,
@@ -176,6 +180,7 @@ impl Pipeline {
     /// Uses a larger inliner budget and a second inline+SCCP round.
     pub fn aggressive() -> Self {
         let mut p = Self::new();
+        p.add_step(Step::FuncPasses(vec![Pass::LegalizeMultiResult]));
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(vec![
             Pass::CfgCleanup,
@@ -202,8 +207,9 @@ impl Pipeline {
     /// Default optimization pipeline with a conservative ordering.
     ///
     /// Current sequence:
-    /// 1. `Inline` — single-block inlining (module-level)
-    /// 2. Per-function passes (parallel):
+    /// 1. `LegalizeMultiResult` — lower unsupported multi-result ops to single-result IR
+    /// 2. `Inline` — single-block inlining (module-level)
+    /// 3. Per-function passes (parallel):
     ///    - `CfgCleanup` — normalize CFG before analysis-heavy passes
     ///    - `Sccp` — constant propagation + dead code elimination (composite)
     ///    - `Gvn` — sparse predicated global value numbering with value-phi resolution
@@ -340,6 +346,10 @@ struct PassContext {
 fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
     let _span = trace_span!("sonatina.optim.pipeline.pass", pass = pass.as_str()).entered();
     match pass {
+        Pass::LegalizeMultiResult => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.legalize_multi_result").entered();
+            legalize_multi_result(func);
+        }
         Pass::CfgCleanup => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.cfg_cleanup").entered();
             CfgCleanup::new(CleanupMode::Strict).run(func);

@@ -10,45 +10,59 @@ use super::FunctionVerifier;
 impl FunctionVerifier<'_> {
     pub(super) fn check_metadata_consistency(&mut self) {
         for inst in self.func.dfg.insts.keys() {
-            let Some(result) = self.func.dfg.try_inst_result(inst).flatten() else {
-                continue;
-            };
+            for (result_idx, result) in self.func.dfg.inst_results(inst).iter().enumerate() {
+                let Some(value_data) = self.func.dfg.get_value(*result) else {
+                    self.emit(
+                        Diagnostic::error(
+                            DiagnosticCode::InstResultMapBroken,
+                            "inst_results points to a missing value",
+                            Location::Inst {
+                                func: self.func_ref,
+                                block: self.inst_to_block.get(&inst).copied(),
+                                inst,
+                            },
+                        )
+                        .with_note(format!("missing value id {}", result.as_u32())),
+                    );
+                    continue;
+                };
 
-            let Some(value_data) = self.func.dfg.get_value(result) else {
-                self.emit(
-                    Diagnostic::error(
-                        DiagnosticCode::InstResultMapBroken,
-                        "inst_results points to a missing value",
-                        Location::Inst {
-                            func: self.func_ref,
-                            block: self.inst_to_block.get(&inst).copied(),
-                            inst,
-                        },
-                    )
-                    .with_note(format!("missing value id {}", result.as_u32())),
-                );
-                continue;
-            };
-
-            if !matches!(value_data, Value::Inst { inst: owner, .. } if *owner == inst) {
-                self.emit(
-                    Diagnostic::error(
-                        DiagnosticCode::InstResultMapBroken,
-                        "inst_results and Value::Inst mapping are inconsistent",
-                        Location::Inst {
-                            func: self.func_ref,
-                            block: self.inst_to_block.get(&inst).copied(),
-                            inst,
-                        },
-                    )
-                    .with_note(format!("inst_result points to value v{}", result.as_u32())),
-                );
+                if !matches!(
+                    value_data,
+                    Value::Inst {
+                        inst: owner,
+                        result_idx: owner_result_idx,
+                        ..
+                    } if *owner == inst && usize::from(*owner_result_idx) == result_idx
+                ) {
+                    self.emit(
+                        Diagnostic::error(
+                            DiagnosticCode::InstResultMapBroken,
+                            "inst_results and Value::Inst mapping are inconsistent",
+                            Location::Inst {
+                                func: self.func_ref,
+                                block: self.inst_to_block.get(&inst).copied(),
+                                inst,
+                            },
+                        )
+                        .with_note(format!(
+                            "inst_results[{result_idx}] points to value v{}",
+                            result.as_u32()
+                        )),
+                    );
+                }
             }
         }
 
         for (value_id, value_data) in self.func.dfg.values.iter() {
-            if let Value::Inst { inst, .. } = value_data
-                && self.func.dfg.try_inst_result(*inst).flatten() != Some(value_id)
+            if let Value::Inst {
+                inst, result_idx, ..
+            } = value_data
+                && self
+                    .func
+                    .dfg
+                    .inst_result_at(*inst, usize::from(*result_idx))
+                    != Some(value_id)
             {
                 self.emit(
                     Diagnostic::error(
@@ -59,7 +73,11 @@ impl FunctionVerifier<'_> {
                             value: value_id,
                         },
                     )
-                    .with_note(format!("owner inst {}", inst.as_u32())),
+                    .with_note(format!(
+                        "owner inst {}, result slot {}",
+                        inst.as_u32(),
+                        result_idx
+                    )),
                 );
             }
         }

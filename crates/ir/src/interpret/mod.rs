@@ -1,6 +1,7 @@
 use std::fmt;
 
 use macros::inst_prop;
+use smallvec::{SmallVec, smallvec};
 
 use crate::{BlockId, DataFlowGraph, Immediate, Type, ValueId, inst, module::FuncRef};
 
@@ -12,15 +13,26 @@ mod data;
 mod evm;
 mod logic;
 
+pub type EvalResults = SmallVec<[EvalValue; 1]>;
+
+pub(crate) fn no_result() -> EvalResults {
+    SmallVec::new()
+}
+
+pub(crate) fn single_result(value: EvalValue) -> EvalResults {
+    smallvec![value]
+}
+
 #[inst_prop]
 pub trait Interpret {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue;
+    fn interpret(&self, state: &mut dyn State) -> EvalResults;
 
     // TODO: Implement `Interpret` for all inst types and use
     // `type Members = All`
     type Members = (
         inst::arith::Neg,
         inst::arith::Add,
+        inst::arith::Uaddo,
         inst::arith::Sub,
         inst::arith::Mul,
         inst::arith::Sdiv,

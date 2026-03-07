@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Inst, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
@@ -59,23 +60,45 @@ impl<'f> CfgEditor<'f> {
         block
     }
 
+    pub fn append_inst_with_results(
+        &mut self,
+        block: BlockId,
+        inst: Box<dyn Inst>,
+        result_tys: &[Type],
+    ) -> (InstId, SmallVec<[ValueId; 2]>) {
+        assert!(self.func.layout.is_block_inserted(block));
+        let inst_id = self.func.dfg.make_inst_dyn(inst);
+        self.func.layout.append_inst(inst_id, block);
+
+        let results = result_tys
+            .iter()
+            .enumerate()
+            .map(|(result_idx, ty)| {
+                let value = self.func.dfg.make_value(Value::Inst {
+                    inst: inst_id,
+                    result_idx: result_idx.try_into().expect("too many instruction results"),
+                    ty: *ty,
+                });
+                self.func.dfg.append_result(inst_id, value);
+                value
+            })
+            .collect();
+
+        (inst_id, results)
+    }
+
     pub fn append_inst_with_result(
         &mut self,
         block: BlockId,
         inst: Box<dyn Inst>,
         result_ty: Option<Type>,
     ) -> (InstId, Option<ValueId>) {
-        assert!(self.func.layout.is_block_inserted(block));
-        let inst_id = self.func.dfg.make_inst_dyn(inst);
-        self.func.layout.append_inst(inst_id, block);
-
-        let result = result_ty.map(|ty| {
-            let value = self.func.dfg.make_value(Value::Inst { inst: inst_id, ty });
-            self.func.dfg.attach_result(inst_id, value);
-            value
-        });
-
-        (inst_id, result)
+        let (inst_id, results) = match result_ty {
+            Some(result_ty) => self.append_inst_with_results(block, inst, &[result_ty]),
+            None => self.append_inst_with_results(block, inst, &[]),
+        };
+        debug_assert!(results.len() <= 1);
+        (inst_id, results.first().copied())
     }
 
     pub fn trim_after_terminator(&mut self) -> bool {
