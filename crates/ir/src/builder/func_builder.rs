@@ -5,7 +5,11 @@ use super::{
 use crate::{
     BlockId, Function, GlobalVariableRef, Immediate, Inst, InstId, InstSetBase, Type, ValueId,
     func_cursor::{CursorLocation, FuncCursor},
-    inst::control_flow,
+    inst::{
+        arith::{Saddo, Smulo, Snego, Ssubo, Uaddo, Umulo, Usubo},
+        control_flow,
+        evm::{EvmSdivo, EvmSmodo, EvmUdivo, EvmUmodo},
+    },
     module::{FuncRef, ModuleCtx},
 };
 use smallvec::SmallVec;
@@ -211,6 +215,192 @@ where
         self.insert_inst_no_result(i);
     }
 
+    fn insert_checked_results<I: Inst>(&mut self, inst: I, value_ty: Type) -> [ValueId; 2] {
+        let results = self.insert_inst_results(inst, &[value_ty, Type::I1]);
+        debug_assert_eq!(results.len(), 2);
+        [results[0], results[1]]
+    }
+
+    fn insert_checked_binary<I: Inst>(
+        &mut self,
+        inst: I,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> [ValueId; 2] {
+        let lhs_ty = self.type_of(lhs);
+        let rhs_ty = self.type_of(rhs);
+        assert_eq!(
+            lhs_ty, rhs_ty,
+            "checked binary operands must have the same type"
+        );
+        assert!(
+            lhs_ty.is_integral(),
+            "checked binary operands must be integral"
+        );
+        self.insert_checked_results(inst, lhs_ty)
+    }
+
+    fn insert_checked_unary<I: Inst>(&mut self, inst: I, arg: ValueId) -> [ValueId; 2] {
+        let arg_ty = self.type_of(arg);
+        assert!(
+            arg_ty.is_integral(),
+            "checked unary operand must be integral"
+        );
+        self.insert_checked_results(inst, arg_ty)
+    }
+
+    pub fn insert_uaddo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            Uaddo::new(
+                self.inst_set()
+                    .has_uaddo()
+                    .expect("target ISA must support `uaddo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_saddo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            Saddo::new(
+                self.inst_set()
+                    .has_saddo()
+                    .expect("target ISA must support `saddo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_usubo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            Usubo::new(
+                self.inst_set()
+                    .has_usubo()
+                    .expect("target ISA must support `usubo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_ssubo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            Ssubo::new(
+                self.inst_set()
+                    .has_ssubo()
+                    .expect("target ISA must support `ssubo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_umulo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            Umulo::new(
+                self.inst_set()
+                    .has_umulo()
+                    .expect("target ISA must support `umulo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_smulo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            Smulo::new(
+                self.inst_set()
+                    .has_smulo()
+                    .expect("target ISA must support `smulo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_snego(&mut self, arg: ValueId) -> [ValueId; 2] {
+        self.insert_checked_unary(
+            Snego::new(
+                self.inst_set()
+                    .has_snego()
+                    .expect("target ISA must support `snego`"),
+                arg,
+            ),
+            arg,
+        )
+    }
+
+    pub fn insert_evm_udivo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            EvmUdivo::new(
+                self.inst_set()
+                    .has_evm_udivo()
+                    .expect("target ISA must support `evm_udivo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_evm_sdivo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            EvmSdivo::new(
+                self.inst_set()
+                    .has_evm_sdivo()
+                    .expect("target ISA must support `evm_sdivo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_evm_umodo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            EvmUmodo::new(
+                self.inst_set()
+                    .has_evm_umodo()
+                    .expect("target ISA must support `evm_umodo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_evm_smodo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            EvmSmodo::new(
+                self.inst_set()
+                    .has_evm_smodo()
+                    .expect("target ISA must support `evm_smodo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
     pub fn insert_call_results(
         &mut self,
         callee: FuncRef,
@@ -348,11 +538,12 @@ mod tests {
 
     use super::{super::test_util::*, *};
     use crate::{
-        Linkage, Signature, Value,
+        I256, Immediate, Linkage, Signature, Value,
         inst::{
             arith::{Add, Mul, Sub, Uaddo},
             cast::Sext,
             control_flow::{Br, Jump, Phi, Return},
+            evm::EvmRevert,
         },
         isa::Isa,
     };
@@ -607,5 +798,88 @@ mod tests {
         assert!(multi_return.is_err(), "multi-return insert_call must panic");
 
         builder.insert_inst_no_result(Return::new_unit(is));
+    }
+
+    #[test]
+    fn checked_overflow_helpers_infer_result_types() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I256, Type::I256], Type::Unit);
+        let is = evm.inst_set();
+
+        let entry_block = builder.append_block();
+        builder.switch_to_block(entry_block);
+        let lhs = builder.args()[0];
+        let rhs = builder.args()[1];
+
+        let checked_results = [
+            builder.insert_uaddo(lhs, rhs),
+            builder.insert_saddo(lhs, rhs),
+            builder.insert_usubo(lhs, rhs),
+            builder.insert_ssubo(lhs, rhs),
+            builder.insert_umulo(lhs, rhs),
+            builder.insert_smulo(lhs, rhs),
+            builder.insert_snego(lhs),
+            builder.insert_evm_udivo(lhs, rhs),
+            builder.insert_evm_sdivo(lhs, rhs),
+            builder.insert_evm_umodo(lhs, rhs),
+            builder.insert_evm_smodo(lhs, rhs),
+        ];
+        builder.insert_inst_no_result(Return::new_unit(is));
+
+        for [value, overflow] in checked_results {
+            assert_eq!(builder.type_of(value), Type::I256);
+            assert_eq!(builder.type_of(overflow), Type::I1);
+            let inst = builder.func.dfg.value_inst(value).unwrap();
+            assert_eq!(builder.func.dfg.value_inst_result(value), Some((inst, 0)));
+            assert_eq!(
+                builder.func.dfg.value_inst_result(overflow),
+                Some((inst, 1))
+            );
+        }
+    }
+
+    #[test]
+    fn checked_add_can_branch_to_evm_revert_on_overflow() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I256, Type::I256], Type::I256);
+        let is = evm.inst_set();
+
+        let entry = builder.append_block();
+        let overflow_block = builder.append_block();
+        let ok_block = builder.append_block();
+
+        builder.switch_to_block(entry);
+        let lhs = builder.args()[0];
+        let rhs = builder.args()[1];
+        let [sum, overflow] = builder.insert_uaddo(lhs, rhs);
+        builder.insert_inst_no_result(Br::new(is, overflow, overflow_block, ok_block));
+
+        builder.switch_to_block(overflow_block);
+        let zero = builder.make_imm_value(Immediate::from_i256(I256::from(0), Type::I256));
+        builder.insert_inst_no_result(EvmRevert::new(is, zero, zero));
+
+        builder.switch_to_block(ok_block);
+        builder.insert_return(sum);
+
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        assert_eq!(
+            dump_func(&module, func_ref),
+            "func public %test_func(v0.i256, v1.i256) -> i256 {
+    block0:
+        (v2.i256, v3.i1) = uaddo v0 v1;
+        br v3 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v2;
+}
+"
+        );
     }
 }
