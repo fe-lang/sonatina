@@ -17,7 +17,7 @@ use sonatina_ir::{
 
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
-    optim::{call_purity::is_removable_pure_call, multi_result_legalize::legalize_multi_result},
+    optim::call_purity::is_removable_pure_call,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,15 +42,17 @@ enum InlinePlan {
     SpliceSingleBlockTerminator(TerminatorSplicePlan),
 }
 
+type InstResultTemplates = SmallVec<[(ValueId, Type); 2]>;
+
 struct TemplateInst {
     inst: Box<dyn Inst>,
-    old_result: Option<(ValueId, Type)>,
+    old_results: InstResultTemplates,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct TemplateInstSummary {
     inst_id: InstId,
-    old_result: Option<(ValueId, Type)>,
+    old_results: InstResultTemplates,
 }
 
 struct SplicePlan {
@@ -170,10 +172,6 @@ impl Inliner {
     pub fn run(&mut self, module: &mut Module) -> InlineStats {
         const MAX_ITERS: usize = 8;
         let mut stats = InlineStats::default();
-
-        for func_ref in module.funcs() {
-            module.func_store.modify(func_ref, legalize_multi_result);
-        }
 
         let mut iter = 0;
         while iter < MAX_ITERS {
@@ -507,13 +505,15 @@ fn collect_splice_body(
             return None;
         }
         extend_const_values_from_inst_operands(callee, inst_id, &mut const_values);
-        let old_result = callee
+        let old_results = callee
             .dfg
-            .inst_result(inst_id)
-            .map(|res| (res, callee.dfg.value_ty(res)));
+            .inst_results(inst_id)
+            .iter()
+            .map(|&res| (res, callee.dfg.value_ty(res)))
+            .collect();
         body.push(TemplateInstSummary {
             inst_id,
-            old_result,
+            old_results,
         });
     }
 
@@ -566,7 +566,7 @@ fn materialize_body_templates(
     body.iter()
         .map(|summary| TemplateInst {
             inst: callee.dfg.clone_inst(summary.inst_id),
-            old_result: summary.old_result,
+            old_results: summary.old_results.clone(),
         })
         .collect()
 }
@@ -679,18 +679,24 @@ fn apply_splice_single_block(
         return false;
     }
 
-    apply_splice_body(splice_plan.body, &mut value_map, |new_inst, result_ty| {
+    apply_splice_body(splice_plan.body, &mut value_map, |new_inst, result_tys| {
         let new_inst_id = caller.dfg.make_inst_dyn(new_inst);
         caller.layout.insert_inst_before(new_inst_id, call_inst_id);
-        result_ty.map(|ty| {
-            let new_res = caller.dfg.make_value(Value::Inst {
-                inst: new_inst_id,
-                result_idx: 0,
-                ty,
-            });
-            caller.dfg.attach_result(new_inst_id, new_res);
-            new_res
-        })
+        let new_results: SmallVec<[ValueId; 2]> = result_tys
+            .iter()
+            .enumerate()
+            .map(|(result_idx, ty)| {
+                caller.dfg.make_value(Value::Inst {
+                    inst: new_inst_id,
+                    result_idx: result_idx.try_into().expect("too many instruction results"),
+                    ty: *ty,
+                })
+            })
+            .collect();
+        caller
+            .dfg
+            .attach_results(new_inst_id, new_results.as_slice());
+        new_results
     });
 
     if let Some((old_ret, call_res)) = splice_plan.ret_value.zip(call_res) {
@@ -750,14 +756,14 @@ fn apply_splice_single_block_terminator(
 
     let mut editor = CfgEditor::new(caller, CleanupMode::Strict);
     let call_block = editor.truncate_block_from_inst(call_inst_id);
-    apply_splice_body(splice_plan.body, &mut value_map, |new_inst, result_ty| {
-        let (_, new_result) = editor.append_inst_with_result(call_block, new_inst, result_ty);
-        new_result
+    apply_splice_body(splice_plan.body, &mut value_map, |new_inst, result_tys| {
+        let (_, new_results) = editor.append_inst_with_results(call_block, new_inst, result_tys);
+        new_results
     });
 
     let mut new_term = splice_plan.terminator;
     rewrite_inst_values_checked(new_term.as_mut(), &value_map);
-    editor.append_inst_with_result(call_block, new_term, None);
+    editor.append_inst_with_results(call_block, new_term, &[]);
     editor.recompute_cfg();
 
     stats.calls_spliced += 1;
@@ -787,16 +793,28 @@ fn build_splice_value_map(
 fn apply_splice_body(
     body: Vec<TemplateInst>,
     value_map: &mut FxHashMap<ValueId, ValueId>,
-    mut insert: impl FnMut(Box<dyn Inst>, Option<Type>) -> Option<ValueId>,
+    mut insert: impl FnMut(Box<dyn Inst>, &[Type]) -> SmallVec<[ValueId; 2]>,
 ) {
     for template_inst in body {
         let mut new_inst = template_inst.inst;
         rewrite_inst_values_checked(new_inst.as_mut(), value_map);
-        let inserted_result = insert(new_inst, template_inst.old_result.map(|(_, ty)| ty));
+        let result_tys: SmallVec<[Type; 2]> = template_inst
+            .old_results
+            .iter()
+            .map(|(_, ty)| *ty)
+            .collect();
+        let inserted_results = insert(new_inst, result_tys.as_slice());
+        assert_eq!(
+            inserted_results.len(),
+            template_inst.old_results.len(),
+            "inserted result count did not match template result count"
+        );
 
-        if let Some((old_res, _)) = template_inst.old_result {
-            let new_res =
-                inserted_result.expect("instruction result type provided when old result exists");
+        for ((old_res, _), new_res) in template_inst
+            .old_results
+            .into_iter()
+            .zip(inserted_results.into_iter())
+        {
             value_map.insert(old_res, new_res);
         }
     }
@@ -813,8 +831,8 @@ fn validate_splice_value_flow(
         if !inst_values_available(template_inst.inst.as_ref(), &available) {
             return false;
         }
-        if let Some((old_res, _)) = template_inst.old_result {
-            available.insert(old_res);
+        for (old_res, _) in &template_inst.old_results {
+            available.insert(*old_res);
         }
     }
 

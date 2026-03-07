@@ -22,12 +22,9 @@ use sonatina_ir::{
 
 use crate::{
     domtree::{DomTree, DominatorTreeTraversable},
-    optim::{
-        multi_result_legalize::legalize_multi_result,
-        simplify_expr::{
-            SimplifyExprResult, simplify_binary_with_known_imm, simplify_cast,
-            simplify_unary_with_same_inner,
-        },
+    optim::simplify_expr::{
+        SimplifyExprResult, simplify_binary_with_known_imm, simplify_cast,
+        simplify_unary_with_same_inner,
     },
 };
 
@@ -93,7 +90,6 @@ impl GvnSolver {
     /// `cfg` and `domtree` is modified to reflect graph structure change.
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph, domtree: &mut DomTree) {
         self.clear();
-        legalize_multi_result(func);
         cfg.compute(func);
         domtree.compute(cfg);
 
@@ -139,7 +135,7 @@ impl GvnSolver {
 
             let insts: Vec<_> = func.layout.iter_inst(block).collect();
             for insn in insts {
-                if let Some(inst_result) = func.dfg.inst_result(insn) {
+                for &inst_result in func.dfg.inst_results(insn) {
                     self.values[inst_result].rank = rank;
                     rank += 1;
                 }
@@ -221,7 +217,8 @@ impl GvnSolver {
                 let mut next_insn = func.layout.first_inst_of(block);
                 while let Some(insn) = next_insn {
                     // Reassign congruence class to the result value of the insn.
-                    if let Some(inst_result) = func.dfg.inst_result(insn) {
+                    let inst_results = func.dfg.inst_results(insn).to_vec();
+                    for inst_result in inst_results {
                         let result = self.reassign_congruence(func, domtree, insn, inst_result);
                         if result.changed {
                             changed = true;
@@ -1978,6 +1975,13 @@ impl<'a> RedundantCodeRemover<'a> {
         panic!("alias loop detected");
     }
 
+    fn inst_results_are_dead(&self, func: &Function, inst: InstId) -> bool {
+        func.dfg
+            .inst_results(inst)
+            .iter()
+            .all(|&result| func.dfg.users_num(result) == 0)
+    }
+
     fn lookup_avail_from(&self, mut block: Option<BlockId>, class: Class) -> Option<ValueId> {
         while let Some(current) = block {
             let avails = &self.avail_set[current];
@@ -2071,20 +2075,40 @@ impl<'a> RedundantCodeRemover<'a> {
 
                 CursorLocation::At(insn) => {
                     let block = inserter.block(func).unwrap();
-                    if let Some(inst_result) = func.dfg.inst_result(insn) {
-                        let class = self.solver.value_class(inst_result);
-                        // Use representative value if the class is in avail set.
-                        if !func.dfg.side_effect(insn).has_effect()
-                            && let Some(value) =
+                    let inst_results = func.dfg.inst_results(insn).to_vec();
+                    if inst_results.is_empty() {
+                        inserter.proceed(func);
+                        continue;
+                    }
+
+                    let mut changed = false;
+                    let mut aliased_results = FxHashSet::default();
+                    if !func.dfg.side_effect(insn).has_effect() {
+                        for &inst_result in &inst_results {
+                            let class = self.solver.value_class(inst_result);
+                            if let Some(value) =
                                 self.lookup_avail_in_block(class, &local_avails, parent)
-                        {
-                            self.change_to_alias(func, inst_result, value);
-                            inserter.remove_inst(func);
+                            {
+                                self.change_to_alias(func, inst_result, value);
+                                aliased_results.insert(inst_result);
+                                changed = true;
+                            }
+                        }
+                    }
+
+                    if changed && self.inst_results_are_dead(func, insn) {
+                        inserter.remove_inst(func);
+                        continue;
+                    }
+
+                    if func.dfg.is_phi(insn) {
+                        self.rewrite_phi(func, insn, block);
+                    }
+                    for &inst_result in &inst_results {
+                        if aliased_results.contains(&inst_result) {
                             continue;
                         }
-
-                        // Try rewrite phi insn to reflect edge's reachability.
-                        self.rewrite_phi(func, insn, block);
+                        let class = self.solver.value_class(inst_result);
                         local_avails.insert(class, inst_result);
                     }
 
@@ -2115,9 +2139,12 @@ impl<'a> RedundantCodeRemover<'a> {
 
                 CursorLocation::At(insn) => {
                     let block = inserter.block(func).unwrap();
-                    if let Some(inst_result) = func.dfg.inst_result(insn) {
+                    let inst_results = func.dfg.inst_results(insn).to_vec();
+                    let mut changed = false;
+                    for &inst_result in &inst_results {
                         // If value phi exists for the `inst_result` and its resolution succeeds,
-                        // then use resolved phi value and remove insn.
+                        // then use resolved phi value and remove the instruction if all attached
+                        // results become dead.
                         let class = self.solver.value_class(inst_result);
                         if let Some(value_phi) = &self.solver.classes[class].value_phi {
                             let ty = func.dfg.value_ty(inst_result);
@@ -2131,10 +2158,14 @@ impl<'a> RedundantCodeRemover<'a> {
                                 );
 
                                 self.change_to_alias(func, inst_result, value);
-                                inserter.remove_inst(func);
-                                continue;
+                                changed = true;
                             }
                         }
+                    }
+
+                    if changed && self.inst_results_are_dead(func, insn) {
+                        inserter.remove_inst(func);
+                        continue;
                     }
 
                     inserter.proceed(func);

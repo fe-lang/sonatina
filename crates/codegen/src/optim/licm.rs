@@ -6,7 +6,6 @@ use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
     domtree::DomTree,
     loop_analysis::{Loop, LoopTree},
-    optim::multi_result_legalize::legalize_multi_result,
 };
 
 #[derive(Debug)]
@@ -29,7 +28,6 @@ impl LicmSolver {
     /// This method also modifies `cfg` and `lpt` htt
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph, lpt: &mut LoopTree) {
         self.clear();
-        legalize_multi_result(func);
         cfg.compute(func);
         let mut domtree = DomTree::new();
         domtree.compute(cfg);

@@ -158,7 +158,6 @@ impl Pipeline {
     /// This is the recommended baseline (O1-style) pipeline.
     pub fn balanced() -> Self {
         let mut p = Self::new();
-        p.add_step(Step::FuncPasses(vec![Pass::LegalizeMultiResult]));
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(vec![
             Pass::CfgCleanup,
@@ -180,7 +179,6 @@ impl Pipeline {
     /// Uses a larger inliner budget and a second inline+SCCP round.
     pub fn aggressive() -> Self {
         let mut p = Self::new();
-        p.add_step(Step::FuncPasses(vec![Pass::LegalizeMultiResult]));
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(vec![
             Pass::CfgCleanup,
@@ -207,9 +205,8 @@ impl Pipeline {
     /// Default optimization pipeline with a conservative ordering.
     ///
     /// Current sequence:
-    /// 1. `LegalizeMultiResult` — lower unsupported multi-result ops to single-result IR
-    /// 2. `Inline` — single-block inlining (module-level)
-    /// 3. Per-function passes (parallel):
+    /// 1. `Inline` — single-block inlining (module-level)
+    /// 2. Per-function passes (parallel):
     ///    - `CfgCleanup` — normalize CFG before analysis-heavy passes
     ///    - `Sccp` — constant propagation + dead code elimination (composite)
     ///    - `Gvn` — sparse predicated global value numbering with value-phi resolution

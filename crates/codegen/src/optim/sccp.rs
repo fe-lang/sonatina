@@ -23,8 +23,7 @@ use sonatina_ir::{
 use super::{
     adce::AdceSolver,
     cfg_cleanup::CfgCleanup,
-    multi_result_legalize::legalize_multi_result,
-    sccp_simplify::{SimplifyResult, simplify_inst},
+    sccp_simplify::{SimplifyAction, simplify_inst},
 };
 use crate::cfg_edit::{CfgEditor, CleanupMode};
 
@@ -57,7 +56,6 @@ impl SccpSolver {
     }
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) {
         self.clear();
-        legalize_multi_result(func);
 
         let cleanup_mode = if cfg!(debug_assertions) {
             CleanupMode::Strict
@@ -205,76 +203,117 @@ impl SccpSolver {
             return;
         };
 
-        let Some(inst_result) = func.dfg.inst_result(inst_id) else {
+        let inst_results = func.dfg.inst_results(inst_id).to_vec();
+        if inst_results.is_empty() {
             return;
-        };
+        }
 
         // SCCP here is intraprocedural. Do not attempt to interpret calls even
         // when callee attrs classify them as effect-free.
         if func.dfg.is_call(inst_id) {
-            self.set_lattice_cell(inst_result, LatticeCell::Top);
+            self.set_inst_results_top(&inst_results);
             return;
         }
 
         let inst = func.dfg.inst(inst_id);
         if func.dfg.side_effect(inst_id).has_effect() {
-            self.set_lattice_cell(inst_result, LatticeCell::Top);
-            return;
-        }
-        if func.dfg.is_call(inst_id) {
-            self.set_lattice_cell(inst_result, LatticeCell::Top);
+            self.set_inst_results_top(&inst_results);
             return;
         }
 
-        match simplify_inst(func, &self.lattice, &self.may_be_undef, inst_id) {
-            SimplifyResult::Const(imm) => {
-                let cell = self
-                    .normalize_const_imm_for_value(func, inst_result, imm)
-                    .map(LatticeCell::Const)
-                    .unwrap_or(LatticeCell::Top);
-                self.set_lattice_cell(inst_result, cell);
-                self.set_may_be_undef(inst_result, false);
-                return;
-            }
-            SimplifyResult::Copy(src) => {
-                let src_cell =
-                    self.normalize_cell_for_value(func, inst_result, self.cell_of(func, src));
-                self.set_lattice_cell(inst_result, src_cell);
-                self.set_may_be_undef(inst_result, self.may_be_undef_of(func, src));
-                return;
-            }
-            SimplifyResult::NoChange => {}
-        }
-
-        let mut result_may_be_undef = false;
-        inst.for_each_value(&mut |value| {
-            result_may_be_undef |= self.may_be_undef_of(func, value);
-        });
-
-        let mut cell_state = CellState::new(&self.lattice, &func.dfg);
-        let value = InstDowncast::map(func.inst_set(), inst, |i: &dyn Interpret| {
-            i.interpret(&mut cell_state)
-        });
-
-        let cell = match value.as_ref().and_then(|results| {
-            debug_assert!(
-                results.len() <= 1,
-                "SCCP evaluated a multi-result instruction without legalization"
+        let simplified = simplify_inst(func, &self.lattice, &self.may_be_undef, inst_id);
+        if simplified.len() != inst_results.len() {
+            debug_assert_eq!(
+                simplified.len(),
+                inst_results.len(),
+                "SCCP simplifier returned the wrong number of results for {inst_id:?}"
             );
-            results.first()
-        }) {
-            Some(EvalValue::Imm(value)) => self
-                .normalize_const_imm_for_value(func, inst_result, *value)
-                .map(LatticeCell::Const)
-                .unwrap_or(LatticeCell::Top),
-            Some(_) => cell_state.nonconst_result_cell(),
-            None => LatticeCell::Top,
-        };
+            self.set_inst_results_top(&inst_results);
+            return;
+        }
 
-        result_may_be_undef |= self.is_arith_div_or_rem_by_zero(func, inst_id);
+        let mut result_states = vec![None; inst_results.len()];
+        let mut all_results_simplified = true;
+        for (idx, (&result, action)) in inst_results.iter().zip(simplified).enumerate() {
+            match action {
+                SimplifyAction::Const(imm) => {
+                    let cell = self
+                        .normalize_const_imm_for_value(func, result, imm)
+                        .map(LatticeCell::Const)
+                        .unwrap_or(LatticeCell::Top);
+                    result_states[idx] = Some((cell, false));
+                }
+                SimplifyAction::Copy(src) => {
+                    let src_cell =
+                        self.normalize_cell_for_value(func, result, self.cell_of(func, src));
+                    result_states[idx] = Some((src_cell, self.may_be_undef_of(func, src)));
+                }
+                SimplifyAction::NoChange => {
+                    all_results_simplified = false;
+                }
+            }
+        }
 
-        self.set_lattice_cell(inst_result, cell);
-        self.set_may_be_undef(inst_result, result_may_be_undef);
+        if all_results_simplified {
+            for (&result, state) in inst_results.iter().zip(result_states) {
+                let (cell, may_be_undef) =
+                    state.expect("all simplified SCCP results must have a state");
+                self.set_lattice_cell(result, cell);
+                self.set_may_be_undef(result, may_be_undef);
+            }
+            return;
+        }
+
+        let mut operand_may_be_undef = false;
+        inst.for_each_value(&mut |value| {
+            operand_may_be_undef |= self.may_be_undef_of(func, value);
+        });
+        let result_may_divide_by_zero = self.is_arith_div_or_rem_by_zero(func, inst_id);
+
+        {
+            let mut cell_state = CellState::new(&self.lattice, &func.dfg);
+            let value = InstDowncast::map(func.inst_set(), inst, |i: &dyn Interpret| {
+                i.interpret(&mut cell_state)
+            });
+
+            if let Some(values) = value.as_ref()
+                && values.len() != inst_results.len()
+            {
+                debug_assert_eq!(
+                    values.len(),
+                    inst_results.len(),
+                    "SCCP interpreted the wrong number of results for {inst_id:?}"
+                );
+                self.set_inst_results_top(&inst_results);
+                return;
+            }
+
+            for (idx, &result) in inst_results.iter().enumerate() {
+                if result_states[idx].is_some() {
+                    continue;
+                }
+
+                let eval_value = value.as_ref().and_then(|values| values.get(idx));
+                let cell = match eval_value {
+                    Some(EvalValue::Imm(value)) => self
+                        .normalize_const_imm_for_value(func, result, *value)
+                        .map(LatticeCell::Const)
+                        .unwrap_or(LatticeCell::Top),
+                    Some(_) => cell_state.nonconst_result_cell(),
+                    None => LatticeCell::Top,
+                };
+                let may_be_undef = operand_may_be_undef
+                    || result_may_divide_by_zero
+                    || eval_value.is_some_and(EvalValue::is_undef);
+                result_states[idx] = Some((cell, may_be_undef));
+            }
+        }
+
+        for (&result, state) in inst_results.iter().zip(result_states) {
+            let (cell, may_be_undef) = state.expect("every SCCP result must have a final state");
+            self.set_lattice_cell(result, cell);
+            self.set_may_be_undef(result, may_be_undef);
+        }
     }
 
     fn is_arith_div_or_rem_by_zero(&self, func: &Function, inst_id: InstId) -> bool {
@@ -406,50 +445,88 @@ impl SccpSolver {
     }
 
     fn fold(&self, func: &mut Function, inst: InstId) {
-        let inst_result = match func.dfg.inst_result(inst) {
-            Some(result) => result,
-            None => return,
-        };
-
-        if !func.dfg.is_phi(inst)
-            && let SimplifyResult::Copy(src) =
-                simplify_inst(func, &self.lattice, &self.may_be_undef, inst)
-        {
-            let result_ty = func.dfg.value_ty(inst_result);
-            let src_ty = func.dfg.value_ty(src);
-            if src_ty == result_ty {
-                func.dfg.change_to_alias(inst_result, src);
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-            } else if let Some(bitcast) = func.inst_set().has_bitcast()
-                && func.dfg.ctx.size_of(src_ty).ok() == func.dfg.ctx.size_of(result_ty).ok()
-            {
-                func.dfg
-                    .replace_inst(inst, Box::new(cast::Bitcast::new(bitcast, src, result_ty)));
-            }
+        let inst_results = func.dfg.inst_results(inst).to_vec();
+        if inst_results.is_empty() {
             return;
         }
 
-        match self.lattice[inst_result].to_imm() {
-            Some(imm) => {
-                let result_ty = func.dfg.value_ty(inst_result);
-                debug_assert_eq!(
-                    imm.ty(),
-                    result_ty,
-                    "SCCP tried to fold an immediate of a different type: {inst:?}"
-                );
-                if imm.ty() != result_ty {
-                    return;
-                }
+        let mut changed = false;
+        if !func.dfg.is_phi(inst) {
+            let simplified = simplify_inst(func, &self.lattice, &self.may_be_undef, inst);
+            debug_assert_eq!(
+                simplified.len(),
+                inst_results.len(),
+                "SCCP simplifier returned the wrong number of fold results for {inst:?}"
+            );
 
-                let new_value = func.dfg.make_imm_value(imm);
-                func.dfg.change_to_alias(inst_result, new_value);
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-            }
-            None => {
-                if func.dfg.is_phi(inst) {
-                    self.try_fold_phi(func, inst)
+            for (idx, (&result, action)) in inst_results.iter().zip(simplified).enumerate() {
+                match action {
+                    SimplifyAction::Const(imm) => {
+                        let result_ty = func.dfg.value_ty(result);
+                        debug_assert_eq!(
+                            imm.ty(),
+                            result_ty,
+                            "SCCP tried to fold an immediate of a different type: {inst:?}"
+                        );
+                        if imm.ty() != result_ty {
+                            continue;
+                        }
+
+                        let new_value = func.dfg.make_imm_value(imm);
+                        func.dfg.change_to_alias(result, new_value);
+                        changed = true;
+                    }
+                    SimplifyAction::Copy(src) => {
+                        let result_ty = func.dfg.value_ty(result);
+                        let src_ty = func.dfg.value_ty(src);
+                        if src_ty == result_ty {
+                            func.dfg.change_to_alias(result, src);
+                            changed = true;
+                        } else if idx == 0
+                            && inst_results.len() == 1
+                            && let Some(bitcast) = func.inst_set().has_bitcast()
+                            && func.dfg.ctx.size_of(src_ty).ok()
+                                == func.dfg.ctx.size_of(result_ty).ok()
+                        {
+                            func.dfg.replace_inst(
+                                inst,
+                                Box::new(cast::Bitcast::new(bitcast, src, result_ty)),
+                            );
+                            return;
+                        }
+                    }
+                    SimplifyAction::NoChange => {}
                 }
             }
+        }
+
+        for &result in &inst_results {
+            if func.dfg.users_num(result) == 0 {
+                continue;
+            }
+
+            let Some(imm) = self.lattice[result].to_imm() else {
+                continue;
+            };
+            let result_ty = func.dfg.value_ty(result);
+            debug_assert_eq!(
+                imm.ty(),
+                result_ty,
+                "SCCP tried to fold an immediate of a different type: {inst:?}"
+            );
+            if imm.ty() != result_ty {
+                continue;
+            }
+
+            let new_value = func.dfg.make_imm_value(imm);
+            func.dfg.change_to_alias(result, new_value);
+            changed = true;
+        }
+
+        if changed && self.inst_results_are_dead(func, inst) {
+            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        } else if !changed && func.dfg.is_phi(inst) {
+            self.try_fold_phi(func, inst);
         }
     }
 
@@ -549,6 +626,20 @@ impl SccpSolver {
         }
     }
 
+    fn set_inst_results_top(&mut self, results: &[ValueId]) {
+        for &result in results {
+            self.set_lattice_cell(result, LatticeCell::Top);
+            self.set_may_be_undef(result, false);
+        }
+    }
+
+    fn inst_results_are_dead(&self, func: &Function, inst: InstId) -> bool {
+        func.dfg
+            .inst_results(inst)
+            .iter()
+            .all(|&result| func.dfg.users_num(result) == 0)
+    }
+
     fn cell_of(&self, func: &Function, value: ValueId) -> LatticeCell {
         match func.dfg.value(value) {
             Value::Immediate { imm, .. } => LatticeCell::Const(*imm),
@@ -614,9 +705,10 @@ impl SccpSolver {
                     continue;
                 }
 
-                let Some(result) = func.dfg.inst_result(inst) else {
+                let results = func.dfg.inst_results(inst);
+                if results.is_empty() {
                     continue;
-                };
+                }
 
                 let mut operands_all_non_bot = true;
                 inst_data.for_each_value(&mut |value| {
@@ -625,9 +717,11 @@ impl SccpSolver {
                     }
                 });
 
-                let result_cell = self.lattice.get(result).copied().unwrap_or_default();
-                if operands_all_non_bot && result_cell.is_bot() {
-                    panic!("SCCP produced Bot for executable inst result: {inst:?}");
+                for &result in results {
+                    let result_cell = self.lattice.get(result).copied().unwrap_or_default();
+                    if operands_all_non_bot && result_cell.is_bot() {
+                        panic!("SCCP produced Bot for executable inst result: {inst:?}");
+                    }
                 }
             }
         }

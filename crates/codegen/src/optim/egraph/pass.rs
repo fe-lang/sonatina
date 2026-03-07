@@ -9,8 +9,6 @@ use sonatina_ir::{
     ControlFlowGraph, Function, InstDowncast, InstId, Type, Value, ValueId, inst::data::Mstore,
 };
 
-use crate::optim::multi_result_legalize::legalize_multi_result;
-
 use super::{EggTerm, Elaborator, func_to_egglog};
 
 const TYPES: &str = include_str!("types.egg");
@@ -35,7 +33,6 @@ fn has_unknown_call_attrs(func: &Function) -> bool {
 /// Run e-graph optimization pass on a function.
 /// Returns true if the function was modified.
 pub fn run_egraph_pass(func: &mut Function) -> bool {
-    legalize_multi_result(func);
     if has_unknown_call_attrs(func) {
         debug_assert!(
             false,
@@ -56,7 +53,7 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
 
     for block in func.layout.iter_block() {
         for inst_id in func.layout.iter_inst(block) {
-            if let Some(result) = func.dfg.inst_result(inst_id) {
+            for &result in func.dfg.inst_results(inst_id) {
                 let name = format!("v{}", result.as_u32());
                 value_map.insert(name.clone(), result);
                 type_map.insert(name, func.dfg.value_ty(result));
@@ -82,7 +79,7 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
 
     for block in func.layout.iter_block() {
         for inst_id in func.layout.iter_inst(block) {
-            if let Some(result) = func.dfg.inst_result(inst_id) {
+            for &result in func.dfg.inst_results(inst_id) {
                 let name = format!("v{}", result.as_u32());
                 full_program.push_str(&format!("\n(extract {})", name));
                 extract_names.push(name);
@@ -419,11 +416,11 @@ fn is_trivially_dead_pure_inst(func: &Function, inst: InstId) -> bool {
         return false;
     }
 
-    let Some(result) = func.dfg.inst_result(inst) else {
-        return false;
-    };
-
-    func.dfg.users_num(result) == 0
+    let results = func.dfg.inst_results(inst);
+    !results.is_empty()
+        && results
+            .iter()
+            .all(|&result| func.dfg.users_num(result) == 0)
 }
 
 #[cfg(test)]

@@ -7,6 +7,7 @@ use sonatina_codegen::{
 };
 use sonatina_ir::ir_writer::FuncWriter;
 use sonatina_parser::ParsedModule;
+use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/test_files/inliner/",
@@ -340,7 +341,7 @@ func public %caller(v0.i32, v1.i32) -> i32 {
 }
 
 #[test]
-fn inliner_legalizes_multi_result_callees_before_analysis() {
+fn inliner_splices_multi_result_callees_without_legalizing_them() {
     let source = r#"
 target = "evm-ethereum-osaka"
 
@@ -362,13 +363,23 @@ func public %caller(v0.i256, v1.i256) -> i256 {
     let module = &mut parsed.module;
 
     let mut inliner = Inliner::new(InlinerConfig::default());
-    inliner.run(module);
+    let stats = inliner.run(module);
 
     let dumped = dump_module(module);
     assert!(
-        !dumped.contains("uaddo"),
-        "inliner should legalize multi-result instructions before analyzing callees:\n{dumped}"
+        !dumped.contains("call %leaf"),
+        "inliner should splice the callsite:\n{dumped}"
     );
+    assert!(
+        dumped.contains("uaddo"),
+        "inliner should preserve multi-result instructions until lowering:\n{dumped}"
+    );
+    assert!(
+        stats.calls_spliced >= 1,
+        "expected the callsite to be spliced:\n{dumped}"
+    );
+    let report = verify_module(module, &VerifierConfig::for_level(VerificationLevel::Fast));
+    assert!(report.is_ok(), "module failed verification: {report:?}");
 }
 
 fn dump_module(module: &sonatina_ir::Module) -> String {

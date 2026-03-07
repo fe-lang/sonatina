@@ -1,8 +1,10 @@
 use cranelift_entity::SecondaryMap;
+use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     Function, Immediate, InstId, Type, Value, ValueId,
     inst::{
-        BinaryInstKind, CastInstKind, InstClassKind, cast, data, downcast, inst_set::InstSetBase,
+        BinaryInstKind, CastInstKind, InstClassKind, arith, cast, data, downcast,
+        inst_set::InstSetBase,
     },
 };
 
@@ -14,18 +16,29 @@ use super::{
     },
 };
 
-pub(super) enum SimplifyResult {
+#[derive(Clone, Copy)]
+pub(super) enum SimplifyAction {
     Const(Immediate),
     Copy(ValueId),
     NoChange,
 }
 
-fn from_expr_simplify_result(simplified: SimplifyExprResult) -> SimplifyResult {
+pub(super) type SimplifyResults = SmallVec<[SimplifyAction; 1]>;
+
+fn from_expr_simplify_result(simplified: SimplifyExprResult) -> SimplifyAction {
     match simplified {
-        SimplifyExprResult::Const(imm) => SimplifyResult::Const(imm),
-        SimplifyExprResult::Copy(value) => SimplifyResult::Copy(value),
-        SimplifyExprResult::NoChange => SimplifyResult::NoChange,
+        SimplifyExprResult::Const(imm) => SimplifyAction::Const(imm),
+        SimplifyExprResult::Copy(value) => SimplifyAction::Copy(value),
+        SimplifyExprResult::NoChange => SimplifyAction::NoChange,
     }
+}
+
+fn wrap_action(action: SimplifyAction) -> SimplifyResults {
+    smallvec![action]
+}
+
+fn no_change_results(len: usize) -> SimplifyResults {
+    std::iter::repeat_n(SimplifyAction::NoChange, len).collect()
 }
 
 fn known_imm(
@@ -77,7 +90,7 @@ fn simplify_commutative_and(
     may_be_undef: &SecondaryMap<ValueId, bool>,
     lhs: ValueId,
     rhs: ValueId,
-) -> SimplifyResult {
+) -> SimplifyAction {
     from_expr_simplify_result(simplify_binary_with_known_imm(
         func,
         BinaryInstKind::And,
@@ -94,7 +107,7 @@ fn simplify_commutative_or(
     may_be_undef: &SecondaryMap<ValueId, bool>,
     lhs: ValueId,
     rhs: ValueId,
-) -> SimplifyResult {
+) -> SimplifyAction {
     from_expr_simplify_result(simplify_binary_with_known_imm(
         func,
         BinaryInstKind::Or,
@@ -111,7 +124,7 @@ fn simplify_commutative_xor(
     may_be_undef: &SecondaryMap<ValueId, bool>,
     lhs: ValueId,
     rhs: ValueId,
-) -> SimplifyResult {
+) -> SimplifyAction {
     from_expr_simplify_result(simplify_binary_with_known_imm(
         func,
         BinaryInstKind::Xor,
@@ -127,7 +140,7 @@ fn simplify_commutative_mul(
     lattice: &SecondaryMap<ValueId, LatticeCell>,
     lhs: ValueId,
     rhs: ValueId,
-) -> SimplifyResult {
+) -> SimplifyAction {
     from_expr_simplify_result(simplify_binary_with_known_imm(
         func,
         BinaryInstKind::Mul,
@@ -143,7 +156,7 @@ fn simplify_commutative_add(
     lattice: &SecondaryMap<ValueId, LatticeCell>,
     lhs: ValueId,
     rhs: ValueId,
-) -> SimplifyResult {
+) -> SimplifyAction {
     from_expr_simplify_result(simplify_binary_with_known_imm(
         func,
         BinaryInstKind::Add,
@@ -158,19 +171,19 @@ fn simplify_gep_all_zero(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
     values: &[ValueId],
-) -> SimplifyResult {
+) -> SimplifyAction {
     let Some((&base, indices)) = values.split_first() else {
-        return SimplifyResult::NoChange;
+        return SimplifyAction::NoChange;
     };
 
     if indices
         .iter()
         .all(|&idx| known_imm(func, lattice, idx).is_some_and(Immediate::is_zero))
     {
-        return SimplifyResult::Copy(base);
+        return SimplifyAction::Copy(base);
     }
 
-    SimplifyResult::NoChange
+    SimplifyAction::NoChange
 }
 
 fn simplify_sub(
@@ -179,7 +192,7 @@ fn simplify_sub(
     may_be_undef: &SecondaryMap<ValueId, bool>,
     lhs: ValueId,
     rhs: ValueId,
-) -> SimplifyResult {
+) -> SimplifyAction {
     from_expr_simplify_result(simplify_binary_with_known_imm(
         func,
         BinaryInstKind::Sub,
@@ -195,7 +208,7 @@ fn simplify_redundant_cast(
     kind: CastInstKind,
     from: ValueId,
     ty: Type,
-) -> SimplifyResult {
+) -> SimplifyAction {
     from_expr_simplify_result(simplify_cast(func, kind, from, ty))
 }
 
@@ -214,18 +227,18 @@ fn simplify_eq_zext_i1_one(
     lattice: &SecondaryMap<ValueId, LatticeCell>,
     lhs: ValueId,
     rhs: ValueId,
-) -> SimplifyResult {
+) -> SimplifyAction {
     if let Some(from) = zext_i1_source(func, is, lhs)
         && known_imm(func, lattice, rhs) == Some(Immediate::one(func.dfg.value_ty(lhs)))
     {
-        return SimplifyResult::Copy(from);
+        return SimplifyAction::Copy(from);
     }
     if let Some(from) = zext_i1_source(func, is, rhs)
         && known_imm(func, lattice, lhs) == Some(Immediate::one(func.dfg.value_ty(rhs)))
     {
-        return SimplifyResult::Copy(from);
+        return SimplifyAction::Copy(from);
     }
-    SimplifyResult::NoChange
+    SimplifyAction::NoChange
 }
 
 fn simplify_ne_zext_i1_zero(
@@ -234,18 +247,18 @@ fn simplify_ne_zext_i1_zero(
     lattice: &SecondaryMap<ValueId, LatticeCell>,
     lhs: ValueId,
     rhs: ValueId,
-) -> SimplifyResult {
+) -> SimplifyAction {
     if let Some(from) = zext_i1_source(func, is, lhs)
         && known_imm(func, lattice, rhs) == Some(Immediate::zero(func.dfg.value_ty(lhs)))
     {
-        return SimplifyResult::Copy(from);
+        return SimplifyAction::Copy(from);
     }
     if let Some(from) = zext_i1_source(func, is, rhs)
         && known_imm(func, lattice, lhs) == Some(Immediate::zero(func.dfg.value_ty(rhs)))
     {
-        return SimplifyResult::Copy(from);
+        return SimplifyAction::Copy(from);
     }
-    SimplifyResult::NoChange
+    SimplifyAction::NoChange
 }
 
 fn simplify_div_by_one(
@@ -254,7 +267,7 @@ fn simplify_div_by_one(
     lattice: &SecondaryMap<ValueId, LatticeCell>,
     lhs: ValueId,
     rhs: ValueId,
-) -> SimplifyResult {
+) -> SimplifyAction {
     from_expr_simplify_result(simplify_binary_with_known_imm(
         func,
         kind,
@@ -271,7 +284,7 @@ fn simplify_rem_by_one(
     lattice: &SecondaryMap<ValueId, LatticeCell>,
     lhs: ValueId,
     rhs: ValueId,
-) -> SimplifyResult {
+) -> SimplifyAction {
     from_expr_simplify_result(simplify_binary_with_known_imm(
         func,
         kind,
@@ -289,12 +302,35 @@ fn simplify_cmp_self(
     lhs: ValueId,
     rhs: ValueId,
     result: bool,
-) -> SimplifyResult {
+) -> SimplifyAction {
     if same_non_undef(func, lattice, may_be_undef, lhs, rhs) {
-        return SimplifyResult::Const(Immediate::I1(result));
+        return SimplifyAction::Const(Immediate::I1(result));
     }
 
-    SimplifyResult::NoChange
+    SimplifyAction::NoChange
+}
+
+fn simplify_uaddo(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    lhs: ValueId,
+    rhs: ValueId,
+    results_len: usize,
+) -> SimplifyResults {
+    let lhs_ty = func.dfg.value_ty(lhs);
+    if known_imm(func, lattice, rhs) == Some(Immediate::zero(lhs_ty)) {
+        return smallvec![
+            SimplifyAction::Copy(lhs),
+            SimplifyAction::Const(Immediate::I1(false))
+        ];
+    }
+    if known_imm(func, lattice, lhs) == Some(Immediate::zero(lhs_ty)) {
+        return smallvec![
+            SimplifyAction::Copy(rhs),
+            SimplifyAction::Const(Immediate::I1(false))
+        ];
+    }
+    no_change_results(results_len)
 }
 
 pub(super) fn simplify_inst(
@@ -302,18 +338,19 @@ pub(super) fn simplify_inst(
     lattice: &SecondaryMap<ValueId, LatticeCell>,
     may_be_undef: &SecondaryMap<ValueId, bool>,
     inst_id: InstId,
-) -> SimplifyResult {
+) -> SimplifyResults {
     let inst = func.dfg.inst(inst_id);
     let is = func.inst_set();
+    let results_len = func.dfg.inst_results(inst_id).len();
 
     match inst.kind() {
         InstClassKind::Unary(kind) => {
             let values = inst.collect_values();
             let [arg] = values.as_slice() else {
-                return SimplifyResult::NoChange;
+                return no_change_results(results_len);
             };
 
-            from_expr_simplify_result(simplify_unary_with_same_inner(
+            wrap_action(from_expr_simplify_result(simplify_unary_with_same_inner(
                 kind,
                 *arg,
                 |arg, expected| {
@@ -331,15 +368,15 @@ pub(super) fn simplify_inst(
                     };
                     Some(*arg)
                 },
-            ))
+            )))
         }
         InstClassKind::Binary(kind) => {
             let values = inst.collect_values();
             let [lhs, rhs] = values.as_slice() else {
-                return SimplifyResult::NoChange;
+                return no_change_results(results_len);
             };
 
-            match kind {
+            wrap_action(match kind {
                 BinaryInstKind::And => {
                     simplify_commutative_and(func, lattice, may_be_undef, *lhs, *rhs)
                 }
@@ -372,15 +409,15 @@ pub(super) fn simplify_inst(
                 }
                 BinaryInstKind::Eq => {
                     let simplified = simplify_eq_zext_i1_one(func, is, lattice, *lhs, *rhs);
-                    if !matches!(simplified, SimplifyResult::NoChange) {
-                        return simplified;
+                    if !matches!(simplified, SimplifyAction::NoChange) {
+                        return wrap_action(simplified);
                     }
                     simplify_cmp_self(func, lattice, may_be_undef, *lhs, *rhs, true)
                 }
                 BinaryInstKind::Ne => {
                     let simplified = simplify_ne_zext_i1_zero(func, is, lattice, *lhs, *rhs);
-                    if !matches!(simplified, SimplifyResult::NoChange) {
-                        return simplified;
+                    if !matches!(simplified, SimplifyAction::NoChange) {
+                        return wrap_action(simplified);
                     }
                     simplify_cmp_self(func, lattice, may_be_undef, *lhs, *rhs, false)
                 }
@@ -396,13 +433,13 @@ pub(super) fn simplify_inst(
                 | BinaryInstKind::Sge => {
                     simplify_cmp_self(func, lattice, may_be_undef, *lhs, *rhs, true)
                 }
-                BinaryInstKind::EvmExp | BinaryInstKind::EvmByte => SimplifyResult::NoChange,
-            }
+                BinaryInstKind::EvmExp | BinaryInstKind::EvmByte => SimplifyAction::NoChange,
+            })
         }
         InstClassKind::Cast(kind) => {
             let values = inst.collect_values();
             let [from] = values.as_slice() else {
-                return SimplifyResult::NoChange;
+                return no_change_results(results_len);
             };
 
             let ty = match kind {
@@ -415,17 +452,21 @@ pub(super) fn simplify_inst(
             };
 
             if let Some(ty) = ty {
-                simplify_redundant_cast(func, kind, *from, ty)
+                wrap_action(simplify_redundant_cast(func, kind, *from, ty))
             } else {
-                SimplifyResult::NoChange
+                no_change_results(results_len)
             }
         }
         InstClassKind::Phi | InstClassKind::Opaque => {
             if let Some(i) = downcast::<&data::Gep>(is, inst) {
-                return simplify_gep_all_zero(func, lattice, i.values().as_slice());
+                return wrap_action(simplify_gep_all_zero(func, lattice, i.values().as_slice()));
             }
 
-            SimplifyResult::NoChange
+            if let Some(i) = downcast::<&arith::Uaddo>(is, inst) {
+                return simplify_uaddo(func, lattice, *i.lhs(), *i.rhs(), results_len);
+            }
+
+            no_change_results(results_len)
         }
     }
 }
