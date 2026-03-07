@@ -95,8 +95,8 @@ pub struct CallSavePlan {
     /// Word offsets (relative to STATIC_BASE) to save, in ascending order.
     pub save_word_offsets: Vec<u32>,
 
-    /// Whether the call returns a value (IR: call has inst_result).
-    pub has_return: bool,
+    /// Number of values left on the stack after the call returns.
+    pub result_count: u8,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -345,7 +345,7 @@ pub(crate) fn compute_program_memory_plan(
 struct CallMeta {
     inst: InstId,
     callee_need_words: u32,
-    has_return: bool,
+    result_count: u8,
     is_internal_scc_call: bool,
     arg_count: u8,
     live_out_objs: Vec<StackObjId>,
@@ -427,7 +427,7 @@ fn solve_call_preservation_for_func(
         calls.push(CallMeta {
             inst: call.inst,
             callee_need_words,
-            has_return: call.has_return,
+            result_count: call.result_count,
             is_internal_scc_call: is_internal,
             arg_count: call.arg_count,
             live_out_objs: call.live_out_objs.clone(),
@@ -467,19 +467,16 @@ fn solve_call_preservation_for_func(
         2 + push_imm_len_u32(addr)
     }
 
-    fn save_gas(k: u64, arg_count: u64, has_return: bool) -> u64 {
-        let swap_chunks = if has_return && k != 0 {
-            k.div_ceil(16)
-        } else {
-            0
-        };
+    fn save_gas(k: u64, arg_count: u64, result_count: u64) -> u64 {
         k.checked_mul(12)
             .and_then(|g| g.checked_add(k.checked_mul(arg_count).and_then(|s| s.checked_mul(3))?))
-            .and_then(|g| g.checked_add(swap_chunks.checked_mul(3)?))
+            .and_then(|g| {
+                g.checked_add(k.checked_mul(result_count).and_then(|s| s.checked_mul(3))?)
+            })
             .expect("save gas overflow")
     }
 
-    fn save_code_bytes(save_offsets: &[u32], arg_count: u64, has_return: bool) -> u64 {
+    fn save_code_bytes(save_offsets: &[u32], arg_count: u64, result_count: u64) -> u64 {
         let mut bytes: u64 = 0;
         for &w in save_offsets {
             let addr = STATIC_BASE
@@ -495,12 +492,9 @@ fn solve_call_preservation_for_func(
         bytes = bytes
             .checked_add(k.checked_mul(arg_count).expect("swap bytes overflow"))
             .expect("swap bytes overflow");
-
-        if has_return && k != 0 {
-            bytes = bytes
-                .checked_add(k.div_ceil(16))
-                .expect("swap bytes overflow");
-        }
+        bytes = bytes
+            .checked_add(k.checked_mul(result_count).expect("swap bytes overflow"))
+            .expect("swap bytes overflow");
 
         bytes
     }
@@ -581,8 +575,9 @@ fn solve_call_preservation_for_func(
             }
 
             let arg_count = u64::from(call.arg_count);
-            let gas = save_gas(k, arg_count, call.has_return);
-            let bytes = save_code_bytes(&save_offsets, arg_count, call.has_return);
+            let result_count = u64::from(call.result_count);
+            let gas = save_gas(k, arg_count, result_count);
+            let bytes = save_code_bytes(&save_offsets, arg_count, result_count);
             let stack_risk = k;
 
             cost = cost
@@ -781,7 +776,7 @@ impl CallSavePlansForFuncCtx<'_> {
                 call.inst,
                 CallSavePlan {
                     save_word_offsets: save_offsets,
-                    has_return: call.has_return,
+                    result_count: call.result_count,
                 },
             );
         }
@@ -855,7 +850,7 @@ fn verify_static_arena_plan(
                     .get(&inst)
                     .unwrap_or_else(|| panic!("StaticArena missing call_saves entry for {inst:?}"));
 
-                if actual.has_return != expected.has_return
+                if actual.result_count != expected.result_count
                     || actual.save_word_offsets != expected.save_word_offsets
                 {
                     panic!(
@@ -1271,7 +1266,7 @@ block0:
                     .call_saves
                     .get(&call_inst)
                     .expect("missing call save plan");
-                assert!(save.has_return);
+                assert_eq!(save.result_count, 1);
                 assert_eq!(save.save_word_offsets.as_slice(), &[off]);
             }
             None => panic!("missing call choice"),

@@ -174,21 +174,22 @@ fn compute_summary_for_func(
                 let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
 
                 match data {
-                    EvmInstKind::Return(ret) => {
-                        let Some(ret_val) = ret.arg().copied() else {
+                    EvmInstKind::Return(_) => {
+                        let Some(ret_args) = function.dfg.return_args(inst) else {
                             continue;
                         };
+                        for &ret_val in ret_args {
+                            let ret_ty = function.dfg.value_ty(ret_val);
+                            if ret_ty.is_pointer(&module.ctx) {
+                                summary.returns_any_ptr = true;
+                            }
 
-                        let ret_ty = function.dfg.value_ty(ret_val);
-                        if ret_ty.is_pointer(&module.ctx) {
-                            summary.returns_any_ptr = true;
-                        }
-
-                        let ret_prov = &prov[ret_val];
-                        for idx in ret_prov.arg_indices() {
-                            let idx = idx as usize;
-                            if idx < summary.arg_may_be_returned.len() {
-                                summary.arg_may_be_returned[idx] = true;
+                            let ret_prov = &prov[ret_val];
+                            for idx in ret_prov.arg_indices() {
+                                let idx = idx as usize;
+                                if idx < summary.arg_may_be_returned.len() {
+                                    summary.arg_may_be_returned[idx] = true;
+                                }
                             }
                         }
                     }

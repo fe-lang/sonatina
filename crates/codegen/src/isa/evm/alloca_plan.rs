@@ -269,18 +269,20 @@ fn compute_escaping_allocas(
         for inst in function.layout.iter_inst(block) {
             let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
             match data {
-                EvmInstKind::Return(ret) => {
-                    let Some(ret_val) = ret.arg().copied() else {
+                EvmInstKind::Return(_) => {
+                    let Some(ret_args) = function.dfg.return_args(inst) else {
                         continue;
                     };
-                    for base in prov[ret_val].alloca_insts() {
-                        escaping
-                            .entry(base)
-                            .or_default()
-                            .push(AllocaEscapeSite::Return {
-                                inst,
-                                value: ret_val,
-                            });
+                    for &ret_val in ret_args {
+                        for base in prov[ret_val].alloca_insts() {
+                            escaping
+                                .entry(base)
+                                .or_default()
+                                .push(AllocaEscapeSite::Return {
+                                    inst,
+                                    value: ret_val,
+                                });
+                        }
                     }
                 }
                 EvmInstKind::Mstore(mstore) => {

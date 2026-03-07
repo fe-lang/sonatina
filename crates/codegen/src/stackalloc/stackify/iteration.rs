@@ -272,17 +272,23 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             last_use,
         );
 
-        let res = self
+        let results: SmallVec<[ValueId; 4]> = self
             .ctx
             .func
             .dfg
-            .inst_result(inst)
-            .map(|v| self.ctx.canonicalize_value(v));
+            .inst_results(inst)
+            .iter()
+            .map(|&v| self.ctx.canonicalize_value(v))
+            .collect();
+        let res = match results.as_slice() {
+            [res] => Some(*res),
+            _ => None,
+        };
         if is_normal && inst_is_noop_alias_cast(self.ctx, inst, &args, res) {
             self.observer.on_inst_actions("cleanup", &[], None);
             self.observer.on_inst_actions("pre", &[], None);
             self.observer
-                .on_inst_normal(self.ctx.func, inst, &args, res);
+                .on_inst_normal(self.ctx.func, inst, &args, results.as_slice());
 
             // The instruction is a typed alias-only cast for EVM stackify purposes:
             // it does not consume or produce stack values, but it still counts as an SSA use.
@@ -521,19 +527,15 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                 &self.alloc.pre_actions[inst][after_cleanup_len..],
                 None,
             );
-            self.observer.on_inst_return(
-                self.ctx.func,
-                inst,
-                self.ctx
-                    .func
-                    .dfg
-                    .return_args(inst)
-                    .and_then(|args| match args {
-                        [] => None,
-                        [arg] => Some(*arg),
-                        _ => panic!("stackify does not support multi-value return {inst:?}"),
-                    }),
-            );
+            let ret_vals: SmallVec<[ValueId; 16]> = self
+                .ctx
+                .func
+                .dfg
+                .return_args(inst)
+                .map(|args| args.iter().copied().collect())
+                .unwrap_or_default();
+            self.observer
+                .on_inst_return(self.ctx.func, inst, ret_vals.as_slice());
             return InstOutcome::TerminateBlock;
         }
 
@@ -559,7 +561,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             None,
         );
         self.observer
-            .on_inst_normal(self.ctx.func, inst, &args, res);
+            .on_inst_normal(self.ctx.func, inst, &args, results.as_slice());
 
         consume_operand_uses(
             self.ctx.func,
@@ -579,19 +581,23 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             state.stack.remove_call_ret_addr();
         }
 
-        if let Some(res) = res {
+        for &res in results.iter().rev() {
             state.stack.push_value(res);
+        }
+
+        for (depth, &res) in results.iter().enumerate() {
             let res_live = state.live_future.contains(res) || state.live_out.contains(res);
-            if res_live {
-                self.with_post_actions_planner(
-                    &mut state.stack,
-                    inst,
-                    &mut state.free_slots,
-                    |planner| {
-                        planner.emit_store_if_spilled(res);
-                    },
-                );
+            if !res_live {
+                continue;
             }
+            self.with_post_actions_planner(
+                &mut state.stack,
+                inst,
+                &mut state.free_slots,
+                |planner| {
+                    planner.emit_store_if_spilled_at_depth(res, depth);
+                },
+            );
         }
 
         self.observer

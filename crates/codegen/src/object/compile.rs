@@ -108,6 +108,7 @@ fn diagnostic_targets_multi_result_inst(module: &Module, location: &Location) ->
 fn reject_unsupported_evm_multi_return(
     module: &Module,
     funcs: &[FuncRef],
+    entry: FuncRef,
     object: &sonatina_ir::object::ObjectName,
     section: &sonatina_ir::object::SectionName,
 ) -> Vec<ObjectCompileError> {
@@ -120,14 +121,37 @@ fn reject_unsupported_evm_multi_return(
         let Some(sig) = module.ctx.get_sig(func) else {
             continue;
         };
-        if sig.ret_tys().len() > 1 {
+        let ret_count = sig.ret_tys().len();
+        if ret_count > 16 {
             errors.push(ObjectCompileError::BackendError {
                 object: object.clone(),
                 section: section.clone(),
                 func,
                 message: format!(
-                    "EVM backend does not support functions with {} return values",
-                    sig.ret_tys().len()
+                    "EVM backend supports at most 16 internal return values, but function %{} has {ret_count}",
+                    sig.name()
+                ),
+            });
+        }
+        if func == entry && ret_count > 1 {
+            errors.push(ObjectCompileError::BackendError {
+                object: object.clone(),
+                section: section.clone(),
+                func,
+                message: format!(
+                    "EVM backend does not support section entry %{} with {ret_count} return values",
+                    sig.name()
+                ),
+            });
+        }
+        if ret_count > 1 && !sig.linkage().has_definition() {
+            errors.push(ObjectCompileError::BackendError {
+                object: object.clone(),
+                section: section.clone(),
+                func,
+                message: format!(
+                    "EVM backend does not support declaration-only function %{} with {ret_count} return values",
+                    sig.name()
                 ),
             });
         }
@@ -143,13 +167,13 @@ fn reject_unsupported_evm_multi_return(
                             .map(|sig| format!("%{}", sig.name()))
                             .unwrap_or_else(|| format!("{:?}", call.callee()));
 
-                        if call_results.len() > 1 {
+                        if call_results.len() > 16 {
                             errors.push(ObjectCompileError::BackendError {
                                 object: object.clone(),
                                 section: section.clone(),
                                 func,
                                 message: format!(
-                                    "EVM backend does not support call inst{} with {} results to {callee_name}",
+                                    "EVM backend supports at most 16 call results, but inst{} has {} results to {callee_name}",
                                     inst.as_u32(),
                                     call_results.len()
                                 ),
@@ -157,14 +181,26 @@ fn reject_unsupported_evm_multi_return(
                         }
 
                         if let Some(callee_sig) = module.ctx.get_sig(*call.callee()) {
-                            if callee_sig.ret_tys().len() > 1 {
+                            if callee_sig.ret_tys().len() > 16 {
                                 errors.push(ObjectCompileError::BackendError {
                                     object: object.clone(),
                                     section: section.clone(),
                                     func,
                                     message: format!(
-                                        "EVM backend does not support calls to {callee_name} with {} return values",
+                                        "EVM backend supports at most 16 internal return values, but callee {callee_name} has {}",
                                         callee_sig.ret_tys().len()
+                                    ),
+                                });
+                            }
+                            if callee_sig.ret_tys().len() > 1
+                                && !module.ctx.func_linkage(*call.callee()).has_definition()
+                            {
+                                errors.push(ObjectCompileError::BackendError {
+                                    object: object.clone(),
+                                    section: section.clone(),
+                                    func,
+                                    message: format!(
+                                        "EVM backend does not support external or declaration-only multi-return calls to {callee_name}"
                                     ),
                                 });
                             }
@@ -185,13 +221,13 @@ fn reject_unsupported_evm_multi_return(
                     }
 
                     if let Some(return_args) = function.dfg.return_args(inst) {
-                        if return_args.len() > 1 {
+                        if return_args.len() > 16 {
                             errors.push(ObjectCompileError::BackendError {
                                 object: object.clone(),
                                 section: section.clone(),
                                 func,
                                 message: format!(
-                                    "EVM backend does not support return inst{} with {} values",
+                                    "EVM backend supports at most 16 return values, but return inst{} has {}",
                                     inst.as_u32(),
                                     return_args.len()
                                 ),
@@ -446,8 +482,13 @@ fn compile_section<B: LowerBackend>(
             section = %section_name.0
         )
         .entered();
-        let backend_errors =
-            reject_unsupported_evm_multi_return(program.module, &funcs, object_name, section_name);
+        let backend_errors = reject_unsupported_evm_multi_return(
+            program.module,
+            &funcs,
+            section.entry,
+            object_name,
+            section_name,
+        );
         if !backend_errors.is_empty() {
             return Err(backend_errors);
         }
@@ -1532,7 +1573,7 @@ object @O {
     }
 
     #[test]
-    fn compile_object_rejects_multi_return_functions_for_evm() {
+    fn compile_object_rejects_multi_return_section_entry_for_evm() {
         let s = r#"
 target = "evm-ethereum-london"
 
@@ -1564,14 +1605,58 @@ object @O {
             errs.iter().any(|err| matches!(
                 err,
                 ObjectCompileError::BackendError { message, .. }
-                    if message.contains("does not support functions with 2 return values")
+                    if message.contains("does not support section entry %main with 2 return values")
             )),
             "expected multi-return backend error, got {errs:?}"
         );
     }
 
     #[test]
-    fn compile_object_rejects_multi_return_calls_for_evm() {
+    fn compile_object_allows_internal_multi_return_helpers_for_evm() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %pair_add(v0.i32, v1.i32) -> (i32, i1) {
+    block0:
+        v2.i32 = add v0 v1;
+        v3.i1 = lt v2 v0;
+        return (v2, v3);
+}
+
+func public %main() -> i32 {
+    block0:
+        (v0.i32, v1.i1) = call %pair_add 1.i32 2.i32;
+        br v1 block1 block2;
+
+    block1:
+        return 0.i32;
+
+    block2:
+        return v0;
+}
+
+object @O {
+  section runtime {
+    entry %main;
+  }
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let backend = FakeBackend;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: false,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
+        };
+
+        compile_object(&parsed.module, &backend, "O", &opts)
+            .expect("internal multi-return helper should be allowed");
+    }
+
+    #[test]
+    fn compile_object_rejects_external_multi_return_calls_for_evm() {
         let s = r#"
 target = "evm-ethereum-london"
 
@@ -1605,9 +1690,66 @@ object @O {
             errs.iter().any(|err| matches!(
                 err,
                 ObjectCompileError::BackendError { message, .. }
-                    if message.contains("call inst") && message.contains("2 results")
+                    if message.contains("external or declaration-only multi-return calls")
             )),
             "expected multi-return call backend error, got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn compile_object_rejects_internal_multi_return_arity_above_16_for_evm() {
+        let ret_tys = std::iter::repeat_n("i32", 17)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let ret_values = (0..17)
+            .map(|idx| format!("{idx}.i32"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let call_results = (0..17)
+            .map(|idx| format!("v{idx}.i32"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let src = format!(
+            r#"
+target = "evm-ethereum-london"
+
+func public %pair_many() -> ({ret_tys}) {{
+    block0:
+        return ({ret_values});
+}}
+
+func public %main() -> i32 {{
+    block0:
+        ({call_results}) = call %pair_many;
+        return v0;
+}}
+
+object @O {{
+  section runtime {{
+    entry %main;
+  }}
+}}
+"#
+        );
+
+        let parsed = parse_module(&src).unwrap();
+        let backend = FakeBackend;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: false,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
+        };
+
+        let errs = compile_object(&parsed.module, &backend, "O", &opts)
+            .expect_err("must reject >16 internal multi-return arity");
+        assert!(
+            errs.iter().any(|err| matches!(
+                err,
+                ObjectCompileError::BackendError { message, .. }
+                    if message.contains("supports at most 16 internal return values")
+            )),
+            "expected internal multi-return arity error, got {errs:?}"
         );
     }
 

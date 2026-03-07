@@ -413,8 +413,11 @@ mod tests {
             for block in function.layout.iter_block() {
                 for inst in function.layout.iter_inst(block) {
                     let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
-                    if let EvmInstKind::Return(ret) = data
-                        && let Some(ret_val) = ret.arg().copied()
+                    if let EvmInstKind::Return(_) = data
+                        && let Some(ret_val) = function
+                            .dfg
+                            .return_args(inst)
+                            .and_then(|args| args.first().copied())
                     {
                         return prov[ret_val].clone();
                     }

@@ -67,7 +67,7 @@ pub(crate) struct FuncObjectLayout {
 pub(crate) struct CallSiteLiveObjects {
     pub(crate) inst: InstId,
     pub(crate) callee: FuncRef,
-    pub(crate) has_return: bool,
+    pub(crate) result_count: u8,
     pub(crate) arg_count: u8,
     pub(crate) live_out_objs: Vec<StackObjId>,
     pub(crate) must_layout_objs: Vec<StackObjId>,
@@ -348,12 +348,14 @@ pub(crate) fn compute_func_stack_objects(
                 continue;
             };
             let arg_count = u8::try_from(call.args().len()).expect("call arg count too large");
+            let call_results = function.dfg.inst_results(inst);
+            let result_count =
+                u8::try_from(call_results.len()).expect("call result count too large");
 
-            let def = function.dfg.inst_result(inst);
             let mut set: FxHashSet<StackObjId> = FxHashSet::default();
             let mut roots: FxHashSet<InstId> = FxHashSet::default();
             for v in analysis.inst_liveness.live_out(inst).iter() {
-                if Some(v) == def {
+                if call_results.contains(&v) {
                     continue;
                 }
 
@@ -414,7 +416,7 @@ pub(crate) fn compute_func_stack_objects(
             call_sites.push(CallSiteLiveObjects {
                 inst,
                 callee: *call.callee(),
-                has_return: function.dfg.inst_result(inst).is_some(),
+                result_count,
                 arg_count,
                 live_out_objs: live_objs,
                 must_layout_objs,
@@ -799,18 +801,20 @@ fn compute_escaping_allocas(
         for inst in function.layout.iter_inst(block) {
             let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
             match data {
-                EvmInstKind::Return(ret) => {
-                    let Some(ret_val) = ret.arg().copied() else {
+                EvmInstKind::Return(_) => {
+                    let Some(ret_args) = function.dfg.return_args(inst) else {
                         continue;
                     };
-                    for base in prov[ret_val].alloca_insts() {
-                        escaping
-                            .entry(base)
-                            .or_default()
-                            .push(AllocaEscapeSite::Return {
-                                inst,
-                                value: ret_val,
-                            });
+                    for &ret_val in ret_args {
+                        for base in prov[ret_val].alloca_insts() {
+                            escaping
+                                .entry(base)
+                                .or_default()
+                                .push(AllocaEscapeSite::Return {
+                                    inst,
+                                    value: ret_val,
+                                });
+                        }
                     }
                 }
                 EvmInstKind::Mstore(mstore) => {

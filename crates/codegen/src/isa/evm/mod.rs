@@ -236,7 +236,7 @@ impl EvmBackend {
                     )
                     .expect("mem plan write failed");
 
-                    let mut call_info: FxHashMap<InstId, (FuncRef, bool)> = FxHashMap::default();
+                    let mut call_info: FxHashMap<InstId, (FuncRef, usize)> = FxHashMap::default();
                     module.func_store.view(func, |function| {
                         for block in function.layout.iter_block() {
                             for inst in function.layout.iter_inst(block) {
@@ -245,7 +245,7 @@ impl EvmBackend {
                                 };
                                 call_info.insert(
                                     inst,
-                                    (call.callee(), function.dfg.inst_result(inst).is_some()),
+                                    (call.callee(), function.dfg.inst_results(inst).len()),
                                 );
                             }
                         }
@@ -256,7 +256,7 @@ impl EvmBackend {
                     call_choices.sort_unstable_by_key(|(i, _)| i.as_u32());
 
                     for (inst, choice) in call_choices {
-                        let (callee, has_return) =
+                        let (callee, result_count) =
                             call_info.get(&inst).copied().unwrap_or_else(|| {
                                 panic!("missing call info for inst {}", inst.as_u32())
                             });
@@ -279,14 +279,14 @@ impl EvmBackend {
                         if save_offsets.is_empty() {
                             writeln!(
                                 &mut out,
-                                "  call inst{} callee=%{callee_name} callee_need_words={callee_need_words} choice={choice:?} has_return={has_return} save_words=0",
+                                "  call inst{} callee=%{callee_name} callee_need_words={callee_need_words} choice={choice:?} result_count={result_count} save_words=0",
                                 inst.as_u32()
                             )
                             .expect("mem plan write failed");
                         } else {
                             writeln!(
                                 &mut out,
-                                "  call inst{} callee=%{callee_name} callee_need_words={callee_need_words} choice={choice:?} has_return={has_return} save_words={} save_offsets={save_offsets:?}",
+                                "  call inst{} callee=%{callee_name} callee_need_words={callee_need_words} choice={choice:?} result_count={result_count} save_words={} save_offsets={save_offsets:?}",
                                 inst.as_u32(),
                                 save_offsets.len(),
                             )
@@ -945,15 +945,32 @@ impl Drop for CurrentJumpTargetsGuard<'_> {
     }
 }
 
-fn assert_single_result_lowering_ir(func: &Function) {
+fn assert_supported_lowering_ir(func: &Function) {
     for block in func.layout.iter_block() {
         for inst in func.layout.iter_inst(block) {
             let results = func.dfg.inst_results(inst);
+            if results.len() <= 1 {
+                continue;
+            }
+
             assert!(
-                results.len() <= 1,
+                func.dfg.is_call(inst),
                 "multi-result instruction `{}` must be legalized before EVM lowering",
                 func.dfg.inst(inst).as_text()
             );
+            assert!(
+                results.len() <= 16,
+                "EVM lowering supports at most 16 call results"
+            );
+            if let Some(call) = func.dfg.call_info(inst)
+                && let Some(sig) = func.ctx().get_sig(call.callee())
+            {
+                assert_eq!(
+                    results.len(),
+                    sig.ret_tys().len(),
+                    "call result count must match callee signature before EVM lowering"
+                );
+            }
         }
     }
 }
@@ -974,7 +991,7 @@ impl LowerBackend for EvmBackend {
         for &func in funcs {
             module.func_store.modify(func, |function| {
                 legalize_multi_result(function);
-                assert_single_result_lowering_ir(function);
+                assert_supported_lowering_ir(function);
             });
         }
         let ptr_escape = {
@@ -1223,7 +1240,7 @@ impl LowerBackend for EvmBackend {
 
         module.func_store.modify(func, |function| {
             legalize_multi_result(function);
-            assert_single_result_lowering_ir(function);
+            assert_supported_lowering_ir(function);
         });
 
         let ptr_escape = {
@@ -1340,7 +1357,7 @@ impl LowerBackend for EvmBackend {
     }
 
     fn lower(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, insn: InstId) {
-        let result = ctx.insn_result(insn);
+        let results: SmallVec<[ValueId; 4]> = ctx.insn_results(insn).iter().copied().collect();
         let args = ctx.insn_data(insn).collect_values();
         let data = self.isa.inst_set().resolve_inst(ctx.insn_data(insn));
 
@@ -1349,7 +1366,7 @@ impl LowerBackend for EvmBackend {
             for op in ops {
                 ctx.push(*op);
             }
-            perform_actions(ctx, &alloc.write(insn, result));
+            perform_actions(ctx, &alloc.write(insn, results.as_slice()));
         };
 
         match &data {
@@ -1387,7 +1404,7 @@ impl LowerBackend for EvmBackend {
                     ctx.push(OpCode::SIGNEXTEND);
                 }
 
-                perform_actions(ctx, &alloc.write(insn, result));
+                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::Zext(_) => {
                 let from = args[0];
@@ -1400,7 +1417,7 @@ impl LowerBackend for EvmBackend {
                     push_bytes(ctx, &bytes);
                     ctx.push(OpCode::AND);
                 }
-                perform_actions(ctx, &alloc.write(insn, result));
+                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
 
             EvmInstKind::Trunc(trunc) => {
@@ -1413,12 +1430,12 @@ impl LowerBackend for EvmBackend {
                     push_bytes(ctx, &bytes);
                     ctx.push(OpCode::AND);
                 }
-                perform_actions(ctx, &alloc.write(insn, result));
+                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::Bitcast(_) => {
                 // No-op.
                 perform_actions(ctx, &alloc.read(insn, &args));
-                perform_actions(ctx, &alloc.write(insn, result));
+                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::IntToPtr(_) => {
                 // Pointers are represented as 256-bit integers on the EVM.
@@ -1432,7 +1449,7 @@ impl LowerBackend for EvmBackend {
                     push_bytes(ctx, &bytes);
                     ctx.push(OpCode::AND);
                 }
-                perform_actions(ctx, &alloc.write(insn, result));
+                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::PtrToInt(ptr_to_int) => {
                 let dst_ty = *ptr_to_int.ty();
@@ -1444,7 +1461,7 @@ impl LowerBackend for EvmBackend {
                     push_bytes(ctx, &bytes);
                     ctx.push(OpCode::AND);
                 }
-                perform_actions(ctx, &alloc.write(insn, result));
+                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::Lt(_) => basic_op(ctx, &[OpCode::LT]),
             EvmInstKind::Gt(_) => basic_op(ctx, &[OpCode::GT]),
@@ -1571,8 +1588,8 @@ impl LowerBackend for EvmBackend {
                 let jumpdest_op = ctx.push(OpCode::JUMPDEST);
                 ctx.add_label_reference(push_callback, Label::Insn(jumpdest_op));
 
-                // Post-call: spill the call result if needed.
-                perform_actions(ctx, &alloc.write(insn, result));
+                // Post-call: spill the call results if needed.
+                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
 
             EvmInstKind::Return(_) => {
@@ -1580,9 +1597,8 @@ impl LowerBackend for EvmBackend {
                 leave_frame(ctx, alloc.frame_size_slots());
 
                 // Caller pushes return location onto stack prior to call.
-                if !args.is_empty() {
-                    // Swap the return loc to the top.
-                    ctx.push(OpCode::SWAP1);
+                for depth in 1..=args.len() {
+                    ctx.push(swap_op(depth as u8));
                 }
                 ctx.push(OpCode::JUMP);
             }
@@ -1629,7 +1645,7 @@ impl LowerBackend for EvmBackend {
                         ctx.push(OpCode::POP);
                     }
                     push_bytes(ctx, &u32_to_be(addr_bytes));
-                    perform_actions(ctx, &alloc.write(insn, result));
+                    perform_actions(ctx, &alloc.write(insn, results.as_slice()));
                     return;
                 }
 
@@ -1658,7 +1674,7 @@ impl LowerBackend for EvmBackend {
                     }
                 }
 
-                perform_actions(ctx, &alloc.write(insn, result));
+                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::Alloca(_) => {
                 let mem_plan = self.current_mem_plan.borrow();
@@ -1691,7 +1707,7 @@ impl LowerBackend for EvmBackend {
                     }
                 }
 
-                perform_actions(ctx, &alloc.write(insn, result));
+                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
 
             EvmInstKind::EvmStop(_) => basic_op(ctx, &[OpCode::STOP]),
@@ -1824,7 +1840,7 @@ impl LowerBackend for EvmBackend {
                         emit_malloc_base(ctx, min_base_bytes, needs_dyn_sp_clamp);
                     }
 
-                    perform_actions(ctx, &alloc.write(insn, result));
+                    perform_actions(ctx, &alloc.write(insn, results.as_slice()));
                     return;
                 }
 
@@ -1855,7 +1871,7 @@ impl LowerBackend for EvmBackend {
                 push_bytes(ctx, &[FREE_PTR_SLOT]);
                 ctx.push(OpCode::MSTORE);
 
-                perform_actions(ctx, &alloc.write(insn, result));
+                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::InsertValue(_) => todo!(),
             EvmInstKind::ExtractValue(_) => todo!(),
@@ -1863,7 +1879,7 @@ impl LowerBackend for EvmBackend {
                 let func = *get_fn.func();
                 perform_actions(ctx, &alloc.read(insn, &args));
                 ctx.push_jump_target(OpCode::PUSH1, Label::Function(func));
-                perform_actions(ctx, &alloc.write(insn, result));
+                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::EvmInvalid(_) => basic_op(ctx, &[OpCode::INVALID]),
 
@@ -1877,7 +1893,7 @@ impl LowerBackend for EvmBackend {
                         sym,
                     },
                 );
-                perform_actions(ctx, &alloc.write(insn, result));
+                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::SymSize(sym_size) => {
                 let sym = sym_size.sym().clone();
@@ -1889,7 +1905,7 @@ impl LowerBackend for EvmBackend {
                         sym,
                     },
                 );
-                perform_actions(ctx, &alloc.write(insn, result));
+                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
         }
     }
@@ -2012,27 +2028,19 @@ impl FinalAlloc {
         }
 
         let mut restore: Actions = Actions::new();
-        let mut stack_order: Vec<u32> = plan.save_word_offsets.iter().copied().rev().collect();
+        let result_count = usize::from(plan.result_count);
+        assert!(
+            result_count <= 16,
+            "call result count exceeds SWAP16: {result_count}"
+        );
 
-        if plan.has_return {
-            while !stack_order.is_empty() {
-                let m = stack_order.len().min(16);
-                restore.push(Action::StackSwap(m as u8));
-
-                // After SWAPm, the deepest saved word in this chunk is on top, followed by the
-                // remaining (m-1) saved words, then the return value.
-                let deepest = stack_order[m - 1];
-                restore.push(Action::MemStoreAbs(self.abs_addr_for_word(deepest)));
-                for &w in stack_order.iter().take(m - 1) {
-                    restore.push(Action::MemStoreAbs(self.abs_addr_for_word(w)));
-                }
-
-                stack_order.drain(..m);
+        for &w in plan.save_word_offsets.iter().rev() {
+            for depth in 1..=result_count {
+                restore.push(Action::StackSwap(
+                    u8::try_from(depth).expect("swap depth too large"),
+                ));
             }
-        } else {
-            for w in stack_order {
-                restore.push(Action::MemStoreAbs(self.abs_addr_for_word(w)));
-            }
+            restore.push(Action::MemStoreAbs(self.abs_addr_for_word(w)));
         }
 
         let mut out: Actions = Actions::new();
@@ -2106,8 +2114,8 @@ impl Allocator for FinalAlloc {
         self.rewrite_actions(actions)
     }
 
-    fn write(&self, inst: InstId, val: Option<sonatina_ir::ValueId>) -> Actions {
-        let actions = self.inner.write(inst, val);
+    fn write(&self, inst: InstId, vals: &[sonatina_ir::ValueId]) -> Actions {
+        let actions = self.inner.write(inst, vals);
         let actions = self.inject_call_save_post(inst, actions);
         self.rewrite_actions(actions)
     }
@@ -3173,6 +3181,157 @@ block0:
                 );
             }
         }
+    }
+
+    #[test]
+    fn call_save_post_preserves_two_results_above_saved_words() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %callee(v0.i256, v1.i256) -> (i256, i1) {
+block0:
+    v2.*i256 = alloca i256;
+    mstore v2 v0 i256;
+    v3.i256 = mload v2 i256;
+    v4.i256 = add v3 v1;
+    v5.i1 = lt v4 v3;
+    return (v4, v5);
+}
+
+func public %caller() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.*i256 = alloca i256;
+    mstore v0 1.i256 i256;
+    mstore v1 2.i256 i256;
+    (v2.i256, v3.i1) = call %callee 11.i256 22.i256;
+    v4.i256 = mload v0 i256;
+    v5.i256 = mload v1 i256;
+    br v3 block1 block2;
+
+block1:
+    v6.i256 = add v4 v5;
+    return v6;
+
+block2:
+    v7.i256 = add v2 v4;
+    return v7;
+}
+"#,
+        )
+        .unwrap();
+
+        let funcs = parsed.module.funcs();
+        let isa = Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        });
+        let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
+
+        let mut analyses: FxHashMap<FuncRef, memory_plan::FuncAnalysis> = FxHashMap::default();
+        for &func in &funcs {
+            parsed.module.func_store.modify(func, |function| {
+                let mut cfg = ControlFlowGraph::new();
+                cfg.compute(function);
+
+                let mut splitter = CriticalEdgeSplitter::new();
+                splitter.run(function, &mut cfg);
+
+                let mut liveness = Liveness::new();
+                liveness.compute(function, &cfg);
+
+                let mut inst_liveness = InstLiveness::new();
+                inst_liveness.compute(function, &cfg, &liveness);
+
+                let mut dom = DomTree::new();
+                dom.compute(&cfg);
+
+                let block_order = dom.rpo().to_owned();
+                let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute();
+
+                analyses.insert(
+                    func,
+                    memory_plan::FuncAnalysis {
+                        alloc,
+                        inst_liveness,
+                        block_order,
+                    },
+                );
+            });
+        }
+
+        let cost_model = ArenaCostModel {
+            w_save: 0,
+            w_code: 0,
+            ..ArenaCostModel::default()
+        };
+        let plan = compute_program_memory_plan(
+            &parsed.module,
+            &funcs,
+            &analyses,
+            &ptr_escape,
+            &isa,
+            &cost_model,
+        );
+
+        let mut names: FxHashMap<String, FuncRef> = FxHashMap::default();
+        for &f in &funcs {
+            let name = parsed.module.ctx.func_sig(f, |sig| sig.name().to_string());
+            names.insert(name, f);
+        }
+        let caller = names["caller"];
+
+        let (call_inst, call_results): (InstId, SmallVec<[ValueId; 8]>) =
+            parsed.module.func_store.view(caller, |function| {
+                for block in function.layout.iter_block() {
+                    for inst in function.layout.iter_inst(block) {
+                        if function.dfg.call_info(inst).is_none() {
+                            continue;
+                        }
+                        return (
+                            inst,
+                            function.dfg.inst_results(inst).iter().copied().collect(),
+                        );
+                    }
+                }
+                panic!("missing call inst");
+            });
+
+        let analysis = analyses.remove(&caller).expect("missing caller analysis");
+        let mem_plan = plan
+            .funcs
+            .get(&caller)
+            .expect("missing caller plan")
+            .clone();
+        let alloc = FinalAlloc::new(analysis.alloc, mem_plan);
+
+        let MemScheme::StaticArena(st) = &alloc.mem_plan.scheme else {
+            panic!("expected StaticArena plan for caller");
+        };
+        let save_plan = st
+            .call_saves
+            .get(&call_inst)
+            .expect("expected non-empty call_saves entry for call");
+        assert_eq!(save_plan.result_count, 2);
+        assert!(
+            !save_plan.save_word_offsets.is_empty(),
+            "expected at least one saved word"
+        );
+
+        let actions = alloc.write(call_inst, &call_results);
+        let mut expected = Actions::new();
+        for &w in save_plan.save_word_offsets.iter().rev() {
+            expected.push(Action::StackSwap(1));
+            expected.push(Action::StackSwap(2));
+            expected.push(Action::MemStoreAbs(alloc.abs_addr_for_word(w)));
+        }
+        assert_eq!(
+            actions.as_slice(),
+            expected.as_slice(),
+            "multi-result call-save restore must preserve both results above restored words"
+        );
     }
 
     #[test]

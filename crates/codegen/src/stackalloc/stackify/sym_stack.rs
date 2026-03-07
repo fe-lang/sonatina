@@ -114,13 +114,6 @@ impl SymStack {
         self.push_value(stack_as);
     }
 
-    pub(super) fn rename_top_value(&mut self, v: ValueId) {
-        let Some(StackItem::Value(top)) = self.items.front_mut() else {
-            panic!("expected StackItem::Value on top of stack")
-        };
-        *top = v;
-    }
-
     pub(super) fn rename_value_at_depth(&mut self, depth: usize, v: ValueId) {
         debug_assert!(depth < self.len_above_func_ret());
         let Some(StackItem::Value(slot)) = self.items.get_mut(depth) else {
@@ -186,15 +179,6 @@ impl SymStack {
         assert!(pos < self.len_above_func_ret(), "SWAP past call barrier");
         for k in 1..=pos {
             self.swap(k, actions);
-        }
-    }
-
-    pub(super) fn clear_above_func_ret(&mut self, actions: &mut Actions) {
-        while let Some(top) = self.items.front() {
-            if *top == StackItem::FuncRetAddr {
-                break;
-            }
-            self.pop(actions);
         }
     }
 

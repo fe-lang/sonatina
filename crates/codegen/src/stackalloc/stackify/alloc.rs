@@ -53,7 +53,7 @@ impl Allocator for StackifyAlloc {
         self.pre_actions[inst].clone()
     }
 
-    fn write(&self, inst: InstId, _val: Option<ValueId>) -> Actions {
+    fn write(&self, inst: InstId, _vals: &[ValueId]) -> Actions {
         self.post_actions[inst].clone()
     }
 
