@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/coin.sntn
 ---
@@ -16,7 +17,7 @@ object: Contract
 
 functions:
   mem: dyn_base=0x120 static_base=0xc0
-  __Contract_runtime_entry: ir_blocks=1 ir_insts=62 vcode_ops=249 fixups=36 imm_bytes=52
+  __Contract_runtime_entry: ir_blocks=1 ir_insts=62 vcode_ops=233 fixups=36 imm_bytes=44
     mem: scheme=StaticArena need_words=3 locals_words=0
   __Coin_recv_0_0: ir_blocks=3 ir_insts=26 vcode_ops=54 fixups=1 imm_bytes=4
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -60,9 +61,9 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
   soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=32 vcode_ops=81 fixups=3 imm_bytes=18
     mem: scheme=StaticArena need_words=0 locals_words=0
-  soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=3 ir_insts=21 vcode_ops=44 fixups=1 imm_bytes=4
+  soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=3 ir_insts=21 vcode_ops=40 fixups=1 imm_bytes=2
     mem: scheme=StaticArena need_words=0 locals_words=0
-  soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=3 ir_insts=24 vcode_ops=44 fixups=1 imm_bytes=5
+  soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=3 ir_insts=24 vcode_ops=40 fixups=1 imm_bytes=3
     mem: scheme=StaticArena need_words=0 locals_words=0
   cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=8 vcode_ops=27 fixups=1 imm_bytes=6
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -88,14 +89,14 @@ evm:
     // v62.i1 = is_zero v61;
     - stack=[v61, v11], last_use=[v61]
       is_zero [v61] -> v62
-    // v14.i256 = zext v62 i256;
+    // v78.i256 = bitcast v62 i256;
+    - stack=[v62, v11]
+      bitcast [v62] -> v62
+    // call %assert v78;
     - stack=[v62, v11], last_use=[v62]
-      zext [v62] -> v14
-    // call %assert v14;
-    - stack=[v14, v11], last_use=[v14]
       pre: [PUSH_CONT, SWAP1]
-      call [v14]
-    // v15.*i8 = evm_malloc 64.i256;
+      call [v62]
+    // v15.*i256 = evm_malloc 64.i256;
     - stack=[v11]
       evm_malloc [] -> v15
     // v16.i256 = ptr_to_int v15 i256;
@@ -127,14 +128,14 @@ evm:
     - stack=[v21, v11], last_use=[v21]
       pre: [PUSH(10)]
       eq [10, v21] -> v65
-    // v23.i256 = zext v65 i256;
+    // v79.i256 = bitcast v65 i256;
+    - stack=[v65, v11]
+      bitcast [v65] -> v65
+    // call %assert v79;
     - stack=[v65, v11], last_use=[v65]
-      zext [v65] -> v23
-    // call %assert v23;
-    - stack=[v23, v11], last_use=[v23]
       pre: [PUSH_CONT, SWAP1]
-      call [v23]
-    // v24.*i8 = evm_malloc 64.i256;
+      call [v65]
+    // v24.*i256 = evm_malloc 64.i256;
     - stack=[v11]
       evm_malloc [] -> v24
     // v25.i256 = ptr_to_int v24 i256;
@@ -166,14 +167,14 @@ evm:
     - stack=[v30, v11], last_use=[v30]
       pre: [PUSH(5)]
       eq [5, v30] -> v68
-    // v32.i256 = zext v68 i256;
+    // v80.i256 = bitcast v68 i256;
+    - stack=[v68, v11]
+      bitcast [v68] -> v68
+    // call %assert v80;
     - stack=[v68, v11], last_use=[v68]
-      zext [v68] -> v32
-    // call %assert v32;
-    - stack=[v32, v11], last_use=[v32]
       pre: [PUSH_CONT, SWAP1]
-      call [v32]
-    // v33.*i8 = evm_malloc 64.i256;
+      call [v68]
+    // v33.*i256 = evm_malloc 64.i256;
     - stack=[v11]
       evm_malloc [] -> v33
     // v34.i256 = ptr_to_int v33 i256;
@@ -204,13 +205,13 @@ evm:
     // v71.i1 = is_zero v39;
     - stack=[v39, v11], last_use=[v39]
       is_zero [v39] -> v71
-    // v41.i256 = zext v71 i256;
+    // v81.i256 = bitcast v71 i256;
+    - stack=[v71, v11]
+      bitcast [v71] -> v71
+    // call %assert v81;
     - stack=[v71, v11], last_use=[v71]
-      zext [v71] -> v41
-    // call %assert v41;
-    - stack=[v41, v11], last_use=[v41]
       pre: [PUSH_CONT, SWAP1]
-      call [v41]
+      call [v71]
     // v42.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__BalanceOf_h891837b06b5610d4__9cd8cdf578aad9be 0.i256 v11 100000.i256 0.i256 0.i256;
     - stack=[v11]
       pre: [PUSH(0), PUSH(0), PUSH(0), PUSH(100000), DUP5, PUSH_CONT, SWAP5]
@@ -219,13 +220,13 @@ evm:
     - stack=[v42, v11], last_use=[v42]
       pre: [PUSH(7)]
       eq [7, v42] -> v72
-    // v44.i256 = zext v72 i256;
+    // v82.i256 = bitcast v72 i256;
+    - stack=[v72, v11]
+      bitcast [v72] -> v72
+    // call %assert v82;
     - stack=[v72, v11], last_use=[v72]
-      zext [v72] -> v44
-    // call %assert v44;
-    - stack=[v44, v11], last_use=[v44]
       pre: [PUSH_CONT, SWAP1]
-      call [v44]
+      call [v72]
     // v45.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__BalanceOf_h891837b06b5610d4__9cd8cdf578aad9be 0.i256 v11 100000.i256 0.i256 1.i256;
     - stack=[v11]
       pre: [PUSH(0), PUSH(1), PUSH(0), PUSH(100000), DUP5, PUSH_CONT, SWAP5]
@@ -234,14 +235,14 @@ evm:
     - stack=[v45, v11], last_use=[v45]
       pre: [PUSH(8)]
       eq [8, v45] -> v73
-    // v47.i256 = zext v73 i256;
+    // v83.i256 = bitcast v73 i256;
+    - stack=[v73, v11]
+      bitcast [v73] -> v73
+    // call %assert v83;
     - stack=[v73, v11], last_use=[v73]
-      zext [v73] -> v47
-    // call %assert v47;
-    - stack=[v47, v11], last_use=[v47]
       pre: [PUSH_CONT, SWAP1]
-      call [v47]
-    // v48.*i8 = evm_malloc 64.i256;
+      call [v73]
+    // v48.*i256 = evm_malloc 64.i256;
     - stack=[v11]
       evm_malloc [] -> v48
     // v49.i256 = ptr_to_int v48 i256;
@@ -273,13 +274,13 @@ evm:
     - stack=[v54, v11], last_use=[v54]
       pre: [PUSH(1)]
       eq [1, v54] -> v76
-    // v56.i256 = zext v76 i256;
+    // v84.i256 = bitcast v76 i256;
+    - stack=[v76, v11]
+      bitcast [v76] -> v76
+    // call %assert v84;
     - stack=[v76, v11], last_use=[v76]
-      zext [v76] -> v56
-    // call %assert v56;
-    - stack=[v56, v11], last_use=[v56]
       pre: [PUSH_CONT, SWAP1]
-      call [v56]
+      call [v76]
     // v57.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__TotalSupply_h7bb395110a25abc2__8d4065b5d6bedb33 0.i256 v11 100000.i256 0.i256;
     - stack=[v11], last_use=[v11]
       pre: [PUSH(0), PUSH(100000), PUSH(0), SWAP3, PUSH_CONT, SWAP4]
@@ -288,13 +289,13 @@ evm:
     - stack=[v57], last_use=[v57]
       pre: [PUSH(15)]
       eq [15, v57] -> v77
-    // v59.i256 = zext v77 i256;
+    // v85.i256 = bitcast v77 i256;
+    - stack=[v77]
+      bitcast [v77] -> v77
+    // call %assert v85;
     - stack=[v77], last_use=[v77]
-      zext [v77] -> v59
-    // call %assert v59;
-    - stack=[v59], last_use=[v59]
       pre: [PUSH_CONT, SWAP1]
-      call [v59]
+      call [v77]
     // evm_return 0.i256 0.i256;
     - stack=[]
       pre: [PUSH(0), PUSH(0)]
@@ -600,7 +601,7 @@ evm:
     - stack=[v5, v3, v2, v1], last_use=[v3]
       pre: [DUP1, SWAP2]
       sub [v3, v5] -> v13
-    // v14.*i8 = evm_malloc v13;
+    // v14.*i256 = evm_malloc v13;
     - stack=[v13, v5, v2, v1]
       pre: [DUP1]
       evm_malloc [v13] -> v14
@@ -611,7 +612,7 @@ evm:
     - stack=[v14, v13, v5, v2, v1], last_use=[v5]
       pre: [DUP1, SWAP3, DUP3, SWAP2]
       evm_code_copy [v14, v5, v13]
-    // v19.*i8 = evm_malloc 64.i256;
+    // v19.*i256 = evm_malloc 64.i256;
     - stack=[v13, v14, v2, v1]
       evm_malloc [] -> v19
     // v20.i256 = ptr_to_int v19 i256;
@@ -666,7 +667,7 @@ evm:
     - stack=[]
       pre: [PUSH(0), PUSH_CONT, SWAP1]
       call [0] -> v1
-    // v60.*i8 = evm_malloc 64.i256;
+    // v60.*i256 = evm_malloc 64.i256;
     - stack=[v1]
       evm_malloc [] -> v60
     // v61.i256 = ptr_to_int v60 i256;
@@ -699,7 +700,7 @@ evm:
     // v68.i256 = mload v67 i256;
     - stack=[v60, v1], last_use=[v60]
       mload [v60] -> v68
-    // v69.*i8 = evm_malloc 64.i256;
+    // v69.*i256 = evm_malloc 64.i256;
     - stack=[v68, v1]
       evm_malloc [] -> v69
     // v70.i256 = ptr_to_int v69 i256;
@@ -723,7 +724,7 @@ evm:
     - stack=[v74, v69, v1], last_use=[v74]
       pre: [PUSH(4), SWAP1]
       mstore [v74, 4]
-    // v46.*i8 = evm_malloc 96.i256;
+    // v46.*i256 = evm_malloc 96.i256;
     - stack=[v69, v1]
       evm_malloc [] -> v46
     // v47.i256 = ptr_to_int v46 i256;
@@ -789,7 +790,7 @@ evm:
     - stack=[v24, v46], last_use=[v46]
       pre: [SWAP1, PUSH_CONT, SWAP1]
       call [v46] -> v25
-    // v26.*i8 = evm_malloc 64.i256;
+    // v26.*i256 = evm_malloc 64.i256;
     - stack=[v25, v24]
       evm_malloc [] -> v26
     // v27.i256 = ptr_to_int v26 i256;
@@ -843,7 +844,7 @@ evm:
     - stack=[v32, v46], last_use=[v46]
       pre: [SWAP1, PUSH_CONT, SWAP1]
       call [v46] -> v33
-    // v34.*i8 = evm_malloc 64.i256;
+    // v34.*i256 = evm_malloc 64.i256;
     - stack=[v33, v32]
       evm_malloc [] -> v34
     // v35.i256 = ptr_to_int v34 i256;
@@ -943,7 +944,7 @@ evm:
     // v26.i256 = sym_addr &__Coin_init;
     - stack=[v25, v1, v2, <RET>]
       sym_addr [] -> v26
-    // v6.*i8 = evm_malloc v25;
+    // v6.*i256 = evm_malloc v25;
     - stack=[v26, v25, v1, v2, <RET>]
       pre: [DUP2]
       evm_malloc [v25] -> v6
@@ -999,7 +1000,7 @@ evm:
     - stack=[v27x, <RET>]
       cleanup: [POP]
       evm_return_data_size [] -> v19
-    // v20.*i8 = evm_malloc v19;
+    // v20.*i256 = evm_malloc v19;
     - stack=[v19, <RET>]
       pre: [DUP1]
       evm_malloc [v19] -> v20
@@ -1150,7 +1151,7 @@ evm:
     // v13.i256 = evm_return_data_size;
     - stack=[v12, v54, <RET>]
       evm_return_data_size [] -> v13
-    // v14.*i8 = evm_malloc v13;
+    // v14.*i256 = evm_malloc v13;
     - stack=[v13, v12, v54, <RET>]
       pre: [DUP1]
       evm_malloc [v13] -> v14
@@ -1299,7 +1300,7 @@ evm:
     // v13.i256 = evm_return_data_size;
     - stack=[v12, v54, <RET>]
       evm_return_data_size [] -> v13
-    // v14.*i8 = evm_malloc v13;
+    // v14.*i256 = evm_malloc v13;
     - stack=[v13, v12, v54, <RET>]
       pre: [DUP1]
       evm_malloc [v13] -> v14
@@ -1415,7 +1416,7 @@ evm:
     // v13.i256 = evm_return_data_size;
     - stack=[v12, v43, <RET>]
       evm_return_data_size [] -> v13
-    // v14.*i8 = evm_malloc v13;
+    // v14.*i256 = evm_malloc v13;
     - stack=[v13, v12, v43, <RET>]
       pre: [DUP1]
       evm_malloc [v13] -> v14
@@ -1514,7 +1515,7 @@ evm:
     // v12.i256 = evm_return_data_size;
     - stack=[v11, v36, <RET>]
       evm_return_data_size [] -> v12
-    // v13.*i8 = evm_malloc v12;
+    // v13.*i256 = evm_malloc v12;
     - stack=[v12, v11, v36, <RET>]
       pre: [DUP1]
       evm_malloc [v12] -> v13
@@ -1727,7 +1728,7 @@ evm:
       evm_revert [0, 0]
   block2 P=[] T=[v22, v0, v1]
     inherited from block0: [v22, v0, v1, <RET>]
-    // v5.*i8 = evm_malloc 64.i256;
+    // v5.*i256 = evm_malloc 64.i256;
     - stack=[v22, v0, v1, <RET>]
       evm_malloc [] -> v5
     // v6.i256 = ptr_to_int v5 i256;
@@ -1769,7 +1770,7 @@ evm:
 
 // func public %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.i256) -> i256
   block0 P=[v0] T=[]
-    // v25.*i8 = evm_malloc 96.i256;
+    // v25.*i256 = evm_malloc 96.i256;
     - stack=[v0, <RET>]
       evm_malloc [] -> v25
     // v26.i256 = ptr_to_int v25 i256;
@@ -1817,7 +1818,7 @@ evm:
     - stack=[v38, v25, <RET>], last_use=[v38]
       pre: [PUSH(0), SWAP1]
       mstore [v38, 0]
-    // v2.*i8 = evm_malloc 128.i256;
+    // v2.*i256 = evm_malloc 128.i256;
     - stack=[v25, <RET>]
       evm_malloc [] -> v2
     // v3.i256 = ptr_to_int v2 i256;
@@ -1903,7 +1904,7 @@ evm:
       br [v5] -> [block1, block3]
   block1 P=[] T=[v0, v1]
     inherited from block0: [v0, v1, <RET>]
-    // v8.*i8 = evm_malloc v1;
+    // v8.*i256 = evm_malloc v1;
     - stack=[v0, v1, <RET>]
       pre: [DUP2]
       evm_malloc [v1] -> v8
@@ -1969,7 +1970,7 @@ evm:
     // v6.i256 = mload v5 i256;
     - stack=[v5, v3, <RET>], last_use=[v5]
       mload [v5] -> v6
-    // v7.*i8 = evm_malloc 64.i256;
+    // v7.*i256 = evm_malloc 64.i256;
     - stack=[v6, v3, <RET>]
       evm_malloc [] -> v7
     // v8.i256 = ptr_to_int v7 i256;
@@ -2002,7 +2003,7 @@ evm:
 
 // func public %solencoder_h1b9228b90dad6928_new() -> i256
   block0 P=[] T=[]
-    // v0.*i8 = evm_malloc 96.i256;
+    // v0.*i256 = evm_malloc 96.i256;
     - stack=[<RET>]
       evm_malloc [] -> v0
     // v1.i256 = ptr_to_int v0 i256;
@@ -2040,7 +2041,7 @@ evm:
 
 // func public %cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.i256) -> i256
   block0 P=[v0] T=[]
-    // v1.*i8 = evm_malloc 96.i256;
+    // v1.*i256 = evm_malloc 96.i256;
     - stack=[v0, <RET>]
       evm_malloc [] -> v1
     // v2.i256 = ptr_to_int v1 i256;
@@ -2094,7 +2095,7 @@ evm:
 
 // func public %soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256, v1.i256) -> i256
   block0 P=[v0, v1] T=[]
-    // v22.*i8 = evm_malloc 64.i256;
+    // v22.*i256 = evm_malloc 64.i256;
     - stack=[v0, v1, <RET>]
       evm_malloc [] -> v22
     // v23.i256 = ptr_to_int v22 i256;
@@ -2127,7 +2128,7 @@ evm:
     // v30.i256 = mload v29 i256;
     - stack=[v22, v1, <RET>], last_use=[v22]
       mload [v22] -> v30
-    // v31.*i8 = evm_malloc 64.i256;
+    // v31.*i256 = evm_malloc 64.i256;
     - stack=[v30, v1, <RET>]
       evm_malloc [] -> v31
     // v32.i256 = ptr_to_int v31 i256;
@@ -2151,7 +2152,7 @@ evm:
     - stack=[v36, v31, v1, <RET>], last_use=[v36]
       pre: [DUP3, SWAP1]
       mstore [v36, v1]
-    // v4.*i8 = evm_malloc 96.i256;
+    // v4.*i256 = evm_malloc 96.i256;
     - stack=[v31, v1, <RET>]
       evm_malloc [] -> v4
     // v5.i256 = ptr_to_int v4 i256;
@@ -2241,19 +2242,19 @@ evm:
     - stack=[v66, v11, v10, v12, v5, <RET>], last_use=[v66]
       pre: [DUP4]
       gt [v12, v66] -> v67
-    // v68.i256 = zext v67 i256;
-    - stack=[v67, v11, v10, v12, v5, <RET>], last_use=[v67]
-      zext [v67] -> v68
+    // v72.i256 = bitcast v67 i256;
+    - stack=[v67, v11, v10, v12, v5, <RET>]
+      bitcast [v67] -> v67
     // v69.i1 = lt v12 v11;
-    - stack=[v68, v11, v10, v12, v5, <RET>]
+    - stack=[v67, v11, v10, v12, v5, <RET>]
       pre: [DUP2, DUP5]
       lt [v12, v11] -> v69
-    // v70.i256 = zext v69 i256;
-    - stack=[v69, v68, v11, v10, v12, v5, <RET>], last_use=[v69]
-      zext [v69] -> v70
-    // v71.i256 = or v68 v70;
-    - stack=[v70, v68, v11, v10, v12, v5, <RET>], last_use=[v68, v70]
-      or [v70, v68] -> v71
+    // v73.i256 = bitcast v69 i256;
+    - stack=[v69, v67, v11, v10, v12, v5, <RET>]
+      bitcast [v69] -> v69
+    // v71.i256 = or v72 v73;
+    - stack=[v69, v67, v11, v10, v12, v5, <RET>], last_use=[v67, v69]
+      or [v69, v67] -> v71
     // v23.i1 = ne 0.i256 v71;
     - stack=[v71, v11, v10, v12, v5, <RET>], last_use=[v71]
       pre: [PUSH(0)]
@@ -2324,19 +2325,19 @@ evm:
     - stack=[v12, v11, v10, v44, v0, <RET>], last_use=[v44]
       pre: [SWAP3, DUP4]
       gt [v12, v44] -> v67
-    // v68.i256 = zext v67 i256;
-    - stack=[v67, v11, v10, v12, v0, <RET>], last_use=[v67]
-      zext [v67] -> v68
+    // v72.i256 = bitcast v67 i256;
+    - stack=[v67, v11, v10, v12, v0, <RET>]
+      bitcast [v67] -> v67
     // v69.i1 = lt v12 v11;
-    - stack=[v68, v11, v10, v12, v0, <RET>]
+    - stack=[v67, v11, v10, v12, v0, <RET>]
       pre: [DUP2, DUP5]
       lt [v12, v11] -> v69
-    // v70.i256 = zext v69 i256;
-    - stack=[v69, v68, v11, v10, v12, v0, <RET>], last_use=[v69]
-      zext [v69] -> v70
-    // v71.i256 = or v68 v70;
-    - stack=[v70, v68, v11, v10, v12, v0, <RET>], last_use=[v68, v70]
-      or [v70, v68] -> v71
+    // v73.i256 = bitcast v69 i256;
+    - stack=[v69, v67, v11, v10, v12, v0, <RET>]
+      bitcast [v69] -> v69
+    // v71.i256 = or v72 v73;
+    - stack=[v69, v67, v11, v10, v12, v0, <RET>], last_use=[v67, v69]
+      or [v69, v67] -> v71
     // v23.i1 = ne 0.i256 v71;
     - stack=[v71, v11, v10, v12, v0, <RET>], last_use=[v71]
       pre: [PUSH(0)]
@@ -2376,7 +2377,7 @@ evm:
 
 // func public %cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256) -> i256
   block0 P=[v0] T=[]
-    // v1.*i8 = evm_malloc 64.i256;
+    // v1.*i256 = evm_malloc 64.i256;
     - stack=[v0, <RET>]
       evm_malloc [] -> v1
     // v2.i256 = ptr_to_int v1 i256;
@@ -2415,7 +2416,7 @@ evm:
     // v4.i256 = mload v3 i256;
     - stack=[v0, v1, <RET>], last_use=[v0]
       mload [v0] -> v4
-    // v5.*i8 = evm_malloc 64.i256;
+    // v5.*i256 = evm_malloc 64.i256;
     - stack=[v4, v1, <RET>]
       evm_malloc [] -> v5
     // v6.i256 = ptr_to_int v5 i256;
@@ -2458,12 +2459,12 @@ __Contract_runtime_entry:
     DUP1  // v61.i1 = is_zero v11;
     ISZERO
     ISZERO  // v62.i1 = is_zero v61;
-    PUSH1 `pc + (4)`  // call %assert v14;
+    PUSH1 `pc + (4)`  // call %assert v78;
     SWAP1
     PUSH1 FuncRef(12)
     JUMP
     JUMPDEST
-    PUSH1 0x40 (64)  // v15.*i8 = evm_malloc 64.i256;
+    PUSH1 0x40 (64)  // v15.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2
@@ -2499,12 +2500,12 @@ __Contract_runtime_entry:
     JUMPDEST
     PUSH1 0xa (10)  // v65.i1 = eq 10.i256 v21;
     EQ
-    PUSH1 `pc + (4)`  // call %assert v23;
+    PUSH1 `pc + (4)`  // call %assert v79;
     SWAP1
     PUSH1 FuncRef(12)
     JUMP
     JUMPDEST
-    PUSH1 0x40 (64)  // v24.*i8 = evm_malloc 64.i256;
+    PUSH1 0x40 (64)  // v24.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2
@@ -2540,12 +2541,12 @@ __Contract_runtime_entry:
     JUMPDEST
     PUSH1 0x5 (5)  // v68.i1 = eq 5.i256 v30;
     EQ
-    PUSH1 `pc + (4)`  // call %assert v32;
+    PUSH1 `pc + (4)`  // call %assert v80;
     SWAP1
     PUSH1 FuncRef(12)
     JUMP
     JUMPDEST
-    PUSH1 0x40 (64)  // v33.*i8 = evm_malloc 64.i256;
+    PUSH1 0x40 (64)  // v33.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2
@@ -2580,7 +2581,7 @@ __Contract_runtime_entry:
     JUMP
     JUMPDEST
     ISZERO  // v71.i1 = is_zero v39;
-    PUSH1 `pc + (4)`  // call %assert v41;
+    PUSH1 `pc + (4)`  // call %assert v81;
     SWAP1
     PUSH1 FuncRef(12)
     JUMP
@@ -2597,7 +2598,7 @@ __Contract_runtime_entry:
     JUMPDEST
     PUSH1 0x7 (7)  // v72.i1 = eq 7.i256 v42;
     EQ
-    PUSH1 `pc + (4)`  // call %assert v44;
+    PUSH1 `pc + (4)`  // call %assert v82;
     SWAP1
     PUSH1 FuncRef(12)
     JUMP
@@ -2614,12 +2615,12 @@ __Contract_runtime_entry:
     JUMPDEST
     PUSH1 0x8 (8)  // v73.i1 = eq 8.i256 v45;
     EQ
-    PUSH1 `pc + (4)`  // call %assert v47;
+    PUSH1 `pc + (4)`  // call %assert v83;
     SWAP1
     PUSH1 FuncRef(12)
     JUMP
     JUMPDEST
-    PUSH1 0x40 (64)  // v48.*i8 = evm_malloc 64.i256;
+    PUSH1 0x40 (64)  // v48.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2
@@ -2655,7 +2656,7 @@ __Contract_runtime_entry:
     JUMPDEST
     PUSH1 0x1 (1)  // v76.i1 = eq 1.i256 v54;
     EQ
-    PUSH1 `pc + (4)`  // call %assert v56;
+    PUSH1 `pc + (4)`  // call %assert v84;
     SWAP1
     PUSH1 FuncRef(12)
     JUMP
@@ -2671,7 +2672,7 @@ __Contract_runtime_entry:
     JUMPDEST
     PUSH1 0xf (15)  // v77.i1 = eq 15.i256 v57;
     EQ
-    PUSH1 `pc + (4)`  // call %assert v59;
+    PUSH1 `pc + (4)`  // call %assert v85;
     SWAP1
     PUSH1 FuncRef(12)
     JUMP
@@ -2869,7 +2870,7 @@ __Coin_init:
     DUP1  // v17.i256 = sub v4 v6;
     SWAP2
     SUB
-    DUP1  // v18.*i8 = evm_malloc v17;
+    DUP1  // v18.*i256 = evm_malloc v17;
     PUSH1 0x1f (31)
     ADD
     PUSH1 0x1f (31)
@@ -2895,7 +2896,7 @@ __Coin_init:
     DUP3
     SWAP2
     CODECOPY
-    PUSH1 0x40 (64)  // v24.*i8 = evm_malloc 64.i256;
+    PUSH1 0x40 (64)  // v24.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2
@@ -2949,7 +2950,7 @@ __Coin_runtime:
     PUSH1 FuncRef(22)
     JUMP
     JUMPDEST
-    PUSH1 0x40 (64)  // v60.*i8 = evm_malloc 64.i256;
+    PUSH1 0x40 (64)  // v60.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2
@@ -2969,7 +2970,7 @@ __Coin_runtime:
     SWAP1
     MSTORE
     MLOAD  // v68.i256 = mload v67 i256;
-    PUSH1 0x40 (64)  // v69.*i8 = evm_malloc 64.i256;
+    PUSH1 0x40 (64)  // v69.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2
@@ -2993,7 +2994,7 @@ __Coin_runtime:
     PUSH1 0x4 (4)  // mstore v74 4.i256 i256;
     SWAP1
     MSTORE
-    PUSH1 0x40 (64)  // v46.*i8 = evm_malloc 96.i256;
+    PUSH1 0x40 (64)  // v46.*i256 = evm_malloc 96.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2
@@ -3042,7 +3043,7 @@ __Coin_runtime:
     PUSH1 FuncRef(60)
     JUMP
     JUMPDEST
-    PUSH1 0x40 (64)  // v26.*i8 = evm_malloc 64.i256;
+    PUSH1 0x40 (64)  // v26.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2
@@ -3096,7 +3097,7 @@ __Coin_runtime:
     PUSH1 FuncRef(60)
     JUMP
     JUMPDEST
-    PUSH1 0x40 (64)  // v34.*i8 = evm_malloc 64.i256;
+    PUSH1 0x40 (64)  // v34.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2
@@ -3188,7 +3189,7 @@ create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e:
     POP  // v25.i256 = sym_size &__Coin_init;
     PUSH0 0x0 (0)
     PUSH0 0x0 (0)  // v26.i256 = sym_addr &__Coin_init;
-    DUP2  // v7.*i8 = evm_malloc v25;
+    DUP2  // v7.*i256 = evm_malloc v25;
     POP
     PUSH1 0x40 (64)
     MLOAD
@@ -3230,7 +3231,7 @@ create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e:
   block1:
     POP  // v22.i256 = evm_return_data_size;
     RETURNDATASIZE
-    DUP1  // v23.*i8 = evm_malloc v22;
+    DUP1  // v23.*i256 = evm_malloc v22;
     POP
     PUSH1 0x40 (64)
     MLOAD
@@ -3340,7 +3341,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Credit_h1b40c7da4bcceeac
     SWAP5
     CALL
     RETURNDATASIZE  // v16.i256 = evm_return_data_size;
-    DUP1  // v17.*i8 = evm_malloc v16;
+    DUP1  // v17.*i256 = evm_malloc v16;
     PUSH1 0x1f (31)
     ADD
     PUSH1 0x1f (31)
@@ -3458,7 +3459,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Transfer_hbe7d801e15d910
     SWAP5
     CALL
     RETURNDATASIZE  // v16.i256 = evm_return_data_size;
-    DUP1  // v17.*i8 = evm_malloc v16;
+    DUP1  // v17.*i256 = evm_malloc v16;
     PUSH1 0x1f (31)
     ADD
     PUSH1 0x1f (31)
@@ -3562,7 +3563,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__BalanceOf_h891837b06b561
     SWAP5
     CALL
     RETURNDATASIZE  // v16.i256 = evm_return_data_size;
-    DUP1  // v17.*i8 = evm_malloc v16;
+    DUP1  // v17.*i256 = evm_malloc v16;
     PUSH1 0x1f (31)
     ADD
     PUSH1 0x1f (31)
@@ -3652,7 +3653,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__TotalSupply_h7bb395110a2
     SWAP6
     CALL
     RETURNDATASIZE  // v15.i256 = evm_return_data_size;
-    DUP1  // v16.*i8 = evm_malloc v15;
+    DUP1  // v16.*i256 = evm_malloc v15;
     PUSH1 0x1f (31)
     ADD
     PUSH1 0x1f (31)
@@ -3825,7 +3826,7 @@ decode_returndata__u256__3271ca15373d4483:
     REVERT
   block2:
     JUMPDEST
-    PUSH1 0x40 (64)  // v8.*i8 = evm_malloc 64.i256;
+    PUSH1 0x40 (64)  // v8.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2
@@ -3870,7 +3871,7 @@ decode_returndata__u256__3271ca15373d4483:
 soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v25.*i8 = evm_malloc 96.i256;
+    PUSH1 0x40 (64)  // v25.*i256 = evm_malloc 96.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2
@@ -3903,7 +3904,7 @@ soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54c
     PUSH0  // mstore v38 0.i256 i256;
     SWAP1
     MSTORE
-    PUSH1 0x40 (64)  // v4.*i8 = evm_malloc 128.i256;
+    PUSH1 0x40 (64)  // v4.*i256 = evm_malloc 128.i256;
     MLOAD
     PUSH2 0x11f (287)
     DUP2
@@ -3956,7 +3957,7 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     PUSH1 block3  // br v6 block1 block3;
     JUMPI
   block1:
-    DUP2  // v10.*i8 = evm_malloc v1;
+    DUP2  // v10.*i256 = evm_malloc v1;
     PUSH1 0x1f (31)
     ADD
     PUSH1 0x1f (31)
@@ -4015,7 +4016,7 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish:
     PUSH1 0x40 (64)
     ADD
     MLOAD  // v8.i256 = mload v7 i256;
-    PUSH1 0x40 (64)  // v10.*i8 = evm_malloc 64.i256;
+    PUSH1 0x40 (64)  // v10.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH2 0x11f (287)
     DUP2
@@ -4047,7 +4048,7 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish:
 solencoder_h1b9228b90dad6928_new:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v2.*i8 = evm_malloc 96.i256;
+    PUSH1 0x40 (64)  // v2.*i256 = evm_malloc 96.i256;
     MLOAD
     PUSH2 0x11f (287)
     DUP2
@@ -4084,7 +4085,7 @@ solencoder_h1b9228b90dad6928_new:
 cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v3.*i8 = evm_malloc 96.i256;
+    PUSH1 0x40 (64)  // v3.*i256 = evm_malloc 96.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2
@@ -4124,7 +4125,7 @@ cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b
 soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v22.*i8 = evm_malloc 64.i256;
+    PUSH1 0x40 (64)  // v22.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2
@@ -4144,7 +4145,7 @@ soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3
     SWAP1
     MSTORE
     MLOAD  // v30.i256 = mload v29 i256;
-    PUSH1 0x40 (64)  // v31.*i8 = evm_malloc 64.i256;
+    PUSH1 0x40 (64)  // v31.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2
@@ -4168,7 +4169,7 @@ soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3
     DUP3  // mstore v36 v1 i256;
     SWAP1
     MSTORE
-    PUSH1 0x40 (64)  // v6.*i8 = evm_malloc 96.i256;
+    PUSH1 0x40 (64)  // v6.*i256 = evm_malloc 96.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2
@@ -4229,7 +4230,7 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData
     DUP2  // v69.i1 = lt v15 v13;
     DUP5
     LT
-    OR  // v71.i256 = or v68 v70;
+    OR  // v71.i256 = or v72 v73;
     PUSH0  // v26.i1 = ne 0.i256 v71;
     EQ
     PUSH1 block2  // br v26 block1 block2;
@@ -4271,7 +4272,7 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBy
     DUP2  // v69.i1 = lt v15 v13;
     DUP5
     LT
-    OR  // v71.i256 = or v68 v70;
+    OR  // v71.i256 = or v72 v73;
     PUSH0  // v26.i1 = ne 0.i256 v71;
     EQ
     PUSH1 block2  // br v26 block1 block2;
@@ -4297,7 +4298,7 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBy
 cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v3.*i8 = evm_malloc 64.i256;
+    PUSH1 0x40 (64)  // v3.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2
@@ -4329,7 +4330,7 @@ cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563:
   block0:
     JUMPDEST
     MLOAD  // v5.i256 = mload v4 i256;
-    PUSH1 0x40 (64)  // v7.*i8 = evm_malloc 64.i256;
+    PUSH1 0x40 (64)  // v7.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2

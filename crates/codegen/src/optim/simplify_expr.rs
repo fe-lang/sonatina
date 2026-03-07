@@ -167,6 +167,10 @@ pub(crate) fn simplify_binary_with_known_imm(
         | BinaryInstKind::Ge
         | BinaryInstKind::Sle
         | BinaryInstKind::Sge
+        | BinaryInstKind::EvmUdivo
+        | BinaryInstKind::EvmSdivo
+        | BinaryInstKind::EvmUmodo
+        | BinaryInstKind::EvmSmodo
         | BinaryInstKind::EvmExp
         | BinaryInstKind::EvmByte => {}
     }

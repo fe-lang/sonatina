@@ -917,6 +917,30 @@ func public %caller(v0.i32, v1.i32) -> (i32, i1) {
     }
 
     #[test]
+    fn test_parse_overflow_ops() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %ops(v0.i32, v1.i32) -> unit {
+    block0:
+        (v2.i32, v3.i1) = saddo v0 v1;
+        (v4.i32, v5.i1) = usubo v0 v1;
+        (v6.i32, v7.i1) = ssubo v0 v1;
+        (v8.i32, v9.i1) = umulo v0 v1;
+        (v10.i32, v11.i1) = smulo v0 v1;
+        (v12.i32, v13.i1) = snego v0;
+        (v14.i32, v15.i1) = evm_udivo v0 v1;
+        (v16.i32, v17.i1) = evm_sdivo v0 v1;
+        (v18.i32, v19.i1) = evm_umodo v0 v1;
+        (v20.i32, v21.i1) = evm_smodo v0 v1;
+        return;
+}
+"#;
+
+        assert!(parse_module(s).is_ok());
+    }
+
+    #[test]
     fn test_parse_module_includes_objects() {
         let s = r#"
 target = "evm-ethereum-london"

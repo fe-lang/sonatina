@@ -433,7 +433,12 @@ pub(super) fn simplify_inst(
                 | BinaryInstKind::Sge => {
                     simplify_cmp_self(func, lattice, may_be_undef, *lhs, *rhs, true)
                 }
-                BinaryInstKind::EvmExp | BinaryInstKind::EvmByte => SimplifyAction::NoChange,
+                BinaryInstKind::EvmUdivo
+                | BinaryInstKind::EvmSdivo
+                | BinaryInstKind::EvmUmodo
+                | BinaryInstKind::EvmSmodo
+                | BinaryInstKind::EvmExp
+                | BinaryInstKind::EvmByte => SimplifyAction::NoChange,
             })
         }
         InstClassKind::Cast(kind) => {

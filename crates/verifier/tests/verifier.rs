@@ -301,6 +301,44 @@ func public %bad_uaddo(v0.i32, v1.i32) -> unit {
 }
 
 #[test]
+fn other_overflow_ops_result_types_are_checked() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_ssubo(v0.i32, v1.i32) -> unit {
+    block0:
+        (v2.i32, v3.i32) = ssubo v0 v1;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}
+
+#[test]
+fn evm_checked_divmod_result_types_are_checked() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_evm_sdivo(v0.i32, v1.i32) -> unit {
+    block0:
+        (v2.i32, v3.i32) = evm_sdivo v0 v1;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}
+
+#[test]
 fn uaddo_missing_results_are_checked() {
     let src = r#"
 target = "evm-ethereum-london"

@@ -46,8 +46,12 @@ pub enum BinaryInstKind {
     Xor,
     EvmUdiv,
     EvmSdiv,
+    EvmUdivo,
+    EvmSdivo,
     EvmUmod,
     EvmSmod,
+    EvmUmodo,
+    EvmSmodo,
     EvmExp,
     EvmByte,
 }

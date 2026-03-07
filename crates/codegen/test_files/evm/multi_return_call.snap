@@ -1,35 +1,36 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/multi_return_call.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 63 bytes
-  total: 63 bytes
+  section runtime: 64 bytes
+  total: 64 bytes
 
 functions:
   mem: dyn_base=0x100 static_base=0xc0
-  entry: ir_blocks=3 ir_insts=12 vcode_ops=37 fixups=3 imm_bytes=6
+  entry: ir_blocks=3 ir_insts=12 vcode_ops=38 fixups=3 imm_bytes=6
     mem: scheme=StaticArena need_words=2 locals_words=2
   pair_add: ir_blocks=1 ir_insts=6 vcode_ops=16 fixups=0 imm_bytes=1
     mem: scheme=StaticArena need_words=1 locals_words=1
 
 evm:
-  case no_overflow: calldata_len=64 success reason=Return gas_used=21445 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=165
-  case overflow: calldata_len=64 success reason=Return gas_used=21821 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=169
+  case no_overflow: calldata_len=64 success reason=Return gas_used=21448 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=168
+  case overflow: calldata_len=64 success reason=Return gas_used=21824 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=172
 
 
 --------------- DEBUG ---------------
 
 // func public %entry()
   block0 P=[] T=[]
-    // v0.i256 = evm_calldata_load 0.i32;
+    // v0.i256 = evm_calldata_load 0.i256;
     - stack=[]
       pre: [PUSH(0)]
       evm_calldata_load [0] -> v0
-    // v1.i256 = evm_calldata_load 32.i32;
+    // v1.i256 = evm_calldata_load 32.i256;
     - stack=[v0]
       pre: [PUSH(32)]
       evm_calldata_load [32] -> v1
@@ -46,33 +47,34 @@ evm:
       call [v1, v0] -> [v3, v4]
     // v5.i256 = mload v2 i256;
     - stack=[v3, v4, v2], last_use=[v2]
-      pre: [SWAP1, SWAP2]
+      pre: [SWAP2]
       mload [v2] -> v5
     // v6.i256 = add v3 v5;
-    - stack=[v5, v3, v4], last_use=[v3, v5]
-      add [v5, v3] -> v6
+    - stack=[v5, v4, v3], last_use=[v3, v5]
+      pre: [SWAP1, SWAP2]
+      add [v3, v5] -> v6
     // br v4 block1 block2;
     - stack=[v6, v4]
       pre: [SWAP1]
       br [v4] -> [block1, block2]
   block1 P=[] T=[]
     inherited from block0: [v6x]
-    // mstore 0.i8 1.i256 i256;
+    // mstore 0.i256 1.i256 i256;
     - stack=[v6x]
       cleanup: [POP]
       pre: [PUSH(1), PUSH(0)]
       mstore [0, 1]
-    // evm_return 0.i8 32.i8;
+    // evm_return 0.i256 32.i256;
     - stack=[]
       pre: [PUSH(32), PUSH(0)]
       evm_return [0, 32]
   block2 P=[] T=[v6]
     inherited from block0: [v6]
-    // mstore 0.i8 v6 i256;
+    // mstore 0.i256 v6 i256;
     - stack=[v6], last_use=[v6]
       pre: [PUSH(0)]
       mstore [0, v6]
-    // evm_return 0.i8 32.i8;
+    // evm_return 0.i256 32.i256;
     - stack=[]
       pre: [PUSH(32), PUSH(0)]
       evm_return [0, 32]
@@ -106,9 +108,9 @@ evm:
 entry:
   block0:
     JUMPDEST
-    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
+    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
-    PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i32;
+    PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i256;
     CALLDATALOAD
     PUSH1 0xe0 (224)  // v2.*i256 = alloca i256;
     PUSH1 0x7 (7)  // mstore v2 7.i256 i256;
@@ -121,27 +123,28 @@ entry:
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    SWAP1  // v5.i256 = mload v2 i256;
-    SWAP2
+    SWAP2  // v5.i256 = mload v2 i256;
     MLOAD
-    ADD  // v6.i256 = add v3 v5;
+    SWAP1  // v6.i256 = add v3 v5;
+    SWAP2
+    ADD
     SWAP1  // br v4 block1 block2;
     ISZERO
     PUSH1 block2
     JUMPI
   block1:
-    POP  // mstore 0.i8 1.i256 i256;
+    POP  // mstore 0.i256 1.i256 i256;
     PUSH1 0x1 (1)
     PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
     RETURN
   block2:
     JUMPDEST
-    PUSH0  // mstore 0.i8 v6 i256;
+    PUSH0  // mstore 0.i256 v6 i256;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
     RETURN
 

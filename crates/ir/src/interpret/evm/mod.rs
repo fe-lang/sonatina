@@ -1,3 +1,5 @@
+use smallvec::smallvec;
+
 use super::{Action, EvalValue, Interpret, State, single_result};
 use crate::{I256, Immediate, Type, U256, inst::evm::*};
 
@@ -99,6 +101,10 @@ fn evm_byte(pos: U256, value: U256, value_bytes: usize) -> U256 {
     (value >> (shift_bytes * 8)) & U256::from(0xffu16)
 }
 
+fn overflow_results(result: EvalValue, overflow: EvalValue) -> super::EvalResults {
+    smallvec![result, overflow]
+}
+
 impl Interpret for EvmUdiv {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
@@ -109,6 +115,23 @@ impl Interpret for EvmUdiv {
         single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
             if rhs.is_zero() { rhs } else { lhs.udiv(rhs) }
         }))
+    }
+}
+
+impl Interpret for EvmUdivo {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+
+        match (lhs, rhs) {
+            (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) => overflow_results(
+                EvalValue::Imm(if rhs.is_zero() { rhs } else { lhs.udiv(rhs) }),
+                EvalValue::Imm(Immediate::from(rhs.is_zero())),
+            ),
+            _ => overflow_results(EvalValue::Undef, EvalValue::Undef),
+        }
     }
 }
 
@@ -125,6 +148,31 @@ impl Interpret for EvmSdiv {
     }
 }
 
+impl Interpret for EvmSdivo {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+
+        match (lhs, rhs) {
+            (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) => {
+                let ty = lhs.ty();
+                let min =
+                    Immediate::from_i256(I256::from(U256::one() << (bits_for_ty(ty) - 1)), ty);
+                let neg_one = Immediate::from_i256(I256::from(mask_for_ty(ty)), ty);
+                overflow_results(
+                    EvalValue::Imm(if rhs.is_zero() { rhs } else { lhs.sdiv(rhs) }),
+                    EvalValue::Imm(Immediate::from(
+                        rhs.is_zero() || (lhs == min && rhs == neg_one),
+                    )),
+                )
+            }
+            _ => overflow_results(EvalValue::Undef, EvalValue::Undef),
+        }
+    }
+}
+
 impl Interpret for EvmUmod {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
@@ -138,6 +186,23 @@ impl Interpret for EvmUmod {
     }
 }
 
+impl Interpret for EvmUmodo {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+
+        match (lhs, rhs) {
+            (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) => overflow_results(
+                EvalValue::Imm(if rhs.is_zero() { rhs } else { lhs.urem(rhs) }),
+                EvalValue::Imm(Immediate::from(rhs.is_zero())),
+            ),
+            _ => overflow_results(EvalValue::Undef, EvalValue::Undef),
+        }
+    }
+}
+
 impl Interpret for EvmSmod {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
@@ -148,6 +213,23 @@ impl Interpret for EvmSmod {
         single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
             if rhs.is_zero() { rhs } else { lhs.srem(rhs) }
         }))
+    }
+}
+
+impl Interpret for EvmSmodo {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+
+        match (lhs, rhs) {
+            (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) => overflow_results(
+                EvalValue::Imm(if rhs.is_zero() { rhs } else { lhs.srem(rhs) }),
+                EvalValue::Imm(Immediate::from(rhs.is_zero())),
+            ),
+            _ => overflow_results(EvalValue::Undef, EvalValue::Undef),
+        }
     }
 }
 

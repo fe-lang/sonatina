@@ -70,38 +70,98 @@ impl_binary_integral_same_rule!(
     logic::Xor => "xor",
 );
 
-impl VerifyInst for arith::Uaddo {
+fn verify_binary_overflow_inst(
+    verifier: &mut FunctionVerifier<'_>,
+    inst_id: InstId,
+    lhs: ValueId,
+    rhs: ValueId,
+    opname: &str,
+) {
+    let location = verifier.inst_location(inst_id);
+    let Some(lhs_ty) = verifier.value_ty(lhs) else {
+        return;
+    };
+    let Some(rhs_ty) = verifier.value_ty(rhs) else {
+        return;
+    };
+
+    if !lhs_ty.is_integral() || !rhs_ty.is_integral() {
+        verifier.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} operands must be integral"),
+                location.clone(),
+            )
+            .with_note(format!("lhs {:?}, rhs {:?}", lhs_ty, rhs_ty)),
+        );
+    }
+    if lhs_ty != rhs_ty {
+        verifier.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} operands must have identical types"),
+                location.clone(),
+            )
+            .with_note(format!("lhs {:?}, rhs {:?}", lhs_ty, rhs_ty)),
+        );
+    }
+
+    verifier.expect_result_tys(inst_id, &[lhs_ty, Type::I1], location);
+}
+
+fn verify_unary_overflow_inst(
+    verifier: &mut FunctionVerifier<'_>,
+    inst_id: InstId,
+    arg: ValueId,
+    opname: &str,
+) {
+    let location = verifier.inst_location(inst_id);
+    let Some(arg_ty) = verifier.value_ty(arg) else {
+        return;
+    };
+
+    if !arg_ty.is_integral() {
+        verifier.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} operand must be integral"),
+                location.clone(),
+            )
+            .with_note(format!("arg {:?}", arg_ty)),
+        );
+    }
+
+    verifier.expect_result_tys(inst_id, &[arg_ty, Type::I1], location);
+}
+
+macro_rules! impl_binary_overflow_rule {
+    ($($ty:ty => $opname:literal),+ $(,)?) => {
+        $(
+            impl VerifyInst for $ty {
+                fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+                    verify_binary_overflow_inst(verifier, inst_id, *self.lhs(), *self.rhs(), $opname);
+                }
+            }
+        )+
+    };
+}
+
+impl_binary_overflow_rule!(
+    arith::Uaddo => "uaddo",
+    arith::Saddo => "saddo",
+    arith::Usubo => "usubo",
+    arith::Ssubo => "ssubo",
+    arith::Umulo => "umulo",
+    arith::Smulo => "smulo",
+    evm::EvmUdivo => "evm_udivo",
+    evm::EvmSdivo => "evm_sdivo",
+    evm::EvmUmodo => "evm_umodo",
+    evm::EvmSmodo => "evm_smodo",
+);
+
+impl VerifyInst for arith::Snego {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
-        let location = verifier.inst_location(inst_id);
-        let Some(lhs_ty) = verifier.value_ty(*self.lhs()) else {
-            return;
-        };
-        let Some(rhs_ty) = verifier.value_ty(*self.rhs()) else {
-            return;
-        };
-
-        if !lhs_ty.is_integral() || !rhs_ty.is_integral() {
-            verifier.emit(
-                Diagnostic::error(
-                    DiagnosticCode::InstOperandTypeMismatch,
-                    "uaddo operands must be integral",
-                    location.clone(),
-                )
-                .with_note(format!("lhs {:?}, rhs {:?}", lhs_ty, rhs_ty)),
-            );
-        }
-        if lhs_ty != rhs_ty {
-            verifier.emit(
-                Diagnostic::error(
-                    DiagnosticCode::InstOperandTypeMismatch,
-                    "uaddo operands must have identical types",
-                    location.clone(),
-                )
-                .with_note(format!("lhs {:?}, rhs {:?}", lhs_ty, rhs_ty)),
-            );
-        }
-
-        verifier.expect_result_tys(inst_id, &[lhs_ty, Type::I1], location);
+        verify_unary_overflow_inst(verifier, inst_id, *self.arg(), "snego");
     }
 }
 

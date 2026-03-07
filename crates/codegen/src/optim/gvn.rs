@@ -825,8 +825,12 @@ impl GvnSolver {
                 }
                 BinaryInstKind::EvmUdiv
                 | BinaryInstKind::EvmSdiv
+                | BinaryInstKind::EvmUdivo
+                | BinaryInstKind::EvmSdivo
                 | BinaryInstKind::EvmUmod
                 | BinaryInstKind::EvmSmod
+                | BinaryInstKind::EvmUmodo
+                | BinaryInstKind::EvmSmodo
                 | BinaryInstKind::EvmExp
                 | BinaryInstKind::EvmByte => return None,
             }

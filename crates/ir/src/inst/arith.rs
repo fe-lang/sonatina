@@ -22,6 +22,12 @@ pub struct Uaddo {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct Saddo {
+    lhs: ValueId,
+    rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(kind(binary(Mul)))]
 pub struct Mul {
     lhs: ValueId,
@@ -33,6 +39,35 @@ pub struct Mul {
 pub struct Sub {
     lhs: ValueId,
     rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct Usubo {
+    lhs: ValueId,
+    rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct Ssubo {
+    lhs: ValueId,
+    rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct Umulo {
+    lhs: ValueId,
+    rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct Smulo {
+    lhs: ValueId,
+    rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+pub struct Snego {
+    arg: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]

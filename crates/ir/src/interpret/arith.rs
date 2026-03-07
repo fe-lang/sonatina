@@ -36,6 +36,21 @@ impl Interpret for Uaddo {
     }
 }
 
+impl Interpret for Saddo {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
+            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+        };
+
+        let (sum, overflow) = lhs.overflowing_sadd(rhs);
+        smallvec::smallvec![EvalValue::Imm(sum), EvalValue::Imm(overflow.into())]
+    }
+}
+
 impl Interpret for Sub {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
@@ -49,6 +64,36 @@ impl Interpret for Sub {
     }
 }
 
+impl Interpret for Usubo {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
+            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+        };
+
+        let (diff, overflow) = lhs.overflowing_usub(rhs);
+        smallvec::smallvec![EvalValue::Imm(diff), EvalValue::Imm(overflow.into())]
+    }
+}
+
+impl Interpret for Ssubo {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
+            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+        };
+
+        let (diff, overflow) = lhs.overflowing_ssub(rhs);
+        smallvec::smallvec![EvalValue::Imm(diff), EvalValue::Imm(overflow.into())]
+    }
+}
+
 impl Interpret for Mul {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
@@ -58,6 +103,50 @@ impl Interpret for Mul {
         state.set_action(Action::Continue);
 
         single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| lhs * rhs))
+    }
+}
+
+impl Interpret for Umulo {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
+            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+        };
+
+        let (product, overflow) = lhs.overflowing_umul(rhs);
+        smallvec::smallvec![EvalValue::Imm(product), EvalValue::Imm(overflow.into())]
+    }
+}
+
+impl Interpret for Smulo {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
+            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+        };
+
+        let (product, overflow) = lhs.overflowing_smul(rhs);
+        smallvec::smallvec![EvalValue::Imm(product), EvalValue::Imm(overflow.into())]
+    }
+}
+
+impl Interpret for Snego {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let value = state.lookup_val(*self.arg());
+        let EvalValue::Imm(value) = value else {
+            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+        };
+
+        let (negated, overflow) = value.overflowing_sneg();
+        smallvec::smallvec![EvalValue::Imm(negated), EvalValue::Imm(overflow.into())]
     }
 }
 
@@ -293,6 +382,72 @@ mod tests {
             crate::interpret::EvalResults::from_vec(vec![
                 EvalValue::Imm(Immediate::I8(0)),
                 EvalValue::Imm(Immediate::I1(true))
+            ])
+        );
+    }
+
+    #[test]
+    fn signed_overflow_ops_return_wrapped_values_and_flags() {
+        let hi = TestHasInst;
+        let lhs = crate::ValueId::from_u32(0);
+        let rhs = crate::ValueId::from_u32(1);
+        let mut state = TestState::new([
+            (lhs, EvalValue::Imm(Immediate::I8(-128))),
+            (rhs, EvalValue::Imm(Immediate::I8(-1))),
+        ]);
+
+        assert_eq!(
+            Saddo::new(&hi, lhs, rhs).interpret(&mut state),
+            crate::interpret::EvalResults::from_vec(vec![
+                EvalValue::Imm(Immediate::I8(127)),
+                EvalValue::Imm(Immediate::I1(true))
+            ])
+        );
+        assert_eq!(
+            Ssubo::new(&hi, lhs, rhs).interpret(&mut state),
+            crate::interpret::EvalResults::from_vec(vec![
+                EvalValue::Imm(Immediate::I8(-127)),
+                EvalValue::Imm(Immediate::I1(false))
+            ])
+        );
+        assert_eq!(
+            Snego::new(&hi, lhs).interpret(&mut state),
+            crate::interpret::EvalResults::from_vec(vec![
+                EvalValue::Imm(Immediate::I8(-128)),
+                EvalValue::Imm(Immediate::I1(true))
+            ])
+        );
+    }
+
+    #[test]
+    fn unsigned_and_signed_mul_sub_ops_cover_overflow_cases() {
+        let hi = TestHasInst;
+        let lhs = crate::ValueId::from_u32(0);
+        let rhs = crate::ValueId::from_u32(1);
+        let mut state = TestState::new([
+            (lhs, EvalValue::Imm(Immediate::I8(-1))),
+            (rhs, EvalValue::Imm(Immediate::I8(2))),
+        ]);
+
+        assert_eq!(
+            Usubo::new(&hi, rhs, lhs).interpret(&mut state),
+            crate::interpret::EvalResults::from_vec(vec![
+                EvalValue::Imm(Immediate::I8(3)),
+                EvalValue::Imm(Immediate::I1(true))
+            ])
+        );
+        assert_eq!(
+            Umulo::new(&hi, lhs, rhs).interpret(&mut state),
+            crate::interpret::EvalResults::from_vec(vec![
+                EvalValue::Imm(Immediate::I8(-2)),
+                EvalValue::Imm(Immediate::I1(true))
+            ])
+        );
+        assert_eq!(
+            Smulo::new(&hi, lhs, rhs).interpret(&mut state),
+            crate::interpret::EvalResults::from_vec(vec![
+                EvalValue::Imm(Immediate::I8(-2)),
+                EvalValue::Imm(Immediate::I1(false))
             ])
         );
     }

@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/deploy_codecopy.sntn
 ---
@@ -28,20 +29,20 @@ evm:
 entry:
   block0:
     JUMPDEST
-    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
+    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
-    DUP1  // v1.i32 = shr 224.i32 v0;
+    DUP1  // v1.i256 = shr 224.i256 v0;
     PUSH1 0xe0 (224)
     SHR
-    SWAP1  // v2.i32 = shl 32.i32 v0;
+    SWAP1  // v2.i256 = shl 32.i256 v0;
     PUSH1 0x20 (32)
     SHL
-    PUSH1 0xe0 (224)  // v3.i32 = shr 224.i32 v2;
+    PUSH1 0xe0 (224)  // v3.i256 = shr 224.i256 v2;
     SHR
-    ADD  // v4.i32 = add v1 v3;
-    PUSH0  // mstore 0.i32 v4 i32;
+    ADD  // v4.i256 = add v1 v3;
+    PUSH0  // mstore 0.i256 v4 i256;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
     RETURN
 

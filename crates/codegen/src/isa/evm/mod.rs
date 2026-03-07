@@ -1,5 +1,6 @@
 mod heap_plan;
 mod late_alias;
+mod legalize;
 pub use late_alias::canonicalize_alias_value;
 pub(crate) use late_alias::normalize_alias_map;
 mod malloc_plan;
@@ -25,22 +26,22 @@ use crate::{
         lower::{FixupUpdate, Lower, LowerBackend, LoweredFunction, SectionLoweringCtx},
         vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
     },
-    optim::multi_result_legalize::legalize_multi_result,
     stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyBuilder},
 };
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, Immediate, InstId, InstSetExt, Module, Type, U256, ValueId,
     cfg::ControlFlowGraph,
-    inst::{control_flow::BranchKind, evm::inst_set::EvmInstKind},
+    inst::{control_flow::BranchKind, data::SymbolRef, evm::inst_set::EvmInstKind},
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
-    types::CompoundType,
+    types::{CompoundType, CompoundTypeRef},
 };
 use sonatina_triple::{EvmVersion, OperatingSystem};
 
 use cranelift_entity::{EntityList, SecondaryMap};
 use late_alias::compute_evm_late_aliases;
+use legalize::legalize_evm_section;
 use mem_effects::compute_func_mem_effects;
 use memory_plan::{
     ArenaCostModel, CallPreserveChoice, DYN_FP_SLOT, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan,
@@ -945,9 +946,162 @@ impl Drop for CurrentJumpTargetsGuard<'_> {
     }
 }
 
-fn assert_supported_lowering_ir(func: &Function) {
+fn type_is_legalized_evm(ctx: &ModuleCtx, ty: Type, seen: &mut FxHashSet<CompoundTypeRef>) -> bool {
+    match ty {
+        Type::I1 | Type::I256 | Type::Unit => true,
+        Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 => false,
+        Type::Compound(compound) => {
+            if !seen.insert(compound) {
+                return true;
+            }
+
+            match ctx.with_ty_store(|store| store.resolve_compound(compound).clone()) {
+                CompoundType::Array { elem, .. } | CompoundType::Ptr(elem) => {
+                    type_is_legalized_evm(ctx, elem, seen)
+                }
+                CompoundType::Func { args, ret_tys } => args
+                    .iter()
+                    .chain(ret_tys.iter())
+                    .all(|&ty| type_is_legalized_evm(ctx, ty, seen)),
+                CompoundType::Struct(data) => data
+                    .fields
+                    .iter()
+                    .all(|&field| type_is_legalized_evm(ctx, field, seen)),
+            }
+        }
+    }
+}
+
+fn assert_type_is_legalized_evm(ctx: &ModuleCtx, ty: Type, context: &str) {
+    let mut seen = FxHashSet::default();
+    assert!(
+        type_is_legalized_evm(ctx, ty, &mut seen),
+        "{context} must be legalized to the EVM scalar subset, found {ty:?}"
+    );
+}
+
+fn collect_call_closure(module: &Module, roots: &[FuncRef]) -> Vec<FuncRef> {
+    let mut closure = FxHashSet::default();
+    let mut worklist = Vec::from(roots);
+    let evm_inst_set = Evm::new(module.ctx.triple).inst_set();
+
+    while let Some(func_ref) = worklist.pop() {
+        if !module.ctx.declared_funcs.contains_key(&func_ref) || !closure.insert(func_ref) {
+            continue;
+        }
+
+        if !module.ctx.func_linkage(func_ref).has_definition() {
+            continue;
+        }
+
+        module.func_store.view(func_ref, |func| {
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    match evm_inst_set.resolve_inst(func.dfg.inst(inst)) {
+                        EvmInstKind::Call(call) => worklist.push(*call.callee()),
+                        EvmInstKind::GetFunctionPtr(ptr) => worklist.push(*ptr.func()),
+                        EvmInstKind::SymAddr(sym) => {
+                            if let SymbolRef::Func(sym_func) = sym.sym() {
+                                worklist.push(*sym_func);
+                            }
+                        }
+                        EvmInstKind::SymSize(sym) => {
+                            if let SymbolRef::Func(sym_func) = sym.sym() {
+                                worklist.push(*sym_func);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        });
+    }
+
+    let mut closure: Vec<_> = closure.into_iter().collect();
+    closure.sort_unstable();
+    closure
+}
+
+fn assert_supported_lowering_ir(func_ref: FuncRef, func: &Function) {
+    if let Some(sig) = func.ctx().get_sig(func_ref) {
+        for &arg in sig.args() {
+            assert_type_is_legalized_evm(func.ctx(), arg, "function argument type");
+        }
+        for &ret in sig.ret_tys() {
+            assert_type_is_legalized_evm(func.ctx(), ret, "function return type");
+        }
+    }
+
+    for &arg in &func.arg_values {
+        assert_type_is_legalized_evm(
+            func.ctx(),
+            func.dfg.value_ty(arg),
+            "function argument value",
+        );
+    }
+    for value in func.dfg.value_ids() {
+        assert_type_is_legalized_evm(func.ctx(), func.dfg.value_ty(value), "value type");
+    }
+
+    let evm_inst_set = Evm::new(func.ctx().triple).inst_set();
     for block in func.layout.iter_block() {
         for inst in func.layout.iter_inst(block) {
+            match evm_inst_set.resolve_inst(func.dfg.inst(inst)) {
+                EvmInstKind::Uaddo(_)
+                | EvmInstKind::Saddo(_)
+                | EvmInstKind::Usubo(_)
+                | EvmInstKind::Ssubo(_)
+                | EvmInstKind::Umulo(_)
+                | EvmInstKind::Smulo(_)
+                | EvmInstKind::Snego(_)
+                | EvmInstKind::EvmUdivo(_)
+                | EvmInstKind::EvmSdivo(_)
+                | EvmInstKind::EvmUmodo(_)
+                | EvmInstKind::EvmSmodo(_) => {
+                    panic!(
+                        "multi-result arithmetic must be legalized before EVM lowering: {}",
+                        func.dfg.inst(inst).as_text()
+                    );
+                }
+                EvmInstKind::Sdiv(_)
+                | EvmInstKind::Udiv(_)
+                | EvmInstKind::Umod(_)
+                | EvmInstKind::Smod(_) => {
+                    panic!(
+                        "generic integer div/mod must be legalized to EVM-specific ops before lowering: {}",
+                        func.dfg.inst(inst).as_text()
+                    );
+                }
+                EvmInstKind::Sext(_) | EvmInstKind::Zext(_) | EvmInstKind::Trunc(_) => {
+                    panic!(
+                        "integer casts must be eliminated before EVM lowering: {}",
+                        func.dfg.inst(inst).as_text()
+                    );
+                }
+                EvmInstKind::Not(not) if func.dfg.value_ty(*not.arg()) == Type::I1 => {
+                    panic!("not on i1 must be legalized before EVM lowering");
+                }
+                EvmInstKind::Bitcast(bitcast) => {
+                    assert_type_is_legalized_evm(func.ctx(), *bitcast.ty(), "bitcast type");
+                }
+                EvmInstKind::IntToPtr(int_to_ptr) => {
+                    assert_type_is_legalized_evm(func.ctx(), *int_to_ptr.ty(), "inttoptr type");
+                }
+                EvmInstKind::PtrToInt(ptr_to_int) => {
+                    assert_type_is_legalized_evm(func.ctx(), *ptr_to_int.ty(), "ptrtoint type");
+                }
+                EvmInstKind::Mload(mload) => {
+                    assert_type_is_legalized_evm(func.ctx(), *mload.ty(), "mload type");
+                }
+                EvmInstKind::Mstore(mstore) => {
+                    assert_type_is_legalized_evm(func.ctx(), *mstore.ty(), "mstore type");
+                }
+                EvmInstKind::Alloca(alloca) => {
+                    assert_type_is_legalized_evm(func.ctx(), *alloca.ty(), "alloca type");
+                }
+                _ => {}
+            }
+
             let results = func.dfg.inst_results(inst);
             if results.len() <= 1 {
                 continue;
@@ -988,10 +1142,10 @@ impl LowerBackend for EvmBackend {
     ) {
         let _span =
             info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
+        legalize_evm_section(module, funcs);
         for &func in funcs {
-            module.func_store.modify(func, |function| {
-                legalize_multi_result(function);
-                assert_supported_lowering_ir(function);
+            module.func_store.view(func, |function| {
+                assert_supported_lowering_ir(func, function)
             });
         }
         let ptr_escape = {
@@ -1238,9 +1392,10 @@ impl LowerBackend for EvmBackend {
             return self.lower_prepared_function(module, func, prepared);
         }
 
-        module.func_store.modify(func, |function| {
-            legalize_multi_result(function);
-            assert_supported_lowering_ir(function);
+        let closure = collect_call_closure(module, std::slice::from_ref(&func));
+        legalize_evm_section(module, &closure);
+        module.func_store.view(func, |function| {
+            assert_supported_lowering_ir(func, function)
         });
 
         let ptr_escape = {
@@ -1372,9 +1527,23 @@ impl LowerBackend for EvmBackend {
         match &data {
             EvmInstKind::Neg(_) => basic_op(ctx, &[OpCode::PUSH0, OpCode::SUB]),
             EvmInstKind::Add(_) => basic_op(ctx, &[OpCode::ADD]),
-            EvmInstKind::Uaddo(_) => panic!("uaddo must be legalized before EVM lowering"),
+            EvmInstKind::Uaddo(_)
+            | EvmInstKind::Saddo(_)
+            | EvmInstKind::Usubo(_)
+            | EvmInstKind::Ssubo(_)
+            | EvmInstKind::Umulo(_)
+            | EvmInstKind::Smulo(_)
+            | EvmInstKind::Snego(_) => {
+                panic!("overflow instructions must be legalized before EVM lowering")
+            }
             EvmInstKind::Mul(_) => basic_op(ctx, &[OpCode::MUL]),
             EvmInstKind::Sub(_) => basic_op(ctx, &[OpCode::SUB]),
+            EvmInstKind::Sdiv(_)
+            | EvmInstKind::Udiv(_)
+            | EvmInstKind::Umod(_)
+            | EvmInstKind::Smod(_) => {
+                panic!("generic integer div/mod must be legalized before EVM lowering")
+            }
             EvmInstKind::Shl(_) => basic_op(ctx, &[OpCode::SHL]),
             EvmInstKind::Shr(_) => basic_op(ctx, &[OpCode::SHR]),
             EvmInstKind::Sar(_) => basic_op(ctx, &[OpCode::SAR]),
@@ -1469,6 +1638,7 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::Sgt(_) => basic_op(ctx, &[OpCode::SGT]),
             EvmInstKind::Le(_) => basic_op(ctx, &[OpCode::GT, OpCode::ISZERO]),
             EvmInstKind::Ge(_) => basic_op(ctx, &[OpCode::LT, OpCode::ISZERO]),
+            EvmInstKind::Sle(_) => basic_op(ctx, &[OpCode::SGT, OpCode::ISZERO]),
             EvmInstKind::Sge(_) => basic_op(ctx, &[OpCode::SLT, OpCode::ISZERO]),
             EvmInstKind::Eq(_) => basic_op(ctx, &[OpCode::EQ]),
             EvmInstKind::Ne(_) => basic_op(ctx, &[OpCode::EQ, OpCode::ISZERO]),
@@ -1714,6 +1884,12 @@ impl LowerBackend for EvmBackend {
 
             EvmInstKind::EvmSdiv(_) => basic_op(ctx, &[OpCode::SDIV]),
             EvmInstKind::EvmUdiv(_) => basic_op(ctx, &[OpCode::DIV]),
+            EvmInstKind::EvmSdivo(_)
+            | EvmInstKind::EvmUdivo(_)
+            | EvmInstKind::EvmUmodo(_)
+            | EvmInstKind::EvmSmodo(_) => {
+                panic!("checked EVM div/mod instructions must be legalized before EVM lowering")
+            }
             EvmInstKind::EvmUmod(_) => basic_op(ctx, &[OpCode::MOD]),
             EvmInstKind::EvmSmod(_) => basic_op(ctx, &[OpCode::SMOD]),
             EvmInstKind::EvmAddMod(_) => basic_op(ctx, &[OpCode::ADDMOD]),

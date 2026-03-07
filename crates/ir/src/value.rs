@@ -201,6 +201,96 @@ impl Immediate {
         (Self::from_i256(I256::from(sum & mask), ty), overflow)
     }
 
+    pub fn overflowing_sadd(self, rhs: Self) -> (Self, bool) {
+        debug_assert_eq!(self.ty(), rhs.ty());
+
+        let ty = self.ty();
+        if ty == Type::I256 {
+            let lhs = self.as_i256();
+            let rhs = rhs.as_i256();
+            let result = lhs.overflowing_add(rhs).0;
+            let overflow =
+                lhs.is_negative() == rhs.is_negative() && result.is_negative() != lhs.is_negative();
+            return (Self::from_i256(result, ty), overflow);
+        }
+
+        let raw = self.as_i256().overflowing_add(rhs.as_i256()).0;
+        let result = Self::from_i256(raw, ty);
+        (result, result.as_i256() != raw)
+    }
+
+    pub fn overflowing_usub(self, rhs: Self) -> (Self, bool) {
+        debug_assert_eq!(self.ty(), rhs.ty());
+
+        let ty = self.ty();
+        let mask = self.mask_for_ty();
+        let lhs = self.unsigned_value();
+        let rhs = rhs.unsigned_value();
+        let (diff, borrow) = lhs.overflowing_sub(rhs);
+        let overflow = borrow || lhs < rhs;
+        (Self::from_i256(I256::from(diff & mask), ty), overflow)
+    }
+
+    pub fn overflowing_ssub(self, rhs: Self) -> (Self, bool) {
+        debug_assert_eq!(self.ty(), rhs.ty());
+
+        let ty = self.ty();
+        if ty == Type::I256 {
+            let lhs = self.as_i256();
+            let rhs = rhs.as_i256();
+            let result = lhs.overflowing_sub(rhs).0;
+            let overflow =
+                lhs.is_negative() != rhs.is_negative() && result.is_negative() != lhs.is_negative();
+            return (Self::from_i256(result, ty), overflow);
+        }
+
+        let raw = self.as_i256().overflowing_sub(rhs.as_i256()).0;
+        let result = Self::from_i256(raw, ty);
+        (result, result.as_i256() != raw)
+    }
+
+    pub fn overflowing_umul(self, rhs: Self) -> (Self, bool) {
+        debug_assert_eq!(self.ty(), rhs.ty());
+
+        let ty = self.ty();
+        let mask = self.mask_for_ty();
+        let (product, carry) = self.unsigned_value().overflowing_mul(rhs.unsigned_value());
+        let overflow = carry || product > mask;
+        (Self::from_i256(I256::from(product & mask), ty), overflow)
+    }
+
+    pub fn overflowing_smul(self, rhs: Self) -> (Self, bool) {
+        debug_assert_eq!(self.ty(), rhs.ty());
+
+        let ty = self.ty();
+        if ty == Type::I256 {
+            let lhs = self.as_i256();
+            let rhs = rhs.as_i256();
+            let result = lhs.overflowing_mul(rhs).0;
+            let rhs_nonzero = !rhs.is_zero();
+            let neg_one = -I256::one();
+            let special =
+                (lhs.is_minimum() && rhs == neg_one) || (rhs.is_minimum() && lhs == neg_one);
+            let div_check = rhs_nonzero && result.overflowing_div(rhs).0 != lhs;
+            let overflow = rhs_nonzero && (special || div_check);
+            return (Self::from_i256(result, ty), overflow);
+        }
+
+        let raw = self.as_i256().overflowing_mul(rhs.as_i256()).0;
+        let result = Self::from_i256(raw, ty);
+        (result, result.as_i256() != raw)
+    }
+
+    pub fn overflowing_sneg(self) -> (Self, bool) {
+        let ty = self.ty();
+        let raw = I256::zero().overflowing_sub(self.as_i256()).0;
+        let result = Self::from_i256(raw, ty);
+        if ty == Type::I256 {
+            return (result, self.as_i256().is_minimum());
+        }
+        (result, result.as_i256() != raw)
+    }
+
     pub fn zero(ty: Type) -> Self {
         let val = I256::zero();
         Self::from_i256(val, ty)

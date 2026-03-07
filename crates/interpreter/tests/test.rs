@@ -120,6 +120,73 @@ func public %caller(v0.i32) -> i32 {
 }
 
 #[test]
+fn interpreter_executes_checked_evm_divmod_ops() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func public %checked_div(v0.i8, v1.i8) -> (i8, i1) {
+    block0:
+        (v2.i8, v3.i1) = evm_sdivo v0 v1;
+        return (v2, v3);
+}
+
+func public %checked_mod(v0.i8, v1.i8) -> (i8, i1) {
+    block0:
+        (v2.i8, v3.i1) = evm_smodo v0 v1;
+        return (v2, v3);
+}
+"#;
+
+    let parsed = sonatina_parser::parse_module(source).expect("module should parse");
+    let checked_div = parsed
+        .module
+        .ctx
+        .declared_funcs
+        .iter()
+        .find_map(|entry| (entry.value().name() == "checked_div").then(|| *entry.key()))
+        .expect("checked_div should be declared");
+    let checked_mod = parsed
+        .module
+        .ctx
+        .declared_funcs
+        .iter()
+        .find_map(|entry| (entry.value().name() == "checked_mod").then(|| *entry.key()))
+        .expect("checked_mod should be declared");
+    let mut machine = Machine::new(parsed.module);
+
+    assert_eq!(
+        machine
+            .run_results(
+                checked_div,
+                vec![
+                    EvalValue::Imm(Immediate::I8(i8::MIN)),
+                    EvalValue::Imm(Immediate::I8(-1)),
+                ],
+            )
+            .as_slice(),
+        &[
+            EvalValue::Imm(Immediate::I8(i8::MIN)),
+            EvalValue::Imm(Immediate::I1(true)),
+        ]
+    );
+    assert_eq!(
+        machine
+            .run_results(
+                checked_mod,
+                vec![
+                    EvalValue::Imm(Immediate::I8(5)),
+                    EvalValue::Imm(Immediate::I8(0)),
+                ],
+            )
+            .as_slice(),
+        &[
+            EvalValue::Imm(Immediate::I8(0)),
+            EvalValue::Imm(Immediate::I1(true)),
+        ]
+    );
+}
+
+#[test]
 #[should_panic(expected = "run called on multi-return function")]
 fn interpreter_run_panics_on_multi_return_function() {
     let source = r#"
