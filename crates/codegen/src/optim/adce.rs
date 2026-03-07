@@ -3,14 +3,10 @@
 use std::collections::BTreeSet;
 
 use cranelift_entity::SecondaryMap;
-use sonatina_ir::{
-    BlockId, Function, InstId,
-    func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::SideEffect,
-};
+use sonatina_ir::{BlockId, Function, InstId, inst::SideEffect};
 
 use crate::{
-    cfg_edit::{CfgEditor, CleanupMode},
+    cfg_edit::{CfgEditor, CleanupMode, remove_phi_incoming_from, simplify_trivial_phis_in_block},
     optim::{call_purity::is_removable_pure_call, cfg_cleanup::CfgCleanup},
     post_domtree::{PDFSet, PDTIdom, PostDomTree},
 };
@@ -47,7 +43,7 @@ impl AdceSolver {
         CfgCleanup::new(CleanupMode::Strict).run(func);
     }
 
-    /// Returns `true` if branch inst is modified while dead code elimination.
+    /// Returns `true` if dead code elimination changed the function.
     fn run_dce(&mut self, func: &mut Function) -> bool {
         self.clear();
 
@@ -160,14 +156,6 @@ impl AdceSolver {
         let blocks: Vec<_> = func.layout.iter_block().collect();
         let mut dead_insts = Vec::new();
         for block in blocks {
-            if !func.layout.is_block_inserted(block) {
-                continue;
-            }
-            if !self.does_block_live(block) {
-                InstInserter::at_location(CursorLocation::BlockTop(block)).remove_block(func);
-                continue;
-            }
-
             dead_insts.extend(
                 func.layout
                     .iter_inst(block)
@@ -175,12 +163,65 @@ impl AdceSolver {
             );
         }
 
-        for &inst in &dead_insts {
-            if func.layout.is_inst_inserted(inst) {
+        let dead_blocks: Vec<_> = func
+            .layout
+            .iter_block()
+            .filter(|&block| !self.does_block_live(block))
+            .collect();
+        let mut changed = !dead_blocks.is_empty();
+        for block in dead_blocks {
+            let succs: Vec<_> = func
+                .layout
+                .last_inst_of(block)
+                .and_then(|inst| func.dfg.branch_info(inst).map(|branch| branch.dests()))
+                .unwrap_or_default()
+                .to_vec();
+            for succ in succs {
+                if func.layout.is_block_inserted(succ) {
+                    remove_phi_incoming_from(func, succ, block);
+                    simplify_trivial_phis_in_block(func, succ);
+                }
+            }
+            for inst in func.layout.iter_inst(block).collect::<Vec<_>>() {
                 func.layout.remove_inst(inst);
             }
+            func.layout.remove_block(block);
+            func.erase_block(block);
         }
-        func.erase_insts(&dead_insts);
+
+        let dead_insts: Vec<_> = dead_insts
+            .into_iter()
+            .filter(|&inst| func.dfg.has_inst(inst))
+            .collect();
+        let mut pending = dead_insts;
+        loop {
+            let mut next_pending = Vec::new();
+            let mut removed_any = false;
+            for inst in pending {
+                if !func.dfg.has_inst(inst) {
+                    continue;
+                }
+                if func
+                    .dfg
+                    .inst_results(inst)
+                    .iter()
+                    .all(|&result| func.dfg.users_num(result) == 0)
+                {
+                    if func.layout.is_inst_inserted(inst) {
+                        func.layout.remove_inst(inst);
+                    }
+                    func.erase_inst(inst);
+                    removed_any = true;
+                    changed = true;
+                } else {
+                    next_pending.push(inst);
+                }
+            }
+            if !removed_any {
+                break;
+            }
+            pending = next_pending;
+        }
 
         // Modify branch insts to remove unreachable edges via CfgEditor.
         let mut editor = CfgEditor::new(func, CleanupMode::RepairWithUndef);
@@ -190,7 +231,7 @@ impl AdceSolver {
             br_inst_modified |= self.modify_branch(&mut editor, block);
         }
 
-        br_inst_modified
+        changed || br_inst_modified
     }
 
     fn living_post_dom(&self, mut block: BlockId) -> Option<BlockId> {

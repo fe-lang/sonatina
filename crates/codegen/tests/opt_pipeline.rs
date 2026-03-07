@@ -341,6 +341,61 @@ func public %entry() -> i256 {
 }
 
 #[test]
+fn sccp_prunes_complex_loop_without_adce_block_delete_panic() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %complex_loop() -> i8 {
+    block0:
+        v0.i8 = add 1.i8 0.i8;
+        v1.i8 = add v0 0.i8;
+        v2.i8 = sub v0 1.i8;
+        jump block1;
+
+    block1:
+        v3.i8 = phi (v9 block6) (v0 block0);
+        v4.i8 = phi (v10 block6) (v2 block0);
+        v5.i1 = lt v4 100.i8;
+        br v5 block2 block3;
+
+    block2:
+        v6.i1 = lt v3 20.i8;
+        br v6 block4 block5;
+
+    block3:
+        return v3;
+
+    block4:
+        v7.i8 = add 1.i8 v4;
+        jump block6;
+
+    block5:
+        v8.i8 = add v4 2.i8;
+        jump block6;
+
+    block6:
+        v9.i8 = phi (v0 block4) (v4 block5);
+        v10.i8 = phi (v7 block4) (v8 block5);
+        jump block1;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("return 1.i8;"),
+        "complex loop should fold to a constant return:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
 fn gvn_eliminates_redundant_checked_overflow_ops() {
     let (module, func_ref) = parse_test_module(
         r#"

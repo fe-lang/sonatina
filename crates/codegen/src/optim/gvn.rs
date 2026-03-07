@@ -21,6 +21,7 @@ use sonatina_ir::{
 };
 
 use crate::{
+    cfg_edit::{CfgEditor, CleanupMode},
     domtree::{DomTree, DominatorTreeTraversable},
     optim::simplify_expr::{
         SimplifyExprResult, simplify_binary_with_known_imm, simplify_cast,
@@ -2570,7 +2571,17 @@ impl<'a> RedundantCodeRemover<'a> {
 
     /// Remove unreachable edges and blocks.
     fn remove_unreachable_edges(&self, func: &mut Function) {
-        let entry_block = func.layout.entry_block().unwrap();
+        let unreachable_blocks: Vec<_> = func
+            .layout
+            .iter_block()
+            .filter(|&block| !self.solver.blocks[block].reachable)
+            .collect();
+        let mut editor = CfgEditor::new(func, CleanupMode::RepairWithUndef);
+        for block in unreachable_blocks {
+            editor.delete_block_unreachable(block);
+        }
+
+        let entry_block = editor.func().layout.entry_block().unwrap();
         let mut inserter = InstInserter::at_location(CursorLocation::BlockTop(entry_block));
         let mut rebuild_users = false;
 
@@ -2578,17 +2589,18 @@ impl<'a> RedundantCodeRemover<'a> {
             match inserter.loc() {
                 CursorLocation::BlockTop(block) => {
                     if !self.solver.blocks[block].reachable {
-                        inserter.remove_block(func);
+                        editor.delete_block_unreachable(block);
+                        inserter.set_location(CursorLocation::BlockTop(entry_block));
                     } else {
-                        inserter.proceed(func);
+                        inserter.proceed(editor.func());
                     }
                 }
 
-                CursorLocation::BlockBottom(..) => inserter.proceed(func),
+                CursorLocation::BlockBottom(..) => inserter.proceed(editor.func()),
 
                 CursorLocation::At(insn) => {
-                    let block = inserter.block(func).unwrap();
-                    if let Some(br_table) = func.dfg.cast_br_table(insn).cloned() {
+                    let block = inserter.block(editor.func()).unwrap();
+                    if let Some(br_table) = editor.func().dfg.cast_br_table(insn).cloned() {
                         let unreachable: FxHashSet<_> =
                             self.solver.unreachable_out_edges(block).copied().collect();
 
@@ -2621,8 +2633,8 @@ impl<'a> RedundantCodeRemover<'a> {
                                 dests.insert(*dest);
                             }
 
-                            let is = func.inst_set();
-                            func.dfg.insts[insn] = match dests.len() {
+                            let is = editor.func().inst_set();
+                            editor.func_mut().dfg.insts[insn] = match dests.len() {
                                 0 => Box::new(Unreachable::new_unchecked(is)),
                                 1 => Box::new(Jump::new(is.jump(), *dests.iter().next().unwrap())),
                                 _ => {
@@ -2634,13 +2646,13 @@ impl<'a> RedundantCodeRemover<'a> {
                             };
                             rebuild_users = true;
                         }
-                    } else if func.dfg.is_branch(insn) {
+                    } else if editor.func().dfg.is_branch(insn) {
                         for &out_edge in self.solver.unreachable_out_edges(block) {
                             let edge_data = self.solver.edge_data(out_edge);
-                            func.dfg.remove_branch_dest(insn, edge_data.to);
+                            editor.func_mut().dfg.remove_branch_dest(insn, edge_data.to);
                         }
                     }
-                    inserter.proceed(func);
+                    inserter.proceed(editor.func());
                 }
 
                 CursorLocation::NoWhere => break,
@@ -2648,7 +2660,7 @@ impl<'a> RedundantCodeRemover<'a> {
         }
 
         if rebuild_users {
-            func.rebuild_users();
+            editor.func_mut().rebuild_users();
         }
     }
 

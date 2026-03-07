@@ -150,15 +150,16 @@ fn compute_reachable(cfg: &ControlFlowGraph, entry: BlockId) -> BTreeSet<BlockId
 }
 
 fn prune_unreachable(func: &mut Function, reachable: &BTreeSet<BlockId>) -> bool {
-    let blocks: Vec<_> = func.layout.iter_block().collect();
+    let blocks: Vec<_> = func
+        .layout
+        .iter_block()
+        .filter(|block| !reachable.contains(block))
+        .collect();
     let mut changed = false;
+    let mut editor = CfgEditor::new(func, CleanupMode::RepairWithUndef);
 
     for block in blocks {
-        if reachable.contains(&block) {
-            continue;
-        }
-        InstInserter::at_location(CursorLocation::BlockTop(block)).remove_block(func);
-        changed = true;
+        changed |= editor.delete_block_unreachable(block);
     }
 
     changed
