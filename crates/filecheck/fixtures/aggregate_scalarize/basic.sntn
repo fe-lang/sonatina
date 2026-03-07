@@ -78,6 +78,29 @@ func public %scalarize_promote_alloca(v0.i256, v1.i256) -> i256 {
         return v7;
 }
 
+# sameln: func public %scalarize_promote_non_entry_alloca(v0.i1, v1.i256, v2.i256) -> i256 {
+# check:     block1:
+# check:         add v1 v2;
+# check:         return v8;
+func public %scalarize_promote_non_entry_alloca(v0.i1, v1.i256, v2.i256) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v3.*@slice = alloca @slice;
+        v4.*i256 = gep v3 0.i8 0.i8;
+        v5.*i256 = gep v3 0.i8 1.i8;
+        mstore v4 v1 i256;
+        mstore v5 v2 i256;
+        v6.i256 = mload v4 i256;
+        v7.i256 = mload v5 i256;
+        v8.i256 = add v6 v7;
+        return v8;
+
+    block2:
+        return 0.i256;
+}
+
 # sameln: func public %scalarize_promote_live_bitcast_projection(v0.i256) -> i256 {
 # check:     block0:
 # check:         return v0;

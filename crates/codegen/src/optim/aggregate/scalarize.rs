@@ -7,6 +7,8 @@ use sonatina_ir::{
     inst::{cast, control_flow, data, downcast},
 };
 
+use crate::cfg_edit::{CfgEditor, CleanupMode};
+
 use super::{
     cleanup::DeadPureInstCleanup, promotion::SsaBuilder, reconstruct::bitcast_before_inst, shape,
 };
@@ -22,6 +24,7 @@ struct Projection {
 #[derive(Clone)]
 struct PromotedAlloca {
     inst: InstId,
+    seed_block: BlockId,
     shape: shape::AggregateShape,
     leaf_vars: SmallVec<[sonatina_ir::builder::Variable; 4]>,
 }
@@ -60,6 +63,8 @@ impl AggregateScalarize {
         } else {
             return false;
         }
+
+        self.canonicalize_promoted_allocas(func, &mut promoted_allocas);
 
         let mut ssa = SsaBuilder::new();
         self.append_block_preds(func, &mut ssa);
@@ -196,18 +201,64 @@ impl AggregateScalarize {
         ssa: &mut SsaBuilder,
         promoted_allocas: &mut [PromotedAlloca],
     ) {
-        let entry = func
-            .layout
-            .entry_block()
-            .expect("function has no entry block");
         for promoted in promoted_allocas {
+            self.assert_promoted_alloca_seed_block(func, promoted);
             for leaf in &promoted.shape.leaves {
                 let var = ssa.declare_var(leaf.ty);
                 promoted.leaf_vars.push(var);
                 let undef = func.dfg.make_undef_value(leaf.ty);
-                ssa.def_var(var, undef, entry);
+                ssa.def_var(var, undef, promoted.seed_block);
             }
         }
+    }
+
+    fn canonicalize_promoted_allocas(
+        &self,
+        func: &mut Function,
+        promoted_allocas: &mut Vec<PromotedAlloca>,
+    ) {
+        if promoted_allocas.is_empty() {
+            return;
+        }
+
+        let mut inst_order = FxHashMap::default();
+        for (idx, inst) in func
+            .layout
+            .iter_block()
+            .flat_map(|block| func.layout.iter_inst(block))
+            .enumerate()
+        {
+            inst_order.insert(inst, idx);
+        }
+        promoted_allocas.sort_by_key(|promoted| inst_order[&promoted.inst]);
+
+        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        for promoted in promoted_allocas {
+            let block = editor.func().layout.inst_block(promoted.inst);
+            promoted.seed_block = if first_non_phi_inst(editor.func(), block) == Some(promoted.inst)
+            {
+                block
+            } else {
+                editor.split_block_at(promoted.inst).1
+            };
+        }
+    }
+
+    fn assert_promoted_alloca_seed_block(&self, func: &Function, promoted: &PromotedAlloca) {
+        assert_eq!(
+            func.layout.inst_block(promoted.inst),
+            promoted.seed_block,
+            "promoted alloca {} should live in its seed block {}",
+            promoted.inst.as_u32(),
+            promoted.seed_block.as_u32()
+        );
+        assert_eq!(
+            first_non_phi_inst(func, promoted.seed_block),
+            Some(promoted.inst),
+            "promoted alloca {} should be first non-phi in seed block {}",
+            promoted.inst.as_u32(),
+            promoted.seed_block.as_u32()
+        );
     }
 
     fn find_promotable_allocas(
@@ -220,30 +271,29 @@ impl AggregateScalarize {
     ) {
         let mut promoted = Vec::new();
         let mut projection_of: SecondaryMap<ValueId, Option<Projection>> = SecondaryMap::default();
-        let Some(entry) = func.layout.entry_block() else {
-            return (promoted, projection_of);
-        };
 
-        let mut entry_allocas: Vec<(InstId, ValueId, Type, shape::AggregateShape)> = Vec::new();
-        for inst in func.layout.iter_inst(entry) {
-            let Some(alloca) = downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst))
-            else {
-                continue;
-            };
-            let Some(ptr_value) = func.dfg.inst_result(inst) else {
-                continue;
-            };
-            let ty = *alloca.ty();
-            let Some(shape) = self.aggregate_shape(module, ty) else {
-                continue;
-            };
-            if shape.leaves.len() > 4 {
-                continue;
+        let mut allocas: Vec<(InstId, ValueId, Type, shape::AggregateShape)> = Vec::new();
+        for block in func.layout.iter_block() {
+            for inst in func.layout.iter_inst(block) {
+                let Some(alloca) = downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst))
+                else {
+                    continue;
+                };
+                let Some(ptr_value) = func.dfg.inst_result(inst) else {
+                    continue;
+                };
+                let ty = *alloca.ty();
+                let Some(shape) = self.aggregate_shape(module, ty) else {
+                    continue;
+                };
+                if shape.leaves.len() > 4 {
+                    continue;
+                }
+                allocas.push((inst, ptr_value, ty, shape));
             }
-            entry_allocas.push((inst, ptr_value, ty, shape));
         }
 
-        for (inst, ptr_value, alloca_ty, shape_data) in entry_allocas {
+        for (inst, ptr_value, alloca_ty, shape_data) in allocas {
             let whole_slice = shape::AggregateSlice {
                 ty: alloca_ty,
                 first_leaf: 0,
@@ -388,6 +438,7 @@ impl AggregateScalarize {
 
             promoted.push(PromotedAlloca {
                 inst,
+                seed_block: func.layout.inst_block(inst),
                 shape: shape_data,
                 leaf_vars: SmallVec::new(),
             });
@@ -1481,6 +1532,12 @@ fn is_dead_inst_tree(
     dead
 }
 
+fn first_non_phi_inst(func: &Function, block: BlockId) -> Option<InstId> {
+    func.layout
+        .iter_inst(block)
+        .find(|inst| !func.dfg.is_phi(*inst))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1497,6 +1554,36 @@ mod tests {
             .into_iter()
             .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
             .expect("function should exist")
+    }
+
+    fn assert_no_promoted_aggregate_artifacts(
+        func: &Function,
+        ctx: &sonatina_ir::module::ModuleCtx,
+    ) {
+        for block in func.layout.iter_block() {
+            for inst in func.layout.iter_inst(block) {
+                assert!(
+                    downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                    "promoted alloca should be removed"
+                );
+                if let Some(mload) =
+                    <&data::Mload as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst))
+                {
+                    assert!(
+                        !shape::is_supported_aggregate_ty(ctx, *mload.ty()),
+                        "aggregate mload should be gone after scalarization"
+                    );
+                }
+                if let Some(mstore) =
+                    <&data::Mstore as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst))
+                {
+                    assert!(
+                        !shape::is_supported_aggregate_ty(ctx, *mstore.ty()),
+                        "aggregate mstore should be gone after scalarization"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -1562,28 +1649,7 @@ func private %f(v0.i1, v1.i1, v2.i256) -> i256 {
                     });
                 }
             }
-            for block in func.layout.iter_block() {
-                for inst in func.layout.iter_inst(block) {
-                    if let Some(mload) = <&data::Mload as InstDowncast>::downcast(
-                        func.inst_set(),
-                        func.dfg.inst(inst),
-                    ) {
-                        assert!(
-                            !shape::is_supported_aggregate_ty(&ctx, *mload.ty()),
-                            "aggregate mload should be gone after scalarization"
-                        );
-                    }
-                    if let Some(mstore) = <&data::Mstore as InstDowncast>::downcast(
-                        func.inst_set(),
-                        func.dfg.inst(inst),
-                    ) {
-                        assert!(
-                            !shape::is_supported_aggregate_ty(&ctx, *mstore.ty()),
-                            "aggregate mstore should be gone after scalarization"
-                        );
-                    }
-                }
-            }
+            assert_no_promoted_aggregate_artifacts(func, &ctx);
         });
     }
 
@@ -1659,6 +1725,284 @@ func private %f() -> i256 {
     }
 
     #[test]
+    fn scalarize_promotes_non_entry_alloca() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @slice = { i256, i256 };
+
+func private %f(v0.i1, v1.i256, v2.i256) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v3.*@slice = alloca @slice;
+        v4.*i256 = gep v3 0.i8 0.i8;
+        v5.*i256 = gep v3 0.i8 1.i8;
+        mstore v4 v1 i256;
+        mstore v5 v2 i256;
+        v6.i256 = mload v4 i256;
+        v7.i256 = mload v5 i256;
+        v8.i256 = add v6 v7;
+        return v8;
+
+    block2:
+        return 0.i256;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            assert_no_promoted_aggregate_artifacts(func, &ctx);
+        });
+    }
+
+    #[test]
+    fn scalarize_splits_block_to_seed_non_entry_alloca_at_its_location() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @one = { i256 };
+
+func private %f(v0.i1, v1.i256) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v2.i256 = add v1 1.i256;
+        v3.*@one = alloca @one;
+        mstore v3 v2 i256;
+        v4.i256 = mload v3 i256;
+        return v4;
+
+    block2:
+        return 0.i256;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            assert_eq!(
+                func.layout.iter_block().count(),
+                4,
+                "non-entry alloca with leading instructions should split its block"
+            );
+            assert_no_promoted_aggregate_artifacts(func, &ctx);
+        });
+    }
+
+    #[test]
+    fn scalarize_splits_each_promoted_alloca_to_its_own_seed_point() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @one = { i256 };
+
+func private %f(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = add v0 1.i256;
+        v3.*@one = alloca @one;
+        mstore v3 v2 i256;
+        v4.i256 = mload v3 i256;
+        v5.*@one = alloca @one;
+        mstore v5 v1 i256;
+        v6.i256 = mload v5 i256;
+        v7.i256 = add v4 v6;
+        return v7;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            assert_eq!(
+                func.layout.iter_block().count(),
+                3,
+                "each promoted alloca in the original block should get its own seed point"
+            );
+            assert_no_promoted_aggregate_artifacts(func, &ctx);
+        });
+    }
+
+    #[test]
+    fn scalarize_non_entry_alloca_merges_store_and_undef_paths() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @one = { i256 };
+
+func private %f(v0.i1) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.*@one = alloca @one;
+        v2.*i256 = gep v1 0.i8 0.i8;
+        br v0 block2 block3;
+
+    block2:
+        mstore v2 7.i256 i256;
+        jump block4;
+
+    block3:
+        jump block4;
+
+    block4:
+        v3.i256 = mload v2 i256;
+        return v3;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            assert_no_promoted_aggregate_artifacts(func, &ctx);
+
+            let mut found = false;
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    let Some(phi) = <&control_flow::Phi as InstDowncast>::downcast(
+                        func.inst_set(),
+                        func.dfg.inst(inst),
+                    ) else {
+                        continue;
+                    };
+                    if func
+                        .dfg
+                        .inst_result(inst)
+                        .is_none_or(|result| func.dfg.value_ty(result) != Type::I256)
+                    {
+                        continue;
+                    }
+
+                    let has_undef = phi
+                        .args()
+                        .iter()
+                        .any(|(value, _)| matches!(func.dfg.value(*value), Value::Undef { .. }));
+                    let has_non_undef = phi
+                        .args()
+                        .iter()
+                        .any(|(value, _)| !matches!(func.dfg.value(*value), Value::Undef { .. }));
+                    if has_undef && has_non_undef {
+                        found = true;
+                    }
+                }
+            }
+
+            assert!(found, "expected scalar phi merging stored and undef paths");
+        });
+    }
+
+    #[test]
+    fn scalarize_loop_local_alloca_reseeds_at_its_location() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @one = { i256 };
+
+func private %f() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i1 = phi (1.i1 block0) (0.i1 block4);
+        v1.i256 = add 5.i256 6.i256;
+        v2.*@one = alloca @one;
+        v3.*i256 = gep v2 0.i8 0.i8;
+        br v0 block2 block3;
+
+    block2:
+        mstore v3 9.i256 i256;
+        jump block3;
+
+    block3:
+        v4.i256 = mload v3 i256;
+        br v0 block4 block5;
+
+    block4:
+        jump block1;
+
+    block5:
+        return v4;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            assert_eq!(
+                func.layout.iter_block().count(),
+                7,
+                "loop-local alloca with leading instructions should split its seed point"
+            );
+            assert_no_promoted_aggregate_artifacts(func, &ctx);
+
+            let mut found = false;
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    let Some(phi) = <&control_flow::Phi as InstDowncast>::downcast(
+                        func.inst_set(),
+                        func.dfg.inst(inst),
+                    ) else {
+                        continue;
+                    };
+                    if func
+                        .dfg
+                        .inst_result(inst)
+                        .is_none_or(|result| func.dfg.value_ty(result) != Type::I256)
+                    {
+                        continue;
+                    }
+
+                    let has_undef = phi
+                        .args()
+                        .iter()
+                        .any(|(value, _)| matches!(func.dfg.value(*value), Value::Undef { .. }));
+                    let has_non_undef = phi
+                        .args()
+                        .iter()
+                        .any(|(value, _)| !matches!(func.dfg.value(*value), Value::Undef { .. }));
+                    if has_undef && has_non_undef {
+                        found = true;
+                    }
+                }
+            }
+
+            assert!(
+                found,
+                "loop-local promoted alloca should re-seed to undef at its alloca point"
+            );
+        });
+    }
+
+    #[test]
     fn scalarize_simplifies_transitive_scalar_phi_users_without_stale_entries() {
         let module = parse_test_module(
             r#"
@@ -1717,28 +2061,7 @@ func private %f(v0.i1, v1.i1, v2.i256, v3.i256) -> i256 {
                     });
                 }
             }
-            for block in func.layout.iter_block() {
-                for inst in func.layout.iter_inst(block) {
-                    if let Some(mload) = <&data::Mload as InstDowncast>::downcast(
-                        func.inst_set(),
-                        func.dfg.inst(inst),
-                    ) {
-                        assert!(
-                            !shape::is_supported_aggregate_ty(&ctx, *mload.ty()),
-                            "aggregate mload should be gone after scalarization"
-                        );
-                    }
-                    if let Some(mstore) = <&data::Mstore as InstDowncast>::downcast(
-                        func.inst_set(),
-                        func.dfg.inst(inst),
-                    ) {
-                        assert!(
-                            !shape::is_supported_aggregate_ty(&ctx, *mstore.ty()),
-                            "aggregate mstore should be gone after scalarization"
-                        );
-                    }
-                }
-            }
+            assert_no_promoted_aggregate_artifacts(func, &ctx);
         });
     }
 
@@ -1769,17 +2092,9 @@ func private %f(v0.i1) -> i256 {
         });
 
         module.func_store.view(func_ref, |func| {
+            assert_no_promoted_aggregate_artifacts(func, &ctx);
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
-                    if let Some(mload) = <&data::Mload as InstDowncast>::downcast(
-                        func.inst_set(),
-                        func.dfg.inst(inst),
-                    ) {
-                        assert!(
-                            !shape::is_supported_aggregate_ty(&ctx, *mload.ty()),
-                            "aggregate mload should be gone after scalarization"
-                        );
-                    }
                     if let Some(phi) = <&control_flow::Phi as InstDowncast>::downcast(
                         func.inst_set(),
                         func.dfg.inst(inst),
