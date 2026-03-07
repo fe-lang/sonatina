@@ -200,7 +200,7 @@ mod tests {
     };
 
     #[inst_set(InstKind = "TestInstKind")]
-    struct TestInstSet(Add, Sub, Not, Phi, Jump);
+    struct TestInstSet(Add, Uaddo, Sub, Not, Snego, Phi, Jump);
 
     #[test]
     fn ctor() {
@@ -318,8 +318,16 @@ mod tests {
             InstClassKind::Binary(BinaryInstKind::Add)
         );
         assert_eq!(
+            Uaddo::new(&inst_set, v, v).kind(),
+            InstClassKind::Binary(BinaryInstKind::Uaddo)
+        );
+        assert_eq!(
             Not::new(&inst_set, v).kind(),
             InstClassKind::Unary(UnaryInstKind::Not)
+        );
+        assert_eq!(
+            Snego::new(&inst_set, v).kind(),
+            InstClassKind::Unary(UnaryInstKind::Snego)
         );
         assert_eq!(
             Phi::new(inst_set.phi(), vec![(v, b0)]).kind(),

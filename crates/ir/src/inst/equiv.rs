@@ -14,6 +14,7 @@ use super::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryInstKind {
     Neg,
+    Snego,
     Not,
     IsZero,
     EvmClz,
@@ -22,8 +23,14 @@ pub enum UnaryInstKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinaryInstKind {
     Add,
+    Uaddo,
+    Saddo,
     Mul,
+    Umulo,
+    Smulo,
     Sub,
+    Usubo,
+    Ssubo,
     Sdiv,
     Udiv,
     Umod,
@@ -155,7 +162,11 @@ impl OwnedInstKey {
             self.kind,
             InstClassKind::Binary(
                 BinaryInstKind::Add
+                    | BinaryInstKind::Uaddo
+                    | BinaryInstKind::Saddo
                     | BinaryInstKind::Mul
+                    | BinaryInstKind::Umulo
+                    | BinaryInstKind::Smulo
                     | BinaryInstKind::Eq
                     | BinaryInstKind::Ne
                     | BinaryInstKind::And

@@ -16,12 +16,14 @@ pub struct Add {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(Uaddo)))]
 pub struct Uaddo {
     lhs: ValueId,
     rhs: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(Saddo)))]
 pub struct Saddo {
     lhs: ValueId,
     rhs: ValueId,
@@ -42,30 +44,35 @@ pub struct Sub {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(Usubo)))]
 pub struct Usubo {
     lhs: ValueId,
     rhs: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(Ssubo)))]
 pub struct Ssubo {
     lhs: ValueId,
     rhs: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(Umulo)))]
 pub struct Umulo {
     lhs: ValueId,
     rhs: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(Smulo)))]
 pub struct Smulo {
     lhs: ValueId,
     rhs: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(unary(Snego)))]
 pub struct Snego {
     arg: ValueId,
 }

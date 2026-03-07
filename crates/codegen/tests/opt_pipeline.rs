@@ -282,6 +282,111 @@ func public %entry(v0.i256) -> i256 {
 }
 
 #[test]
+fn sccp_folds_checked_overflow_identities() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+    block0:
+        (v1.i256, v2.i1) = usubo v0 0.i256;
+        (v3.i256, v4.i1) = umulo v1 1.i256;
+        (v5.i256, v6.i1) = evm_udivo v3 1.i256;
+        (v7.i256, v8.i1) = evm_umodo v5 1.i256;
+        br v8 block1 block2;
+
+    block1:
+        return v7;
+
+    block2:
+        return v5;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    for needle in ["usubo", "umulo", "evm_udivo", "evm_umodo"] {
+        assert_func_not_contains(&module, func_ref, needle);
+    }
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn sccp_folds_snego_zero_identity() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> i256 {
+    block0:
+        (v0.i256, v1.i1) = snego 0.i256;
+        br v1 block1 block2;
+
+    block1:
+        return 99.i256;
+
+    block2:
+        return v0;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    assert_func_not_contains(&module, func_ref, "snego");
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn gvn_eliminates_redundant_checked_overflow_ops() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256, v1.i256) -> i256 {
+    block0:
+        (v2.i256, v3.i1) = umulo v0 v1;
+        (v4.i256, v5.i1) = umulo v0 v1;
+        v6.i1 = or v3 v5;
+        (v7.i256, v8.i1) = evm_udivo v2 v1;
+        (v9.i256, v10.i1) = evm_udivo v4 v1;
+        v11.i1 = or v6 v8;
+        v12.i1 = or v11 v10;
+        br v12 block1 block2;
+
+    block1:
+        return v9;
+
+    block2:
+        return v7;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        let mut domtree = DomTree::new();
+        GvnSolver::new().run(func, &mut cfg, &mut domtree);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert_eq!(
+        dumped.matches("umulo").count(),
+        1,
+        "unexpected GVN output:\n{dumped}"
+    );
+    assert_eq!(
+        dumped.matches("evm_udivo").count(),
+        1,
+        "unexpected GVN output:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
 fn standalone_function_passes_support_live_multi_result_input() {
     let (sccp_module, sccp_func) = parse_test_module(STANDALONE_MULTI_RESULT_SRC);
     sccp_module.func_store.modify(sccp_func, |func| {

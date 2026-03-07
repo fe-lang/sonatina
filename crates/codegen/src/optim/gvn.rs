@@ -416,8 +416,16 @@ impl GvnSolver {
     ) -> ReassignResult {
         // Perform symbolic evaluation for the insn.
         let block = func.layout.inst_block(insn);
-        let gvn_insn =
-            self.perform_symbolic_evaluation(func, domtree, inst_to_gvn_key(func, insn), block);
+        let Some(result_idx) = func.dfg.value_result_idx(inst_result) else {
+            return ReassignResult::default();
+        };
+        let gvn_insn = self.perform_symbolic_evaluation(
+            func,
+            domtree,
+            inst_to_gvn_key(func, insn),
+            result_idx,
+            block,
+        );
 
         // If insn has a side effect, create new class if the value still belongs to
         // `INITIAL_CLASS`.
@@ -687,6 +695,7 @@ impl GvnSolver {
         func: &mut Function,
         domtree: &DomTree,
         insn_expr: OwnedInstKey,
+        result_idx: usize,
         block: BlockId,
     ) -> GvnInsn {
         // Get canonicalized insn by swapping arguments with leader values.
@@ -746,12 +755,12 @@ impl GvnSolver {
             }
         };
 
-        if let Some(imm) = self.perform_constant_folding(func, &insn_expr) {
+        if let Some(imm) = self.perform_constant_folding(func, &insn_expr, result_idx) {
             GvnInsn::Value(imm)
-        } else if let Some(result) = self.perform_simplification(func, &insn_expr) {
+        } else if let Some(result) = self.perform_simplification(func, &insn_expr, result_idx) {
             result
         } else {
-            GvnInsn::Expr(insn_expr)
+            GvnInsn::expr(insn_expr, result_idx)
         }
     }
 
@@ -760,11 +769,17 @@ impl GvnSolver {
         &mut self,
         func: &mut Function,
         insn_expr: &OwnedInstKey,
+        result_idx: usize,
     ) -> Option<ValueId> {
         let imm = if let InstClassKind::Unary(kind) = insn_expr.kind() {
             let arg = func.dfg.value_imm(insn_expr.unary_arg()?)?;
             match kind {
                 UnaryInstKind::Neg => -arg,
+                UnaryInstKind::Snego => match result_idx {
+                    0 => arg.overflowing_sneg().0,
+                    1 => Immediate::from(arg.overflowing_sneg().1),
+                    _ => return None,
+                },
                 UnaryInstKind::Not => !arg,
                 UnaryInstKind::IsZero => arg.is_zero().into(),
                 UnaryInstKind::EvmClz => return None,
@@ -773,8 +788,98 @@ impl GvnSolver {
             let (lhs, rhs) = insn_expr.binary_args()?;
             match kind {
                 BinaryInstKind::Add => func.dfg.value_imm(lhs)? + func.dfg.value_imm(rhs)?,
+                BinaryInstKind::Uaddo => match result_idx {
+                    0 => {
+                        func.dfg
+                            .value_imm(lhs)?
+                            .overflowing_uadd(func.dfg.value_imm(rhs)?)
+                            .0
+                    }
+                    1 => Immediate::from(
+                        func.dfg
+                            .value_imm(lhs)?
+                            .overflowing_uadd(func.dfg.value_imm(rhs)?)
+                            .1,
+                    ),
+                    _ => return None,
+                },
+                BinaryInstKind::Saddo => match result_idx {
+                    0 => {
+                        func.dfg
+                            .value_imm(lhs)?
+                            .overflowing_sadd(func.dfg.value_imm(rhs)?)
+                            .0
+                    }
+                    1 => Immediate::from(
+                        func.dfg
+                            .value_imm(lhs)?
+                            .overflowing_sadd(func.dfg.value_imm(rhs)?)
+                            .1,
+                    ),
+                    _ => return None,
+                },
                 BinaryInstKind::Mul => func.dfg.value_imm(lhs)? * func.dfg.value_imm(rhs)?,
+                BinaryInstKind::Umulo => match result_idx {
+                    0 => {
+                        func.dfg
+                            .value_imm(lhs)?
+                            .overflowing_umul(func.dfg.value_imm(rhs)?)
+                            .0
+                    }
+                    1 => Immediate::from(
+                        func.dfg
+                            .value_imm(lhs)?
+                            .overflowing_umul(func.dfg.value_imm(rhs)?)
+                            .1,
+                    ),
+                    _ => return None,
+                },
+                BinaryInstKind::Smulo => match result_idx {
+                    0 => {
+                        func.dfg
+                            .value_imm(lhs)?
+                            .overflowing_smul(func.dfg.value_imm(rhs)?)
+                            .0
+                    }
+                    1 => Immediate::from(
+                        func.dfg
+                            .value_imm(lhs)?
+                            .overflowing_smul(func.dfg.value_imm(rhs)?)
+                            .1,
+                    ),
+                    _ => return None,
+                },
                 BinaryInstKind::Sub => func.dfg.value_imm(lhs)? - func.dfg.value_imm(rhs)?,
+                BinaryInstKind::Usubo => match result_idx {
+                    0 => {
+                        func.dfg
+                            .value_imm(lhs)?
+                            .overflowing_usub(func.dfg.value_imm(rhs)?)
+                            .0
+                    }
+                    1 => Immediate::from(
+                        func.dfg
+                            .value_imm(lhs)?
+                            .overflowing_usub(func.dfg.value_imm(rhs)?)
+                            .1,
+                    ),
+                    _ => return None,
+                },
+                BinaryInstKind::Ssubo => match result_idx {
+                    0 => {
+                        func.dfg
+                            .value_imm(lhs)?
+                            .overflowing_ssub(func.dfg.value_imm(rhs)?)
+                            .0
+                    }
+                    1 => Immediate::from(
+                        func.dfg
+                            .value_imm(lhs)?
+                            .overflowing_ssub(func.dfg.value_imm(rhs)?)
+                            .1,
+                    ),
+                    _ => return None,
+                },
                 BinaryInstKind::Sdiv => {
                     let lhs = func.dfg.value_imm(lhs)?;
                     let rhs = func.dfg.value_imm(rhs)?;
@@ -823,16 +928,75 @@ impl GvnSolver {
                     let value = func.dfg.value_imm(rhs)?;
                     value.ashr(bits)
                 }
-                BinaryInstKind::EvmUdiv
-                | BinaryInstKind::EvmSdiv
-                | BinaryInstKind::EvmUdivo
-                | BinaryInstKind::EvmSdivo
-                | BinaryInstKind::EvmUmod
-                | BinaryInstKind::EvmSmod
-                | BinaryInstKind::EvmUmodo
-                | BinaryInstKind::EvmSmodo
-                | BinaryInstKind::EvmExp
-                | BinaryInstKind::EvmByte => return None,
+                BinaryInstKind::EvmUdiv => {
+                    let lhs = func.dfg.value_imm(lhs)?;
+                    let rhs = func.dfg.value_imm(rhs)?;
+                    if rhs.is_zero() { rhs } else { lhs.udiv(rhs) }
+                }
+                BinaryInstKind::EvmSdiv => {
+                    let lhs = func.dfg.value_imm(lhs)?;
+                    let rhs = func.dfg.value_imm(rhs)?;
+                    if rhs.is_zero() { rhs } else { lhs.sdiv(rhs) }
+                }
+                BinaryInstKind::EvmUdivo => {
+                    let lhs = func.dfg.value_imm(lhs)?;
+                    let rhs = func.dfg.value_imm(rhs)?;
+                    match result_idx {
+                        0 => {
+                            if rhs.is_zero() {
+                                rhs
+                            } else {
+                                lhs.udiv(rhs)
+                            }
+                        }
+                        1 => Immediate::from(rhs.is_zero()),
+                        _ => return None,
+                    }
+                }
+                BinaryInstKind::EvmSdivo => {
+                    let lhs = func.dfg.value_imm(lhs)?;
+                    let rhs = func.dfg.value_imm(rhs)?;
+                    let overflow = rhs.is_zero() || (rhs.is_all_one() && lhs.overflowing_sneg().1);
+                    match result_idx {
+                        0 => {
+                            if rhs.is_zero() {
+                                rhs
+                            } else {
+                                lhs.sdiv(rhs)
+                            }
+                        }
+                        1 => Immediate::from(overflow),
+                        _ => return None,
+                    }
+                }
+                BinaryInstKind::EvmUmod => {
+                    let lhs = func.dfg.value_imm(lhs)?;
+                    let rhs = func.dfg.value_imm(rhs)?;
+                    if rhs.is_zero() { rhs } else { lhs.urem(rhs) }
+                }
+                BinaryInstKind::EvmSmod => {
+                    let lhs = func.dfg.value_imm(lhs)?;
+                    let rhs = func.dfg.value_imm(rhs)?;
+                    if rhs.is_zero() { rhs } else { lhs.srem(rhs) }
+                }
+                BinaryInstKind::EvmUmodo | BinaryInstKind::EvmSmodo => {
+                    let lhs = func.dfg.value_imm(lhs)?;
+                    let rhs = func.dfg.value_imm(rhs)?;
+                    match result_idx {
+                        0 => {
+                            if rhs.is_zero() {
+                                rhs
+                            } else if matches!(kind, BinaryInstKind::EvmUmodo) {
+                                lhs.urem(rhs)
+                            } else {
+                                lhs.srem(rhs)
+                            }
+                        }
+                        1 => Immediate::from(rhs.is_zero()),
+                        _ => return None,
+                    }
+                }
+                BinaryInstKind::EvmExp | BinaryInstKind::EvmByte => return None,
             }
         } else if let InstClassKind::Cast(kind) = insn_expr.kind() {
             let (arg, ty) = insn_expr.cast_arg_ty()?;
@@ -861,9 +1025,25 @@ impl GvnSolver {
         &mut self,
         func: &mut Function,
         insn_expr: &OwnedInstKey,
+        result_idx: usize,
     ) -> Option<GvnInsn> {
         if let InstClassKind::Unary(kind) = insn_expr.kind() {
             let arg = insn_expr.unary_arg()?;
+            if matches!(kind, UnaryInstKind::Snego)
+                && result_idx == 0
+                && func.dfg.value_imm(arg).is_some_and(Immediate::is_zero)
+            {
+                let zero = Immediate::zero(func.dfg.value_ty(arg));
+                let zero = self.make_imm(&mut func.dfg, zero);
+                return Some(GvnInsn::Value(zero));
+            }
+            if matches!(kind, UnaryInstKind::Snego)
+                && result_idx == 1
+                && func.dfg.value_imm(arg).is_some_and(Immediate::is_zero)
+            {
+                let no_overflow = self.make_imm(&mut func.dfg, false);
+                return Some(GvnInsn::Value(no_overflow));
+            }
             let simplified = simplify_unary_with_same_inner(kind, arg, |arg, expected| {
                 let Value::Inst { inst, .. } = func.dfg.value(arg) else {
                     return None;
@@ -880,6 +1060,11 @@ impl GvnSolver {
 
         if let InstClassKind::Binary(kind) = insn_expr.kind() {
             let (lhs, rhs) = insn_expr.binary_args()?;
+            if let Some(result) =
+                self.perform_checked_overflow_simplification(func, kind, lhs, rhs, result_idx)
+            {
+                return Some(result);
+            }
             let simplified = simplify_binary_with_known_imm(
                 func,
                 kind,
@@ -919,6 +1104,109 @@ impl GvnSolver {
                 .map(|(value, _)| *value)
                 .filter(|first| phi_args.iter().all(|(value, _)| value == first))
                 .map(GvnInsn::Value);
+        }
+
+        None
+    }
+
+    fn perform_checked_overflow_simplification(
+        &mut self,
+        func: &mut Function,
+        kind: BinaryInstKind,
+        lhs: ValueId,
+        rhs: ValueId,
+        result_idx: usize,
+    ) -> Option<GvnInsn> {
+        let ty = func.dfg.value_ty(lhs);
+        let zero = Immediate::zero(ty);
+        let one = Immediate::one(ty);
+        let lhs_imm = func.dfg.value_imm(lhs);
+        let rhs_imm = func.dfg.value_imm(rhs);
+
+        match kind {
+            BinaryInstKind::Uaddo | BinaryInstKind::Saddo => {
+                if rhs_imm == Some(zero) {
+                    return Some(if result_idx == 0 {
+                        GvnInsn::Value(lhs)
+                    } else if result_idx == 1 {
+                        GvnInsn::Value(self.make_imm(&mut func.dfg, false))
+                    } else {
+                        return None;
+                    });
+                }
+                if lhs_imm == Some(zero) {
+                    return Some(if result_idx == 0 {
+                        GvnInsn::Value(rhs)
+                    } else if result_idx == 1 {
+                        GvnInsn::Value(self.make_imm(&mut func.dfg, false))
+                    } else {
+                        return None;
+                    });
+                }
+            }
+            BinaryInstKind::Usubo | BinaryInstKind::Ssubo => {
+                if rhs_imm == Some(zero) {
+                    return Some(if result_idx == 0 {
+                        GvnInsn::Value(lhs)
+                    } else if result_idx == 1 {
+                        GvnInsn::Value(self.make_imm(&mut func.dfg, false))
+                    } else {
+                        return None;
+                    });
+                }
+            }
+            BinaryInstKind::Umulo | BinaryInstKind::Smulo => {
+                if lhs_imm == Some(zero) || rhs_imm == Some(zero) {
+                    return Some(if result_idx == 0 {
+                        GvnInsn::Value(self.make_imm(&mut func.dfg, zero))
+                    } else if result_idx == 1 {
+                        GvnInsn::Value(self.make_imm(&mut func.dfg, false))
+                    } else {
+                        return None;
+                    });
+                }
+                if lhs_imm == Some(one) {
+                    return Some(if result_idx == 0 {
+                        GvnInsn::Value(rhs)
+                    } else if result_idx == 1 {
+                        GvnInsn::Value(self.make_imm(&mut func.dfg, false))
+                    } else {
+                        return None;
+                    });
+                }
+                if rhs_imm == Some(one) {
+                    return Some(if result_idx == 0 {
+                        GvnInsn::Value(lhs)
+                    } else if result_idx == 1 {
+                        GvnInsn::Value(self.make_imm(&mut func.dfg, false))
+                    } else {
+                        return None;
+                    });
+                }
+            }
+            BinaryInstKind::EvmUdivo | BinaryInstKind::EvmSdivo => {
+                if rhs_imm == Some(one) {
+                    return Some(if result_idx == 0 {
+                        GvnInsn::Value(lhs)
+                    } else if result_idx == 1 {
+                        GvnInsn::Value(self.make_imm(&mut func.dfg, false))
+                    } else {
+                        return None;
+                    });
+                }
+            }
+            BinaryInstKind::EvmUmodo | BinaryInstKind::EvmSmodo => {
+                if rhs_imm == Some(one) {
+                    return Some(if result_idx == 0 {
+                        GvnInsn::Value(self.make_imm(&mut func.dfg, zero))
+                    } else if result_idx == 1 {
+                        GvnInsn::Value(self.make_imm(&mut func.dfg, false))
+                    } else {
+                        return None;
+                    });
+                }
+            }
+            _ => {}
         }
 
         None
@@ -985,7 +1273,7 @@ impl GvnSolver {
     ) -> Option<(ValueId, ValueId)> {
         let class = self.value_class(value);
         if class != INITIAL_CLASS
-            && let GvnInsn::Expr(insn_expr) = &self.classes[class].gvn_insn
+            && let GvnInsn::Expr { key: insn_expr, .. } = &self.classes[class].gvn_insn
             && matches!(insn_expr.kind(), InstClassKind::Binary(expr_kind) if expr_kind == kind)
             && let Some(args) = insn_expr.binary_args()
         {
@@ -1116,24 +1404,27 @@ impl GvnSolver {
         cond: ValueId,
         edge_truth: bool,
     ) -> Option<PredicateRelation> {
-        let inst = func.dfg.value_inst(cond)?;
-        let mut insn_expr = inst_to_gvn_key(func, inst);
+        let (inst, result_idx) = func.dfg.value_inst_result(cond)?;
+        let mut gvn_insn = GvnInsn::expr(inst_to_gvn_key(func, inst), result_idx);
         let mut expected_true = edge_truth;
 
         // Canonicalize predicates by peeling `not` and mapping `ne == false` to `eq`.
         for _ in 0..16 {
-            if let Some(GvnInsn::Value(value)) = self.perform_simplification(func, &insn_expr)
-                && let Some(value_inst) = func.dfg.value_inst(value)
+            let (insn_expr, result_idx) = gvn_insn.expr_parts()?;
+
+            if let Some(simplified) = self.perform_simplification(func, insn_expr, result_idx)
+                && let GvnInsn::Value(value) = simplified
+                && let Some((value_inst, value_result_idx)) = func.dfg.value_inst_result(value)
             {
-                insn_expr = inst_to_gvn_key(func, value_inst);
+                gvn_insn = GvnInsn::expr(inst_to_gvn_key(func, value_inst), value_result_idx);
                 continue;
             }
 
             if matches!(insn_expr.kind(), InstClassKind::Unary(UnaryInstKind::Not))
                 && let Some(arg) = insn_expr.unary_arg()
-                && let Some(inner_inst) = func.dfg.value_inst(arg)
+                && let Some((inner_inst, inner_result_idx)) = func.dfg.value_inst_result(arg)
             {
-                insn_expr = inst_to_gvn_key(func, inner_inst);
+                gvn_insn = GvnInsn::expr(inst_to_gvn_key(func, inner_inst), inner_result_idx);
                 expected_true = !expected_true;
                 continue;
             }
@@ -1149,8 +1440,8 @@ impl GvnSolver {
                     _ => unreachable!(),
                 };
 
-                if let Some(arg_inst) = func.dfg.value_inst(arg) {
-                    insn_expr = inst_to_gvn_key(func, arg_inst);
+                if let Some((arg_inst, arg_result_idx)) = func.dfg.value_inst_result(arg) {
+                    gvn_insn = GvnInsn::expr(inst_to_gvn_key(func, arg_inst), arg_result_idx);
                     continue;
                 }
 
@@ -1500,7 +1791,10 @@ enum GvnInsn {
     /// A value which occurs when insn is simplified/folded to value.
     Value(ValueId),
     /// A canonicalized expression key.
-    Expr(OwnedInstKey),
+    Expr {
+        key: OwnedInstKey,
+        result_idx: usize,
+    },
 }
 
 impl From<ValueId> for GvnInsn {
@@ -1511,7 +1805,23 @@ impl From<ValueId> for GvnInsn {
 
 impl From<OwnedInstKey> for GvnInsn {
     fn from(insn: OwnedInstKey) -> Self {
-        Self::Expr(insn)
+        Self::Expr {
+            key: insn,
+            result_idx: 0,
+        }
+    }
+}
+
+impl GvnInsn {
+    fn expr(key: OwnedInstKey, result_idx: usize) -> Self {
+        Self::Expr { key, result_idx }
+    }
+
+    fn expr_parts(&self) -> Option<(&OwnedInstKey, usize)> {
+        match self {
+            Self::Expr { key, result_idx } => Some((key, *result_idx)),
+            Self::Value(..) => None,
+        }
     }
 }
 
@@ -1586,15 +1896,16 @@ impl<'a> ValuePhiFinder<'a> {
     /// Main entry of this struct.
     fn compute_value_phi(&mut self, func: &mut Function, gvn_insn: &GvnInsn) -> Option<ValuePhi> {
         // Break infinite loop if the block has been already visited.
-        let insn_expr = if let GvnInsn::Expr(insn_expr) = gvn_insn {
-            insn_expr
+        let (insn_expr, result_idx) = if let GvnInsn::Expr { key, result_idx } = gvn_insn {
+            (key, *result_idx)
         } else {
             return None;
         };
 
         if let Some(arg) = insn_expr.unary_arg() {
             let arg = self.get_phi_of(func, arg)?;
-            let make_query = |value| insn_expr.with_unary_arg(value).unwrap();
+            let make_query =
+                |value| GvnInsn::expr(insn_expr.with_unary_arg(value).unwrap(), result_idx);
             return self.compute_value_phi_for_unary(func, arg, make_query);
         }
 
@@ -1613,13 +1924,15 @@ impl<'a> ValuePhiFinder<'a> {
             };
 
             let commutative = insn_expr.is_commutative_binary();
-            let make_query = |lhs, rhs| insn_expr.with_binary_args(lhs, rhs).unwrap();
+            let make_query =
+                |lhs, rhs| GvnInsn::expr(insn_expr.with_binary_args(lhs, rhs).unwrap(), result_idx);
             return self.compute_value_phi_for_binary(func, lhs, rhs, commutative, make_query);
         }
 
         if let Some((arg, _)) = insn_expr.cast_arg_ty() {
             let arg = self.get_phi_of(func, arg)?;
-            let make_query = |value| insn_expr.with_cast_arg(value).unwrap();
+            let make_query =
+                |value| GvnInsn::expr(insn_expr.with_cast_arg(value).unwrap(), result_idx);
             return self.compute_value_phi_for_cast(func, arg, make_query);
         }
 
@@ -1633,7 +1946,7 @@ impl<'a> ValuePhiFinder<'a> {
         make_query: F,
     ) -> Option<ValuePhi>
     where
-        F: Fn(ValueId) -> OwnedInstKey + Copy,
+        F: Fn(ValueId) -> GvnInsn + Copy,
     {
         let value_phi_insn = if let ValuePhi::PhiInsn(insn) = value_phi {
             insn
@@ -1669,7 +1982,7 @@ impl<'a> ValuePhiFinder<'a> {
         make_query: F,
     ) -> Option<ValuePhi>
     where
-        F: Fn(ValueId, ValueId) -> OwnedInstKey + Copy,
+        F: Fn(ValueId, ValueId) -> GvnInsn + Copy,
     {
         // Unpack the value phis and create args to lookup value phi.
         //
@@ -1765,7 +2078,7 @@ impl<'a> ValuePhiFinder<'a> {
         make_query: F,
     ) -> Option<ValuePhi>
     where
-        F: Fn(ValueId) -> OwnedInstKey + Copy,
+        F: Fn(ValueId) -> GvnInsn + Copy,
     {
         let value_phi_insn = if let ValuePhi::PhiInsn(insn) = value_phi {
             insn
@@ -1793,24 +2106,24 @@ impl<'a> ValuePhiFinder<'a> {
     }
 
     /// Lookup value phi argument.
-    fn lookup_value_phi_arg(
-        &mut self,
-        func: &mut Function,
-        query: OwnedInstKey,
-    ) -> Option<ValuePhi> {
+    fn lookup_value_phi_arg(&mut self, func: &mut Function, query: GvnInsn) -> Option<ValuePhi> {
         // Perform constant folding and insn simplification to canonicalize query.
-        let query = if let Some(imm) = self.solver.perform_constant_folding(func, &query) {
-            // If constant folding succeeds, no need to further query for the argument.
-            return Some(ValuePhi::Value(imm));
-        } else if let Some(simplified) = self.solver.perform_simplification(func, &query) {
-            // If query is simplified to a value, then no need to further query for the argument.
-            if let GvnInsn::Value(value) = simplified {
-                return Some(ValuePhi::Value(value));
+        let query = if let GvnInsn::Expr { key, result_idx } = query {
+            if let Some(imm) = self.solver.perform_constant_folding(func, &key, result_idx) {
+                return Some(ValuePhi::Value(imm));
+            } else if let Some(simplified) =
+                self.solver.perform_simplification(func, &key, result_idx)
+            {
+                if let GvnInsn::Value(value) = simplified {
+                    return Some(ValuePhi::Value(value));
+                } else {
+                    simplified
+                }
             } else {
-                simplified
+                GvnInsn::expr(key, result_idx)
             }
         } else {
-            GvnInsn::Expr(query)
+            return None;
         };
 
         // If class already exists for the query, return the leader value of the class.
@@ -1854,7 +2167,7 @@ impl<'a> ValuePhiFinder<'a> {
             let phi_block = func.layout.inst_block(func.dfg.value_inst(value)?);
 
             // if the gvn_insn of the value class is phi, then create `ValuePhi::PhiInsn` from its args.
-            if let GvnInsn::Expr(insn_expr) = &self.solver.classes[class].gvn_insn
+            if let GvnInsn::Expr { key: insn_expr, .. } = &self.solver.classes[class].gvn_insn
                 && let Some(phi_args) = insn_expr.phi_args()
             {
                 let mut result = ValuePhiInsn::with_capacity(phi_block, phi_args.len());
@@ -2478,7 +2791,7 @@ func private %entry(v0.i32, v1.i32) -> i32 {
 
             let stale_phi = ValuePhi::Value(func.arg_values[0]);
             let class = solver.make_class(
-                GvnInsn::Expr(inst_to_gvn_key(func, add_inst)),
+                GvnInsn::expr(inst_to_gvn_key(func, add_inst), 0),
                 Some(stale_phi.clone()),
             );
 
@@ -2548,12 +2861,61 @@ func private %entry(v0.i1) -> i32 {
                 solver.edges[edge].reachable = true;
             }
 
-            let class = solver.make_class(GvnInsn::Expr(phi_key), None);
+            let class = solver.make_class(GvnInsn::expr(phi_key, 0), None);
             solver.assign_class(phi_value, class);
 
             let mut finder = ValuePhiFinder::new(&mut solver, func.arg_values[0]);
             assert!(finder.get_phi_of(func, phi_value).is_some());
             assert!(finder.get_phi_of(func, phi_value).is_some());
+        });
+    }
+
+    #[test]
+    fn multi_result_values_use_distinct_congruence_classes() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i256, v1.i256) -> i256 {
+    block0:
+        (v2.i256, v3.i1) = uaddo v0 v1;
+        br v3 block1 block2;
+
+    block1:
+        return v2;
+
+    block2:
+        return v0;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+
+            let uaddo_inst = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find(|&inst| {
+                    matches!(
+                        inst_to_gvn_key(func, inst).kind(),
+                        InstClassKind::Binary(BinaryInstKind::Uaddo)
+                    )
+                })
+                .expect("test function should contain a uaddo instruction");
+            let inst_results = func.dfg.inst_results(uaddo_inst).to_vec();
+            let [sum, overflow] = inst_results.as_slice() else {
+                panic!("uaddo should produce exactly two results");
+            };
+
+            let mut solver = GvnSolver::new();
+            solver.run(func, &mut cfg, &mut domtree);
+
+            assert_ne!(solver.value_class(*sum), solver.value_class(*overflow));
         });
     }
 
@@ -2586,7 +2948,7 @@ func private %entry() -> i8 {
             let key = inst_to_gvn_key(func, sar_inst);
             let mut solver = GvnSolver::new();
             let folded = solver
-                .perform_constant_folding(func, &key)
+                .perform_constant_folding(func, &key, 0)
                 .expect("sar constant folding should succeed");
             assert_eq!(func.dfg.value_imm(folded), Some(Immediate::I8(-4)));
         });

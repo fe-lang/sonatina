@@ -25,7 +25,9 @@ pub(crate) fn simplify_unary_with_same_inner(
         UnaryInstKind::Not | UnaryInstKind::Neg => same_inner_arg(arg, kind)
             .map(SimplifyExprResult::Copy)
             .unwrap_or(SimplifyExprResult::NoChange),
-        UnaryInstKind::IsZero | UnaryInstKind::EvmClz => SimplifyExprResult::NoChange,
+        UnaryInstKind::Snego | UnaryInstKind::IsZero | UnaryInstKind::EvmClz => {
+            SimplifyExprResult::NoChange
+        }
     }
 }
 
@@ -159,7 +161,13 @@ pub(crate) fn simplify_binary_with_known_imm(
                 return SimplifyExprResult::Copy(rhs);
             }
         }
-        BinaryInstKind::Lt
+        BinaryInstKind::Uaddo
+        | BinaryInstKind::Saddo
+        | BinaryInstKind::Umulo
+        | BinaryInstKind::Smulo
+        | BinaryInstKind::Usubo
+        | BinaryInstKind::Ssubo
+        | BinaryInstKind::Lt
         | BinaryInstKind::Gt
         | BinaryInstKind::Slt
         | BinaryInstKind::Sgt

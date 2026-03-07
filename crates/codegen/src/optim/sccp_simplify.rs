@@ -3,7 +3,7 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     Function, Immediate, InstId, Type, Value, ValueId,
     inst::{
-        BinaryInstKind, CastInstKind, InstClassKind, arith, cast, data, downcast,
+        BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, cast, data, downcast,
         inst_set::InstSetBase,
     },
 };
@@ -317,6 +317,10 @@ fn simplify_uaddo(
     rhs: ValueId,
     results_len: usize,
 ) -> SimplifyResults {
+    if results_len != 2 {
+        return no_change_results(results_len);
+    }
+
     let lhs_ty = func.dfg.value_ty(lhs);
     if known_imm(func, lattice, rhs) == Some(Immediate::zero(lhs_ty)) {
         return smallvec![
@@ -330,6 +334,131 @@ fn simplify_uaddo(
             SimplifyAction::Const(Immediate::I1(false))
         ];
     }
+    no_change_results(results_len)
+}
+
+fn simplify_usubo(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    lhs: ValueId,
+    rhs: ValueId,
+    results_len: usize,
+) -> SimplifyResults {
+    if results_len != 2 {
+        return no_change_results(results_len);
+    }
+
+    let lhs_ty = func.dfg.value_ty(lhs);
+    if known_imm(func, lattice, rhs) == Some(Immediate::zero(lhs_ty)) {
+        return smallvec![
+            SimplifyAction::Copy(lhs),
+            SimplifyAction::Const(Immediate::I1(false))
+        ];
+    }
+
+    no_change_results(results_len)
+}
+
+fn simplify_umulo(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    lhs: ValueId,
+    rhs: ValueId,
+    results_len: usize,
+) -> SimplifyResults {
+    if results_len != 2 {
+        return no_change_results(results_len);
+    }
+
+    let lhs_ty = func.dfg.value_ty(lhs);
+    let zero = Immediate::zero(lhs_ty);
+    let one = Immediate::one(lhs_ty);
+
+    if known_imm(func, lattice, lhs) == Some(zero) || known_imm(func, lattice, rhs) == Some(zero) {
+        return smallvec![
+            SimplifyAction::Const(zero),
+            SimplifyAction::Const(Immediate::I1(false))
+        ];
+    }
+    if known_imm(func, lattice, lhs) == Some(one) {
+        return smallvec![
+            SimplifyAction::Copy(rhs),
+            SimplifyAction::Const(Immediate::I1(false))
+        ];
+    }
+    if known_imm(func, lattice, rhs) == Some(one) {
+        return smallvec![
+            SimplifyAction::Copy(lhs),
+            SimplifyAction::Const(Immediate::I1(false))
+        ];
+    }
+
+    no_change_results(results_len)
+}
+
+fn simplify_snego(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    arg: ValueId,
+    results_len: usize,
+) -> SimplifyResults {
+    if results_len != 2 {
+        return no_change_results(results_len);
+    }
+
+    let arg_ty = func.dfg.value_ty(arg);
+    if known_imm(func, lattice, arg) == Some(Immediate::zero(arg_ty)) {
+        return smallvec![
+            SimplifyAction::Const(Immediate::zero(arg_ty)),
+            SimplifyAction::Const(Immediate::I1(false))
+        ];
+    }
+
+    no_change_results(results_len)
+}
+
+fn simplify_evm_divo(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    lhs: ValueId,
+    rhs: ValueId,
+    results_len: usize,
+) -> SimplifyResults {
+    if results_len != 2 {
+        return no_change_results(results_len);
+    }
+
+    let lhs_ty = func.dfg.value_ty(lhs);
+    if known_imm(func, lattice, rhs) == Some(Immediate::one(lhs_ty)) {
+        return smallvec![
+            SimplifyAction::Copy(lhs),
+            SimplifyAction::Const(Immediate::I1(false))
+        ];
+    }
+
+    no_change_results(results_len)
+}
+
+fn simplify_evm_modo(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    lhs: ValueId,
+    rhs: ValueId,
+    results_len: usize,
+) -> SimplifyResults {
+    if results_len != 2 {
+        return no_change_results(results_len);
+    }
+
+    let lhs_ty = func.dfg.value_ty(lhs);
+    if known_imm(func, lattice, rhs) == Some(Immediate::one(lhs_ty)) {
+        let imm = Immediate::zero(lhs_ty);
+        return smallvec![
+            SimplifyAction::Const(imm),
+            SimplifyAction::Const(Immediate::I1(false))
+        ];
+    }
+
     no_change_results(results_len)
 }
 
@@ -349,6 +478,10 @@ pub(super) fn simplify_inst(
             let [arg] = values.as_slice() else {
                 return no_change_results(results_len);
             };
+
+            if matches!(kind, UnaryInstKind::Snego) {
+                return simplify_snego(func, lattice, *arg, results_len);
+            }
 
             wrap_action(from_expr_simplify_result(simplify_unary_with_same_inner(
                 kind,
@@ -375,6 +508,22 @@ pub(super) fn simplify_inst(
             let [lhs, rhs] = values.as_slice() else {
                 return no_change_results(results_len);
             };
+
+            if matches!(kind, BinaryInstKind::Uaddo | BinaryInstKind::Saddo) {
+                return simplify_uaddo(func, lattice, *lhs, *rhs, results_len);
+            }
+            if matches!(kind, BinaryInstKind::Usubo | BinaryInstKind::Ssubo) {
+                return simplify_usubo(func, lattice, *lhs, *rhs, results_len);
+            }
+            if matches!(kind, BinaryInstKind::Umulo | BinaryInstKind::Smulo) {
+                return simplify_umulo(func, lattice, *lhs, *rhs, results_len);
+            }
+            if matches!(kind, BinaryInstKind::EvmUdivo | BinaryInstKind::EvmSdivo) {
+                return simplify_evm_divo(func, lattice, *lhs, *rhs, results_len);
+            }
+            if matches!(kind, BinaryInstKind::EvmUmodo | BinaryInstKind::EvmSmodo) {
+                return simplify_evm_modo(func, lattice, *lhs, *rhs, results_len);
+            }
 
             wrap_action(match kind {
                 BinaryInstKind::And => {
@@ -433,7 +582,13 @@ pub(super) fn simplify_inst(
                 | BinaryInstKind::Sge => {
                     simplify_cmp_self(func, lattice, may_be_undef, *lhs, *rhs, true)
                 }
-                BinaryInstKind::EvmUdivo
+                BinaryInstKind::Uaddo
+                | BinaryInstKind::Saddo
+                | BinaryInstKind::Umulo
+                | BinaryInstKind::Smulo
+                | BinaryInstKind::Usubo
+                | BinaryInstKind::Ssubo
+                | BinaryInstKind::EvmUdivo
                 | BinaryInstKind::EvmSdivo
                 | BinaryInstKind::EvmUmodo
                 | BinaryInstKind::EvmSmodo
@@ -465,10 +620,6 @@ pub(super) fn simplify_inst(
         InstClassKind::Phi | InstClassKind::Opaque => {
             if let Some(i) = downcast::<&data::Gep>(is, inst) {
                 return wrap_action(simplify_gep_all_zero(func, lattice, i.values().as_slice()));
-            }
-
-            if let Some(i) = downcast::<&arith::Uaddo>(is, inst) {
-                return simplify_uaddo(func, lattice, *i.lhs(), *i.rhs(), results_len);
             }
 
             no_change_results(results_len)
