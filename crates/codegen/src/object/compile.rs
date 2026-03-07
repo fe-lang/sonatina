@@ -9,6 +9,7 @@ use sonatina_ir::{
     module::FuncRef,
     object::EmbedSymbol,
 };
+use sonatina_triple::Architecture;
 use sonatina_verifier::{
     Location, VerificationLevel, VerifierConfig, verify_module, verify_module_invariants,
 };
@@ -102,6 +103,120 @@ fn diagnostic_targets_multi_result_inst(module: &Module, location: &Location) ->
         function.dfg.inst_results(inst).len() != 1
             || <&Uaddo as InstDowncast>::downcast(function.inst_set(), inst_data).is_some()
     })
+}
+
+fn reject_unsupported_evm_multi_return(
+    module: &Module,
+    funcs: &[FuncRef],
+    object: &sonatina_ir::object::ObjectName,
+    section: &sonatina_ir::object::SectionName,
+) -> Vec<ObjectCompileError> {
+    if !matches!(module.ctx.triple.architecture, Architecture::Evm) {
+        return vec![];
+    }
+
+    let mut errors = Vec::new();
+    for &func in funcs {
+        let Some(sig) = module.ctx.get_sig(func) else {
+            continue;
+        };
+        if sig.ret_tys().len() > 1 {
+            errors.push(ObjectCompileError::BackendError {
+                object: object.clone(),
+                section: section.clone(),
+                func,
+                message: format!(
+                    "EVM backend does not support functions with {} return values",
+                    sig.ret_tys().len()
+                ),
+            });
+        }
+
+        module.func_store.view(func, |function| {
+            for block in function.layout.iter_block() {
+                for inst in function.layout.iter_inst(block) {
+                    if let Some(call) = function.dfg.cast_call(inst) {
+                        let call_results = function.dfg.inst_results(inst);
+                        let callee_name = module
+                            .ctx
+                            .get_sig(*call.callee())
+                            .map(|sig| format!("%{}", sig.name()))
+                            .unwrap_or_else(|| format!("{:?}", call.callee()));
+
+                        if call_results.len() > 1 {
+                            errors.push(ObjectCompileError::BackendError {
+                                object: object.clone(),
+                                section: section.clone(),
+                                func,
+                                message: format!(
+                                    "EVM backend does not support call inst{} with {} results to {callee_name}",
+                                    inst.as_u32(),
+                                    call_results.len()
+                                ),
+                            });
+                        }
+
+                        if let Some(callee_sig) = module.ctx.get_sig(*call.callee()) {
+                            if callee_sig.ret_tys().len() > 1 {
+                                errors.push(ObjectCompileError::BackendError {
+                                    object: object.clone(),
+                                    section: section.clone(),
+                                    func,
+                                    message: format!(
+                                        "EVM backend does not support calls to {callee_name} with {} return values",
+                                        callee_sig.ret_tys().len()
+                                    ),
+                                });
+                            }
+                            if call_results.len() != callee_sig.ret_tys().len() {
+                                errors.push(ObjectCompileError::BackendError {
+                                    object: object.clone(),
+                                    section: section.clone(),
+                                    func,
+                                    message: format!(
+                                        "call inst{} result count {} does not match callee {callee_name} return count {}",
+                                        inst.as_u32(),
+                                        call_results.len(),
+                                        callee_sig.ret_tys().len()
+                                    ),
+                                });
+                            }
+                        }
+                    }
+
+                    if let Some(return_args) = function.dfg.return_args(inst) {
+                        if return_args.len() > 1 {
+                            errors.push(ObjectCompileError::BackendError {
+                                object: object.clone(),
+                                section: section.clone(),
+                                func,
+                                message: format!(
+                                    "EVM backend does not support return inst{} with {} values",
+                                    inst.as_u32(),
+                                    return_args.len()
+                                ),
+                            });
+                        }
+                        if return_args.len() != sig.ret_tys().len() {
+                            errors.push(ObjectCompileError::BackendError {
+                                object: object.clone(),
+                                section: section.clone(),
+                                func,
+                                message: format!(
+                                    "return inst{} value count {} does not match function signature return count {}",
+                                    inst.as_u32(),
+                                    return_args.len(),
+                                    sig.ret_tys().len()
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    errors
 }
 
 pub fn compile_all_objects<B: LowerBackend>(
@@ -331,6 +446,11 @@ fn compile_section<B: LowerBackend>(
             section = %section_name.0
         )
         .entered();
+        let backend_errors =
+            reject_unsupported_evm_multi_return(program.module, &funcs, object_name, section_name);
+        if !backend_errors.is_empty() {
+            return Err(backend_errors);
+        }
         link_section(
             program.module,
             backend,
@@ -1408,6 +1528,86 @@ object @O {
                 .iter()
                 .any(|diagnostic| diagnostic.code.as_str() == "IR0601"),
             "expected IR0601, got {report}"
+        );
+    }
+
+    #[test]
+    fn compile_object_rejects_multi_return_functions_for_evm() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %main(v0.i32, v1.i32) -> (i32, i1) {
+    block0:
+        (v2.i32, v3.i1) = uaddo v0 v1;
+        return (v2, v3);
+}
+
+object @O {
+  section runtime {
+    entry %main;
+  }
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let backend = FakeBackend;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: false,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
+        };
+
+        let errs = compile_object(&parsed.module, &backend, "O", &opts)
+            .expect_err("must reject multi-return");
+        assert!(
+            errs.iter().any(|err| matches!(
+                err,
+                ObjectCompileError::BackendError { message, .. }
+                    if message.contains("does not support functions with 2 return values")
+            )),
+            "expected multi-return backend error, got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn compile_object_rejects_multi_return_calls_for_evm() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+declare external %pair_add(i32, i32) -> (i32, i1);
+
+func public %main() {
+    block0:
+        (v0.i32, v1.i1) = call %pair_add 1.i32 2.i32;
+        return;
+}
+
+object @O {
+  section runtime {
+    entry %main;
+  }
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let backend = FakeBackend;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: false,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
+        };
+
+        let errs = compile_object(&parsed.module, &backend, "O", &opts)
+            .expect_err("must reject multi-return call");
+        assert!(
+            errs.iter().any(|err| matches!(
+                err,
+                ObjectCompileError::BackendError { message, .. }
+                    if message.contains("call inst") && message.contains("2 results")
+            )),
+            "expected multi-return call backend error, got {errs:?}"
         );
     }
 

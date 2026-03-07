@@ -102,16 +102,36 @@ fn build_return(
     has_inst: &dyn HasInst<Return>,
 ) -> Result<Return, Box<Error>> {
     let mut ast_args = args.iter().peekable();
-
-    let arg = if ast_args.peek().is_some() {
-        Some(super::process_arg!(ctx, fb, ast_args, ValueId))
-    } else {
-        None
+    let args = match ast_args.next() {
+        None => SmallVec::new(),
+        Some(ast_arg) => match &ast_arg.kind {
+            ast::InstArgKind::Value(value) => smallvec::smallvec![ctx.value(fb, value)],
+            ast::InstArgKind::MultiValue(values) => {
+                values.iter().map(|value| ctx.value(fb, value)).collect()
+            }
+            kind => {
+                let actual = match kind {
+                    ast::InstArgKind::Value(_) => "value",
+                    ast::InstArgKind::MultiValue(_) => "(value, ...)",
+                    ast::InstArgKind::Ty(_) => "type",
+                    ast::InstArgKind::Block(_) => "block",
+                    ast::InstArgKind::ValueBlockMap(_) => "(value, block)",
+                    ast::InstArgKind::FuncRef(_) => "function name",
+                    ast::InstArgKind::EmbedSymbol(_) => "embed symbol",
+                    ast::InstArgKind::CurrentSection => "current section symbol",
+                };
+                return Err(Box::new(Error::InstArgKindMismatch {
+                    expected: "value".into(),
+                    actual: Some(actual.into()),
+                    span: ast_arg.span,
+                }));
+            }
+        },
     };
 
     if let Some(arg) = ast_args.next() {
         Err(Box::new(Error::UnexpectedTrailingInstArg(arg.span)))
     } else {
-        Ok(Return::new(has_inst, arg))
+        Ok(Return::new(has_inst, args.into()))
     }
 }

@@ -1,5 +1,6 @@
 ---
 source: crates/parser/tests/syntax.rs
+assertion_line: 35
 input_file: test_files/syntax/module/global_variable.sntn
 ---
 Module {
@@ -354,12 +355,12 @@ Module {
                     ..
                 },
                 params: [],
-                ret_type: Some(
+                ret_types: [
                     Type {
                         kind: Unit,
                         ..
                     },
-                ),
+                ],
             },
             blocks: [
                 Block {

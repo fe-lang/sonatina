@@ -521,8 +521,19 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                 &self.alloc.pre_actions[inst][after_cleanup_len..],
                 None,
             );
-            self.observer
-                .on_inst_return(self.ctx.func, inst, self.ctx.func.dfg.as_return(inst));
+            self.observer.on_inst_return(
+                self.ctx.func,
+                inst,
+                self.ctx
+                    .func
+                    .dfg
+                    .return_args(inst)
+                    .and_then(|args| match args {
+                        [] => None,
+                        [arg] => Some(*arg),
+                        _ => panic!("stackify does not support multi-value return {inst:?}"),
+                    }),
+            );
             return InstOutcome::TerminateBlock;
         }
 

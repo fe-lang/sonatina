@@ -82,7 +82,7 @@ fn build_and_verify_reports_invalid_builder_module() {
     let isa = Evm::new(triple);
     let builder = ModuleBuilder::new(ModuleCtx::new(&isa));
     builder
-        .declare_function(Signature::new("main", Linkage::Public, &[], Type::Unit))
+        .declare_function(Signature::new_unit("main", Linkage::Public, &[]))
         .expect("declaration should succeed");
 
     let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
@@ -99,7 +99,7 @@ fn build_verified_extension_accepts_valid_builder_module() {
     let isa = Evm::new(triple);
     let builder = ModuleBuilder::new(ModuleCtx::new(&isa));
     builder
-        .declare_function(Signature::new(
+        .declare_function(Signature::new_single(
             "decl",
             Linkage::External,
             &[Type::I32],
@@ -131,6 +131,96 @@ func public %ok(v0.i32) -> i32 {
     let report = verify_module(&parsed.module, &cfg);
 
     assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn multi_return_functions_and_calls_verify() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func private %pair_add(v0.i32, v1.i32) -> (i32, i1) {
+    block0:
+        (v2.i32, v3.i1) = uaddo v0 v1;
+        return (v2, v3);
+}
+
+func public %caller(v0.i32, v1.i32) -> (i32, i1) {
+    block0:
+        (v2.i32, v3.i1) = call %pair_add v0 v1;
+        return (v2, v3);
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn multi_return_mismatches_are_reported() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+declare external %pair_add(i32, i32) -> (i32, i1);
+
+func public %caller() -> i32 {
+    block0:
+        v0.i32 = call %pair_add 1.i32 2.i32;
+        return v0;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}
+
+#[test]
+fn multi_return_call_result_type_mismatch_is_reported() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+declare external %pair_add(i32, i32) -> (i32, i1);
+
+func public %caller() -> unit {
+    block0:
+        (v0.i1, v1.i32) = call %pair_add 1.i32 2.i32;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}
+
+#[test]
+fn multi_return_value_mismatches_are_reported() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_arity() -> (i32, i1) {
+    block0:
+        return 0.i32;
+}
+
+func public %bad_type() -> (i32, i1) {
+    block0:
+        return (0.i1, 0.i1);
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0604"), "expected IR0604, got {report}");
 }
 
 #[test]
@@ -647,6 +737,30 @@ func public %caller(v0.*(i32, i32) -> i32) -> unit {
     let report = verify_module(&parsed.module, &cfg);
 
     assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn function_pointer_return_type_list_mismatch_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %callee(v0.i32) -> (i32, i1) {
+    block0:
+        return (v0, 0.i1);
+}
+
+func public %caller() -> unit {
+    block0:
+        v0.*(i32) -> i32 = get_function_ptr %callee;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
 }
 
 #[test]

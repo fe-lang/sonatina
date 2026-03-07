@@ -5,6 +5,7 @@ use super::{
 use crate::{
     BlockId, Function, GlobalVariableRef, Immediate, Inst, InstId, InstSetBase, Type, ValueId,
     func_cursor::{CursorLocation, FuncCursor},
+    inst::control_flow,
     module::{FuncRef, ModuleCtx},
 };
 use smallvec::SmallVec;
@@ -210,6 +211,63 @@ where
         self.insert_inst_no_result(i);
     }
 
+    pub fn insert_call_results(
+        &mut self,
+        callee: FuncRef,
+        args: SmallVec<[ValueId; 8]>,
+    ) -> SmallVec<[ValueId; 2]> {
+        let ret_tys = self
+            .module_builder
+            .sig(callee, |sig| sig.ret_tys().to_vec());
+        let call = control_flow::Call::new(
+            self.inst_set()
+                .has_call()
+                .expect("target ISA must support `call`"),
+            callee,
+            args,
+        );
+        self.insert_inst_results(call, &ret_tys)
+    }
+
+    pub fn insert_call(
+        &mut self,
+        callee: FuncRef,
+        args: SmallVec<[ValueId; 8]>,
+    ) -> Option<ValueId> {
+        let results = self.insert_call_results(callee, args);
+        assert!(
+            results.len() <= 1,
+            "insert_call called on multi-return callee"
+        );
+        results.first().copied()
+    }
+
+    pub fn insert_return_values(&mut self, values: &[ValueId]) {
+        self.insert_inst_no_result(control_flow::Return::new(
+            self.inst_set()
+                .has_return()
+                .expect("target ISA must support `return`"),
+            SmallVec::from_slice(values).into(),
+        ));
+    }
+
+    pub fn insert_return(&mut self, value: ValueId) {
+        self.insert_inst_no_result(control_flow::Return::new_single(
+            self.inst_set()
+                .has_return()
+                .expect("target ISA must support `return`"),
+            value,
+        ));
+    }
+
+    pub fn insert_return_unit(&mut self) {
+        self.insert_inst_no_result(control_flow::Return::new_unit(
+            self.inst_set()
+                .has_return()
+                .expect("target ISA must support `return`"),
+        ));
+    }
+
     pub fn declare_var(&mut self, ty: Type) -> Variable {
         self.ssa_builder.declare_var(ty)
     }
@@ -286,9 +344,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use smallvec::smallvec;
+
     use super::{super::test_util::*, *};
     use crate::{
-        Value,
+        Linkage, Signature, Value,
         inst::{
             arith::{Add, Mul, Sub, Uaddo},
             cast::Sext,
@@ -312,7 +372,7 @@ mod tests {
 
         let sub = Sub::new(is, v2, v0);
         builder.insert_inst(sub, Type::I8);
-        let ret = Return::new(is, None);
+        let ret = Return::new_unit(is);
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
@@ -347,7 +407,7 @@ mod tests {
         let v3 = builder.insert_inst(sext, Type::I64);
         let mul = Mul::new(is, v3, arg1);
         builder.insert_inst(mul, Type::I64);
-        let ret = Return::new(is, None);
+        let ret = Return::new_unit(is);
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
@@ -377,7 +437,7 @@ mod tests {
 
         builder.switch_to_block(entry_block);
         let v0 = builder.make_imm_value(1i32);
-        let ret = Return::new(is, Some(v0));
+        let ret = Return::new_single(is, v0);
         builder.insert_inst_no_result(ret);
         builder.seal_all();
         builder.finish();
@@ -426,7 +486,7 @@ mod tests {
         let v3 = builder.insert_inst(phi, Type::I64);
         let add = Add::new(is, v3, arg0);
         builder.insert_inst(add, Type::I64);
-        let ret = Return::new(is, None);
+        let ret = Return::new_unit(is);
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
@@ -467,7 +527,7 @@ mod tests {
         let args = builder.args();
         let results =
             builder.insert_inst_results(Uaddo::new(is, args[0], args[1]), &[Type::I32, Type::I1]);
-        let ret = Return::new(is, None);
+        let ret = Return::new_unit(is);
         builder.insert_inst_no_result(ret);
 
         assert_eq!(results.len(), 2);
@@ -507,5 +567,45 @@ mod tests {
             }
             other => panic!("unexpected second result value: {other:?}"),
         }
+    }
+
+    #[test]
+    fn insert_call_handles_unit_single_and_multi_return_callees() {
+        let mb = test_module_builder();
+        let unit = mb
+            .declare_function(Signature::new_unit("unit", Linkage::Private, &[Type::I32]))
+            .unwrap();
+        let single = mb
+            .declare_function(Signature::new_single(
+                "single",
+                Linkage::Private,
+                &[Type::I32],
+                Type::I32,
+            ))
+            .unwrap();
+        let pair = mb
+            .declare_function(Signature::new(
+                "pair",
+                Linkage::Private,
+                &[Type::I32],
+                &[Type::I32, Type::I1],
+            ))
+            .unwrap();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I32], Type::Unit);
+        let is = evm.inst_set();
+
+        let entry_block = builder.append_block();
+        builder.switch_to_block(entry_block);
+        let arg = builder.args()[0];
+
+        assert_eq!(builder.insert_call(unit, smallvec![arg]), None);
+        assert!(builder.insert_call(single, smallvec![arg]).is_some());
+
+        let multi_return = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = builder.insert_call(pair, smallvec![arg]);
+        }));
+        assert!(multi_return.is_err(), "multi-return insert_call must panic");
+
+        builder.insert_inst_no_result(Return::new_unit(is));
     }
 }

@@ -255,7 +255,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, merge_block));
 
         builder.switch_to_block(merge_block);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -301,7 +301,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, e));
 
         builder.switch_to_block(e);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -382,7 +382,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Br::new(is, v0, m, b));
 
         builder.switch_to_block(m);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -449,10 +449,10 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, f));
 
         builder.switch_to_block(e);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.switch_to_block(f);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();

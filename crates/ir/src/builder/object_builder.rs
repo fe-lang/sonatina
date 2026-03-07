@@ -267,10 +267,10 @@ mod tests {
     fn builds_and_declares_object() {
         let mut mb = test_module_builder();
         let runtime = mb
-            .declare_function(Signature::new("runtime", Linkage::Public, &[], Type::Unit))
+            .declare_function(Signature::new_unit("runtime", Linkage::Public, &[]))
             .unwrap();
         let init = mb
-            .declare_function(Signature::new("init", Linkage::Public, &[], Type::Unit))
+            .declare_function(Signature::new_unit("init", Linkage::Public, &[]))
             .unwrap();
 
         let gv = mb.declare_gv(GlobalVariableData::constant(
@@ -304,7 +304,7 @@ mod tests {
     fn rejects_multiple_entries() {
         let mb = test_module_builder();
         let runtime = mb
-            .declare_function(Signature::new("runtime", Linkage::Public, &[], Type::Unit))
+            .declare_function(Signature::new_unit("runtime", Linkage::Public, &[]))
             .unwrap();
 
         let mut obj = ObjectBuilder::new("Contract");
@@ -318,7 +318,7 @@ mod tests {
     fn rejects_duplicate_embed_symbols() {
         let mb = test_module_builder();
         let init = mb
-            .declare_function(Signature::new("init", Linkage::Public, &[], Type::Unit))
+            .declare_function(Signature::new_unit("init", Linkage::Public, &[]))
             .unwrap();
 
         let mut obj = ObjectBuilder::new("Contract");

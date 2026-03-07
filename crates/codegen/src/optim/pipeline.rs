@@ -448,7 +448,7 @@ mod tests {
         let arg = builder.args()[0];
         let c1 = builder.make_imm_value(1i32);
         let sum = builder.insert_inst_with(|| Add::new(is, arg, c1), Type::I32);
-        builder.insert_inst_no_result_with(|| Return::new(is, Some(sum)));
+        builder.insert_inst_no_result_with(|| Return::new_single(is, sum));
         builder.seal_all();
         builder.finish();
 

@@ -851,7 +851,7 @@ impl State for CellState<'_, '_> {
         &mut self,
         _func: sonatina_ir::module::FuncRef,
         _args: Vec<EvalValue>,
-    ) -> EvalValue {
+    ) -> sonatina_ir::interpret::EvalResults {
         panic!("call instuctuion must not be Interpreted")
     }
 
@@ -920,7 +920,7 @@ mod tests {
     fn sccp_smoke_fuzz_no_panics() {
         for seed in 0..8u64 {
             let mb = test_module_builder();
-            let sig = Signature::new("fuzz", Linkage::Public, &[], Type::I256);
+            let sig = Signature::new_single("fuzz", Linkage::Public, &[], Type::I256);
             let func_ref = mb.declare_function(sig).unwrap();
 
             let mut fb = mb.func_builder::<InstInserter>(func_ref);
@@ -958,7 +958,7 @@ mod tests {
             }
 
             let ret = *values.last().unwrap();
-            fb.insert_inst_no_result(Return::new_unchecked(is, Some(ret)));
+            fb.insert_inst_no_result(Return::new_unchecked(is, smallvec![ret].into()));
             fb.seal_all();
             fb.finish();
 
@@ -975,7 +975,7 @@ mod tests {
     #[test]
     fn sccp_does_not_fold_pointer_constants() {
         let mb = test_module_builder();
-        let sig = Signature::new("ptr_const", Linkage::Public, &[], Type::I256);
+        let sig = Signature::new_single("ptr_const", Linkage::Public, &[], Type::I256);
         let func_ref = mb.declare_function(sig).unwrap();
 
         let mut fb = mb.func_builder::<InstInserter>(func_ref);
@@ -989,7 +989,7 @@ mod tests {
         let ptr = fb.insert_inst(IntToPtr::new(is, word, ptr_ty), ptr_ty);
         let roundtrip = fb.insert_inst(PtrToInt::new(is, ptr, Type::I256), Type::I256);
 
-        fb.insert_inst_no_result(Return::new_unchecked(is, Some(roundtrip)));
+        fb.insert_inst_no_result(Return::new_unchecked(is, smallvec![roundtrip].into()));
         fb.seal_all();
         fb.finish();
 
@@ -1005,7 +1005,7 @@ mod tests {
     #[test]
     fn sccp_folds_add_zero_with_pointer_operand() {
         let mb = test_module_builder();
-        let sig = Signature::new("ptr_add_zero", Linkage::Public, &[], Type::I256);
+        let sig = Signature::new_single("ptr_add_zero", Linkage::Public, &[], Type::I256);
         let func_ref = mb.declare_function(sig).unwrap();
 
         let mut fb = mb.func_builder::<InstInserter>(func_ref);
@@ -1021,7 +1021,7 @@ mod tests {
         let addr = fb.insert_inst(arith::Add::new_unchecked(is, ptr, zero), Type::I256);
         let one = fb.make_imm_value(Immediate::one(Type::I256));
         fb.insert_inst_no_result(Mstore::new(is, addr, one, Type::I256));
-        fb.insert_inst_no_result(Return::new_unchecked(is, Some(one)));
+        fb.insert_inst_no_result(Return::new_unchecked(is, smallvec![one].into()));
         fb.seal_all();
         fb.finish();
 
@@ -1058,7 +1058,7 @@ mod tests {
     #[test]
     fn sccp_folds_all_zero_gep_chain() {
         let mb = test_module_builder();
-        let sig = Signature::new("ptr_gep_zero", Linkage::Public, &[], Type::I256);
+        let sig = Signature::new_single("ptr_gep_zero", Linkage::Public, &[], Type::I256);
         let func_ref = mb.declare_function(sig).unwrap();
 
         let mut fb = mb.func_builder::<InstInserter>(func_ref);
@@ -1081,7 +1081,7 @@ mod tests {
             ptr_i256_ty,
         );
         let roundtrip = fb.insert_inst(PtrToInt::new(is, gep, Type::I256), Type::I256);
-        fb.insert_inst_no_result(Return::new_unchecked(is, Some(roundtrip)));
+        fb.insert_inst_no_result(Return::new_unchecked(is, smallvec![roundtrip].into()));
         fb.seal_all();
         fb.finish();
 

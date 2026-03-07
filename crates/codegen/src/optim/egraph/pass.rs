@@ -763,7 +763,7 @@ mod tests {
         let v20 = builder.make_imm_value(20i32);
         builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v20, Type::I32));
 
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
         builder.seal_all();
 
         assert!(eliminate_adjacent_dead_stores(&mut builder.func));
@@ -803,7 +803,7 @@ mod tests {
         let v8 = builder.make_imm_value(20i8);
         builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v8, Type::I8));
 
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
         builder.seal_all();
 
         assert!(!eliminate_adjacent_dead_stores(&mut builder.func));

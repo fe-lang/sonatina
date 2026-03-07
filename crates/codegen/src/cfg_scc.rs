@@ -338,7 +338,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, b2));
 
         builder.switch_to_block(b2);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -382,7 +382,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, merge));
 
         builder.switch_to_block(merge);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -426,7 +426,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, header));
 
         builder.switch_to_block(exit);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -469,7 +469,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Br::new(is, arg, loop_block, exit));
 
         builder.switch_to_block(exit);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -518,7 +518,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, c));
 
         builder.switch_to_block(exit);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -555,7 +555,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, exit));
 
         builder.switch_to_block(exit);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.switch_to_block(u0);
         builder.insert_inst_no_result_with(|| Jump::new(is, u1));

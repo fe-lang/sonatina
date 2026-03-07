@@ -76,7 +76,7 @@ pub trait FuncCursor {
 
     fn make_result(&self, func: &mut Function, inst_id: InstId, ty: Type) -> ValueId {
         let results = self.make_results(func, inst_id, &[ty]);
-        debug_assert_eq!(results.len(), 1);
+        assert_eq!(results.len(), 1);
         results[0]
     }
 

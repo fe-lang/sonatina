@@ -1,5 +1,6 @@
 ---
 source: crates/parser/tests/syntax.rs
+assertion_line: 35
 input_file: test_files/syntax/module/simple.sntn
 ---
 Module {
@@ -33,14 +34,14 @@ Module {
                     ..
                 },
             ],
-            ret_type: Some(
+            ret_types: [
                 Type {
                     kind: Int(
                         I8,
                     ),
                     ..
                 },
-            ),
+            ],
         },
     ],
     declared_gvs: [],
@@ -112,7 +113,7 @@ Module {
                     ..
                 },
                 params: [],
-                ret_type: None,
+                ret_types: [],
             },
             blocks: [
                 Block {
@@ -212,14 +213,14 @@ Module {
                         },
                     ),
                 ],
-                ret_type: Some(
+                ret_types: [
                     Type {
                         kind: Int(
                             I8,
                         ),
                         ..
                     },
-                ),
+                ],
             },
             blocks: [
                 Block {
@@ -505,7 +506,7 @@ Module {
                         },
                     ),
                 ],
-                ret_type: None,
+                ret_types: [],
             },
             blocks: [
                 Block {
@@ -555,7 +556,7 @@ Module {
                         },
                     ),
                 ],
-                ret_type: None,
+                ret_types: [],
             },
             blocks: [
                 Block {
@@ -747,14 +748,14 @@ Module {
                         },
                     ),
                 ],
-                ret_type: Some(
+                ret_types: [
                     Type {
                         kind: Int(
                             I64,
                         ),
                         ..
                     },
-                ),
+                ],
             },
             blocks: [
                 Block {

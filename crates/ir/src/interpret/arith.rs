@@ -170,6 +170,7 @@ mod tests {
     use crate::{
         DataFlowGraph, HasInst, Immediate, Type,
         builder::test_util::test_isa,
+        interpret::EvalResults,
         module::{FuncRef, ModuleCtx},
     };
 
@@ -199,7 +200,7 @@ mod tests {
             self.values.get(&value).cloned().unwrap_or_default()
         }
 
-        fn call_func(&mut self, _func: FuncRef, _args: Vec<EvalValue>) -> EvalValue {
+        fn call_func(&mut self, _func: FuncRef, _args: Vec<EvalValue>) -> EvalResults {
             unreachable!()
         }
 

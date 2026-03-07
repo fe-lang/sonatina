@@ -157,7 +157,7 @@ pub struct FuncDeclaration {
     pub linkage: Linkage,
     pub name: FunctionName,
     pub params: Vec<Type>,
-    pub ret_type: Option<Type>,
+    pub ret_types: Vec<Type>,
 }
 
 impl FromSyntax<Error> for FuncDeclaration {
@@ -168,7 +168,9 @@ impl FromSyntax<Error> for FuncDeclaration {
             linkage,
             name: node.single(Rule::function_identifier),
             params: node.descend_into(Rule::function_param_type_list, |n| n.multi(Rule::type_name)),
-            ret_type: node.descend_into_opt(Rule::function_ret_type, |n| n.single(Rule::type_name)),
+            ret_types: node
+                .descend_into_opt(Rule::function_ret_type, |n| n.multi(Rule::type_name))
+                .unwrap_or_default(),
         }
     }
 }
@@ -314,7 +316,7 @@ pub struct FuncSignature {
     pub linkage: Linkage,
     pub name: FunctionName,
     pub params: Vec<ValueDeclaration>,
-    pub ret_type: Option<Type>,
+    pub ret_types: Vec<Type>,
 }
 
 impl FromSyntax<Error> for FuncSignature {
@@ -325,7 +327,9 @@ impl FromSyntax<Error> for FuncSignature {
             linkage,
             name: node.single(Rule::function_identifier),
             params: node.descend_into(Rule::function_params, |n| n.multi(Rule::value_declaration)),
-            ret_type: node.descend_into_opt(Rule::function_ret_type, |n| n.single(Rule::type_name)),
+            ret_types: node
+                .descend_into_opt(Rule::function_ret_type, |n| n.multi(Rule::type_name))
+                .unwrap_or_default(),
         }
     }
 }
@@ -559,6 +563,10 @@ impl FromSyntax<Error> for InstArg {
     fn from_syntax(node: &mut Node<Error>) -> Self {
         let kind = if let Some(value) = node.single_opt(Rule::value) {
             InstArgKind::Value(value)
+        } else if let Some(values) =
+            node.descend_into_opt(Rule::multi_value_list, |n| n.multi(Rule::value))
+        {
+            InstArgKind::MultiValue(values)
         } else if let Some(ty) = node.single_opt(Rule::type_name) {
             InstArgKind::Ty(ty)
         } else if let Some(block) = node.single_opt(Rule::block_ident) {
@@ -585,6 +593,7 @@ impl FromSyntax<Error> for InstArg {
 #[derive(Debug)]
 pub enum InstArgKind {
     Value(Value),
+    MultiValue(Vec<Value>),
     Ty(Type),
     Block(BlockId),
     ValueBlockMap((Value, BlockId)),
@@ -597,6 +606,7 @@ impl InstArgKind {
     fn discriminant_name(&self) -> SmolStr {
         match self {
             Self::Value(_) => "value",
+            Self::MultiValue(_) => "(value, ...)",
             Self::Ty(_) => "type",
             Self::Block(_) => "block",
             Self::ValueBlockMap(_) => "(value, block)",
@@ -641,12 +651,9 @@ impl FromSyntax<Error> for Type {
             Rule::struct_identifier => TypeKind::Struct(node.parse_str(Rule::struct_name)),
             Rule::function_type => {
                 let args = node.descend_into(Rule::function_type_arg, |n| n.multi(Rule::type_name));
-                let ret_ty =
-                    node.descend_into(Rule::function_ret_type, |n| n.single(Rule::type_name));
-                TypeKind::Func {
-                    args,
-                    ret_ty: Box::new(ret_ty),
-                }
+                let ret_tys =
+                    node.descend_into(Rule::function_ret_type, |n| n.multi(Rule::type_name));
+                TypeKind::Func { args, ret_tys }
             }
             _ => unreachable!(),
         };
@@ -663,7 +670,7 @@ pub enum TypeKind {
     Ptr(Box<Type>),
     Array(Box<Type>, usize),
     Struct(SmolStr),
-    Func { args: Vec<Type>, ret_ty: Box<Type> },
+    Func { args: Vec<Type>, ret_tys: Vec<Type> },
     Unit,
     Error,
 }

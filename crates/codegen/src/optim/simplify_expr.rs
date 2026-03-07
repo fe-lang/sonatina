@@ -213,7 +213,7 @@ mod tests {
     fn simplify_binary_with_known_imm_folds_shift_identities() {
         let isa = test_isa();
         let ctx = ModuleCtx::new(&isa);
-        let sig = Signature::new("f", Linkage::Private, &[], Type::I256);
+        let sig = Signature::new_single("f", Linkage::Private, &[], Type::I256);
         let mut func = Function::new(&ctx, &sig);
         let bits = func.dfg.make_imm_value(Immediate::zero(Type::I8));
         let value = func

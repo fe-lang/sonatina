@@ -103,7 +103,7 @@ mod tests {
         builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(c);
-        let ret = Return::new(is, None);
+        let ret = Return::new_unit(is);
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
@@ -169,11 +169,11 @@ mod tests {
         builder.insert_inst_no_result(br);
 
         builder.switch_to_block(d);
-        let ret = Return::new(is, None);
+        let ret = Return::new_unit(is);
         builder.insert_inst_no_result(ret);
 
         builder.switch_to_block(e);
-        let ret = Return::new(is, None);
+        let ret = Return::new_unit(is);
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
@@ -243,7 +243,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Br::new(is, phi_res, c, b));
 
         builder.switch_to_block(c);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -302,7 +302,7 @@ mod tests {
         builder.switch_to_block(c);
         let v = builder.make_imm_value(1i8);
         builder.insert_inst_with(|| Phi::new(is, vec![(v, a), (v, b)]), Type::I8);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -362,10 +362,10 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, b));
 
         builder.switch_to_block(d);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.switch_to_block(e);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();

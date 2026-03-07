@@ -32,9 +32,9 @@ impl PtrEscapeSummary {
         Self {
             arg_may_escape: vec![true; arg_count],
             arg_may_be_returned: vec![true; arg_count],
-            returns_any_ptr: module
-                .ctx
-                .func_sig(func, |sig| sig.ret_ty().is_pointer(&module.ctx)),
+            returns_any_ptr: module.ctx.func_sig(func, |sig| {
+                sig.ret_tys().iter().any(|ty| ty.is_pointer(&module.ctx))
+            }),
         }
     }
 }
@@ -175,7 +175,7 @@ fn compute_summary_for_func(
 
                 match data {
                     EvmInstKind::Return(ret) => {
-                        let Some(ret_val) = *ret.arg() else {
+                        let Some(ret_val) = ret.arg().copied() else {
                             continue;
                         };
 

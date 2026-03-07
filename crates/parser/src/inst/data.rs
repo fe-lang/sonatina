@@ -73,6 +73,7 @@ fn build_symbol_ref(
             actual: Some(
                 match other {
                     ast::InstArgKind::Value(_) => "value",
+                    ast::InstArgKind::MultiValue(_) => "(value, ...)",
                     ast::InstArgKind::Ty(_) => "type",
                     ast::InstArgKind::Block(_) => "block",
                     ast::InstArgKind::ValueBlockMap(_) => "(value, block)",

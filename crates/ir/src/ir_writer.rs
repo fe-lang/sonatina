@@ -64,8 +64,8 @@ impl<'a> ModuleWriter<'a> {
             .into_iter()
             .partition(|func_ref| {
                 self.module
-                    .ctx
-                    .func_sig(*func_ref, |sig| sig.linkage().has_definition())
+                    .func_store
+                    .view(*func_ref, |func| func.layout.entry_block().is_some())
             });
         // Write an external functions.
         for &func_ref in &func_decls {
@@ -409,13 +409,16 @@ impl IrWrite<FuncWriteCtx<'_>> for FunctionSignature {
         arg_values.write_with_delim(w, ", ", ctx)?;
         write!(w, ")")?;
 
-        m_ctx.func_sig(func_ref, |sig| {
-            let ret_ty = sig.ret_ty();
-            if !ret_ty.is_unit() {
+        m_ctx.func_sig(func_ref, |sig| match sig.ret_tys() {
+            [] => Ok(()),
+            [ret_ty] => {
                 write!(w, " -> ")?;
                 ret_ty.write(w, ctx)
-            } else {
-                Ok(())
+            }
+            ret_tys => {
+                write!(w, " -> (")?;
+                ret_tys.write_with_delim(w, ", ", ctx)?;
+                write!(w, ")")
             }
         })
     }

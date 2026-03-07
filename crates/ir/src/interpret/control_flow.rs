@@ -77,30 +77,19 @@ impl Interpret for Call {
             .map(|arg| state.lookup_val(*arg))
             .collect();
 
-        let val = state.call_func(func, args);
         state.set_action(Action::Continue);
-        if state
-            .dfg()
-            .ctx
-            .get_sig(func)
-            .is_some_and(|sig| sig.ret_ty().is_unit())
-        {
-            no_result()
-        } else {
-            single_result(val)
-        }
+        state.call_func(func, args)
     }
 }
 
 impl Interpret for Return {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
-        let ret_val = if let Some(val) = self.arg() {
-            state.lookup_val(*val)
-        } else {
-            EvalValue::Undef
-        };
-
-        state.set_action(Action::Return(ret_val));
+        let ret_vals = self
+            .args()
+            .iter()
+            .map(|val| state.lookup_val(*val))
+            .collect();
+        state.set_action(Action::Return(ret_vals));
         no_result()
     }
 }

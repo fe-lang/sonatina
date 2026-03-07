@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(Call::inst_arity(), InstArity::AtLeast(1));
         assert_eq!(BrTable::inst_arity(), InstArity::AtLeast(2));
         assert_eq!(Phi::inst_arity(), InstArity::AtLeast(1));
-        assert_eq!(Return::inst_arity(), InstArity::AtMost(1));
+        assert_eq!(Return::inst_arity(), InstArity::AtLeast(0));
         assert_eq!(Gep::inst_arity(), InstArity::AtLeast(2));
     }
 

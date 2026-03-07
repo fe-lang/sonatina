@@ -207,7 +207,7 @@ mod tests {
             Type::I64,
         );
         builder.insert_inst_with(|| Add::new(is, v3, arg0), Type::I64);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -265,16 +265,16 @@ mod tests {
         builder.insert_inst_no_result_with(|| Br::new(is, v0, b, c));
 
         builder.switch_to_block(b);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.switch_to_block(c);
         builder.insert_inst_no_result_with(|| Br::new(is, v0, d, e));
 
         builder.switch_to_block(d);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.switch_to_block(e);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -334,7 +334,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Br::new(is, v0, a, h));
 
         builder.switch_to_block(h);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();

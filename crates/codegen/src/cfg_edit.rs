@@ -836,7 +836,7 @@ mod tests {
         let one = builder.make_imm_value(1i32);
         let two = builder.make_imm_value(2i32);
         let phi = builder.insert_inst_with(|| Phi::new(is, vec![(one, b0), (two, b1)]), Type::I32);
-        builder.insert_inst_no_result_with(|| Return::new(is, Some(phi)));
+        builder.insert_inst_no_result_with(|| Return::new_single(is, phi));
 
         builder.seal_all();
         builder.finish();
@@ -870,7 +870,7 @@ mod tests {
         builder.switch_to_block(b0);
         let one = builder.make_imm_value(1i32);
         let v0 = builder.insert_inst_with(|| Add::new(is, arg0, one), Type::I32);
-        builder.insert_inst_no_result_with(|| Return::new(is, Some(v0)));
+        builder.insert_inst_no_result_with(|| Return::new_single(is, v0));
         builder.seal_all();
         builder.finish();
 
@@ -894,7 +894,7 @@ mod tests {
             );
             let add_res = add_res.unwrap();
 
-            editor.append_inst_with_result(block, Box::new(Return::new(is, Some(add_res))), None);
+            editor.append_inst_with_result(block, Box::new(Return::new_single(is, add_res)), None);
             editor.recompute_cfg();
 
             let term = editor.func().layout.last_inst_of(block).unwrap();
@@ -949,7 +949,7 @@ mod tests {
         builder.append_phi_arg(v4, v6, b4);
 
         builder.switch_to_block(b5);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -1012,7 +1012,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Br::new(is, cond, b0, b1));
 
         builder.switch_to_block(b1);
-        builder.insert_inst_no_result_with(|| Return::new(is, Some(v0)));
+        builder.insert_inst_no_result_with(|| Return::new_single(is, v0));
 
         builder.seal_all();
         builder.finish();
@@ -1062,7 +1062,7 @@ mod tests {
         builder.append_phi_arg(phi, v1, b1);
 
         builder.switch_to_block(b2);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -1102,7 +1102,7 @@ mod tests {
         builder.append_phi_arg(phi, phi, b2);
 
         builder.switch_to_block(b3);
-        builder.insert_inst_no_result_with(|| Return::new(is, Some(phi)));
+        builder.insert_inst_no_result_with(|| Return::new_single(is, phi));
 
         builder.seal_all();
         builder.finish();
@@ -1116,7 +1116,7 @@ mod tests {
             assert!(!func.dfg.is_phi(first));
 
             let term = func.layout.last_inst_of(b3).unwrap();
-            assert_eq!(func.dfg.as_return(term), Some(seed));
+            assert_eq!(func.dfg.return_args(term), Some(&[seed][..]));
         });
     }
 
@@ -1152,7 +1152,7 @@ mod tests {
 
         builder.switch_to_block(b3);
         let phi = builder.insert_inst_with(|| Phi::new(is, vec![(v2, b2), (seed, b4)]), Type::I32);
-        builder.insert_inst_no_result_with(|| Return::new(is, Some(phi)));
+        builder.insert_inst_no_result_with(|| Return::new_single(is, phi));
 
         builder.seal_all();
         builder.finish();

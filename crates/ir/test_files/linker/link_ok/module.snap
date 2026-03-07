@@ -1,5 +1,6 @@
 ---
 source: crates/ir/tests/linker.rs
+assertion_line: 38
 input_file: test_files/linker/link_ok/module.snap
 ---
 target = "evm-ethereum-cancun"
@@ -10,7 +11,7 @@ type @bar = {i8, [i8; 31]};
 global public const i256 $ZERO = 0;
 global external const i256 $ONE;
 
-declare func external %f_outer(i8) -> i8;
+declare external %f_outer(i8) -> i8;
 
 func public %f_b(v0.i8, v1.i8) -> i8 {
     block0:

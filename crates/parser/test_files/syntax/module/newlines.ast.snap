@@ -1,5 +1,6 @@
 ---
 source: crates/parser/tests/syntax.rs
+assertion_line: 35
 input_file: test_files/syntax/module/newlines.sntn
 ---
 Module {
@@ -24,7 +25,7 @@ Module {
                     ..
                 },
                 params: [],
-                ret_type: None,
+                ret_types: [],
             },
             blocks: [
                 Block {

@@ -1,7 +1,9 @@
+use std::mem;
+
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     BlockId, DataFlowGraph, Function, I256, Immediate, InstId, Module, Type, Value, ValueId,
-    interpret::{Action, EvalValue, Interpret, State},
+    interpret::{Action, EvalResults, EvalValue, Interpret, State},
     isa::Endian,
     module::{FuncRef, ModuleCtx, RoFuncStore},
     prelude::*,
@@ -33,6 +35,15 @@ impl Machine {
     }
 
     pub fn run(&mut self, func_ref: FuncRef, args: Vec<EvalValue>) -> EvalValue {
+        let results = self.run_results(func_ref, args);
+        match results.as_slice() {
+            [] => EvalValue::Undef,
+            [value] => value.clone(),
+            _ => panic!("run called on multi-return function {func_ref:?}"),
+        }
+    }
+
+    pub fn run_results(&mut self, func_ref: FuncRef, args: Vec<EvalValue>) -> EvalResults {
         let func = self.funcs.get(&func_ref).unwrap();
         let frame = Frame::new(func_ref, func, args);
         self.frames.push(frame);
@@ -57,7 +68,7 @@ impl Machine {
         self.funcs.get(&self.top_frame().func).unwrap()
     }
 
-    fn run_on_func(&mut self) -> EvalValue {
+    fn run_on_func(&mut self) -> EvalResults {
         let layout = &self.top_func().layout;
         let entry_block = layout.entry_block().unwrap();
         let first_inst = layout.first_inst_of(entry_block).unwrap();
@@ -99,7 +110,7 @@ impl Machine {
                     panic!("fall through detected!")
                 }
 
-                Action::Return(e_val) => return e_val,
+                Action::Return(results) => return results,
             }
         }
     }
@@ -146,8 +157,9 @@ impl State for Machine {
         }
     }
 
-    fn call_func(&mut self, func_ref: FuncRef, args: Vec<EvalValue>) -> EvalValue {
+    fn call_func(&mut self, func_ref: FuncRef, args: Vec<EvalValue>) -> EvalResults {
         let ret_addr = self.pc;
+        let caller_action = mem::replace(&mut self.action, Action::Continue);
 
         let func = self.funcs.get(&func_ref).unwrap();
         let new_frame = Frame::new(func_ref, func, args);
@@ -157,6 +169,7 @@ impl State for Machine {
 
         self.frames.pop();
         self.pc = ret_addr;
+        self.action = caller_action;
 
         result
     }

@@ -442,16 +442,18 @@ impl ModuleLinker {
                 CompoundType::Ptr(linked_ty)
             }
 
-            CompoundType::Func { mut args, ret_ty } => {
+            CompoundType::Func {
+                mut args,
+                mut ret_tys,
+            } => {
                 for arg in args.iter_mut() {
                     *arg = link_type(self, *arg)?;
                 }
-                let linked_ret_ty = link_type(self, ret_ty)?;
-
-                CompoundType::Func {
-                    args,
-                    ret_ty: linked_ret_ty,
+                for ret_ty in ret_tys.iter_mut() {
+                    *ret_ty = link_type(self, *ret_ty)?;
                 }
+
+                CompoundType::Func { args, ret_tys }
             }
 
             CompoundType::Struct(mut s_data) => {
@@ -599,8 +601,12 @@ impl ModuleLinker {
                 .iter()
                 .map(|ty| ref_map.lookup_type(*ty))
                 .collect();
-            let ret_ty = ref_map.lookup_type(sig.ret_ty());
-            Signature::new(name, linkage, &args, ret_ty)
+            let ret_tys: Vec<_> = sig
+                .ret_tys()
+                .iter()
+                .map(|ty| ref_map.lookup_type(*ty))
+                .collect();
+            Signature::new(name, linkage, &args, &ret_tys)
         });
 
         let Some(linked_func_ref) = self.builder.lookup_func(sig.name()) else {
@@ -614,7 +620,7 @@ impl ModuleLinker {
 
         let linked_func_linkage = self.builder.sig(linked_func_ref, |linked_sig| {
             // Validates the signature.
-            if sig.args() != linked_sig.args() || sig.ret_ty() != linked_sig.ret_ty() {
+            if sig.args() != linked_sig.args() || sig.ret_tys() != linked_sig.ret_tys() {
                 return Err(LinkError::InconsistentFuncSignature {
                     name: sig.name().to_string(),
                 });
@@ -653,14 +659,14 @@ mod tests {
     fn test_linker_conflicting_function_signature_should_fail() {
         let mod1 = {
             let builder = test_module_builder();
-            let sig = Signature::new("foo", Linkage::Public, &[Type::I32], Type::I32);
+            let sig = Signature::new_single("foo", Linkage::Public, &[Type::I32], Type::I32);
             builder.declare_function(sig).unwrap();
             builder.build()
         };
 
         let mod2 = {
             let builder = test_module_builder();
-            let sig = Signature::new("foo", Linkage::Public, &[Type::I64], Type::I64);
+            let sig = Signature::new_single("foo", Linkage::Public, &[Type::I64], Type::I64);
             builder.declare_function(sig).unwrap();
             builder.build()
         };
@@ -677,7 +683,7 @@ mod tests {
 
     #[test]
     fn test_linker_duplicate_public_functions_should_fail() {
-        let sig = Signature::new("foo", Linkage::Public, &[Type::I32], Type::I32);
+        let sig = Signature::new_single("foo", Linkage::Public, &[Type::I32], Type::I32);
 
         let mod1 = {
             let builder = test_module_builder();
@@ -701,7 +707,7 @@ mod tests {
 
     #[test]
     fn test_linker_duplicate_private_should_fail() {
-        let sig = Signature::new("foo", Linkage::Private, &[Type::I32], Type::I32);
+        let sig = Signature::new_single("foo", Linkage::Private, &[Type::I32], Type::I32);
 
         let mod1 = {
             let builder = test_module_builder();
@@ -725,8 +731,8 @@ mod tests {
 
     #[test]
     fn test_linker_public_and_external_should_succeed() {
-        let sig_public = Signature::new("foo", Linkage::Public, &[Type::I32], Type::I32);
-        let sig_external = Signature::new("foo", Linkage::External, &[Type::I32], Type::I32);
+        let sig_public = Signature::new_single("foo", Linkage::Public, &[Type::I32], Type::I32);
+        let sig_external = Signature::new_single("foo", Linkage::External, &[Type::I32], Type::I32);
 
         let mod1 = {
             let builder = test_module_builder();
@@ -749,8 +755,8 @@ mod tests {
 
     #[test]
     fn test_linker_different_names_should_succeed() {
-        let sig1 = Signature::new("foo_mod1", Linkage::Private, &[Type::I32], Type::I32);
-        let sig2 = Signature::new("foo_mod2", Linkage::Private, &[Type::I32], Type::I32);
+        let sig1 = Signature::new_single("foo_mod1", Linkage::Private, &[Type::I32], Type::I32);
+        let sig2 = Signature::new_single("foo_mod2", Linkage::Private, &[Type::I32], Type::I32);
 
         let mod1 = {
             let builder = test_module_builder();

@@ -598,7 +598,7 @@ mod tests {
 
     fn call_load_mem_id(attrs: FuncAttrs) -> u32 {
         let mb = test_module_builder();
-        let callee_sig = Signature::new("callee", Linkage::Public, &[], Type::Unit);
+        let callee_sig = Signature::new_unit("callee", Linkage::Public, &[]);
         let callee = mb.declare_function(callee_sig).unwrap();
         mb.ctx.set_func_attrs(callee, attrs);
 
@@ -619,7 +619,7 @@ mod tests {
             )
         });
         builder.insert_inst_with(|| Mload::new(is, addr, Type::I32), Type::I32);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
         builder.seal_all();
 
         let program = func_to_egglog(&builder.func);

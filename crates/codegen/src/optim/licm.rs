@@ -186,7 +186,7 @@ mod tests {
         builder.append_phi_arg(v0, v1, b1);
 
         builder.switch_to_block(b2);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -256,7 +256,7 @@ mod tests {
         builder.append_phi_arg(idx, idx_next, body);
 
         builder.switch_to_block(exit);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();

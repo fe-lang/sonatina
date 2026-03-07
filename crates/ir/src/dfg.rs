@@ -166,12 +166,12 @@ impl DataFlowGraph {
     }
 
     pub fn attach_results(&mut self, inst_id: InstId, values: &[ValueId]) {
-        debug_assert!(
+        assert!(
             self.inst_results[inst_id].is_empty(),
             "results for {inst_id:?} are already attached"
         );
         for (result_idx, value_id) in values.iter().copied().enumerate() {
-            debug_assert!(
+            assert!(
                 matches!(
                     self.value(value_id),
                     Value::Inst {
@@ -188,7 +188,7 @@ impl DataFlowGraph {
 
     pub fn append_result(&mut self, inst_id: InstId, value_id: ValueId) {
         let result_idx = self.inst_results[inst_id].len();
-        debug_assert!(
+        assert!(
             matches!(
                 self.value(value_id),
                 Value::Inst {
@@ -586,9 +586,9 @@ impl DataFlowGraph {
             .is_some()
     }
 
-    pub fn as_return(&self, inst: InstId) -> Option<ValueId> {
+    pub fn return_args(&self, inst: InstId) -> Option<&[ValueId]> {
         let r: &control_flow::Return = InstDowncast::downcast(self.inst_set(), self.inst(inst))?;
-        *r.arg()
+        Some(r.args().as_slice())
     }
 
     pub fn rewrite_branch_dest(&mut self, inst_id: InstId, from: BlockId, to: BlockId) {

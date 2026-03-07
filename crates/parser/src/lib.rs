@@ -88,13 +88,9 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
                 .iter()
                 .map(|t| ctx.type_(&builder, t))
                 .collect::<Vec<_>>();
-            let ret_ty = func
-                .ret_type
-                .as_ref()
-                .map(|t| ctx.type_(&builder, t))
-                .unwrap_or(ir::Type::Unit);
+            let ret_tys = ctx.ret_tys(&builder, &func.ret_types);
 
-            let sig = Signature::new(&func.name.name, func.linkage, &params, ret_ty);
+            let sig = Signature::new(&func.name.name, func.linkage, &params, &ret_tys);
 
             // Safe to unwrap: function name checked for duplicate above
             builder.declare_function(sig).unwrap();
@@ -117,12 +113,8 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
                     .map(|decl| ctx.type_(&builder, &decl.1))
                     .collect::<Vec<_>>();
 
-                let ret_ty = sig
-                    .ret_type
-                    .as_ref()
-                    .map(|t| ctx.type_(&builder, t))
-                    .unwrap_or(ir::Type::Unit);
-                let sig = Signature::new(&sig.name.name, sig.linkage, &args, ret_ty);
+                let ret_tys = ctx.ret_tys(&builder, &sig.ret_types);
+                let sig = Signature::new(&sig.name.name, sig.linkage, &args, &ret_tys);
 
                 // Safe to unwrap: function name checked for duplicate above
                 Some(builder.declare_function(sig).unwrap())
@@ -416,10 +408,10 @@ impl BuildCtx {
                     ir::Type::Unit
                 }),
 
-            ast::TypeKind::Func { args, ret_ty } => {
+            ast::TypeKind::Func { args, ret_tys } => {
                 let args: Vec<_> = args.iter().map(|t| self.type_(mb, t)).collect();
-                let ret_ty = self.type_(mb, ret_ty);
-                mb.declare_func_type(&args, ret_ty)
+                let ret_tys = self.ret_tys(mb, ret_tys);
+                mb.declare_func_type(&args, &ret_tys)
             }
 
             ast::TypeKind::Error => unreachable!(),
@@ -433,6 +425,15 @@ impl BuildCtx {
             false
         } else {
             true
+        }
+    }
+
+    fn ret_tys(&mut self, mb: &ModuleBuilder, ret_tys: &[ast::Type]) -> Vec<ir::Type> {
+        let ret_tys: Vec<_> = ret_tys.iter().map(|ty| self.type_(mb, ty)).collect();
+        if ret_tys.as_slice() == [ir::Type::Unit] {
+            vec![]
+        } else {
+            ret_tys
         }
     }
 
@@ -632,6 +633,16 @@ mod tests {
                 _ => None,
             })
             .expect("expected arity mismatch error")
+    }
+
+    fn has_unexpected_trailing_inst_arg(input: &str) -> bool {
+        let errors = match parse_module(input) {
+            Ok(_) => panic!("expected parser error"),
+            Err(errors) => errors,
+        };
+        errors
+            .into_iter()
+            .any(|err| matches!(err, Error::UnexpectedTrailingInstArg(..)))
     }
 
     #[test]
@@ -858,9 +869,51 @@ func public %main() {
 }
 "#;
 
-        let (expected, actual) = inst_arity_error(s);
-        assert_eq!(expected, ir::InstArity::AtMost(1));
-        assert_eq!(actual, 2);
+        assert!(has_unexpected_trailing_inst_arg(s));
+    }
+
+    #[test]
+    fn test_multi_return_signatures_and_return_tuples_roundtrip() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+declare private %takes_cb(*(i32, i32) -> (i32, i1));
+
+func private %pair_add(v0.i32, v1.i32) -> (i32, i1) {
+    block0:
+        (v2.i32, v3.i1) = uaddo v0 v1;
+        return (v2, v3);
+}
+
+func public %caller(v0.i32, v1.i32) -> (i32, i1) {
+    block0:
+        (v2.i32, v3.i1) = call %pair_add v0 v1;
+        return (v2, v3);
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let pair_add = parsed
+            .module
+            .ctx
+            .declared_funcs
+            .iter()
+            .find_map(|entry| (entry.value().name() == "pair_add").then(|| *entry.key()))
+            .expect("pair_add should be declared");
+        assert_eq!(
+            parsed
+                .module
+                .ctx
+                .func_sig(pair_add, |sig| sig.ret_tys().to_vec()),
+            vec![ir::Type::I32, ir::Type::I1]
+        );
+
+        let mut w = ir::ir_writer::ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
+        let printed = w.dump_string();
+        assert!(printed.contains("declare private %takes_cb(*(i32, i32) -> (i32, i1));"));
+        assert!(printed.contains("func private %pair_add(v0.i32, v1.i32) -> (i32, i1) {"));
+        assert!(printed.contains("(v2.i32, v3.i1) = call %pair_add v0 v1;"));
+        assert!(printed.contains("return (v2, v3);"));
     }
 
     #[test]

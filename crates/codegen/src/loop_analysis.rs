@@ -299,7 +299,7 @@ mod tests {
         builder.append_phi_arg(v1, v3, b2);
 
         builder.switch_to_block(b3);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -364,7 +364,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, b1));
 
         builder.switch_to_block(b6);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -406,7 +406,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Br::new(is, arg, b1, b2));
 
         builder.switch_to_block(b2);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -478,7 +478,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, b1));
 
         builder.switch_to_block(b11);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();

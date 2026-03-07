@@ -319,7 +319,7 @@ mod tests {
         let add = Add::new(is, v1, v0);
         builder.insert_inst(add, Type::I32);
 
-        let ret = Return::new(is, None);
+        let ret = Return::new_unit(is);
         builder.insert_inst_no_result(ret);
         builder.seal_block();
         builder.finish();
@@ -374,7 +374,7 @@ mod tests {
 
         builder.switch_to_block(b3);
         builder.use_var(var);
-        let ret = Return::new(is, None);
+        let ret = Return::new_unit(is);
         builder.insert_inst_no_result(ret);
         builder.seal_block();
         builder.finish();
@@ -464,7 +464,7 @@ mod tests {
         let v_var1 = builder.use_var(var1);
         let add = Add::new(is, v_var0, v_var1);
         builder.insert_inst(add, Type::I32);
-        let ret = Return::new(is, None);
+        let ret = Return::new_unit(is);
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
@@ -545,7 +545,7 @@ mod tests {
         let val = builder.use_var(var);
         let add = Add::new(is, val, val);
         builder.insert_inst(add, Type::I32);
-        let ret = Return::new(is, None);
+        let ret = Return::new_unit(is);
         builder.insert_inst_no_result(ret);
         builder.seal_block();
         builder.finish();
@@ -630,7 +630,7 @@ mod tests {
         let val = builder.use_var(var);
         let add = Add::new(is, val, val);
         builder.insert_inst(add, Type::I32);
-        let ret = Return::new(is, None);
+        let ret = Return::new_unit(is);
         builder.insert_inst_no_result(ret);
         builder.seal_block();
         builder.finish();
@@ -719,7 +719,7 @@ mod tests {
         let val = builder.use_var(var);
         let add = Add::new(is, val, val);
         builder.insert_inst(add, Type::I32);
-        let ret = Return::new(is, None);
+        let ret = Return::new_unit(is);
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
@@ -805,8 +805,7 @@ mod tests {
 
         builder.switch_to_block(b4);
         let ret_val = builder.use_var(var);
-        let ret = Return::new(is, ret_val.into());
-        builder.insert_inst_no_result(ret);
+        builder.insert_inst_no_result(Return::new_single(is, ret_val));
 
         builder.seal_all();
         builder.finish();

@@ -250,7 +250,9 @@ fn conservative_unknown_ptr_summary(module: &ModuleCtx, func_ref: FuncRef) -> Pt
     PtrEscapeSummary {
         arg_may_escape: vec![true; arg_count],
         arg_may_be_returned: vec![true; arg_count],
-        returns_any_ptr: module.func_sig(func_ref, |sig| sig.ret_ty().is_pointer(module)),
+        returns_any_ptr: module.func_sig(func_ref, |sig| {
+            sig.ret_tys().iter().any(|ty| ty.is_pointer(module))
+        }),
     }
 }
 
@@ -268,7 +270,7 @@ fn compute_escaping_allocas(
             let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
             match data {
                 EvmInstKind::Return(ret) => {
-                    let Some(ret_val) = *ret.arg() else {
+                    let Some(ret_val) = ret.arg().copied() else {
                         continue;
                     };
                     for base in prov[ret_val].alloca_insts() {

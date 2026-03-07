@@ -943,7 +943,7 @@ mod tests {
         let array_ty = builder.declare_array_type(Type::I32, 4);
         let ptr_array_ty = builder.ptr_type(array_ty);
         let base_ptr = builder.insert_inst_with(|| Alloca::new(is, array_ty), ptr_array_ty);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
         builder.seal_all();
 
         let insert_before = builder

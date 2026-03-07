@@ -28,9 +28,13 @@ enum ValueTemplate {
     Undef(Type),
 }
 
+type ReturnedTemplates = SmallVec<[ValueTemplate; 2]>;
+type ReturnedValues = SmallVec<[ValueId; 2]>;
+type InstResultTemplates = SmallVec<[(ValueId, Type); 2]>;
+
 enum InlinePlan {
     /// Delete the call; optionally alias its result to a materialized value.
-    RemoveCall { returned: Option<ValueTemplate> },
+    RemoveCall { returned: ReturnedTemplates },
     /// Rewrite the call into a call to a different direct callee.
     RewriteCall {
         new_callee: FuncRef,
@@ -41,8 +45,6 @@ enum InlinePlan {
     /// Splice a single-block callee that terminates the caller (e.g. `evm_revert`).
     SpliceSingleBlockTerminator(TerminatorSplicePlan),
 }
-
-type InstResultTemplates = SmallVec<[(ValueId, Type); 2]>;
 
 struct TemplateInst {
     inst: Box<dyn Inst>,
@@ -59,7 +61,7 @@ struct SplicePlan {
     callee_args: Vec<ValueId>,
     const_values: BTreeMap<ValueId, ValueTemplate>,
     body: Vec<TemplateInst>,
-    ret_value: Option<ValueId>,
+    ret_values: ReturnedValues,
 }
 
 struct TerminatorSplicePlan {
@@ -74,7 +76,7 @@ struct SplicePlanSummary {
     callee_args: Vec<ValueId>,
     const_values: BTreeMap<ValueId, ValueTemplate>,
     body: Vec<TemplateInstSummary>,
-    ret_value: Option<ValueId>,
+    ret_values: ReturnedValues,
 }
 
 #[derive(Clone)]
@@ -88,7 +90,7 @@ struct TerminatorSplicePlanSummary {
 #[derive(Clone)]
 enum InlinePlanSummary {
     RemoveCall {
-        returned: Option<ValueTemplate>,
+        returned: ReturnedTemplates,
     },
     RewriteCall {
         new_callee: FuncRef,
@@ -339,13 +341,15 @@ fn analyze_callee(
             &insts,
         );
     };
-    let ret_value = *ret_inst.arg();
+    let ret_values: ReturnedValues = ret_inst.args().iter().copied().collect();
 
     // Pattern A/B/C: single return-only block.
     if insts.len() == 1 {
-        if ret_value.is_none() {
+        if ret_values.is_empty() {
             if config.enable_noop {
-                return Some(InlinePlanSummary::RemoveCall { returned: None });
+                return Some(InlinePlanSummary::RemoveCall {
+                    returned: SmallVec::new(),
+                });
             }
             return None;
         }
@@ -354,10 +358,11 @@ fn analyze_callee(
             return None;
         }
 
-        let template = classify_value_template(callee, ret_value?)?;
-        return Some(InlinePlanSummary::RemoveCall {
-            returned: Some(template),
-        });
+        let returned = ret_values
+            .iter()
+            .map(|&ret_value| classify_value_template(callee, ret_value))
+            .collect::<Option<ReturnedTemplates>>()?;
+        return Some(InlinePlanSummary::RemoveCall { returned });
     }
 
     // Pattern D: wrapper forwarding (call; return).
@@ -372,13 +377,12 @@ fn analyze_callee(
                 callee_callsite_count,
                 config,
                 stats,
-                ret_value,
+                &ret_values,
                 &insts,
             );
         };
 
-        let call_res = callee.dfg.inst_result(call_inst_id);
-        if call_res != ret_value {
+        if callee.dfg.inst_results(call_inst_id) != ret_values.as_slice() {
             return None;
         }
 
@@ -404,7 +408,7 @@ fn analyze_callee(
         callee_callsite_count,
         config,
         stats,
-        ret_value,
+        &ret_values,
         &insts,
     )
 }
@@ -414,7 +418,7 @@ fn analyze_splice(
     callee_callsite_count: usize,
     config: &InlinerConfig,
     stats: &mut InlineStats,
-    ret_value: Option<ValueId>,
+    ret_values: &[ValueId],
     insts: &[InstId],
 ) -> Option<InlinePlanSummary> {
     if !config.enable_single_block_splice {
@@ -425,10 +429,10 @@ fn analyze_splice(
     let mut collected =
         collect_splice_body(callee, callee_callsite_count, config, stats, body_insts)?;
 
-    if let Some(ret_value) = ret_value
-        && let Some(tpl) = classify_value_template(callee, ret_value)
-    {
-        record_const_value(&mut collected.const_values, ret_value, tpl);
+    for &ret_value in ret_values {
+        if let Some(tpl) = classify_value_template(callee, ret_value) {
+            record_const_value(&mut collected.const_values, ret_value, tpl);
+        }
     }
 
     let callee_args: Vec<ValueId> = callee.arg_values.iter().copied().collect();
@@ -436,7 +440,7 @@ fn analyze_splice(
         callee_args,
         const_values: collected.const_values,
         body: collected.body,
-        ret_value,
+        ret_values: ret_values.iter().copied().collect(),
     };
 
     Some(InlinePlanSummary::SpliceSingleBlock(plan))
@@ -531,7 +535,7 @@ fn is_pure_splice_inst(callee: &Function, inst_id: InstId) -> bool {
 fn materialize_plan(callee: &Function, summary: &InlinePlanSummary) -> InlinePlan {
     match summary {
         InlinePlanSummary::RemoveCall { returned } => InlinePlan::RemoveCall {
-            returned: *returned,
+            returned: returned.clone(),
         },
         InlinePlanSummary::RewriteCall {
             new_callee,
@@ -545,7 +549,7 @@ fn materialize_plan(callee: &Function, summary: &InlinePlanSummary) -> InlinePla
                 callee_args: summary.callee_args.clone(),
                 const_values: summary.const_values.clone(),
                 body: materialize_body_templates(callee, &summary.body),
-                ret_value: summary.ret_value,
+                ret_values: summary.ret_values.clone(),
             })
         }
         InlinePlanSummary::SpliceSingleBlockTerminator(summary) => {
@@ -588,15 +592,20 @@ fn apply_plan(
     else {
         return false;
     };
-    let call_res = caller.dfg.inst_result(call_inst_id);
+    let call_results: ReturnedValues = caller
+        .dfg
+        .inst_results(call_inst_id)
+        .iter()
+        .copied()
+        .collect();
 
     match plan {
         InlinePlan::RemoveCall { returned } => {
-            if call_res.is_some() && returned.is_none() {
+            if call_results.len() != returned.len() {
                 return false;
             }
 
-            if let Some((call_res, tpl)) = call_res.zip(returned.as_ref()) {
+            for (&call_res, tpl) in call_results.iter().zip(returned.iter()) {
                 let Some(alias) = materialize(tpl, caller, &call_args) else {
                     return false;
                 };
@@ -637,7 +646,7 @@ fn apply_plan(
             caller,
             call_inst_id,
             &call_args,
-            call_res,
+            &call_results,
             splice_plan,
             stats,
         ),
@@ -646,7 +655,7 @@ fn apply_plan(
                 caller,
                 call_inst_id,
                 &call_args,
-                call_res,
+                &call_results,
                 splice_plan,
                 stats,
             )
@@ -658,11 +667,11 @@ fn apply_splice_single_block(
     caller: &mut Function,
     call_inst_id: InstId,
     call_args: &[ValueId],
-    call_res: Option<ValueId>,
+    call_results: &[ValueId],
     splice_plan: SplicePlan,
     stats: &mut InlineStats,
 ) -> bool {
-    if call_res.is_some() && splice_plan.ret_value.is_none() {
+    if call_results.len() != splice_plan.ret_values.len() {
         return false;
     }
 
@@ -675,7 +684,7 @@ fn apply_splice_single_block(
         return false;
     };
 
-    if !validate_splice_value_flow(&splice_plan.body, splice_plan.ret_value, None, &value_map) {
+    if !validate_splice_value_flow(&splice_plan.body, &splice_plan.ret_values, None, &value_map) {
         return false;
     }
 
@@ -699,7 +708,7 @@ fn apply_splice_single_block(
         new_results
     });
 
-    if let Some((old_ret, call_res)) = splice_plan.ret_value.zip(call_res) {
+    for (&old_ret, &call_res) in splice_plan.ret_values.iter().zip(call_results.iter()) {
         let new_ret = *value_map
             .get(&old_ret)
             .expect("validated splice return value must be mapped");
@@ -717,11 +726,11 @@ fn apply_splice_single_block_terminator(
     caller: &mut Function,
     call_inst_id: InstId,
     call_args: &[ValueId],
-    call_res: Option<ValueId>,
+    call_results: &[ValueId],
     splice_plan: TerminatorSplicePlan,
     stats: &mut InlineStats,
 ) -> bool {
-    if call_res.is_some() {
+    if !call_results.is_empty() {
         return false;
     }
 
@@ -747,7 +756,7 @@ fn apply_splice_single_block_terminator(
 
     if !validate_splice_value_flow(
         &splice_plan.body,
-        None,
+        &[],
         Some(splice_plan.terminator.as_ref()),
         &value_map,
     ) {
@@ -822,7 +831,7 @@ fn apply_splice_body(
 
 fn validate_splice_value_flow(
     body: &[TemplateInst],
-    required_value: Option<ValueId>,
+    required_values: &[ValueId],
     trailing_inst: Option<&dyn Inst>,
     initial_map: &FxHashMap<ValueId, ValueId>,
 ) -> bool {
@@ -836,10 +845,10 @@ fn validate_splice_value_flow(
         }
     }
 
-    if let Some(required_value) = required_value
-        && !available.contains(&required_value)
-    {
-        return false;
+    for &required_value in required_values {
+        if !available.contains(&required_value) {
+            return false;
+        }
     }
 
     if let Some(trailing_inst) = trailing_inst
@@ -894,7 +903,7 @@ fn classify_value_template(func: &Function, value: ValueId) -> Option<ValueTempl
 fn signatures_match(ctx: &ModuleCtx, a: FuncRef, b: FuncRef) -> bool {
     ctx.func_sig(a, |a_sig| {
         ctx.func_sig(b, |b_sig| {
-            a_sig.args() == b_sig.args() && a_sig.ret_ty() == b_sig.ret_ty()
+            a_sig.args() == b_sig.args() && a_sig.ret_tys() == b_sig.ret_tys()
         })
     })
 }

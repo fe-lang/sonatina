@@ -33,7 +33,7 @@ impl BlockNode<'_> {
         let Self { block, ctx, .. } = self;
         if block == DUMMY_BLOCK {
             return ctx.module_ctx().func_sig(ctx.func_ref, |sig| {
-                let sig = sig.dump_string(ctx);
+                let sig = format!("func {}", sig.dump_string(ctx));
                 label::Text::LabelStr(sig.into())
             });
         }

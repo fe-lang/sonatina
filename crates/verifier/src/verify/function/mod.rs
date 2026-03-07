@@ -376,7 +376,7 @@ impl<'a> FunctionVerifier<'a> {
                 "func %{}({:?}) -> {:?}\n",
                 sig.name(),
                 sig.args(),
-                sig.ret_ty()
+                sig.ret_tys()
             ));
         }
         snippet.push_str(&format!("  {block}:\n"));

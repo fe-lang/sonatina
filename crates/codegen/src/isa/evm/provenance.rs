@@ -414,7 +414,7 @@ mod tests {
                 for inst in function.layout.iter_inst(block) {
                     let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
                     if let EvmInstKind::Return(ret) = data
-                        && let Some(ret_val) = *ret.arg()
+                        && let Some(ret_val) = ret.arg().copied()
                     {
                         return prov[ret_val].clone();
                     }

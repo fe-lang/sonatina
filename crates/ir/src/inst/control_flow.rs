@@ -1,7 +1,12 @@
 use macros::{Inst, inst_prop};
 use smallvec::{SmallVec, smallvec};
 
-use crate::{BlockId, Inst, InstSetBase, ValueId, module::FuncRef};
+use crate::{
+    BlockId, HasInst, Inst, InstSetBase, ValueId,
+    ir_writer::{FuncWriteCtx, IrWrite},
+    module::FuncRef,
+    visitor::{Visitable, VisitableMut, Visitor, VisitorMut},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(terminator)]
@@ -69,9 +74,99 @@ pub struct Call {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Control))]
 #[inst(terminator)]
-#[inst(arity(at_most(1)))]
+#[inst(arity(at_least(0)))]
 pub struct Return {
-    arg: Option<ValueId>,
+    args: ReturnArgs,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct ReturnArgs(SmallVec<[ValueId; 2]>);
+
+impl ReturnArgs {
+    pub fn as_slice(&self) -> &[ValueId] {
+        self.0.as_slice()
+    }
+
+    pub fn first(&self) -> Option<&ValueId> {
+        self.0.first()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &ValueId> {
+        self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl From<SmallVec<[ValueId; 2]>> for ReturnArgs {
+    fn from(args: SmallVec<[ValueId; 2]>) -> Self {
+        Self(args)
+    }
+}
+
+impl Visitable for ReturnArgs {
+    fn accept(&self, visitor: &mut dyn Visitor) {
+        self.0.accept(visitor);
+    }
+}
+
+impl VisitableMut for ReturnArgs {
+    fn accept_mut(&mut self, visitor: &mut dyn VisitorMut) {
+        self.0.accept_mut(visitor);
+    }
+}
+
+impl IrWrite<FuncWriteCtx<'_>> for ReturnArgs {
+    fn write<W>(&self, w: &mut W, ctx: &FuncWriteCtx<'_>) -> std::io::Result<()>
+    where
+        W: std::io::Write,
+    {
+        match self.0.as_slice() {
+            [] => Ok(()),
+            [arg] => arg.write(w, ctx),
+            args => {
+                write!(w, "(")?;
+                args.write_with_delim(w, ", ", ctx)?;
+                write!(w, ")")
+            }
+        }
+    }
+
+    fn has_content(&self) -> bool {
+        !self.0.is_empty()
+    }
+}
+
+impl Return {
+    pub fn new_unit(has_inst: &dyn HasInst<Self>) -> Self {
+        Self::new(has_inst, ReturnArgs::default())
+    }
+
+    pub fn new_single(has_inst: &dyn HasInst<Self>, arg: ValueId) -> Self {
+        Self::new(has_inst, ReturnArgs::from(smallvec![arg]))
+    }
+
+    pub fn returns_unit(&self) -> bool {
+        self.args.is_empty()
+    }
+
+    pub fn returns_single(&self) -> bool {
+        self.args.len() == 1
+    }
+
+    pub fn arg(&self) -> Option<&ValueId> {
+        assert!(
+            self.args.len() <= 1,
+            "arg called on multi-value return instruction"
+        );
+        self.args.first()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]

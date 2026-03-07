@@ -90,7 +90,17 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     }
 
     pub fn plan_internal_return(&mut self, inst: InstId) {
-        let Some(ret_val) = self.ctx.func.dfg.as_return(inst) else {
+        let Some(ret_val) = self
+            .ctx
+            .func
+            .dfg
+            .return_args(inst)
+            .and_then(|args| match args {
+                [] => None,
+                [arg] => Some(*arg),
+                _ => panic!("stackify does not support multi-value return {inst:?}"),
+            })
+        else {
             // No return value: pop everything above the function return address.
             self.stack.clear_above_func_ret(self.actions);
             return;

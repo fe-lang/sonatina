@@ -103,7 +103,7 @@ pub trait State {
     /// error, or cause a panic).
     fn lookup_val(&mut self, value: ValueId) -> EvalValue;
 
-    fn call_func(&mut self, func: FuncRef, args: Vec<EvalValue>) -> EvalValue;
+    fn call_func(&mut self, func: FuncRef, args: Vec<EvalValue>) -> EvalResults;
 
     fn set_action(&mut self, action: Action);
 
@@ -136,7 +136,7 @@ pub enum Action {
     /// This happens e.g, the `BrTable` doesn't have a table entry that
     /// corresponds to scrutinee.
     FallThrough,
-    Return(EvalValue),
+    Return(EvalResults),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

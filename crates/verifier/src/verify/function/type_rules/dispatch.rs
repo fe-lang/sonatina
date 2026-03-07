@@ -485,7 +485,7 @@ impl VerifyInst for data::GetFunctionPtr {
             let Some(cmpd) = store.get_compound(func_cmpd_ref) else {
                 return false;
             };
-            matches!(cmpd, CompoundType::Func { args, ret_ty } if args.as_slice() == sig.args() && *ret_ty == sig.ret_ty())
+            matches!(cmpd, CompoundType::Func { args, ret_tys } if args.as_slice() == sig.args() && ret_tys.as_slice() == sig.ret_tys())
         });
         if !matches {
             verifier.emit(
@@ -498,7 +498,7 @@ impl VerifyInst for data::GetFunctionPtr {
                     "callee signature is {}({:?}) -> {:?}",
                     sig.name(),
                     sig.args(),
-                    sig.ret_ty()
+                    sig.ret_tys()
                 )),
             );
         }
@@ -658,56 +658,53 @@ impl VerifyInst for control_flow::Call {
                 );
             }
         }
-        if callee_sig.ret_ty().is_unit() {
-            verifier.expect_no_result(inst_id, verifier.inst_location(inst_id));
-        } else {
-            verifier.expect_result_ty(
-                inst_id,
-                callee_sig.ret_ty(),
-                verifier.inst_location(inst_id),
-            );
-        }
+        verifier.expect_result_tys(
+            inst_id,
+            callee_sig.ret_tys(),
+            verifier.inst_location(inst_id),
+        );
     }
 }
 
 impl VerifyInst for control_flow::Return {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
         let location = verifier.inst_location(inst_id);
-        let expected_ret_ty = verifier
+        let expected_ret_tys = verifier
             .sig
             .as_ref()
-            .map(|sig| sig.ret_ty())
-            .unwrap_or(Type::Unit);
-        match (expected_ret_ty, self.arg()) {
-            (ret_ty, None) if !ret_ty.is_unit() => {
-                verifier.emit(Diagnostic::error(
+            .map(|sig| sig.ret_tys().to_vec())
+            .unwrap_or_default();
+        let actual_args = self.args().as_slice();
+        if expected_ret_tys.len() != actual_args.len() {
+            verifier.emit(
+                Diagnostic::error(
                     DiagnosticCode::ReturnTypeMismatch,
-                    "non-unit function return requires an argument",
+                    "return value count does not match function signature",
                     location,
-                ));
+                )
+                .with_note(format!(
+                    "expected {}, found {}",
+                    expected_ret_tys.len(),
+                    actual_args.len()
+                )),
+            );
+        }
+        for (index, (value, expected_ty)) in actual_args.iter().zip(expected_ret_tys).enumerate() {
+            if let Some(actual_ty) = verifier.value_ty(*value)
+                && actual_ty != expected_ty
+            {
+                verifier.emit(
+                    Diagnostic::error(
+                        DiagnosticCode::ReturnTypeMismatch,
+                        "return value type does not match function return type",
+                        verifier.inst_location(inst_id),
+                    )
+                    .with_note(format!(
+                        "return {index}: expected {:?}, found {:?}",
+                        expected_ty, actual_ty
+                    )),
+                );
             }
-            (ret_ty, Some(_)) if ret_ty.is_unit() => {
-                verifier.emit(Diagnostic::error(
-                    DiagnosticCode::ReturnTypeMismatch,
-                    "unit function return must not carry a value",
-                    location,
-                ));
-            }
-            (ret_ty, Some(value)) => {
-                if let Some(actual_ty) = verifier.value_ty(*value)
-                    && actual_ty != ret_ty
-                {
-                    verifier.emit(
-                        Diagnostic::error(
-                            DiagnosticCode::ReturnTypeMismatch,
-                            "return value type does not match function return type",
-                            verifier.inst_location(inst_id),
-                        )
-                        .with_note(format!("expected {:?}, found {:?}", ret_ty, actual_ty)),
-                    );
-                }
-            }
-            _ => {}
         }
         verifier.expect_no_result(inst_id, verifier.inst_location(inst_id));
     }

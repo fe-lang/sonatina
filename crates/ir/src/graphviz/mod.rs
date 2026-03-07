@@ -67,7 +67,7 @@ mod test {
         let v3 = builder.insert_inst(phi, Type::I64);
         let add = Add::new(is, v3, arg0);
         builder.insert_inst(add, Type::I64);
-        let ret = Return::new(is, None);
+        let ret = Return::new_unit(is);
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
