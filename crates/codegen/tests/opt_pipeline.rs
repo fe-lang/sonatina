@@ -396,6 +396,43 @@ func public %complex_loop() -> i8 {
 }
 
 #[test]
+fn sccp_deletes_unreachable_region_with_cross_block_uses() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> i256 {
+    block0:
+        v0.i1 = eq 0.i256 1.i256;
+        br v0 block1 block2;
+
+    block1:
+        v1.i256 = add 40.i256 2.i256;
+        jump block3;
+
+    block2:
+        return 7.i256;
+
+    block3:
+        return v1;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("return 7.i256;"),
+        "unreachable region should be pruned without leaving live users:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
 fn gvn_eliminates_redundant_checked_overflow_ops() {
     let (module, func_ref) = parse_test_module(
         r#"
