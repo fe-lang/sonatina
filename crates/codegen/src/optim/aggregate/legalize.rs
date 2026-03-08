@@ -1248,6 +1248,9 @@ impl AggregateLowerToMemoryLegalize {
             let mut removed_any = false;
 
             for &slot_ptr in &slot_ptrs {
+                if !func.dfg.has_value(slot_ptr) {
+                    continue;
+                }
                 if !func
                     .dfg
                     .value_inst(slot_ptr)
