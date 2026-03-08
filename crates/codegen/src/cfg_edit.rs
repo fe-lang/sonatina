@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Inst, InstId, Type, Value, ValueId,
@@ -139,37 +139,11 @@ impl<'f> CfgEditor<'f> {
     }
 
     pub fn remove_succ(&mut self, from: BlockId, to: BlockId) -> bool {
-        let Some(term) = self.func.layout.last_inst_of(from) else {
-            panic!("block {from:?} has no terminator");
-        };
-        assert!(
-            self.func.dfg.is_terminator(term),
-            "block {from:?} does not end with a terminator"
-        );
-
-        let Some(branch_info) = self.func.dfg.branch_info(term) else {
-            return false;
-        };
-
-        if !branch_info.dests().into_iter().any(|dest| dest == to) {
-            return false;
-        }
-
-        self.func.dfg.remove_branch_dest(term, to);
-
-        if !self.func.layout.is_block_inserted(to) {
-            if matches!(self.mode, CleanupMode::Strict) {
-                panic!("branch target {to:?} is not inserted");
-            }
+        let changed = remove_succ_and_repair_phis(self.func, self.mode, from, to);
+        if changed {
             self.recompute_cfg();
-            return true;
         }
-
-        remove_phi_incoming_from(self.func, to, from);
-        simplify_trivial_phis_in_block(self.func, to);
-
-        self.recompute_cfg();
-        true
+        changed
     }
 
     pub fn remove_edge(&mut self, from: BlockId, to: BlockId) -> bool {
@@ -490,6 +464,79 @@ impl<'f> CfgEditor<'f> {
         true
     }
 
+    /// Deletes a closed unreachable region after callers have identified every block in it.
+    ///
+    /// `blocks` must include every inserted block that will be removed. If a live successor or
+    /// predecessor is omitted, cross-region users may survive and instruction erasure can panic.
+    pub fn delete_blocks_unreachable(&mut self, blocks: &[BlockId]) -> bool {
+        let mut to_delete = Vec::new();
+        let mut to_delete_set = FxHashSet::default();
+        for &block in blocks {
+            if self.func.layout.is_block_inserted(block) && to_delete_set.insert(block) {
+                to_delete.push(block);
+            }
+        }
+        if to_delete.is_empty() {
+            return false;
+        }
+
+        {
+            let cfg = &self.cfg;
+            let func = &mut self.func;
+            for &block in &to_delete {
+                for &pred in cfg.preds_of(block) {
+                    if to_delete_set.contains(&pred) || !func.layout.is_block_inserted(pred) {
+                        continue;
+                    }
+
+                    let removed = remove_succ_and_repair_phis(func, self.mode, pred, block);
+                    assert!(removed, "edge {pred:?} -> {block:?} does not exist");
+                }
+            }
+
+            for &block in &to_delete {
+                for &succ in cfg.succs_of(block) {
+                    if to_delete_set.contains(&succ) || !func.layout.is_block_inserted(succ) {
+                        continue;
+                    }
+
+                    remove_phi_incoming_from(func, succ, block);
+                    simplify_trivial_phis_in_block(func, succ);
+                }
+            }
+
+            let mut insts = Vec::new();
+            for &block in &to_delete {
+                insts.extend(func.layout.iter_inst(block));
+            }
+            debug_assert!(
+                {
+                    let inst_set: FxHashSet<_> = insts.iter().copied().collect();
+                    insts.iter().copied().all(|inst| {
+                        func.dfg.inst_results(inst).iter().copied().all(|value| {
+                            func.dfg.users(value).all(|user| {
+                                !func.layout.is_inst_inserted(*user) || inst_set.contains(user)
+                            })
+                        })
+                    })
+                },
+                "delete_blocks_unreachable requires a closed region"
+            );
+            for &inst in &insts {
+                func.layout.remove_inst(inst);
+            }
+            func.erase_insts(&insts);
+
+            for &block in &to_delete {
+                func.layout.remove_block(block);
+                func.erase_block(block);
+            }
+        }
+
+        self.recompute_cfg();
+        true
+    }
+
     pub fn replace_succ(
         &mut self,
         from: BlockId,
@@ -645,6 +692,41 @@ impl<'f> CfgEditor<'f> {
             next_inst = self.func.layout.next_inst_of(phi_inst_id);
         }
     }
+}
+
+fn remove_succ_and_repair_phis(
+    func: &mut Function,
+    mode: CleanupMode,
+    from: BlockId,
+    to: BlockId,
+) -> bool {
+    let Some(term) = func.layout.last_inst_of(from) else {
+        panic!("block {from:?} has no terminator");
+    };
+    assert!(
+        func.dfg.is_terminator(term),
+        "block {from:?} does not end with a terminator"
+    );
+
+    let Some(branch_info) = func.dfg.branch_info(term) else {
+        return false;
+    };
+    if !branch_info.dests().into_iter().any(|dest| dest == to) {
+        return false;
+    }
+
+    func.dfg.remove_branch_dest(term, to);
+
+    if !func.layout.is_block_inserted(to) {
+        if matches!(mode, CleanupMode::Strict) {
+            panic!("branch target {to:?} is not inserted");
+        }
+        return true;
+    }
+
+    remove_phi_incoming_from(func, to, from);
+    simplify_trivial_phis_in_block(func, to);
+    true
 }
 
 fn iter_phis_in_block(func: &Function, block: BlockId) -> impl Iterator<Item = InstId> + '_ {

@@ -400,11 +400,12 @@ impl SccpSolver {
         let mut editor = CfgEditor::new(func, mode);
 
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();
-        for block in blocks {
-            if !self.reachable_blocks[block] {
-                editor.delete_block_unreachable(block);
-            }
-        }
+        let unreachable: Vec<_> = blocks
+            .iter()
+            .copied()
+            .filter(|block| !self.reachable_blocks[*block])
+            .collect();
+        editor.delete_blocks_unreachable(&unreachable);
 
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();
         for block in blocks {
