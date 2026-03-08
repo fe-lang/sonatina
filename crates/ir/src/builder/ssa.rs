@@ -171,6 +171,9 @@ impl SsaBuilder {
         InstInserter::at_location(CursorLocation::At(inst_id)).remove_inst(func);
 
         for user in modified {
+            if !func.dfg.has_inst(user) {
+                continue;
+            }
             if func.dfg.cast_phi(user).is_some() && !self.trivial_phis.contains_key(user) {
                 self.remove_trivial_phi(func, user);
             }
@@ -303,6 +306,46 @@ mod tests {
 
     #[inst_set(InstKind = "TestInstKind")]
     struct TestInstSet(Phi, Jump, Add, Return, Br, BrTable);
+
+    #[test]
+    fn remove_trivial_phi_skips_users_deleted_by_recursion() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I32);
+        let is = evm.inst_set();
+        let mut ssa = SsaBuilder::new();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let imm = builder.make_imm_value(7i32);
+        let phi1 = Phi::new(is, vec![(imm, block), (imm, block)]);
+        let phi1_res = builder.insert_inst(phi1, Type::I32);
+        let phi1_inst = builder.func.dfg.value_inst(phi1_res).unwrap();
+
+        let phi2 = Phi::new(is, vec![(phi1_res, block), (imm, block)]);
+        let phi2_res = builder.insert_inst(phi2, Type::I32);
+
+        let phi3 = Phi::new(is, vec![(phi1_res, block), (phi2_res, block)]);
+        let phi3_res = builder.insert_inst(phi3, Type::I32);
+
+        builder.insert_inst_no_result(Return::new_single(is, phi3_res));
+
+        ssa.remove_trivial_phi(&mut builder.func, phi1_inst);
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+
+        assert_eq!(
+            dump_func(&module, func_ref),
+            "func public %test_func() -> i32 {
+    block0:
+        return 7.i32;
+}
+"
+        );
+    }
 
     #[test]
     fn use_var_local() {
