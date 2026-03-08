@@ -1,8 +1,9 @@
-use std::collections::BTreeSet;
-
 use cranelift_entity::{SecondaryMap, packed_option::PackedOption};
+use vec_collections::VecSet;
 
 use crate::{BlockId, Function};
+
+type BlockSet = VecSet<[BlockId; 4]>;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct ControlFlowGraph {
@@ -32,8 +33,16 @@ impl ControlFlowGraph {
         self.blocks[block].preds()
     }
 
+    pub fn preds_as_slice(&self, block: BlockId) -> &[BlockId] {
+        self.blocks[block].preds_slice()
+    }
+
     pub fn succs_of(&self, block: BlockId) -> impl Iterator<Item = &BlockId> {
         self.blocks[block].succs()
+    }
+
+    pub fn succs_as_slice(&self, block: BlockId) -> &[BlockId] {
+        self.blocks[block].succs_slice()
     }
 
     pub fn pred_num_of(&self, block: BlockId) -> usize {
@@ -52,14 +61,58 @@ impl ControlFlowGraph {
         CfgPostOrder::new(self)
     }
 
+    pub fn reachable_blocks(&self) -> SecondaryMap<BlockId, bool> {
+        let mut reachable = SecondaryMap::default();
+        let Some(entry) = self.entry() else {
+            return reachable;
+        };
+
+        let mut stack = vec![entry];
+        while let Some(block) = stack.pop() {
+            if reachable[block] {
+                continue;
+            }
+
+            reachable[block] = true;
+            stack.extend(
+                self.succs_as_slice(block)
+                    .iter()
+                    .copied()
+                    .filter(|succ| !reachable[*succ]),
+            );
+        }
+
+        reachable
+    }
+
     pub fn add_edge(&mut self, from: BlockId, to: BlockId) {
         self.blocks[to].push_pred(from);
         self.blocks[from].push_succ(to);
     }
 
+    pub fn replace_edge(&mut self, from: BlockId, old_to: BlockId, new_to: BlockId) {
+        self.remove_edge(from, old_to);
+        self.add_edge(from, new_to);
+    }
+
     pub fn remove_edge(&mut self, from: BlockId, to: BlockId) {
         self.blocks[to].remove_pred(from);
         self.blocks[from].remove_succ(to);
+    }
+
+    pub fn add_exit(&mut self, block: BlockId) {
+        if !self.exits.contains(&block) {
+            self.exits.push(block);
+        }
+    }
+
+    pub fn remove_exit(&mut self, block: BlockId) {
+        self.exits.retain(|exit| *exit != block);
+    }
+
+    pub fn replace_exit(&mut self, old: BlockId, new: BlockId) {
+        self.remove_exit(old);
+        self.add_exit(new);
     }
 
     pub fn reverse_edges(&mut self, new_entry: BlockId, new_exits: &[BlockId]) {
@@ -93,10 +146,19 @@ impl ControlFlowGraph {
     }
 }
 
-#[derive(Default, Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct BlockNode {
-    preds: BTreeSet<BlockId>,
-    succs: BTreeSet<BlockId>,
+    preds: BlockSet,
+    succs: BlockSet,
+}
+
+impl Default for BlockNode {
+    fn default() -> Self {
+        Self {
+            preds: VecSet::empty(),
+            succs: VecSet::empty(),
+        }
+    }
 }
 
 impl BlockNode {
@@ -120,8 +182,16 @@ impl BlockNode {
         self.preds.iter()
     }
 
+    fn preds_slice(&self) -> &[BlockId] {
+        self.preds.as_ref()
+    }
+
     fn succs(&self) -> impl Iterator<Item = &BlockId> {
         self.succs.iter()
+    }
+
+    fn succs_slice(&self) -> &[BlockId] {
+        self.succs.as_ref()
     }
 
     fn pred_num(&self) -> usize {

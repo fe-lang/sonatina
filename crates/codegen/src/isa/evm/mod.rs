@@ -26,6 +26,7 @@ use crate::{
         lower::{FixupUpdate, Lower, LowerBackend, LoweredFunction, SectionLoweringCtx},
         vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
     },
+    optim::aggregate::{AggregateLowerToMemoryLegalize, assert_aggregate_legalized, shape},
     stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyBuilder},
 };
 use smallvec::{SmallVec, smallvec};
@@ -451,6 +452,9 @@ impl EvmBackend {
             blocks = block_order.len()
         )
         .entered();
+        module.func_store.view(func, |function| {
+            assert_aggregate_legalized(function, &module.ctx);
+        });
         let mut vcode = {
             let _span = trace_span!("sonatina.codegen.evm.lower_prepared_function.lower").entered();
             module.func_store.view(func, |function| {
@@ -1168,6 +1172,21 @@ impl LowerBackend for EvmBackend {
             }
         }
 
+        {
+            let _span = debug_span!("sonatina.codegen.evm.aggregate_legalize").entered();
+            for &func in funcs {
+                let _span = trace_span!(
+                    "sonatina.codegen.evm.aggregate_legalize.func",
+                    func_ref = func.as_u32()
+                )
+                .entered();
+                module.func_store.modify(func, |function| {
+                    AggregateLowerToMemoryLegalize::default().run(function, &module.ctx);
+                    assert_aggregate_legalized(function, &module.ctx);
+                });
+            }
+        }
+
         // Scratch fixed point: scratch spills depend on transitive scratch barriers.
         let mut scratch_spill_funcs: FxHashSet<FuncRef> = FxHashSet::default();
         let mut scratch_effects = {
@@ -1409,6 +1428,15 @@ impl LowerBackend for EvmBackend {
                 .entered();
             module.func_store.modify(func, |function| {
                 prepare_free_ptr_restore(function, &module.ctx, self, &ptr_escape);
+            });
+        }
+
+        {
+            let _span =
+                trace_span!("sonatina.codegen.evm.lower_function.aggregate_legalize").entered();
+            module.func_store.modify(func, |function| {
+                AggregateLowerToMemoryLegalize::default().run(function, &module.ctx);
+                assert_aggregate_legalized(function, &module.ctx);
             });
         }
 
@@ -2049,8 +2077,16 @@ impl LowerBackend for EvmBackend {
 
                 perform_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
-            EvmInstKind::InsertValue(_) => todo!(),
-            EvmInstKind::ExtractValue(_) => todo!(),
+            EvmInstKind::InsertValue(_) => {
+                panic!(
+                    "aggregate legalization invariant violated: insert_value reached EVM lowering"
+                )
+            }
+            EvmInstKind::ExtractValue(_) => {
+                panic!(
+                    "aggregate legalization invariant violated: extract_value reached EVM lowering"
+                )
+            }
             EvmInstKind::GetFunctionPtr(get_fn) => {
                 let func = *get_fn.func();
                 perform_actions(ctx, &alloc.read(insn, &args));
@@ -2371,7 +2407,10 @@ fn build_gep_lower_plan(ctx: &Lower<OpCode>, args: &[ValueId]) -> GepLowerPlan {
                     panic!("struct gep indices must be immediate constants");
                 };
                 let (field_offset, field_ty) =
-                    struct_field_offset_bytes(&s.fields, s.packed, idx, ctx.module);
+                    shape::struct_field_offset_bytes(&s.fields, s.packed, idx, ctx.module)
+                        .unwrap_or_else(|| {
+                            panic!("invalid struct gep: packed/unsupported field projection")
+                        });
                 steps.push(GepStep::AddConst {
                     offset_bytes: field_offset,
                     consume_index: false,
@@ -2448,47 +2487,6 @@ fn aligned_malloc_size_imm(imm: Immediate) -> U256 {
     let size = imm.as_i256().to_u256();
     let (size_padded, _) = size.overflowing_add(U256::from(0x1f_u8));
     size_padded & !U256::from(0x1f_u8)
-}
-
-fn struct_field_offset_bytes(
-    fields: &[Type],
-    packed: bool,
-    idx: usize,
-    module: &ModuleCtx,
-) -> (u32, Type) {
-    let &field_ty = fields.get(idx).expect("struct gep index out of bounds");
-
-    let mut offset: u32 = 0;
-    for &ty in fields.iter().take(idx) {
-        if !packed {
-            let align =
-                u32::try_from(module.align_of_unchecked(ty)).expect("struct field align too large");
-            offset = align_to(offset, align);
-        }
-
-        let size =
-            u32::try_from(module.size_of_unchecked(ty)).expect("struct field size too large");
-        offset = offset
-            .checked_add(size)
-            .expect("struct field offset overflow");
-    }
-
-    if !packed {
-        let align = u32::try_from(module.align_of_unchecked(field_ty))
-            .expect("struct field align too large");
-        offset = align_to(offset, align);
-    }
-
-    (offset, field_ty)
-}
-
-fn align_to(offset: u32, align: u32) -> u32 {
-    if align <= 1 {
-        return offset;
-    }
-    debug_assert!(align.is_power_of_two(), "alignment must be power of two");
-
-    offset.checked_add(align - 1).expect("align overflow") & !(align - 1)
 }
 
 fn fold_stack_actions(actions: &[Action]) -> SmallVec<[Action; 8]> {

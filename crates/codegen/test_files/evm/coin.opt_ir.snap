@@ -310,14 +310,6 @@ func private %create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6e
         v7.*i8 = evm_malloc v25;
         v8.i256 = ptr_to_int v7 i256;
         evm_code_copy v8 v26 v25;
-        v9.i256 = add v25 v8;
-        v10.*@__fe_SolEncoder_3 = alloca @__fe_SolEncoder_3;
-        v12.*i256 = bitcast v10 *i256;
-        mstore v12 v9 i256;
-        v14.*i256 = gep v10 0.i256 1.i256;
-        mstore v14 v9 i256;
-        v17.*i256 = gep v10 0.i256 2.i256;
-        mstore v17 v9 i256;
         v27.i256 = evm_create2 v1 v8 v25 v2;
         v19.i1 = is_zero v27;
         br v19 block1 block2;

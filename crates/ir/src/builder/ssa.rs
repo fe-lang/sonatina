@@ -18,7 +18,7 @@ pub struct VariableData {
     ty: Type,
 }
 
-pub(super) struct SsaBuilder {
+pub struct SsaBuilder {
     blocks: SecondaryMap<BlockId, SsaBlock>,
 
     /// Records all declared variables.
@@ -30,7 +30,7 @@ pub(super) struct SsaBuilder {
 }
 
 impl SsaBuilder {
-    pub(super) fn new() -> Self {
+    pub fn new() -> Self {
         SsaBuilder {
             blocks: SecondaryMap::default(),
             vars: PrimaryMap::default(),
@@ -38,20 +38,15 @@ impl SsaBuilder {
             aliases: FxHashMap::default(),
         }
     }
-    pub(super) fn declare_var(&mut self, ty: Type) -> Variable {
+    pub fn declare_var(&mut self, ty: Type) -> Variable {
         self.vars.push(VariableData { ty })
     }
 
-    pub(super) fn def_var(&mut self, var: Variable, value: ValueId, block: BlockId) {
+    pub fn def_var(&mut self, var: Variable, value: ValueId, block: BlockId) {
         self.blocks[block].def_var(var, value);
     }
 
-    pub(super) fn use_var(
-        &mut self,
-        func: &mut Function,
-        var: Variable,
-        block: BlockId,
-    ) -> ValueId {
+    pub fn use_var(&mut self, func: &mut Function, var: Variable, block: BlockId) -> ValueId {
         let value = if let Some(value) = self.blocks[block].use_var_local(var) {
             value
         } else {
@@ -60,7 +55,7 @@ impl SsaBuilder {
         self.resolve_alias(value)
     }
 
-    pub(super) fn resolve_alias(&self, mut value: ValueId) -> ValueId {
+    pub fn resolve_alias(&self, mut value: ValueId) -> ValueId {
         while let Some(alias) = self.aliases.get(&value) {
             if *alias == value {
                 break;
@@ -74,11 +69,11 @@ impl SsaBuilder {
         self.vars[var].ty
     }
 
-    pub(super) fn append_pred(&mut self, block: BlockId, pred: BlockId) {
+    pub fn append_pred(&mut self, block: BlockId, pred: BlockId) {
         self.blocks[block].append_pred(pred);
     }
 
-    pub(super) fn seal_block(&mut self, func: &mut Function, block: BlockId) {
+    pub fn seal_block(&mut self, func: &mut Function, block: BlockId) {
         if self.is_sealed(block) {
             return;
         }
@@ -90,7 +85,7 @@ impl SsaBuilder {
         self.blocks[block].seal();
     }
 
-    pub(super) fn seal_all(&mut self, func: &mut Function) {
+    pub fn seal_all(&mut self, func: &mut Function) {
         let mut next_block = func.layout.entry_block();
         while let Some(block) = next_block {
             self.seal_block(func, block);
@@ -240,6 +235,12 @@ impl SsaBuilder {
         }
 
         modified
+    }
+}
+
+impl Default for SsaBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

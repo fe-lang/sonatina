@@ -18,6 +18,7 @@ use crate::{
 
 use super::{
     adce::AdceSolver,
+    aggregate::{AggregateCombine, AggregateScalarize},
     cfg_cleanup::CfgCleanup,
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
     egraph::run_egraph_pass,
@@ -38,6 +39,10 @@ pub enum Pass {
     LegalizeMultiResult,
     /// Control flow graph cleanup (dead block removal, phi pruning, terminator repair).
     CfgCleanup,
+    /// Local aggregate InstCombine rewrites.
+    AggregateCombine,
+    /// Aggregate scalarization (SROA + closed SSA-web scalarization).
+    AggregateScalarize,
     /// Sparse conditional constant propagation (composite: CfgCleanup + SCCP + CfgCleanup + ADCE).
     Sccp,
     /// Standalone aggressive dead code elimination.
@@ -60,6 +65,8 @@ impl Pass {
         match self {
             Pass::LegalizeMultiResult => "legalize_multi_result",
             Pass::CfgCleanup => "cfg_cleanup",
+            Pass::AggregateCombine => "aggregate_combine",
+            Pass::AggregateScalarize => "aggregate_scalarize",
             Pass::Sccp => "sccp",
             Pass::Adce => "adce",
             Pass::Licm => "licm",
@@ -126,7 +133,14 @@ fn step_needs_func_behavior(passes: &[Pass]) -> bool {
 fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
     matches!(
         pass,
-        Pass::CfgCleanup | Pass::Sccp | Pass::Adce | Pass::Licm | Pass::Egraph | Pass::Gvn
+        Pass::CfgCleanup
+            | Pass::AggregateCombine
+            | Pass::AggregateScalarize
+            | Pass::Sccp
+            | Pass::Adce
+            | Pass::Licm
+            | Pass::Egraph
+            | Pass::Gvn
     )
 }
 
@@ -161,6 +175,8 @@ impl Pipeline {
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(vec![
             Pass::CfgCleanup,
+            Pass::AggregateCombine,
+            Pass::AggregateScalarize,
             Pass::Sccp,
             Pass::Gvn,
             Pass::Licm,
@@ -182,6 +198,8 @@ impl Pipeline {
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(vec![
             Pass::CfgCleanup,
+            Pass::AggregateCombine,
+            Pass::AggregateScalarize,
             Pass::Sccp,
             Pass::Gvn,
             Pass::Licm,
@@ -194,6 +212,8 @@ impl Pipeline {
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(vec![
             Pass::CfgCleanup,
+            Pass::AggregateCombine,
+            Pass::AggregateScalarize,
             Pass::Sccp,
             Pass::Gvn,
             Pass::CfgCleanup,
@@ -350,6 +370,14 @@ fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
         Pass::CfgCleanup => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.cfg_cleanup").entered();
             CfgCleanup::new(CleanupMode::Strict).run(func);
+        }
+        Pass::AggregateCombine => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_combine").entered();
+            AggregateCombine::default().run(func);
+        }
+        Pass::AggregateScalarize => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_scalarize").entered();
+            AggregateScalarize::default().run(func);
         }
         Pass::Sccp => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.sccp").entered();

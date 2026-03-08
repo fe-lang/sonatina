@@ -1,10 +1,11 @@
 //! This module contains Sonatine IR data flow graph.
-use std::{collections::BTreeSet, io};
+use std::io;
 
 use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl};
 use dyn_clone::clone_box;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
+use vec_collections::VecSet;
 
 use super::{Immediate, Type, Value, ValueId};
 use crate::{
@@ -14,8 +15,45 @@ use crate::{
         control_flow::{self, BranchInfo, CallInfo, Jump, Phi},
     },
     ir_writer::{FuncWriteCtx, IrWrite},
-    module::{FuncAttrs, ModuleCtx},
+    module::ModuleCtx,
 };
+
+type UserSet = VecSet<[InstId; 2]>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ValueUsers(UserSet);
+
+impl Default for ValueUsers {
+    fn default() -> Self {
+        Self(VecSet::empty())
+    }
+}
+
+impl ValueUsers {
+    fn as_slice(&self) -> &[InstId] {
+        self.0.as_ref()
+    }
+
+    fn insert(&mut self, inst: InstId) {
+        self.0.insert(inst);
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &InstId> {
+        self.0.iter()
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn remove(&mut self, inst: &InstId) {
+        self.0.remove(inst);
+    }
+
+    fn union_with(&mut self, other: &Self) {
+        self.0 |= &other.0;
+    }
+}
 
 pub struct DataFlowGraph {
     pub ctx: ModuleCtx,
@@ -33,7 +71,7 @@ pub struct DataFlowGraph {
     pub immediates: FxHashMap<Immediate, ValueId>,
     #[doc(hidden)]
     pub globals: FxHashMap<GlobalVariableRef, ValueId>,
-    users: SecondaryMap<ValueId, BTreeSet<InstId>>,
+    users: SecondaryMap<ValueId, ValueUsers>,
 }
 
 impl DataFlowGraph {
@@ -335,8 +373,8 @@ impl DataFlowGraph {
         self.users.clear();
     }
 
-    pub fn users_set(&self, value_id: ValueId) -> Option<&BTreeSet<InstId>> {
-        self.users.get(value_id)
+    pub fn users_set(&self, value_id: ValueId) -> Option<&[InstId]> {
+        self.users.get(value_id).map(ValueUsers::as_slice)
     }
 
     pub fn inst_results(&self, inst_id: InstId) -> &[ValueId] {
@@ -457,15 +495,15 @@ impl DataFlowGraph {
     }
 
     pub fn change_to_alias(&mut self, value: ValueId, alias: ValueId) {
-        let mut users = std::mem::take(&mut self.users[value]);
-        for inst in &users {
+        let users = std::mem::take(&mut self.users[value]);
+        for inst in users.iter() {
             self.insts[*inst].for_each_value_mut(&mut |user_value| {
                 if *user_value == value {
                     *user_value = alias;
                 }
             });
         }
-        self.users[alias].append(&mut users);
+        self.users[alias].union_with(&users);
     }
 
     pub fn delete_inst(&mut self, inst_id: InstId) {
@@ -549,24 +587,14 @@ impl DataFlowGraph {
     }
 
     pub fn side_effect(&self, inst_id: InstId) -> SideEffect {
-        if let Some(call_info) = self.call_info(inst_id) {
-            let callee = call_info.callee();
-            let attrs = self.ctx.func_attrs(callee);
-
-            if attrs.contains(FuncAttrs::NORETURN) || !attrs.contains(FuncAttrs::WILLRETURN) {
-                return SideEffect::Control;
-            }
-
-            if attrs.contains(FuncAttrs::MEM_WRITE) {
-                SideEffect::Write
-            } else if attrs.contains(FuncAttrs::MEM_READ) {
-                SideEffect::Read
-            } else {
-                SideEffect::None
-            }
-        } else {
-            self.inst(inst_id).side_effect()
+        let side_effect = self.inst(inst_id).side_effect();
+        if side_effect != SideEffect::Write {
+            return side_effect;
         }
+
+        self.cast_call(inst_id).map_or(side_effect, |call| {
+            self.ctx.call_side_effect(*call.callee())
+        })
     }
 
     pub fn is_branch(&self, inst_id: InstId) -> bool {
