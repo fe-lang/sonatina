@@ -28,9 +28,9 @@ entry:
     PUSH2 0x100 (256)  // v28.*[i256; 2] = alloca [i256; 2];
     PUSH2 0x140 (320)  // v20.*@pair = alloca @pair;
     PUSH2 0x180 (384)  // v12.*@pair = alloca @pair;
-    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
+    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
-    PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i32;
+    PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i256;
     CALLDATALOAD
     DUP3  // v15.*i256 = gep v12 0.i64 0.i64;
     POP
@@ -91,8 +91,8 @@ entry:
     POP  // v35.*i256 = gep v28 0.i64 1.i64;
     PUSH2 0x120 (288)
     MLOAD  // v36.i256 = mload v35 i256;
-    PUSH0  // mstore 0.i32 v36 i256;
+    PUSH0  // mstore 0.i256 v36 i256;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
     RETURN

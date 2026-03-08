@@ -17,7 +17,7 @@ object: Contract
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
-  __Contract_runtime_entry: ir_blocks=1 ir_insts=62 vcode_ops=249 fixups=36 imm_bytes=52
+  __Contract_runtime_entry: ir_blocks=1 ir_insts=62 vcode_ops=233 fixups=36 imm_bytes=44
     mem: scheme=StaticArena need_words=0 locals_words=0
   __Coin_recv_0_0: ir_blocks=3 ir_insts=26 vcode_ops=54 fixups=1 imm_bytes=4
     mem: scheme=StaticArena need_words=0 locals_words=0

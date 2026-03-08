@@ -195,6 +195,7 @@ pub(crate) fn bitcast_before_inst(
     );
     let cast_value = func.dfg.make_value(Value::Inst {
         inst: bitcast_inst,
+        result_idx: 0,
         ty: to_ty,
     });
     cursor.attach_result(func, bitcast_inst, cast_value);
@@ -240,6 +241,7 @@ fn extract_value_before_inst(
     );
     let extract_value = func.dfg.make_value(Value::Inst {
         inst: extract_inst,
+        result_idx: 0,
         ty,
     });
     cursor.attach_result(func, extract_inst, extract_value);
@@ -266,6 +268,7 @@ fn insert_value_before_inst(
     );
     let insert_value = func.dfg.make_value(Value::Inst {
         inst: insert_inst,
+        result_idx: 0,
         ty,
     });
     cursor.attach_result(func, insert_inst, insert_value);

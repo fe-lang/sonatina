@@ -7,8 +7,8 @@ input_file: test_files/evm/aggregate_legalize.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 40 bytes
-  total: 40 bytes
+  section runtime: 39 bytes
+  total: 39 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
@@ -18,7 +18,7 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case ok: calldata_len=64 success reason=Return gas_used=21383 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=103
+  case ok: calldata_len=64 success reason=Return gas_used=21370 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=90
 
 
 --------------- DEBUG ---------------
@@ -27,9 +27,9 @@ evm:
 entry:
   block0:
     JUMPDEST
-    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
+    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
-    PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i32;
+    PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i256;
     CALLDATALOAD
     DUP2  // v3.i256 = call %agg_phi v0 v1;
     DUP2
@@ -41,9 +41,9 @@ entry:
     SWAP2  // v22.i256 = add v0 v1;
     ADD
     ADD  // v4.i256 = add v22 v3;
-    PUSH0  // mstore 0.i32 v4 i256;
+    PUSH0  // mstore 0.i256 v4 i256;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
     RETURN
 

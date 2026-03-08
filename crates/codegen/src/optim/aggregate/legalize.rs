@@ -121,19 +121,53 @@ impl AggregateLowerToMemoryLegalize {
     fn cleanup_legalized_artifacts(&mut self, func: &mut Function, split_edges: bool) -> bool {
         // User sets stay current through legalization and CFG cleanup, so the cleanup
         // phases can share the single rebuild done before rewriting starts.
-        let removed_slots = self.remove_dead_materialized_slots(func);
-        let removed_pure = self.dead_pure_cleanup.run_with_current_users(func);
-        let mut changed = removed_slots || removed_pure;
+        let mut changed = false;
+        let mut pending_cfg_cleanup = split_edges;
 
-        if split_edges {
-            let cleaned_cfg = CfgCleanup::new(CleanupMode::Strict).run(func);
-            changed |= cleaned_cfg;
-            if cleaned_cfg {
-                changed |= self.remove_dead_materialized_slots(func);
-                changed |= self.dead_pure_cleanup.run_with_current_users(func);
+        loop {
+            let removed_mloads = self.remove_dead_aggregate_mloads(func);
+            let removed_slots = self.remove_dead_materialized_slots(func);
+            let removed_pure = self.dead_pure_cleanup.run_with_current_users(func);
+            let cleaned_cfg = pending_cfg_cleanup && CfgCleanup::new(CleanupMode::Strict).run(func);
+            pending_cfg_cleanup = false;
+
+            let progress = removed_mloads || removed_slots || removed_pure || cleaned_cfg;
+            changed |= progress;
+            if !progress {
+                return changed;
             }
         }
+    }
 
+    fn remove_dead_aggregate_mloads(&self, func: &mut Function) -> bool {
+        let mut changed = false;
+        let blocks: Vec<_> = func.layout.iter_block().collect();
+        for block in blocks {
+            let insts: Vec<_> = func.layout.iter_inst(block).collect();
+            for inst in insts {
+                let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
+                else {
+                    continue;
+                };
+                if !shape::is_supported_aggregate_ty(func.ctx(), *mload.ty()) {
+                    continue;
+                }
+                let Some(result) = func.dfg.inst_result(inst) else {
+                    continue;
+                };
+                if func
+                    .dfg
+                    .users(result)
+                    .copied()
+                    .any(|user| func.layout.is_inst_inserted(user))
+                {
+                    continue;
+                }
+
+                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+                changed = true;
+            }
+        }
         changed
     }
 
@@ -146,7 +180,11 @@ impl AggregateLowerToMemoryLegalize {
         let alloca = data::Alloca::new_unchecked(func.inst_set(), ty);
         let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(entry));
         let inst = cursor.prepend_inst_data(func, alloca);
-        let ptr = func.dfg.make_value(Value::Inst { inst, ty: ptr_ty });
+        let ptr = func.dfg.make_value(Value::Inst {
+            inst,
+            result_idx: 0,
+            ty: ptr_ty,
+        });
         cursor.attach_result(func, inst, ptr);
         ptr
     }
@@ -160,6 +198,20 @@ impl AggregateLowerToMemoryLegalize {
     ) {
         func.dfg.change_to_alias(result, replacement);
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+    }
+
+    fn remove_if_results_dead(&self, func: &mut Function, inst: InstId) -> bool {
+        if func.dfg.inst_results(inst).iter().copied().any(|result| {
+            func.dfg
+                .users(result)
+                .copied()
+                .any(|user| func.layout.is_inst_inserted(user))
+        }) {
+            return false;
+        }
+
+        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        true
     }
 
     fn single_word_leaf(
@@ -264,7 +316,7 @@ impl AggregateLowerToMemoryLegalize {
                 dst_ptr,
                 &dst_leaves,
             );
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            self.remove_if_results_dead(func, inst);
             return true;
         }
 
@@ -292,7 +344,7 @@ impl AggregateLowerToMemoryLegalize {
                 payload,
                 leaf.ty,
             );
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            self.remove_if_results_dead(func, inst);
             return true;
         }
 
@@ -387,7 +439,7 @@ impl AggregateLowerToMemoryLegalize {
             );
         }
 
-        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        self.remove_if_results_dead(func, inst);
     }
 
     fn rewrite_insert_value_dynamic_array_index(
@@ -418,7 +470,7 @@ impl AggregateLowerToMemoryLegalize {
         } else {
             self.emit_store_scalar_to_path(func, builder, elem_ptr, &[], *insert.value(), elem);
         }
-        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        self.remove_if_results_dead(func, inst);
     }
 
     fn rewrite_extract_value(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) {
@@ -459,7 +511,7 @@ impl AggregateLowerToMemoryLegalize {
                     ty: result_ty,
                 },
             );
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            self.remove_if_results_dead(func, inst);
             return;
         }
 
@@ -528,7 +580,7 @@ impl AggregateLowerToMemoryLegalize {
                     result_ty,
                 );
             }
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            self.remove_if_results_dead(func, inst);
             return;
         }
 
@@ -570,7 +622,7 @@ impl AggregateLowerToMemoryLegalize {
             );
         }
 
-        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        self.remove_if_results_dead(func, inst);
     }
 
     fn rewrite_aggregate_mload(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) {
@@ -589,7 +641,7 @@ impl AggregateLowerToMemoryLegalize {
             .copied()
             .any(|user| func.layout.is_inst_inserted(user))
         {
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            self.remove_if_results_dead(func, inst);
             return;
         }
 
@@ -598,7 +650,7 @@ impl AggregateLowerToMemoryLegalize {
         let dst_ptr = self.materialized_ptr(func, result, module);
         self.emit_copy_aggregate_ptr_to_ptr(func, module, &mut builder, src_ptr, dst_ptr, agg_ty);
 
-        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        self.remove_if_results_dead(func, inst);
     }
 
     fn rewrite_extract_tree_from_aggregate_addr(
@@ -706,7 +758,7 @@ impl AggregateLowerToMemoryLegalize {
                 .copied()
                 .any(|user| func.layout.is_inst_inserted(user))
             {
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+                self.remove_if_results_dead(func, inst);
             }
         }
     }
@@ -761,7 +813,7 @@ impl AggregateLowerToMemoryLegalize {
             dst_ptr,
             agg_ty,
         );
-        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        self.remove_if_results_dead(func, inst);
     }
 
     fn shape_or_panic(&mut self, module: &ModuleCtx, ty: Type) -> shape::AggregateShape {
@@ -1353,7 +1405,11 @@ impl BeforeCursor {
         ty: Type,
     ) -> ValueId {
         let inst = self.insert_no_result(func, inst_data);
-        let value = func.dfg.make_value(Value::Inst { inst, ty });
+        let value = func.dfg.make_value(Value::Inst {
+            inst,
+            result_idx: 0,
+            ty,
+        });
         self.cursor.attach_result(func, inst, value);
         value
     }
@@ -1381,17 +1437,20 @@ fn scan_aggregate_legalize_needs(func: &Function, module: &ModuleCtx) -> Aggrega
                 {
                     panic!("aggregate call arguments are unsupported by aggregate legalization");
                 }
-                if let Some(result) = func.dfg.inst_result(inst)
-                    && shape::is_supported_aggregate_ty(module, func.dfg.value_ty(result))
-                {
+                if func.dfg.inst_results(inst).iter().copied().any(|result| {
+                    shape::is_supported_aggregate_ty(module, func.dfg.value_ty(result))
+                }) {
                     panic!("aggregate call results are unsupported by aggregate legalization");
                 }
             }
 
             if let Some(ret) =
                 downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(inst))
-                && let Some(arg) = ret.arg()
-                && shape::is_supported_aggregate_ty(module, func.dfg.value_ty(*arg))
+                && ret
+                    .args()
+                    .iter()
+                    .copied()
+                    .any(|arg| shape::is_supported_aggregate_ty(module, func.dfg.value_ty(arg)))
             {
                 panic!("aggregate return values are unsupported by aggregate legalization");
             }

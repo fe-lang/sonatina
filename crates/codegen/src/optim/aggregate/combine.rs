@@ -398,7 +398,11 @@ fn append_phi_at_block_top(
     let phi = control_flow::Phi::new_unchecked(func.inst_set(), args);
     let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(block));
     let inst = cursor.prepend_inst_data(func, phi);
-    let value = func.dfg.make_value(Value::Inst { inst, ty });
+    let value = func.dfg.make_value(Value::Inst {
+        inst,
+        result_idx: 0,
+        ty,
+    });
     cursor.attach_result(func, inst, value);
     value
 }
@@ -424,7 +428,11 @@ fn append_non_phi_after_phi_region<I: sonatina_ir::Inst>(
         InstInserter::at_location(CursorLocation::BlockTop(block))
     };
     let inst = cursor.insert_inst_data(func, inst_data);
-    let value = func.dfg.make_value(Value::Inst { inst, ty });
+    let value = func.dfg.make_value(Value::Inst {
+        inst,
+        result_idx: 0,
+        ty,
+    });
     cursor.attach_result(func, inst, value);
     value
 }
@@ -447,7 +455,7 @@ fn is_explicit_undef(func: &Function, v: ValueId) -> bool {
 
 fn compute_definitely_non_undef_aggregates(func: &Function) -> SecondaryMap<ValueId, bool> {
     let mut definitely_non_undef = SecondaryMap::default();
-    for value in func.dfg.values.keys() {
+    for value in func.dfg.value_ids() {
         let ty = func.dfg.value_ty(value);
         if shape::is_supported_aggregate_ty(func.ctx(), ty) {
             definitely_non_undef[value] = !is_explicit_undef(func, value);
@@ -456,7 +464,7 @@ fn compute_definitely_non_undef_aggregates(func: &Function) -> SecondaryMap<Valu
 
     loop {
         let mut changed = false;
-        for value in func.dfg.values.keys() {
+        for value in func.dfg.value_ids() {
             let ty = func.dfg.value_ty(value);
             if !shape::is_supported_aggregate_ty(func.ctx(), ty) {
                 continue;

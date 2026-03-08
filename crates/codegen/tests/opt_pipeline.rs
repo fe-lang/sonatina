@@ -2,19 +2,18 @@ mod common;
 
 use dir_test::{Fixture, dir_test};
 use sonatina_codegen::{
-    cfg_edit::CleanupMode,
     domtree::DomTree,
     loop_analysis::LoopTree,
     optim::{
-        cfg_cleanup::CfgCleanup,
-        egraph::run_egraph_pass,
-        gvn::GvnSolver,
-        licm::LicmSolver,
-        pipeline::Pipeline,
+        egraph::run_egraph_pass, gvn::GvnSolver, licm::LicmSolver, pipeline::Pipeline,
         sccp::SccpSolver,
     },
 };
-use sonatina_ir::{ControlFlowGraph, Function, Module, ir_writer::{FuncWriter, ModuleWriter}, module::FuncRef};
+use sonatina_ir::{
+    ControlFlowGraph, Module,
+    ir_writer::{FuncWriter, ModuleWriter},
+    module::FuncRef,
+};
 use sonatina_parser::parse_module;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
@@ -29,24 +28,6 @@ fn test_opt_pipeline(fixture: Fixture<&str>) {
     let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
     snap_test!(writer.dump_string(), fixture.path());
 }
-
-fn run_sccp(func: &mut Function) {
-    let mut cfg = ControlFlowGraph::new();
-    cfg.compute(func);
-    SccpSolver::new().run(func, &mut cfg);
-}
-
-fn run_licm(func: &mut Function) {
-    let mut cfg = ControlFlowGraph::new();
-    cfg.compute(func);
-    let mut domtree = DomTree::new();
-    domtree.compute(&cfg);
-    let mut lpt = LoopTree::new();
-    lpt.compute(&cfg, &domtree);
-    LicmSolver::new().run(func, &mut cfg, &mut lpt);
-    CfgCleanup::new(CleanupMode::Strict).run(func);
-}
-
 
 #[test]
 fn sccp_folds_constant_uaddo_results() {

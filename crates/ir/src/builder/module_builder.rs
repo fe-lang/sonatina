@@ -316,10 +316,10 @@ mod tests {
     fn test_call_side_effect_cache_tracks_attr_updates() {
         let builder = test_module_builder();
         let callee = builder
-            .declare_function(Signature::new("callee", Linkage::Private, &[], Type::Unit))
+            .declare_function(Signature::new_unit("callee", Linkage::Private, &[]))
             .unwrap();
         let caller = builder
-            .declare_function(Signature::new("caller", Linkage::Private, &[], Type::Unit))
+            .declare_function(Signature::new_unit("caller", Linkage::Private, &[]))
             .unwrap();
 
         let evm = test_isa();
@@ -334,7 +334,7 @@ mod tests {
                 smallvec![],
             )
         });
-        func_builder.insert_inst_no_result_with(|| Return::new(is, None));
+        func_builder.insert_inst_no_result_with(|| Return::new(is, smallvec![].into()));
         func_builder.seal_all();
         func_builder.finish();
 

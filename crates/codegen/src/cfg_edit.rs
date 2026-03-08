@@ -1221,7 +1221,7 @@ mod tests {
 
         builder.switch_to_block(b2);
         let one = builder.make_imm_value(1i32);
-        builder.insert_inst_no_result_with(|| Return::new(is, Some(one)));
+        builder.insert_inst_no_result_with(|| Return::new_single(is, one));
 
         builder.seal_all();
         builder.finish();
@@ -1242,7 +1242,7 @@ mod tests {
             assert!(!editor.func().layout.is_block_inserted(b2));
 
             let b0_term = editor.func().layout.last_inst_of(b0).unwrap();
-            assert!(editor.func().dfg.as_return(b0_term).is_some());
+            assert!(editor.func().dfg.is_return(b0_term));
             assert_eq!(editor.cfg().exits.as_slice(), [b0]);
 
             let b0_succs: Vec<_> = editor.cfg().succs_of(b0).copied().collect();

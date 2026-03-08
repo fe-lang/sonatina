@@ -470,7 +470,7 @@ impl AggregateScalarize {
             .iter()
             .map(|promoted| promoted.inst)
             .collect();
-        for value in func.dfg.values.keys() {
+        for value in func.dfg.value_ids() {
             if let Some(projection) = projection_of[value]
                 && !kept.contains(&projection.alloca_inst)
             {
@@ -488,7 +488,7 @@ impl AggregateScalarize {
         projection_of: &SecondaryMap<ValueId, Option<Projection>>,
         scalarizable: &SecondaryMap<ValueId, bool>,
     ) -> bool {
-        for ptr in func.dfg.values.keys() {
+        for ptr in func.dfg.value_ids() {
             let Some(projection) = projection_of[ptr] else {
                 continue;
             };
@@ -533,7 +533,7 @@ impl AggregateScalarize {
     ) -> SecondaryMap<ValueId, bool> {
         let mut scalarizable: SecondaryMap<ValueId, bool> = SecondaryMap::default();
 
-        for value in func.dfg.values.keys() {
+        for value in func.dfg.value_ids() {
             let ty = func.dfg.value_ty(value);
             if !shape::is_supported_aggregate_ty(module, ty) {
                 continue;
@@ -575,7 +575,7 @@ impl AggregateScalarize {
 
         loop {
             let mut changed = false;
-            for value in func.dfg.values.keys() {
+            for value in func.dfg.value_ids() {
                 if !scalarizable[value] {
                     continue;
                 }
@@ -811,6 +811,7 @@ impl AggregateScalarize {
                     let phi_inst = cursor.prepend_inst_data(func, phi);
                     let phi_res = func.dfg.make_value(Value::Inst {
                         inst: phi_inst,
+                        result_idx: 0,
                         ty: leaf.ty,
                     });
                     cursor.attach_result(func, phi_inst, phi_res);
@@ -878,7 +879,6 @@ impl AggregateScalarize {
                     ));
                 }
                 scalarized_agg[result] = Some(leaves);
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
                 return;
             }
 
@@ -998,7 +998,6 @@ impl AggregateScalarize {
                 mapped.push(value);
             }
             scalarized_agg[result] = Some(mapped);
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             return;
         }
 
@@ -1013,7 +1012,6 @@ impl AggregateScalarize {
             let value = bitcast_before_inst(func, inst, from, from_ty, dst_leaf.ty);
             leaves.push(value);
             scalarized_agg[result] = Some(leaves);
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             return;
         }
 
@@ -1084,7 +1082,6 @@ impl AggregateScalarize {
                 base_leaves[slice.first_leaf + i] = val;
             }
             scalarized_agg[result] = Some(base_leaves);
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             return;
         }
 
@@ -1121,7 +1118,6 @@ impl AggregateScalarize {
                 leaves.push(dest_leaves[slice.first_leaf + i]);
             }
             scalarized_agg[result] = Some(leaves);
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             return;
         }
 
@@ -1174,7 +1170,6 @@ impl AggregateScalarize {
             }
 
             scalarized_agg[result] = Some(leaf_phis);
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
         }
     }
 
@@ -1183,7 +1178,7 @@ impl AggregateScalarize {
         func: &mut Function,
         scalar_phi_results: &mut SecondaryMap<ValueId, Option<LeafValues>>,
     ) {
-        let values: Vec<_> = func.dfg.values.keys().collect();
+        let values: Vec<_> = func.dfg.value_ids().collect();
         for value in values {
             let Some(mut leaf_phis) = scalar_phi_results[value].take() else {
                 continue;
@@ -1246,17 +1241,50 @@ impl AggregateScalarize {
         let mut changed = false;
         loop {
             func.rebuild_users();
+            let removed_mloads = self.cleanup_dead_aggregate_mloads_with_current_users(func);
             let removed_allocas = self.cleanup_dead_promoted_allocas_with_current_users(
                 func,
                 projection_of,
                 promoted_by_inst,
             );
             let removed_pure = self.dead_pure_cleanup.run_with_current_users(func);
-            if !removed_allocas && !removed_pure {
+            if !removed_mloads && !removed_allocas && !removed_pure {
                 return changed;
             }
             changed = true;
         }
+    }
+
+    fn cleanup_dead_aggregate_mloads_with_current_users(&self, func: &mut Function) -> bool {
+        let mut changed = false;
+        let blocks: Vec<_> = func.layout.iter_block().collect();
+        for block in blocks {
+            let insts: Vec<_> = func.layout.iter_inst(block).collect();
+            for inst in insts {
+                let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
+                else {
+                    continue;
+                };
+                if !shape::is_supported_aggregate_ty(func.ctx(), *mload.ty()) {
+                    continue;
+                }
+                let Some(result) = func.dfg.inst_result(inst) else {
+                    continue;
+                };
+                if func
+                    .dfg
+                    .users(result)
+                    .copied()
+                    .any(|user| func.layout.is_inst_inserted(user))
+                {
+                    continue;
+                }
+
+                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+                changed = true;
+            }
+        }
+        changed
     }
 
     fn cleanup_dead_promoted_allocas_with_current_users(
@@ -1272,7 +1300,7 @@ impl AggregateScalarize {
 
         loop {
             let mut removed_any = false;
-            for value in func.dfg.values.keys() {
+            for value in func.dfg.value_ids().collect::<Vec<_>>() {
                 let Some(projection) = projection_of[value] else {
                     continue;
                 };

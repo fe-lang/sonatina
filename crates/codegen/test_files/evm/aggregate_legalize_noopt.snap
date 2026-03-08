@@ -27,18 +27,18 @@ evm:
 entry:
   block0:
     JUMPDEST
-    PUSH0  // v0.i256 = evm_calldata_load 0.i32;
+    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
-    PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i32;
+    PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i256;
     CALLDATALOAD
     PUSH1 `pc + (4)`  // v2.i256 = call %agg_noopt v0 v1;
     SWAP2
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    PUSH0  // mstore 0.i32 v2 i256;
+    PUSH0  // mstore 0.i256 v2 i256;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
     RETURN
 
