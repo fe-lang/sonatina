@@ -1,142 +1,254 @@
-use super::{Action, EvalValue, Interpret, State};
+use super::{Action, EvalValue, Interpret, State, single_result};
 use crate::inst::arith::*;
 
 impl Interpret for Neg {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let val = state.lookup_val(*self.arg());
-        val.with_imm(|value| -value)
+        single_result(val.with_imm(|value| -value))
     }
 }
 
 impl Interpret for Add {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
 
-        EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| lhs + rhs)
+        single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| lhs + rhs))
+    }
+}
+
+impl Interpret for Uaddo {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
+            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+        };
+
+        let (sum, overflow) = lhs.overflowing_uadd(rhs);
+        smallvec::smallvec![EvalValue::Imm(sum), EvalValue::Imm(overflow.into())]
+    }
+}
+
+impl Interpret for Saddo {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
+            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+        };
+
+        let (sum, overflow) = lhs.overflowing_sadd(rhs);
+        smallvec::smallvec![EvalValue::Imm(sum), EvalValue::Imm(overflow.into())]
     }
 }
 
 impl Interpret for Sub {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
 
-        EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| EvalValue::Imm(lhs - rhs))
+        single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
+            EvalValue::Imm(lhs - rhs)
+        }))
+    }
+}
+
+impl Interpret for Usubo {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
+            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+        };
+
+        let (diff, overflow) = lhs.overflowing_usub(rhs);
+        smallvec::smallvec![EvalValue::Imm(diff), EvalValue::Imm(overflow.into())]
+    }
+}
+
+impl Interpret for Ssubo {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
+            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+        };
+
+        let (diff, overflow) = lhs.overflowing_ssub(rhs);
+        smallvec::smallvec![EvalValue::Imm(diff), EvalValue::Imm(overflow.into())]
     }
 }
 
 impl Interpret for Mul {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
         state.set_action(Action::Continue);
 
-        EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| lhs * rhs)
+        single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| lhs * rhs))
+    }
+}
+
+impl Interpret for Umulo {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
+            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+        };
+
+        let (product, overflow) = lhs.overflowing_umul(rhs);
+        smallvec::smallvec![EvalValue::Imm(product), EvalValue::Imm(overflow.into())]
+    }
+}
+
+impl Interpret for Smulo {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
+            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+        };
+
+        let (product, overflow) = lhs.overflowing_smul(rhs);
+        smallvec::smallvec![EvalValue::Imm(product), EvalValue::Imm(overflow.into())]
+    }
+}
+
+impl Interpret for Snego {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let value = state.lookup_val(*self.arg());
+        let EvalValue::Imm(value) = value else {
+            return smallvec::smallvec![EvalValue::Undef, EvalValue::Undef];
+        };
+
+        let (negated, overflow) = value.overflowing_sneg();
+        smallvec::smallvec![EvalValue::Imm(negated), EvalValue::Imm(overflow.into())]
     }
 }
 
 impl Interpret for Sdiv {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
 
-        EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
+        single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
             if rhs.is_zero() {
                 return EvalValue::Undef;
             }
             lhs.sdiv(rhs).into()
-        })
+        }))
     }
 }
 
 impl Interpret for Udiv {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
 
-        EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
+        single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
             if rhs.is_zero() {
                 return EvalValue::Undef;
             }
             lhs.udiv(rhs).into()
-        })
+        }))
     }
 }
 
 impl Interpret for Umod {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
 
-        EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
+        single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
             if rhs.is_zero() {
                 return EvalValue::Undef;
             }
             lhs.urem(rhs).into()
-        })
+        }))
     }
 }
 
 impl Interpret for Smod {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let lhs = state.lookup_val(*self.lhs());
         let rhs = state.lookup_val(*self.rhs());
 
-        EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
+        single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
             if rhs.is_zero() {
                 return EvalValue::Undef;
             }
             lhs.srem(rhs).into()
-        })
+        }))
     }
 }
 
 impl Interpret for Shl {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let bits = state.lookup_val(*self.bits());
         let value = state.lookup_val(*self.value());
-        EvalValue::zip_with_imm(bits, value, |bits, value| value << bits)
+        single_result(EvalValue::zip_with_imm(bits, value, |bits, value| {
+            value << bits
+        }))
     }
 }
 
 impl Interpret for Shr {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let bits = state.lookup_val(*self.bits());
         let value = state.lookup_val(*self.value());
 
-        EvalValue::zip_with_imm(bits, value, |bits, value| value >> bits)
+        single_result(EvalValue::zip_with_imm(bits, value, |bits, value| {
+            value >> bits
+        }))
     }
 }
 
 impl Interpret for Sar {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let bits = state.lookup_val(*self.bits());
         let value = state.lookup_val(*self.value());
 
-        EvalValue::zip_with_imm(bits, value, |bits, value| value.ashr(bits))
+        single_result(EvalValue::zip_with_imm(bits, value, |bits, value| {
+            value.ashr(bits)
+        }))
     }
 }
 
@@ -147,6 +259,7 @@ mod tests {
     use crate::{
         DataFlowGraph, HasInst, Immediate, Type,
         builder::test_util::test_isa,
+        interpret::EvalResults,
         module::{FuncRef, ModuleCtx},
     };
 
@@ -176,7 +289,7 @@ mod tests {
             self.values.get(&value).cloned().unwrap_or_default()
         }
 
-        fn call_func(&mut self, _func: FuncRef, _args: Vec<EvalValue>) -> EvalValue {
+        fn call_func(&mut self, _func: FuncRef, _args: Vec<EvalValue>) -> EvalResults {
             unreachable!()
         }
 
@@ -218,19 +331,19 @@ mod tests {
 
         assert_eq!(
             Sdiv::new(&hi, lhs, rhs).interpret(&mut state),
-            EvalValue::Undef
+            super::single_result(EvalValue::Undef)
         );
         assert_eq!(
             Udiv::new(&hi, lhs, rhs).interpret(&mut state),
-            EvalValue::Undef
+            super::single_result(EvalValue::Undef)
         );
         assert_eq!(
             Umod::new(&hi, lhs, rhs).interpret(&mut state),
-            EvalValue::Undef
+            super::single_result(EvalValue::Undef)
         );
         assert_eq!(
             Smod::new(&hi, lhs, rhs).interpret(&mut state),
-            EvalValue::Undef
+            super::single_result(EvalValue::Undef)
         );
     }
 
@@ -246,11 +359,96 @@ mod tests {
 
         assert_eq!(
             Shr::new(&hi, bits, value).interpret(&mut state),
-            EvalValue::Imm(Immediate::I8(124))
+            super::single_result(EvalValue::Imm(Immediate::I8(124)))
         );
         assert_eq!(
             Sar::new(&hi, bits, value).interpret(&mut state),
-            EvalValue::Imm(Immediate::I8(-4))
+            super::single_result(EvalValue::Imm(Immediate::I8(-4)))
+        );
+    }
+
+    #[test]
+    fn uaddo_returns_sum_and_overflow_flag() {
+        let hi = TestHasInst;
+        let lhs = crate::ValueId::from_u32(0);
+        let rhs = crate::ValueId::from_u32(1);
+        let mut state = TestState::new([
+            (lhs, EvalValue::Imm(Immediate::I8(-1))),
+            (rhs, EvalValue::Imm(Immediate::I8(1))),
+        ]);
+
+        assert_eq!(
+            Uaddo::new(&hi, lhs, rhs).interpret(&mut state),
+            crate::interpret::EvalResults::from_vec(vec![
+                EvalValue::Imm(Immediate::I8(0)),
+                EvalValue::Imm(Immediate::I1(true))
+            ])
+        );
+    }
+
+    #[test]
+    fn signed_overflow_ops_return_wrapped_values_and_flags() {
+        let hi = TestHasInst;
+        let lhs = crate::ValueId::from_u32(0);
+        let rhs = crate::ValueId::from_u32(1);
+        let mut state = TestState::new([
+            (lhs, EvalValue::Imm(Immediate::I8(-128))),
+            (rhs, EvalValue::Imm(Immediate::I8(-1))),
+        ]);
+
+        assert_eq!(
+            Saddo::new(&hi, lhs, rhs).interpret(&mut state),
+            crate::interpret::EvalResults::from_vec(vec![
+                EvalValue::Imm(Immediate::I8(127)),
+                EvalValue::Imm(Immediate::I1(true))
+            ])
+        );
+        assert_eq!(
+            Ssubo::new(&hi, lhs, rhs).interpret(&mut state),
+            crate::interpret::EvalResults::from_vec(vec![
+                EvalValue::Imm(Immediate::I8(-127)),
+                EvalValue::Imm(Immediate::I1(false))
+            ])
+        );
+        assert_eq!(
+            Snego::new(&hi, lhs).interpret(&mut state),
+            crate::interpret::EvalResults::from_vec(vec![
+                EvalValue::Imm(Immediate::I8(-128)),
+                EvalValue::Imm(Immediate::I1(true))
+            ])
+        );
+    }
+
+    #[test]
+    fn unsigned_and_signed_mul_sub_ops_cover_overflow_cases() {
+        let hi = TestHasInst;
+        let lhs = crate::ValueId::from_u32(0);
+        let rhs = crate::ValueId::from_u32(1);
+        let mut state = TestState::new([
+            (lhs, EvalValue::Imm(Immediate::I8(-1))),
+            (rhs, EvalValue::Imm(Immediate::I8(2))),
+        ]);
+
+        assert_eq!(
+            Usubo::new(&hi, rhs, lhs).interpret(&mut state),
+            crate::interpret::EvalResults::from_vec(vec![
+                EvalValue::Imm(Immediate::I8(3)),
+                EvalValue::Imm(Immediate::I1(true))
+            ])
+        );
+        assert_eq!(
+            Umulo::new(&hi, lhs, rhs).interpret(&mut state),
+            crate::interpret::EvalResults::from_vec(vec![
+                EvalValue::Imm(Immediate::I8(-2)),
+                EvalValue::Imm(Immediate::I1(true))
+            ])
+        );
+        assert_eq!(
+            Smulo::new(&hi, lhs, rhs).interpret(&mut state),
+            crate::interpret::EvalResults::from_vec(vec![
+                EvalValue::Imm(Immediate::I8(-2)),
+                EvalValue::Imm(Immediate::I1(false))
+            ])
         );
     }
 }

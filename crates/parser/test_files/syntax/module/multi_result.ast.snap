@@ -1,0 +1,209 @@
+---
+source: crates/parser/tests/syntax.rs
+assertion_line: 35
+input_file: test_files/syntax/module/multi_result.sntn
+---
+Module {
+    target: Some(
+        TargetTriple {
+            architecture: Evm,
+            vendor: Ethereum,
+            operating_system: Evm(
+                London,
+            ),
+        },
+    ),
+    declared_functions: [],
+    declared_gvs: [],
+    struct_types: [],
+    functions: [
+        Func {
+            signature: FuncSignature {
+                linkage: Public,
+                name: FunctionName {
+                    name: "multi_result",
+                    ..
+                },
+                params: [
+                    ValueDeclaration(
+                        ValueName {
+                            string: "v0",
+                            ..
+                        },
+                        Type {
+                            kind: Int(
+                                I32,
+                            ),
+                            ..
+                        },
+                    ),
+                    ValueDeclaration(
+                        ValueName {
+                            string: "v1",
+                            ..
+                        },
+                        Type {
+                            kind: Int(
+                                I32,
+                            ),
+                            ..
+                        },
+                    ),
+                ],
+                ret_types: [],
+            },
+            blocks: [
+                Block {
+                    id: BlockId {
+                        id: Some(
+                            0,
+                        ),
+                        ..
+                    },
+                    stmts: [
+                        Stmt {
+                            kind: Assign(
+                                [
+                                    ValueDeclaration(
+                                        ValueName {
+                                            string: "v2",
+                                            ..
+                                        },
+                                        Type {
+                                            kind: Int(
+                                                I32,
+                                            ),
+                                            ..
+                                        },
+                                    ),
+                                ],
+                                Inst {
+                                    name: InstName {
+                                        name: "add",
+                                        ..
+                                    },
+                                    args: [
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Named(
+                                                        ValueName {
+                                                            string: "v0",
+                                                            ..
+                                                        },
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Named(
+                                                        ValueName {
+                                                            string: "v1",
+                                                            ..
+                                                        },
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                    ],
+                                    ..
+                                },
+                            ),
+                            ..
+                        },
+                        Stmt {
+                            kind: Assign(
+                                [
+                                    ValueDeclaration(
+                                        ValueName {
+                                            string: "v3",
+                                            ..
+                                        },
+                                        Type {
+                                            kind: Int(
+                                                I32,
+                                            ),
+                                            ..
+                                        },
+                                    ),
+                                    ValueDeclaration(
+                                        ValueName {
+                                            string: "v4",
+                                            ..
+                                        },
+                                        Type {
+                                            kind: Int(
+                                                I1,
+                                            ),
+                                            ..
+                                        },
+                                    ),
+                                ],
+                                Inst {
+                                    name: InstName {
+                                        name: "uaddo",
+                                        ..
+                                    },
+                                    args: [
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Named(
+                                                        ValueName {
+                                                            string: "v2",
+                                                            ..
+                                                        },
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                        InstArg {
+                                            kind: Value(
+                                                Value {
+                                                    kind: Named(
+                                                        ValueName {
+                                                            string: "v1",
+                                                            ..
+                                                        },
+                                                    ),
+                                                    ..
+                                                },
+                                            ),
+                                            ..
+                                        },
+                                    ],
+                                    ..
+                                },
+                            ),
+                            ..
+                        },
+                        Stmt {
+                            kind: Inst(
+                                Inst {
+                                    name: InstName {
+                                        name: "return",
+                                        ..
+                                    },
+                                    args: [],
+                                    ..
+                                },
+                            ),
+                            ..
+                        },
+                    ],
+                },
+            ],
+            comments: [],
+        },
+    ],
+    objects: [],
+    comments: [],
+}

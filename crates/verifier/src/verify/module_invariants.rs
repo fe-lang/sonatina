@@ -65,14 +65,16 @@ pub(super) fn collect_module_invariants(
             );
         }
 
-        verify_signature_type(
-            &module.ctx,
-            *func_ref,
-            sig.ret_ty(),
-            "signature return".to_string(),
-            cfg,
-            report,
-        );
+        for (index, ret_ty) in sig.ret_tys().iter().enumerate() {
+            verify_signature_type(
+                &module.ctx,
+                *func_ref,
+                *ret_ty,
+                format!("signature return {index}"),
+                cfg,
+                report,
+            );
+        }
     }
 
     let mut store_refs = module.func_store.funcs();
@@ -541,14 +543,16 @@ pub(crate) fn has_by_value_function_type_in_signature(ctx: &ModuleCtx, ty: Type)
                     stack.push((field, behind_pointer));
                 }
             }
-            CompoundType::Func { args, ret_ty } => {
+            CompoundType::Func { args, ret_tys } => {
                 if !behind_pointer {
                     return true;
                 }
                 for arg in args {
                     stack.push((arg, false));
                 }
-                stack.push((ret_ty, false));
+                for ret_ty in ret_tys {
+                    stack.push((ret_ty, false));
+                }
             }
         }
     }

@@ -176,8 +176,8 @@ impl InstLiveness {
             for inst in insts.into_iter().rev() {
                 self.live_out[inst] = live.clone();
 
-                if let Some(def) = func.dfg.inst_result(inst) {
-                    live.remove(def);
+                for def in func.dfg.inst_results(inst) {
+                    live.remove(*def);
                 }
 
                 if func.dfg.is_phi(inst) {
@@ -203,8 +203,8 @@ impl InstLiveness {
             for inst in func.layout.iter_inst(block) {
                 if func.dfg.call_info(inst).is_some() {
                     call_live_values.union_with(self.live_out(inst));
-                    if let Some(def) = func.dfg.inst_result(inst) {
-                        call_live_values.remove(def);
+                    for def in func.dfg.inst_results(inst) {
+                        call_live_values.remove(*def);
                     }
                 }
             }
@@ -248,8 +248,8 @@ fn for_each_use(func: &Function, block: BlockId, mut f: impl FnMut(ValueId, Opti
 
 fn for_each_def(func: &Function, block: BlockId, mut f: impl FnMut(ValueId, bool)) {
     for inst in func.layout.iter_inst(block) {
-        if let Some(val) = func.dfg.inst_result(inst) {
-            f(val, func.dfg.is_phi(inst))
+        for val in func.dfg.inst_results(inst) {
+            f(*val, func.dfg.is_phi(inst))
         }
     }
 }

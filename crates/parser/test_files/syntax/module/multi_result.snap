@@ -1,0 +1,79 @@
+---
+source: crates/parser/tests/syntax.rs
+input_file: test_files/syntax/module/multi_result.sntn
+---
+module "target = "evm-ethereum-london"
+
+func public %multi_result(v0.i32, v1.i32) {
+    block0:
+        v2.i32 = add v0 v1;
+        (v3.i32, v4.i1) = uaddo v2 v1;
+        return;
+}
+"
+  target_triple "evm-ethereum-london"
+  function "func public %multi_result(v0.i32, v1.i32) {
+      block0:
+          v2.i32 = add v0 v1;
+          (v3.i32, v4.i1) = uaddo v2 v1;
+          return;
+  }"
+    function_signature "func public %multi_result(v0.i32, v1.i32) "
+      linkage "public"
+      function_identifier "%multi_result"
+        function_name "multi_result"
+      function_params "(v0.i32, v1.i32)"
+        value_declaration "v0.i32"
+          value_name "v0"
+          type_name "i32"
+            primitive_type "i32"
+        value_declaration "v1.i32"
+          value_name "v1"
+          type_name "i32"
+            primitive_type "i32"
+    block "block0:
+            v2.i32 = add v0 v1;
+            (v3.i32, v4.i1) = uaddo v2 v1;
+            return;"
+      block_ident "block0"
+        block_number "0"
+      stmt "v2.i32 = add v0 v1;"
+        assign_stmt "v2.i32 = add v0 v1"
+          value_declaration "v2.i32"
+            value_name "v2"
+            type_name "i32"
+              primitive_type "i32"
+          inst "add v0 v1"
+            inst_name "add"
+              inst_identifier "add"
+            inst_arg "v0"
+              value "v0"
+                value_name "v0"
+            inst_arg "v1"
+              value "v1"
+                value_name "v1"
+      stmt "(v3.i32, v4.i1) = uaddo v2 v1;"
+        assign_stmt "(v3.i32, v4.i1) = uaddo v2 v1"
+          value_declaration "v3.i32"
+            value_name "v3"
+            type_name "i32"
+              primitive_type "i32"
+          value_declaration "v4.i1"
+            value_name "v4"
+            type_name "i1"
+              primitive_type "i1"
+          inst "uaddo v2 v1"
+            inst_name "uaddo"
+              inst_identifier "uaddo"
+            inst_arg "v2"
+              value "v2"
+                value_name "v2"
+            inst_arg "v1"
+              value "v1"
+                value_name "v1"
+      stmt "return;"
+        inst_stmt "return"
+          inst "return"
+            inst_name "return"
+              inst_identifier "return"
+  EOI ""

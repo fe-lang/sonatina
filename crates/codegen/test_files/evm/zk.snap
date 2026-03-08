@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/zk.sntn
 ---
@@ -26,7 +27,7 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
   init__StorPtr_Evm___207f35a85ac4062e: ir_blocks=1 ir_insts=4 vcode_ops=9 fixups=2 imm_bytes=2
     mem: scheme=StaticArena need_words=0 locals_words=0
-  runtime__StorPtr_Evm___207f35a85ac4062e: ir_blocks=13 ir_insts=61 vcode_ops=184 fixups=22 imm_bytes=43
+  runtime__StorPtr_Evm___207f35a85ac4062e: ir_blocks=13 ir_insts=61 vcode_ops=180 fixups=22 imm_bytes=41
     mem: scheme=StaticArena need_words=0 locals_words=0
   hash2_at: ir_blocks=1 ir_insts=5 vcode_ops=16 fixups=0 imm_bytes=2
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -1116,13 +1117,13 @@ evm:
     // v65.i1 = eq v11 v7;
     - stack=[v11, v7], last_use=[v7, v11]
       eq [v11, v7] -> v65
-    // v13.i256 = zext v65 i256;
+    // v72.i256 = bitcast v65 i256;
+    - stack=[v65]
+      bitcast [v65] -> v65
+    // call %abi_return_bool v72;
     - stack=[v65], last_use=[v65]
-      zext [v65] -> v13
-    // call %abi_return_bool v13;
-    - stack=[v13], last_use=[v13]
       pre: [PUSH_CONT, SWAP1]
-      call [v13]
+      call [v65]
     // unreachable;
     - stack=[]
       unreachable []
@@ -1241,13 +1242,13 @@ evm:
     // v66.i1 = eq v24 v28;
     - stack=[v28, v24], last_use=[v24, v28]
       eq [v28, v24] -> v66
-    // v30.i256 = zext v66 i256;
+    // v73.i256 = bitcast v66 i256;
+    - stack=[v66]
+      bitcast [v66] -> v66
+    // call %abi_return_bool v73;
     - stack=[v66], last_use=[v66]
-      zext [v66] -> v30
-    // call %abi_return_bool v30;
-    - stack=[v30], last_use=[v30]
       pre: [PUSH_CONT, SWAP1]
-      call [v30]
+      call [v66]
     // unreachable;
     - stack=[]
       unreachable []
@@ -1325,7 +1326,7 @@ evm:
 
 // func public %hash2(v0.i256, v1.i256) -> i256
   block0 P=[v0, v1] T=[]
-    // v2.*i8 = evm_malloc 64.i256;
+    // v2.*i256 = evm_malloc 64.i256;
     - stack=[v0, v1, <RET>]
       evm_malloc [] -> v2
     // v3.i256 = ptr_to_int v2 i256;
@@ -2232,7 +2233,7 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     JUMP
     JUMPDEST
     EQ  // v65.i1 = eq v17 v12;
-    PUSH1 `pc + (4)`  // call %abi_return_bool v19;
+    PUSH1 `pc + (4)`  // call %abi_return_bool v72;
     SWAP1
     PUSH1 FuncRef(1)
     JUMP
@@ -2325,7 +2326,7 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     JUMP
     JUMPDEST
     EQ  // v66.i1 = eq v31 v35;
-    PUSH1 `pc + (4)`  // call %abi_return_bool v37;
+    PUSH1 `pc + (4)`  // call %abi_return_bool v73;
     SWAP1
     PUSH1 FuncRef(1)
     JUMP
@@ -2392,7 +2393,7 @@ hash2_at:
 hash2:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v4.*i8 = evm_malloc 64.i256;
+    PUSH1 0x40 (64)  // v4.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0xbf (191)
     DUP2

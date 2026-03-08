@@ -25,7 +25,7 @@ struct_name              = @{ ident_start_char ~ ident_body_char* }
 function            =  { function_signature ~ function_body }
 _functions          = _{ (NEWLINE* ~ function ~ NEWLINE*)* }
 function_signature  =  { "func" ~ linkage ~ function_identifier ~ function_params ~ function_ret_type? }
-function_ret_type   =  { "->" ~ type_name }
+function_ret_type   =  { "->" ~ (type_name | multi_type_name_list) }
 linkage             =  { "public" | "private" | "external" }
 function_identifier = ${ "%" ~ function_name }
 function_name       = @{ ident_start_char ~ ident_body_char* }
@@ -54,6 +54,7 @@ array_type         = !{ "[" ~ type_name ~ ";" ~ array_size ~ "]" }
 array_size         =  { ASCII_DIGIT+ }
 function_type      = !{ function_type_arg ~ function_ret_type }
 function_type_arg  =  { "(" ~ type_list ~ ")" }
+multi_type_name_list = _{ "(" ~ type_name ~ ("," ~ type_name)+ ~ ")" }
 unit_type          =  { "unit" }
 
 value_declaration = ${ value_name ~ "." ~ type_name }
@@ -80,13 +81,16 @@ current_section_symbol = { "." }
 
 // Stmts
 stmt        = { (assign_stmt | inst_stmt) ~ ";" }
-assign_stmt = { value_declaration ~ "=" ~ inst }
+assign_stmt = { assign_lhs ~ "=" ~ inst }
+assign_lhs = _{ value_declaration | multi_value_declaration }
+multi_value_declaration = _{ "(" ~ value_declaration ~ ("," ~ value_declaration)+ ~ ")" }
 inst_stmt   = { inst }
 
 inst            = { inst_name ~ inst_arg* }
 inst_name       = { inst_identifier }
 inst_identifier = @{ ident_start_char ~ ident_body_char* }
-inst_arg        = { value | type_name | block_ident | value_block_map | function_identifier | embed_symbol | current_section_symbol }
+inst_arg        = { multi_value_list | value | type_name | block_ident | value_block_map | function_identifier | embed_symbol | current_section_symbol }
+multi_value_list = { "(" ~ value ~ ("," ~ value)+ ~ ")" }
 value_block_map = { "(" ~ value ~ block_ident ~ ")" }
 
 value        =  { value_name | imm_number | undef | global_value }

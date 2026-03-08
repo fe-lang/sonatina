@@ -147,7 +147,7 @@ impl<'a> StackifyBuilder<'a> {
             scratch_live_values
         } else {
             let mut scratch_live_values = BitSet::default();
-            for value in self.func.dfg.values.keys() {
+            for value in self.func.dfg.value_ids() {
                 scratch_live_values.insert(value);
             }
             scratch_live_values
@@ -157,7 +157,7 @@ impl<'a> StackifyBuilder<'a> {
             value_aliases.clone()
         } else {
             let mut aliases: SecondaryMap<ValueId, Option<ValueId>> = SecondaryMap::new();
-            for value in self.func.dfg.values.keys() {
+            for value in self.func.dfg.value_ids() {
                 aliases[value] = Some(value);
             }
             aliases
@@ -286,7 +286,7 @@ fn assign_spill_obj_ids(
 ) -> SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>> {
     let mut map: SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>> =
         SecondaryMap::new();
-    for v in func.dfg.values.keys() {
+    for v in func.dfg.value_ids() {
         let _ = &mut map[v];
     }
 
@@ -334,7 +334,7 @@ block0:
 
         parsed.module.func_store.view(func_ref, |func| {
             let mut aliases: SecondaryMap<_, Option<_>> = SecondaryMap::new();
-            for value in func.dfg.values.keys() {
+            for value in func.dfg.value_ids() {
                 aliases[value] = Some(value);
             }
 

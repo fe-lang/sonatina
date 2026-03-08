@@ -15,8 +15,15 @@ define_inst_set_base! {
     trait InstSetBase {
         arith::Neg,
         arith::Add,
+        arith::Uaddo,
+        arith::Saddo,
         arith::Mul,
         arith::Sub,
+        arith::Usubo,
+        arith::Ssubo,
+        arith::Umulo,
+        arith::Smulo,
+        arith::Snego,
         arith::Sdiv,
         arith::Udiv,
         arith::Umod,
@@ -64,8 +71,12 @@ define_inst_set_base! {
         // Evm specific
         evm::EvmUdiv,
         evm::EvmSdiv,
+        evm::EvmUdivo,
+        evm::EvmSdivo,
         evm::EvmUmod,
         evm::EvmSmod,
+        evm::EvmUmodo,
+        evm::EvmSmodo,
         evm::EvmStop,
         evm::EvmInvalid,
         evm::EvmAddMod,
@@ -189,7 +200,7 @@ mod tests {
     };
 
     #[inst_set(InstKind = "TestInstKind")]
-    struct TestInstSet(Add, Sub, Not, Phi, Jump);
+    struct TestInstSet(Add, Uaddo, Sub, Not, Snego, Phi, Jump);
 
     #[test]
     fn ctor() {
@@ -283,7 +294,7 @@ mod tests {
         assert_eq!(Call::inst_arity(), InstArity::AtLeast(1));
         assert_eq!(BrTable::inst_arity(), InstArity::AtLeast(2));
         assert_eq!(Phi::inst_arity(), InstArity::AtLeast(1));
-        assert_eq!(Return::inst_arity(), InstArity::AtMost(1));
+        assert_eq!(Return::inst_arity(), InstArity::AtLeast(0));
         assert_eq!(Gep::inst_arity(), InstArity::AtLeast(2));
     }
 
@@ -307,8 +318,16 @@ mod tests {
             InstClassKind::Binary(BinaryInstKind::Add)
         );
         assert_eq!(
+            Uaddo::new(&inst_set, v, v).kind(),
+            InstClassKind::Binary(BinaryInstKind::Uaddo)
+        );
+        assert_eq!(
             Not::new(&inst_set, v).kind(),
             InstClassKind::Unary(UnaryInstKind::Not)
+        );
+        assert_eq!(
+            Snego::new(&inst_set, v).kind(),
+            InstClassKind::Unary(UnaryInstKind::Snego)
         );
         assert_eq!(
             Phi::new(inst_set.phi(), vec![(v, b0)]).kind(),

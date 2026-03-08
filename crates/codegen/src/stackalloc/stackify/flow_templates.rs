@@ -236,11 +236,17 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                 &empty_last_use
             };
 
-            let res = ctx
+            let results: SmallVec<[ValueId; 4]> = ctx
                 .func
                 .dfg
-                .inst_result(inst)
-                .map(|v| ctx.canonicalize_value(v));
+                .inst_results(inst)
+                .iter()
+                .map(|&v| ctx.canonicalize_value(v))
+                .collect();
+            let res = match results.as_slice() {
+                [res] => Some(*res),
+                _ => None,
+            };
             if is_normal && inst_is_noop_alias_cast(ctx, inst, &args, res) {
                 // Typed alias-only no-op casts should be invisible to stack simulation:
                 // they do not move stack values, but still consume one SSA use.
@@ -403,21 +409,25 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                 stack.remove_call_ret_addr();
             }
 
-            if let Some(res) = res {
+            for &res in results.iter().rev() {
                 stack.push_value(res);
-                if live_future.contains(res) || live_out.contains(res) {
-                    let mem = planner::MemPlan::new(
-                        spill,
-                        spill_requests,
-                        ctx,
-                        self.spill_obj,
-                        &mut free_slots,
-                        slots,
-                    );
-                    with_planner(ctx, mem, &mut stack, &mut actions, |planner| {
-                        planner.emit_store_if_spilled(res)
-                    });
+            }
+
+            for (depth, &res) in results.iter().enumerate() {
+                if !live_future.contains(res) && !live_out.contains(res) {
+                    continue;
                 }
+                let mem = planner::MemPlan::new(
+                    spill,
+                    spill_requests,
+                    ctx,
+                    self.spill_obj,
+                    &mut free_slots,
+                    slots,
+                );
+                with_planner(ctx, mem, &mut stack, &mut actions, |planner| {
+                    planner.emit_store_if_spilled_at_depth(res, depth)
+                });
             }
         }
     }

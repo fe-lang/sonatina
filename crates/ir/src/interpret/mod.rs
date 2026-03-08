@@ -1,6 +1,7 @@
 use std::fmt;
 
 use macros::inst_prop;
+use smallvec::{SmallVec, smallvec};
 
 use crate::{BlockId, DataFlowGraph, Immediate, Type, ValueId, inst, module::FuncRef};
 
@@ -12,17 +13,34 @@ mod data;
 mod evm;
 mod logic;
 
+pub type EvalResults = SmallVec<[EvalValue; 1]>;
+
+pub(crate) fn no_result() -> EvalResults {
+    SmallVec::new()
+}
+
+pub(crate) fn single_result(value: EvalValue) -> EvalResults {
+    smallvec![value]
+}
+
 #[inst_prop]
 pub trait Interpret {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue;
+    fn interpret(&self, state: &mut dyn State) -> EvalResults;
 
     // TODO: Implement `Interpret` for all inst types and use
     // `type Members = All`
     type Members = (
         inst::arith::Neg,
         inst::arith::Add,
+        inst::arith::Uaddo,
+        inst::arith::Saddo,
         inst::arith::Sub,
+        inst::arith::Usubo,
+        inst::arith::Ssubo,
         inst::arith::Mul,
+        inst::arith::Umulo,
+        inst::arith::Smulo,
+        inst::arith::Snego,
         inst::arith::Sdiv,
         inst::arith::Udiv,
         inst::arith::Umod,
@@ -68,9 +86,13 @@ pub trait Interpret {
         inst::control_flow::Return,
         inst::control_flow::Unreachable,
         inst::evm::EvmUdiv,
+        inst::evm::EvmUdivo,
         inst::evm::EvmSdiv,
+        inst::evm::EvmSdivo,
         inst::evm::EvmUmod,
+        inst::evm::EvmUmodo,
         inst::evm::EvmSmod,
+        inst::evm::EvmSmodo,
         inst::evm::EvmAddMod,
         inst::evm::EvmMulMod,
         inst::evm::EvmExp,
@@ -91,7 +113,7 @@ pub trait State {
     /// error, or cause a panic).
     fn lookup_val(&mut self, value: ValueId) -> EvalValue;
 
-    fn call_func(&mut self, func: FuncRef, args: Vec<EvalValue>) -> EvalValue;
+    fn call_func(&mut self, func: FuncRef, args: Vec<EvalValue>) -> EvalResults;
 
     fn set_action(&mut self, action: Action);
 
@@ -124,7 +146,7 @@ pub enum Action {
     /// This happens e.g, the `BrTable` doesn't have a table entry that
     /// corresponds to scrutinee.
     FallThrough,
-    Return(EvalValue),
+    Return(EvalResults),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

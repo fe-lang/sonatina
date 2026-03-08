@@ -4,6 +4,7 @@ use sonatina_ir::{BlockId, ControlFlowGraph, Function, InstId, ValueId};
 
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
+    domtree::DomTree,
     loop_analysis::{Loop, LoopTree},
 };
 
@@ -26,6 +27,12 @@ impl LicmSolver {
     /// Run loop invariant code motion ont the function.
     /// This method also modifies `cfg` and `lpt` htt
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph, lpt: &mut LoopTree) {
+        self.clear();
+        cfg.compute(func);
+        let mut domtree = DomTree::new();
+        domtree.compute(cfg);
+        lpt.compute(cfg, &domtree);
+
         for lp in lpt.loops() {
             self.collect_invaliants(func, cfg, lpt, lp);
 
@@ -55,8 +62,8 @@ impl LicmSolver {
             for inst in func.layout.iter_inst(block) {
                 if self.is_invariant(func, &loop_var, inst) {
                     self.invariants.push(inst);
-                } else if let Some(result) = func.dfg.inst_result(inst) {
-                    loop_var.insert(result);
+                } else {
+                    loop_var.extend(func.dfg.inst_results(inst).iter().copied());
                 }
             }
         }
@@ -179,7 +186,7 @@ mod tests {
         builder.append_phi_arg(v0, v1, b1);
 
         builder.switch_to_block(b2);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -249,7 +256,7 @@ mod tests {
         builder.append_phi_arg(idx, idx_next, body);
 
         builder.switch_to_block(exit);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();

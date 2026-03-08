@@ -22,7 +22,7 @@ pub trait Allocator {
     /// in the specified order. I.e. the first `Value` in `vals`
     /// will be on the top of the stack.
     fn read(&self, inst: InstId, vals: &[ValueId]) -> Actions;
-    fn write(&self, inst: InstId, val: Option<ValueId>) -> Actions;
+    fn write(&self, inst: InstId, vals: &[ValueId]) -> Actions;
 
     fn traverse_edge(&self, from: BlockId, to: BlockId) -> Actions;
 }

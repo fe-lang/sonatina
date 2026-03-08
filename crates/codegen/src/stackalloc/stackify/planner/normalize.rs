@@ -204,29 +204,6 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         );
         debug_assert!(matches_exact(self.stack, desired));
     }
-
-    /// Delete everything between the current top value and the function return barrier, preserving
-    /// the top value.
-    ///
-    /// This is a specialized cleanup used at internal returns. When there is more than one value
-    /// between `[ret_val]` and `FuncRetAddr`, we swap the return value down as close as possible
-    /// (up to `SWAP16`) and then pop a run of intermediates, repeating until the barrier is
-    /// directly below the top.
-    pub(super) fn delete_between_top_and_func_ret(&mut self) {
-        loop {
-            let Some(barrier_pos) = self.stack.func_ret_index() else {
-                break;
-            };
-            if barrier_pos <= 1 {
-                break;
-            }
-            let between = barrier_pos.saturating_sub(1);
-            let swap_depth = between.min(self.ctx.reach.dup_max);
-            debug_assert!(swap_depth >= 1);
-            self.stack.swap(swap_depth, self.actions);
-            self.stack.pop_n(swap_depth, self.actions);
-        }
-    }
 }
 
 pub(super) struct SpillAwareCostModel<'a> {

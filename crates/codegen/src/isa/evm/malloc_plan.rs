@@ -85,12 +85,14 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
         for inst in function.layout.iter_inst(block) {
             let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
             match data {
-                EvmInstKind::Return(ret) => {
-                    let Some(ret_val) = *ret.arg() else {
+                EvmInstKind::Return(_) => {
+                    let Some(ret_args) = function.dfg.return_args(inst) else {
                         continue;
                     };
-                    if value_may_be_heap_derived(function, module, ret_val, prov) {
-                        return false;
+                    for &ret_val in ret_args {
+                        if value_may_be_heap_derived(function, module, ret_val, prov) {
+                            return false;
+                        }
                     }
                 }
                 EvmInstKind::Mstore(mstore) => {
@@ -248,8 +250,8 @@ pub(crate) fn compute_transient_mallocs(
 
             if matches!(data, EvmInstKind::EvmMalloc(_)) {
                 let mut live = inst_liveness.live_out(inst).clone();
-                if let Some(def) = function.dfg.inst_result(inst) {
-                    live.remove(def);
+                for def in function.dfg.inst_results(inst) {
+                    live.remove(*def);
                 }
 
                 remove_live_mallocs(&mut mallocs, &live, prov, local_mem, &seen_mallocs);
@@ -495,17 +497,19 @@ fn compute_malloc_escape_kinds(
         for inst in function.layout.iter_inst(block) {
             let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
             match data {
-                EvmInstKind::Return(ret) => {
-                    let Some(ret_val) = *ret.arg() else {
+                EvmInstKind::Return(_) => {
+                    let Some(ret_args) = function.dfg.return_args(inst) else {
                         continue;
                     };
-                    record_escaping_mallocs(
-                        &mut escape_kinds,
-                        ret_val,
-                        prov,
-                        &seen_mallocs,
-                        MallocEscapeKind::RETURNS_TO_CALLER,
-                    );
+                    for &ret_val in ret_args {
+                        record_escaping_mallocs(
+                            &mut escape_kinds,
+                            ret_val,
+                            prov,
+                            &seen_mallocs,
+                            MallocEscapeKind::RETURNS_TO_CALLER,
+                        );
+                    }
                 }
                 EvmInstKind::Mstore(mstore) => {
                     let addr = *mstore.addr();
@@ -602,7 +606,9 @@ fn conservative_unknown_ptr_summary(module: &ModuleCtx, func_ref: FuncRef) -> Pt
     PtrEscapeSummary {
         arg_may_escape: vec![true; arg_count],
         arg_may_be_returned: vec![true; arg_count],
-        returns_any_ptr: module.func_sig(func_ref, |sig| sig.ret_ty().is_pointer(module)),
+        returns_any_ptr: module.func_sig(func_ref, |sig| {
+            sig.ret_tys().iter().any(|ty| ty.is_pointer(module))
+        }),
     }
 }
 

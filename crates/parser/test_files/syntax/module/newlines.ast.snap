@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/syntax.rs
+assertion_line: 35
 input_file: test_files/syntax/module/newlines.sntn
-snapshot_kind: text
 ---
 Module {
     target: Some(
@@ -25,7 +25,7 @@ Module {
                     ..
                 },
                 params: [],
-                ret_type: None,
+                ret_types: [],
             },
             blocks: [
                 Block {
@@ -38,18 +38,20 @@ Module {
                     stmts: [
                         Stmt {
                             kind: Assign(
-                                ValueDeclaration(
-                                    ValueName {
-                                        string: "v0",
-                                        ..
-                                    },
-                                    Type {
-                                        kind: Int(
-                                            I8,
-                                        ),
-                                        ..
-                                    },
-                                ),
+                                [
+                                    ValueDeclaration(
+                                        ValueName {
+                                            string: "v0",
+                                            ..
+                                        },
+                                        Type {
+                                            kind: Int(
+                                                I8,
+                                            ),
+                                            ..
+                                        },
+                                    ),
+                                ],
                                 Inst {
                                     name: InstName {
                                         name: "add",

@@ -31,8 +31,7 @@ impl FunctionVerifier<'_> {
             let mut detached: Vec<_> = self
                 .func
                 .dfg
-                .insts
-                .keys()
+                .inst_ids()
                 .filter(|inst| !self.inst_to_block.contains_key(inst))
                 .collect();
             detached.sort_by_key(|inst| inst.as_u32());

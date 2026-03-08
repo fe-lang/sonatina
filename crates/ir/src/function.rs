@@ -2,7 +2,7 @@ use std::io;
 
 use smallvec::SmallVec;
 
-use super::{DataFlowGraph, Layout, Type, ValueId};
+use super::{BlockId, DataFlowGraph, InstId, Layout, Type, ValueId};
 use crate::{InstSetBase, Linkage, ir_writer::IrWrite, module::ModuleCtx};
 
 pub struct Function {
@@ -39,6 +39,43 @@ impl Function {
         self.dfg.inst_set()
     }
 
+    pub fn erase_inst(&mut self, inst: InstId) {
+        assert!(self.layout.has_inst_slot(inst));
+        assert!(
+            !self.layout.is_inst_inserted(inst),
+            "instruction {inst:?} must be detached before erase"
+        );
+        self.dfg.delete_inst(inst);
+    }
+
+    pub fn erase_insts(&mut self, insts: &[InstId]) {
+        for &inst in insts {
+            assert!(self.layout.has_inst_slot(inst));
+            assert!(
+                !self.layout.is_inst_inserted(inst),
+                "instruction {inst:?} must be detached before erase"
+            );
+            self.dfg.untrack_inst(inst);
+        }
+
+        for &inst in insts {
+            self.dfg.delete_inst(inst);
+        }
+    }
+
+    pub fn erase_block(&mut self, block: BlockId) {
+        assert!(self.layout.has_block_slot(block));
+        assert!(
+            !self.layout.is_block_inserted(block),
+            "block {block:?} must be detached before erase"
+        );
+        assert!(
+            self.layout.try_first_inst_of(block) == Some(None),
+            "block {block:?} must be empty before erase"
+        );
+        self.dfg.delete_block(block);
+    }
+
     /// Recompute `dfg.users` from scratch using only layout-inserted instructions.
     ///
     /// Call this after passes that may leave stale user entries (e.g. egraph).
@@ -61,18 +98,27 @@ pub struct Signature {
     linkage: Linkage,
 
     args: SmallVec<[Type; 8]>,
-    ret_ty: Type,
+    ret_tys: SmallVec<[Type; 2]>,
 }
 
 impl Signature {
-    pub fn new(name: &str, linkage: Linkage, args: &[Type], ret_ty: Type) -> Self {
+    pub fn new(name: &str, linkage: Linkage, args: &[Type], ret_tys: &[Type]) -> Self {
         Self {
             name: name.to_string(),
             linkage,
             args: args.into(),
-            ret_ty,
+            ret_tys: ret_tys.into(),
         }
     }
+
+    pub fn new_unit(name: &str, linkage: Linkage, args: &[Type]) -> Self {
+        Self::new(name, linkage, args, &[])
+    }
+
+    pub fn new_single(name: &str, linkage: Linkage, args: &[Type], ret_ty: Type) -> Self {
+        Self::new(name, linkage, args, &[ret_ty])
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -89,20 +135,35 @@ impl Signature {
         &self.args
     }
 
+    pub fn ret_tys(&self) -> &[Type] {
+        &self.ret_tys
+    }
+
+    pub fn returns_unit(&self) -> bool {
+        self.ret_tys.is_empty()
+    }
+
+    pub fn returns_single(&self) -> bool {
+        self.ret_tys.len() == 1
+    }
+
+    pub fn single_ret_ty(&self) -> Option<Type> {
+        (self.ret_tys.len() == 1).then(|| self.ret_tys[0])
+    }
+
     pub fn ret_ty(&self) -> Type {
-        self.ret_ty
+        match self.ret_tys.as_slice() {
+            [] => Type::Unit,
+            [ret_ty] => *ret_ty,
+            _ => panic!("ret_ty called on multi-return signature {}", self.name),
+        }
     }
 
     pub fn func_ptr_type(&self, ctx: &ModuleCtx) -> Type {
         ctx.with_ty_store_mut(|s| {
-            let func_ty = s.make_func(&self.args, self.ret_ty);
+            let func_ty = s.make_func(&self.args, &self.ret_tys);
             s.make_ptr(func_ty)
         })
-    }
-
-    #[doc(hidden)]
-    pub fn set_ret_ty(&mut self, ty: Type) {
-        self.ret_ty = ty;
     }
 }
 
@@ -114,15 +175,22 @@ where
     where
         W: io::Write,
     {
-        write!(w, "func ")?;
         self.linkage.write(w, ctx)?;
         write!(w, " %{}(", self.name)?;
-        self.args.write_with_delim(w, " ", ctx)?;
+        self.args.write_with_delim(w, ", ", ctx)?;
         write!(w, ")")?;
 
-        if !self.ret_ty.is_unit() {
-            write!(w, " -> ")?;
-            self.ret_ty.write(w, ctx)?;
+        match self.ret_tys.as_slice() {
+            [] => {}
+            [ret_ty] => {
+                write!(w, " -> ")?;
+                ret_ty.write(w, ctx)?;
+            }
+            ret_tys => {
+                write!(w, " -> (")?;
+                ret_tys.write_with_delim(w, ", ", ctx)?;
+                write!(w, ")")?;
+            }
         }
 
         Ok(())

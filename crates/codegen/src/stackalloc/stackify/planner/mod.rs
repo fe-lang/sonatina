@@ -158,8 +158,13 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         }
     }
 
-    pub(super) fn emit_store_if_spilled(&mut self, v: ValueId) {
-        self.mem.emit_store_if_spilled_at_depth(v, 0, self.actions);
+    pub(super) fn emit_store_if_spilled_at_depth(&mut self, v: ValueId, depth: usize) {
+        if !self.mem.spill_set().contains(v) {
+            return;
+        }
+        debug_assert!(depth < self.ctx.reach.dup_max, "DUP out of range");
+        self.mem
+            .emit_store_if_spilled_at_depth(v, depth as u8, self.actions);
     }
 
     pub(super) fn emit_store_spilled_value_from_source(

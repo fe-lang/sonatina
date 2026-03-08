@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/terminal_exit_no_cleanup.sntn
 ---
@@ -13,13 +14,13 @@ functions:
   mem: dyn_base=0xc0 static_base=0xc0
   entry: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=0
     mem: scheme=StaticArena need_words=0 locals_words=0
-  exit_return: ir_blocks=1 ir_insts=2 vcode_ops=7 fixups=0 imm_bytes=2
+  exit_return: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=0
     mem: scheme=StaticArena need_words=0 locals_words=0
-  exit_revert: ir_blocks=1 ir_insts=2 vcode_ops=7 fixups=0 imm_bytes=2
+  exit_revert: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=0
     mem: scheme=StaticArena need_words=0 locals_words=0
-  exit_stop: ir_blocks=1 ir_insts=2 vcode_ops=5 fixups=0 imm_bytes=2
+  exit_stop: ir_blocks=1 ir_insts=1 vcode_ops=2 fixups=0 imm_bytes=0
     mem: scheme=StaticArena need_words=0 locals_words=0
-  exit_invalid: ir_blocks=1 ir_insts=2 vcode_ops=5 fixups=0 imm_bytes=2
+  exit_invalid: ir_blocks=1 ir_insts=1 vcode_ops=2 fixups=0 imm_bytes=0
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
@@ -37,44 +38,28 @@ evm:
 
 // func private %exit_return()
   block0 P=[] T=[]
-    // v0.i256 = add 1.i256 2.i256;
-    - stack=[]
-      pre: [PUSH(2), PUSH(1)]
-      add [1, 2] -> v0
     // evm_return 0.i256 0.i256;
-    - stack=[v0x]
+    - stack=[]
       pre: [PUSH(0), PUSH(0)]
       evm_return [0, 0]
 
 // func private %exit_revert()
   block0 P=[] T=[]
-    // v0.i256 = add 3.i256 4.i256;
-    - stack=[]
-      pre: [PUSH(4), PUSH(3)]
-      add [3, 4] -> v0
     // evm_revert 0.i256 0.i256;
-    - stack=[v0x]
+    - stack=[]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
 
 // func private %exit_stop()
   block0 P=[] T=[]
-    // v0.i256 = add 5.i256 6.i256;
-    - stack=[]
-      pre: [PUSH(6), PUSH(5)]
-      add [5, 6] -> v0
     // evm_stop;
-    - stack=[v0x]
+    - stack=[]
       evm_stop []
 
 // func private %exit_invalid()
   block0 P=[] T=[]
-    // v0.i256 = add 7.i256 8.i256;
-    - stack=[]
-      pre: [PUSH(8), PUSH(7)]
-      add [7, 8] -> v0
     // evm_invalid;
-    - stack=[v0x]
+    - stack=[]
       evm_invalid []
 
 // func public %entry()
@@ -89,9 +74,6 @@ entry:
 exit_return:
   block0:
     JUMPDEST
-    PUSH1 0x2 (2)  // v0.i256 = add 1.i256 2.i256;
-    PUSH1 0x1 (1)
-    ADD
     PUSH0  // evm_return 0.i256 0.i256;
     PUSH0
     RETURN
@@ -100,9 +82,6 @@ exit_return:
 exit_revert:
   block0:
     JUMPDEST
-    PUSH1 0x4 (4)  // v0.i256 = add 3.i256 4.i256;
-    PUSH1 0x3 (3)
-    ADD
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
@@ -111,16 +90,10 @@ exit_revert:
 exit_stop:
   block0:
     JUMPDEST
-    PUSH1 0x6 (6)  // v0.i256 = add 5.i256 6.i256;
-    PUSH1 0x5 (5)
-    ADD
     STOP  // evm_stop;
 
 // func private %exit_invalid()
 exit_invalid:
   block0:
     JUMPDEST
-    PUSH1 0x8 (8)  // v0.i256 = add 7.i256 8.i256;
-    PUSH1 0x7 (7)
-    ADD
     INVALID  // evm_invalid;

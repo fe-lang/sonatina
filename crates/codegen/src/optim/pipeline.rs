@@ -24,6 +24,7 @@ use super::{
     gvn::GvnSolver,
     inliner::{Inliner, InlinerConfig},
     licm::LicmSolver,
+    multi_result_legalize::legalize_multi_result,
     sccp::SccpSolver,
 };
 
@@ -34,6 +35,7 @@ use super::{
 /// where standalone dead code elimination is needed without constant propagation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Pass {
+    LegalizeMultiResult,
     /// Control flow graph cleanup (dead block removal, phi pruning, terminator repair).
     CfgCleanup,
     /// Sparse conditional constant propagation (composite: CfgCleanup + SCCP + CfgCleanup + ADCE).
@@ -56,6 +58,7 @@ pub enum Pass {
 impl Pass {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Pass::LegalizeMultiResult => "legalize_multi_result",
             Pass::CfgCleanup => "cfg_cleanup",
             Pass::Sccp => "sccp",
             Pass::Adce => "adce",
@@ -340,6 +343,10 @@ struct PassContext {
 fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
     let _span = trace_span!("sonatina.optim.pipeline.pass", pass = pass.as_str()).entered();
     match pass {
+        Pass::LegalizeMultiResult => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.legalize_multi_result").entered();
+            legalize_multi_result(func);
+        }
         Pass::CfgCleanup => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.cfg_cleanup").entered();
             CfgCleanup::new(CleanupMode::Strict).run(func);
@@ -441,7 +448,7 @@ mod tests {
         let arg = builder.args()[0];
         let c1 = builder.make_imm_value(1i32);
         let sum = builder.insert_inst_with(|| Add::new(is, arg, c1), Type::I32);
-        builder.insert_inst_no_result_with(|| Return::new(is, Some(sum)));
+        builder.insert_inst_no_result_with(|| Return::new_single(is, sum));
         builder.seal_all();
         builder.finish();
 

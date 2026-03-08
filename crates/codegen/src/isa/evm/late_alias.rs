@@ -32,7 +32,7 @@ pub(crate) fn normalize_alias_map(
     function: &Function,
     value_aliases: &mut SecondaryMap<ValueId, Option<ValueId>>,
 ) {
-    for value in function.dfg.values.keys() {
+    for value in function.dfg.value_ids() {
         let mut seen: BitSet<ValueId> = BitSet::default();
         let mut path = SmallVec::<[ValueId; 8]>::new();
         let mut current = value;
@@ -62,7 +62,7 @@ pub(crate) fn normalize_alias_map(
     }
 
     #[cfg(debug_assertions)]
-    for value in function.dfg.values.keys() {
+    for value in function.dfg.value_ids() {
         let rep = value_aliases[value].unwrap_or(value);
         debug_assert_eq!(
             value_aliases[rep].unwrap_or(rep),
@@ -76,7 +76,7 @@ pub(crate) fn normalize_alias_map(
 impl LateValueAliasMap {
     pub(crate) fn identity(function: &Function) -> Self {
         let mut rep_of: SecondaryMap<ValueId, Option<ValueId>> = SecondaryMap::new();
-        for v in function.dfg.values.keys() {
+        for v in function.dfg.value_ids() {
             rep_of[v] = Some(v);
         }
         Self { rep_of }
@@ -116,7 +116,7 @@ pub(crate) fn compute_evm_late_aliases(
 
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
-            let Some(result) = function.dfg.inst_result(inst) else {
+            let [result] = function.dfg.inst_results(inst) else {
                 continue;
             };
 
@@ -139,7 +139,7 @@ pub(crate) fn compute_evm_late_aliases(
             };
 
             let from_rep = aliases.rep(from);
-            aliases.rep_of[result] = Some(from_rep);
+            aliases.rep_of[*result] = Some(from_rep);
         }
     }
 

@@ -25,7 +25,9 @@ pub(crate) fn simplify_unary_with_same_inner(
         UnaryInstKind::Not | UnaryInstKind::Neg => same_inner_arg(arg, kind)
             .map(SimplifyExprResult::Copy)
             .unwrap_or(SimplifyExprResult::NoChange),
-        UnaryInstKind::IsZero | UnaryInstKind::EvmClz => SimplifyExprResult::NoChange,
+        UnaryInstKind::Snego | UnaryInstKind::IsZero | UnaryInstKind::EvmClz => {
+            SimplifyExprResult::NoChange
+        }
     }
 }
 
@@ -159,7 +161,13 @@ pub(crate) fn simplify_binary_with_known_imm(
                 return SimplifyExprResult::Copy(rhs);
             }
         }
-        BinaryInstKind::Lt
+        BinaryInstKind::Uaddo
+        | BinaryInstKind::Saddo
+        | BinaryInstKind::Umulo
+        | BinaryInstKind::Smulo
+        | BinaryInstKind::Usubo
+        | BinaryInstKind::Ssubo
+        | BinaryInstKind::Lt
         | BinaryInstKind::Gt
         | BinaryInstKind::Slt
         | BinaryInstKind::Sgt
@@ -167,6 +175,10 @@ pub(crate) fn simplify_binary_with_known_imm(
         | BinaryInstKind::Ge
         | BinaryInstKind::Sle
         | BinaryInstKind::Sge
+        | BinaryInstKind::EvmUdivo
+        | BinaryInstKind::EvmSdivo
+        | BinaryInstKind::EvmUmodo
+        | BinaryInstKind::EvmSmodo
         | BinaryInstKind::EvmExp
         | BinaryInstKind::EvmByte => {}
     }
@@ -213,7 +225,7 @@ mod tests {
     fn simplify_binary_with_known_imm_folds_shift_identities() {
         let isa = test_isa();
         let ctx = ModuleCtx::new(&isa);
-        let sig = Signature::new("f", Linkage::Private, &[], Type::I256);
+        let sig = Signature::new_single("f", Linkage::Private, &[], Type::I256);
         let mut func = Function::new(&ctx, &sig);
         let bits = func.dfg.make_imm_value(Immediate::zero(Type::I8));
         let value = func

@@ -37,10 +37,10 @@ impl TypeStore {
         Type::Compound(cmpd_ref)
     }
 
-    pub fn make_func(&mut self, args: &[Type], ret_ty: Type) -> Type {
+    pub fn make_func(&mut self, args: &[Type], ret_tys: &[Type]) -> Type {
         let cmpd_ref = self.make_compound(CompoundType::Func {
             args: args.into(),
-            ret_ty,
+            ret_tys: ret_tys.into(),
         });
         Type::Compound(cmpd_ref)
     }
@@ -319,11 +319,19 @@ where
                     }
                 }
 
-                CompoundType::Func { args, ret_ty: ret } => {
+                CompoundType::Func { args, ret_tys } => {
                     write!(w, "(")?;
                     args.write_with_delim(w, ", ", ctx)?;
                     write!(w, ") -> ")?;
-                    ret.write(w, ctx)
+                    match ret_tys.as_slice() {
+                        [] => Type::Unit.write(w, ctx),
+                        [ret_ty] => ret_ty.write(w, ctx),
+                        ret_tys => {
+                            write!(w, "(")?;
+                            ret_tys.write_with_delim(w, ", ", ctx)?;
+                            write!(w, ")")
+                        }
+                    }
                 }
             })
     }
@@ -339,7 +347,7 @@ pub enum CompoundType {
     Struct(StructData),
     Func {
         args: SmallVec<[Type; 8]>,
-        ret_ty: Type,
+        ret_tys: SmallVec<[Type; 2]>,
     },
 }
 

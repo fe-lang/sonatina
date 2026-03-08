@@ -40,7 +40,11 @@ pub mod test_util {
         args: &[Type],
         ret_ty: Type,
     ) -> (Evm, FunctionBuilder<InstInserter>) {
-        let sig = Signature::new("test_func", Linkage::Public, args, ret_ty);
+        let sig = if ret_ty.is_unit() {
+            Signature::new_unit("test_func", Linkage::Public, args)
+        } else {
+            Signature::new_single("test_func", Linkage::Public, args, ret_ty)
+        };
         let func_ref = mb.declare_function(sig).unwrap();
         (test_isa(), mb.func_builder(func_ref))
     }

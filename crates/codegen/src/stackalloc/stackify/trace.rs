@@ -65,7 +65,7 @@ pub(super) trait StackifyObserver {
         _func: &Function,
         _inst: InstId,
         _args: &[ValueId],
-        _res: Option<ValueId>,
+        _results: &[ValueId],
     ) {
     }
 
@@ -75,7 +75,7 @@ pub(super) trait StackifyObserver {
 
     fn on_inst_br_table(&mut self, _inst: InstId) {}
 
-    fn on_inst_return(&mut self, _func: &Function, _inst: InstId, _ret: Option<ValueId>) {}
+    fn on_inst_return(&mut self, _func: &Function, _inst: InstId, _rets: &[ValueId]) {}
 }
 
 pub(super) struct NullObserver;
@@ -289,7 +289,7 @@ impl StackifyObserver for StackifyTrace {
         func: &Function,
         inst: InstId,
         args: &[ValueId],
-        res: Option<ValueId>,
+        results: &[ValueId],
     ) {
         let op_name = func.dfg.inst(inst).as_text();
         let _ = write!(
@@ -297,8 +297,14 @@ impl StackifyObserver for StackifyTrace {
             "      {op_name} {}",
             fmt_trace_operands(func, inst, args)
         );
-        if let Some(r) = res {
-            let _ = write!(&mut self.out, " -> {}", fmt_value(func, r));
+        match results {
+            [] => {}
+            [result] => {
+                let _ = write!(&mut self.out, " -> {}", fmt_value(func, *result));
+            }
+            _ => {
+                let _ = write!(&mut self.out, " -> {}", fmt_values(func, results));
+            }
         }
         let _ = writeln!(&mut self.out);
     }
@@ -320,16 +326,12 @@ impl StackifyObserver for StackifyTrace {
         let _ = writeln!(&mut self.out, "      br_table");
     }
 
-    fn on_inst_return(&mut self, func: &Function, inst: InstId, ret: Option<ValueId>) {
+    fn on_inst_return(&mut self, func: &Function, inst: InstId, rets: &[ValueId]) {
         let op_name = func.dfg.inst(inst).as_text();
-        if let Some(ret) = ret {
-            let _ = writeln!(
-                &mut self.out,
-                "      {op_name} {}",
-                fmt_values(func, &[ret])
-            );
-        } else {
+        if rets.is_empty() {
             let _ = writeln!(&mut self.out, "      {op_name} []");
+        } else {
+            let _ = writeln!(&mut self.out, "      {op_name} {}", fmt_values(func, rets));
         }
     }
 }

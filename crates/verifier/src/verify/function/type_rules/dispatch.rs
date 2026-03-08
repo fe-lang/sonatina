@@ -70,6 +70,101 @@ impl_binary_integral_same_rule!(
     logic::Xor => "xor",
 );
 
+fn verify_binary_overflow_inst(
+    verifier: &mut FunctionVerifier<'_>,
+    inst_id: InstId,
+    lhs: ValueId,
+    rhs: ValueId,
+    opname: &str,
+) {
+    let location = verifier.inst_location(inst_id);
+    let Some(lhs_ty) = verifier.value_ty(lhs) else {
+        return;
+    };
+    let Some(rhs_ty) = verifier.value_ty(rhs) else {
+        return;
+    };
+
+    if !lhs_ty.is_integral() || !rhs_ty.is_integral() {
+        verifier.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} operands must be integral"),
+                location.clone(),
+            )
+            .with_note(format!("lhs {:?}, rhs {:?}", lhs_ty, rhs_ty)),
+        );
+    }
+    if lhs_ty != rhs_ty {
+        verifier.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} operands must have identical types"),
+                location.clone(),
+            )
+            .with_note(format!("lhs {:?}, rhs {:?}", lhs_ty, rhs_ty)),
+        );
+    }
+
+    verifier.expect_result_tys(inst_id, &[lhs_ty, Type::I1], location);
+}
+
+fn verify_unary_overflow_inst(
+    verifier: &mut FunctionVerifier<'_>,
+    inst_id: InstId,
+    arg: ValueId,
+    opname: &str,
+) {
+    let location = verifier.inst_location(inst_id);
+    let Some(arg_ty) = verifier.value_ty(arg) else {
+        return;
+    };
+
+    if !arg_ty.is_integral() {
+        verifier.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} operand must be integral"),
+                location.clone(),
+            )
+            .with_note(format!("arg {:?}", arg_ty)),
+        );
+    }
+
+    verifier.expect_result_tys(inst_id, &[arg_ty, Type::I1], location);
+}
+
+macro_rules! impl_binary_overflow_rule {
+    ($($ty:ty => $opname:literal),+ $(,)?) => {
+        $(
+            impl VerifyInst for $ty {
+                fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+                    verify_binary_overflow_inst(verifier, inst_id, *self.lhs(), *self.rhs(), $opname);
+                }
+            }
+        )+
+    };
+}
+
+impl_binary_overflow_rule!(
+    arith::Uaddo => "uaddo",
+    arith::Saddo => "saddo",
+    arith::Usubo => "usubo",
+    arith::Ssubo => "ssubo",
+    arith::Umulo => "umulo",
+    arith::Smulo => "smulo",
+    evm::EvmUdivo => "evm_udivo",
+    evm::EvmSdivo => "evm_sdivo",
+    evm::EvmUmodo => "evm_umodo",
+    evm::EvmSmodo => "evm_smodo",
+);
+
+impl VerifyInst for arith::Snego {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        verify_unary_overflow_inst(verifier, inst_id, *self.arg(), "snego");
+    }
+}
+
 macro_rules! impl_shift_rule {
     ($($ty:ty => $opname:literal),+ $(,)?) => {
         $(
@@ -450,7 +545,7 @@ impl VerifyInst for data::GetFunctionPtr {
             let Some(cmpd) = store.get_compound(func_cmpd_ref) else {
                 return false;
             };
-            matches!(cmpd, CompoundType::Func { args, ret_ty } if args.as_slice() == sig.args() && *ret_ty == sig.ret_ty())
+            matches!(cmpd, CompoundType::Func { args, ret_tys } if args.as_slice() == sig.args() && ret_tys.as_slice() == sig.ret_tys())
         });
         if !matches {
             verifier.emit(
@@ -463,7 +558,7 @@ impl VerifyInst for data::GetFunctionPtr {
                     "callee signature is {}({:?}) -> {:?}",
                     sig.name(),
                     sig.args(),
-                    sig.ret_ty()
+                    sig.ret_tys()
                 )),
             );
         }
@@ -623,56 +718,53 @@ impl VerifyInst for control_flow::Call {
                 );
             }
         }
-        if callee_sig.ret_ty().is_unit() {
-            verifier.expect_no_result(inst_id, verifier.inst_location(inst_id));
-        } else {
-            verifier.expect_result_ty(
-                inst_id,
-                callee_sig.ret_ty(),
-                verifier.inst_location(inst_id),
-            );
-        }
+        verifier.expect_result_tys(
+            inst_id,
+            callee_sig.ret_tys(),
+            verifier.inst_location(inst_id),
+        );
     }
 }
 
 impl VerifyInst for control_flow::Return {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
         let location = verifier.inst_location(inst_id);
-        let expected_ret_ty = verifier
+        let expected_ret_tys = verifier
             .sig
             .as_ref()
-            .map(|sig| sig.ret_ty())
-            .unwrap_or(Type::Unit);
-        match (expected_ret_ty, self.arg()) {
-            (ret_ty, None) if !ret_ty.is_unit() => {
-                verifier.emit(Diagnostic::error(
+            .map(|sig| sig.ret_tys().to_vec())
+            .unwrap_or_default();
+        let actual_args = self.args().as_slice();
+        if expected_ret_tys.len() != actual_args.len() {
+            verifier.emit(
+                Diagnostic::error(
                     DiagnosticCode::ReturnTypeMismatch,
-                    "non-unit function return requires an argument",
+                    "return value count does not match function signature",
                     location,
-                ));
+                )
+                .with_note(format!(
+                    "expected {}, found {}",
+                    expected_ret_tys.len(),
+                    actual_args.len()
+                )),
+            );
+        }
+        for (index, (value, expected_ty)) in actual_args.iter().zip(expected_ret_tys).enumerate() {
+            if let Some(actual_ty) = verifier.value_ty(*value)
+                && actual_ty != expected_ty
+            {
+                verifier.emit(
+                    Diagnostic::error(
+                        DiagnosticCode::ReturnTypeMismatch,
+                        "return value type does not match function return type",
+                        verifier.inst_location(inst_id),
+                    )
+                    .with_note(format!(
+                        "return {index}: expected {:?}, found {:?}",
+                        expected_ty, actual_ty
+                    )),
+                );
             }
-            (ret_ty, Some(_)) if ret_ty.is_unit() => {
-                verifier.emit(Diagnostic::error(
-                    DiagnosticCode::ReturnTypeMismatch,
-                    "unit function return must not carry a value",
-                    location,
-                ));
-            }
-            (ret_ty, Some(value)) => {
-                if let Some(actual_ty) = verifier.value_ty(*value)
-                    && actual_ty != ret_ty
-                {
-                    verifier.emit(
-                        Diagnostic::error(
-                            DiagnosticCode::ReturnTypeMismatch,
-                            "return value type does not match function return type",
-                            verifier.inst_location(inst_id),
-                        )
-                        .with_note(format!("expected {:?}, found {:?}", ret_ty, actual_ty)),
-                    );
-                }
-            }
-            _ => {}
         }
         verifier.expect_no_result(inst_id, verifier.inst_location(inst_id));
     }

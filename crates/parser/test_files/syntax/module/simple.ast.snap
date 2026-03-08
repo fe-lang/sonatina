@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/syntax.rs
+assertion_line: 35
 input_file: test_files/syntax/module/simple.sntn
-snapshot_kind: text
 ---
 Module {
     target: Some(
@@ -34,14 +34,14 @@ Module {
                     ..
                 },
             ],
-            ret_type: Some(
+            ret_types: [
                 Type {
                     kind: Int(
                         I8,
                     ),
                     ..
                 },
-            ),
+            ],
         },
     ],
     declared_gvs: [],
@@ -113,7 +113,7 @@ Module {
                     ..
                 },
                 params: [],
-                ret_type: None,
+                ret_types: [],
             },
             blocks: [
                 Block {
@@ -126,18 +126,20 @@ Module {
                     stmts: [
                         Stmt {
                             kind: Assign(
-                                ValueDeclaration(
-                                    ValueName {
-                                        string: "v0",
-                                        ..
-                                    },
-                                    Type {
-                                        kind: Int(
-                                            I8,
-                                        ),
-                                        ..
-                                    },
-                                ),
+                                [
+                                    ValueDeclaration(
+                                        ValueName {
+                                            string: "v0",
+                                            ..
+                                        },
+                                        Type {
+                                            kind: Int(
+                                                I8,
+                                            ),
+                                            ..
+                                        },
+                                    ),
+                                ],
                                 Inst {
                                     name: InstName {
                                         name: "call",
@@ -211,14 +213,14 @@ Module {
                         },
                     ),
                 ],
-                ret_type: Some(
+                ret_types: [
                     Type {
                         kind: Int(
                             I8,
                         ),
                         ..
                     },
-                ),
+                ],
             },
             blocks: [
                 Block {
@@ -231,18 +233,20 @@ Module {
                     stmts: [
                         Stmt {
                             kind: Assign(
-                                ValueDeclaration(
-                                    ValueName {
-                                        string: "v1",
-                                        ..
-                                    },
-                                    Type {
-                                        kind: Int(
-                                            I8,
-                                        ),
-                                        ..
-                                    },
-                                ),
+                                [
+                                    ValueDeclaration(
+                                        ValueName {
+                                            string: "v1",
+                                            ..
+                                        },
+                                        Type {
+                                            kind: Int(
+                                                I8,
+                                            ),
+                                            ..
+                                        },
+                                    ),
+                                ],
                                 Inst {
                                     name: InstName {
                                         name: "mul",
@@ -284,18 +288,20 @@ Module {
                         },
                         Stmt {
                             kind: Assign(
-                                ValueDeclaration(
-                                    ValueName {
-                                        string: "v2",
-                                        ..
-                                    },
-                                    Type {
-                                        kind: Int(
-                                            I8,
-                                        ),
-                                        ..
-                                    },
-                                ),
+                                [
+                                    ValueDeclaration(
+                                        ValueName {
+                                            string: "v2",
+                                            ..
+                                        },
+                                        Type {
+                                            kind: Int(
+                                                I8,
+                                            ),
+                                            ..
+                                        },
+                                    ),
+                                ],
                                 Inst {
                                     name: InstName {
                                         name: "call",
@@ -500,7 +506,7 @@ Module {
                         },
                     ),
                 ],
-                ret_type: None,
+                ret_types: [],
             },
             blocks: [
                 Block {
@@ -550,7 +556,7 @@ Module {
                         },
                     ),
                 ],
-                ret_type: None,
+                ret_types: [],
             },
             blocks: [
                 Block {
@@ -742,14 +748,14 @@ Module {
                         },
                     ),
                 ],
-                ret_type: Some(
+                ret_types: [
                     Type {
                         kind: Int(
                             I64,
                         ),
                         ..
                     },
-                ),
+                ],
             },
             blocks: [
                 Block {
@@ -797,18 +803,20 @@ Module {
                     stmts: [
                         Stmt {
                             kind: Assign(
-                                ValueDeclaration(
-                                    ValueName {
-                                        string: "v1",
-                                        ..
-                                    },
-                                    Type {
-                                        kind: Int(
-                                            I64,
-                                        ),
-                                        ..
-                                    },
-                                ),
+                                [
+                                    ValueDeclaration(
+                                        ValueName {
+                                            string: "v1",
+                                            ..
+                                        },
+                                        Type {
+                                            kind: Int(
+                                                I64,
+                                            ),
+                                            ..
+                                        },
+                                    ),
+                                ],
                                 Inst {
                                     name: InstName {
                                         name: "phi",
@@ -866,18 +874,20 @@ Module {
                         },
                         Stmt {
                             kind: Assign(
-                                ValueDeclaration(
-                                    ValueName {
-                                        string: "v2",
-                                        ..
-                                    },
-                                    Type {
-                                        kind: Int(
-                                            I1,
-                                        ),
-                                        ..
-                                    },
-                                ),
+                                [
+                                    ValueDeclaration(
+                                        ValueName {
+                                            string: "v2",
+                                            ..
+                                        },
+                                        Type {
+                                            kind: Int(
+                                                I1,
+                                            ),
+                                            ..
+                                        },
+                                    ),
+                                ],
                                 Inst {
                                     name: InstName {
                                         name: "gt",

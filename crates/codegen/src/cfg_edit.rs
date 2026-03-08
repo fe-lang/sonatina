@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Inst, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
@@ -50,13 +51,46 @@ impl<'f> CfgEditor<'f> {
         assert!(self.func.layout.is_inst_inserted(first_inst));
         let block = self.func.layout.inst_block(first_inst);
 
+        let mut insts = Vec::new();
         let mut current = Some(first_inst);
         while let Some(inst_id) = current {
+            insts.push(inst_id);
             current = self.func.layout.next_inst_of(inst_id);
-            InstInserter::at_location(CursorLocation::At(inst_id)).remove_inst(self.func);
         }
 
+        for &inst_id in &insts {
+            self.func.layout.remove_inst(inst_id);
+        }
+        self.func.erase_insts(&insts);
+
         block
+    }
+
+    pub fn append_inst_with_results(
+        &mut self,
+        block: BlockId,
+        inst: Box<dyn Inst>,
+        result_tys: &[Type],
+    ) -> (InstId, SmallVec<[ValueId; 2]>) {
+        assert!(self.func.layout.is_block_inserted(block));
+        let inst_id = self.func.dfg.make_inst_dyn(inst);
+        self.func.layout.append_inst(inst_id, block);
+
+        let results = result_tys
+            .iter()
+            .enumerate()
+            .map(|(result_idx, ty)| {
+                let value = self.func.dfg.make_value(Value::Inst {
+                    inst: inst_id,
+                    result_idx: result_idx.try_into().expect("too many instruction results"),
+                    ty: *ty,
+                });
+                self.func.dfg.append_result(inst_id, value);
+                value
+            })
+            .collect();
+
+        (inst_id, results)
     }
 
     pub fn append_inst_with_result(
@@ -65,17 +99,12 @@ impl<'f> CfgEditor<'f> {
         inst: Box<dyn Inst>,
         result_ty: Option<Type>,
     ) -> (InstId, Option<ValueId>) {
-        assert!(self.func.layout.is_block_inserted(block));
-        let inst_id = self.func.dfg.make_inst_dyn(inst);
-        self.func.layout.append_inst(inst_id, block);
-
-        let result = result_ty.map(|ty| {
-            let value = self.func.dfg.make_value(Value::Inst { inst: inst_id, ty });
-            self.func.dfg.attach_result(inst_id, value);
-            value
-        });
-
-        (inst_id, result)
+        let (inst_id, results) = match result_ty {
+            Some(result_ty) => self.append_inst_with_results(block, inst, &[result_ty]),
+            None => self.append_inst_with_results(block, inst, &[]),
+        };
+        debug_assert!(results.len() <= 1);
+        (inst_id, results.first().copied())
     }
 
     pub fn trim_after_terminator(&mut self) -> bool {
@@ -83,18 +112,24 @@ impl<'f> CfgEditor<'f> {
 
         let blocks: Vec<_> = self.func.layout.iter_block().collect();
         for block in blocks {
+            let mut to_remove = Vec::new();
             let mut found_term = false;
             let mut next_inst = self.func.layout.first_inst_of(block);
             while let Some(inst) = next_inst {
                 next_inst = self.func.layout.next_inst_of(inst);
                 if found_term {
-                    InstInserter::at_location(CursorLocation::At(inst)).remove_inst(self.func);
+                    to_remove.push(inst);
                     changed = true;
                     continue;
                 }
 
                 found_term = self.func.dfg.is_terminator(inst);
             }
+
+            for &inst in &to_remove {
+                self.func.layout.remove_inst(inst);
+            }
+            self.func.erase_insts(&to_remove);
         }
 
         if changed {
@@ -801,7 +836,7 @@ mod tests {
         let one = builder.make_imm_value(1i32);
         let two = builder.make_imm_value(2i32);
         let phi = builder.insert_inst_with(|| Phi::new(is, vec![(one, b0), (two, b1)]), Type::I32);
-        builder.insert_inst_no_result_with(|| Return::new(is, Some(phi)));
+        builder.insert_inst_no_result_with(|| Return::new_single(is, phi));
 
         builder.seal_all();
         builder.finish();
@@ -835,7 +870,7 @@ mod tests {
         builder.switch_to_block(b0);
         let one = builder.make_imm_value(1i32);
         let v0 = builder.insert_inst_with(|| Add::new(is, arg0, one), Type::I32);
-        builder.insert_inst_no_result_with(|| Return::new(is, Some(v0)));
+        builder.insert_inst_no_result_with(|| Return::new_single(is, v0));
         builder.seal_all();
         builder.finish();
 
@@ -859,7 +894,7 @@ mod tests {
             );
             let add_res = add_res.unwrap();
 
-            editor.append_inst_with_result(block, Box::new(Return::new(is, Some(add_res))), None);
+            editor.append_inst_with_result(block, Box::new(Return::new_single(is, add_res)), None);
             editor.recompute_cfg();
 
             let term = editor.func().layout.last_inst_of(block).unwrap();
@@ -914,7 +949,7 @@ mod tests {
         builder.append_phi_arg(v4, v6, b4);
 
         builder.switch_to_block(b5);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -977,7 +1012,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Br::new(is, cond, b0, b1));
 
         builder.switch_to_block(b1);
-        builder.insert_inst_no_result_with(|| Return::new(is, Some(v0)));
+        builder.insert_inst_no_result_with(|| Return::new_single(is, v0));
 
         builder.seal_all();
         builder.finish();
@@ -1027,7 +1062,7 @@ mod tests {
         builder.append_phi_arg(phi, v1, b1);
 
         builder.switch_to_block(b2);
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();
         builder.finish();
@@ -1067,7 +1102,7 @@ mod tests {
         builder.append_phi_arg(phi, phi, b2);
 
         builder.switch_to_block(b3);
-        builder.insert_inst_no_result_with(|| Return::new(is, Some(phi)));
+        builder.insert_inst_no_result_with(|| Return::new_single(is, phi));
 
         builder.seal_all();
         builder.finish();
@@ -1081,7 +1116,7 @@ mod tests {
             assert!(!func.dfg.is_phi(first));
 
             let term = func.layout.last_inst_of(b3).unwrap();
-            assert_eq!(func.dfg.as_return(term), Some(seed));
+            assert_eq!(func.dfg.return_args(term), Some(&[seed][..]));
         });
     }
 
@@ -1117,7 +1152,7 @@ mod tests {
 
         builder.switch_to_block(b3);
         let phi = builder.insert_inst_with(|| Phi::new(is, vec![(v2, b2), (seed, b4)]), Type::I32);
-        builder.insert_inst_no_result_with(|| Return::new(is, Some(phi)));
+        builder.insert_inst_no_result_with(|| Return::new_single(is, phi));
 
         builder.seal_all();
         builder.finish();

@@ -10,9 +10,9 @@ pub(super) fn iter_nested_types(cmpd: &CompoundType) -> Vec<Type> {
         CompoundType::Array { elem, .. } => vec![*elem],
         CompoundType::Ptr(elem) => vec![*elem],
         CompoundType::Struct(data) => data.fields.clone(),
-        CompoundType::Func { args, ret_ty } => {
+        CompoundType::Func { args, ret_tys } => {
             let mut nested = args.to_vec();
-            nested.push(*ret_ty);
+            nested.extend(ret_tys.iter().copied());
             nested
         }
     }
@@ -54,11 +54,13 @@ pub(super) fn is_type_valid(ctx: &ModuleCtx, ty: Type) -> bool {
                     push_nested(field, true);
                 }
             }
-            CompoundType::Func { args, ret_ty } => {
+            CompoundType::Func { args, ret_tys } => {
                 for arg in args {
                     push_nested(arg, true);
                 }
-                push_nested(ret_ty, true);
+                for ret_ty in ret_tys {
+                    push_nested(ret_ty, true);
+                }
             }
         }
     }

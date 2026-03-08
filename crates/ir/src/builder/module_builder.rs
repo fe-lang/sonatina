@@ -86,7 +86,7 @@ impl ModuleBuilder {
     pub fn declare_function(&self, sig: Signature) -> Result<FuncRef, BuilderError> {
         if let Some(func_ref) = self.declared_funcs.get(sig.name()) {
             return self.ctx.func_sig(*func_ref, |func_sig| {
-                if func_sig.args() == sig.args() && func_sig.ret_ty() == sig.ret_ty() {
+                if func_sig.args() == sig.args() && func_sig.ret_tys() == sig.ret_tys() {
                     Ok(*func_ref)
                 } else {
                     Err(BuilderError::ConflictingFunctionDeclaration)
@@ -127,8 +127,8 @@ impl ModuleBuilder {
         self.ctx.with_ty_store_mut(|s| s.make_array(elem, len))
     }
 
-    pub fn declare_func_type(&self, args: &[Type], ret_ty: Type) -> Type {
-        self.ctx.with_ty_store_mut(|s| s.make_func(args, ret_ty))
+    pub fn declare_func_type(&self, args: &[Type], ret_tys: &[Type]) -> Type {
+        self.ctx.with_ty_store_mut(|s| s.make_func(args, ret_tys))
     }
 
     pub fn lookup_func(&self, name: &str) -> Option<FuncRef> {
@@ -208,7 +208,7 @@ mod tests {
     #[test]
     fn test_declare_function_success() {
         let builder = test_module_builder();
-        let sig = Signature::new("foo", Linkage::Public, &[], Type::Unit);
+        let sig = Signature::new_unit("foo", Linkage::Public, &[]);
 
         let result = builder.declare_function(sig.clone());
         assert!(result.is_ok());
@@ -222,8 +222,8 @@ mod tests {
     fn test_declare_function_conflict() {
         let builder = test_module_builder();
 
-        let sig1 = Signature::new("foo", Linkage::Public, &[Type::I32], Type::I32);
-        let sig2 = Signature::new("foo", Linkage::Public, &[Type::I64], Type::I64);
+        let sig1 = Signature::new_single("foo", Linkage::Public, &[Type::I32], Type::I32);
+        let sig2 = Signature::new_single("foo", Linkage::Public, &[Type::I64], Type::I64);
 
         builder.declare_function(sig1).unwrap();
         let result = builder.declare_function(sig2);
@@ -276,7 +276,7 @@ mod tests {
 
         let mut refs = Vec::new();
         for i in 0..5 {
-            let sig = Signature::new(&format!("f{i}"), Linkage::Private, &[], Type::Unit);
+            let sig = Signature::new_unit(&format!("f{i}"), Linkage::Private, &[]);
             refs.push(builder.declare_function(sig).unwrap());
         }
 
@@ -298,7 +298,7 @@ mod tests {
         assert_eq!(builder.ctx.func_attrs(refs[0]), FuncAttrs::MEM_READ);
         assert!(!builder.ctx.has_func_attrs(refs[3]));
 
-        let new_sig = Signature::new("new_func", Linkage::Private, &[], Type::Unit);
+        let new_sig = Signature::new_unit("new_func", Linkage::Private, &[]);
         let new_ref = builder.declare_function(new_sig).unwrap();
         assert_eq!(new_ref, refs[3]);
         assert!(!builder.ctx.has_func_attrs(new_ref));

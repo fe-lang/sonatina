@@ -60,18 +60,17 @@ pub(super) fn compute_def_info(
             0
         };
         for inst in func.layout.iter_inst(block) {
-            let Some(res_orig) = func.dfg.inst_result(inst) else {
-                continue;
-            };
-            let res = value_aliases[res_orig].unwrap_or(res_orig);
-            if res != res_orig {
-                continue;
+            for &res_orig in func.dfg.inst_results(inst) {
+                let res = value_aliases[res_orig].unwrap_or(res_orig);
+                if res != res_orig {
+                    continue;
+                }
+                info[res] = Some(DefInfo {
+                    def_block: block,
+                    def_index: idx,
+                });
+                idx = idx.saturating_add(1);
             }
-            info[res] = Some(DefInfo {
-                def_block: block,
-                def_index: idx,
-            });
-            idx = idx.saturating_add(1);
         }
     }
 

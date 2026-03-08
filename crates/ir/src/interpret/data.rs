@@ -1,31 +1,32 @@
-use super::{Action, EvalValue, Interpret, State};
+use super::{Action, EvalValue, Interpret, State, no_result, single_result};
 use crate::{I256, Immediate, Type, inst::data::*, types::CompoundType};
 
 impl Interpret for Mload {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let addr = state.lookup_val(*self.addr());
-        state.load(addr, *self.ty())
+        single_result(state.load(addr, *self.ty()))
     }
 }
 
 impl Interpret for Mstore {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let addr = state.lookup_val(*self.addr());
         let value = state.lookup_val(*self.value());
-        state.store(addr, value, *self.ty())
+        let _ = state.store(addr, value, *self.ty());
+        no_result()
     }
 }
 
 impl Interpret for Gep {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let Some(base_addr) = state.lookup_val(self.values()[0]).as_imm() else {
-            return EvalValue::Undef;
+            return single_result(EvalValue::Undef);
         };
 
         let mut current_ty = state.dfg().value_ty(self.values()[0]);
@@ -38,7 +39,7 @@ impl Interpret for Gep {
         let mut offset = 0;
         for value in self.values()[1..].iter() {
             let Some(idx_value) = state.lookup_val(*value).as_imm() else {
-                return EvalValue::Undef;
+                return single_result(EvalValue::Undef);
             };
             let idx_value = idx_value.as_usize();
 
@@ -98,39 +99,39 @@ impl Interpret for Gep {
 
         let tl = state.dfg().ctx.type_layout;
         let res = base_addr + Immediate::from_i256(I256::from(offset), tl.pointer_repl());
-        EvalValue::Imm(res)
+        single_result(EvalValue::Imm(res))
     }
 }
 
 impl Interpret for GetFunctionPtr {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
-        EvalValue::Undef
+        single_result(EvalValue::Undef)
     }
 }
 
 impl Interpret for SymAddr {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
-        EvalValue::Undef
+        single_result(EvalValue::Undef)
     }
 }
 
 impl Interpret for SymSize {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
-        EvalValue::Undef
+        single_result(EvalValue::Undef)
     }
 }
 
 impl Interpret for Alloca {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
-        state.alloca(*self.ty())
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        single_result(state.alloca(*self.ty()))
     }
 }
 
 impl Interpret for InsertValue {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let dest = state.lookup_val(*self.dest());
@@ -160,7 +161,7 @@ impl Interpret for InsertValue {
                 idx_val.is_undef(),
                 "insert_value index must be an immediate"
             );
-            return EvalValue::Undef;
+            return single_result(EvalValue::Undef);
         };
         if idx >= fields.len() {
             debug_assert!(
@@ -168,16 +169,16 @@ impl Interpret for InsertValue {
                 "insert_value index out of bounds: idx={idx} len={}",
                 fields.len()
             );
-            return EvalValue::Undef;
+            return single_result(EvalValue::Undef);
         }
         fields[idx] = state.lookup_val(*self.value());
 
-        EvalValue::Aggregate { fields, ty }
+        single_result(EvalValue::Aggregate { fields, ty })
     }
 }
 
 impl Interpret for ExtractValue {
-    fn interpret(&self, state: &mut dyn State) -> EvalValue {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
 
         let dest = state.lookup_val(*self.dest());
@@ -185,7 +186,7 @@ impl Interpret for ExtractValue {
             EvalValue::Aggregate { fields, .. } => fields,
 
             EvalValue::Undef => {
-                return EvalValue::Undef;
+                return single_result(EvalValue::Undef);
             }
 
             EvalValue::Imm(_) => {
@@ -199,16 +200,16 @@ impl Interpret for ExtractValue {
                 idx_val.is_undef(),
                 "extract_value index must be an immediate"
             );
-            return EvalValue::Undef;
+            return single_result(EvalValue::Undef);
         };
-        dest.get(idx).cloned().unwrap_or_else(|| {
+        single_result(dest.get(idx).cloned().unwrap_or_else(|| {
             debug_assert!(
                 false,
                 "extract_value index out of bounds: idx={idx} len={}",
                 dest.len()
             );
             EvalValue::Undef
-        })
+        }))
     }
 }
 

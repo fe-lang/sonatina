@@ -1,5 +1,5 @@
 use sonatina_ir::{
-    InstDowncastMut, Linkage, Signature, Type, ValueId,
+    InstDowncastMut, Linkage, Signature, Type, Value, ValueId,
     builder::ModuleBuilder,
     inst::{arith::Add, control_flow::BrTable, data::Gep},
     isa::evm::Evm,
@@ -82,7 +82,7 @@ fn build_and_verify_reports_invalid_builder_module() {
     let isa = Evm::new(triple);
     let builder = ModuleBuilder::new(ModuleCtx::new(&isa));
     builder
-        .declare_function(Signature::new("main", Linkage::Public, &[], Type::Unit))
+        .declare_function(Signature::new_unit("main", Linkage::Public, &[]))
         .expect("declaration should succeed");
 
     let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
@@ -99,7 +99,7 @@ fn build_verified_extension_accepts_valid_builder_module() {
     let isa = Evm::new(triple);
     let builder = ModuleBuilder::new(ModuleCtx::new(&isa));
     builder
-        .declare_function(Signature::new(
+        .declare_function(Signature::new_single(
             "decl",
             Linkage::External,
             &[Type::I32],
@@ -131,6 +131,96 @@ func public %ok(v0.i32) -> i32 {
     let report = verify_module(&parsed.module, &cfg);
 
     assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn multi_return_functions_and_calls_verify() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func private %pair_add(v0.i32, v1.i32) -> (i32, i1) {
+    block0:
+        (v2.i32, v3.i1) = uaddo v0 v1;
+        return (v2, v3);
+}
+
+func public %caller(v0.i32, v1.i32) -> (i32, i1) {
+    block0:
+        (v2.i32, v3.i1) = call %pair_add v0 v1;
+        return (v2, v3);
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn multi_return_mismatches_are_reported() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+declare external %pair_add(i32, i32) -> (i32, i1);
+
+func public %caller() -> i32 {
+    block0:
+        v0.i32 = call %pair_add 1.i32 2.i32;
+        return v0;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}
+
+#[test]
+fn multi_return_call_result_type_mismatch_is_reported() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+declare external %pair_add(i32, i32) -> (i32, i1);
+
+func public %caller() -> unit {
+    block0:
+        (v0.i1, v1.i32) = call %pair_add 1.i32 2.i32;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}
+
+#[test]
+fn multi_return_value_mismatches_are_reported() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_arity() -> (i32, i1) {
+    block0:
+        return 0.i32;
+}
+
+func public %bad_type() -> (i32, i1) {
+    block0:
+        return (0.i1, 0.i1);
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0604"), "expected IR0604, got {report}");
 }
 
 #[test]
@@ -189,6 +279,173 @@ func public %bad_cmp_result() -> unit {
     let report = verify_module(&parsed.module, &cfg);
 
     assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}
+
+#[test]
+fn uaddo_result_types_are_checked() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_uaddo(v0.i32, v1.i32) -> unit {
+    block0:
+        (v2.i32, v3.i32) = uaddo v0 v1;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}
+
+#[test]
+fn other_overflow_ops_result_types_are_checked() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_ssubo(v0.i32, v1.i32) -> unit {
+    block0:
+        (v2.i32, v3.i32) = ssubo v0 v1;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}
+
+#[test]
+fn evm_checked_divmod_result_types_are_checked() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_evm_sdivo(v0.i32, v1.i32) -> unit {
+    block0:
+        (v2.i32, v3.i32) = evm_sdivo v0 v1;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}
+
+#[test]
+fn uaddo_missing_results_are_checked() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_uaddo(v0.i32, v1.i32) -> unit {
+    block0:
+        uaddo v0 v1;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}
+
+#[test]
+fn uaddo_extra_results_are_checked() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_uaddo(v0.i32, v1.i32) -> unit {
+    block0:
+        (v2.i32, v3.i1, v4.i1) = uaddo v0 v1;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}
+
+#[test]
+fn multi_result_metadata_mismatch_is_reported() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %ok_uaddo(v0.i32, v1.i32) -> unit {
+    block0:
+        (v2.i32, v3.i1) = uaddo v0 v1;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let module = parsed.module;
+    let func_ref = module.funcs()[0];
+
+    module.func_store.modify(func_ref, |func| {
+        let entry = func.layout.entry_block().expect("entry block must exist");
+        let inst = func
+            .layout
+            .first_inst_of(entry)
+            .expect("uaddo must be first inst");
+        let results = func.dfg.inst_results(inst).to_vec();
+        let bad = results[1];
+        let Value::Inst { result_idx, .. } = &mut func.dfg.values[bad] else {
+            panic!("expected instruction result");
+        };
+        *result_idx = 0;
+    });
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&module, &cfg);
+
+    assert!(has_code(&report, "IR0701"), "expected IR0701, got {report}");
+}
+
+#[test]
+fn multi_result_metadata_mismatch_is_reported_in_fast_mode() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %ok_uaddo(v0.i32, v1.i32) -> unit {
+    block0:
+        (v2.i32, v3.i1) = uaddo v0 v1;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let module = parsed.module;
+    let func_ref = module.funcs()[0];
+
+    module.func_store.modify(func_ref, |func| {
+        let entry = func.layout.entry_block().expect("entry block must exist");
+        let inst = func
+            .layout
+            .first_inst_of(entry)
+            .expect("uaddo must be first inst");
+        let results = func.dfg.inst_results(inst).to_vec();
+        let bad = results[1];
+        let Value::Inst { result_idx, .. } = &mut func.dfg.values[bad] else {
+            panic!("expected instruction result");
+        };
+        *result_idx = 0;
+    });
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Fast);
+    let report = verify_module(&module, &cfg);
+
+    assert!(has_code(&report, "IR0701"), "expected IR0701, got {report}");
 }
 
 #[test]
@@ -518,6 +775,30 @@ func public %caller(v0.*(i32, i32) -> i32) -> unit {
     let report = verify_module(&parsed.module, &cfg);
 
     assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn function_pointer_return_type_list_mismatch_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %callee(v0.i32) -> (i32, i1) {
+    block0:
+        return (v0, 0.i1);
+}
+
+func public %caller() -> unit {
+    block0:
+        v0.*(i32) -> i32 = get_function_ptr %callee;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
 }
 
 #[test]
@@ -925,6 +1206,52 @@ func public %entry() -> unit {
     let report = verify_module(&module, &cfg);
 
     assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn deleted_result_used_by_live_inst_is_reported() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %entry(v0.i32, v1.i32) -> i32 {
+    block0:
+        v2.i32 = add v0 v1;
+        return v0;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let module = parsed.module;
+    let func_ref = module.funcs()[0];
+    let deleted_value = parsed.debug.value(func_ref, "v2").expect("v2 should exist");
+
+    module.func_store.modify(func_ref, |func| {
+        let deleted_inst = func
+            .dfg
+            .value_inst(deleted_value)
+            .expect("v2 should be defined by an instruction");
+        let block = func.layout.entry_block().expect("entry block should exist");
+        let ret_inst = func
+            .layout
+            .last_inst_of(block)
+            .expect("return should exist");
+
+        func.layout.remove_inst(deleted_inst);
+        func.erase_inst(deleted_inst);
+
+        func.dfg.untrack_inst(ret_inst);
+        func.dfg
+            .inst_mut(ret_inst)
+            .for_each_value_mut(&mut |value| {
+                *value = deleted_value;
+            });
+        func.dfg.attach_user(ret_inst);
+    });
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&module, &cfg);
+
+    assert!(has_code(&report, "IR0001"), "expected IR0001, got {report}");
 }
 
 #[test]

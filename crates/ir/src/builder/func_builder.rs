@@ -3,11 +3,16 @@ use super::{
     ssa::{SsaBuilder, Variable},
 };
 use crate::{
-    BlockId, Function, GlobalVariableRef, Immediate, Inst, InstId, InstSetBase, Type, Value,
-    ValueId,
+    BlockId, Function, GlobalVariableRef, Immediate, Inst, InstId, InstSetBase, Type, ValueId,
     func_cursor::{CursorLocation, FuncCursor},
+    inst::{
+        arith::{Saddo, Smulo, Snego, Ssubo, Uaddo, Umulo, Usubo},
+        control_flow,
+        evm::{EvmSdivo, EvmSmodo, EvmUdivo, EvmUmodo},
+    },
     module::{FuncRef, ModuleCtx},
 };
+use smallvec::SmallVec;
 
 pub struct FunctionBuilder<C> {
     pub module_builder: ModuleBuilder,
@@ -118,39 +123,19 @@ where
             .declare_struct_type(name, fields, packed)
     }
 
-    /// Inserts an instruction into the current position and returns a `ValueId`
-    /// for the result.
-    ///
-    /// # Parameters
-    /// - `inst`: The instruction to insert, which must implement the `Inst`
-    ///   trait.
-    /// - `ret_ty`: The return type of the instruction. A result value will be
-    ///   created with this type and associated with the instruction.
-    ///
-    /// # Returns
-    /// - `ValueId`: The ID of the result value associated with the inserted
-    ///   instruction.
-    pub fn insert_inst<I: Inst>(&mut self, inst: I, ret_ty: Type) -> ValueId {
-        let mut inst = inst;
-        inst.for_each_value_mut(&mut |v| {
-            *v = self.ssa_builder.resolve_alias(*v);
-        });
-
-        let inst_id = self.cursor.insert_inst_data(&mut self.func, inst);
-        self.append_pred(inst_id);
-
-        let result = Value::Inst {
-            inst: inst_id,
-            ty: ret_ty,
-        };
-        let result = self.func.dfg.make_value(result);
-        self.func.dfg.attach_result(inst_id, result);
-
-        self.cursor.set_location(CursorLocation::At(inst_id));
-        result
+    pub fn insert_inst_results<I: Inst>(
+        &mut self,
+        inst: I,
+        ret_tys: &[Type],
+    ) -> SmallVec<[ValueId; 2]> {
+        self.insert_inst_dyn_results(Box::new(inst), ret_tys)
     }
 
-    pub fn insert_inst_dyn(&mut self, inst: Box<dyn Inst>, ret_ty: Type) -> ValueId {
+    pub fn insert_inst_dyn_results(
+        &mut self,
+        inst: Box<dyn Inst>,
+        ret_tys: &[Type],
+    ) -> SmallVec<[ValueId; 2]> {
         let mut inst = inst;
         inst.for_each_value_mut(&mut |v| {
             *v = self.ssa_builder.resolve_alias(*v);
@@ -158,16 +143,41 @@ where
 
         let inst_id = self.cursor.insert_inst_data_dyn(&mut self.func, inst);
         self.append_pred(inst_id);
-
-        let result = Value::Inst {
-            inst: inst_id,
-            ty: ret_ty,
-        };
-        let result = self.func.dfg.make_value(result);
-        self.func.dfg.attach_result(inst_id, result);
+        let results = self.cursor.make_results(&mut self.func, inst_id, ret_tys);
+        self.cursor
+            .attach_results(&mut self.func, inst_id, &results);
 
         self.cursor.set_location(CursorLocation::At(inst_id));
-        result
+        results
+    }
+
+    /// Inserts an instruction into the current position and returns a `ValueId`
+    /// for the result.
+    ///
+    /// This is a strict single-result convenience wrapper over
+    /// [`Self::insert_inst_results`].
+    pub fn insert_inst<I: Inst>(&mut self, inst: I, ret_ty: Type) -> ValueId {
+        let results = self.insert_inst_results(inst, &[ret_ty]);
+        debug_assert_eq!(results.len(), 1);
+        results[0]
+    }
+
+    pub fn insert_inst_dyn(&mut self, inst: Box<dyn Inst>, ret_ty: Type) -> ValueId {
+        let results = self.insert_inst_dyn_results(inst, &[ret_ty]);
+        debug_assert_eq!(results.len(), 1);
+        results[0]
+    }
+
+    pub fn insert_inst_results_with<F, I>(
+        &mut self,
+        f: F,
+        ret_tys: &[Type],
+    ) -> SmallVec<[ValueId; 2]>
+    where
+        F: FnOnce() -> I,
+        I: Inst,
+    {
+        self.insert_inst_results(f(), ret_tys)
     }
 
     pub fn insert_inst_with<F, I>(&mut self, f: F, ret_ty: Type) -> ValueId
@@ -175,8 +185,9 @@ where
         F: FnOnce() -> I,
         I: Inst,
     {
-        let i = f();
-        self.insert_inst(i, ret_ty)
+        let results = self.insert_inst_results_with(f, &[ret_ty]);
+        debug_assert_eq!(results.len(), 1);
+        results[0]
     }
 
     /// Inserts an instruction into the function without creating a result value
@@ -188,25 +199,11 @@ where
     /// - `inst`: The instruction to insert, which must implement the `Inst`
     ///   trait.
     pub fn insert_inst_no_result<I: Inst>(&mut self, inst: I) {
-        let mut inst = inst;
-        inst.for_each_value_mut(&mut |v| {
-            *v = self.ssa_builder.resolve_alias(*v);
-        });
-
-        let inst_id = self.cursor.insert_inst_data(&mut self.func, inst);
-        self.append_pred(inst_id);
-        self.cursor.set_location(CursorLocation::At(inst_id));
+        let _ = self.insert_inst_results(inst, &[]);
     }
 
     pub fn insert_inst_no_result_dyn(&mut self, inst: Box<dyn Inst>) {
-        let mut inst = inst;
-        inst.for_each_value_mut(&mut |v| {
-            *v = self.ssa_builder.resolve_alias(*v);
-        });
-
-        let inst_id = self.cursor.insert_inst_data_dyn(&mut self.func, inst);
-        self.append_pred(inst_id);
-        self.cursor.set_location(CursorLocation::At(inst_id));
+        let _ = self.insert_inst_dyn_results(inst, &[]);
     }
 
     pub fn insert_inst_no_result_with<F, I>(&mut self, f: F)
@@ -216,6 +213,249 @@ where
     {
         let i = f();
         self.insert_inst_no_result(i);
+    }
+
+    fn insert_checked_results<I: Inst>(&mut self, inst: I, value_ty: Type) -> [ValueId; 2] {
+        let results = self.insert_inst_results(inst, &[value_ty, Type::I1]);
+        debug_assert_eq!(results.len(), 2);
+        [results[0], results[1]]
+    }
+
+    fn insert_checked_binary<I: Inst>(
+        &mut self,
+        inst: I,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> [ValueId; 2] {
+        let lhs_ty = self.type_of(lhs);
+        let rhs_ty = self.type_of(rhs);
+        assert_eq!(
+            lhs_ty, rhs_ty,
+            "checked binary operands must have the same type"
+        );
+        assert!(
+            lhs_ty.is_integral(),
+            "checked binary operands must be integral"
+        );
+        self.insert_checked_results(inst, lhs_ty)
+    }
+
+    fn insert_checked_unary<I: Inst>(&mut self, inst: I, arg: ValueId) -> [ValueId; 2] {
+        let arg_ty = self.type_of(arg);
+        assert!(
+            arg_ty.is_integral(),
+            "checked unary operand must be integral"
+        );
+        self.insert_checked_results(inst, arg_ty)
+    }
+
+    pub fn insert_uaddo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            Uaddo::new(
+                self.inst_set()
+                    .has_uaddo()
+                    .expect("target ISA must support `uaddo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_saddo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            Saddo::new(
+                self.inst_set()
+                    .has_saddo()
+                    .expect("target ISA must support `saddo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_usubo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            Usubo::new(
+                self.inst_set()
+                    .has_usubo()
+                    .expect("target ISA must support `usubo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_ssubo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            Ssubo::new(
+                self.inst_set()
+                    .has_ssubo()
+                    .expect("target ISA must support `ssubo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_umulo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            Umulo::new(
+                self.inst_set()
+                    .has_umulo()
+                    .expect("target ISA must support `umulo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_smulo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            Smulo::new(
+                self.inst_set()
+                    .has_smulo()
+                    .expect("target ISA must support `smulo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_snego(&mut self, arg: ValueId) -> [ValueId; 2] {
+        self.insert_checked_unary(
+            Snego::new(
+                self.inst_set()
+                    .has_snego()
+                    .expect("target ISA must support `snego`"),
+                arg,
+            ),
+            arg,
+        )
+    }
+
+    pub fn insert_evm_udivo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            EvmUdivo::new(
+                self.inst_set()
+                    .has_evm_udivo()
+                    .expect("target ISA must support `evm_udivo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_evm_sdivo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            EvmSdivo::new(
+                self.inst_set()
+                    .has_evm_sdivo()
+                    .expect("target ISA must support `evm_sdivo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_evm_umodo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            EvmUmodo::new(
+                self.inst_set()
+                    .has_evm_umodo()
+                    .expect("target ISA must support `evm_umodo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_evm_smodo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
+        self.insert_checked_binary(
+            EvmSmodo::new(
+                self.inst_set()
+                    .has_evm_smodo()
+                    .expect("target ISA must support `evm_smodo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_call_results(
+        &mut self,
+        callee: FuncRef,
+        args: SmallVec<[ValueId; 8]>,
+    ) -> SmallVec<[ValueId; 2]> {
+        let ret_tys = self
+            .module_builder
+            .sig(callee, |sig| sig.ret_tys().to_vec());
+        let call = control_flow::Call::new(
+            self.inst_set()
+                .has_call()
+                .expect("target ISA must support `call`"),
+            callee,
+            args,
+        );
+        self.insert_inst_results(call, &ret_tys)
+    }
+
+    pub fn insert_call(
+        &mut self,
+        callee: FuncRef,
+        args: SmallVec<[ValueId; 8]>,
+    ) -> Option<ValueId> {
+        let results = self.insert_call_results(callee, args);
+        assert!(
+            results.len() <= 1,
+            "insert_call called on multi-return callee"
+        );
+        results.first().copied()
+    }
+
+    pub fn insert_return_values(&mut self, values: &[ValueId]) {
+        self.insert_inst_no_result(control_flow::Return::new(
+            self.inst_set()
+                .has_return()
+                .expect("target ISA must support `return`"),
+            SmallVec::from_slice(values).into(),
+        ));
+    }
+
+    pub fn insert_return(&mut self, value: ValueId) {
+        self.insert_inst_no_result(control_flow::Return::new_single(
+            self.inst_set()
+                .has_return()
+                .expect("target ISA must support `return`"),
+            value,
+        ));
+    }
+
+    pub fn insert_return_unit(&mut self) {
+        self.insert_inst_no_result(control_flow::Return::new_unit(
+            self.inst_set()
+                .has_return()
+                .expect("target ISA must support `return`"),
+        ));
     }
 
     pub fn declare_var(&mut self, ty: Type) -> Variable {
@@ -294,12 +534,16 @@ where
 
 #[cfg(test)]
 mod tests {
+    use smallvec::smallvec;
+
     use super::{super::test_util::*, *};
     use crate::{
+        I256, Immediate, Linkage, Signature, Value,
         inst::{
-            arith::{Add, Mul, Sub},
+            arith::{Add, Mul, Sub, Uaddo},
             cast::Sext,
             control_flow::{Br, Jump, Phi, Return},
+            evm::EvmRevert,
         },
         isa::Isa,
     };
@@ -319,7 +563,7 @@ mod tests {
 
         let sub = Sub::new(is, v2, v0);
         builder.insert_inst(sub, Type::I8);
-        let ret = Return::new(is, None);
+        let ret = Return::new_unit(is);
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
@@ -354,7 +598,7 @@ mod tests {
         let v3 = builder.insert_inst(sext, Type::I64);
         let mul = Mul::new(is, v3, arg1);
         builder.insert_inst(mul, Type::I64);
-        let ret = Return::new(is, None);
+        let ret = Return::new_unit(is);
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
@@ -384,7 +628,7 @@ mod tests {
 
         builder.switch_to_block(entry_block);
         let v0 = builder.make_imm_value(1i32);
-        let ret = Return::new(is, Some(v0));
+        let ret = Return::new_single(is, v0);
         builder.insert_inst_no_result(ret);
         builder.seal_all();
         builder.finish();
@@ -433,7 +677,7 @@ mod tests {
         let v3 = builder.insert_inst(phi, Type::I64);
         let add = Add::new(is, v3, arg0);
         builder.insert_inst(add, Type::I64);
-        let ret = Return::new(is, None);
+        let ret = Return::new_unit(is);
         builder.insert_inst_no_result(ret);
 
         builder.seal_all();
@@ -457,6 +701,183 @@ mod tests {
         v3.i64 = phi (1.i64 block1) (2.i64 block2);
         v4.i64 = add v3 v0;
         return;
+}
+"
+        );
+    }
+
+    #[test]
+    fn insert_inst_results_tracks_result_order() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I32, Type::I32], Type::Unit);
+        let is = evm.inst_set();
+
+        let entry_block = builder.append_block();
+        builder.switch_to_block(entry_block);
+
+        let args = builder.args();
+        let results =
+            builder.insert_inst_results(Uaddo::new(is, args[0], args[1]), &[Type::I32, Type::I1]);
+        let ret = Return::new_unit(is);
+        builder.insert_inst_no_result(ret);
+
+        assert_eq!(results.len(), 2);
+        let inst = builder.func.dfg.value_inst(results[0]).unwrap();
+        assert_eq!(builder.func.dfg.inst_results(inst), results.as_slice());
+        assert_eq!(
+            builder.func.dfg.value_inst_result(results[0]),
+            Some((inst, 0))
+        );
+        assert_eq!(
+            builder.func.dfg.value_inst_result(results[1]),
+            Some((inst, 1))
+        );
+
+        match builder.func.dfg.value(results[0]) {
+            Value::Inst {
+                inst: owner,
+                result_idx,
+                ty,
+            } => {
+                assert_eq!(*owner, inst);
+                assert_eq!(*result_idx, 0);
+                assert_eq!(*ty, Type::I32);
+            }
+            other => panic!("unexpected first result value: {other:?}"),
+        }
+
+        match builder.func.dfg.value(results[1]) {
+            Value::Inst {
+                inst: owner,
+                result_idx,
+                ty,
+            } => {
+                assert_eq!(*owner, inst);
+                assert_eq!(*result_idx, 1);
+                assert_eq!(*ty, Type::I1);
+            }
+            other => panic!("unexpected second result value: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn insert_call_handles_unit_single_and_multi_return_callees() {
+        let mb = test_module_builder();
+        let unit = mb
+            .declare_function(Signature::new_unit("unit", Linkage::Private, &[Type::I32]))
+            .unwrap();
+        let single = mb
+            .declare_function(Signature::new_single(
+                "single",
+                Linkage::Private,
+                &[Type::I32],
+                Type::I32,
+            ))
+            .unwrap();
+        let pair = mb
+            .declare_function(Signature::new(
+                "pair",
+                Linkage::Private,
+                &[Type::I32],
+                &[Type::I32, Type::I1],
+            ))
+            .unwrap();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I32], Type::Unit);
+        let is = evm.inst_set();
+
+        let entry_block = builder.append_block();
+        builder.switch_to_block(entry_block);
+        let arg = builder.args()[0];
+
+        assert_eq!(builder.insert_call(unit, smallvec![arg]), None);
+        assert!(builder.insert_call(single, smallvec![arg]).is_some());
+
+        let multi_return = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = builder.insert_call(pair, smallvec![arg]);
+        }));
+        assert!(multi_return.is_err(), "multi-return insert_call must panic");
+
+        builder.insert_inst_no_result(Return::new_unit(is));
+    }
+
+    #[test]
+    fn checked_overflow_helpers_infer_result_types() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I256, Type::I256], Type::Unit);
+        let is = evm.inst_set();
+
+        let entry_block = builder.append_block();
+        builder.switch_to_block(entry_block);
+        let lhs = builder.args()[0];
+        let rhs = builder.args()[1];
+
+        let checked_results = [
+            builder.insert_uaddo(lhs, rhs),
+            builder.insert_saddo(lhs, rhs),
+            builder.insert_usubo(lhs, rhs),
+            builder.insert_ssubo(lhs, rhs),
+            builder.insert_umulo(lhs, rhs),
+            builder.insert_smulo(lhs, rhs),
+            builder.insert_snego(lhs),
+            builder.insert_evm_udivo(lhs, rhs),
+            builder.insert_evm_sdivo(lhs, rhs),
+            builder.insert_evm_umodo(lhs, rhs),
+            builder.insert_evm_smodo(lhs, rhs),
+        ];
+        builder.insert_inst_no_result(Return::new_unit(is));
+
+        for [value, overflow] in checked_results {
+            assert_eq!(builder.type_of(value), Type::I256);
+            assert_eq!(builder.type_of(overflow), Type::I1);
+            let inst = builder.func.dfg.value_inst(value).unwrap();
+            assert_eq!(builder.func.dfg.value_inst_result(value), Some((inst, 0)));
+            assert_eq!(
+                builder.func.dfg.value_inst_result(overflow),
+                Some((inst, 1))
+            );
+        }
+    }
+
+    #[test]
+    fn checked_add_can_branch_to_evm_revert_on_overflow() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I256, Type::I256], Type::I256);
+        let is = evm.inst_set();
+
+        let entry = builder.append_block();
+        let overflow_block = builder.append_block();
+        let ok_block = builder.append_block();
+
+        builder.switch_to_block(entry);
+        let lhs = builder.args()[0];
+        let rhs = builder.args()[1];
+        let [sum, overflow] = builder.insert_uaddo(lhs, rhs);
+        builder.insert_inst_no_result(Br::new(is, overflow, overflow_block, ok_block));
+
+        builder.switch_to_block(overflow_block);
+        let zero = builder.make_imm_value(Immediate::from_i256(I256::from(0), Type::I256));
+        builder.insert_inst_no_result(EvmRevert::new(is, zero, zero));
+
+        builder.switch_to_block(ok_block);
+        builder.insert_return(sum);
+
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        assert_eq!(
+            dump_func(&module, func_ref),
+            "func public %test_func(v0.i256, v1.i256) -> i256 {
+    block0:
+        (v2.i256, v3.i1) = uaddo v0 v1;
+        br v3 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v2;
 }
 "
         );

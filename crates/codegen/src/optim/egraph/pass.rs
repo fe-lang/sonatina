@@ -53,7 +53,7 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
 
     for block in func.layout.iter_block() {
         for inst_id in func.layout.iter_inst(block) {
-            if let Some(result) = func.dfg.inst_result(inst_id) {
+            for &result in func.dfg.inst_results(inst_id) {
                 let name = format!("v{}", result.as_u32());
                 value_map.insert(name.clone(), result);
                 type_map.insert(name, func.dfg.value_ty(result));
@@ -79,7 +79,7 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
 
     for block in func.layout.iter_block() {
         for inst_id in func.layout.iter_inst(block) {
-            if let Some(result) = func.dfg.inst_result(inst_id) {
+            for &result in func.dfg.inst_results(inst_id) {
                 let name = format!("v{}", result.as_u32());
                 full_program.push_str(&format!("\n(extract {})", name));
                 extract_names.push(name);
@@ -362,8 +362,8 @@ fn eliminate_adjacent_dead_stores(func: &mut Function) -> bool {
                     && prev_addr == addr
                     && prev_ty == ty
                 {
-                    func.dfg.untrack_inst(prev_id);
                     func.layout.remove_inst(prev_id);
+                    func.erase_inst(prev_id);
                     changed = true;
                 }
 
@@ -394,8 +394,8 @@ fn eliminate_dead_pure_insts(func: &mut Function) -> bool {
         }
 
         let operands = func.dfg.inst(inst).collect_values();
-        func.dfg.untrack_inst(inst);
         func.layout.remove_inst(inst);
+        func.erase_inst(inst);
         changed = true;
 
         for operand in operands {
@@ -416,11 +416,11 @@ fn is_trivially_dead_pure_inst(func: &Function, inst: InstId) -> bool {
         return false;
     }
 
-    let Some(result) = func.dfg.inst_result(inst) else {
-        return false;
-    };
-
-    func.dfg.users_num(result) == 0
+    let results = func.dfg.inst_results(inst);
+    !results.is_empty()
+        && results
+            .iter()
+            .all(|&result| func.dfg.users_num(result) == 0)
 }
 
 #[cfg(test)]
@@ -763,7 +763,7 @@ mod tests {
         let v20 = builder.make_imm_value(20i32);
         builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v20, Type::I32));
 
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
         builder.seal_all();
 
         assert!(eliminate_adjacent_dead_stores(&mut builder.func));
@@ -803,7 +803,7 @@ mod tests {
         let v8 = builder.make_imm_value(20i8);
         builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v8, Type::I8));
 
-        builder.insert_inst_no_result_with(|| Return::new(is, None));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
         builder.seal_all();
 
         assert!(!eliminate_adjacent_dead_stores(&mut builder.func));

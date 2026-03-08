@@ -90,70 +90,21 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     }
 
     pub fn plan_internal_return(&mut self, inst: InstId) {
-        let Some(ret_val) = self.ctx.func.dfg.as_return(inst) else {
-            // No return value: pop everything above the function return address.
-            self.stack.clear_above_func_ret(self.actions);
-            return;
-        };
-        let ret_val = self.ctx.canonicalize_value(ret_val);
-
-        if self.ctx.func.dfg.value_is_imm(ret_val) {
-            let imm = self
-                .ctx
-                .func
-                .dfg
-                .value_imm(ret_val)
-                .expect("imm value missing payload");
-
-            // If an identical immediate is already on the stack, reuse it instead of pushing a
-            // duplicate constant.
-            let limit = self.stack.len_above_func_ret();
-            let mut existing_pos: Option<usize> = None;
-            for (idx, item) in self.stack.iter().take(limit).enumerate() {
-                let StackItem::Value(v) = item else {
-                    continue;
-                };
-                let Some(stack_imm) = self.ctx.func.dfg.value_imm(*v) else {
-                    continue;
-                };
-                if stack_imm == imm {
-                    existing_pos = Some(idx);
-                    break;
-                }
-            }
-
-            if let Some(pos) = existing_pos {
-                self.stack.pop_n(pos, self.actions);
-                self.stack.rename_top_value(ret_val);
-                self.delete_between_top_and_func_ret();
-                return;
-            }
-
-            // Immediate return: clear the callee stack segment, then push the immediate.
-            self.stack.clear_above_func_ret(self.actions);
-            self.stack.push_imm(ret_val, imm, self.actions);
-            return;
-        }
-
-        // Prefer using an existing stack copy of the return value (if any) to avoid
-        // forcing it into `spill_set`.
-        //
-        // Step 1: pop values until either the return value or the return-address barrier is on top.
-        loop {
-            match self.stack.top() {
-                Some(StackItem::Value(v)) if *v == ret_val => break,
-                Some(StackItem::FuncRetAddr) | None => break,
-                Some(_) => {
-                    self.stack.pop(self.actions);
-                }
-            }
-        }
-
-        // Step 2: if the return value wasn't present on the stack, reload it from `spill_set`.
-        if self.stack.top() != Some(&StackItem::Value(ret_val)) {
-            self.push_value_from_spill_slot_or_mark(ret_val, ret_val);
-        }
-
-        self.delete_between_top_and_func_ret();
+        let ret_vals: SmallVec<[ValueId; 16]> = self
+            .ctx
+            .func
+            .dfg
+            .return_args(inst)
+            .map(|args| {
+                args.iter()
+                    .map(|&arg| self.ctx.canonicalize_value(arg))
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            ret_vals.len() <= 16,
+            "stackify supports at most 16 return values for {inst:?}"
+        );
+        self.normalize_to_exact(ret_vals.as_slice());
     }
 }

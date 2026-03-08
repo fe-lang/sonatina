@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/malloc_dynamic_frame_clamp_trace.sntn
 ---
@@ -13,7 +14,7 @@ functions:
   mem: dyn_base=0xc0 static_base=0xc0
   dyn: ir_blocks=1 ir_insts=4 vcode_ops=58 fixups=4 imm_bytes=14
     mem: scheme=DynamicFrame locals_words=1
-  main: ir_blocks=1 ir_insts=5 vcode_ops=27 fixups=2 imm_bytes=5
+  main: ir_blocks=1 ir_insts=4 vcode_ops=27 fixups=2 imm_bytes=5
     mem: scheme=StaticArena need_words=0 locals_words=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -90,7 +91,7 @@ dyn:
 main:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v0.*i8 = evm_malloc 32.i256;
+    PUSH1 0x40 (64)  // v0.*i256 = evm_malloc 32.i256;
     MLOAD
     PUSH1 0x80 (128)
     MLOAD
@@ -110,10 +111,10 @@ main:
     POP
     PUSH1 0xc0 (192)
     JUMPDEST
-    PUSH1 0x6f (111)  // mstore v1 111.i256 i256;
+    PUSH1 0x6f (111)  // mstore v0 111.i256 i256;
     DUP2
     MSTORE
-    MLOAD  // v2.i256 = mload v1 i256;
+    MLOAD  // v2.i256 = mload v0 i256;
     SWAP1  // return v2;
     JUMP
 
@@ -125,8 +126,8 @@ entry:
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    PUSH0  // mstore 0.i32 v0 i256;
+    PUSH0  // mstore 0.i256 v0 i256;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i8 32.i8;
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
     RETURN

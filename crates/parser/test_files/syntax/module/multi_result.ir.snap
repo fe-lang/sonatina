@@ -1,0 +1,12 @@
+---
+source: crates/parser/tests/syntax.rs
+input_file: test_files/syntax/module/multi_result.sntn
+---
+target = "evm-ethereum-london"
+
+func public %multi_result(v0.i32, v1.i32) {
+    block0:
+        v2.i32 = add v0 v1;
+        (v3.i32, v4.i1) = uaddo v2 v1;
+        return;
+}

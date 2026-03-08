@@ -7,6 +7,7 @@ use sonatina_codegen::{
 };
 use sonatina_ir::ir_writer::FuncWriter;
 use sonatina_parser::ParsedModule;
+use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/test_files/inliner/",
@@ -337,6 +338,173 @@ func public %caller(v0.i32, v1.i32) -> i32 {
         !dumped.contains("call %large"),
         "large callee should inline when multi-callsite cap is raised:\n{dumped}"
     );
+}
+
+#[test]
+fn inliner_splices_multi_result_callees_without_legalizing_them() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %leaf(v0.i256, v1.i256) -> i256 {
+    block0:
+        (v2.i256, v3.i1) = uaddo v0 v1;
+        return v2;
+}
+
+func public %caller(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = call %leaf v0 v1;
+        return v2;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(InlinerConfig::default());
+    let stats = inliner.run(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %leaf"),
+        "inliner should splice the callsite:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("uaddo"),
+        "inliner should preserve multi-result instructions until lowering:\n{dumped}"
+    );
+    assert!(
+        stats.calls_spliced >= 1,
+        "expected the callsite to be spliced:\n{dumped}"
+    );
+    let report = verify_module(module, &VerifierConfig::for_level(VerificationLevel::Fast));
+    assert!(report.is_ok(), "module failed verification: {report:?}");
+}
+
+#[test]
+fn inliner_splices_multi_return_callees() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %pair_leaf(v0.i256, v1.i256) -> (i256, i1) {
+    block0:
+        (v2.i256, v3.i1) = uaddo v0 v1;
+        return (v2, v3);
+}
+
+func public %caller(v0.i256, v1.i256) -> (i256, i1) {
+    block0:
+        (v2.i256, v3.i1) = call %pair_leaf v0 v1;
+        return (v2, v3);
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(InlinerConfig::default());
+    let stats = inliner.run(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %pair_leaf"),
+        "inliner should splice the multi-return callsite:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("uaddo"),
+        "spliced body should preserve multi-result instructions:\n{dumped}"
+    );
+    assert!(stats.calls_spliced >= 1, "expected splice:\n{dumped}");
+    let report = verify_module(module, &VerifierConfig::for_level(VerificationLevel::Fast));
+    assert!(report.is_ok(), "module failed verification: {report:?}");
+}
+
+#[test]
+fn inliner_rewrites_multi_return_wrappers() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %leaf(v0.i256, v1.i256) -> (i256, i1) {
+    block0:
+        (v2.i256, v3.i1) = uaddo v0 v1;
+        return (v2, v3);
+}
+
+func private %wrapper(v0.i256, v1.i256) -> (i256, i1) {
+    block0:
+        (v2.i256, v3.i1) = call %leaf v0 v1;
+        return (v2, v3);
+}
+
+func public %caller(v0.i256, v1.i256) -> (i256, i1) {
+    block0:
+        (v2.i256, v3.i1) = call %wrapper v0 v1;
+        return (v2, v3);
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(InlinerConfig {
+        enable_single_block_splice: false,
+        ..Default::default()
+    });
+    let stats = inliner.run(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %wrapper"),
+        "wrapper call should be rewritten:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("call %leaf"),
+        "rewritten call should target leaf directly:\n{dumped}"
+    );
+    assert!(stats.calls_rewritten >= 1, "expected rewrite:\n{dumped}");
+    let report = verify_module(module, &VerifierConfig::for_level(VerificationLevel::Fast));
+    assert!(report.is_ok(), "module failed verification: {report:?}");
+}
+
+#[test]
+fn inliner_removes_multi_return_return_only_calls() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %forward(v0.i256, v1.i1) -> (i256, i1) {
+    block0:
+        return (v0, v1);
+}
+
+func public %caller(v0.i256, v1.i1) -> (i256, i1) {
+    block0:
+        (v2.i256, v3.i1) = call %forward v0 v1;
+        return (v2, v3);
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(InlinerConfig::default());
+    let stats = inliner.run(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %forward"),
+        "return-only multi-return call should be removed:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("return (v0, v1);"),
+        "call results should alias elementwise:\n{dumped}"
+    );
+    assert!(stats.calls_removed >= 1, "expected removal:\n{dumped}");
+    let report = verify_module(module, &VerifierConfig::for_level(VerificationLevel::Fast));
+    assert!(report.is_ok(), "module failed verification: {report:?}");
 }
 
 fn dump_module(module: &sonatina_ir::Module) -> String {

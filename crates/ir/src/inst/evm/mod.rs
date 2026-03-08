@@ -11,8 +11,22 @@ pub struct EvmUdiv {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(EvmUdivo)))]
+pub struct EvmUdivo {
+    lhs: ValueId,
+    rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(kind(binary(EvmSdiv)))]
 pub struct EvmSdiv {
+    lhs: ValueId,
+    rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(EvmSdivo)))]
+pub struct EvmSdivo {
     lhs: ValueId,
     rhs: ValueId,
 }
@@ -25,8 +39,22 @@ pub struct EvmUmod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(EvmUmodo)))]
+pub struct EvmUmodo {
+    lhs: ValueId,
+    rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(kind(binary(EvmSmod)))]
 pub struct EvmSmod {
+    lhs: ValueId,
+    rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(EvmSmodo)))]
+pub struct EvmSmodo {
     lhs: ValueId,
     rhs: ValueId,
 }
