@@ -55,15 +55,18 @@ fn is_dead_pure_inst(func: &Function, inst: InstId) -> bool {
         return false;
     }
 
-    let Some(result) = func.dfg.inst_result(inst) else {
+    let results = func.dfg.inst_results(inst);
+    if results.is_empty() {
         return false;
-    };
+    }
 
-    !func
-        .dfg
-        .users(result)
-        .copied()
-        .any(|user| func.layout.is_inst_inserted(user))
+    results.iter().copied().all(|result| {
+        !func
+            .dfg
+            .users(result)
+            .copied()
+            .any(|user| func.layout.is_inst_inserted(user))
+    })
 }
 
 fn inst_operands(func: &Function, inst: InstId) -> SmallVec<[ValueId; 8]> {
