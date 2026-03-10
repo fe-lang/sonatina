@@ -4,6 +4,26 @@ input_file: test_files/opt_pipeline/storage_loop.sntn
 ---
 target = "evm-ethereum-osaka"
 
+func private %update_count__StorPtr_u256___64779554cfbf0358(v0.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = phi (0.i256 block0) (v13 block2);
+        v5.i1 = lt v3 20.i256;
+        br v5 block2 block4;
+
+    block2:
+        v9.i256 = evm_sload v0;
+        v11.i256 = add 1.i256 v9;
+        evm_sstore v0 v11;
+        v13.i256 = add 1.i256 v3;
+        jump block1;
+
+    block4:
+        return;
+}
+
 func private %__Foo_init() {
     block0:
         v2.i256 = sym_addr &__Foo_runtime;
@@ -37,26 +57,15 @@ func private %__Foo_runtime() {
         mstore v26 4.i256 i256;
         v27.i256 = add 64.i256 v22;
         mstore v27 4.i256 i256;
-        v44.i256 = shr 224.i256 v11;
-        v5.i1 = eq 1.i256 v44;
-        br v5 block16 block1;
+        v30.i256 = shr 224.i256 v11;
+        v5.i1 = eq 1.i256 v30;
+        br v5 block2 block1;
 
     block1:
         evm_revert 0.i256 0.i256;
 
-    block16:
-        v37.i256 = phi (0.i256 block6) (v42 block17);
-        v38.i1 = lt v37 20.i256;
-        br v38 block17 block7;
-
-    block17:
-        v40.i256 = evm_sload 0.i256;
-        v41.i256 = add 1.i256 v40;
-        evm_sstore 0.i256 v41;
-        v42.i256 = add 1.i256 v37;
-        jump block16;
-
-    block7:
+    block2:
+        call %update_count__StorPtr_u256___64779554cfbf0358 0.i256;
         evm_return 0.i256 0.i256;
 }
 

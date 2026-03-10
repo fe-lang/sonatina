@@ -106,7 +106,7 @@ pub(super) fn decide_inline(
         return InlineDecision::Skip(InlineSkipReason::NoBody);
     }
 
-    let mut predicted_growth = summary.insts.saturating_sub(1);
+    let mut predicted_growth = summary.insts;
     if request.call_has_result && summary.returns > 1 {
         predicted_growth = predicted_growth.saturating_add(1);
     }

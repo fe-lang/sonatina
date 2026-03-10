@@ -395,7 +395,7 @@ fn collect_call_sites(func: &Function) -> Vec<CallSite> {
             sites.push(CallSite {
                 call_inst: inst_id,
                 callee: *call.callee(),
-                has_result: func.dfg.inst_result(inst_id).is_some(),
+                has_result: !func.dfg.inst_results(inst_id).is_empty(),
             });
         }
     }

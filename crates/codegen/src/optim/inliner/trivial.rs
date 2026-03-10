@@ -1,4 +1,4 @@
-//! Trivial inliner (single-block, no CFG surgery).
+//! Trivial inliner (single-block, no multi-block CFG cloning).
 
 use std::collections::BTreeMap;
 
@@ -196,8 +196,14 @@ pub(super) fn analyze_callee(
             <&control_flow::Call as InstDowncast>::downcast(is, callee.dfg.inst(call_inst_id))
         else {
             // Not a wrapper; fall through to splicing.
-            return analyze_splice(callee, callee_call_count, config, stats,
-                &ret_values, &insts);
+            return analyze_splice(
+                callee,
+                callee_call_count,
+                config,
+                stats,
+                &ret_values,
+                &insts,
+            );
         };
 
         if callee.dfg.inst_results(call_inst_id) != ret_values.as_slice() {
@@ -220,8 +226,14 @@ pub(super) fn analyze_callee(
         });
     }
 
-    analyze_splice(callee, callee_call_count, config, stats,
-        &ret_values, &insts)
+    analyze_splice(
+        callee,
+        callee_call_count,
+        config,
+        stats,
+        &ret_values,
+        &insts,
+    )
 }
 
 fn analyze_splice(

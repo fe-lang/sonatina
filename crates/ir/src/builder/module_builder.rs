@@ -391,7 +391,7 @@ mod tests {
     #[test]
     fn set_func_hints_merges_bits() {
         let builder = test_module_builder();
-        let sig = Signature::new("f", Linkage::Private, &[], Type::Unit);
+        let sig = Signature::new("f", Linkage::Private, &[], &[]);
         let func_ref = builder.declare_function(sig).unwrap();
 
         builder.ctx.set_func_hints(func_ref, FuncHints::NOINLINE);

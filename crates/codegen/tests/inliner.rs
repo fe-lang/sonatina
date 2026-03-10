@@ -879,7 +879,7 @@ func public %self(v0.i1, v1.i1, v2.i32) -> i32 {
     let mut cfg = full_only_inliner_test_config();
     cfg.allow_inline_recursive = true;
     cfg.max_inline_depth = 1;
-    cfg.max_growth_per_caller = 10;
+    cfg.max_growth_per_caller = 12;
     cfg.max_total_growth = 64;
 
     let mut inliner = Inliner::new(cfg);
@@ -1351,6 +1351,115 @@ func public %caller(v0.i1, v1.i32) -> i32 {
         "merge-phi growth should be budgeted and block this inline:\n{dumped}"
     );
     assert_eq!(stats.full_calls_inlined, 0);
+    assert!(stats.skipped_budget > 0);
+}
+
+#[test]
+fn full_inliner_growth_prediction_accounts_for_split_jump() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %single_ret(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 1.i32;
+        return v2;
+}
+
+func public %caller(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %single_ret v0 v1;
+        return v2;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut cfg = full_only_inliner_test_config();
+    cfg.always_inline_single_use = false;
+    cfg.max_growth_per_caller = 3;
+    cfg.max_total_growth = 64;
+    cfg.inline_threshold = 1000;
+    cfg.inline_threshold_cold = 1000;
+
+    let mut inliner = Inliner::new(cfg);
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        dumped.contains("call %single_ret"),
+        "split jump growth should be budgeted and block this inline:\n{dumped}"
+    );
+    assert_eq!(stats.full_calls_inlined, 0);
+    assert!(stats.skipped_budget > 0);
+}
+
+#[test]
+fn full_inliner_net_growth_accounts_for_split_jump() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %left(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 1.i32;
+        return v2;
+}
+
+func private %right(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 2.i32;
+        return v2;
+}
+
+func public %caller(v0.i1, v1.i32, v2.i32) -> i32 {
+    block0:
+        v3.i32 = call %left v0 v1;
+        v4.i32 = call %right v0 v2;
+        v5.i32 = add v3 v4;
+        return v5;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut cfg = full_only_inliner_test_config();
+    cfg.max_growth_per_caller = 7;
+    cfg.max_total_growth = 64;
+    cfg.inline_threshold = 1000;
+    cfg.inline_threshold_cold = 1000;
+
+    let mut inliner = Inliner::new(cfg);
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert_eq!(stats.full_calls_inlined, 1);
+    assert!(
+        dumped.contains("call %left") ^ dumped.contains("call %right"),
+        "one call should remain once the caller growth cap is reached:\n{dumped}"
+    );
     assert!(stats.skipped_budget > 0);
 }
 
