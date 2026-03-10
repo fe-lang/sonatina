@@ -1,6 +1,6 @@
 use sonatina_triple::TargetTriple;
 
-use crate::{InstSetBase, Type, module::ModuleCtx};
+use crate::{AddressSpaceInfo, InstSetBase, Type, module::ModuleCtx};
 
 pub mod evm;
 
@@ -10,6 +10,7 @@ pub trait Isa {
     fn triple(&self) -> TargetTriple;
     fn inst_set(&self) -> &'static Self::InstSet;
     fn type_layout(&self) -> &'static dyn TypeLayout;
+    fn address_spaces(&self) -> &'static dyn AddressSpaceInfo;
 }
 
 pub trait TypeLayout: Send + Sync {

@@ -1,19 +1,18 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/coin.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Coin
-  section init: 969 bytes
-  section runtime: 761 bytes
-  total: 1730 bytes
+  section init: 942 bytes
+  section runtime: 747 bytes
+  total: 1689 bytes
 
 object: Contract
-  section runtime: 2467 bytes
-  total: 2467 bytes
+  section runtime: 2427 bytes
+  total: 2427 bytes
 
 functions:
   mem: dyn_base=0xc0 static_base=0xc0
@@ -21,13 +20,13 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
   __Coin_recv_0_0: ir_blocks=3 ir_insts=26 vcode_ops=54 fixups=1 imm_bytes=4
     mem: scheme=StaticArena need_words=0 locals_words=0
-  __Coin_recv_0_1: ir_blocks=7 ir_insts=31 vcode_ops=80 fixups=3 imm_bytes=5
+  __Coin_recv_0_1: ir_blocks=7 ir_insts=30 vcode_ops=79 fixups=3 imm_bytes=5
     mem: scheme=StaticArena need_words=0 locals_words=0
   __Coin_recv_0_2: ir_blocks=3 ir_insts=7 vcode_ops=14 fixups=1 imm_bytes=1
     mem: scheme=StaticArena need_words=0 locals_words=0
   __Coin_init: ir_blocks=3 ir_insts=24 vcode_ops=89 fixups=7 imm_bytes=16
     mem: scheme=StaticArena need_words=0 locals_words=0
-  __Coin_runtime: ir_blocks=9 ir_insts=72 vcode_ops=230 fixups=35 imm_bytes=31
+  __Coin_runtime: ir_blocks=9 ir_insts=62 vcode_ops=219 fixups=35 imm_bytes=29
     mem: scheme=StaticArena need_words=0 locals_words=0
   create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e: ir_blocks=3 ir_insts=14 vcode_ops=51 fixups=5 imm_bytes=8
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -49,7 +48,7 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
   decode_returndata__u256__3271ca15373d4483: ir_blocks=3 ir_insts=15 vcode_ops=53 fixups=6 imm_bytes=9
     mem: scheme=StaticArena need_words=0 locals_words=0
-  soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=1 ir_insts=33 vcode_ops=77 fixups=2 imm_bytes=18
+  soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=1 ir_insts=25 vcode_ops=68 fixups=2 imm_bytes=14
     mem: scheme=StaticArena need_words=0 locals_words=0
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=4 ir_insts=17 vcode_ops=53 fixups=3 imm_bytes=8
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -59,7 +58,7 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
   cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=1 ir_insts=15 vcode_ops=36 fixups=1 imm_bytes=8
     mem: scheme=StaticArena need_words=0 locals_words=0
-  soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=32 vcode_ops=81 fixups=3 imm_bytes=18
+  soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=22 vcode_ops=70 fixups=3 imm_bytes=15
     mem: scheme=StaticArena need_words=0 locals_words=0
   soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=3 ir_insts=21 vcode_ops=40 fixups=1 imm_bytes=2
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -71,7 +70,7 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=293079 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=272079
+  case ok: calldata_len=0 success reason=Return gas_used=289741 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=268741
 
 
 --------------- DEBUG ---------------
@@ -437,29 +436,25 @@ evm:
       pre: [DUP2]
       evm_sload [v1] -> v11
     // v12.i1 = lt v11 v7;
-    - stack=[v11, v7, v1, <RET>], last_use=[v11]
-      pre: [DUP2, SWAP1]
+    - stack=[v11, v7, v1, <RET>]
+      pre: [DUP2, DUP2]
       lt [v11, v7] -> v12
     // br v12 block3 block4;
-    - stack=[v12, v7, v1, <RET>]
+    - stack=[v12, v11, v7, v1, <RET>]
       br [v12] -> [block3, block4]
   block3 P=[] T=[]
-    inherited from block1: [v7x, v1x, <RET>]
+    inherited from block1: [v11x, v7x, v1x, <RET>]
     // return 1.i256;
-    - stack=[v7x, v1x, <RET>]
-      cleanup: [POP, POP]
+    - stack=[v11x, v7x, v1x, <RET>]
+      cleanup: [POP, POP, POP]
       return: [PUSH(1)]
       return [1]
-  block4 P=[] T=[v7, v1]
-    inherited from block1: [v7, v1, <RET>]
-    // v20.i256 = evm_sload v1;
-    - stack=[v7, v1, <RET>]
-      pre: [DUP2]
-      evm_sload [v1] -> v20
-    // v21.i256 = sub v20 v7;
-    - stack=[v20, v7, v1, <RET>], last_use=[v20]
+  block4 P=[] T=[v11, v7, v1]
+    inherited from block1: [v11, v7, v1, <RET>]
+    // v21.i256 = sub v11 v7;
+    - stack=[v11, v7, v1, <RET>], last_use=[v11]
       pre: [DUP2, SWAP1]
-      sub [v20, v7] -> v21
+      sub [v11, v7] -> v21
     // evm_sstore v1 v21;
     - stack=[v21, v7, v1, <RET>], last_use=[v21]
       pre: [DUP3]
@@ -670,9 +665,6 @@ evm:
     // v60.*i256 = evm_malloc 64.i256;
     - stack=[v1]
       evm_malloc [] -> v60
-    // v61.i256 = ptr_to_int v60 i256;
-    - stack=[v60, v1]
-      ptr_to_int [v60] -> v60
     // v77.*@__fe_Cursor_8 = bitcast v60 *@__fe_Cursor_8;
     - stack=[v60, v1]
       bitcast [v60] -> v60
@@ -684,86 +676,56 @@ evm:
       pre: [PUSH(0), DUP2]
       mstore [v60, 0]
     // v65.*i256 = gep v77 0.i256 1.i256;
-    - stack=[v60, v1]
-      pre: [DUP1]
+    - stack=[v60, v1], last_use=[v60]
       gep [v60, 0, 1] -> v65
     // mstore v65 0.i256 i256;
-    - stack=[v65, v60, v1], last_use=[v65]
+    - stack=[v65, v1], last_use=[v65]
       pre: [PUSH(0), SWAP1]
       mstore [v65, 0]
-    // v66.*@__fe_Cursor_8 = int_to_ptr v61 *@__fe_Cursor_8;
-    - stack=[v60, v1]
-      int_to_ptr [v60] -> v60
-    // v67.*@__fe_CallData_7 = bitcast v66 *@__fe_CallData_7;
-    - stack=[v60, v1]
-      bitcast [v60] -> v60
-    // v68.i256 = mload v67 i256;
-    - stack=[v60, v1], last_use=[v60]
-      mload [v60] -> v68
     // v69.*i256 = evm_malloc 64.i256;
-    - stack=[v68, v1]
+    - stack=[v1]
       evm_malloc [] -> v69
-    // v70.i256 = ptr_to_int v69 i256;
-    - stack=[v69, v68, v1]
-      ptr_to_int [v69] -> v69
     // v79.*@__fe_Cursor_8 = bitcast v69 *@__fe_Cursor_8;
-    - stack=[v69, v68, v1]
+    - stack=[v69, v1]
       bitcast [v69] -> v69
     // v72.*@__fe_CallData_7 = bitcast v79 *@__fe_CallData_7;
-    - stack=[v69, v68, v1]
-      bitcast [v69] -> v69
-    // mstore v72 v68 i256;
-    - stack=[v69, v68, v1], last_use=[v68]
-      pre: [SWAP1, DUP2]
-      mstore [v69, v68]
-    // v74.*i256 = gep v79 0.i256 1.i256;
     - stack=[v69, v1]
-      pre: [DUP1]
+      bitcast [v69] -> v69
+    // mstore v72 0.i256 i256;
+    - stack=[v69, v1]
+      pre: [PUSH(0), DUP2]
+      mstore [v69, 0]
+    // v74.*i256 = gep v79 0.i256 1.i256;
+    - stack=[v69, v1], last_use=[v69]
       gep [v69, 0, 1] -> v74
     // mstore v74 4.i256 i256;
-    - stack=[v74, v69, v1], last_use=[v74]
+    - stack=[v74, v1], last_use=[v74]
       pre: [PUSH(4), SWAP1]
       mstore [v74, 4]
     // v46.*i256 = evm_malloc 96.i256;
-    - stack=[v69, v1]
+    - stack=[v1]
       evm_malloc [] -> v46
     // v47.i256 = ptr_to_int v46 i256;
-    - stack=[v46, v69, v1]
+    - stack=[v46, v1]
       ptr_to_int [v46] -> v46
-    // v48.*@__fe_Cursor_8 = int_to_ptr v70 *@__fe_Cursor_8;
-    - stack=[v46, v69, v1]
-      int_to_ptr [v69] -> v69
-    // v49.*i256 = bitcast v48 *i256;
-    - stack=[v46, v69, v1]
-      bitcast [v69] -> v69
-    // v50.i256 = mload v49 i256;
-    - stack=[v46, v69, v1]
-      pre: [DUP2]
-      mload [v69] -> v50
     // v81.*@__fe_SolDecoder_9 = bitcast v46 *@__fe_SolDecoder_9;
-    - stack=[v50, v46, v69, v1]
+    - stack=[v46, v1]
       bitcast [v46] -> v46
     // v52.*i256 = bitcast v81 *i256;
-    - stack=[v50, v46, v69, v1]
+    - stack=[v46, v1]
       bitcast [v46] -> v46
-    // mstore v52 v50 i256;
-    - stack=[v50, v46, v69, v1], last_use=[v50]
-      pre: [DUP2]
-      mstore [v46, v50]
-    // v54.*i256 = gep v48 0.i256 1.i256;
-    - stack=[v46, v69, v1], last_use=[v69]
-      pre: [SWAP1]
-      gep [v69, 0, 1] -> v54
-    // v55.i256 = mload v54 i256;
-    - stack=[v54, v46, v1], last_use=[v54]
-      mload [v54] -> v55
+    // mstore v52 0.i256 i256;
+    - stack=[v46, v1]
+      pre: [PUSH(0), DUP2]
+      mstore [v46, 0]
     // v57.*i256 = gep v81 0.i256 0.i256 1.i256;
-    - stack=[v55, v46, v1]
-      pre: [DUP2]
+    - stack=[v46, v1]
+      pre: [DUP1]
       gep [v46, 0, 0, 1] -> v57
-    // mstore v57 v55 i256;
-    - stack=[v57, v55, v46, v1], last_use=[v55, v57]
-      mstore [v57, v55]
+    // mstore v57 4.i256 i256;
+    - stack=[v57, v46, v1], last_use=[v57]
+      pre: [PUSH(4), SWAP1]
+      mstore [v57, 4]
     // v59.*i256 = gep v81 0.i256 1.i256;
     - stack=[v46, v1]
       pre: [DUP1]
@@ -821,9 +783,9 @@ evm:
     - stack=[v5], last_use=[v5]
       pre: [PUSH(0), SWAP1, PUSH_CONT, SWAP2]
       call [v5, 0]
-    // unreachable;
+    // evm_invalid;
     - stack=[]
-      unreachable []
+      evm_invalid []
   block6 P=[] T=[v46, v1]
     inherited from block0: [v46, v1]
     // v11.i1 = eq 217554442.i256 v1;
@@ -875,9 +837,9 @@ evm:
     - stack=[v7], last_use=[v7]
       pre: [PUSH(0), SWAP1, PUSH_CONT, SWAP2]
       call [v7, 0]
-    // unreachable;
+    // evm_invalid;
     - stack=[]
-      unreachable []
+      evm_invalid []
   block7 P=[] T=[v46, v1]
     inherited from block6: [v46, v1]
     // v12.i1 = eq 1818602213.i256 v1;
@@ -902,9 +864,9 @@ evm:
     - stack=[v9], last_use=[v9]
       pre: [PUSH(0), SWAP1, PUSH_CONT, SWAP2]
       call [v9, 0]
-    // unreachable;
+    // evm_invalid;
     - stack=[]
-      unreachable []
+      evm_invalid []
   block8 P=[] T=[v1]
     inherited from block7: [v46x, v1]
     // v13.i1 = eq 960555502.i256 v1;
@@ -931,9 +893,9 @@ evm:
     - stack=[v42], last_use=[v42]
       pre: [PUSH(0), SWAP1, PUSH_CONT, SWAP2]
       call [v42, 0]
-    // unreachable;
+    // evm_invalid;
     - stack=[]
-      unreachable []
+      evm_invalid []
 
 // func private %create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e(v0.i256, v1.i256, v2.i256) -> i256
   block0 P=[v0, v1, v2] T=[]
@@ -1745,9 +1707,6 @@ evm:
     // v25.*i256 = evm_malloc 96.i256;
     - stack=[v0, <RET>]
       evm_malloc [] -> v25
-    // v26.i256 = ptr_to_int v25 i256;
-    - stack=[v25, v0, <RET>]
-      ptr_to_int [v25] -> v25
     // v27.*@__fe_MemoryBytes_2 = int_to_ptr v0 *@__fe_MemoryBytes_2;
     - stack=[v25, v0, <RET>]
       int_to_ptr [v0] -> v0
@@ -1765,85 +1724,63 @@ evm:
     - stack=[v29, v25, v0, <RET>]
       bitcast [v25] -> v25
     // mstore v31 v29 i256;
-    - stack=[v29, v25, v0, <RET>], last_use=[v29]
-      pre: [DUP2]
+    - stack=[v29, v25, v0, <RET>]
+      pre: [DUP1, DUP3]
       mstore [v25, v29]
     // v33.*i256 = gep v27 0.i256 1.i256;
-    - stack=[v25, v0, <RET>], last_use=[v0]
-      pre: [SWAP1]
+    - stack=[v29, v25, v0, <RET>], last_use=[v0]
+      pre: [SWAP2]
       gep [v0, 0, 1] -> v33
     // v34.i256 = mload v33 i256;
-    - stack=[v33, v25, <RET>], last_use=[v33]
+    - stack=[v33, v25, v29, <RET>], last_use=[v33]
       mload [v33] -> v34
     // v36.*i256 = gep v39 0.i256 0.i256 1.i256;
-    - stack=[v34, v25, <RET>]
+    - stack=[v34, v25, v29, <RET>]
       pre: [DUP2]
       gep [v25, 0, 0, 1] -> v36
     // mstore v36 v34 i256;
-    - stack=[v36, v34, v25, <RET>], last_use=[v34, v36]
+    - stack=[v36, v34, v25, v29, <RET>], last_use=[v36]
+      pre: [DUP2, SWAP1]
       mstore [v36, v34]
     // v38.*i256 = gep v39 0.i256 1.i256;
-    - stack=[v25, <RET>]
-      pre: [DUP1]
+    - stack=[v34, v25, v29, <RET>], last_use=[v25]
+      pre: [SWAP1]
       gep [v25, 0, 1] -> v38
     // mstore v38 0.i256 i256;
-    - stack=[v38, v25, <RET>], last_use=[v38]
+    - stack=[v38, v34, v29, <RET>], last_use=[v38]
       pre: [PUSH(0), SWAP1]
       mstore [v38, 0]
     // v2.*i256 = evm_malloc 128.i256;
-    - stack=[v25, <RET>]
+    - stack=[v34, v29, <RET>]
       evm_malloc [] -> v2
     // v3.i256 = ptr_to_int v2 i256;
-    - stack=[v2, v25, <RET>]
+    - stack=[v2, v34, v29, <RET>]
       ptr_to_int [v2] -> v2
-    // v4.*@__fe_Cursor_5 = int_to_ptr v26 *@__fe_Cursor_5;
-    - stack=[v2, v25, <RET>]
-      int_to_ptr [v25] -> v25
-    // v5.*i256 = bitcast v4 *i256;
-    - stack=[v2, v25, <RET>]
-      bitcast [v25] -> v25
-    // v6.i256 = mload v5 i256;
-    - stack=[v2, v25, <RET>]
-      pre: [DUP2]
-      mload [v25] -> v6
     // v42.*@__fe_SolDecoder_6 = bitcast v2 *@__fe_SolDecoder_6;
-    - stack=[v6, v2, v25, <RET>]
+    - stack=[v2, v34, v29, <RET>]
       bitcast [v2] -> v2
     // v8.*i256 = bitcast v42 *i256;
-    - stack=[v6, v2, v25, <RET>]
+    - stack=[v2, v34, v29, <RET>]
       bitcast [v2] -> v2
-    // mstore v8 v6 i256;
-    - stack=[v6, v2, v25, <RET>], last_use=[v6]
-      pre: [DUP2]
-      mstore [v2, v6]
-    // v10.*i256 = gep v4 0.i256 0.i256 1.i256;
-    - stack=[v2, v25, <RET>]
-      pre: [DUP2]
-      gep [v25, 0, 0, 1] -> v10
-    // v11.i256 = mload v10 i256;
-    - stack=[v10, v2, v25, <RET>], last_use=[v10]
-      mload [v10] -> v11
+    // mstore v8 v29 i256;
+    - stack=[v2, v34, v29, <RET>], last_use=[v29]
+      pre: [SWAP2, DUP3]
+      mstore [v2, v29]
     // v13.*i256 = gep v42 0.i256 0.i256 0.i256 1.i256;
-    - stack=[v11, v2, v25, <RET>]
+    - stack=[v34, v2, <RET>]
       pre: [DUP2]
       gep [v2, 0, 0, 0, 1] -> v13
-    // mstore v13 v11 i256;
-    - stack=[v13, v11, v2, v25, <RET>], last_use=[v11, v13]
-      mstore [v13, v11]
-    // v15.*i256 = gep v4 0.i256 1.i256;
-    - stack=[v2, v25, <RET>], last_use=[v25]
-      pre: [SWAP1]
-      gep [v25, 0, 1] -> v15
-    // v16.i256 = mload v15 i256;
-    - stack=[v15, v2, <RET>], last_use=[v15]
-      mload [v15] -> v16
+    // mstore v13 v34 i256;
+    - stack=[v13, v34, v2, <RET>], last_use=[v13, v34]
+      mstore [v13, v34]
     // v18.*i256 = gep v42 0.i256 0.i256 1.i256;
-    - stack=[v16, v2, <RET>]
-      pre: [DUP2]
+    - stack=[v2, <RET>]
+      pre: [DUP1]
       gep [v2, 0, 0, 1] -> v18
-    // mstore v18 v16 i256;
-    - stack=[v18, v16, v2, <RET>], last_use=[v16, v18]
-      mstore [v18, v16]
+    // mstore v18 0.i256 i256;
+    - stack=[v18, v2, <RET>], last_use=[v18]
+      pre: [PUSH(0), SWAP1]
+      mstore [v18, 0]
     // v20.*i256 = gep v42 0.i256 1.i256;
     - stack=[v2, <RET>]
       pre: [DUP1]
@@ -2070,9 +2007,6 @@ evm:
     // v22.*i256 = evm_malloc 64.i256;
     - stack=[v0, v1, <RET>]
       evm_malloc [] -> v22
-    // v23.i256 = ptr_to_int v22 i256;
-    - stack=[v22, v0, v1, <RET>]
-      ptr_to_int [v22] -> v22
     // v37.*@__fe_Cursor_8 = bitcast v22 *@__fe_Cursor_8;
     - stack=[v22, v0, v1, <RET>]
       bitcast [v22] -> v22
@@ -2080,90 +2014,60 @@ evm:
     - stack=[v22, v0, v1, <RET>]
       bitcast [v22] -> v22
     // mstore v25 v0 i256;
-    - stack=[v22, v0, v1, <RET>], last_use=[v0]
-      pre: [SWAP1, DUP2]
+    - stack=[v22, v0, v1, <RET>]
+      pre: [DUP2, DUP2]
       mstore [v22, v0]
     // v27.*i256 = gep v37 0.i256 1.i256;
-    - stack=[v22, v1, <RET>]
-      pre: [DUP1]
+    - stack=[v22, v0, v1, <RET>], last_use=[v22]
       gep [v22, 0, 1] -> v27
     // mstore v27 0.i256 i256;
-    - stack=[v27, v22, v1, <RET>], last_use=[v27]
+    - stack=[v27, v0, v1, <RET>], last_use=[v27]
       pre: [PUSH(0), SWAP1]
       mstore [v27, 0]
-    // v28.*@__fe_Cursor_8 = int_to_ptr v23 *@__fe_Cursor_8;
-    - stack=[v22, v1, <RET>]
-      int_to_ptr [v22] -> v22
-    // v29.*@__fe_CallData_7 = bitcast v28 *@__fe_CallData_7;
-    - stack=[v22, v1, <RET>]
-      bitcast [v22] -> v22
-    // v30.i256 = mload v29 i256;
-    - stack=[v22, v1, <RET>], last_use=[v22]
-      mload [v22] -> v30
     // v31.*i256 = evm_malloc 64.i256;
-    - stack=[v30, v1, <RET>]
+    - stack=[v0, v1, <RET>]
       evm_malloc [] -> v31
-    // v32.i256 = ptr_to_int v31 i256;
-    - stack=[v31, v30, v1, <RET>]
-      ptr_to_int [v31] -> v31
     // v39.*@__fe_Cursor_8 = bitcast v31 *@__fe_Cursor_8;
-    - stack=[v31, v30, v1, <RET>]
+    - stack=[v31, v0, v1, <RET>]
       bitcast [v31] -> v31
     // v34.*@__fe_CallData_7 = bitcast v39 *@__fe_CallData_7;
-    - stack=[v31, v30, v1, <RET>]
+    - stack=[v31, v0, v1, <RET>]
       bitcast [v31] -> v31
-    // mstore v34 v30 i256;
-    - stack=[v31, v30, v1, <RET>], last_use=[v30]
-      pre: [SWAP1, DUP2]
-      mstore [v31, v30]
+    // mstore v34 v0 i256;
+    - stack=[v31, v0, v1, <RET>]
+      pre: [DUP2, DUP2]
+      mstore [v31, v0]
     // v36.*i256 = gep v39 0.i256 1.i256;
-    - stack=[v31, v1, <RET>]
-      pre: [DUP1]
+    - stack=[v31, v0, v1, <RET>], last_use=[v31]
       gep [v31, 0, 1] -> v36
     // mstore v36 v1 i256;
-    - stack=[v36, v31, v1, <RET>], last_use=[v36]
+    - stack=[v36, v0, v1, <RET>], last_use=[v36]
       pre: [DUP3, SWAP1]
       mstore [v36, v1]
     // v4.*i256 = evm_malloc 96.i256;
-    - stack=[v31, v1, <RET>]
+    - stack=[v0, v1, <RET>]
       evm_malloc [] -> v4
     // v5.i256 = ptr_to_int v4 i256;
-    - stack=[v4, v31, v1, <RET>]
+    - stack=[v4, v0, v1, <RET>]
       ptr_to_int [v4] -> v4
-    // v6.*@__fe_Cursor_8 = int_to_ptr v32 *@__fe_Cursor_8;
-    - stack=[v4, v31, v1, <RET>]
-      int_to_ptr [v31] -> v31
-    // v7.*i256 = bitcast v6 *i256;
-    - stack=[v4, v31, v1, <RET>]
-      bitcast [v31] -> v31
-    // v8.i256 = mload v7 i256;
-    - stack=[v4, v31, v1, <RET>]
-      pre: [DUP2]
-      mload [v31] -> v8
     // v41.*@__fe_SolDecoder_9 = bitcast v4 *@__fe_SolDecoder_9;
-    - stack=[v8, v4, v31, v1, <RET>]
+    - stack=[v4, v0, v1, <RET>]
       bitcast [v4] -> v4
     // v10.*i256 = bitcast v41 *i256;
-    - stack=[v8, v4, v31, v1, <RET>]
+    - stack=[v4, v0, v1, <RET>]
       bitcast [v4] -> v4
-    // mstore v10 v8 i256;
-    - stack=[v8, v4, v31, v1, <RET>], last_use=[v8]
-      pre: [DUP2]
-      mstore [v4, v8]
-    // v12.*i256 = gep v6 0.i256 1.i256;
-    - stack=[v4, v31, v1, <RET>], last_use=[v31]
-      pre: [SWAP1]
-      gep [v31, 0, 1] -> v12
-    // v13.i256 = mload v12 i256;
-    - stack=[v12, v4, v1, <RET>], last_use=[v12]
-      mload [v12] -> v13
+    // mstore v10 v0 i256;
+    - stack=[v4, v0, v1, <RET>], last_use=[v0]
+      pre: [SWAP1, DUP2]
+      mstore [v4, v0]
     // v15.*i256 = gep v41 0.i256 0.i256 1.i256;
-    - stack=[v13, v4, v1, <RET>]
-      pre: [DUP2]
+    - stack=[v4, v1, <RET>]
+      pre: [DUP1]
       gep [v4, 0, 0, 1] -> v15
-    // mstore v15 v13 i256;
-    - stack=[v15, v13, v4, v1, <RET>], last_use=[v13, v15]
-      mstore [v15, v13]
+    // mstore v15 v1 i256;
+    - stack=[v15, v4, v1, <RET>], last_use=[v15]
+      pre: [DUP3, SWAP1]
+      mstore [v15, v1]
     // v17.*i256 = gep v41 0.i256 1.i256;
     - stack=[v4, v1, <RET>]
       pre: [DUP1]
@@ -2728,7 +2632,7 @@ __Coin_recv_0_1:
     DUP2  // v15.i256 = evm_sload v1;
     SLOAD
     DUP2  // v17.i1 = lt v15 v9;
-    SWAP1
+    DUP2
     LT
     ISZERO  // br v17 block3 block4;
     PUSH1 block4
@@ -2736,14 +2640,13 @@ __Coin_recv_0_1:
   block3:
     POP  // return 1.i256;
     POP
+    POP
     PUSH1 0x1 (1)
     SWAP1
     JUMP
   block4:
     JUMPDEST
-    DUP2  // v28.i256 = evm_sload v1;
-    SLOAD
-    DUP2  // v30.i256 = sub v28 v9;
+    DUP2  // v30.i256 = sub v15 v9;
     SWAP1
     SUB
     DUP3  // evm_sstore v1 v30;
@@ -2935,13 +2838,11 @@ __Coin_runtime:
     PUSH0  // mstore v63 0.i256 i256;
     DUP2
     MSTORE
-    DUP1  // v65.*i256 = gep v77 0.i256 1.i256;
-    PUSH1 0x20 (32)
+    PUSH1 0x20 (32)  // v65.*i256 = gep v77 0.i256 1.i256;
     ADD
     PUSH0  // mstore v65 0.i256 i256;
     SWAP1
     MSTORE
-    MLOAD  // v68.i256 = mload v67 i256;
     PUSH1 0x40 (64)  // v69.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0xbf (191)
@@ -2952,16 +2853,10 @@ __Coin_runtime:
     POP
     PUSH1 0xc0 (192)
     JUMPDEST
-    DUP1
-    PUSH1 0x40 (64)
-    ADD
-    PUSH1 0x40 (64)
-    MSTORE
-    SWAP1  // mstore v72 v68 i256;
+    PUSH0  // mstore v72 0.i256 i256;
     DUP2
     MSTORE
-    DUP1  // v74.*i256 = gep v79 0.i256 1.i256;
-    PUSH1 0x20 (32)
+    PUSH1 0x20 (32)  // v74.*i256 = gep v79 0.i256 1.i256;
     ADD
     PUSH1 0x4 (4)  // mstore v74 4.i256 i256;
     SWAP1
@@ -2976,18 +2871,15 @@ __Coin_runtime:
     POP
     PUSH1 0xc0 (192)
     JUMPDEST
-    DUP2  // v50.i256 = mload v49 i256;
-    MLOAD
-    DUP2  // mstore v52 v50 i256;
+    PUSH0  // mstore v52 0.i256 i256;
+    DUP2
     MSTORE
-    SWAP1  // v54.*i256 = gep v48 0.i256 1.i256;
+    DUP1  // v57.*i256 = gep v81 0.i256 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
-    MLOAD  // v55.i256 = mload v54 i256;
-    DUP2  // v57.*i256 = gep v81 0.i256 0.i256 1.i256;
-    PUSH1 0x20 (32)
-    ADD
-    MSTORE  // mstore v57 v55 i256;
+    PUSH1 0x4 (4)  // mstore v57 4.i256 i256;
+    SWAP1
+    MSTORE
     DUP1  // v59.*i256 = gep v81 0.i256 1.i256;
     PUSH1 0x40 (64)
     ADD
@@ -3045,7 +2937,7 @@ __Coin_runtime:
     PUSH1 FuncRef(25)
     JUMP
     JUMPDEST
-    INVALID  // unreachable;
+    INVALID  // evm_invalid;
   block6:
     JUMPDEST
     DUP2  // v9.i1 = eq 217554442.i256 v2;
@@ -3099,7 +2991,7 @@ __Coin_runtime:
     PUSH1 FuncRef(25)
     JUMP
     JUMPDEST
-    INVALID  // unreachable;
+    INVALID  // evm_invalid;
   block7:
     JUMPDEST
     DUP2  // v10.i1 = eq 1818602213.i256 v2;
@@ -3129,7 +3021,7 @@ __Coin_runtime:
     PUSH1 FuncRef(25)
     JUMP
     JUMPDEST
-    INVALID  // unreachable;
+    INVALID  // evm_invalid;
   block8:
     JUMPDEST
     POP  // v11.i1 = eq 960555502.i256 v2;
@@ -3152,7 +3044,7 @@ __Coin_runtime:
     PUSH1 FuncRef(25)
     JUMP
     JUMPDEST
-    INVALID  // unreachable;
+    INVALID  // evm_invalid;
 
 // func private %create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e(v0.i256, v1.i256, v2.i256) -> i256
 create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e:
@@ -3837,24 +3729,22 @@ soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54c
     POP
     PUSH1 0xc0 (192)
     JUMPDEST
-    DUP1
-    PUSH1 0x60 (96)
-    ADD
-    PUSH1 0x40 (64)
-    MSTORE
     DUP2  // v29.i256 = mload v28 i256;
     MLOAD
-    DUP2  // mstore v31 v29 i256;
+    DUP1  // mstore v31 v29 i256;
+    DUP3
     MSTORE
-    SWAP1  // v33.*i256 = gep v27 0.i256 1.i256;
+    SWAP2  // v33.*i256 = gep v27 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
     MLOAD  // v34.i256 = mload v33 i256;
     DUP2  // v36.*i256 = gep v39 0.i256 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
-    MSTORE  // mstore v36 v34 i256;
-    DUP1  // v38.*i256 = gep v39 0.i256 1.i256;
+    DUP2  // mstore v36 v34 i256;
+    SWAP1
+    MSTORE
+    SWAP1  // v38.*i256 = gep v39 0.i256 1.i256;
     PUSH1 0x40 (64)
     ADD
     PUSH0  // mstore v38 0.i256 i256;
@@ -3875,26 +3765,19 @@ soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54c
     ADD
     PUSH1 0x40 (64)
     MSTORE
-    DUP2  // v8.i256 = mload v7 i256;
-    MLOAD
-    DUP2  // mstore v10 v8 i256;
+    SWAP2  // mstore v10 v29 i256;
+    DUP3
     MSTORE
-    DUP2  // v13.*i256 = gep v6 0.i256 0.i256 1.i256;
-    PUSH1 0x20 (32)
-    ADD
-    MLOAD  // v14.i256 = mload v13 i256;
     DUP2  // v16.*i256 = gep v42 0.i256 0.i256 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
-    MSTORE  // mstore v16 v14 i256;
-    SWAP1  // v18.*i256 = gep v6 0.i256 1.i256;
+    MSTORE  // mstore v16 v34 i256;
+    DUP1  // v21.*i256 = gep v42 0.i256 0.i256 1.i256;
     PUSH1 0x40 (64)
     ADD
-    MLOAD  // v19.i256 = mload v18 i256;
-    DUP2  // v21.*i256 = gep v42 0.i256 0.i256 1.i256;
-    PUSH1 0x40 (64)
-    ADD
-    MSTORE  // mstore v21 v19 i256;
+    PUSH0  // mstore v21 0.i256 i256;
+    SWAP1
+    MSTORE
     DUP1  // v23.*i256 = gep v42 0.i256 1.i256;
     PUSH1 0x60 (96)
     ADD
@@ -4091,16 +3974,14 @@ soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3
     POP
     PUSH1 0xc0 (192)
     JUMPDEST
-    SWAP1  // mstore v25 v0 i256;
+    DUP2  // mstore v25 v0 i256;
     DUP2
     MSTORE
-    DUP1  // v27.*i256 = gep v37 0.i256 1.i256;
-    PUSH1 0x20 (32)
+    PUSH1 0x20 (32)  // v27.*i256 = gep v37 0.i256 1.i256;
     ADD
     PUSH0  // mstore v27 0.i256 i256;
     SWAP1
     MSTORE
-    MLOAD  // v30.i256 = mload v29 i256;
     PUSH1 0x40 (64)  // v31.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0xbf (191)
@@ -4111,16 +3992,10 @@ soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3
     POP
     PUSH1 0xc0 (192)
     JUMPDEST
-    DUP1
-    PUSH1 0x40 (64)
-    ADD
-    PUSH1 0x40 (64)
-    MSTORE
-    SWAP1  // mstore v34 v30 i256;
+    DUP2  // mstore v34 v0 i256;
     DUP2
     MSTORE
-    DUP1  // v36.*i256 = gep v39 0.i256 1.i256;
-    PUSH1 0x20 (32)
+    PUSH1 0x20 (32)  // v36.*i256 = gep v39 0.i256 1.i256;
     ADD
     DUP3  // mstore v36 v1 i256;
     SWAP1
@@ -4140,18 +4015,15 @@ soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3
     ADD
     PUSH1 0x40 (64)
     MSTORE
-    DUP2  // v10.i256 = mload v9 i256;
-    MLOAD
-    DUP2  // mstore v12 v10 i256;
+    SWAP1  // mstore v12 v0 i256;
+    DUP2
     MSTORE
-    SWAP1  // v15.*i256 = gep v8 0.i256 1.i256;
+    DUP1  // v18.*i256 = gep v41 0.i256 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
-    MLOAD  // v16.i256 = mload v15 i256;
-    DUP2  // v18.*i256 = gep v41 0.i256 0.i256 1.i256;
-    PUSH1 0x20 (32)
-    ADD
-    MSTORE  // mstore v18 v16 i256;
+    DUP3  // mstore v18 v1 i256;
+    SWAP1
+    MSTORE
     DUP1  // v20.*i256 = gep v41 0.i256 1.i256;
     PUSH1 0x40 (64)
     ADD
