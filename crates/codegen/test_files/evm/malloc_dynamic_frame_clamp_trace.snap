@@ -18,7 +18,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21130 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=74
+  case ok: calldata_len=8 success reason=Return gas_used=21127 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=71
 
 
 --------------- DEBUG ---------------
@@ -33,7 +33,7 @@ dyn:
     PUSH1 `pc + (7)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     DUP1
     PUSH1 0x80 (128)
     MSTORE
@@ -90,13 +90,13 @@ main:
     SWAP1
     JUMPDEST
     POP
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     PUSH1 0x6f (111)  // mstore v0 111.i256 i256;
     DUP2

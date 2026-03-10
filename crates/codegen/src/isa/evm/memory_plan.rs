@@ -23,7 +23,7 @@ use sonatina_ir::isa::evm::Evm;
 pub const WORD_BYTES: u32 = 32;
 pub const FREE_PTR_SLOT: u8 = 0x40;
 pub const DYN_SP_SLOT: u8 = 0x80;
-pub const STATIC_BASE: u32 = 0xc0;
+pub const STATIC_BASE: u32 = 0xa0;
 
 #[derive(Clone, Debug)]
 pub struct ProgramMemoryPlan {

@@ -16,7 +16,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
 
 evm:
-  case ok: calldata_len=4 success reason=Return gas_used=21994 gas_refunded=0 logs=0 output=call len=32 tx_gas=21016 runtime_gas=978
+  case ok: calldata_len=4 success reason=Return gas_used=21990 gas_refunded=0 logs=0 output=call len=32 tx_gas=21016 runtime_gas=974
 
 
 --------------- DEBUG ---------------
@@ -25,9 +25,9 @@ evm:
 main:
   block0:
     JUMPDEST
-    PUSH1 0xc0 (192)  // v0.*i256 = alloca i256;
+    PUSH1 0xa0 (160)  // v0.*i256 = alloca i256;
     POP  // v1.*i256 = gep v0 255.i256;
-    PUSH2 0x20a0 (8352)
+    PUSH2 0x2080 (8320)
     PUSH1 0x4d (77)  // mstore v1 77.i256 i256;
     DUP2
     MSTORE

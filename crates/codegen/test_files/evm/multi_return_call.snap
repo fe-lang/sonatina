@@ -11,13 +11,13 @@ object: Contract
 
 functions:
   entry: ir_blocks=3 ir_insts=12 vcode_ops=38 fixups=3 imm_bytes=6
-    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0xe0) entry_abs_words=1 abs_words_end=2
+    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0xc0) entry_abs_words=1 abs_words_end=2
   pair_add: ir_blocks=1 ir_insts=6 vcode_ops=16 fixups=0 imm_bytes=1
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=1
 
 evm:
-  case no_overflow: calldata_len=64 success reason=Return gas_used=21448 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=168
-  case overflow: calldata_len=64 success reason=Return gas_used=21824 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=172
+  case no_overflow: calldata_len=64 success reason=Return gas_used=21445 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=165
+  case overflow: calldata_len=64 success reason=Return gas_used=21821 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=169
 
 
 --------------- DEBUG ---------------
@@ -110,7 +110,7 @@ entry:
     CALLDATALOAD
     PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i256;
     CALLDATALOAD
-    PUSH1 0xe0 (224)  // v2.*i256 = alloca i256;
+    PUSH1 0xc0 (192)  // v2.*i256 = alloca i256;
     PUSH1 0x7 (7)  // mstore v2 7.i256 i256;
     DUP2
     MSTORE
@@ -150,7 +150,7 @@ entry:
 pair_add:
   block0:
     JUMPDEST
-    PUSH1 0xc0 (192)  // v2.*i256 = alloca i256;
+    PUSH1 0xa0 (160)  // v2.*i256 = alloca i256;
     SWAP1  // mstore v2 v0 i256;
     DUP2
     MSTORE

@@ -20,7 +20,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21286 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=230
+  case ok: calldata_len=8 success reason=Return gas_used=21283 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=227
 
 
 --------------- DEBUG ---------------
@@ -31,13 +31,13 @@ mk:
     JUMPDEST
     PUSH1 0x40 (64)  // v0.*i256 = evm_malloc 32.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH1 0x20 (32)
@@ -56,13 +56,13 @@ scratch:
     JUMPDEST
     PUSH1 0x40 (64)  // v0.*i256 = evm_malloc 32.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     PUSH1 0x6f (111)  // mstore v0 111.i256 i256;
     DUP2

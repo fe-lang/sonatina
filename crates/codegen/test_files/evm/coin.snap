@@ -69,7 +69,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=293079 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=272079
+  case ok: calldata_len=0 success reason=Return gas_used=293055 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=272055
 
 
 --------------- DEBUG ---------------
@@ -2436,13 +2436,13 @@ __Contract_runtime_entry:
     JUMPDEST
     PUSH1 0x40 (64)  // v15.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH1 0x40 (64)
@@ -2477,13 +2477,13 @@ __Contract_runtime_entry:
     JUMPDEST
     PUSH1 0x40 (64)  // v24.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH1 0x40 (64)
@@ -2518,13 +2518,13 @@ __Contract_runtime_entry:
     JUMPDEST
     PUSH1 0x40 (64)  // v33.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH1 0x40 (64)
@@ -2592,13 +2592,13 @@ __Contract_runtime_entry:
     JUMPDEST
     PUSH1 0x40 (64)  // v48.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH1 0x40 (64)
@@ -2848,13 +2848,13 @@ __Coin_init:
     AND
     PUSH1 0x40 (64)
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     SWAP2
@@ -2868,13 +2868,13 @@ __Coin_init:
     CODECOPY
     PUSH1 0x40 (64)  // v24.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH1 0x40 (64)
@@ -2922,13 +2922,13 @@ __Coin_runtime:
     JUMPDEST
     PUSH1 0x40 (64)  // v60.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     PUSH0  // mstore v63 0.i256 i256;
     DUP2
@@ -2942,13 +2942,13 @@ __Coin_runtime:
     MLOAD  // v68.i256 = mload v67 i256;
     PUSH1 0x40 (64)  // v69.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH1 0x40 (64)
@@ -2966,13 +2966,13 @@ __Coin_runtime:
     MSTORE
     PUSH1 0x40 (64)  // v46.*i256 = evm_malloc 96.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP2  // v50.i256 = mload v49 i256;
     MLOAD
@@ -3015,13 +3015,13 @@ __Coin_runtime:
     JUMPDEST
     PUSH1 0x40 (64)  // v26.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     SWAP2  // mstore v29 v24 i256;
     DUP3
@@ -3069,13 +3069,13 @@ __Coin_runtime:
     JUMPDEST
     PUSH1 0x40 (64)  // v34.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     SWAP2  // mstore v37 v32 i256;
     DUP3
@@ -3163,13 +3163,13 @@ create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e:
     POP
     PUSH1 0x40 (64)
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP3  // evm_code_copy v8 v26 v25;
     SWAP1
@@ -3189,13 +3189,13 @@ create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e:
     POP
     PUSH1 0x40 (64)
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP2  // evm_return_data_copy v24 0.i256 v22;
     PUSH0
@@ -3303,13 +3303,13 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Credit_h1b40c7da4bcceeac
     AND
     PUSH1 0x40 (64)
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     SWAP2
@@ -3421,13 +3421,13 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Transfer_hbe7d801e15d910
     AND
     PUSH1 0x40 (64)
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     SWAP2
@@ -3525,13 +3525,13 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__BalanceOf_h891837b06b561
     AND
     PUSH1 0x40 (64)
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     SWAP2
@@ -3615,13 +3615,13 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__TotalSupply_h7bb395110a2
     AND
     PUSH1 0x40 (64)
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     SWAP2
@@ -3782,13 +3782,13 @@ decode_returndata__u256__3271ca15373d4483:
     JUMPDEST
     PUSH1 0x40 (64)  // v8.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH1 0x40 (64)
@@ -3827,13 +3827,13 @@ soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54c
     JUMPDEST
     PUSH1 0x40 (64)  // v25.*i256 = evm_malloc 96.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH1 0x60 (96)
@@ -3860,13 +3860,13 @@ soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54c
     MSTORE
     PUSH1 0x40 (64)  // v4.*i256 = evm_malloc 128.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH1 0x80 (128)
@@ -3919,13 +3919,13 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     AND
     PUSH1 0x40 (64)
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     SWAP2
@@ -3972,13 +3972,13 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish:
     MLOAD  // v8.i256 = mload v7 i256;
     PUSH1 0x40 (64)  // v10.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH1 0x40 (64)
@@ -4004,13 +4004,13 @@ solencoder_h1b9228b90dad6928_new:
     JUMPDEST
     PUSH1 0x40 (64)  // v2.*i256 = evm_malloc 96.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH1 0x60 (96)
@@ -4041,13 +4041,13 @@ cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b
     JUMPDEST
     PUSH1 0x40 (64)  // v3.*i256 = evm_malloc 96.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH1 0x60 (96)
@@ -4081,13 +4081,13 @@ soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3
     JUMPDEST
     PUSH1 0x40 (64)  // v22.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     SWAP1  // mstore v25 v0 i256;
     DUP2
@@ -4101,13 +4101,13 @@ soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3
     MLOAD  // v30.i256 = mload v29 i256;
     PUSH1 0x40 (64)  // v31.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH1 0x40 (64)
@@ -4125,13 +4125,13 @@ soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3
     MSTORE
     PUSH1 0x40 (64)  // v6.*i256 = evm_malloc 96.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH1 0x60 (96)
@@ -4254,13 +4254,13 @@ cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563:
     JUMPDEST
     PUSH1 0x40 (64)  // v3.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH1 0x40 (64)
@@ -4286,13 +4286,13 @@ cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563:
     MLOAD  // v5.i256 = mload v4 i256;
     PUSH1 0x40 (64)  // v7.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH1 0x40 (64)

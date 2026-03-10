@@ -20,4 +20,4 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
 
 evm:
-  case bug_demo: calldata_len=8 success reason=Return gas_used=21311 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=255
+  case bug_demo: calldata_len=8 success reason=Return gas_used=21308 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=252
