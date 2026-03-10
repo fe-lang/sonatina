@@ -1046,7 +1046,7 @@ fn verify_subset_packing(
     }
 }
 
-fn topo_sort_sccs(
+pub(crate) fn topo_sort_sccs(
     funcs: &FxHashSet<FuncRef>,
     call_graph: &CallGraph,
     scc: &CallGraphSccs,
@@ -1108,7 +1108,7 @@ fn topo_sort_sccs(
     topo
 }
 
-fn build_scc_edges(
+pub(crate) fn build_scc_edges(
     funcs: &FxHashSet<FuncRef>,
     call_graph: &CallGraph,
     scc: &CallGraphSccs,

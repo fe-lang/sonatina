@@ -74,6 +74,19 @@ impl LazyFramePlan {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FrameSummary {
+    pub(crate) lowering: Option<LazyFramePlan>,
+    pub(crate) full_body_active: bool,
+    pub(crate) active_pre_insts: FxHashSet<InstId>,
+}
+
+impl FrameSummary {
+    pub(crate) fn local_frame_active_before_inst(&self, inst: InstId) -> bool {
+        self.full_body_active || self.active_pre_insts.contains(&inst)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum PostNode {
     Real(BlockId),
@@ -106,16 +119,45 @@ struct RootUseDepCtx<'a> {
     order: &'a PointOrderTable,
 }
 
-pub(crate) fn compute_lazy_frame_plan(
+pub(crate) fn compute_frame_summary(
+    function: &Function,
+    alloc: &dyn Allocator,
+    mem_plan: &FuncMemPlan,
+    isa: &Evm,
+) -> FrameSummary {
+    if mem_plan.frame_size_words() == 0 {
+        return FrameSummary::default();
+    }
+
+    let Some(plan) = compute_lazy_frame_plan_inner(function, alloc, mem_plan, isa) else {
+        return FrameSummary {
+            lowering: None,
+            full_body_active: true,
+            active_pre_insts: FxHashSet::default(),
+        };
+    };
+
+    let Some(active_pre_insts) = compute_active_pre_insts(function, alloc, isa, &plan) else {
+        return FrameSummary {
+            lowering: Some(plan),
+            full_body_active: true,
+            active_pre_insts: FxHashSet::default(),
+        };
+    };
+
+    FrameSummary {
+        lowering: Some(plan),
+        full_body_active: false,
+        active_pre_insts,
+    }
+}
+
+fn compute_lazy_frame_plan_inner(
     function: &Function,
     alloc: &dyn Allocator,
     mem_plan: &FuncMemPlan,
     isa: &Evm,
 ) -> Option<LazyFramePlan> {
-    if mem_plan.frame_size_words() == 0 {
-        return None;
-    }
-
     function.layout.entry_block()?;
 
     let mut cfg = ControlFlowGraph::default();
@@ -189,6 +231,142 @@ pub(crate) fn compute_lazy_frame_plan(
     }
 
     Some(LazyFramePlan { enter, exits })
+}
+
+fn compute_active_pre_insts(
+    function: &Function,
+    alloc: &dyn Allocator,
+    isa: &Evm,
+    plan: &LazyFramePlan,
+) -> Option<FxHashSet<InstId>> {
+    let mut cfg = ControlFlowGraph::default();
+    cfg.compute(function);
+    let entry_block = function.layout.entry_block()?;
+    let mut active_at_entry: FxHashMap<BlockId, bool> = FxHashMap::default();
+    active_at_entry.insert(entry_block, false);
+    let mut worklist = vec![entry_block];
+    let mut active_pre_insts: FxHashSet<InstId> = FxHashSet::default();
+
+    while let Some(block) = worklist.pop() {
+        let mut active = *active_at_entry
+            .get(&block)
+            .unwrap_or_else(|| panic!("missing active state for block {}", block.as_u32()));
+        apply_site_state(plan, FrameSite::BlockEntry(block), &mut active);
+
+        for inst in function.layout.iter_inst(block) {
+            let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
+            let args = function.dfg.inst(inst).collect_values();
+            apply_site_state(plan, FrameSite::PreInst(inst), &mut active);
+
+            match &data {
+                EvmInstKind::Call(_) => {
+                    let mut actions = alloc.read(inst, &args);
+                    let cont_pos = actions
+                        .iter()
+                        .position(|a| matches!(a, Action::PushContinuationOffset))?;
+                    let suffix: Vec<Action> = actions.drain(cont_pos + 1..).collect();
+                    let marker = actions.remove(cont_pos);
+                    if marker != Action::PushContinuationOffset {
+                        return None;
+                    }
+                    let prefix_folded_len = fold_stack_actions(&actions).len();
+                    apply_actions_state(plan, FrameSite::PreInst(inst), &actions, 0, &mut active);
+                    apply_actions_state(
+                        plan,
+                        FrameSite::PreInst(inst),
+                        &suffix,
+                        prefix_folded_len,
+                        &mut active,
+                    );
+                }
+                EvmInstKind::BrTable(br) => {
+                    for (case_val, _) in br.table().iter() {
+                        let actions = alloc.read(inst, &[*br.scrutinee(), *case_val]);
+                        if fold_stack_actions(&actions).iter().any(|action| {
+                            matches!(
+                                action,
+                                Action::MemLoadFrameSlot(_) | Action::MemStoreFrameSlot(_)
+                            )
+                        }) {
+                            return None;
+                        }
+                    }
+                }
+                _ => apply_actions_state(
+                    plan,
+                    FrameSite::PreInst(inst),
+                    &alloc.read(inst, &args),
+                    0,
+                    &mut active,
+                ),
+            }
+
+            apply_site_state(plan, FrameSite::Inst(inst), &mut active);
+            if matches!(data, EvmInstKind::Call(_) | EvmInstKind::EvmMalloc(_)) && active {
+                active_pre_insts.insert(inst);
+            }
+            apply_after_site_state(plan, FrameSite::Inst(inst), &mut active);
+
+            apply_site_state(plan, FrameSite::PostInst(inst), &mut active);
+            apply_actions_state(
+                plan,
+                FrameSite::PostInst(inst),
+                &alloc.write(inst, function.dfg.inst_results(inst)),
+                0,
+                &mut active,
+            );
+            apply_after_site_state(plan, FrameSite::PostInst(inst), &mut active);
+        }
+
+        for succ in cfg.succs_of(block) {
+            let succ = *succ;
+            if let Some(prev) = active_at_entry.get(&succ) {
+                if *prev != active {
+                    return None;
+                }
+            } else {
+                active_at_entry.insert(succ, active);
+                worklist.push(succ);
+            }
+        }
+    }
+
+    Some(active_pre_insts)
+}
+
+fn apply_site_state(plan: &LazyFramePlan, site: FrameSite, active: &mut bool) {
+    if plan.enter_before_site(site) {
+        *active = true;
+    }
+    if plan.exit_before_site(site) {
+        *active = false;
+    }
+}
+
+fn apply_after_site_state(plan: &LazyFramePlan, site: FrameSite, active: &mut bool) {
+    if plan.exit_after_site(site) {
+        *active = false;
+    }
+}
+
+fn apply_actions_state(
+    plan: &LazyFramePlan,
+    site: FrameSite,
+    actions: &[Action],
+    action_index_offset: usize,
+    active: &mut bool,
+) {
+    for (index, _) in fold_stack_actions(actions).iter().enumerate() {
+        let index = action_index_offset
+            .checked_add(index)
+            .expect("lazy frame action index overflow");
+        if plan.enter_before_action(site, index) {
+            *active = true;
+        }
+        if plan.exit_after_action(site, index) {
+            *active = false;
+        }
+    }
 }
 
 fn collect_dep_points(
@@ -741,9 +919,18 @@ mod tests {
         module: sonatina_ir::Module,
         func: sonatina_ir::module::FuncRef,
         plan: LazyFramePlan,
+        summary: FrameSummary,
     }
 
-    fn lazy_plan_from_src(src: &str, func_name: &str, cost_model: &ArenaCostModel) -> LazyPlanCtx {
+    fn frame_summary_from_src(
+        src: &str,
+        func_name: &str,
+        cost_model: &ArenaCostModel,
+    ) -> (
+        sonatina_ir::Module,
+        sonatina_ir::module::FuncRef,
+        FrameSummary,
+    ) {
         let parsed = parse_module(src).expect("module parses");
         let funcs = parsed.module.funcs();
         let isa = Evm::new(TargetTriple {
@@ -806,14 +993,21 @@ mod tests {
             .expect("missing function plan")
             .clone();
         let alloc = FinalAlloc::new(analysis.alloc, mem_plan.clone());
-        let lazy_plan = parsed.module.func_store.view(func, |function| {
-            compute_lazy_frame_plan(function, &alloc, &mem_plan, &isa)
+        let summary = parsed.module.func_store.view(func, |function| {
+            compute_frame_summary(function, &alloc, &mem_plan, &isa)
         });
 
+        (parsed.module, func, summary)
+    }
+
+    fn lazy_plan_from_src(src: &str, func_name: &str, cost_model: &ArenaCostModel) -> LazyPlanCtx {
+        let (module, func, summary) = frame_summary_from_src(src, func_name, cost_model);
+
         LazyPlanCtx {
-            module: parsed.module,
+            module,
             func,
-            plan: lazy_plan.expect("expected lazy frame plan"),
+            plan: summary.lowering.clone().expect("expected lazy frame plan"),
+            summary,
         }
     }
 
@@ -936,5 +1130,109 @@ block2:
         });
 
         assert!(ctx.plan.exit_after_site(FrameSite::PreInst(ret_inst)));
+    }
+
+    #[test]
+    fn malloc_before_lazy_enter_is_not_marked_active() {
+        let ctx = lazy_plan_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i256) -> i256 {
+block0:
+    v2.*i8 = evm_malloc 32.i256;
+    br v0 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v3.*i256 = alloca i256;
+    mstore v3 v1 i256;
+    v4.i256 = call %f 1.i1 v1;
+    v5.i256 = mload v3 i256;
+    v6.i256 = add v4 v5;
+    return v6;
+}
+"#,
+            "f",
+            &ArenaCostModel::default(),
+        );
+
+        let malloc_inst = ctx.module.func_store.view(ctx.func, |function| {
+            function
+                .layout
+                .iter_block()
+                .flat_map(|block| function.layout.iter_inst(block))
+                .find(|&inst| {
+                    matches!(
+                        Evm::new(function.dfg.ctx.triple)
+                            .inst_set()
+                            .resolve_inst(function.dfg.inst(inst)),
+                        EvmInstKind::EvmMalloc(_)
+                    )
+                })
+                .expect("malloc")
+        });
+
+        assert!(!ctx.summary.local_frame_active_before_inst(malloc_inst));
+    }
+
+    #[test]
+    fn malloc_after_lazy_enter_is_marked_active() {
+        let ctx = lazy_plan_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i256) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v2.*i256 = alloca i256;
+    mstore v2 v1 i256;
+    v3.*i8 = evm_malloc 32.i256;
+    v4.i256 = call %f 1.i1 v1;
+    v5.i256 = mload v2 i256;
+    v6.i256 = add v4 v5;
+    return v6;
+}
+"#,
+            "f",
+            &ArenaCostModel::default(),
+        );
+
+        let malloc_inst = ctx.module.func_store.view(ctx.func, |function| {
+            function
+                .layout
+                .iter_block()
+                .flat_map(|block| function.layout.iter_inst(block))
+                .find(|&inst| {
+                    matches!(
+                        Evm::new(function.dfg.ctx.triple)
+                            .inst_set()
+                            .resolve_inst(function.dfg.inst(inst)),
+                        EvmInstKind::EvmMalloc(_)
+                    )
+                })
+                .expect("malloc")
+        });
+
+        assert!(ctx.summary.local_frame_active_before_inst(malloc_inst));
+    }
+
+    #[test]
+    fn full_body_active_summary_marks_all_insts_active() {
+        let summary = FrameSummary {
+            lowering: None,
+            full_body_active: true,
+            active_pre_insts: FxHashSet::default(),
+        };
+
+        assert!(summary.local_frame_active_before_inst(InstId::from_u32(0)));
+        assert!(summary.local_frame_active_before_inst(InstId::from_u32(1)));
     }
 }

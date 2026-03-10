@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use crate::stackalloc::{Action, Actions, Allocator};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct StackifyAlloc {
     pub(super) pre_actions: SecondaryMap<InstId, Actions>,
     pub(super) post_actions: SecondaryMap<InstId, Actions>,
