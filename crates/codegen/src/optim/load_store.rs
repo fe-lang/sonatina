@@ -4,8 +4,12 @@ use sonatina_ir::{
     AccessKind, AddressSpaceId, ControlFlowGraph, Function, InstDowncast, InstId, ValueId,
     bitset::BitSet,
     inst::{
+        control_flow,
         data::{Mload, Mstore},
-        evm::{EvmCalldataLoad, EvmMstore8, EvmSload, EvmSstore, EvmTload, EvmTstore},
+        evm::{
+            EvmCalldataLoad, EvmInvalid, EvmMstore8, EvmReturn, EvmRevert, EvmSelfDestruct,
+            EvmSload, EvmSstore, EvmStop, EvmTload, EvmTstore,
+        },
     },
 };
 
@@ -106,6 +110,7 @@ impl LoadStoreSolver {
 
     fn run_backward(&mut self, func: &mut Function, cfg: &ControlFlowGraph) -> bool {
         let reachable = cfg.reachable_blocks();
+        let committing_exit_reachable = blocks_reaching_committing_exit(func, cfg, &reachable);
         let order: Vec<_> = cfg.post_order().collect();
 
         let mut in_states = SecondaryMap::<sonatina_ir::BlockId, LiveState>::new();
@@ -138,7 +143,13 @@ impl LoadStoreSolver {
                         continue;
                     }
                     let analysis = MemoryAccessAnalysis::new();
-                    if transfer_backward(func, inst, &analysis, &mut live) {
+                    if transfer_backward(
+                        func,
+                        inst,
+                        &analysis,
+                        &mut live,
+                        committing_exit_reachable[block],
+                    ) {
                         changed = true;
                     }
                 }
@@ -240,6 +251,7 @@ fn transfer_backward(
     inst: InstId,
     analysis: &MemoryAccessAnalysis,
     live: &mut LiveState,
+    committing_exit_reachable: bool,
 ) -> bool {
     let effects = func.dfg.effects(inst);
 
@@ -260,7 +272,8 @@ fn transfer_backward(
 
                 let has_whole_space_live = live.whole_space_live.contains(access.space);
                 let has_exact_live = has_may_alias_live(&live.exact_live, &key, analysis);
-                let live_at_exit = write_visible_after_return(func, &key);
+                let live_at_exit =
+                    committing_exit_reachable && write_visible_at_committing_exit(func, &key);
                 let dead = !has_whole_space_live && !has_exact_live && !live_at_exit;
 
                 if dead && store_is_removable(func, inst) {
@@ -367,7 +380,67 @@ fn store_is_removable(func: &Function, inst: InstId) -> bool {
         || <&EvmTstore as InstDowncast>::downcast(is, inst_data).is_some()
 }
 
-fn write_visible_after_return(func: &Function, key: &TrackedLocKey) -> bool {
+fn blocks_reaching_committing_exit(
+    func: &Function,
+    cfg: &ControlFlowGraph,
+    reachable: &SecondaryMap<sonatina_ir::BlockId, bool>,
+) -> SecondaryMap<sonatina_ir::BlockId, bool> {
+    let mut reaches_commit = SecondaryMap::new();
+    let mut worklist = Vec::new();
+
+    for &exit in &cfg.exits {
+        if !reachable[exit] || !exit_commits_visible_writes(func, exit) {
+            continue;
+        }
+
+        reaches_commit[exit] = true;
+        worklist.push(exit);
+    }
+
+    while let Some(block) = worklist.pop() {
+        for pred in cfg.preds_of(block).copied().filter(|pred| reachable[*pred]) {
+            if reaches_commit[pred] {
+                continue;
+            }
+
+            reaches_commit[pred] = true;
+            worklist.push(pred);
+        }
+    }
+
+    reaches_commit
+}
+
+fn exit_commits_visible_writes(func: &Function, block: sonatina_ir::BlockId) -> bool {
+    let Some(term) = func.layout.last_inst_of(block) else {
+        return false;
+    };
+    if !func.dfg.is_exit(term) {
+        return false;
+    }
+
+    let inst = func.dfg.inst(term);
+    let is = func.inst_set();
+
+    if <&EvmRevert as InstDowncast>::downcast(is, inst).is_some()
+        || <&EvmInvalid as InstDowncast>::downcast(is, inst).is_some()
+        || <&control_flow::Unreachable as InstDowncast>::downcast(is, inst).is_some()
+    {
+        return false;
+    }
+
+    if <&control_flow::Return as InstDowncast>::downcast(is, inst).is_some()
+        || <&EvmReturn as InstDowncast>::downcast(is, inst).is_some()
+        || <&EvmSelfDestruct as InstDowncast>::downcast(is, inst).is_some()
+        || <&EvmStop as InstDowncast>::downcast(is, inst).is_some()
+    {
+        return true;
+    }
+
+    true
+}
+
+fn write_visible_at_committing_exit(func: &Function, key: &TrackedLocKey) -> bool {
     let default_space = func.ctx().address_spaces().default_space();
     match key {
         TrackedLocKey::Keyed(_) => true,
@@ -390,7 +463,10 @@ mod tests {
         inst::{
             control_flow::Return,
             data::{Alloca, Mload},
-            evm::{EvmCalldataLoad, EvmKeccak256, EvmSload, EvmStaticCall},
+            evm::{
+                EvmCalldataLoad, EvmKeccak256, EvmRevert, EvmSelfDestruct, EvmSload, EvmStaticCall,
+                EvmStop,
+            },
         },
         isa::Isa,
     };
@@ -579,6 +655,78 @@ mod tests {
 
         assert!(!run_solver(&mut builder.func));
         assert_eq!(count_insts::<Mstore>(&builder.func), 1);
+    }
+
+    #[test]
+    fn removes_final_sstore_on_revert_exit() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let zero = builder.make_imm_value(I256::from(0));
+        let slot = builder.make_imm_value(I256::from(1));
+        let value = builder.make_imm_value(I256::from(7));
+        builder.insert_inst_no_result_with(|| EvmSstore::new(is, slot, value));
+        builder.insert_inst_no_result_with(|| EvmRevert::new(is, zero, zero));
+        builder.seal_all();
+
+        assert!(run_solver(&mut builder.func));
+        assert_eq!(count_insts::<EvmSstore>(&builder.func), 0);
+    }
+
+    #[test]
+    fn keeps_final_sstore_on_selfdestruct_exit() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let zero = builder.make_imm_value(I256::from(0));
+        let slot = builder.make_imm_value(I256::from(1));
+        let value = builder.make_imm_value(I256::from(7));
+        builder.insert_inst_no_result_with(|| EvmSstore::new(is, slot, value));
+        builder.insert_inst_no_result_with(|| EvmSelfDestruct::new(is, zero));
+        builder.seal_all();
+
+        assert!(!run_solver(&mut builder.func));
+        assert_eq!(count_insts::<EvmSstore>(&builder.func), 1);
+    }
+
+    #[test]
+    fn keeps_final_sstore_when_any_exit_commits() {
+        use sonatina_ir::inst::control_flow::Br;
+
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I1], Type::Unit);
+        let is = evm.inst_set();
+
+        let entry = builder.append_block();
+        let revert_block = builder.append_block();
+        let stop_block = builder.append_block();
+
+        builder.switch_to_block(entry);
+        let cond = builder.args()[0];
+        let zero = builder.make_imm_value(I256::from(0));
+        let slot = builder.make_imm_value(I256::from(1));
+        let value = builder.make_imm_value(I256::from(7));
+        builder.insert_inst_no_result_with(|| EvmSstore::new(is, slot, value));
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, revert_block, stop_block));
+
+        builder.switch_to_block(revert_block);
+        builder.insert_inst_no_result_with(|| EvmRevert::new(is, zero, zero));
+
+        builder.switch_to_block(stop_block);
+        builder.insert_inst_no_result_with(|| EvmStop::new(is));
+
+        builder.seal_all();
+
+        assert!(!run_solver(&mut builder.func));
+        assert_eq!(count_insts::<EvmSstore>(&builder.func), 1);
     }
 
     #[test]
