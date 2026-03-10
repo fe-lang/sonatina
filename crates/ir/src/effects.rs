@@ -3,7 +3,7 @@ use cranelift_entity::entity_impl;
 use smallvec::{SmallVec, smallvec};
 
 use crate::{
-    DataFlowGraph, InstDowncast, InstId, Type, ValueId,
+    DataFlowGraph, I256, Immediate, InstDowncast, InstId, Type, ValueId,
     bitset::BitSet,
     inst::{
         SideEffect, control_flow, data,
@@ -24,6 +24,7 @@ use crate::{
 };
 
 const EVM_WORD_BYTES: u32 = 32;
+const EVM_FREE_PTR_SLOT: i64 = 0x40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AddressSpaceId(u32);
@@ -64,9 +65,24 @@ pub enum AccessKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccessLoc {
-    LinearExact { addr: ValueId, bytes: u32, ty: Type },
-    LinearRange { addr: ValueId, len: ValueId },
-    KeyedExact { key: ValueId, bytes: u32 },
+    LinearExact {
+        addr: ValueId,
+        bytes: u32,
+        ty: Type,
+    },
+    LinearExactImm {
+        addr: Immediate,
+        bytes: u32,
+        ty: Type,
+    },
+    LinearRange {
+        addr: ValueId,
+        len: ValueId,
+    },
+    KeyedExact {
+        key: ValueId,
+        bytes: u32,
+    },
     WholeSpace,
     Unknown,
 }
@@ -441,10 +457,7 @@ pub fn classify_inst_effects(dfg: &DataFlowGraph, inst_id: InstId) -> InstEffect
     }
 
     if <&EvmMalloc as InstDowncast>::downcast(is, inst).is_some() {
-        return InstEffects {
-            other: OtherEffects::ALLOC,
-            ..InstEffects::default()
-        };
+        return malloc_effects();
     }
 
     if <&EvmStop as InstDowncast>::downcast(is, inst).is_some()
@@ -490,6 +503,21 @@ fn exact_linear(
             loc: AccessLoc::LinearExact { addr, bytes, ty },
         }],
         ..InstEffects::default()
+    }
+}
+
+fn exact_linear_imm(
+    space: AddressSpaceId,
+    kind: AccessKind,
+    addr: Immediate,
+    bytes: u32,
+    ty: Type,
+) -> MemoryAccess {
+    MemoryAccess {
+        space,
+        kind,
+        must_happen: true,
+        loc: AccessLoc::LinearExactImm { addr, bytes, ty },
     }
 }
 
@@ -588,6 +616,17 @@ fn create_effects(addr: ValueId, len: ValueId) -> InstEffects {
             whole_space(RETURNDATA, AccessKind::Write),
         ],
         other: OtherEffects::MUTATE,
+    }
+}
+
+fn malloc_effects() -> InstEffects {
+    let addr = Immediate::from_i256(I256::from(EVM_FREE_PTR_SLOT), Type::I256);
+    InstEffects {
+        accesses: smallvec![
+            exact_linear_imm(MEMORY, AccessKind::Read, addr, EVM_WORD_BYTES, Type::I256),
+            exact_linear_imm(MEMORY, AccessKind::Write, addr, EVM_WORD_BYTES, Type::I256),
+        ],
+        other: OtherEffects::ALLOC,
     }
 }
 
@@ -715,7 +754,7 @@ mod tests {
     use super::*;
     use crate::{
         builder::test_util::*,
-        inst::{control_flow::Return, data::Alloca},
+        inst::{control_flow::Return, data::Alloca, evm::EvmMalloc},
         isa::{Isa, evm::Evm},
     };
 
@@ -772,6 +811,22 @@ mod tests {
         let created =
             builder.insert_inst_with(|| EvmCreate2::new(is, zero, addr, zero, zero), Type::I256);
         builder.insert_inst_no_result_with(|| Return::new_single(is, created));
+        builder.seal_all();
+
+        builder.func
+    }
+
+    fn build_malloc_func() -> crate::Function {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], mb.ptr_type(Type::I8));
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let size = builder.make_imm_value(Immediate::from_i256(I256::from(32), Type::I256));
+        let ptr = builder.insert_inst_with(|| EvmMalloc::new(is, size), mb.ptr_type(Type::I8));
+        builder.insert_inst_no_result_with(|| Return::new_single(is, ptr));
         builder.seal_all();
 
         builder.func
@@ -864,5 +919,39 @@ mod tests {
         assert!(has_access(&effects, RETURNDATA, AccessKind::Write));
         assert!(!has_access(&effects, MEMORY, AccessKind::Write));
         assert_eq!(effects.other, OtherEffects::MUTATE);
+    }
+
+    #[test]
+    fn evm_malloc_effects_touch_free_ptr_slot_without_whole_space_barriers() {
+        let func = build_malloc_func();
+        let effects = effects_for_inst::<EvmMalloc>(&func);
+
+        assert_eq!(effects.accesses.len(), 2);
+        assert!(effects.other.contains(OtherEffects::ALLOC));
+        assert!(
+            effects
+                .accesses
+                .iter()
+                .all(|access| !matches!(access.loc, AccessLoc::WholeSpace))
+        );
+
+        let free_ptr = Immediate::from_i256(I256::from(EVM_FREE_PTR_SLOT), Type::I256);
+        let [read, write] = effects.accesses.as_slice() else {
+            panic!("expected exactly one read and one write");
+        };
+
+        for (access, kind) in [(read, AccessKind::Read), (write, AccessKind::Write)] {
+            assert_eq!(access.space, MEMORY);
+            assert_eq!(access.kind, kind);
+            assert!(access.must_happen);
+            match access.loc {
+                AccessLoc::LinearExactImm { addr, bytes, ty } => {
+                    assert_eq!(addr, free_ptr);
+                    assert_eq!(bytes, EVM_WORD_BYTES);
+                    assert_eq!(ty, Type::I256);
+                }
+                ref other => panic!("expected exact immediate access, got {other:?}"),
+            }
+        }
     }
 }

@@ -560,8 +560,8 @@ mod tests {
             control_flow::Return,
             data::{Alloca, Mload},
             evm::{
-                EvmCalldataLoad, EvmCreate, EvmCreate2, EvmKeccak256, EvmReturn, EvmRevert,
-                EvmSelfDestruct, EvmSload, EvmStaticCall, EvmStop, EvmTload,
+                EvmCalldataLoad, EvmCreate, EvmCreate2, EvmKeccak256, EvmMalloc, EvmReturn,
+                EvmRevert, EvmSelfDestruct, EvmSload, EvmStaticCall, EvmStop, EvmTload,
             },
         },
         isa::Isa,
@@ -713,6 +713,52 @@ mod tests {
 
         assert!(run_solver(&mut builder.func));
         assert_eq!(count_insts::<Mload>(&builder.func), 0);
+    }
+
+    #[test]
+    fn mload_does_not_forward_across_malloc_free_ptr_barrier() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I256);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let addr = builder.make_imm_value(I256::from(64));
+        let size = builder.make_imm_value(I256::from(32));
+        let ptr_ty = builder.ptr_type(Type::I8);
+        let _first = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+        let _malloc = builder.insert_inst_with(|| EvmMalloc::new(is, size), ptr_ty);
+        let second = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, second));
+        builder.seal_all();
+
+        assert!(!run_solver(&mut builder.func));
+        assert_eq!(count_insts::<Mload>(&builder.func), 2);
+    }
+
+    #[test]
+    fn malloc_read_keeps_prior_free_ptr_store_live() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let addr = builder.make_imm_value(I256::from(64));
+        let size = builder.make_imm_value(I256::from(32));
+        let ptr_ty = builder.ptr_type(Type::I8);
+        let v1 = builder.make_imm_value(I256::from(7));
+        let v2 = builder.make_imm_value(I256::from(8));
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v1, Type::I256));
+        let _malloc = builder.insert_inst_with(|| EvmMalloc::new(is, size), ptr_ty);
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v2, Type::I256));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        assert!(!run_solver(&mut builder.func));
+        assert_eq!(count_insts::<Mstore>(&builder.func), 2);
     }
 
     #[test]

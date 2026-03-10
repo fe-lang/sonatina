@@ -371,7 +371,10 @@ fn topo_sort_sccs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonatina_ir::isa::evm::space::{RETURNDATA, STORAGE, TRANSIENT};
+    use sonatina_ir::{
+        OtherEffects,
+        isa::evm::space::{MEMORY, RETURNDATA, STORAGE, TRANSIENT},
+    };
     use sonatina_parser::parse_module;
 
     fn parse(src: &str) -> Module {
@@ -479,5 +482,34 @@ func private %caller(v0.i256, v1.i256) -> i256 {
         assert!(effects.may_read_spaces.contains(TRANSIENT));
         assert!(effects.may_write_spaces.contains(TRANSIENT));
         assert!(effects.may_write_spaces.contains(RETURNDATA));
+    }
+
+    #[test]
+    fn propagates_malloc_memory_barriers_through_internal_calls() {
+        let module = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %alloc() -> *i8 {
+    block0:
+        v0.*i8 = evm_malloc 32.i256;
+        return v0;
+}
+
+func private %caller() -> *i8 {
+    block0:
+        v0.*i8 = call %alloc;
+        return v0;
+}
+"#,
+        );
+
+        analyze_module(&module);
+
+        let caller = find_func(&module, "caller");
+        let effects = module.ctx.func_effects(caller);
+        assert!(effects.may_read_spaces.contains(MEMORY));
+        assert!(effects.may_write_spaces.contains(MEMORY));
+        assert!(effects.other.contains(OtherEffects::ALLOC));
     }
 }

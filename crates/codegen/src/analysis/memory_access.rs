@@ -110,6 +110,15 @@ impl MemoryAccessAnalysis {
                     ty: *ty,
                 }))
             }
+            AccessLoc::LinearExactImm { addr, bytes, ty } => {
+                Some(TrackedLocKey::Linear(LinearLocKey {
+                    space: access.space,
+                    base: BaseObject::Absolute(*addr),
+                    offset: 0,
+                    bytes: *bytes,
+                    ty: *ty,
+                }))
+            }
             AccessLoc::KeyedExact { key, bytes } => Some(TrackedLocKey::Keyed(KeyedLocKey {
                 space: access.space,
                 key: self.trackable_value_key(func, *key)?,
@@ -184,8 +193,16 @@ impl MemoryAccessAnalysis {
                 .is_none_or(|range| self.range_may_alias_key(&range, key)),
             (TrackedLocKey::Keyed(_), AccessLoc::LinearRange { .. }) => false,
             (TrackedLocKey::Linear(_), AccessLoc::KeyedExact { .. })
-            | (TrackedLocKey::Keyed(_), AccessLoc::LinearExact { .. }) => false,
-            (_, AccessLoc::LinearExact { .. } | AccessLoc::KeyedExact { .. }) => self
+            | (
+                TrackedLocKey::Keyed(_),
+                AccessLoc::LinearExact { .. } | AccessLoc::LinearExactImm { .. },
+            ) => false,
+            (
+                _,
+                AccessLoc::LinearExact { .. }
+                | AccessLoc::LinearExactImm { .. }
+                | AccessLoc::KeyedExact { .. },
+            ) => self
                 .trackable_exact_loc(func, access)
                 .is_none_or(|other| self.alias(key, &other) != AliasResult::NoAlias),
         }
@@ -623,6 +640,19 @@ mod tests {
         }
     }
 
+    fn exact_imm_access(space: AddressSpaceId, addr: Immediate) -> MemoryAccess {
+        MemoryAccess {
+            space,
+            kind: AccessKind::Read,
+            must_happen: true,
+            loc: AccessLoc::LinearExactImm {
+                addr,
+                bytes: 32,
+                ty: Type::I256,
+            },
+        }
+    }
+
     #[test]
     fn alias_distinguishes_allocas() {
         let mb = test_module_builder();
@@ -875,6 +905,32 @@ mod tests {
             .expect("range should be trackable");
 
         assert!(analysis.range_may_alias_key(&range, &key));
+    }
+
+    #[test]
+    fn immediate_exact_linear_access_tracks_as_absolute_key() {
+        let mb = test_module_builder();
+        let (_evm, builder) = test_func_builder(&mb, &[], Type::Unit);
+        let analysis = MemoryAccessAnalysis::new();
+        let addr = Immediate::from_i256(I256::from(64), Type::I256);
+
+        let key = analysis
+            .trackable_exact_loc(
+                &builder.func,
+                &exact_imm_access(builder.func.ctx().address_spaces().default_space(), addr),
+            )
+            .expect("immediate exact access should be trackable");
+
+        assert_eq!(
+            key,
+            TrackedLocKey::Linear(LinearLocKey {
+                space: builder.func.ctx().address_spaces().default_space(),
+                base: BaseObject::Absolute(addr),
+                offset: 0,
+                bytes: 32,
+                ty: Type::I256,
+            })
+        );
     }
 
     #[test]
