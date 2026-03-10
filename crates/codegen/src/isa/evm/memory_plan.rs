@@ -10,8 +10,6 @@ use crate::{
     stackalloc::StackifyAlloc,
 };
 
-#[cfg(debug_assertions)]
-use super::static_arena_alloc::verify_object_packing;
 use super::{
     malloc_plan::MallocEscapeKind,
     ptr_escape::PtrEscapeSummary,
@@ -966,19 +964,12 @@ fn verify_program_memory_plan(
                 }
             }
 
-            let stable_real: FxHashMap<StackObjId, u32> = stable_offsets
-                .iter()
-                .filter(|(obj, _)| stack.obj_size_words.contains_key(obj))
-                .map(|(obj, off)| (*obj, *off))
-                .collect();
-            if !stable_real.is_empty() {
-                verify_object_packing(
+            if !stable_subset.is_empty() {
+                verify_subset_packing(
                     func,
-                    &stack,
-                    &stable_real,
-                    func_plan
-                        .stable_words
-                        .max(stable_real.values().copied().max().unwrap_or(0) + 1),
+                    &stable_subset,
+                    &stable_offsets,
+                    func_plan.stable_words,
                 );
             }
         });
