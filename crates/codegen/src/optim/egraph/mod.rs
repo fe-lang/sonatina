@@ -19,11 +19,10 @@ use sonatina_ir::{
 const TYPES: &str = include_str!("types.egg");
 const EXPRS: &str = include_str!("expr.egg");
 const RULES: &str = include_str!("rules.egg");
-const MEMORY: &str = include_str!("memory.egg");
 
 /// Run egglog optimization on the given program.
 pub fn run_egglog(program: &str) -> egglog::EGraph {
-    let full_program = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, program);
+    let full_program = format!("{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, program);
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(None, &full_program).unwrap();
     egraph

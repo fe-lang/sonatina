@@ -5,16 +5,13 @@ use crate::domtree::DomTree;
 use egglog::{CommandOutput, EGraph};
 use rustc_hash::FxHashMap;
 
-use sonatina_ir::{
-    ControlFlowGraph, Function, InstDowncast, InstId, Type, Value, ValueId, inst::data::Mstore,
-};
+use sonatina_ir::{ControlFlowGraph, Function, InstId, Type, Value, ValueId};
 
 use super::{EggTerm, Elaborator, func_to_egglog};
 
 const TYPES: &str = include_str!("types.egg");
 const EXPRS: &str = include_str!("expr.egg");
 const RULES: &str = include_str!("rules.egg");
-const MEMORY: &str = include_str!("memory.egg");
 
 fn has_unknown_call_attrs(func: &Function) -> bool {
     for block in func.layout.iter_block() {
@@ -89,10 +86,7 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
 
     // Run egglog
     let mut egraph = EGraph::default();
-    let full_with_rules = format!(
-        "{}\n{}\n{}\n{}\n{}",
-        TYPES, EXPRS, RULES, MEMORY, full_program
-    );
+    let full_with_rules = format!("{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, full_program);
 
     let results = match egraph.parse_and_run_program(None, &full_with_rules) {
         Ok(r) => r,
@@ -212,9 +206,6 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
         }
     }
 
-    if eliminate_adjacent_dead_stores(func) {
-        changed = true;
-    }
     if eliminate_dead_pure_insts(func) {
         changed = true;
     }
@@ -344,39 +335,6 @@ fn inst_uses_value_directly(func: &Function, inst_value: ValueId, value: ValueId
     used
 }
 
-fn eliminate_adjacent_dead_stores(func: &mut Function) -> bool {
-    let is = func.inst_set();
-    let mut changed = false;
-
-    let blocks: Vec<_> = func.layout.iter_block().collect();
-    for block in blocks {
-        let insts: Vec<_> = func.layout.iter_inst(block).collect();
-        let mut prev_store: Option<(sonatina_ir::InstId, ValueId, Type)> = None;
-
-        for inst_id in insts {
-            let inst = func.dfg.inst(inst_id);
-            if let Some(store) = <&Mstore>::downcast(is, inst) {
-                let addr = *store.addr();
-                let ty = *store.ty();
-                if let Some((prev_id, prev_addr, prev_ty)) = prev_store
-                    && prev_addr == addr
-                    && prev_ty == ty
-                {
-                    func.layout.remove_inst(prev_id);
-                    func.erase_inst(prev_id);
-                    changed = true;
-                }
-
-                prev_store = Some((inst_id, addr, ty));
-            } else {
-                prev_store = None;
-            }
-        }
-    }
-
-    changed
-}
-
 fn eliminate_dead_pure_insts(func: &mut Function) -> bool {
     let mut worklist = Vec::new();
     for block in func.layout.iter_block() {
@@ -449,7 +407,7 @@ mod tests {
 
     #[test]
     fn test_egglog_parses() {
-        let full = format!("{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY);
+        let full = format!("{}\n{}\n{}", TYPES, EXPRS, RULES);
         let mut egraph = EGraph::default();
         egraph
             .parse_and_run_program(None, &full)
@@ -457,366 +415,28 @@ mod tests {
     }
 
     #[test]
-    fn test_store_load_forward_egglog() {
-        // Test the egglog rules directly to verify store-to-load forwarding works
-        // Memory state 0 = InitMem, Memory state 1 = after store
-        let program = r#"
-(let v1 (AllocaResult 1 (I32)))
-; Store 42 to v1, creating memory state 1
-(set (store-prev 1) 0)
-(set (store-addr 1) v1)
-(set (store-val 1) (Const (i256 42) (I32)))
-(set (store-ty 1) (I32))
-; Load from memory state 1 at address v1
-(let v2 (LoadResult 2 1 (I32)))
-(set (load-addr 2) v1)
+    fn run_egraph_pass_does_not_own_memory_forwarding() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-london"
 
-(run 10)
-(extract v2)
-"#;
-        let full = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, program);
-        let mut egraph = EGraph::default();
-        let results = egraph
-            .parse_and_run_program(None, &full)
-            .expect("egglog should run");
-        // v2 should be unified with (Const 42 (I32))
-        let mut extracted = results.iter().filter_map(extract_output_to_string);
-        let result = extracted.next().expect("extract should return a result");
-        assert!(result.contains("0x2a"), "Expected 0x2a, got: {result}");
-        assert!(extracted.next().is_none());
-    }
+func private %f(v0.*i256) -> i256 {
+    block0:
+        mstore v0 7.i256 i256;
+        v1.i256 = mload v0 i256;
+        return v1;
+}
+"#,
+        )
+        .expect("parse should succeed");
 
-    #[test]
-    fn test_load_pass_through_egglog() {
-        // Test load pass-through: load from addr1 after store to addr2 (different alloca)
-        // should read from the previous memory state
-        // v1 = alloca1, v3 = alloca2 (different allocas, must-not-alias)
-        // mem1 = store 10 to v1
-        // mem2 = store 20 to v3
-        // v5 = load from v1 at mem2 -> should be 10 (pass through mem2's store)
-        let program = r#"
-(let v1 (AllocaResult 1 (I32)))
-(let v3 (AllocaResult 3 (I32)))
-; Store 10 to v1, creating memory state 1
-(set (store-prev 1) 0)
-(set (store-addr 1) v1)
-(set (store-val 1) (Const (i256 10) (I32)))
-(set (store-ty 1) (I32))
-; Store 20 to v3, creating memory state 2
-(set (store-prev 2) 1)
-(set (store-addr 2) v3)
-(set (store-val 2) (Const (i256 20) (I32)))
-(set (store-ty 2) (I32))
-; Load from v1 at memory state 2
-(let v5 (LoadResult 5 2 (I32)))
-(set (load-addr 5) v1)
-
-(run 10)
-(extract v5)
-"#;
-        let full = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, program);
-        let mut egraph = EGraph::default();
-        let results = egraph
-            .parse_and_run_program(None, &full)
-            .expect("egglog should run");
-        let mut extracted = results.iter().filter_map(extract_output_to_string);
-        let result = extracted.next().expect("extract should return a result");
-        // v5 should be unified with (Const 10 (I32)) via pass-through
-        assert!(result.contains("0xa"), "Expected 0xa, got: {result}");
-        assert!(extracted.next().is_none());
-    }
-
-    #[test]
-    fn test_load_pass_through_multiple_non_aliasing_stores_egglog() {
-        // mem1: store A=10
-        // mem2: store B=20
-        // mem3: store C=30
-        // load A from mem3 should walk through mem2 and mem3 and still return 10.
-        let program = r#"
-(let a (AllocaResult 1 (I32)))
-(let b (AllocaResult 2 (I32)))
-(let c (AllocaResult 3 (I32)))
-
-(set (store-prev 1) 0)
-(set (store-addr 1) a)
-(set (store-val 1) (Const (i256 10) (I32)))
-(set (store-ty 1) (I32))
-
-(set (store-prev 2) 1)
-(set (store-addr 2) b)
-(set (store-val 2) (Const (i256 20) (I32)))
-(set (store-ty 2) (I32))
-
-(set (store-prev 3) 2)
-(set (store-addr 3) c)
-(set (store-val 3) (Const (i256 30) (I32)))
-(set (store-ty 3) (I32))
-
-(let v4 (LoadResult 4 3 (I32)))
-(set (load-addr 4) a)
-
-(run 10)
-(extract v4)
-"#;
-        let full = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, program);
-        let mut egraph = EGraph::default();
-        let results = egraph
-            .parse_and_run_program(None, &full)
-            .expect("egglog should run");
-        let mut extracted = results.iter().filter_map(extract_output_to_string);
-        let result = extracted.next().expect("extract should return a result");
-        assert!(result.contains("0xa"), "Expected 0xa, got: {result}");
-        assert!(extracted.next().is_none());
-    }
-
-    #[test]
-    fn test_memphi_load_merge_after_non_aliasing_tail_stores_egglog() {
-        // Branch 1: store A=10; store B=99
-        // Branch 2: store A=10; store C=77
-        // Merge memory with MemPhi and load A -> 10.
-        let program = r#"
-(let a (AllocaResult 1 (I32)))
-(let b (AllocaResult 2 (I32)))
-(let c (AllocaResult 3 (I32)))
-
-(set (store-prev 1) 0)
-(set (store-addr 1) a)
-(set (store-val 1) (Const (i256 10) (I32)))
-(set (store-ty 1) (I32))
-
-(set (store-prev 2) 1)
-(set (store-addr 2) b)
-(set (store-val 2) (Const (i256 99) (I32)))
-(set (store-ty 2) (I32))
-
-(set (store-prev 3) 0)
-(set (store-addr 3) a)
-(set (store-val 3) (Const (i256 10) (I32)))
-(set (store-ty 3) (I32))
-
-(set (store-prev 4) 3)
-(set (store-addr 4) c)
-(set (store-val 4) (Const (i256 77) (I32)))
-(set (store-ty 4) (I32))
-
-(is-memphi 5)
-(set (memphi-num-preds 5) 2)
-(set (memphi-pred 5 0) 2)
-(set (memphi-pred 5 1) 4)
-
-(let v6 (LoadResult 6 5 (I32)))
-(set (load-addr 6) a)
-
-(run 10)
-(extract v6)
-"#;
-        let full = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, program);
-        let mut egraph = EGraph::default();
-        let results = egraph
-            .parse_and_run_program(None, &full)
-            .expect("egglog should run");
-        let mut extracted = results.iter().filter_map(extract_output_to_string);
-        let result = extracted.next().expect("extract should return a result");
-        assert!(result.contains("0xa"), "Expected 0xa, got: {result}");
-        assert!(extracted.next().is_none());
-    }
-
-    #[test]
-    fn test_no_false_elimination_egglog() {
-        // Test that loads from different memory states are NOT incorrectly unified
-        // when there's an intervening store to the same address
-        // v1 = alloca
-        // mem1 = store 10 to v1
-        // v4 = load from v1 at mem1 -> 10
-        // mem2 = store 20 to v1 (same address!)
-        // v6 = load from v1 at mem2 -> should be 20, NOT 10
-        let program = r#"
-(let v1 (AllocaResult 1 (I32)))
-; Store 10 to v1, creating memory state 1
-(set (store-prev 1) 0)
-(set (store-addr 1) v1)
-(set (store-val 1) (Const (i256 10) (I32)))
-(set (store-ty 1) (I32))
-; Load from v1 at memory state 1 -> should be 10
-(let v4 (LoadResult 4 1 (I32)))
-(set (load-addr 4) v1)
-; Store 20 to v1, creating memory state 2
-(set (store-prev 2) 1)
-(set (store-addr 2) v1)
-(set (store-val 2) (Const (i256 20) (I32)))
-(set (store-ty 2) (I32))
-; Load from v1 at memory state 2 -> should be 20
-(let v6 (LoadResult 6 2 (I32)))
-(set (load-addr 6) v1)
-
-(run 10)
-(extract v4)
-(extract v6)
-"#;
-        let full = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, program);
-        let mut egraph = EGraph::default();
-        let results = egraph
-            .parse_and_run_program(None, &full)
-            .expect("egglog should run");
-        let mut extracted = results.iter().filter_map(extract_output_to_string);
-        let v4_result = extracted
-            .next()
-            .expect("first extract should return a result");
-        let v6_result = extracted
-            .next()
-            .expect("second extract should return a result");
-        // v4 should be 10
-        assert!(
-            v4_result.contains("0xa"),
-            "v4 should be 0xa, got: {v4_result}"
-        );
-        // v6 should be 20, NOT 10
-        assert!(
-            v6_result.contains("0x14"),
-            "v6 should be 0x14, got: {v6_result}"
-        );
-        assert!(extracted.next().is_none());
-    }
-
-    #[test]
-    fn test_dead_store_detection_egglog() {
-        // Test that consecutive stores to the same address marks first as dead
-        // v1 = alloca
-        // mem1 = store 10 to v1 -> should be marked dead
-        // mem2 = store 20 to v1
-        let program = r#"
-(let v1 (AllocaResult 1 (I32)))
-; Store 10 to v1, creating memory state 1
-(set (store-prev 1) 0)
-(set (store-addr 1) v1)
-(set (store-val 1) (Const (i256 10) (I32)))
-(set (store-ty 1) (I32))
-; Store 20 to v1, creating memory state 2 (overwrites mem1)
-(set (store-prev 2) 1)
-(set (store-addr 2) v1)
-(set (store-val 2) (Const (i256 20) (I32)))
-(set (store-ty 2) (I32))
-
-(run 10)
-(check (dead-store 1))
-"#;
-        let full = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, program);
-        let mut egraph = EGraph::default();
-        // If (check ...) fails, parse_and_run_program returns an error
-        egraph
-            .parse_and_run_program(None, &full)
-            .expect("dead-store 1 should be detected");
-    }
-
-    #[test]
-    fn test_no_dead_store_different_addr_egglog() {
-        // Test that stores to different addresses are NOT marked as dead
-        // v1, v3 = different allocas
-        // mem1 = store 10 to v1 -> should NOT be dead
-        // mem2 = store 20 to v3 -> different address
-        let program = r#"
-(let v1 (AllocaResult 1 (I32)))
-(let v3 (AllocaResult 3 (I32)))
-; Store 10 to v1, creating memory state 1
-(set (store-prev 1) 0)
-(set (store-addr 1) v1)
-(set (store-val 1) (Const (i256 10) (I32)))
-(set (store-ty 1) (I32))
-; Store 20 to v3, creating memory state 2 (different address)
-(set (store-prev 2) 1)
-(set (store-addr 2) v3)
-(set (store-val 2) (Const (i256 20) (I32)))
-(set (store-ty 2) (I32))
-
-(run 10)
-(fail (check (dead-store 1)))
-"#;
-        let full = format!("{}\n{}\n{}\n{}\n{}", TYPES, EXPRS, RULES, MEMORY, program);
-        let mut egraph = EGraph::default();
-        // (fail (check ...)) succeeds if the check fails
-        egraph
-            .parse_and_run_program(None, &full)
-            .expect("dead-store 1 should NOT be detected for different addresses");
-    }
-
-    #[test]
-    fn test_adjacent_dead_store_elimination_ir() {
-        use sonatina_ir::{
-            builder::test_util::*,
-            inst::{control_flow::Return, data::Alloca},
-            isa::Isa,
-        };
-
-        let mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
-        let is = evm.inst_set();
-
-        let b0 = builder.append_block();
-        builder.switch_to_block(b0);
-
-        let ptr_ty = builder.ptr_type(Type::I32);
-        let addr = builder.insert_inst_with(|| Alloca::new(is, Type::I32), ptr_ty);
-
-        let v10 = builder.make_imm_value(10i32);
-        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v10, Type::I32));
-
-        let v20 = builder.make_imm_value(20i32);
-        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v20, Type::I32));
-
-        builder.insert_inst_no_result_with(|| Return::new_unit(is));
-        builder.seal_all();
-
-        assert!(eliminate_adjacent_dead_stores(&mut builder.func));
-
-        let is = builder.func.inst_set();
-        let store_count = builder
-            .func
-            .layout
-            .iter_block()
-            .flat_map(|block| builder.func.layout.iter_inst(block))
-            .filter(|&inst_id| <&Mstore>::downcast(is, builder.func.dfg.inst(inst_id)).is_some())
-            .count();
-        assert_eq!(store_count, 1);
-    }
-
-    #[test]
-    fn test_adjacent_dead_store_elimination_preserves_mixed_width() {
-        use sonatina_ir::{
-            builder::test_util::*,
-            inst::{control_flow::Return, data::Alloca},
-            isa::Isa,
-        };
-
-        let mb = test_module_builder();
-        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
-        let is = evm.inst_set();
-
-        let b0 = builder.append_block();
-        builder.switch_to_block(b0);
-
-        let ptr_ty = builder.ptr_type(Type::I64);
-        let addr = builder.insert_inst_with(|| Alloca::new(is, Type::I64), ptr_ty);
-
-        let v64 = builder.make_imm_value(10i64);
-        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v64, Type::I64));
-
-        let v8 = builder.make_imm_value(20i8);
-        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v8, Type::I8));
-
-        builder.insert_inst_no_result_with(|| Return::new_unit(is));
-        builder.seal_all();
-
-        assert!(!eliminate_adjacent_dead_stores(&mut builder.func));
-
-        let is = builder.func.inst_set();
-        let store_count = builder
-            .func
-            .layout
-            .iter_block()
-            .flat_map(|block| builder.func.layout.iter_inst(block))
-            .filter(|&inst_id| <&Mstore>::downcast(is, builder.func.dfg.inst(inst_id)).is_some())
-            .count();
-        assert_eq!(store_count, 2);
+        let func_ref = find_func_ref(&parsed, "f");
+        parsed.module.func_store.modify(func_ref, |func| {
+            assert!(
+                !run_egraph_pass(func),
+                "load/store forwarding should be owned by the LoadStore pass"
+            );
+        });
     }
 
     #[test]
