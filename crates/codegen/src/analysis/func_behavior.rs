@@ -4,8 +4,7 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, FuncEffectSummary, Function, InstDowncast, Module,
-    inst::{control_flow, evm::EvmReturn},
-    module::FuncRef,
+    inst::control_flow, module::FuncRef,
 };
 
 use crate::{cfg_scc::CfgSccAnalysis, module_analysis};
@@ -330,7 +329,6 @@ fn is_return_like_exit(func: &Function, inst: sonatina_ir::InstId) -> bool {
     let inst_data = func.dfg.inst(inst);
     let is = func.inst_set();
     <&control_flow::Return as InstDowncast>::downcast(is, inst_data).is_some()
-        || <&EvmReturn as InstDowncast>::downcast(is, inst_data).is_some()
 }
 
 fn topo_sort_sccs(
@@ -422,7 +420,7 @@ func private %caller() -> i256 {
     }
 
     #[test]
-    fn evm_return_exit_marks_functions_as_returning() {
+    fn evm_return_exit_marks_functions_as_noreturn() {
         let module = parse(
             r#"
 target = "evm-ethereum-osaka"
@@ -444,13 +442,15 @@ func private %caller() {
 
         let callee = find_func(&module, "return_unit");
         let callee_effects = module.ctx.func_effects(callee);
-        assert!(!callee_effects.noreturn);
-        assert!(callee_effects.will_return);
+        assert!(callee_effects.noreturn);
+        assert!(!callee_effects.will_return);
+        assert!(callee_effects.will_terminate);
 
         let caller = find_func(&module, "caller");
         let caller_effects = module.ctx.func_effects(caller);
-        assert!(!caller_effects.noreturn);
-        assert!(caller_effects.will_return);
+        assert!(caller_effects.noreturn);
+        assert!(!caller_effects.will_return);
+        assert!(caller_effects.will_terminate);
     }
 
     #[test]

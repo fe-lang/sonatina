@@ -803,9 +803,9 @@ evm:
     - stack=[v5], last_use=[v5]
       pre: [PUSH(0), SWAP1, PUSH_CONT, SWAP2]
       call [v5, 0]
-    // evm_invalid;
+    // unreachable;
     - stack=[]
-      evm_invalid []
+      unreachable []
   block6 P=[] T=[v46, v1]
     inherited from block0: [v46, v1]
     // v11.i1 = eq 217554442.i256 v1;
@@ -857,9 +857,9 @@ evm:
     - stack=[v7], last_use=[v7]
       pre: [PUSH(0), SWAP1, PUSH_CONT, SWAP2]
       call [v7, 0]
-    // evm_invalid;
+    // unreachable;
     - stack=[]
-      evm_invalid []
+      unreachable []
   block7 P=[] T=[v46, v1]
     inherited from block6: [v46, v1]
     // v12.i1 = eq 1818602213.i256 v1;
@@ -884,9 +884,9 @@ evm:
     - stack=[v9], last_use=[v9]
       pre: [PUSH(0), SWAP1, PUSH_CONT, SWAP2]
       call [v9, 0]
-    // evm_invalid;
+    // unreachable;
     - stack=[]
-      evm_invalid []
+      unreachable []
   block8 P=[] T=[v1]
     inherited from block7: [v46x, v1]
     // v13.i1 = eq 960555502.i256 v1;
@@ -913,9 +913,9 @@ evm:
     - stack=[v42], last_use=[v42]
       pre: [PUSH(0), SWAP1, PUSH_CONT, SWAP2]
       call [v42, 0]
-    // evm_invalid;
+    // unreachable;
     - stack=[]
-      evm_invalid []
+      unreachable []
 
 // func private %create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e(v0.i256, v1.i256, v2.i256) -> i256
   block0 P=[v0, v1, v2] T=[]
@@ -3011,7 +3011,7 @@ __Coin_runtime:
     PUSH1 FuncRef(25)
     JUMP
     JUMPDEST
-    INVALID  // evm_invalid;
+    INVALID  // unreachable;
   block6:
     JUMPDEST
     DUP2  // v9.i1 = eq 217554442.i256 v2;
@@ -3065,7 +3065,7 @@ __Coin_runtime:
     PUSH1 FuncRef(25)
     JUMP
     JUMPDEST
-    INVALID  // evm_invalid;
+    INVALID  // unreachable;
   block7:
     JUMPDEST
     DUP2  // v10.i1 = eq 1818602213.i256 v2;
@@ -3095,7 +3095,7 @@ __Coin_runtime:
     PUSH1 FuncRef(25)
     JUMP
     JUMPDEST
-    INVALID  // evm_invalid;
+    INVALID  // unreachable;
   block8:
     JUMPDEST
     POP  // v11.i1 = eq 960555502.i256 v2;
@@ -3118,7 +3118,7 @@ __Coin_runtime:
     PUSH1 FuncRef(25)
     JUMP
     JUMPDEST
-    INVALID  // evm_invalid;
+    INVALID  // unreachable;
 
 // func private %create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e(v0.i256, v1.i256, v2.i256) -> i256
 create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e:

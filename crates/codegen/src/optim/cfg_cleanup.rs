@@ -262,3 +262,82 @@ fn assert_ir_invariants(func: &Function, cfg: &ControlFlowGraph) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sonatina_ir::{
+        InstDowncast, Module,
+        inst::control_flow::{Return, Unreachable},
+        module::FuncRef,
+    };
+    use sonatina_parser::parse_module;
+
+    fn parse(src: &str) -> Module {
+        parse_module(src)
+            .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"))
+            .module
+    }
+
+    fn find_func(module: &Module, name: &str) -> FuncRef {
+        module
+            .func_store
+            .funcs()
+            .into_iter()
+            .find(|func_ref| module.ctx.func_sig(*func_ref, |sig| sig.name() == name))
+            .expect("function should exist")
+    }
+
+    #[test]
+    fn trims_code_after_call_to_evm_return_only_helper() {
+        let module = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %exit_now() {
+    block0:
+        evm_return 0.i256 0.i256;
+}
+
+func private %caller() {
+    block0:
+        call %exit_now;
+        return;
+}
+"#,
+        );
+        crate::analysis::func_behavior::analyze_module(&module);
+
+        let exit_now = find_func(&module, "exit_now");
+        let caller = find_func(&module, "caller");
+        assert!(
+            module
+                .ctx
+                .func_attrs(exit_now)
+                .contains(FuncAttrs::NORETURN)
+        );
+
+        module.func_store.modify(caller, |func| {
+            assert!(CfgCleanup::new(CleanupMode::RepairWithUndef).run(func));
+
+            let block = func.layout.entry_block().expect("entry block");
+            let insts: Vec<_> = func.layout.iter_inst(block).collect();
+            assert_eq!(insts.len(), 2);
+            assert!(func.dfg.call_info(insts[0]).is_some());
+            assert!(
+                <&Unreachable as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(insts[1]))
+                    .is_some()
+            );
+            assert_eq!(
+                insts
+                    .iter()
+                    .filter(|&&inst| {
+                        <&Return as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst))
+                            .is_some()
+                    })
+                    .count(),
+                0
+            );
+        });
+    }
+}

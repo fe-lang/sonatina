@@ -252,13 +252,13 @@ func private %__Vault_runtime() {
         v17.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v25;
         v19.i256 = call %__Vault_recv_0_0 v17 0.i256 0.i256;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v19;
-        evm_invalid;
+        unreachable;
 
     block3:
         v21.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v25;
         v23.i256 = call %__Vault_recv_0_1 v21 0.i256 0.i256;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v23;
-        evm_invalid;
+        unreachable;
 
     block4:
         v25.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v25;
@@ -270,12 +270,12 @@ func private %__Vault_runtime() {
     block5:
         v28.i256 = evm_sload 0.i256;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v28;
-        evm_invalid;
+        unreachable;
 
     block6:
         v30.i256 = evm_sload 1.i256;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v30;
-        evm_invalid;
+        unreachable;
 
     block7:
         v31.i256 = evm_caller;
@@ -287,7 +287,7 @@ func private %__Vault_runtime() {
         v43.i256 = evm_keccak256 v41 64.i256;
         v35.i256 = evm_sload v43;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v35;
-        evm_invalid;
+        unreachable;
 
     block8:
         v11.i1 = eq 2.i256 v2;
@@ -345,7 +345,7 @@ func private %__VaultUser_runtime() {
         mstore v27 v21 i256;
         v35.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b 0.i256 v20 100000.i256 0.i256 v21;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v35;
-        evm_invalid;
+        unreachable;
 
     block3:
         v36.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v17;
@@ -358,13 +358,13 @@ func private %__VaultUser_runtime() {
         mstore v43 v37 i256;
         v50.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d 0.i256 v36 100000.i256 0.i256 v37;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v50;
-        evm_invalid;
+        unreachable;
 
     block4:
         v16.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v17;
         v17.i256 = call %__VaultUser_recv_0_2 v16 0.i256;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v17;
-        evm_invalid;
+        unreachable;
 
     block5:
         v7.i1 = eq 17.i256 v1;

@@ -623,6 +623,8 @@ fn malloc_effects() -> InstEffects {
     let addr = Immediate::from_i256(I256::from(EVM_FREE_PTR_SLOT), Type::I256);
     InstEffects {
         accesses: smallvec![
+            // Conservatively model every evm_malloc as touching the free-pointer slot,
+            // even though transient malloc lowering can avoid memory[0x40].
             exact_linear_imm(MEMORY, AccessKind::Read, addr, EVM_WORD_BYTES, Type::I256),
             exact_linear_imm(MEMORY, AccessKind::Write, addr, EVM_WORD_BYTES, Type::I256),
         ],

@@ -257,7 +257,7 @@ func private %__Coin_runtime() {
         mstore v31 v25 i256;
         v15.i256 = call %__Coin_recv_0_0 v27 0.i256;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v15;
-        evm_invalid;
+        unreachable;
 
     block3:
         v32.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v47;
@@ -271,18 +271,18 @@ func private %__Coin_runtime() {
         mstore v39 v33 i256;
         v19.i256 = call %__Coin_recv_0_1 v35 0.i256;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v19;
-        evm_invalid;
+        unreachable;
 
     block4:
         v21.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v47;
         v23.i256 = call %__Coin_recv_0_2 v21 0.i256;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v23;
-        evm_invalid;
+        unreachable;
 
     block5:
         v42.i256 = evm_sload 2.i256;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v42;
-        evm_invalid;
+        unreachable;
 
     block6:
         v9.i1 = eq 217554442.i256 v2;

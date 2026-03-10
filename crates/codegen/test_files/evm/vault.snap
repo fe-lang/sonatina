@@ -807,7 +807,7 @@ __Vault_runtime:
     PUSH1 FuncRef(41)
     JUMP
     JUMPDEST
-    INVALID  // evm_invalid;
+    INVALID  // unreachable;
   block8:
     JUMPDEST
     DUP2  // v11.i1 = eq 2.i256 v2;
@@ -838,7 +838,7 @@ __Vault_runtime:
     PUSH1 FuncRef(41)
     JUMP
     JUMPDEST
-    INVALID  // evm_invalid;
+    INVALID  // unreachable;
   block9:
     JUMPDEST
     DUP2  // v12.i1 = eq 3.i256 v2;
@@ -883,7 +883,7 @@ __Vault_runtime:
     PUSH1 FuncRef(41)
     JUMP
     JUMPDEST
-    INVALID  // evm_invalid;
+    INVALID  // unreachable;
   block11:
     JUMPDEST
     DUP1  // v14.i1 = eq 5.i256 v2;
@@ -903,7 +903,7 @@ __Vault_runtime:
     PUSH1 FuncRef(41)
     JUMP
     JUMPDEST
-    INVALID  // evm_invalid;
+    INVALID  // unreachable;
   block12:
     JUMPDEST
     PUSH1 0x6 (6)  // v15.i1 = eq 6.i256 v2;
@@ -947,7 +947,7 @@ __Vault_runtime:
     PUSH1 FuncRef(41)
     JUMP
     JUMPDEST
-    INVALID  // evm_invalid;
+    INVALID  // unreachable;
 
 // func private %__VaultUser_recv_0_2(v0.i256, v1.i256) -> i256
 __VaultUser_recv_0_2:
@@ -1049,7 +1049,7 @@ __VaultUser_runtime:
     PUSH1 FuncRef(41)
     JUMP
     JUMPDEST
-    INVALID  // evm_invalid;
+    INVALID  // unreachable;
   block5:
     JUMPDEST
     DUP2  // v7.i1 = eq 17.i256 v1;
@@ -1107,7 +1107,7 @@ __VaultUser_runtime:
     PUSH1 FuncRef(41)
     JUMP
     JUMPDEST
-    INVALID  // evm_invalid;
+    INVALID  // unreachable;
   block6:
     JUMPDEST
     SWAP1  // v8.i1 = eq 18.i256 v1;
@@ -1139,7 +1139,7 @@ __VaultUser_runtime:
     PUSH1 FuncRef(41)
     JUMP
     JUMPDEST
-    INVALID  // evm_invalid;
+    INVALID  // unreachable;
 
 // func private %create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8(v0.i256, v1.i256, v2.i256) -> i256
 create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8:
