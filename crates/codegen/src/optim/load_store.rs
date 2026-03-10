@@ -762,6 +762,40 @@ mod tests {
     }
 
     #[test]
+    fn malloc_free_ptr_barrier_does_not_kill_unrelated_malloc_fact() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I256);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let size = builder.make_imm_value(I256::from(32));
+        let value = builder.make_imm_value(I256::from(7));
+        let ptr_ty = builder.ptr_type(Type::I8);
+        let addr = builder.insert_inst_with(|| EvmMalloc::new(is, size), ptr_ty);
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, value, Type::I256));
+        let _malloc = builder.insert_inst_with(|| EvmMalloc::new(is, size), ptr_ty);
+        let loaded = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, loaded));
+        builder.seal_all();
+
+        assert!(run_solver(&mut builder.func));
+        assert_eq!(count_insts::<Mload>(&builder.func), 0);
+
+        let ret = builder
+            .func
+            .layout
+            .last_inst_of(block)
+            .and_then(|inst| builder.func.dfg.return_args(inst))
+            .expect("return args");
+        assert_eq!(
+            builder.func.dfg.value_imm(ret[0]),
+            Some(Immediate::I256(I256::from(7)))
+        );
+    }
+
+    #[test]
     fn sload_does_not_forward_across_create_barrier() {
         let mb = test_module_builder();
         let (evm, mut builder) = test_func_builder(&mb, &[], Type::I256);

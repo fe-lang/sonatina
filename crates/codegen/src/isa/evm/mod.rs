@@ -44,9 +44,10 @@ use cranelift_entity::{EntityList, SecondaryMap};
 use late_alias::compute_evm_late_aliases;
 use legalize::legalize_evm_section;
 use mem_effects::compute_func_mem_effects;
+pub(crate) use memory_plan::STATIC_BASE;
 use memory_plan::{
     ArenaCostModel, CallPreserveChoice, DYN_FP_SLOT, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan,
-    MemScheme, ProgramMemoryPlan, STATIC_BASE, WORD_BYTES, compute_program_memory_plan,
+    MemScheme, ProgramMemoryPlan, WORD_BYTES, compute_program_memory_plan,
 };
 use ptr_escape::{PtrEscapeSummary, compute_ptr_escape_summaries};
 

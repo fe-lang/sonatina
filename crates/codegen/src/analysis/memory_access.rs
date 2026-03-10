@@ -12,7 +12,7 @@ use sonatina_ir::{
     types::CompoundType,
 };
 
-use crate::optim::aggregate::shape;
+use crate::{isa::evm::STATIC_BASE, optim::aggregate::shape};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ValueKey {
@@ -213,21 +213,21 @@ impl MemoryAccessAnalysis {
             return AliasResult::NoAlias;
         }
 
-        match (&lhs.base, &rhs.base) {
-            _ if lhs.base == rhs.base => self.alias_same_base_linear(lhs, rhs),
-            (BaseObject::Alloca(a), BaseObject::Alloca(b)) if a != b => AliasResult::NoAlias,
-            (BaseObject::Alloca(_), BaseObject::Global(_))
-            | (BaseObject::Global(_), BaseObject::Alloca(_))
-            | (BaseObject::Alloca(_), BaseObject::Arg(_))
-            | (BaseObject::Arg(_), BaseObject::Alloca(_))
-            | (BaseObject::Alloca(_), BaseObject::Malloc(_))
-            | (BaseObject::Malloc(_), BaseObject::Alloca(_))
-            | (BaseObject::Global(_), BaseObject::Malloc(_))
-            | (BaseObject::Malloc(_), BaseObject::Global(_)) => AliasResult::NoAlias,
-            (BaseObject::Global(a), BaseObject::Global(b)) if a != b => AliasResult::NoAlias,
-            (BaseObject::Malloc(a), BaseObject::Malloc(b)) if a != b => AliasResult::NoAlias,
-            (BaseObject::Unknown(_), _) | (_, BaseObject::Unknown(_)) => AliasResult::MayAlias,
-            _ => AliasResult::MayAlias,
+        if let Some(alias) = absolute_linear_alias(lhs, rhs) {
+            return alias;
+        }
+
+        if reserved_evm_meta_interval(&lhs.base, lhs.offset, i64::from(lhs.bytes))
+            .is_some_and(|_| is_allocator_managed_base(&rhs.base))
+            || reserved_evm_meta_interval(&rhs.base, rhs.offset, i64::from(rhs.bytes))
+                .is_some_and(|_| is_allocator_managed_base(&lhs.base))
+        {
+            return AliasResult::NoAlias;
+        }
+
+        match self.alias_linear_bases(&lhs.base, &rhs.base) {
+            AliasResult::MustAlias => self.alias_same_base_linear(lhs, rhs),
+            alias => alias,
         }
     }
 
@@ -289,6 +289,14 @@ impl MemoryAccessAnalysis {
             ))
         {
             return self.coverage_from_intervals(range, range_start, range_end, key_start, key_end);
+        }
+
+        if reserved_evm_meta_interval(&range.base, range.offset, range.bytes)
+            .is_some_and(|_| is_allocator_managed_base(&key.base))
+            || reserved_evm_meta_interval(&key.base, key.offset, i64::from(key.bytes))
+                .is_some_and(|_| is_allocator_managed_base(&range.base))
+        {
+            return RangeCoverage::NoOverlap;
         }
 
         match self.alias_linear_bases(&range.base, &key.base) {
@@ -587,6 +595,32 @@ fn absolute_byte_range(base: &BaseObject, offset: i64, bytes: i64) -> Option<(i6
     Some((start, end))
 }
 
+fn absolute_linear_alias(lhs: &LinearLocKey, rhs: &LinearLocKey) -> Option<AliasResult> {
+    let ((lhs_start, lhs_end), (rhs_start, rhs_end)) =
+        absolute_byte_range(&lhs.base, lhs.offset, i64::from(lhs.bytes)).zip(
+            absolute_byte_range(&rhs.base, rhs.offset, i64::from(rhs.bytes)),
+        )?;
+
+    Some(
+        if !byte_ranges_overlap(lhs_start, lhs_end, rhs_start, rhs_end) {
+            AliasResult::NoAlias
+        } else if lhs_start == rhs_start && lhs_end == rhs_end {
+            AliasResult::MustAlias
+        } else {
+            AliasResult::MayAlias
+        },
+    )
+}
+
+fn reserved_evm_meta_interval(base: &BaseObject, offset: i64, bytes: i64) -> Option<(i64, i64)> {
+    let (start, end) = absolute_byte_range(base, offset, bytes)?;
+    (end <= i64::from(STATIC_BASE)).then_some((start, end))
+}
+
+fn is_allocator_managed_base(base: &BaseObject) -> bool {
+    matches!(base, BaseObject::Alloca(_) | BaseObject::Malloc(_))
+}
+
 fn byte_ranges_overlap(lhs_start: i64, lhs_end: i64, rhs_start: i64, rhs_end: i64) -> bool {
     lhs_start < rhs_end && rhs_start < lhs_end
 }
@@ -610,7 +644,7 @@ mod tests {
             arith::Add,
             control_flow::Return,
             data::{Alloca, Mload},
-            evm::EvmSload,
+            evm::{EvmMalloc, EvmSload},
         },
         isa::Isa,
     };
@@ -930,6 +964,78 @@ mod tests {
                 bytes: 32,
                 ty: Type::I256,
             })
+        );
+    }
+
+    #[test]
+    fn reserved_absolute_meta_access_does_not_alias_malloc_key() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let size = builder.make_imm_value(I256::from(32));
+        let ptr_ty = builder.ptr_type(Type::I8);
+        let addr = builder.insert_inst_with(|| EvmMalloc::new(is, size), ptr_ty);
+        let load = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+        let _ = load;
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let insts: Vec<_> = builder.func.layout.iter_inst(block).collect();
+        let malloc_key = single_key(&builder.func, insts[1]);
+        let free_ptr = Immediate::from_i256(I256::from(64), Type::I256);
+        let absolute_key = MemoryAccessAnalysis::new()
+            .trackable_exact_loc(
+                &builder.func,
+                &exact_imm_access(
+                    builder.func.ctx().address_spaces().default_space(),
+                    free_ptr,
+                ),
+            )
+            .expect("free pointer access should be trackable");
+
+        assert_eq!(
+            MemoryAccessAnalysis::new().alias(&malloc_key, &absolute_key),
+            AliasResult::NoAlias
+        );
+    }
+
+    #[test]
+    fn absolute_access_at_static_base_may_alias_malloc_key() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let size = builder.make_imm_value(I256::from(32));
+        let ptr_ty = builder.ptr_type(Type::I8);
+        let addr = builder.insert_inst_with(|| EvmMalloc::new(is, size), ptr_ty);
+        let load = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+        let _ = load;
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let insts: Vec<_> = builder.func.layout.iter_inst(block).collect();
+        let malloc_key = single_key(&builder.func, insts[1]);
+        let heap_addr = Immediate::from_i256(I256::from(STATIC_BASE), Type::I256);
+        let absolute_key = MemoryAccessAnalysis::new()
+            .trackable_exact_loc(
+                &builder.func,
+                &exact_imm_access(
+                    builder.func.ctx().address_spaces().default_space(),
+                    heap_addr,
+                ),
+            )
+            .expect("heap access should be trackable");
+
+        assert_eq!(
+            MemoryAccessAnalysis::new().alias(&malloc_key, &absolute_key),
+            AliasResult::MayAlias
         );
     }
 
