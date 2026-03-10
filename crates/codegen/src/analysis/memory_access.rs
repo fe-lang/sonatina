@@ -40,6 +40,14 @@ pub struct LinearLocKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LinearRangeKey {
+    pub space: AddressSpaceId,
+    pub base: BaseObject,
+    pub offset: i64,
+    pub bytes: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KeyedLocKey {
     pub space: AddressSpaceId,
     pub key: ValueKey,
@@ -100,12 +108,46 @@ impl MemoryAccessAnalysis {
         }
     }
 
+    pub fn trackable_linear_range(
+        &self,
+        func: &Function,
+        access: &sonatina_ir::MemoryAccess,
+    ) -> Option<LinearRangeKey> {
+        let AccessLoc::LinearRange { addr, len } = &access.loc else {
+            return None;
+        };
+
+        let addr = self.canonical_linear_addr(func, *addr);
+        if matches!(addr.base, BaseObject::Unknown(_)) {
+            return None;
+        }
+
+        let bytes = self.value_const_i64(func, *len)?;
+        if bytes < 0 {
+            return None;
+        }
+
+        Some(LinearRangeKey {
+            space: access.space,
+            base: addr.base,
+            offset: addr.offset,
+            bytes,
+        })
+    }
+
     pub fn alias(&self, lhs: &TrackedLocKey, rhs: &TrackedLocKey) -> AliasResult {
         match (lhs, rhs) {
             (TrackedLocKey::Linear(lhs), TrackedLocKey::Linear(rhs)) => self.alias_linear(lhs, rhs),
             (TrackedLocKey::Keyed(lhs), TrackedLocKey::Keyed(rhs)) => self.alias_keyed(lhs, rhs),
             (TrackedLocKey::Linear(_), TrackedLocKey::Keyed(_))
             | (TrackedLocKey::Keyed(_), TrackedLocKey::Linear(_)) => AliasResult::NoAlias,
+        }
+    }
+
+    pub fn range_may_alias_key(&self, range: &LinearRangeKey, key: &TrackedLocKey) -> bool {
+        match key {
+            TrackedLocKey::Linear(key) => self.range_may_alias_linear(range, key),
+            TrackedLocKey::Keyed(_) => false,
         }
     }
 
@@ -126,7 +168,9 @@ impl MemoryAccessAnalysis {
 
         match (key, &access.loc) {
             (_, AccessLoc::WholeSpace | AccessLoc::Unknown) => true,
-            (TrackedLocKey::Linear(_), AccessLoc::LinearRange { .. }) => true,
+            (TrackedLocKey::Linear(_), AccessLoc::LinearRange { .. }) => self
+                .trackable_linear_range(func, access)
+                .is_none_or(|range| self.range_may_alias_key(&range, key)),
             (TrackedLocKey::Keyed(_), AccessLoc::LinearRange { .. }) => false,
             (TrackedLocKey::Linear(_), AccessLoc::KeyedExact { .. })
             | (TrackedLocKey::Keyed(_), AccessLoc::LinearExact { .. }) => false,
@@ -189,6 +233,50 @@ impl MemoryAccessAnalysis {
 
         match (&lhs.key, &rhs.key) {
             (ValueKey::Imm(lhs), ValueKey::Imm(rhs)) if lhs != rhs => AliasResult::NoAlias,
+            _ => AliasResult::MayAlias,
+        }
+    }
+
+    fn range_may_alias_linear(&self, range: &LinearRangeKey, key: &LinearLocKey) -> bool {
+        if range.space != key.space || range.bytes == 0 {
+            return false;
+        }
+
+        if let (Some((range_start, range_end)), Some((key_start, key_end))) = (
+            absolute_byte_range(&range.base, range.offset, range.bytes),
+            absolute_byte_range(&key.base, key.offset, i64::from(key.bytes)),
+        ) {
+            return byte_ranges_overlap(range_start, range_end, key_start, key_end);
+        }
+
+        match self.alias_linear_bases(&range.base, &key.base) {
+            AliasResult::NoAlias => false,
+            AliasResult::MayAlias => true,
+            AliasResult::MustAlias => range
+                .offset
+                .checked_add(range.bytes)
+                .zip(key.offset.checked_add(i64::from(key.bytes)))
+                .is_none_or(|(range_end, key_end)| {
+                    byte_ranges_overlap(range.offset, range_end, key.offset, key_end)
+                }),
+        }
+    }
+
+    fn alias_linear_bases(&self, lhs: &BaseObject, rhs: &BaseObject) -> AliasResult {
+        match (lhs, rhs) {
+            _ if lhs == rhs => AliasResult::MustAlias,
+            (BaseObject::Alloca(a), BaseObject::Alloca(b)) if a != b => AliasResult::NoAlias,
+            (BaseObject::Alloca(_), BaseObject::Global(_))
+            | (BaseObject::Global(_), BaseObject::Alloca(_))
+            | (BaseObject::Alloca(_), BaseObject::Arg(_))
+            | (BaseObject::Arg(_), BaseObject::Alloca(_))
+            | (BaseObject::Alloca(_), BaseObject::Malloc(_))
+            | (BaseObject::Malloc(_), BaseObject::Alloca(_))
+            | (BaseObject::Global(_), BaseObject::Malloc(_))
+            | (BaseObject::Malloc(_), BaseObject::Global(_)) => AliasResult::NoAlias,
+            (BaseObject::Global(a), BaseObject::Global(b)) if a != b => AliasResult::NoAlias,
+            (BaseObject::Malloc(a), BaseObject::Malloc(b)) if a != b => AliasResult::NoAlias,
+            (BaseObject::Unknown(_), _) | (_, BaseObject::Unknown(_)) => AliasResult::MayAlias,
             _ => AliasResult::MayAlias,
         }
     }
@@ -385,6 +473,20 @@ impl CanonicalAddr {
     }
 }
 
+fn absolute_byte_range(base: &BaseObject, offset: i64, bytes: i64) -> Option<(i64, i64)> {
+    let BaseObject::Absolute(base) = base else {
+        return None;
+    };
+
+    let start = immediate_i64(*base)?.checked_add(offset)?;
+    let end = start.checked_add(bytes)?;
+    Some((start, end))
+}
+
+fn byte_ranges_overlap(lhs_start: i64, lhs_end: i64, rhs_start: i64, rhs_end: i64) -> bool {
+    lhs_start < rhs_end && rhs_start < lhs_end
+}
+
 fn immediate_i64(imm: Immediate) -> Option<i64> {
     let value = imm.as_i256();
     if value < I256::from(i64::MIN) || value > I256::from(i64::MAX) {
@@ -398,7 +500,7 @@ fn immediate_i64(imm: Immediate) -> Option<i64> {
 mod tests {
     use super::*;
     use sonatina_ir::{
-        Type,
+        AccessKind, AccessLoc, MemoryAccess, Type,
         builder::test_util::*,
         inst::{
             arith::Add,
@@ -423,6 +525,15 @@ mod tests {
         let effects = func.dfg.effects(inst);
         let access = effects.accesses.first().expect("expected one access");
         analysis.trackable_exact_loc(func, access)
+    }
+
+    fn range_access(space: AddressSpaceId, addr: ValueId, len: ValueId) -> MemoryAccess {
+        MemoryAccess {
+            space,
+            kind: AccessKind::Read,
+            must_happen: false,
+            loc: AccessLoc::LinearRange { addr, len },
+        }
     }
 
     #[test]
@@ -577,5 +688,105 @@ mod tests {
 
         let insts: Vec<_> = builder.func.layout.iter_inst(block).collect();
         assert!(maybe_single_key(&builder.func, insts[1]).is_none());
+    }
+
+    #[test]
+    fn zero_length_linear_range_does_not_alias_exact_linear_key() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let addr = builder.make_imm_value(I256::from(64));
+        let load = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+        let _ = load;
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let inst = builder.func.layout.first_inst_of(block).expect("load");
+        let key = single_key(&builder.func, inst);
+        let zero = builder.make_imm_value(I256::from(0));
+        let analysis = MemoryAccessAnalysis::new();
+        let range = analysis
+            .trackable_linear_range(
+                &builder.func,
+                &range_access(
+                    builder.func.ctx().address_spaces().default_space(),
+                    addr,
+                    zero,
+                ),
+            )
+            .expect("zero-length range should be trackable");
+
+        assert!(!analysis.range_may_alias_key(&range, &key));
+    }
+
+    #[test]
+    fn disjoint_absolute_linear_range_does_not_alias_exact_linear_key() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let addr = builder.make_imm_value(I256::from(64));
+        let load = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+        let _ = load;
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let inst = builder.func.layout.first_inst_of(block).expect("load");
+        let key = single_key(&builder.func, inst);
+        let range_addr = builder.make_imm_value(I256::from(0));
+        let range_len = builder.make_imm_value(I256::from(32));
+        let analysis = MemoryAccessAnalysis::new();
+        let range = analysis
+            .trackable_linear_range(
+                &builder.func,
+                &range_access(
+                    builder.func.ctx().address_spaces().default_space(),
+                    range_addr,
+                    range_len,
+                ),
+            )
+            .expect("range should be trackable");
+
+        assert!(!analysis.range_may_alias_key(&range, &key));
+    }
+
+    #[test]
+    fn overlapping_absolute_linear_range_aliases_exact_linear_key() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let addr = builder.make_imm_value(I256::from(64));
+        let load = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+        let _ = load;
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let inst = builder.func.layout.first_inst_of(block).expect("load");
+        let key = single_key(&builder.func, inst);
+        let range_len = builder.make_imm_value(I256::from(32));
+        let analysis = MemoryAccessAnalysis::new();
+        let range = analysis
+            .trackable_linear_range(
+                &builder.func,
+                &range_access(
+                    builder.func.ctx().address_spaces().default_space(),
+                    addr,
+                    range_len,
+                ),
+            )
+            .expect("range should be trackable");
+
+        assert!(analysis.range_may_alias_key(&range, &key));
     }
 }

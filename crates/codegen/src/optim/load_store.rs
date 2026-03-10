@@ -14,7 +14,7 @@ use sonatina_ir::{
 };
 
 use crate::analysis::memory_access::{
-    AliasResult, BaseObject, MemoryAccessAnalysis, TrackedLocKey,
+    AliasResult, BaseObject, LinearRangeKey, MemoryAccessAnalysis, TrackedLocKey,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -25,6 +25,7 @@ struct AvailState {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct LiveState {
     exact_live: FxHashSet<TrackedLocKey>,
+    range_live: FxHashSet<LinearRangeKey>,
     whole_space_live: BitSet<AddressSpaceId>,
 }
 
@@ -38,13 +39,14 @@ impl LoadStoreSolver {
 
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) -> bool {
         let mut changed_any = false;
+        let analysis = MemoryAccessAnalysis::new();
 
         loop {
             cfg.compute(func);
 
-            let mut changed = self.run_forward(func, cfg);
+            let mut changed = self.run_forward(func, cfg, &analysis);
             cfg.compute(func);
-            changed |= self.run_backward(func, cfg);
+            changed |= self.run_backward(func, cfg, &analysis);
 
             if !changed {
                 return changed_any;
@@ -54,7 +56,12 @@ impl LoadStoreSolver {
         }
     }
 
-    fn run_forward(&mut self, func: &mut Function, cfg: &ControlFlowGraph) -> bool {
+    fn run_forward(
+        &mut self,
+        func: &mut Function,
+        cfg: &ControlFlowGraph,
+        analysis: &MemoryAccessAnalysis,
+    ) -> bool {
         let reachable = cfg.reachable_blocks();
         let order: Vec<_> = cfg
             .post_order()
@@ -92,8 +99,7 @@ impl LoadStoreSolver {
                     if !func.layout.is_inst_inserted(inst) {
                         continue;
                     }
-                    let analysis = MemoryAccessAnalysis::new();
-                    if transfer_forward(func, inst, &analysis, &mut state) {
+                    if transfer_forward(func, inst, analysis, &mut state) {
                         changed = true;
                     }
                 }
@@ -108,7 +114,12 @@ impl LoadStoreSolver {
         changed
     }
 
-    fn run_backward(&mut self, func: &mut Function, cfg: &ControlFlowGraph) -> bool {
+    fn run_backward(
+        &mut self,
+        func: &mut Function,
+        cfg: &ControlFlowGraph,
+        analysis: &MemoryAccessAnalysis,
+    ) -> bool {
         let reachable = cfg.reachable_blocks();
         let committing_exit_reachable = blocks_reaching_committing_exit(func, cfg, &reachable);
         let order: Vec<_> = cfg.post_order().collect();
@@ -142,11 +153,10 @@ impl LoadStoreSolver {
                     if !func.layout.is_inst_inserted(inst) {
                         continue;
                     }
-                    let analysis = MemoryAccessAnalysis::new();
                     if transfer_backward(
                         func,
                         inst,
-                        &analysis,
+                        analysis,
                         &mut live,
                         committing_exit_reachable[block],
                     ) {
@@ -184,6 +194,7 @@ fn meet_live(states: impl Iterator<Item = LiveState>) -> LiveState {
     for state in states {
         out.whole_space_live.union_with(&state.whole_space_live);
         out.exact_live.extend(state.exact_live);
+        out.range_live.extend(state.range_live);
     }
     out
 }
@@ -260,6 +271,8 @@ fn transfer_backward(
             AccessKind::Read => {
                 if let Some(key) = analysis.trackable_exact_loc(func, access) {
                     live.exact_live.insert(key);
+                } else if let Some(range) = analysis.trackable_linear_range(func, access) {
+                    live.range_live.insert(range);
                 } else {
                     live.whole_space_live.insert(access.space);
                 }
@@ -272,9 +285,11 @@ fn transfer_backward(
 
                 let has_whole_space_live = live.whole_space_live.contains(access.space);
                 let has_exact_live = has_may_alias_live(&live.exact_live, &key, analysis);
+                let has_range_live = has_may_alias_live_range(&live.range_live, &key, analysis);
                 let live_at_exit =
                     committing_exit_reachable && write_visible_at_committing_exit(func, &key);
-                let dead = !has_whole_space_live && !has_exact_live && !live_at_exit;
+                let dead =
+                    !has_whole_space_live && !has_exact_live && !has_range_live && !live_at_exit;
 
                 if dead && store_is_removable(func, inst) {
                     remove_inst(func, inst);
@@ -282,7 +297,7 @@ fn transfer_backward(
                 }
 
                 kill_must_alias_live(&mut live.exact_live, &key, analysis);
-                if live_at_exit && !has_whole_space_live && !has_exact_live {
+                if live_at_exit && !has_whole_space_live && !has_exact_live && !has_range_live {
                     live.exact_live.insert(key);
                 }
             }
@@ -316,6 +331,15 @@ fn has_may_alias_live(
 ) -> bool {
     live.iter()
         .any(|other| analysis.alias(other, key) != AliasResult::NoAlias)
+}
+
+fn has_may_alias_live_range(
+    live: &FxHashSet<LinearRangeKey>,
+    key: &TrackedLocKey,
+    analysis: &MemoryAccessAnalysis,
+) -> bool {
+    live.iter()
+        .any(|range| analysis.range_may_alias_key(range, key))
 }
 
 fn kill_must_alias_live(
@@ -651,6 +675,67 @@ mod tests {
         let value = builder.make_imm_value(I256::from(7));
         builder.insert_inst_no_result_with(|| Mstore::new(is, addr, value, Type::I256));
         builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        assert!(!run_solver(&mut builder.func));
+        assert_eq!(count_insts::<Mstore>(&builder.func), 1);
+    }
+
+    #[test]
+    fn removes_disjoint_absolute_memory_store_on_revert_exit() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let zero = builder.make_imm_value(I256::from(0));
+        let len = builder.make_imm_value(I256::from(32));
+        let addr = builder.make_imm_value(I256::from(64));
+        let value = builder.make_imm_value(I256::from(7));
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, value, Type::I256));
+        builder.insert_inst_no_result_with(|| EvmRevert::new(is, zero, len));
+        builder.seal_all();
+
+        assert!(run_solver(&mut builder.func));
+        assert_eq!(count_insts::<Mstore>(&builder.func), 0);
+    }
+
+    #[test]
+    fn removes_zero_length_absolute_memory_store_on_revert_exit() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let zero = builder.make_imm_value(I256::from(0));
+        let addr = builder.make_imm_value(I256::from(64));
+        let value = builder.make_imm_value(I256::from(7));
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, value, Type::I256));
+        builder.insert_inst_no_result_with(|| EvmRevert::new(is, zero, zero));
+        builder.seal_all();
+
+        assert!(run_solver(&mut builder.func));
+        assert_eq!(count_insts::<Mstore>(&builder.func), 0);
+    }
+
+    #[test]
+    fn keeps_absolute_memory_store_when_revert_payload_reads_it() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let addr = builder.make_imm_value(I256::from(64));
+        let len = builder.make_imm_value(I256::from(32));
+        let value = builder.make_imm_value(I256::from(7));
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, value, Type::I256));
+        builder.insert_inst_no_result_with(|| EvmRevert::new(is, addr, len));
         builder.seal_all();
 
         assert!(!run_solver(&mut builder.func));
