@@ -47,6 +47,17 @@ pub struct LinearRangeKey {
     pub bytes: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RangeCoverage {
+    NoOverlap,
+    FullyCovered,
+    PartiallyCovered {
+        before: Option<LinearRangeKey>,
+        after: Option<LinearRangeKey>,
+    },
+    Unknown,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KeyedLocKey {
     pub space: AddressSpaceId,
@@ -238,28 +249,104 @@ impl MemoryAccessAnalysis {
     }
 
     fn range_may_alias_linear(&self, range: &LinearRangeKey, key: &LinearLocKey) -> bool {
-        if range.space != key.space || range.bytes == 0 {
-            return false;
+        !matches!(
+            self.exact_write_coverage(range, key),
+            RangeCoverage::NoOverlap
+        )
+    }
+
+    pub fn exact_write_coverage(
+        &self,
+        range: &LinearRangeKey,
+        key: &LinearLocKey,
+    ) -> RangeCoverage {
+        if range.space != key.space || range.bytes == 0 || key.bytes == 0 {
+            return RangeCoverage::NoOverlap;
         }
 
-        if let (Some((range_start, range_end)), Some((key_start, key_end))) = (
-            absolute_byte_range(&range.base, range.offset, range.bytes),
-            absolute_byte_range(&key.base, key.offset, i64::from(key.bytes)),
-        ) {
-            return byte_ranges_overlap(range_start, range_end, key_start, key_end);
+        if let Some(((range_start, range_end), (key_start, key_end))) =
+            absolute_byte_range(&range.base, range.offset, range.bytes).zip(absolute_byte_range(
+                &key.base,
+                key.offset,
+                i64::from(key.bytes),
+            ))
+        {
+            return self.coverage_from_intervals(range, range_start, range_end, key_start, key_end);
         }
 
         match self.alias_linear_bases(&range.base, &key.base) {
-            AliasResult::NoAlias => false,
-            AliasResult::MayAlias => true,
+            AliasResult::NoAlias => RangeCoverage::NoOverlap,
+            AliasResult::MayAlias => RangeCoverage::Unknown,
             AliasResult::MustAlias => range
                 .offset
                 .checked_add(range.bytes)
                 .zip(key.offset.checked_add(i64::from(key.bytes)))
-                .is_none_or(|(range_end, key_end)| {
-                    byte_ranges_overlap(range.offset, range_end, key.offset, key_end)
+                .map_or(RangeCoverage::Unknown, |(range_end, key_end)| {
+                    self.coverage_from_intervals(
+                        range,
+                        range.offset,
+                        range_end,
+                        key.offset,
+                        key_end,
+                    )
                 }),
         }
+    }
+
+    fn coverage_from_intervals(
+        &self,
+        range: &LinearRangeKey,
+        range_start: i64,
+        range_end: i64,
+        key_start: i64,
+        key_end: i64,
+    ) -> RangeCoverage {
+        if !byte_ranges_overlap(range_start, range_end, key_start, key_end) {
+            return RangeCoverage::NoOverlap;
+        }
+
+        if key_start <= range_start && range_end <= key_end {
+            return RangeCoverage::FullyCovered;
+        }
+
+        let before = if range_start < key_start {
+            let bytes = match key_start.checked_sub(range_start) {
+                Some(bytes) => bytes,
+                None => return RangeCoverage::Unknown,
+            };
+            Some(LinearRangeKey {
+                space: range.space,
+                base: range.base.clone(),
+                offset: range.offset,
+                bytes,
+            })
+        } else {
+            None
+        };
+        let after = if key_end < range_end {
+            let delta = match key_end.checked_sub(range_start) {
+                Some(delta) => delta,
+                None => return RangeCoverage::Unknown,
+            };
+            let bytes = match range_end.checked_sub(key_end) {
+                Some(bytes) => bytes,
+                None => return RangeCoverage::Unknown,
+            };
+            let offset = match range.offset.checked_add(delta) {
+                Some(offset) => offset,
+                None => return RangeCoverage::Unknown,
+            };
+            Some(LinearRangeKey {
+                space: range.space,
+                base: range.base.clone(),
+                offset,
+                bytes,
+            })
+        } else {
+            None
+        };
+
+        RangeCoverage::PartiallyCovered { before, after }
     }
 
     fn alias_linear_bases(&self, lhs: &BaseObject, rhs: &BaseObject) -> AliasResult {
@@ -788,5 +875,129 @@ mod tests {
             .expect("range should be trackable");
 
         assert!(analysis.range_may_alias_key(&range, &key));
+    }
+
+    #[test]
+    fn exact_write_fully_covers_linear_range() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let addr = builder.make_imm_value(I256::from(64));
+        let load = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+        let _ = load;
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let inst = builder.func.layout.first_inst_of(block).expect("load");
+        let TrackedLocKey::Linear(key) = single_key(&builder.func, inst) else {
+            panic!("expected a linear key");
+        };
+        let range_len = builder.make_imm_value(I256::from(32));
+        let analysis = MemoryAccessAnalysis::new();
+        let range = analysis
+            .trackable_linear_range(
+                &builder.func,
+                &range_access(
+                    builder.func.ctx().address_spaces().default_space(),
+                    addr,
+                    range_len,
+                ),
+            )
+            .expect("range should be trackable");
+
+        assert_eq!(
+            analysis.exact_write_coverage(&range, &key),
+            RangeCoverage::FullyCovered
+        );
+    }
+
+    #[test]
+    fn exact_write_partially_covers_linear_range() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let key_addr = builder.make_imm_value(I256::from(80));
+        let load = builder.insert_inst_with(|| Mload::new(is, key_addr, Type::I256), Type::I256);
+        let _ = load;
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let inst = builder.func.layout.first_inst_of(block).expect("load");
+        let TrackedLocKey::Linear(key) = single_key(&builder.func, inst) else {
+            panic!("expected a linear key");
+        };
+        let range_addr = builder.make_imm_value(I256::from(64));
+        let range_len = builder.make_imm_value(I256::from(32));
+        let analysis = MemoryAccessAnalysis::new();
+        let range = analysis
+            .trackable_linear_range(
+                &builder.func,
+                &range_access(
+                    builder.func.ctx().address_spaces().default_space(),
+                    range_addr,
+                    range_len,
+                ),
+            )
+            .expect("range should be trackable");
+
+        assert_eq!(
+            analysis.exact_write_coverage(&range, &key),
+            RangeCoverage::PartiallyCovered {
+                before: Some(LinearRangeKey {
+                    space: range.space,
+                    base: range.base.clone(),
+                    offset: range.offset,
+                    bytes: 16,
+                }),
+                after: None,
+            }
+        );
+    }
+
+    #[test]
+    fn exact_write_disjoint_from_linear_range() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let key_addr = builder.make_imm_value(I256::from(96));
+        let load = builder.insert_inst_with(|| Mload::new(is, key_addr, Type::I256), Type::I256);
+        let _ = load;
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let inst = builder.func.layout.first_inst_of(block).expect("load");
+        let TrackedLocKey::Linear(key) = single_key(&builder.func, inst) else {
+            panic!("expected a linear key");
+        };
+        let range_addr = builder.make_imm_value(I256::from(64));
+        let range_len = builder.make_imm_value(I256::from(32));
+        let analysis = MemoryAccessAnalysis::new();
+        let range = analysis
+            .trackable_linear_range(
+                &builder.func,
+                &range_access(
+                    builder.func.ctx().address_spaces().default_space(),
+                    range_addr,
+                    range_len,
+                ),
+            )
+            .expect("range should be trackable");
+
+        assert_eq!(
+            analysis.exact_write_coverage(&range, &key),
+            RangeCoverage::NoOverlap
+        );
     }
 }

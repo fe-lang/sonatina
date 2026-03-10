@@ -14,7 +14,7 @@ use sonatina_ir::{
 };
 
 use crate::analysis::memory_access::{
-    AliasResult, BaseObject, LinearRangeKey, MemoryAccessAnalysis, TrackedLocKey,
+    AliasResult, BaseObject, LinearRangeKey, MemoryAccessAnalysis, RangeCoverage, TrackedLocKey,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -25,6 +25,7 @@ struct AvailState {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct LiveState {
     exact_live: FxHashSet<TrackedLocKey>,
+    exit_live: FxHashSet<TrackedLocKey>,
     range_live: FxHashSet<LinearRangeKey>,
     whole_space_live: BitSet<AddressSpaceId>,
 }
@@ -140,7 +141,7 @@ impl LoadStoreSolver {
                     cfg.succs_of(block)
                         .copied()
                         .filter(|succ| reachable[*succ])
-                        .map(|succ| in_states[succ].clone()),
+                        .map(|succ| (in_states[succ].clone(), committing_exit_reachable[succ])),
                 );
                 if out_state != out_states[block] {
                     out_states[block] = out_state.clone();
@@ -189,13 +190,25 @@ fn meet_forward(states: impl Iterator<Item = AvailState>) -> AvailState {
     out
 }
 
-fn meet_live(states: impl Iterator<Item = LiveState>) -> LiveState {
+fn meet_live(states: impl Iterator<Item = (LiveState, bool)>) -> LiveState {
     let mut out = LiveState::default();
-    for state in states {
+    let mut exit_states = Vec::new();
+
+    for (state, committing_exit_reachable) in states {
         out.whole_space_live.union_with(&state.whole_space_live);
         out.exact_live.extend(state.exact_live);
         out.range_live.extend(state.range_live);
+        if committing_exit_reachable {
+            exit_states.push(state.exit_live);
+        }
     }
+
+    let Some(mut exit_live) = exit_states.first().cloned() else {
+        return out;
+    };
+    exit_live.retain(|key| exit_states[1..].iter().all(|state| state.contains(key)));
+    out.exit_live = exit_live;
+
     out
 }
 
@@ -286,8 +299,9 @@ fn transfer_backward(
                 let has_whole_space_live = live.whole_space_live.contains(access.space);
                 let has_exact_live = has_may_alias_live(&live.exact_live, &key, analysis);
                 let has_range_live = has_may_alias_live_range(&live.range_live, &key, analysis);
-                let live_at_exit =
-                    committing_exit_reachable && write_visible_at_committing_exit(func, &key);
+                let live_at_exit = committing_exit_reachable
+                    && write_visible_at_committing_exit(func, &key)
+                    && !has_must_alias_live(&live.exit_live, &key, analysis);
                 let dead =
                     !has_whole_space_live && !has_exact_live && !has_range_live && !live_at_exit;
 
@@ -297,8 +311,10 @@ fn transfer_backward(
                 }
 
                 kill_must_alias_live(&mut live.exact_live, &key, analysis);
-                if live_at_exit && !has_whole_space_live && !has_exact_live && !has_range_live {
-                    live.exact_live.insert(key);
+                discharge_live_ranges(&mut live.range_live, &key, analysis);
+                if live_at_exit {
+                    kill_must_alias_live(&mut live.exit_live, &key, analysis);
+                    live.exit_live.insert(key);
                 }
             }
         }
@@ -333,6 +349,15 @@ fn has_may_alias_live(
         .any(|other| analysis.alias(other, key) != AliasResult::NoAlias)
 }
 
+fn has_must_alias_live(
+    live: &FxHashSet<TrackedLocKey>,
+    key: &TrackedLocKey,
+    analysis: &MemoryAccessAnalysis,
+) -> bool {
+    live.iter()
+        .any(|other| analysis.alias(other, key) == AliasResult::MustAlias)
+}
+
 fn has_may_alias_live_range(
     live: &FxHashSet<LinearRangeKey>,
     key: &TrackedLocKey,
@@ -348,6 +373,34 @@ fn kill_must_alias_live(
     analysis: &MemoryAccessAnalysis,
 ) {
     live.retain(|other| analysis.alias(other, key) != AliasResult::MustAlias);
+}
+
+fn discharge_live_ranges(
+    live: &mut FxHashSet<LinearRangeKey>,
+    key: &TrackedLocKey,
+    analysis: &MemoryAccessAnalysis,
+) {
+    let TrackedLocKey::Linear(key) = key else {
+        return;
+    };
+
+    let ranges: Vec<_> = live.drain().collect();
+    for range in ranges {
+        match analysis.exact_write_coverage(&range, key) {
+            RangeCoverage::NoOverlap | RangeCoverage::Unknown => {
+                live.insert(range);
+            }
+            RangeCoverage::FullyCovered => {}
+            RangeCoverage::PartiallyCovered { before, after } => {
+                if let Some(before) = before {
+                    live.insert(before);
+                }
+                if let Some(after) = after {
+                    live.insert(after);
+                }
+            }
+        }
+    }
 }
 
 fn store_value_of_inst(func: &Function, inst: InstId) -> Option<ValueId> {
@@ -488,8 +541,8 @@ mod tests {
             control_flow::Return,
             data::{Alloca, Mload},
             evm::{
-                EvmCalldataLoad, EvmKeccak256, EvmRevert, EvmSelfDestruct, EvmSload, EvmStaticCall,
-                EvmStop,
+                EvmCalldataLoad, EvmKeccak256, EvmReturn, EvmRevert, EvmSelfDestruct, EvmSload,
+                EvmStaticCall, EvmStop,
             },
         },
         isa::Isa,
@@ -682,6 +735,59 @@ mod tests {
     }
 
     #[test]
+    fn removes_overwritten_absolute_memory_store_before_function_exit() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let addr = builder.make_imm_value(I256::from(64));
+        let v1 = builder.make_imm_value(I256::from(7));
+        let v2 = builder.make_imm_value(I256::from(8));
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v1, Type::I256));
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v2, Type::I256));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        assert!(run_solver(&mut builder.func));
+        assert_eq!(count_insts::<Mstore>(&builder.func), 1);
+    }
+
+    #[test]
+    fn keeps_store_when_only_one_commit_path_overwrites_exit_visible_value() {
+        use sonatina_ir::inst::control_flow::Br;
+
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I1], Type::Unit);
+        let is = evm.inst_set();
+
+        let entry = builder.append_block();
+        let overwrite = builder.append_block();
+        let passthrough = builder.append_block();
+
+        builder.switch_to_block(entry);
+        let cond = builder.args()[0];
+        let addr = builder.make_imm_value(I256::from(64));
+        let v1 = builder.make_imm_value(I256::from(7));
+        let v2 = builder.make_imm_value(I256::from(8));
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v1, Type::I256));
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, overwrite, passthrough));
+
+        builder.switch_to_block(overwrite);
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v2, Type::I256));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+
+        builder.switch_to_block(passthrough);
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        assert!(!run_solver(&mut builder.func));
+        assert_eq!(count_insts::<Mstore>(&builder.func), 2);
+    }
+
+    #[test]
     fn removes_disjoint_absolute_memory_store_on_revert_exit() {
         let mb = test_module_builder();
         let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
@@ -740,6 +846,73 @@ mod tests {
 
         assert!(!run_solver(&mut builder.func));
         assert_eq!(count_insts::<Mstore>(&builder.func), 1);
+    }
+
+    #[test]
+    fn removes_overwritten_absolute_memory_store_before_revert_payload() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let addr = builder.make_imm_value(I256::from(64));
+        let len = builder.make_imm_value(I256::from(32));
+        let v1 = builder.make_imm_value(I256::from(7));
+        let v2 = builder.make_imm_value(I256::from(8));
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v1, Type::I256));
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v2, Type::I256));
+        builder.insert_inst_no_result_with(|| EvmRevert::new(is, addr, len));
+        builder.seal_all();
+
+        assert!(run_solver(&mut builder.func));
+        assert_eq!(count_insts::<Mstore>(&builder.func), 1);
+    }
+
+    #[test]
+    fn removes_overwritten_absolute_memory_store_before_return_payload() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let addr = builder.make_imm_value(I256::from(64));
+        let len = builder.make_imm_value(I256::from(32));
+        let v1 = builder.make_imm_value(I256::from(7));
+        let v2 = builder.make_imm_value(I256::from(8));
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v1, Type::I256));
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, v2, Type::I256));
+        builder.insert_inst_no_result_with(|| EvmReturn::new(is, addr, len));
+        builder.seal_all();
+
+        assert!(run_solver(&mut builder.func));
+        assert_eq!(count_insts::<Mstore>(&builder.func), 1);
+    }
+
+    #[test]
+    fn keeps_partially_overwritten_absolute_memory_store_before_revert_payload() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let range_addr = builder.make_imm_value(I256::from(64));
+        let overwrite_addr = builder.make_imm_value(I256::from(80));
+        let len = builder.make_imm_value(I256::from(32));
+        let v1 = builder.make_imm_value(I256::from(7));
+        let v2 = builder.make_imm_value(I256::from(8));
+        builder.insert_inst_no_result_with(|| Mstore::new(is, range_addr, v1, Type::I256));
+        builder.insert_inst_no_result_with(|| Mstore::new(is, overwrite_addr, v2, Type::I256));
+        builder.insert_inst_no_result_with(|| EvmRevert::new(is, range_addr, len));
+        builder.seal_all();
+
+        assert!(!run_solver(&mut builder.func));
+        assert_eq!(count_insts::<Mstore>(&builder.func), 2);
     }
 
     #[test]
