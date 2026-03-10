@@ -1,7 +1,7 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    AccessKind, AddressSpaceId, ControlFlowGraph, Function, InstDowncast, InstId, ValueId,
+    AccessKind, AddressSpaceId, ControlFlowGraph, Function, InstDowncast, InstId, Type, ValueId,
     bitset::BitSet,
     inst::{
         control_flow,
@@ -248,13 +248,13 @@ fn transfer_forward(
         .iter()
         .filter(|access| access.kind == AccessKind::Write && access.must_happen)
     {
-        let Some(stored_value) = store_value_of_inst(func, inst) else {
+        let Some(key) = analysis.trackable_exact_loc(func, access) else {
             kill_aliasing_access(func, state, analysis, access);
             continue;
         };
 
-        let Some(key) = analysis.trackable_exact_loc(func, access) else {
-            kill_aliasing_access(func, state, analysis, access);
+        let Some(stored_value) = store_value_of_inst(func, inst, &key) else {
+            kill_aliasing_key(state, analysis, &key);
             continue;
         };
 
@@ -403,24 +403,43 @@ fn discharge_live_ranges(
     }
 }
 
-fn store_value_of_inst(func: &Function, inst: InstId) -> Option<ValueId> {
+fn store_value_of_inst(func: &Function, inst: InstId, key: &TrackedLocKey) -> Option<ValueId> {
     let inst_data = func.dfg.inst(inst);
     let is = func.inst_set();
 
     if let Some(store) = <&Mstore as InstDowncast>::downcast(is, inst_data) {
-        return Some(*store.value());
+        return forwardable_store_value(func, *store.value(), key);
     }
     if let Some(store) = <&EvmMstore8 as InstDowncast>::downcast(is, inst_data) {
-        return Some(*store.val());
+        return forwardable_store_value(func, *store.val(), key);
     }
     if let Some(store) = <&EvmSstore as InstDowncast>::downcast(is, inst_data) {
-        return Some(*store.val());
+        return forwardable_store_value(func, *store.val(), key);
     }
     if let Some(store) = <&EvmTstore as InstDowncast>::downcast(is, inst_data) {
-        return Some(*store.val());
+        return forwardable_store_value(func, *store.val(), key);
     }
 
     None
+}
+
+fn forwardable_store_value(
+    func: &Function,
+    value: ValueId,
+    key: &TrackedLocKey,
+) -> Option<ValueId> {
+    if func.dfg.value_ty(value) != expected_loaded_value_type(key) {
+        return None;
+    }
+
+    Some(value)
+}
+
+fn expected_loaded_value_type(key: &TrackedLocKey) -> Type {
+    match key {
+        TrackedLocKey::Linear(key) => key.ty,
+        TrackedLocKey::Keyed(_) => Type::I256,
+    }
 }
 
 fn forwardable_read_key(
@@ -1004,5 +1023,56 @@ mod tests {
 
         assert!(run_solver(&mut builder.func));
         assert_eq!(count_insts::<EvmCalldataLoad>(&builder.func), 1);
+    }
+
+    #[test]
+    fn does_not_forward_mstore8_from_wide_value() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I8);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let ptr_ty = builder.ptr_type(Type::I8);
+        let addr = builder.insert_inst_with(|| Alloca::new(is, Type::I8), ptr_ty);
+        let wide = builder.make_imm_value(I256::from(0x1ff));
+        builder.insert_inst_no_result_with(|| EvmMstore8::new(is, addr, wide));
+        let loaded = builder.insert_inst_with(|| Mload::new(is, addr, Type::I8), Type::I8);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, loaded));
+        builder.seal_all();
+
+        assert!(!run_solver(&mut builder.func));
+        assert_eq!(count_insts::<EvmMstore8>(&builder.func), 1);
+        assert_eq!(count_insts::<Mload>(&builder.func), 1);
+
+        let ret = builder
+            .func
+            .layout
+            .last_inst_of(block)
+            .and_then(|inst| builder.func.dfg.return_args(inst))
+            .expect("return args");
+        assert_eq!(builder.func.dfg.value_ty(ret[0]), Type::I8);
+    }
+
+    #[test]
+    fn does_not_forward_sload_from_narrow_stored_value() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I256);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let slot = builder.make_imm_value(I256::from(1));
+        let narrow = builder.make_imm_value(7i32);
+        builder.insert_inst_no_result_with(|| EvmSstore::new(is, slot, narrow));
+        let loaded = builder.insert_inst_with(|| EvmSload::new(is, slot), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, loaded));
+        builder.seal_all();
+
+        assert!(!run_solver(&mut builder.func));
+        assert_eq!(count_insts::<EvmSstore>(&builder.func), 1);
+        assert_eq!(count_insts::<EvmSload>(&builder.func), 1);
     }
 }
