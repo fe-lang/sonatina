@@ -560,8 +560,8 @@ mod tests {
             control_flow::Return,
             data::{Alloca, Mload},
             evm::{
-                EvmCalldataLoad, EvmKeccak256, EvmReturn, EvmRevert, EvmSelfDestruct, EvmSload,
-                EvmStaticCall, EvmStop,
+                EvmCalldataLoad, EvmCreate, EvmCreate2, EvmKeccak256, EvmReturn, EvmRevert,
+                EvmSelfDestruct, EvmSload, EvmStaticCall, EvmStop, EvmTload,
             },
         },
         isa::Isa,
@@ -713,6 +713,87 @@ mod tests {
 
         assert!(run_solver(&mut builder.func));
         assert_eq!(count_insts::<Mload>(&builder.func), 0);
+    }
+
+    #[test]
+    fn sload_does_not_forward_across_create_barrier() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I256);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let ptr_ty = builder.ptr_type(Type::I256);
+        let scratch = builder.insert_inst_with(|| Alloca::new(is, Type::I256), ptr_ty);
+        let zero = builder.make_imm_value(I256::from(0));
+        let one = builder.make_imm_value(I256::from(1));
+
+        builder.insert_inst_no_result_with(|| EvmSstore::new(is, one, one));
+        let _created =
+            builder.insert_inst_with(|| EvmCreate::new(is, zero, scratch, zero), Type::I256);
+        let load = builder.insert_inst_with(|| EvmSload::new(is, one), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, load));
+        builder.seal_all();
+
+        assert!(!run_solver(&mut builder.func));
+        assert_eq!(count_insts::<EvmSstore>(&builder.func), 1);
+        assert_eq!(count_insts::<EvmSload>(&builder.func), 1);
+    }
+
+    #[test]
+    fn create_barrier_keeps_overwritten_sstore_live() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let ptr_ty = builder.ptr_type(Type::I256);
+        let scratch = builder.insert_inst_with(|| Alloca::new(is, Type::I256), ptr_ty);
+        let zero = builder.make_imm_value(I256::from(0));
+        let slot = builder.make_imm_value(I256::from(1));
+        let v1 = builder.make_imm_value(I256::from(7));
+        let v2 = builder.make_imm_value(I256::from(8));
+
+        builder.insert_inst_no_result_with(|| EvmSstore::new(is, slot, v1));
+        let _created =
+            builder.insert_inst_with(|| EvmCreate::new(is, zero, scratch, zero), Type::I256);
+        builder.insert_inst_no_result_with(|| EvmSstore::new(is, slot, v2));
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        assert!(!run_solver(&mut builder.func));
+        assert_eq!(count_insts::<EvmSstore>(&builder.func), 2);
+    }
+
+    #[test]
+    fn tload_does_not_forward_across_create2_barrier() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I256);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let ptr_ty = builder.ptr_type(Type::I256);
+        let scratch = builder.insert_inst_with(|| Alloca::new(is, Type::I256), ptr_ty);
+        let zero = builder.make_imm_value(I256::from(0));
+        let one = builder.make_imm_value(I256::from(1));
+
+        builder.insert_inst_no_result_with(|| EvmTstore::new(is, one, one));
+        let _created = builder.insert_inst_with(
+            || EvmCreate2::new(is, zero, scratch, zero, zero),
+            Type::I256,
+        );
+        let load = builder.insert_inst_with(|| EvmTload::new(is, one), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, load));
+        builder.seal_all();
+
+        assert!(!run_solver(&mut builder.func));
+        assert_eq!(count_insts::<EvmTstore>(&builder.func), 1);
+        assert_eq!(count_insts::<EvmTload>(&builder.func), 1);
     }
 
     #[test]

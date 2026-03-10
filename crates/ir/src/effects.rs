@@ -393,11 +393,11 @@ pub fn classify_inst_effects(dfg: &DataFlowGraph, inst_id: InstId) -> InstEffect
     }
 
     if let Some(create) = <&EvmCreate as InstDowncast>::downcast(is, inst) {
-        return read_memory_with_other(*create.addr(), *create.len(), OtherEffects::MUTATE);
+        return create_effects(*create.addr(), *create.len());
     }
 
     if let Some(create) = <&EvmCreate2 as InstDowncast>::downcast(is, inst) {
-        return read_memory_with_other(*create.addr(), *create.len(), OtherEffects::MUTATE);
+        return create_effects(*create.addr(), *create.len());
     }
 
     if let Some(call) = <&EvmCall as InstDowncast>::downcast(is, inst) {
@@ -577,6 +577,20 @@ fn external_call_effects(
     }
 }
 
+fn create_effects(addr: ValueId, len: ValueId) -> InstEffects {
+    InstEffects {
+        accesses: smallvec![
+            range_access_data(MEMORY, AccessKind::Read, addr, len),
+            whole_space(STORAGE, AccessKind::Read),
+            whole_space(STORAGE, AccessKind::Write),
+            whole_space(TRANSIENT, AccessKind::Read),
+            whole_space(TRANSIENT, AccessKind::Write),
+            whole_space(RETURNDATA, AccessKind::Write),
+        ],
+        other: OtherEffects::MUTATE,
+    }
+}
+
 fn inst_effects_from_func_summary(
     summary: &FuncEffectSummary,
     spaces: &dyn AddressSpaceInfo,
@@ -699,7 +713,69 @@ mod tests {
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
     use super::*;
-    use crate::isa::{Isa, evm::Evm};
+    use crate::{
+        builder::test_util::*,
+        inst::{control_flow::Return, data::Alloca},
+        isa::{Isa, evm::Evm},
+    };
+
+    fn effects_for_inst<T>(func: &crate::Function) -> InstEffects
+    where
+        for<'a> &'a T: InstDowncast<'a>,
+    {
+        let is = func.inst_set();
+        let inst = func
+            .layout
+            .iter_block()
+            .flat_map(|block| func.layout.iter_inst(block))
+            .find(|&inst| <&T as InstDowncast>::downcast(is, func.dfg.inst(inst)).is_some())
+            .expect("instruction should exist");
+        func.dfg.effects(inst)
+    }
+
+    fn has_access(effects: &InstEffects, space: AddressSpaceId, kind: AccessKind) -> bool {
+        effects
+            .accesses
+            .iter()
+            .any(|access| access.space == space && access.kind == kind)
+    }
+
+    fn build_create_func() -> crate::Function {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I256);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let ptr_ty = builder.ptr_type(Type::I256);
+        let addr = builder.insert_inst_with(|| Alloca::new(is, Type::I256), ptr_ty);
+        let zero = builder.make_imm_value(0i32);
+        let created = builder.insert_inst_with(|| EvmCreate::new(is, zero, addr, zero), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, created));
+        builder.seal_all();
+
+        builder.func
+    }
+
+    fn build_create2_func() -> crate::Function {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I256);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let ptr_ty = builder.ptr_type(Type::I256);
+        let addr = builder.insert_inst_with(|| Alloca::new(is, Type::I256), ptr_ty);
+        let zero = builder.make_imm_value(0i32);
+        let created =
+            builder.insert_inst_with(|| EvmCreate2::new(is, zero, addr, zero, zero), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, created));
+        builder.seal_all();
+
+        builder.func
+    }
 
     fn evm_spaces() -> &'static dyn AddressSpaceInfo {
         Evm::new(TargetTriple::new(
@@ -758,5 +834,35 @@ mod tests {
                 desc.name
             );
         }
+    }
+
+    #[test]
+    fn evm_create_effects_include_reentrant_state_and_returndata_barriers() {
+        let func = build_create_func();
+        let effects = effects_for_inst::<EvmCreate>(&func);
+
+        assert!(has_access(&effects, MEMORY, AccessKind::Read));
+        assert!(has_access(&effects, STORAGE, AccessKind::Read));
+        assert!(has_access(&effects, STORAGE, AccessKind::Write));
+        assert!(has_access(&effects, TRANSIENT, AccessKind::Read));
+        assert!(has_access(&effects, TRANSIENT, AccessKind::Write));
+        assert!(has_access(&effects, RETURNDATA, AccessKind::Write));
+        assert!(!has_access(&effects, MEMORY, AccessKind::Write));
+        assert_eq!(effects.other, OtherEffects::MUTATE);
+    }
+
+    #[test]
+    fn evm_create2_effects_include_reentrant_state_and_returndata_barriers() {
+        let func = build_create2_func();
+        let effects = effects_for_inst::<EvmCreate2>(&func);
+
+        assert!(has_access(&effects, MEMORY, AccessKind::Read));
+        assert!(has_access(&effects, STORAGE, AccessKind::Read));
+        assert!(has_access(&effects, STORAGE, AccessKind::Write));
+        assert!(has_access(&effects, TRANSIENT, AccessKind::Read));
+        assert!(has_access(&effects, TRANSIENT, AccessKind::Write));
+        assert!(has_access(&effects, RETURNDATA, AccessKind::Write));
+        assert!(!has_access(&effects, MEMORY, AccessKind::Write));
+        assert_eq!(effects.other, OtherEffects::MUTATE);
     }
 }

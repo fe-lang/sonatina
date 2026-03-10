@@ -371,7 +371,7 @@ fn topo_sort_sccs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonatina_ir::isa::evm::space::STORAGE;
+    use sonatina_ir::isa::evm::space::{RETURNDATA, STORAGE, TRANSIENT};
     use sonatina_parser::parse_module;
 
     fn parse(src: &str) -> Module {
@@ -448,5 +448,36 @@ func private %caller() {
         let caller_effects = module.ctx.func_effects(caller);
         assert!(!caller_effects.noreturn);
         assert!(caller_effects.will_return);
+    }
+
+    #[test]
+    fn propagates_create2_state_and_returndata_barriers_through_internal_calls() {
+        let module = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %spawn(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = evm_create2 0.i256 v0 v1 0.i256;
+        return v2;
+}
+
+func private %caller(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = call %spawn v0 v1;
+        return v2;
+}
+"#,
+        );
+
+        analyze_module(&module);
+
+        let caller = find_func(&module, "caller");
+        let effects = module.ctx.func_effects(caller);
+        assert!(effects.may_read_spaces.contains(STORAGE));
+        assert!(effects.may_write_spaces.contains(STORAGE));
+        assert!(effects.may_read_spaces.contains(TRANSIENT));
+        assert!(effects.may_write_spaces.contains(TRANSIENT));
+        assert!(effects.may_write_spaces.contains(RETURNDATA));
     }
 }
