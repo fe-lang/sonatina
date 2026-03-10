@@ -6,11 +6,11 @@ input_file: test_files/evm/arena_alloc_recursion_spills.sntn
 evm.config: stack_reach=4 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 251 bytes
-  total: 251 bytes
+  section runtime: 242 bytes
+  total: 242 bytes
 
 functions:
-  f: ir_blocks=3 ir_insts=28 vcode_ops=163 fixups=7 imm_bytes=37
+  f: ir_blocks=3 ir_insts=28 vcode_ops=157 fixups=7 imm_bytes=34
     mem: scratch_words=2 stable_words=2 stable_mode=DynamicFrame entry_abs_words=2 abs_words_end=2
   sink8: ir_blocks=1 ir_insts=8 vcode_ops=19 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
@@ -20,4 +20,4 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=22784 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=1784
+  case ok: calldata_len=0 success reason=Return gas_used=22700 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=1700

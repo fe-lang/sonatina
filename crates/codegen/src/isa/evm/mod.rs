@@ -1,5 +1,6 @@
 mod heap_plan;
 mod late_alias;
+mod lazy_frame;
 mod legalize;
 pub use late_alias::canonicalize_alias_value;
 pub(crate) use late_alias::normalize_alias_map;
@@ -42,6 +43,7 @@ use sonatina_triple::{EvmVersion, OperatingSystem};
 
 use cranelift_entity::{EntityList, SecondaryMap};
 use late_alias::compute_evm_late_aliases;
+use lazy_frame::{FrameSite, LazyFramePlan, compute_lazy_frame_plan};
 use legalize::legalize_evm_section;
 use mem_effects::compute_func_mem_effects;
 pub(crate) use memory_plan::STATIC_BASE;
@@ -84,6 +86,7 @@ pub struct EvmBackend {
     arena_cost_model: ArenaCostModel,
     section_state: RefCell<Option<PreparedSection>>,
     current_mem_plan: RefCell<Option<FuncMemPlan>>,
+    current_lazy_frame_plan: RefCell<Option<LazyFramePlan>>,
     current_jump_targets: RefCell<Option<FxHashSet<BlockId>>>,
 }
 impl EvmBackend {
@@ -102,6 +105,7 @@ impl EvmBackend {
             arena_cost_model: ArenaCostModel::default(),
             section_state: RefCell::new(None),
             current_mem_plan: RefCell::new(None),
+            current_lazy_frame_plan: RefCell::new(None),
             current_jump_targets: RefCell::new(None),
         }
     }
@@ -408,6 +412,108 @@ impl EvmBackend {
             .unwrap_or(STATIC_BASE)
     }
 
+    fn current_frame_entry_abs_base(&self) -> u32 {
+        self.current_mem_plan
+            .borrow()
+            .as_ref()
+            .map(|plan| {
+                STATIC_BASE
+                    .checked_add(
+                        plan.entry_abs_words
+                            .checked_mul(WORD_BYTES)
+                            .expect("entry abs bytes overflow"),
+                    )
+                    .expect("entry abs base overflow")
+            })
+            .unwrap_or_else(|| self.dyn_base())
+    }
+
+    fn emit_lazy_frame_enter_if_site_matches(
+        &self,
+        ctx: &mut Lower<OpCode>,
+        frame_size_slots: u32,
+        site: FrameSite,
+    ) {
+        if self
+            .current_lazy_frame_plan
+            .borrow()
+            .as_ref()
+            .is_some_and(|plan| plan.enter_before_site(site))
+        {
+            enter_frame(ctx, frame_size_slots, self.current_frame_entry_abs_base());
+        }
+    }
+
+    fn emit_lazy_frame_leave_if_site_matches(
+        &self,
+        ctx: &mut Lower<OpCode>,
+        frame_size_slots: u32,
+        site: FrameSite,
+    ) {
+        if self
+            .current_lazy_frame_plan
+            .borrow()
+            .as_ref()
+            .is_some_and(|plan| plan.exit_before_site(site))
+        {
+            leave_frame(ctx, frame_size_slots);
+        }
+    }
+
+    fn emit_actions_for_site(
+        &self,
+        ctx: &mut Lower<OpCode>,
+        actions: &[Action],
+        frame_size_slots: u32,
+        site: FrameSite,
+    ) {
+        self.emit_actions_for_site_from_offset(ctx, actions, frame_size_slots, site, 0);
+    }
+
+    fn emit_actions_for_site_from_offset(
+        &self,
+        ctx: &mut Lower<OpCode>,
+        actions: &[Action],
+        frame_size_slots: u32,
+        site: FrameSite,
+        action_index_offset: usize,
+    ) {
+        self.emit_lazy_frame_enter_if_site_matches(ctx, frame_size_slots, site);
+
+        let folded = fold_stack_actions(actions);
+        for (index, action) in folded.iter().copied().enumerate() {
+            let index = action_index_offset
+                .checked_add(index)
+                .expect("lazy frame action index overflow");
+            if self
+                .current_lazy_frame_plan
+                .borrow()
+                .as_ref()
+                .is_some_and(|plan| plan.enter_before_action(site, index))
+            {
+                enter_frame(ctx, frame_size_slots, self.current_frame_entry_abs_base());
+            }
+            perform_action(ctx, action, frame_size_slots);
+            if self
+                .current_lazy_frame_plan
+                .borrow()
+                .as_ref()
+                .is_some_and(|plan| plan.exit_after_action(site, index))
+            {
+                leave_frame(ctx, frame_size_slots);
+            }
+        }
+
+        if self
+            .current_lazy_frame_plan
+            .borrow()
+            .as_ref()
+            .is_some_and(|plan| plan.exit_after_site(site))
+        {
+            leave_frame(ctx, frame_size_slots);
+        }
+    }
+
     fn section_has_dynamic_frames(&self) -> bool {
         self.section_state
             .borrow()
@@ -455,6 +561,10 @@ impl EvmBackend {
                 let _jump_targets_guard =
                     CurrentJumpTargetsGuard::new(&self.current_jump_targets, jump_targets);
                 let mut alloc = FinalAlloc::new(prepared.alloc, mem_plan);
+                let lazy_frame_plan =
+                    compute_lazy_frame_plan(function, &alloc, &alloc.mem_plan, &self.isa);
+                let _lazy_frame_plan_guard =
+                    CurrentLazyFramePlanGuard::new(&self.current_lazy_frame_plan, lazy_frame_plan);
                 let lower = Lower::new(&module.ctx, function, &block_order);
                 lower.lower(self, &mut alloc).map_err(|e| format!("{e:?}"))
             })?
@@ -915,6 +1025,23 @@ impl<'a> CurrentMemPlanGuard<'a> {
 }
 
 impl Drop for CurrentMemPlanGuard<'_> {
+    fn drop(&mut self) {
+        *self.slot.borrow_mut() = None;
+    }
+}
+
+struct CurrentLazyFramePlanGuard<'a> {
+    slot: &'a RefCell<Option<LazyFramePlan>>,
+}
+
+impl<'a> CurrentLazyFramePlanGuard<'a> {
+    fn new(slot: &'a RefCell<Option<LazyFramePlan>>, plan: Option<LazyFramePlan>) -> Self {
+        *slot.borrow_mut() = plan;
+        Self { slot }
+    }
+}
+
+impl Drop for CurrentLazyFramePlanGuard<'_> {
     fn drop(&mut self) {
         *self.slot.borrow_mut() = None;
     }
@@ -1510,25 +1637,13 @@ impl LowerBackend for EvmBackend {
         function: &Function,
     ) {
         let frame_size_slots = alloc.frame_size_slots();
-        let perform_actions = |ctx: &mut Lower<Self::MInst>, actions: &[Action]| {
-            crate::isa::evm::perform_actions(ctx, actions, frame_size_slots)
-        };
-        let entry_abs_base = self
-            .current_mem_plan
-            .borrow()
-            .as_ref()
-            .map(|plan| {
-                STATIC_BASE
-                    .checked_add(
-                        plan.entry_abs_words
-                            .checked_mul(WORD_BYTES)
-                            .expect("entry abs bytes overflow"),
-                    )
-                    .expect("entry abs base overflow")
-            })
-            .unwrap_or_else(|| self.dyn_base());
-        enter_frame(ctx, frame_size_slots, entry_abs_base);
-        perform_actions(ctx, &alloc.enter_function(function));
+        let actions = alloc.enter_function(function);
+        if self.current_lazy_frame_plan.borrow().is_some() {
+            self.emit_actions_for_site(ctx, &actions, frame_size_slots, FrameSite::EnterFunction);
+        } else {
+            enter_frame(ctx, frame_size_slots, self.current_frame_entry_abs_base());
+            crate::isa::evm::perform_actions(ctx, &actions, frame_size_slots);
+        }
     }
 
     fn enter_block(
@@ -1547,23 +1662,36 @@ impl LowerBackend for EvmBackend {
         if ctx.is_entry(block) || is_jump_target {
             ctx.push(OpCode::JUMPDEST);
         }
+        self.emit_lazy_frame_enter_if_site_matches(
+            ctx,
+            _alloc.frame_size_slots(),
+            FrameSite::BlockEntry(block),
+        );
+        self.emit_lazy_frame_leave_if_site_matches(
+            ctx,
+            _alloc.frame_size_slots(),
+            FrameSite::BlockEntry(block),
+        );
     }
 
     fn lower(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, insn: InstId) {
         let frame_size_slots = alloc.frame_size_slots();
-        let perform_actions = |ctx: &mut Lower<Self::MInst>, actions: &[Action]| {
-            crate::isa::evm::perform_actions(ctx, actions, frame_size_slots)
+        let emit_pre_actions = |ctx: &mut Lower<Self::MInst>, actions: &[Action]| {
+            self.emit_actions_for_site(ctx, actions, frame_size_slots, FrameSite::PreInst(insn))
+        };
+        let emit_post_actions = |ctx: &mut Lower<Self::MInst>, actions: &[Action]| {
+            self.emit_actions_for_site(ctx, actions, frame_size_slots, FrameSite::PostInst(insn))
         };
         let results: SmallVec<[ValueId; 4]> = ctx.insn_results(insn).iter().copied().collect();
         let args = ctx.insn_data(insn).collect_values();
         let data = self.isa.inst_set().resolve_inst(ctx.insn_data(insn));
 
         let basic_op = |ctx: &mut Lower<Self::MInst>, ops: &[OpCode]| {
-            perform_actions(ctx, &alloc.read(insn, &args));
+            emit_pre_actions(ctx, &alloc.read(insn, &args));
             for op in ops {
                 ctx.push(*op);
             }
-            perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+            emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
         };
 
         match &data {
@@ -1594,7 +1722,7 @@ impl LowerBackend for EvmBackend {
                 let src_ty = ctx.value_ty(from);
                 let src_bits = scalar_bit_width(src_ty, ctx.module).unwrap_or(256);
 
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
 
                 if src_bits == 1 {
                     // Canonicalize to low bit first in case the producer left a non-canonical
@@ -1615,38 +1743,38 @@ impl LowerBackend for EvmBackend {
                     ctx.push(OpCode::SIGNEXTEND);
                 }
 
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::Zext(_) => {
                 let from = args[0];
                 let src_ty = ctx.value_ty(from);
                 let src_bits = scalar_bit_width(src_ty, ctx.module).unwrap_or(256);
 
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
                 if let Some(mask) = low_bits_mask(src_bits) {
                     let bytes = u256_to_be(&mask);
                     push_bytes(ctx, &bytes);
                     ctx.push(OpCode::AND);
                 }
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
 
             EvmInstKind::Trunc(trunc) => {
                 let dst_ty = *trunc.ty();
                 let dst_bits = scalar_bit_width(dst_ty, ctx.module).unwrap_or(256);
 
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
                 if let Some(mask) = low_bits_mask(dst_bits) {
                     let bytes = u256_to_be(&mask);
                     push_bytes(ctx, &bytes);
                     ctx.push(OpCode::AND);
                 }
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::Bitcast(_) => {
                 // No-op.
-                perform_actions(ctx, &alloc.read(insn, &args));
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::IntToPtr(_) => {
                 // Pointers are represented as 256-bit integers on the EVM.
@@ -1654,25 +1782,25 @@ impl LowerBackend for EvmBackend {
                 let src_ty = ctx.value_ty(from);
                 let src_bits = scalar_bit_width(src_ty, ctx.module).unwrap_or(256);
 
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
                 if let Some(mask) = low_bits_mask(src_bits) {
                     let bytes = u256_to_be(&mask);
                     push_bytes(ctx, &bytes);
                     ctx.push(OpCode::AND);
                 }
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::PtrToInt(ptr_to_int) => {
                 let dst_ty = *ptr_to_int.ty();
                 let dst_bits = scalar_bit_width(dst_ty, ctx.module).unwrap_or(256);
 
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
                 if let Some(mask) = low_bits_mask(dst_bits) {
                     let bytes = u256_to_be(&mask);
                     push_bytes(ctx, &bytes);
                     ctx.push(OpCode::AND);
                 }
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::Lt(_) => basic_op(ctx, &[OpCode::LT]),
             EvmInstKind::Gt(_) => basic_op(ctx, &[OpCode::GT]),
@@ -1693,7 +1821,7 @@ impl LowerBackend for EvmBackend {
 
             EvmInstKind::Jump(jump) => {
                 let dest = *jump.dest();
-                perform_actions(ctx, &alloc.read(insn, &[]));
+                emit_pre_actions(ctx, &alloc.read(insn, &[]));
 
                 if !ctx.is_next_block(dest) {
                     let push_op = ctx.push(OpCode::PUSH1);
@@ -1706,7 +1834,7 @@ impl LowerBackend for EvmBackend {
                 let z_dest = *br.z_dest();
 
                 // JUMPI: dest is top of stack, bool val is next
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
 
                 if ctx.is_next_block(nz_dest) {
                     // Prefer fallthrough to the next block.
@@ -1725,7 +1853,7 @@ impl LowerBackend for EvmBackend {
             }
             EvmInstKind::Phi(_) => {}
             EvmInstKind::Unreachable(_) => {
-                perform_actions(ctx, &alloc.read(insn, &[]));
+                emit_pre_actions(ctx, &alloc.read(insn, &[]));
                 ctx.push(OpCode::INVALID);
             }
 
@@ -1743,7 +1871,12 @@ impl LowerBackend for EvmBackend {
                 );
 
                 for (case_val, dest) in table.iter() {
-                    perform_actions(ctx, &alloc.read(insn, &[scrutinee, *case_val]));
+                    self.emit_actions_for_site(
+                        ctx,
+                        &alloc.read(insn, &[scrutinee, *case_val]),
+                        frame_size_slots,
+                        FrameSite::PreInst(insn),
+                    );
                     ctx.push(OpCode::EQ);
 
                     ctx.push_jump_target(OpCode::PUSH1, Label::Block(*dest));
@@ -1781,13 +1914,26 @@ impl LowerBackend for EvmBackend {
                 );
 
                 // Prefix actions run before the continuation address is pushed.
-                perform_actions(ctx, &actions);
+                let prefix_folded_len = fold_stack_actions(&actions).len();
+                self.emit_actions_for_site_from_offset(
+                    ctx,
+                    &actions,
+                    frame_size_slots,
+                    FrameSite::PreInst(insn),
+                    0,
+                );
 
                 // Push the return pc / continuation address.
                 let push_callback = ctx.push(OpCode::PUSH1);
 
                 // Move fn args onto stack
-                perform_actions(ctx, &suffix);
+                self.emit_actions_for_site_from_offset(
+                    ctx,
+                    &suffix,
+                    frame_size_slots,
+                    FrameSite::PreInst(insn),
+                    prefix_folded_len,
+                );
 
                 // Push fn address onto stack and jump
                 let p = ctx.push(OpCode::PUSH1);
@@ -1799,12 +1945,14 @@ impl LowerBackend for EvmBackend {
                 ctx.add_label_reference(push_callback, Label::Insn(jumpdest_op));
 
                 // Post-call: spill the call results if needed.
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
 
             EvmInstKind::Return(_) => {
-                perform_actions(ctx, &alloc.read(insn, &args));
-                leave_frame(ctx, alloc.frame_size_slots());
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                if self.current_lazy_frame_plan.borrow().is_none() {
+                    leave_frame(ctx, alloc.frame_size_slots());
+                }
 
                 // Caller pushes return location onto stack prior to call.
                 for depth in 1..=args.len() {
@@ -1820,7 +1968,7 @@ impl LowerBackend for EvmBackend {
                     .size_of(*mstore.ty(), ctx.module)
                     .unwrap();
 
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
                 if ty_size == 0 {
                     // TODO: optimize away mstores of size 0
                     // Pop the args, and don't do an mstore.
@@ -1850,16 +1998,26 @@ impl LowerBackend for EvmBackend {
                 if let Some(addr_bytes) =
                     self.try_fold_gep_static_arena_addr(ctx, &args, &gep_plan.steps)
                 {
-                    perform_actions(ctx, &alloc.read(insn, gep_plan.runtime_args.as_slice()));
+                    self.emit_actions_for_site(
+                        ctx,
+                        &alloc.read(insn, gep_plan.runtime_args.as_slice()),
+                        frame_size_slots,
+                        FrameSite::PreInst(insn),
+                    );
                     for _ in 0..gep_plan.runtime_args.len() {
                         ctx.push(OpCode::POP);
                     }
                     push_bytes(ctx, &u32_to_be(addr_bytes));
-                    perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                    emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
                     return;
                 }
 
-                perform_actions(ctx, &alloc.read(insn, gep_plan.runtime_args.as_slice()));
+                self.emit_actions_for_site(
+                    ctx,
+                    &alloc.read(insn, gep_plan.runtime_args.as_slice()),
+                    frame_size_slots,
+                    FrameSite::PreInst(insn),
+                );
                 for step in gep_plan.steps {
                     match step {
                         GepStep::AddConst {
@@ -1884,7 +2042,7 @@ impl LowerBackend for EvmBackend {
                     }
                 }
 
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::Alloca(_) => {
                 let mem_plan = self.current_mem_plan.borrow();
@@ -1894,7 +2052,7 @@ impl LowerBackend for EvmBackend {
 
                 let loc = *mem_plan.alloca_loc.get(&insn).expect("missing alloca plan");
 
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
 
                 match loc {
                     ObjLoc::ScratchAbs(_) | ObjLoc::StableAbs(_) => {
@@ -1903,12 +2061,25 @@ impl LowerBackend for EvmBackend {
                         push_bytes(ctx, &u32_to_be(addr_bytes));
                     }
                     ObjLoc::StableFrame(offset_words) => {
+                        self.emit_lazy_frame_enter_if_site_matches(
+                            ctx,
+                            frame_size_slots,
+                            FrameSite::Inst(insn),
+                        );
                         emit_dyn_frame_addr(ctx, frame_size_slots, offset_words);
+                        if self
+                            .current_lazy_frame_plan
+                            .borrow()
+                            .as_ref()
+                            .is_some_and(|plan| plan.exit_after_site(FrameSite::Inst(insn)))
+                        {
+                            leave_frame(ctx, frame_size_slots);
+                        }
                     }
                     ObjLoc::StackPinned(_) => panic!("stack-pinned allocas are not implemented"),
                 }
 
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
 
             EvmInstKind::EvmStop(_) => basic_op(ctx, &[OpCode::STOP]),
@@ -2026,7 +2197,12 @@ impl LowerBackend for EvmBackend {
                 } else {
                     smallvec![size]
                 };
-                perform_actions(ctx, &alloc.read(insn, runtime_args.as_slice()));
+                self.emit_actions_for_site(
+                    ctx,
+                    &alloc.read(insn, runtime_args.as_slice()),
+                    frame_size_slots,
+                    FrameSite::PreInst(insn),
+                );
 
                 if is_transient {
                     // Drop the requested size if it was materialized at runtime; transient bump
@@ -2047,7 +2223,7 @@ impl LowerBackend for EvmBackend {
                         emit_malloc_base(ctx, min_base_bytes, needs_dyn_sp_clamp);
                     }
 
-                    perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                    emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
                     return;
                 }
 
@@ -2078,7 +2254,7 @@ impl LowerBackend for EvmBackend {
                 push_bytes(ctx, &[FREE_PTR_SLOT]);
                 ctx.push(OpCode::MSTORE);
 
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::InsertValue(_) => {
                 panic!(
@@ -2092,15 +2268,15 @@ impl LowerBackend for EvmBackend {
             }
             EvmInstKind::GetFunctionPtr(get_fn) => {
                 let func = *get_fn.func();
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
                 ctx.push_jump_target(OpCode::PUSH1, Label::Function(func));
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::EvmInvalid(_) => basic_op(ctx, &[OpCode::INVALID]),
 
             EvmInstKind::SymAddr(sym_addr) => {
                 let sym = sym_addr.sym().clone();
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
                 ctx.push_sym_fixup(
                     OpCode::PUSH0,
                     SymFixup {
@@ -2108,11 +2284,11 @@ impl LowerBackend for EvmBackend {
                         sym,
                     },
                 );
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::SymSize(sym_size) => {
                 let sym = sym_size.sym().clone();
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
                 ctx.push_sym_fixup(
                     OpCode::PUSH0,
                     SymFixup {
@@ -2120,7 +2296,7 @@ impl LowerBackend for EvmBackend {
                         sym,
                     },
                 );
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
         }
     }
@@ -2615,71 +2791,75 @@ fn emit_dyn_frame_addr(ctx: &mut Lower<OpCode>, frame_size_slots: u32, offset_wo
     ctx.push(OpCode::SUB);
 }
 
+fn perform_action(ctx: &mut Lower<OpCode>, action: Action, frame_size_slots: u32) {
+    match action {
+        Action::StackDup(slot) => {
+            debug_assert!(slot < 16, "DUP out of range: {slot}");
+            ctx.push(dup_op(slot));
+        }
+        Action::StackSwap(n) => {
+            debug_assert!((1..=16).contains(&n), "SWAP out of range: {n}");
+            ctx.push(swap_op(n));
+        }
+        Action::Push(imm) => {
+            if imm.is_zero() {
+                ctx.push(OpCode::PUSH0);
+            } else {
+                let bytes = match imm {
+                    Immediate::I1(v) => smallvec![v as u8],
+                    Immediate::I8(v) => SmallVec::from_slice(&v.to_be_bytes()),
+                    Immediate::I16(v) => shrink_bytes(&v.to_be_bytes()),
+                    Immediate::I32(v) => shrink_bytes(&v.to_be_bytes()),
+                    Immediate::I64(v) => shrink_bytes(&v.to_be_bytes()),
+                    Immediate::I128(v) => shrink_bytes(&v.to_be_bytes()),
+                    Immediate::I256(v) => shrink_bytes(&v.to_u256().to_big_endian()),
+                };
+                push_bytes(ctx, &bytes);
+
+                // Sign-extend negative numbers to 32 bytes
+                // TODO: signextend isn't always needed (eg push then mstore8)
+                if imm.is_negative() && bytes.len() < 32 {
+                    push_bytes(ctx, &u32_to_be((bytes.len() - 1) as u32));
+                    ctx.push(OpCode::SIGNEXTEND);
+                }
+            }
+        }
+        Action::Pop => {
+            ctx.push(OpCode::POP);
+        }
+        Action::MemLoadAbs(offset) => {
+            let bytes = u32_to_be(offset);
+            push_bytes(ctx, &bytes);
+            ctx.push(OpCode::MLOAD);
+        }
+        Action::MemLoadFrameSlot(offset) => {
+            emit_dyn_frame_addr(ctx, frame_size_slots, offset);
+            ctx.push(OpCode::MLOAD);
+        }
+        Action::MemStoreAbs(offset) => {
+            let bytes = u32_to_be(offset);
+            push_bytes(ctx, &bytes);
+            ctx.push(OpCode::MSTORE);
+        }
+        Action::MemStoreFrameSlot(offset) => {
+            emit_dyn_frame_addr(ctx, frame_size_slots, offset);
+            ctx.push(OpCode::MSTORE);
+        }
+        Action::MemLoadObj(_) | Action::MemStoreObj(_) => {
+            // Invariant: stack-object ops must be rewritten by the allocator wrapper
+            // (`FinalAlloc`) before lowering.
+            panic!("unlowered Mem*Obj action");
+        }
+        Action::PushContinuationOffset => {
+            panic!("handle PushContinuationOffset elsewhere");
+        }
+    }
+}
+
 fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action], frame_size_slots: u32) {
     let folded = fold_stack_actions(actions);
     for action in folded {
-        match action {
-            Action::StackDup(slot) => {
-                debug_assert!(slot < 16, "DUP out of range: {slot}");
-                ctx.push(dup_op(slot));
-            }
-            Action::StackSwap(n) => {
-                debug_assert!((1..=16).contains(&n), "SWAP out of range: {n}");
-                ctx.push(swap_op(n));
-            }
-            Action::Push(imm) => {
-                if imm.is_zero() {
-                    ctx.push(OpCode::PUSH0);
-                } else {
-                    let bytes = match imm {
-                        Immediate::I1(v) => smallvec![v as u8],
-                        Immediate::I8(v) => SmallVec::from_slice(&v.to_be_bytes()),
-                        Immediate::I16(v) => shrink_bytes(&v.to_be_bytes()),
-                        Immediate::I32(v) => shrink_bytes(&v.to_be_bytes()),
-                        Immediate::I64(v) => shrink_bytes(&v.to_be_bytes()),
-                        Immediate::I128(v) => shrink_bytes(&v.to_be_bytes()),
-                        Immediate::I256(v) => shrink_bytes(&v.to_u256().to_big_endian()),
-                    };
-                    push_bytes(ctx, &bytes);
-
-                    // Sign-extend negative numbers to 32 bytes
-                    // TODO: signextend isn't always needed (eg push then mstore8)
-                    if imm.is_negative() && bytes.len() < 32 {
-                        push_bytes(ctx, &u32_to_be((bytes.len() - 1) as u32));
-                        ctx.push(OpCode::SIGNEXTEND);
-                    }
-                }
-            }
-            Action::Pop => {
-                ctx.push(OpCode::POP);
-            }
-            Action::MemLoadAbs(offset) => {
-                let bytes = u32_to_be(offset);
-                push_bytes(ctx, &bytes);
-                ctx.push(OpCode::MLOAD);
-            }
-            Action::MemLoadFrameSlot(offset) => {
-                emit_dyn_frame_addr(ctx, frame_size_slots, offset);
-                ctx.push(OpCode::MLOAD);
-            }
-            Action::MemStoreAbs(offset) => {
-                let bytes = u32_to_be(offset);
-                push_bytes(ctx, &bytes);
-                ctx.push(OpCode::MSTORE);
-            }
-            Action::MemStoreFrameSlot(offset) => {
-                emit_dyn_frame_addr(ctx, frame_size_slots, offset);
-                ctx.push(OpCode::MSTORE);
-            }
-            Action::MemLoadObj(_) | Action::MemStoreObj(_) => {
-                // Invariant: stack-object ops must be rewritten by the allocator wrapper
-                // (`FinalAlloc`) before lowering.
-                panic!("unlowered Mem*Obj action");
-            }
-            Action::PushContinuationOffset => {
-                panic!("handle PushContinuationOffset elsewhere");
-            }
-        }
+        perform_action(ctx, action, frame_size_slots);
     }
 }
 
