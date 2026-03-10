@@ -11,6 +11,7 @@
 
 use cranelift_entity::{EntityRef, SecondaryMap, entity_impl};
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, Function, InstId, InstSetExt, ValueId,
     inst::evm::inst_set::EvmInstKind,
@@ -34,27 +35,28 @@ use super::{
 pub struct StackObjId(u32);
 entity_impl!(StackObjId);
 
-#[cfg(debug_assertions)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-enum StackObjKind {
+pub(crate) enum StackObjKind {
     Alloca(InstId),
     Spill(ValueId),
+    Shadow(InstId),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-struct LiveInterval {
-    start: u32,
-    end: u32,
+pub(crate) struct LiveInterval {
+    pub(crate) start: u32,
+    pub(crate) end: u32,
 }
 
 #[derive(Clone, Debug)]
-struct StackObj {
-    id: StackObjId,
-    #[cfg(debug_assertions)]
-    kind: StackObjKind,
-    size_words: u32,
-    interval: LiveInterval,
-    min_offset_words: u32,
+pub(crate) struct StackObj {
+    pub(crate) id: StackObjId,
+    pub(crate) kind: StackObjKind,
+    pub(crate) size_words: u32,
+    pub(crate) interval: LiveInterval,
+    pub(crate) access_weight: u64,
+    pub(crate) load_count: u32,
+    pub(crate) store_count: u32,
 }
 
 pub(crate) struct FuncObjectLayout {
@@ -64,22 +66,54 @@ pub(crate) struct FuncObjectLayout {
     pub(crate) locals_words: u32,
 }
 
-pub(crate) struct CallSiteLiveObjects {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StableReason {
+    None,
+    VisibleToCallee,
+    RecursiveVisibility,
+    UnknownLocalPointerClosure,
+    #[allow(dead_code)]
+    ExplicitAddressEscapeBarrier,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct ObjFacts {
+    pub(crate) id: StackObjId,
+    pub(crate) size_words: u32,
+    pub(crate) interval: LiveInterval,
+    pub(crate) is_alloca: bool,
+    pub(crate) is_spill: bool,
+    pub(crate) address_taken: bool,
+    pub(crate) access_weight: u64,
+    pub(crate) load_count: u32,
+    pub(crate) store_count: u32,
+    pub(crate) live_across_calls: SmallVec<[InstId; 4]>,
+    pub(crate) visible_to_callee_at: SmallVec<[InstId; 4]>,
+    pub(crate) live_across_recursive_call: bool,
+    pub(crate) must_stable: bool,
+    pub(crate) stable_reason: StableReason,
+}
+
+pub(crate) struct CallSiteObjects {
     pub(crate) inst: InstId,
+    pub(crate) inst_pos: u32,
     pub(crate) callee: FuncRef,
     pub(crate) result_count: u8,
+    #[allow(dead_code)]
     pub(crate) arg_count: u8,
     pub(crate) live_out_objs: Vec<StackObjId>,
-    pub(crate) must_layout_objs: Vec<StackObjId>,
+    pub(crate) callee_visible_objs: Vec<StackObjId>,
 }
 
 pub(crate) struct FuncStackObjects {
-    objects: Vec<StackObj>,
+    pub(crate) objects: Vec<StackObj>,
+    pub(crate) obj_facts: FxHashMap<StackObjId, ObjFacts>,
     pub(crate) obj_size_words: FxHashMap<StackObjId, u32>,
     pub(crate) alloca_ids: FxHashMap<InstId, StackObjId>,
     pub(crate) spill_obj: SecondaryMap<ValueId, Option<StackObjId>>,
-    pub(crate) call_sites: Vec<CallSiteLiveObjects>,
-    pub(crate) requires_dynamic_frame: bool,
+    pub(crate) call_sites: Vec<CallSiteObjects>,
+    pub(crate) next_obj_id: u32,
 }
 
 pub(crate) struct StaticArenaAllocCtx<'a> {
@@ -156,6 +190,18 @@ fn closure_allocas(
     }
 
     Ok(out)
+}
+
+fn conservative_closure_allocas(
+    roots: impl IntoIterator<Item = InstId>,
+    edges: &FxHashMap<InstId, FxHashSet<InstId>>,
+    unknown: &FxHashSet<InstId>,
+    all_allocas: &FxHashSet<InstId>,
+) -> (FxHashSet<InstId>, bool) {
+    match closure_allocas(roots, edges, unknown) {
+        Ok(allocas) => (allocas, false),
+        Err(UnknownLocalPtr) => (all_allocas.clone(), true),
+    }
 }
 
 pub(crate) fn compute_inst_order(
@@ -276,14 +322,15 @@ pub(crate) fn compute_func_stack_objects(
         let id = spill_obj[v].expect("spilled value missing stack object id");
         objects.push(StackObj {
             id,
-            #[cfg(debug_assertions)]
             kind: StackObjKind::Spill(v),
             size_words: 1,
             interval: spill_intervals
                 .get(&v)
                 .copied()
                 .unwrap_or(LiveInterval { start: 0, end: 0 }),
-            min_offset_words: 0,
+            access_weight: 0,
+            load_count: 0,
+            store_count: 0,
         });
     }
 
@@ -326,7 +373,6 @@ pub(crate) fn compute_func_stack_objects(
 
         objects.push(StackObj {
             id,
-            #[cfg(debug_assertions)]
             kind: StackObjKind::Alloca(inst),
             size_words,
             interval: alloca_intervals
@@ -336,17 +382,93 @@ pub(crate) fn compute_func_stack_objects(
                     start: inst_pos.get(&inst).copied().unwrap_or_default(),
                     end: inst_pos.get(&inst).copied().unwrap_or_default(),
                 }),
-            min_offset_words: 0,
+            access_weight: 0,
+            load_count: 0,
+            store_count: 0,
         });
     }
+    let all_allocas: FxHashSet<InstId> = alloca_ids.keys().copied().collect();
 
-    let mut requires_dynamic_frame = false;
-    let mut call_sites: Vec<CallSiteLiveObjects> = Vec::new();
+    let mut obj_index: FxHashMap<StackObjId, usize> = FxHashMap::default();
+    for (idx, obj) in objects.iter().enumerate() {
+        obj_index.insert(obj.id, idx);
+    }
+
+    for block in function.layout.iter_block() {
+        for inst in function.layout.iter_inst(block) {
+            let data = ctx.isa.inst_set().resolve_inst(function.dfg.inst(inst));
+            match data {
+                EvmInstKind::Mload(mload) => {
+                    for base in prov[*mload.addr()].alloca_insts() {
+                        if let Some(&id) = alloca_ids.get(&base)
+                            && let Some(obj) =
+                                obj_index.get(&id).and_then(|idx| objects.get_mut(*idx))
+                        {
+                            obj.load_count = obj.load_count.saturating_add(1);
+                        }
+                    }
+                }
+                EvmInstKind::Mstore(mstore) => {
+                    for base in prov[*mstore.addr()].alloca_insts() {
+                        if let Some(&id) = alloca_ids.get(&base)
+                            && let Some(obj) =
+                                obj_index.get(&id).and_then(|idx| objects.get_mut(*idx))
+                        {
+                            obj.store_count = obj.store_count.saturating_add(1);
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            function.dfg.inst(inst).for_each_value(&mut |v| {
+                if let Some(id) = spill_obj[v]
+                    && let Some(obj) = obj_index.get(&id).and_then(|idx| objects.get_mut(*idx))
+                {
+                    obj.access_weight = obj.access_weight.saturating_add(1);
+                }
+                for base in prov[v].alloca_insts() {
+                    if let Some(&id) = alloca_ids.get(&base)
+                        && let Some(obj) = obj_index.get(&id).and_then(|idx| objects.get_mut(*idx))
+                    {
+                        obj.access_weight = obj.access_weight.saturating_add(1);
+                    }
+                }
+            });
+        }
+    }
+
+    for obj in &mut objects {
+        obj.access_weight = obj
+            .access_weight
+            .saturating_add(u64::from(obj.load_count).saturating_mul(2))
+            .saturating_add(u64::from(obj.store_count).saturating_mul(2));
+    }
+
+    let mut address_taken_allocas: FxHashSet<InstId> = FxHashSet::default();
+    for (&base, stored) in &prov_info.local_mem {
+        address_taken_allocas.insert(base);
+        for child in stored.alloca_insts() {
+            address_taken_allocas.insert(child);
+        }
+    }
+    for edges in local_edges.values() {
+        for &child in edges {
+            address_taken_allocas.insert(child);
+        }
+    }
+    for &base in &local_unknown {
+        address_taken_allocas.insert(base);
+    }
+
+    let mut unknown_barrier_objs: FxHashSet<StackObjId> = FxHashSet::default();
+    let mut call_sites: Vec<CallSiteObjects> = Vec::new();
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             let Some(call) = function.dfg.cast_call(inst) else {
                 continue;
             };
+            let pos = inst_pos.get(&inst).copied().unwrap_or_default();
             let arg_count = u8::try_from(call.args().len()).expect("call arg count too large");
             let call_results = function.dfg.inst_results(inst);
             let result_count =
@@ -368,58 +490,55 @@ pub(crate) fn compute_func_stack_objects(
                 }
             }
 
-            let allocas = if requires_dynamic_frame {
-                roots
-            } else {
-                match closure_allocas(roots.iter().copied(), &local_edges, &local_unknown) {
-                    Ok(s) => s,
-                    Err(UnknownLocalPtr) => {
-                        requires_dynamic_frame = true;
-                        roots
-                    }
-                }
-            };
+            let (allocas, unknown_live) = conservative_closure_allocas(
+                roots.iter().copied(),
+                &local_edges,
+                &local_unknown,
+                &all_allocas,
+            );
             for base in allocas {
                 if let Some(&id) = alloca_ids.get(&base) {
                     set.insert(id);
+                    if unknown_live {
+                        unknown_barrier_objs.insert(id);
+                    }
                 }
             }
 
             let mut live_objs: Vec<StackObjId> = set.into_iter().collect();
             live_objs.sort_unstable_by_key(|id| id.as_u32());
 
-            let mut must_layout: FxHashSet<StackObjId> = FxHashSet::default();
+            let mut visible_objs: FxHashSet<StackObjId> = FxHashSet::default();
             let mut roots: FxHashSet<InstId> = FxHashSet::default();
             for &arg in call.args() {
                 for base in prov[arg].alloca_insts() {
                     roots.insert(base);
                 }
             }
-            let allocas = if requires_dynamic_frame {
-                roots
-            } else {
-                match closure_allocas(roots.iter().copied(), &local_edges, &local_unknown) {
-                    Ok(s) => s,
-                    Err(UnknownLocalPtr) => {
-                        requires_dynamic_frame = true;
-                        roots
-                    }
-                }
-            };
+            let (allocas, unknown_visible) = conservative_closure_allocas(
+                roots.iter().copied(),
+                &local_edges,
+                &local_unknown,
+                &all_allocas,
+            );
             for base in allocas {
                 if let Some(&id) = alloca_ids.get(&base) {
-                    must_layout.insert(id);
+                    visible_objs.insert(id);
+                    if unknown_visible {
+                        unknown_barrier_objs.insert(id);
+                    }
                 }
             }
-            let mut must_layout_objs: Vec<StackObjId> = must_layout.into_iter().collect();
-            must_layout_objs.sort_unstable_by_key(|id| id.as_u32());
-            call_sites.push(CallSiteLiveObjects {
+            let mut callee_visible_objs: Vec<StackObjId> = visible_objs.into_iter().collect();
+            callee_visible_objs.sort_unstable_by_key(|id| id.as_u32());
+            call_sites.push(CallSiteObjects {
                 inst,
+                inst_pos: pos,
                 callee: *call.callee(),
                 result_count,
                 arg_count,
                 live_out_objs: live_objs,
-                must_layout_objs,
+                callee_visible_objs,
             });
         }
     }
@@ -429,13 +548,68 @@ pub(crate) fn compute_func_stack_objects(
         obj_size_words.insert(obj.id, obj.size_words);
     }
 
+    let mut obj_facts: FxHashMap<StackObjId, ObjFacts> = FxHashMap::default();
+    for obj in &objects {
+        let address_taken =
+            matches!(obj.kind, StackObjKind::Alloca(inst) if address_taken_allocas.contains(&inst));
+        obj_facts.insert(
+            obj.id,
+            ObjFacts {
+                id: obj.id,
+                size_words: obj.size_words,
+                interval: obj.interval,
+                is_alloca: matches!(obj.kind, StackObjKind::Alloca(_)),
+                is_spill: matches!(obj.kind, StackObjKind::Spill(_)),
+                address_taken,
+                access_weight: obj.access_weight,
+                load_count: obj.load_count,
+                store_count: obj.store_count,
+                live_across_calls: SmallVec::new(),
+                visible_to_callee_at: SmallVec::new(),
+                live_across_recursive_call: false,
+                must_stable: false,
+                stable_reason: StableReason::None,
+            },
+        );
+    }
+    for call in &call_sites {
+        for &obj in &call.live_out_objs {
+            let facts = obj_facts
+                .get_mut(&obj)
+                .unwrap_or_else(|| panic!("missing object facts for obj {}", obj.as_u32()));
+            if !facts.live_across_calls.contains(&call.inst) {
+                facts.live_across_calls.push(call.inst);
+            }
+        }
+        for &obj in &call.callee_visible_objs {
+            let facts = obj_facts
+                .get_mut(&obj)
+                .unwrap_or_else(|| panic!("missing object facts for obj {}", obj.as_u32()));
+            if !facts.visible_to_callee_at.contains(&call.inst) {
+                facts.visible_to_callee_at.push(call.inst);
+            }
+            facts.must_stable = true;
+            facts.stable_reason = StableReason::VisibleToCallee;
+        }
+    }
+    for obj in unknown_barrier_objs {
+        let facts = obj_facts
+            .get_mut(&obj)
+            .unwrap_or_else(|| panic!("missing object facts for obj {}", obj.as_u32()));
+        facts.must_stable = true;
+        if matches!(facts.stable_reason, StableReason::None) {
+            facts.stable_reason = StableReason::UnknownLocalPointerClosure;
+        }
+    }
+
     FuncStackObjects {
         objects,
+        obj_facts,
         obj_size_words,
         alloca_ids,
         spill_obj,
         call_sites,
-        requires_dynamic_frame,
+        next_obj_id: next_id,
     }
 }
 
@@ -443,12 +617,16 @@ pub(crate) fn pack_objects_with_min_offsets(
     stack: &FuncStackObjects,
     min_offset_words: &FxHashMap<StackObjId, u32>,
 ) -> (FxHashMap<StackObjId, u32>, u32) {
-    let mut objs: Vec<StackObj> = stack.objects.clone();
-    for obj in &mut objs {
-        if let Some(k) = min_offset_words.get(&obj.id) {
-            obj.min_offset_words = (*k).max(obj.min_offset_words);
-        }
-    }
+    let mut objs: Vec<PackedObject> = stack
+        .objects
+        .iter()
+        .map(|obj| PackedObject {
+            id: obj.id,
+            size_words: obj.size_words,
+            interval: obj.interval,
+            min_offset_words: min_offset_words.get(&obj.id).copied().unwrap_or_default(),
+        })
+        .collect();
     pack_objects(&mut objs)
 }
 
@@ -661,7 +839,15 @@ fn compute_alloca_intervals(
     out
 }
 
-fn pack_objects(objects: &mut [StackObj]) -> (FxHashMap<StackObjId, u32>, u32) {
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PackedObject {
+    pub(crate) id: StackObjId,
+    pub(crate) size_words: u32,
+    pub(crate) interval: LiveInterval,
+    pub(crate) min_offset_words: u32,
+}
+
+pub(crate) fn pack_objects(objects: &mut [PackedObject]) -> (FxHashMap<StackObjId, u32>, u32) {
     objects.sort_unstable_by_key(|o| (o.interval.start, o.interval.end, o.id.as_u32()));
 
     let mut out: FxHashMap<StackObjId, u32> = FxHashMap::default();

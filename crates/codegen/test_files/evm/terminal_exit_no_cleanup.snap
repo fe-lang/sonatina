@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/terminal_exit_no_cleanup.sntn
 ---
@@ -11,17 +10,16 @@ object: Contract
   total: 4 bytes
 
 functions:
-  mem: dyn_base=0xc0 static_base=0xc0
   entry: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=0
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   exit_return: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=0
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   exit_revert: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=0
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   exit_stop: ir_blocks=1 ir_insts=1 vcode_ops=2 fixups=0 imm_bytes=0
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   exit_invalid: ir_blocks=1 ir_insts=1 vcode_ops=2 fixups=0 imm_bytes=0
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
   case empty: calldata_len=0 success reason=Return gas_used=21005 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=5

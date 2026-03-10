@@ -1,25 +1,23 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/arena_alloc_recursion_spills.sntn
 ---
 evm.config: stack_reach=4 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 208 bytes
-  total: 208 bytes
+  section runtime: 268 bytes
+  total: 268 bytes
 
 functions:
-  mem: dyn_base=0x140 static_base=0xc0
-  f: ir_blocks=3 ir_insts=28 vcode_ops=129 fixups=5 imm_bytes=26
-    mem: scheme=StaticArena need_words=4 locals_words=4
+  f: ir_blocks=3 ir_insts=28 vcode_ops=176 fixups=7 imm_bytes=40
+    mem: scratch_words=2 stable_words=2 stable_mode=DynamicFrame entry_abs_words=2 abs_words_end=2
   sink8: ir_blocks=1 ir_insts=8 vcode_ops=19 fixups=0 imm_bytes=0
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   a: ir_blocks=1 ir_insts=2 vcode_ops=9 fixups=2 imm_bytes=1
-    mem: scheme=StaticArena need_words=4 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
-    mem: scheme=StaticArena need_words=4 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
 
 evm:
   <no evm.case directives>

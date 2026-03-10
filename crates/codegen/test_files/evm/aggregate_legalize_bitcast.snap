@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/aggregate_legalize_bitcast.sntn
 ---
@@ -11,9 +10,8 @@ object: Contract
   total: 108 bytes
 
 functions:
-  mem: dyn_base=0x1c0 static_base=0xc0
   entry: ir_blocks=1 ir_insts=33 vcode_ops=72 fixups=0 imm_bytes=20
-    mem: scheme=StaticArena need_words=8 locals_words=8
+    mem: scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=8
 
 evm:
   case ok: calldata_len=64 success reason=Return gas_used=21517 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=237

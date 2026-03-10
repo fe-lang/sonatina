@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/casts.sntn
 ---
@@ -11,11 +10,10 @@ object: Contract
   total: 66 bytes
 
 functions:
-  mem: dyn_base=0xc0 static_base=0xc0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   main: ir_blocks=1 ir_insts=13 vcode_ops=24 fixups=0 imm_bytes=7
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
   case ok: calldata_len=8 success reason=Return gas_used=21158 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=102

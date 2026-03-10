@@ -49,7 +49,12 @@ use memory_plan::{
     ArenaCostModel, CallPreserveChoice, DYN_FP_SLOT, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan,
     MemScheme, ProgramMemoryPlan, WORD_BYTES, compute_program_memory_plan,
 };
+use memory_plan::{
+    ArenaCostModel, DYN_FP_SLOT, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan, ObjLoc, PreserveMode,
+    ProgramMemoryPlan, STATIC_BASE, StableMode, WORD_BYTES, compute_program_memory_plan,
+};
 use ptr_escape::{PtrEscapeSummary, compute_ptr_escape_summaries};
+use static_arena_alloc::StackObjId;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum PushWidthPolicy {
@@ -152,8 +157,11 @@ impl EvmBackend {
         let mut out = String::new();
         writeln!(
             &mut out,
-            "evm mem plan: dyn_base=0x{:x} static_base=0x{:x}",
-            section.plan.dyn_base, STATIC_BASE
+            "evm mem plan: global_dyn_base=0x{:x} static_base=0x{:x} scratch_peak_words={} static_chain_peak_words={}",
+            section.plan.global_dyn_base,
+            STATIC_BASE,
+            section.plan.scratch_peak_words,
+            section.plan.static_chain_peak_words
         )
         .expect("mem plan write failed");
 
@@ -164,134 +172,108 @@ impl EvmBackend {
 
             let name = module.ctx.func_sig(func, |sig| sig.name().to_string());
 
-            match &func_plan.scheme {
-                MemScheme::StaticArena(st) => {
-                    writeln!(
-                        &mut out,
-                        "evm mem plan: {name} scheme=StaticArena need_words={} locals_words={}",
-                        st.need_words, func_plan.locals_words
+            let stable = match func_plan.stable_mode {
+                StableMode::None => "None".to_string(),
+                StableMode::DynamicFrame => "DynamicFrame".to_string(),
+                StableMode::StaticAbs { base_word } => {
+                    format!(
+                        "StaticAbs(base=0x{:x})",
+                        STATIC_BASE + (base_word * WORD_BYTES)
                     )
-                    .expect("mem plan write failed");
                 }
-                MemScheme::DynamicFrame => {
-                    writeln!(
-                        &mut out,
-                        "evm mem plan: {name} scheme=DynamicFrame locals_words={}",
-                        func_plan.locals_words
-                    )
-                    .expect("mem plan write failed");
-                }
-            }
+            };
+            writeln!(
+                &mut out,
+                "evm mem plan: {name} scratch_words={} stable_words={} stable_mode={} entry_abs_words={} abs_words_end={}",
+                func_plan.scratch_words,
+                func_plan.stable_words,
+                stable,
+                func_plan.entry_abs_words,
+                func_plan.abs_words_end(),
+            )
+            .expect("mem plan write failed");
 
-            let addr_of = |offset_words: u32| match &func_plan.scheme {
-                MemScheme::StaticArena(_) => {
+            let addr_of = |loc: ObjLoc| match loc {
+                ObjLoc::ScratchAbs(off) => {
+                    let addr_bytes = STATIC_BASE
+                        .checked_add(off.checked_mul(WORD_BYTES).expect("address bytes overflow"))
+                        .expect("address bytes overflow");
+                    format!("0x{addr_bytes:x}")
+                }
+                ObjLoc::StableAbs(off) => {
+                    let base_word = func_plan
+                        .stable_base_word()
+                        .expect("stable abs object missing stable base");
                     let addr_bytes = STATIC_BASE
                         .checked_add(
-                            offset_words
+                            base_word
+                                .checked_add(off)
+                                .expect("address words overflow")
                                 .checked_mul(WORD_BYTES)
                                 .expect("address bytes overflow"),
                         )
                         .expect("address bytes overflow");
                     format!("0x{addr_bytes:x}")
                 }
-                MemScheme::DynamicFrame => {
-                    let addr_bytes = offset_words
-                        .checked_mul(WORD_BYTES)
-                        .expect("address bytes overflow");
+                ObjLoc::StableFrame(off) => {
+                    let addr_bytes = off.checked_mul(WORD_BYTES).expect("address bytes overflow");
                     if addr_bytes == 0 {
                         "fp".to_string()
                     } else {
                         format!("fp+0x{addr_bytes:x}")
                     }
                 }
+                ObjLoc::StackPinned(depth) => format!("stack[{depth}]"),
             };
 
             if detail {
-                let mut direct_callee_need_max: u32 = 0;
+                let mut call_info: FxHashMap<InstId, FuncRef> = FxHashMap::default();
                 module.func_store.view(func, |function| {
                     for block in function.layout.iter_block() {
-                        for insn in function.layout.iter_inst(block) {
-                            let Some(call) = function.dfg.call_info(insn) else {
+                        for inst in function.layout.iter_inst(block) {
+                            let Some(call) = function.dfg.call_info(inst) else {
                                 continue;
                             };
-                            let callee = call.callee();
-                            let callee_plan =
-                                section.plan.funcs.get(&callee).unwrap_or_else(|| {
-                                    panic!(
-                                        "missing memory plan for callee {} (called from {})",
-                                        callee.as_u32(),
-                                        func.as_u32()
-                                    )
-                                });
-                            let MemScheme::StaticArena(st) = &callee_plan.scheme else {
-                                continue;
-                            };
-                            direct_callee_need_max = direct_callee_need_max.max(st.need_words);
+                            call_info.insert(inst, call.callee());
                         }
                     }
                 });
 
-                if let MemScheme::StaticArena(st) = &func_plan.scheme {
-                    writeln!(
-                        &mut out,
-                        "  detail locals_words={} direct_callee_need_max_words={direct_callee_need_max} need_words={}",
-                        func_plan.locals_words, st.need_words
-                    )
-                    .expect("mem plan write failed");
-
-                    let mut call_info: FxHashMap<InstId, (FuncRef, usize)> = FxHashMap::default();
-                    module.func_store.view(func, |function| {
-                        for block in function.layout.iter_block() {
-                            for inst in function.layout.iter_inst(block) {
-                                let Some(call) = function.dfg.call_info(inst) else {
-                                    continue;
-                                };
-                                call_info.insert(
-                                    inst,
-                                    (call.callee(), function.dfg.inst_results(inst).len()),
-                                );
-                            }
-                        }
+                let mut call_preserve: Vec<(InstId, &memory_plan::CallPreservePlan)> = func_plan
+                    .call_preserve
+                    .iter()
+                    .map(|(inst, plan)| (*inst, plan))
+                    .collect();
+                call_preserve.sort_unstable_by_key(|(inst, _)| inst.as_u32());
+                for (inst, plan) in call_preserve {
+                    let callee = call_info.get(&inst).copied().unwrap_or_else(|| {
+                        panic!(
+                            "missing call info for preserve plan at inst {}",
+                            inst.as_u32()
+                        )
                     });
-
-                    let mut call_choices: Vec<(InstId, CallPreserveChoice)> =
-                        st.call_choice.iter().map(|(i, c)| (*i, *c)).collect();
-                    call_choices.sort_unstable_by_key(|(i, _)| i.as_u32());
-
-                    for (inst, choice) in call_choices {
-                        let (callee, result_count) =
-                            call_info.get(&inst).copied().unwrap_or_else(|| {
-                                panic!("missing call info for inst {}", inst.as_u32())
-                            });
-                        let callee_name = module.ctx.func_sig(callee, |sig| sig.name().to_string());
-                        let callee_need_words = section
-                            .plan
-                            .funcs
-                            .get(&callee)
-                            .unwrap_or_else(|| {
-                                panic!("missing memory plan for callee {}", callee.as_u32())
-                            })
-                            .static_clobber_words;
-
-                        let save_offsets = st
-                            .call_saves
-                            .get(&inst)
-                            .map(|p| p.save_word_offsets.as_slice())
-                            .unwrap_or(&[]);
-
-                        if save_offsets.is_empty() {
+                    let callee_name = module.ctx.func_sig(callee, |sig| sig.name().to_string());
+                    match &plan.mode {
+                        PreserveMode::None => {}
+                        PreserveMode::ShadowRuns { shadow_obj, runs } => {
+                            let save_words: u32 = runs.iter().map(|run| run.len_words).sum();
                             writeln!(
                                 &mut out,
-                                "  call inst{} callee=%{callee_name} callee_need_words={callee_need_words} choice={choice:?} result_count={result_count} save_words=0",
-                                inst.as_u32()
+                                "  call inst{} callee=%{callee_name} preserve=ShadowRuns shadow_obj={} result_count={} save_words={} runs={runs:?}",
+                                inst.as_u32(),
+                                shadow_obj.as_u32(),
+                                plan.result_count,
+                                save_words,
                             )
                             .expect("mem plan write failed");
-                        } else {
+                        }
+                        PreserveMode::TinyStackLift { word_offsets } => {
                             writeln!(
                                 &mut out,
-                                "  call inst{} callee=%{callee_name} callee_need_words={callee_need_words} choice={choice:?} result_count={result_count} save_words={} save_offsets={save_offsets:?}",
+                                "  call inst{} callee=%{callee_name} preserve=TinyStackLift result_count={} save_words={} save_offsets={word_offsets:?}",
                                 inst.as_u32(),
-                                save_offsets.len(),
+                                plan.result_count,
+                                word_offsets.len(),
                             )
                             .expect("mem plan write failed");
                         }
@@ -329,11 +311,15 @@ impl EvmBackend {
                         let Some(obj) = func_plan.spill_obj[v] else {
                             continue;
                         };
-                        let offset_words = *func_plan
-                            .obj_offset_words
+                        let loc = func_plan
+                            .obj_loc
                             .get(&obj)
+                            .copied()
+                            .expect("missing stack object location");
+                        let offset_words = func_plan
+                            .obj_word_offset(obj)
                             .expect("missing stack object offset");
-                        spills.push((v, offset_words, addr_of(offset_words)));
+                        spills.push((v, offset_words, addr_of(loc)));
                     }
                 });
 
@@ -359,10 +345,17 @@ impl EvmBackend {
                         let Some(value) = function.dfg.inst_result(insn) else {
                             continue;
                         };
-                        let offset_words = *func_plan
-                            .alloca_offset_words
+                        let loc = func_plan
+                            .alloca_loc
                             .get(&insn)
+                            .copied()
                             .expect("missing alloca plan");
+                        let offset_words = match loc {
+                            ObjLoc::ScratchAbs(off)
+                            | ObjLoc::StableAbs(off)
+                            | ObjLoc::StableFrame(off) => off,
+                            ObjLoc::StackPinned(depth) => u32::from(depth),
+                        };
 
                         let size_bytes = self
                             .isa
@@ -372,7 +365,7 @@ impl EvmBackend {
                             as u32;
                         let size_words = size_bytes.div_ceil(WORD_BYTES);
 
-                        allocas.push((value, offset_words, size_words, addr_of(offset_words)));
+                        allocas.push((value, offset_words, size_words, addr_of(loc)));
                     }
                 }
             });
@@ -414,7 +407,7 @@ impl EvmBackend {
         self.section_state
             .borrow()
             .as_ref()
-            .map(|s| s.plan.dyn_base)
+            .map(|s| s.plan.global_dyn_base)
             .unwrap_or(STATIC_BASE)
     }
 
@@ -487,10 +480,6 @@ impl EvmBackend {
     ) -> Option<u32> {
         let mem_plan = self.current_mem_plan.borrow();
         let mem_plan = mem_plan.as_ref()?;
-        if !matches!(mem_plan.scheme, MemScheme::StaticArena(_)) {
-            return None;
-        }
-
         let &base = args.first()?;
         let base_addr = self.try_fold_static_arena_addr_value(ctx, mem_plan, base)?;
         let offset = gep_const_offset_bytes(steps)?;
@@ -507,8 +496,8 @@ impl EvmBackend {
         let data = self.isa.inst_set().resolve_inst(ctx.insn_data(inst));
         match data {
             EvmInstKind::Alloca(_) => {
-                let &offset_words = mem_plan.alloca_offset_words.get(&inst)?;
-                Some(static_arena_addr_bytes(offset_words))
+                let loc = mem_plan.alloca_loc.get(&inst).copied()?;
+                obj_loc_abs_addr_bytes(mem_plan, loc)
             }
             EvmInstKind::Bitcast(bitcast) => {
                 self.try_fold_static_arena_addr_value(ctx, mem_plan, *bitcast.from())
@@ -623,13 +612,13 @@ fn compute_return_escape_caller_clamp_words(
 
             let mut next = clamp_words.get(&func).copied().unwrap_or(0);
             for caller in func_callers.iter() {
-                let caller_clobber_words = plan
+                let caller_active_words = plan
                     .funcs
                     .get(caller)
-                    .map(|func_plan| func_plan.static_clobber_words)
+                    .map(FuncMemPlan::active_abs_words)
                     .unwrap_or(0);
                 let caller_transitive_words = clamp_words.get(caller).copied().unwrap_or(0);
-                next = next.max(caller_clobber_words.max(caller_transitive_words));
+                next = next.max(caller_active_words.max(caller_transitive_words));
             }
 
             let cur = clamp_words.get(&func).copied().unwrap_or(0);
@@ -1258,7 +1247,7 @@ impl LowerBackend for EvmBackend {
             let _span = trace_span!("sonatina.codegen.evm.compute_func_mem_effects").entered();
             compute_func_mem_effects(module, funcs, &plan, &scratch_effects, &self.isa)
         };
-        let return_escape_caller_clamp_words = {
+        let return_escape_caller_abs_words = {
             let _span = trace_span!("sonatina.codegen.evm.compute_return_escape_clamps").entered();
             compute_return_escape_caller_clamp_words(module, funcs, &plan)
         };
@@ -1290,7 +1279,7 @@ impl LowerBackend for EvmBackend {
                 });
             if let Some(mem_plan) = plan.funcs.get_mut(&func) {
                 mem_plan.malloc_escape_kinds = malloc_escape_kinds;
-                mem_plan.return_escape_caller_clamp_words = return_escape_caller_clamp_words
+                mem_plan.return_escape_caller_abs_words = return_escape_caller_abs_words
                     .get(&func)
                     .copied()
                     .unwrap_or(0);
@@ -1300,14 +1289,12 @@ impl LowerBackend for EvmBackend {
 
         let malloc_bounds = {
             let _span =
-                debug_span!("sonatina.codegen.evm.compute_malloc_future_static_words").entered();
-            heap_plan::compute_malloc_future_static_words(
-                module, funcs, &plan, &analyses, &self.isa,
-            )
+                debug_span!("sonatina.codegen.evm.compute_malloc_future_abs_words").entered();
+            heap_plan::compute_malloc_future_abs_words(module, funcs, &plan, &analyses, &self.isa)
         };
         for (func, bounds) in malloc_bounds {
             if let Some(mem_plan) = plan.funcs.get_mut(&func) {
-                mem_plan.malloc_future_static_words = bounds;
+                mem_plan.malloc_future_abs_words = bounds;
             }
         }
 
@@ -1358,10 +1345,7 @@ impl LowerBackend for EvmBackend {
             })
         };
 
-        let has_dynamic_frames = plan
-            .funcs
-            .values()
-            .any(|func_plan| matches!(&func_plan.scheme, MemScheme::DynamicFrame));
+        let has_dynamic_frames = plan.funcs.values().any(FuncMemPlan::uses_dynamic_frame);
 
         let (allocs, block_orders) = {
             let _span = trace_span!("sonatina.codegen.evm.extract_lowering_state").entered();
@@ -1464,16 +1448,26 @@ impl LowerBackend for EvmBackend {
             alloc: analysis.alloc,
             block_order: analysis.block_order,
             mem_plan: FuncMemPlan {
-                scheme: MemScheme::DynamicFrame,
-                static_clobber_words: 0,
-                obj_offset_words: layout.obj_offset_words,
-                alloca_offset_words: layout.alloca_offset_words,
+                scratch_words: 0,
+                stable_words: layout.locals_words,
+                stable_mode: StableMode::DynamicFrame,
+                entry_abs_words: 0,
+                obj_loc: layout
+                    .obj_offset_words
+                    .into_iter()
+                    .map(|(id, off)| (id, ObjLoc::StableFrame(off)))
+                    .collect(),
+                alloca_loc: layout
+                    .alloca_offset_words
+                    .into_iter()
+                    .map(|(inst, off)| (inst, ObjLoc::StableFrame(off)))
+                    .collect(),
                 spill_obj: layout.spill_obj,
-                locals_words: layout.locals_words,
-                malloc_future_static_words: FxHashMap::default(),
+                call_preserve: FxHashMap::default(),
+                malloc_future_abs_words: FxHashMap::default(),
                 transient_mallocs: FxHashSet::default(),
                 malloc_escape_kinds: FxHashMap::default(),
-                return_escape_caller_clamp_words: 0,
+                return_escape_caller_abs_words: 0,
             },
         };
         self.lower_prepared_function(module, func, lowering)
@@ -1518,7 +1512,21 @@ impl LowerBackend for EvmBackend {
         alloc: &mut dyn Allocator,
         function: &Function,
     ) {
-        enter_frame(ctx, alloc.frame_size_slots(), self.dyn_base());
+        let entry_abs_base = self
+            .current_mem_plan
+            .borrow()
+            .as_ref()
+            .map(|plan| {
+                STATIC_BASE
+                    .checked_add(
+                        plan.entry_abs_words
+                            .checked_mul(WORD_BYTES)
+                            .expect("entry abs bytes overflow"),
+                    )
+                    .expect("entry abs base overflow")
+            })
+            .unwrap_or_else(|| self.dyn_base());
+        enter_frame(ctx, alloc.frame_size_slots(), entry_abs_base);
         perform_actions(ctx, &alloc.enter_function(function));
     }
 
@@ -1881,19 +1889,17 @@ impl LowerBackend for EvmBackend {
                     .as_ref()
                     .expect("missing memory plan during lowering");
 
-                let offset_words = *mem_plan
-                    .alloca_offset_words
-                    .get(&insn)
-                    .expect("missing alloca plan");
+                let loc = *mem_plan.alloca_loc.get(&insn).expect("missing alloca plan");
 
                 perform_actions(ctx, &alloc.read(insn, &args));
 
-                match &mem_plan.scheme {
-                    MemScheme::StaticArena(_) => {
-                        let addr_bytes = static_arena_addr_bytes(offset_words);
+                match loc {
+                    ObjLoc::ScratchAbs(_) | ObjLoc::StableAbs(_) => {
+                        let addr_bytes =
+                            obj_loc_abs_addr_bytes(mem_plan, loc).expect("alloca abs addr missing");
                         push_bytes(ctx, &u32_to_be(addr_bytes));
                     }
-                    MemScheme::DynamicFrame => {
+                    ObjLoc::StableFrame(offset_words) => {
                         let addr_bytes = offset_words
                             .checked_mul(WORD_BYTES)
                             .expect("alloca address bytes overflow");
@@ -1904,6 +1910,7 @@ impl LowerBackend for EvmBackend {
                             ctx.push(OpCode::ADD);
                         }
                     }
+                    ObjLoc::StackPinned(_) => panic!("stack-pinned allocas are not implemented"),
                 }
 
                 perform_actions(ctx, &alloc.write(insn, results.as_slice()));
@@ -1990,7 +1997,7 @@ impl LowerBackend for EvmBackend {
                     .expect("dyn base below static base")
                     / WORD_BYTES;
                 let mut future_words = mem_plan
-                    .malloc_future_static_words
+                    .malloc_future_abs_words
                     .get(&insn)
                     .copied()
                     .unwrap_or(dyn_base_words);
@@ -2006,7 +2013,7 @@ impl LowerBackend for EvmBackend {
                 } else if escape_kinds.is_return_only() {
                     // Return-only escapes only need to survive the transitive caller set of this
                     // function, not unrelated functions in the section.
-                    future_words = future_words.max(mem_plan.return_escape_caller_clamp_words);
+                    future_words = future_words.max(mem_plan.return_escape_caller_abs_words);
                 }
 
                 let min_base_bytes = STATIC_BASE
@@ -2183,44 +2190,121 @@ impl FinalAlloc {
             .expect("stack object addr bytes overflow")
     }
 
+    fn obj_loc_for_id(&self, id: StackObjId) -> ObjLoc {
+        self.mem_plan
+            .obj_loc
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| panic!("missing stack object location for obj {}", id.as_u32()))
+    }
+
+    fn action_load_for_loc(&self, loc: ObjLoc, extra_words: u32) -> Action {
+        match loc {
+            ObjLoc::ScratchAbs(off) => Action::MemLoadAbs(
+                self.abs_addr_for_word(
+                    off.checked_add(extra_words)
+                        .expect("scratch load offset overflow"),
+                ),
+            ),
+            ObjLoc::StableAbs(off) => {
+                let base_word = self
+                    .mem_plan
+                    .stable_base_word()
+                    .expect("stable abs object missing stable base");
+                Action::MemLoadAbs(
+                    self.abs_addr_for_word(
+                        base_word
+                            .checked_add(off)
+                            .and_then(|w| w.checked_add(extra_words))
+                            .expect("stable load offset overflow"),
+                    ),
+                )
+            }
+            ObjLoc::StableFrame(off) => Action::MemLoadFrameSlot(
+                off.checked_add(extra_words)
+                    .expect("frame load offset overflow"),
+            ),
+            ObjLoc::StackPinned(depth) => {
+                panic!("stack-pinned objects are not supported in EVM lowering (depth={depth})")
+            }
+        }
+    }
+
+    fn action_store_for_loc(&self, loc: ObjLoc, extra_words: u32) -> Action {
+        match loc {
+            ObjLoc::ScratchAbs(off) => Action::MemStoreAbs(
+                self.abs_addr_for_word(
+                    off.checked_add(extra_words)
+                        .expect("scratch store offset overflow"),
+                ),
+            ),
+            ObjLoc::StableAbs(off) => {
+                let base_word = self
+                    .mem_plan
+                    .stable_base_word()
+                    .expect("stable abs object missing stable base");
+                Action::MemStoreAbs(
+                    self.abs_addr_for_word(
+                        base_word
+                            .checked_add(off)
+                            .and_then(|w| w.checked_add(extra_words))
+                            .expect("stable store offset overflow"),
+                    ),
+                )
+            }
+            ObjLoc::StableFrame(off) => Action::MemStoreFrameSlot(
+                off.checked_add(extra_words)
+                    .expect("frame store offset overflow"),
+            ),
+            ObjLoc::StackPinned(depth) => {
+                panic!("stack-pinned objects are not supported in EVM lowering (depth={depth})")
+            }
+        }
+    }
+
     fn inject_call_save_pre(
         &self,
         inst: InstId,
-        operand_count: usize,
+        _operand_count: usize,
         actions: Actions,
     ) -> Actions {
-        let MemScheme::StaticArena(st) = &self.mem_plan.scheme else {
+        let Some(plan) = self.mem_plan.call_preserve.get(&inst) else {
             return actions;
         };
-        let Some(plan) = st.call_saves.get(&inst) else {
+        let PreserveMode::ShadowRuns { shadow_obj, runs } = &plan.mode else {
             return actions;
         };
-        if plan.save_word_offsets.is_empty() {
+        if runs.is_empty() {
             return actions;
         }
 
-        assert!(
-            operand_count <= 16,
-            "call operand count exceeds SWAP16: {operand_count}"
-        );
         let Some(cont_pos) = actions
             .iter()
             .position(|a| matches!(a, Action::PushContinuationOffset))
         else {
             panic!("call save expected Action::PushContinuationOffset");
         };
+        let shadow_loc = self.obj_loc_for_id(*shadow_obj);
 
         let mut out = Actions::new();
         for (idx, act) in actions.into_iter().enumerate() {
             if idx == cont_pos {
-                for &w in &plan.save_word_offsets {
-                    out.push(Action::MemLoadAbs(self.abs_addr_for_word(w)));
-                    if operand_count != 0 {
-                        for depth in (1..=operand_count).rev() {
-                            out.push(Action::StackSwap(
-                                u8::try_from(depth).expect("swap depth too large"),
-                            ));
-                        }
+                for run in runs {
+                    for word in 0..run.len_words {
+                        out.push(
+                            self.action_load_for_loc(
+                                ObjLoc::ScratchAbs(run.scratch_src_word),
+                                word,
+                            ),
+                        );
+                        out.push(
+                            self.action_store_for_loc(
+                                shadow_loc,
+                                run.shadow_dst_word
+                                    .checked_add(word)
+                                    .expect("shadow save offset overflow"),
+                            ),
+                        );
                     }
                 }
             }
@@ -2230,35 +2314,37 @@ impl FinalAlloc {
     }
 
     fn inject_call_save_post(&self, inst: InstId, actions: Actions) -> Actions {
-        let MemScheme::StaticArena(st) = &self.mem_plan.scheme else {
+        let Some(plan) = self.mem_plan.call_preserve.get(&inst) else {
             return actions;
         };
-        let Some(plan) = st.call_saves.get(&inst) else {
+        let PreserveMode::ShadowRuns { shadow_obj, runs } = &plan.mode else {
             return actions;
         };
-        if plan.save_word_offsets.is_empty() {
+        if runs.is_empty() {
             return actions;
         }
 
         let mut restore: Actions = Actions::new();
-        let result_count = usize::from(plan.result_count);
-        assert!(
-            result_count <= 16,
-            "call result count exceeds SWAP16: {result_count}"
-        );
-
-        for &w in plan.save_word_offsets.iter().rev() {
-            for depth in 1..=result_count {
-                restore.push(Action::StackSwap(
-                    u8::try_from(depth).expect("swap depth too large"),
-                ));
+        let shadow_loc = self.obj_loc_for_id(*shadow_obj);
+        for run in runs.iter().rev() {
+            for word in (0..run.len_words).rev() {
+                restore.push(
+                    self.action_load_for_loc(
+                        shadow_loc,
+                        run.shadow_dst_word
+                            .checked_add(word)
+                            .expect("shadow restore offset overflow"),
+                    ),
+                );
+                restore.push(
+                    self.action_store_for_loc(ObjLoc::ScratchAbs(run.scratch_src_word), word),
+                );
             }
-            restore.push(Action::MemStoreAbs(self.abs_addr_for_word(w)));
         }
 
         let mut out: Actions = Actions::new();
-        out.extend(restore);
         out.extend(actions);
+        out.extend(restore);
         out
     }
 
@@ -2266,40 +2352,10 @@ impl FinalAlloc {
         for action in actions.iter_mut() {
             match action {
                 Action::MemLoadObj(id) => {
-                    // Invariant: every stackify `Mem*Obj` must have a planned offset.
-                    // Should be checked by a post-plan verifier.
-                    let off = *self.mem_plan.obj_offset_words.get(id).unwrap_or_else(|| {
-                        panic!("missing stack object offset for obj {}", id.as_u32())
-                    });
-                    *action = match &self.mem_plan.scheme {
-                        MemScheme::StaticArena(_) => Action::MemLoadAbs(
-                            STATIC_BASE
-                                .checked_add(
-                                    off.checked_mul(WORD_BYTES)
-                                        .expect("stack object addr bytes overflow"),
-                                )
-                                .expect("stack object addr bytes overflow"),
-                        ),
-                        MemScheme::DynamicFrame => Action::MemLoadFrameSlot(off),
-                    };
+                    *action = self.action_load_for_loc(self.obj_loc_for_id(*id), 0);
                 }
                 Action::MemStoreObj(id) => {
-                    // Invariant: every stackify `Mem*Obj` must have a planned offset.
-                    // Should be checked by a post-plan verifier.
-                    let off = *self.mem_plan.obj_offset_words.get(id).unwrap_or_else(|| {
-                        panic!("missing stack object offset for obj {}", id.as_u32())
-                    });
-                    *action = match &self.mem_plan.scheme {
-                        MemScheme::StaticArena(_) => Action::MemStoreAbs(
-                            STATIC_BASE
-                                .checked_add(
-                                    off.checked_mul(WORD_BYTES)
-                                        .expect("stack object addr bytes overflow"),
-                                )
-                                .expect("stack object addr bytes overflow"),
-                        ),
-                        MemScheme::DynamicFrame => Action::MemStoreFrameSlot(off),
-                    };
+                    *action = self.action_store_for_loc(self.obj_loc_for_id(*id), 0);
                 }
                 _ => {}
             }
@@ -2315,10 +2371,7 @@ impl Allocator for FinalAlloc {
     }
 
     fn frame_size_slots(&self) -> u32 {
-        match self.mem_plan.scheme {
-            MemScheme::StaticArena(_) => 0,
-            MemScheme::DynamicFrame => self.mem_plan.locals_words,
-        }
+        self.mem_plan.frame_size_words()
     }
 
     fn read(&self, inst: InstId, vals: &[sonatina_ir::ValueId]) -> Actions {
@@ -2461,14 +2514,8 @@ fn gep_step(elem_size_bytes: u32, idx: Option<u32>) -> GepStep {
     }
 }
 
-fn static_arena_addr_bytes(offset_words: u32) -> u32 {
-    STATIC_BASE
-        .checked_add(
-            offset_words
-                .checked_mul(WORD_BYTES)
-                .expect("alloca address bytes overflow"),
-        )
-        .expect("alloca address bytes overflow")
+fn obj_loc_abs_addr_bytes(mem_plan: &FuncMemPlan, loc: ObjLoc) -> Option<u32> {
+    mem_plan.abs_addr_for_loc(loc)
 }
 
 pub(crate) fn immediate_u32(imm: Immediate) -> Option<u32> {
@@ -3082,8 +3129,8 @@ fn debug_print_mem_plan(module: &Module, funcs: &[FuncRef], plan: &ProgramMemory
     funcs_by_name.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
     eprintln!(
-        "evm mem debug: dyn_base=0x{:x} static_base=0x{:x}",
-        plan.dyn_base, STATIC_BASE
+        "evm mem debug: global_dyn_base=0x{:x} static_base=0x{:x} scratch_peak_words={} static_chain_peak_words={}",
+        plan.global_dyn_base, STATIC_BASE, plan.scratch_peak_words, plan.static_chain_peak_words
     );
     eprintln!("evm mem debug: entry_mem_init_stores=0");
 
@@ -3091,42 +3138,52 @@ fn debug_print_mem_plan(module: &Module, funcs: &[FuncRef], plan: &ProgramMemory
         let Some(func_plan) = plan.funcs.get(&func) else {
             continue;
         };
-        let (scheme, need_words) = match &func_plan.scheme {
-            MemScheme::StaticArena(st) => ("StaticArena", Some(st.need_words)),
-            MemScheme::DynamicFrame => ("DynamicFrame", None),
+        let stable_mode = match func_plan.stable_mode {
+            StableMode::None => "None".to_string(),
+            StableMode::DynamicFrame => "DynamicFrame".to_string(),
+            StableMode::StaticAbs { base_word } => {
+                format!("StaticAbs(base_word={base_word})")
+            }
         };
-        let clobber_words = func_plan.static_clobber_words;
 
-        let (malloc_min, malloc_max, malloc_count) =
-            if func_plan.malloc_future_static_words.is_empty() {
-                (None, None, 0)
-            } else {
-                let mut min: u32 = u32::MAX;
-                let mut max: u32 = 0;
-                for &w in func_plan.malloc_future_static_words.values() {
-                    min = min.min(w);
-                    max = max.max(w);
-                }
-                (
-                    Some(min),
-                    Some(max),
-                    func_plan.malloc_future_static_words.len(),
-                )
-            };
+        let (malloc_min, malloc_max, malloc_count) = if func_plan.malloc_future_abs_words.is_empty()
+        {
+            (None, None, 0)
+        } else {
+            let mut min: u32 = u32::MAX;
+            let mut max: u32 = 0;
+            for &w in func_plan.malloc_future_abs_words.values() {
+                min = min.min(w);
+                max = max.max(w);
+            }
+            (
+                Some(min),
+                Some(max),
+                func_plan.malloc_future_abs_words.len(),
+            )
+        };
 
-        let clobber_end = (clobber_words != 0).then(|| {
+        let abs_end_words = func_plan.abs_words_end();
+        let abs_end = (abs_end_words != 0).then(|| {
             STATIC_BASE
                 .checked_add(
-                    clobber_words
+                    abs_end_words
                         .checked_mul(WORD_BYTES)
-                        .expect("clobber end overflow"),
+                        .expect("absolute end overflow"),
                 )
-                .expect("clobber end overflow")
+                .expect("absolute end overflow")
         });
 
         eprintln!(
-            "evm mem debug: {name} scheme={scheme} locals_words={} need_words={:?} static_clobber_words={clobber_words} malloc_bounds(min,max,count)=({:?},{:?},{malloc_count}) clobber_end={:?}",
-            func_plan.locals_words, need_words, malloc_min, malloc_max, clobber_end
+            "evm mem debug: {name} scratch_words={} stable_words={} stable_mode={} entry_abs_words={} abs_words_end={} malloc_bounds(min,max,count)=({:?},{:?},{malloc_count}) abs_end={:?}",
+            func_plan.scratch_words,
+            func_plan.stable_words,
+            stable_mode,
+            func_plan.entry_abs_words,
+            abs_end_words,
+            malloc_min,
+            malloc_max,
+            abs_end,
         );
     }
 }
@@ -3207,23 +3264,17 @@ mod tests {
             r#"
 target = "evm-ethereum-osaka"
 
-func public %callee(v0.i256, v1.i256) -> i256 {
+func public %caller(v0.i256, v1.i256) -> i256 {
 block0:
     v2.*i256 = alloca i256;
-    mstore v2 v0 i256;
+    mstore v2 1.i256 i256;
     v3.i256 = mload v2 i256;
-    v4.i256 = add v3 v1;
-    return v4;
-}
-
-func public %caller() -> i256 {
-block0:
-    v0.*i256 = alloca i256;
-    mstore v0 1.i256 i256;
-    v1.i256 = call %callee 11.i256 22.i256;
-    v2.i256 = mload v0 i256;
-    v3.i256 = add v1 v2;
-    return v3;
+    v4.i256 = add v3 v0;
+    mstore v2 v4 i256;
+    v5.i256 = call %caller 11.i256 22.i256;
+    v6.i256 = mload v2 i256;
+    v7.i256 = add v5 v6;
+    return v7;
 }
 "#,
         )
@@ -3313,17 +3364,15 @@ block0:
             .clone();
         let alloc = FinalAlloc::new(analysis.alloc, mem_plan);
 
-        let MemScheme::StaticArena(st) = &alloc.mem_plan.scheme else {
-            panic!("expected StaticArena plan for caller");
-        };
-        let save_plan = st
-            .call_saves
+        let save_plan = alloc
+            .mem_plan
+            .call_preserve
             .get(&call_inst)
-            .expect("expected non-empty call_saves entry for call");
-        assert!(
-            !save_plan.save_word_offsets.is_empty(),
-            "expected at least one saved word"
-        );
+            .expect("expected non-empty call preserve entry for call");
+        let PreserveMode::ShadowRuns { shadow_obj, runs } = &save_plan.mode else {
+            panic!("expected shadow preserve plan for caller");
+        };
+        assert!(!runs.is_empty(), "expected at least one saved run");
 
         let actions = alloc.read(call_inst, &call_args);
         let cont_pos = actions
@@ -3331,31 +3380,35 @@ block0:
             .position(|a| matches!(a, Action::PushContinuationOffset))
             .expect("missing continuation marker");
 
-        let arity = call_args.len();
-        let expected_len = save_plan
-            .save_word_offsets
-            .len()
-            .checked_mul(arity + 1)
+        let expected_len = runs
+            .iter()
+            .map(|run| usize::try_from(run.len_words).expect("run length overflow"))
+            .sum::<usize>()
+            .checked_mul(2)
             .expect("expected injected length overflow");
         assert!(
             cont_pos >= expected_len,
             "expected injected actions immediately before continuation marker"
         );
         let injected = &actions[cont_pos - expected_len..cont_pos];
-
-        for (i, &w) in save_plan.save_word_offsets.iter().enumerate() {
-            let base = i * (arity + 1);
-            assert_eq!(
-                injected[base],
-                Action::MemLoadAbs(alloc.abs_addr_for_word(w))
-            );
-            for (j, depth) in (1..=arity).rev().enumerate() {
-                assert_eq!(
-                    injected[base + 1 + j],
-                    Action::StackSwap(u8::try_from(depth).expect("swap depth too large"))
+        let shadow_loc = alloc.obj_loc_for_id(*shadow_obj);
+        let mut expected = Actions::new();
+        for run in runs {
+            for word in 0..run.len_words {
+                expected.push(
+                    alloc.action_load_for_loc(ObjLoc::ScratchAbs(run.scratch_src_word), word),
+                );
+                expected.push(
+                    alloc.action_store_for_loc(
+                        shadow_loc,
+                        run.shadow_dst_word
+                            .checked_add(word)
+                            .expect("shadow save offset overflow"),
+                    ),
                 );
             }
         }
+        assert_eq!(injected, expected.as_slice());
     }
 
     #[test]
@@ -3364,34 +3417,24 @@ block0:
             r#"
 target = "evm-ethereum-osaka"
 
-func public %callee(v0.i256, v1.i256) -> (i256, i1) {
+func public %caller(v0.i256, v1.i256) -> (i256, i1) {
 block0:
     v2.*i256 = alloca i256;
-    mstore v2 v0 i256;
+    mstore v2 1.i256 i256;
     v3.i256 = mload v2 i256;
-    v4.i256 = add v3 v1;
-    v5.i1 = lt v4 v3;
-    return (v4, v5);
-}
-
-func public %caller() -> i256 {
-block0:
-    v0.*i256 = alloca i256;
-    v1.*i256 = alloca i256;
-    mstore v0 1.i256 i256;
-    mstore v1 2.i256 i256;
-    (v2.i256, v3.i1) = call %callee 11.i256 22.i256;
-    v4.i256 = mload v0 i256;
-    v5.i256 = mload v1 i256;
-    br v3 block1 block2;
+    v4.i256 = add v3 v0;
+    mstore v2 v4 i256;
+    (v5.i256, v6.i1) = call %caller 11.i256 22.i256;
+    v7.i256 = mload v2 i256;
+    br v6 block1 block2;
 
 block1:
-    v6.i256 = add v4 v5;
-    return v6;
+    v8.i256 = add v5 v7;
+    return (v8, v6);
 
 block2:
-    v7.i256 = add v2 v4;
-    return v7;
+    v9.i256 = add v7 1.i256;
+    return (v9, v6);
 }
 "#,
         )
@@ -3482,30 +3525,39 @@ block2:
             .clone();
         let alloc = FinalAlloc::new(analysis.alloc, mem_plan);
 
-        let MemScheme::StaticArena(st) = &alloc.mem_plan.scheme else {
-            panic!("expected StaticArena plan for caller");
-        };
-        let save_plan = st
-            .call_saves
+        let save_plan = alloc
+            .mem_plan
+            .call_preserve
             .get(&call_inst)
-            .expect("expected non-empty call_saves entry for call");
+            .expect("expected non-empty call preserve entry for call");
         assert_eq!(save_plan.result_count, 2);
-        assert!(
-            !save_plan.save_word_offsets.is_empty(),
-            "expected at least one saved word"
-        );
+        let PreserveMode::ShadowRuns { shadow_obj, runs } = &save_plan.mode else {
+            panic!("expected shadow preserve plan for caller");
+        };
+        assert!(!runs.is_empty(), "expected at least one saved run");
 
         let actions = alloc.write(call_inst, &call_results);
         let mut expected = Actions::new();
-        for &w in save_plan.save_word_offsets.iter().rev() {
-            expected.push(Action::StackSwap(1));
-            expected.push(Action::StackSwap(2));
-            expected.push(Action::MemStoreAbs(alloc.abs_addr_for_word(w)));
+        let shadow_loc = alloc.obj_loc_for_id(*shadow_obj);
+        for run in runs.iter().rev() {
+            for word in (0..run.len_words).rev() {
+                expected.push(
+                    alloc.action_load_for_loc(
+                        shadow_loc,
+                        run.shadow_dst_word
+                            .checked_add(word)
+                            .expect("shadow restore offset overflow"),
+                    ),
+                );
+                expected.push(
+                    alloc.action_store_for_loc(ObjLoc::ScratchAbs(run.scratch_src_word), word),
+                );
+            }
         }
         assert_eq!(
             actions.as_slice(),
             expected.as_slice(),
-            "multi-result call-save restore must preserve both results above restored words"
+            "multi-result call preserve restore must copy saved scratch words back after post-actions"
         );
     }
 
