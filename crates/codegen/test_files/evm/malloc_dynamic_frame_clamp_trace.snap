@@ -10,7 +10,7 @@ object: Contract
   total: 23 bytes
 
 functions:
-  dyn: ir_blocks=1 ir_insts=4 vcode_ops=58 fixups=4 imm_bytes=14
+  dyn: ir_blocks=1 ir_insts=4 vcode_ops=47 fixups=4 imm_bytes=11
     mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
   main: ir_blocks=1 ir_insts=4 vcode_ops=27 fixups=2 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -48,22 +48,15 @@ dyn:
     SWAP1
     JUMPDEST
     POP
-    PUSH1 0xa0 (160)
-    MLOAD
-    DUP2
-    MSTORE
-    DUP1
     PUSH1 0x20 (32)
-    ADD
-    PUSH1 0xa0 (160)
-    MSTORE
-    PUSH1 0x40 (64)
     ADD
     PUSH1 0x80 (128)
     MSTORE
     POP  // v1.*i256 = alloca i256;
-    PUSH1 0xa0 (160)
+    PUSH1 0x20 (32)
+    PUSH1 0x80 (128)
     MLOAD
+    SUB
     PUSH0  // mstore v1 0.i256 i256;
     DUP2
     MSTORE
@@ -73,13 +66,9 @@ dyn:
     JUMP
     JUMPDEST
     PUSH1 0x20 (32)  // return v2;
-    PUSH1 0xa0 (160)
+    PUSH1 0x80 (128)
     MLOAD
     SUB
-    DUP1
-    MLOAD
-    PUSH1 0xa0 (160)
-    MSTORE
     PUSH1 0x80 (128)
     MSTORE
     SWAP1

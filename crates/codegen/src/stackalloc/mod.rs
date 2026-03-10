@@ -36,7 +36,7 @@ pub enum Action {
     PushContinuationOffset,
     Pop,
     MemLoadAbs(u32),
-    /// Relative to `LowerBackend`-defined frame pointer
+    /// Relative to the backend-defined dynamic frame layout.
     MemLoadFrameSlot(u32),
     MemStoreAbs(u32),
     MemStoreFrameSlot(u32),

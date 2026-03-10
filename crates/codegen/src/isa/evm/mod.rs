@@ -50,7 +50,7 @@ use memory_plan::{
     MemScheme, ProgramMemoryPlan, WORD_BYTES, compute_program_memory_plan,
 };
 use memory_plan::{
-    ArenaCostModel, DYN_FP_SLOT, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan, ObjLoc, PreserveMode,
+    ArenaCostModel, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan, ObjLoc, PreserveMode,
     ProgramMemoryPlan, STATIC_BASE, StableMode, WORD_BYTES, compute_program_memory_plan,
 };
 use ptr_escape::{PtrEscapeSummary, compute_ptr_escape_summaries};
@@ -216,12 +216,9 @@ impl EvmBackend {
                     format!("0x{addr_bytes:x}")
                 }
                 ObjLoc::StableFrame(off) => {
-                    let addr_bytes = off.checked_mul(WORD_BYTES).expect("address bytes overflow");
-                    if addr_bytes == 0 {
-                        "fp".to_string()
-                    } else {
-                        format!("fp+0x{addr_bytes:x}")
-                    }
+                    let addr_bytes =
+                        frame_slot_sp_relative_bytes(func_plan.frame_size_words(), off);
+                    format!("sp-0x{addr_bytes:x}")
                 }
                 ObjLoc::StackPinned(depth) => format!("stack[{depth}]"),
             };
@@ -1512,6 +1509,10 @@ impl LowerBackend for EvmBackend {
         alloc: &mut dyn Allocator,
         function: &Function,
     ) {
+        let frame_size_slots = alloc.frame_size_slots();
+        let perform_actions = |ctx: &mut Lower<Self::MInst>, actions: &[Action]| {
+            crate::isa::evm::perform_actions(ctx, actions, frame_size_slots)
+        };
         let entry_abs_base = self
             .current_mem_plan
             .borrow()
@@ -1526,7 +1527,7 @@ impl LowerBackend for EvmBackend {
                     .expect("entry abs base overflow")
             })
             .unwrap_or_else(|| self.dyn_base());
-        enter_frame(ctx, alloc.frame_size_slots(), entry_abs_base);
+        enter_frame(ctx, frame_size_slots, entry_abs_base);
         perform_actions(ctx, &alloc.enter_function(function));
     }
 
@@ -1549,6 +1550,10 @@ impl LowerBackend for EvmBackend {
     }
 
     fn lower(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, insn: InstId) {
+        let frame_size_slots = alloc.frame_size_slots();
+        let perform_actions = |ctx: &mut Lower<Self::MInst>, actions: &[Action]| {
+            crate::isa::evm::perform_actions(ctx, actions, frame_size_slots)
+        };
         let results: SmallVec<[ValueId; 4]> = ctx.insn_results(insn).iter().copied().collect();
         let args = ctx.insn_data(insn).collect_values();
         let data = self.isa.inst_set().resolve_inst(ctx.insn_data(insn));
@@ -1754,8 +1759,6 @@ impl LowerBackend for EvmBackend {
             }
 
             EvmInstKind::Call(call) => {
-                // xxx if func uses memory, store new fp
-
                 let callee = *call.callee();
                 let mut actions = alloc.read(insn, &args);
 
@@ -1900,15 +1903,7 @@ impl LowerBackend for EvmBackend {
                         push_bytes(ctx, &u32_to_be(addr_bytes));
                     }
                     ObjLoc::StableFrame(offset_words) => {
-                        let addr_bytes = offset_words
-                            .checked_mul(WORD_BYTES)
-                            .expect("alloca address bytes overflow");
-                        push_bytes(ctx, &[DYN_FP_SLOT]);
-                        ctx.push(OpCode::MLOAD);
-                        if addr_bytes != 0 {
-                            push_bytes(ctx, &u32_to_be(addr_bytes));
-                            ctx.push(OpCode::ADD);
-                        }
+                        emit_dyn_frame_addr(ctx, frame_size_slots, offset_words);
                     }
                     ObjLoc::StackPinned(_) => panic!("stack-pinned allocas are not implemented"),
                 }
@@ -2597,7 +2592,30 @@ fn fold_stack_actions(actions: &[Action]) -> SmallVec<[Action; 8]> {
     out
 }
 
-fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
+fn frame_slot_sp_relative_bytes(frame_size_slots: u32, offset_words: u32) -> u32 {
+    let sp_relative_words = frame_size_slots
+        .checked_sub(offset_words)
+        .filter(|words| *words != 0)
+        .unwrap_or_else(|| {
+            panic!(
+                "frame slot offset {} out of range for frame size {}",
+                offset_words, frame_size_slots
+            )
+        });
+    sp_relative_words
+        .checked_mul(WORD_BYTES)
+        .expect("frame slot byte offset overflow")
+}
+
+fn emit_dyn_frame_addr(ctx: &mut Lower<OpCode>, frame_size_slots: u32, offset_words: u32) {
+    let sp_relative_bytes = frame_slot_sp_relative_bytes(frame_size_slots, offset_words);
+    push_bytes(ctx, &u32_to_be(sp_relative_bytes));
+    push_bytes(ctx, &[DYN_SP_SLOT]);
+    ctx.push(OpCode::MLOAD);
+    ctx.push(OpCode::SUB);
+}
+
+fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action], frame_size_slots: u32) {
     let folded = fold_stack_actions(actions);
     for action in folded {
         match action {
@@ -2641,16 +2659,7 @@ fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
                 ctx.push(OpCode::MLOAD);
             }
             Action::MemLoadFrameSlot(offset) => {
-                push_bytes(ctx, &[DYN_FP_SLOT]);
-                ctx.push(OpCode::MLOAD);
-                let byte_offset = offset
-                    .checked_mul(WORD_BYTES)
-                    .expect("frame slot offset overflow");
-                if byte_offset != 0 {
-                    let bytes = u32_to_be(byte_offset);
-                    push_bytes(ctx, &bytes);
-                    ctx.push(OpCode::ADD);
-                }
+                emit_dyn_frame_addr(ctx, frame_size_slots, offset);
                 ctx.push(OpCode::MLOAD);
             }
             Action::MemStoreAbs(offset) => {
@@ -2659,16 +2668,7 @@ fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
                 ctx.push(OpCode::MSTORE);
             }
             Action::MemStoreFrameSlot(offset) => {
-                push_bytes(ctx, &[DYN_FP_SLOT]);
-                ctx.push(OpCode::MLOAD);
-                let byte_offset = offset
-                    .checked_mul(WORD_BYTES)
-                    .expect("frame slot offset overflow");
-                if byte_offset != 0 {
-                    let bytes = u32_to_be(byte_offset);
-                    push_bytes(ctx, &bytes);
-                    ctx.push(OpCode::ADD);
-                }
+                emit_dyn_frame_addr(ctx, frame_size_slots, offset);
                 ctx.push(OpCode::MSTORE);
             }
             Action::MemLoadObj(_) | Action::MemStoreObj(_) => {
@@ -2830,9 +2830,6 @@ fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
     let frame_bytes = frame_slots
         .checked_mul(WORD_BYTES)
         .expect("frame size overflow");
-    let frame_plus_fp_bytes = frame_bytes
-        .checked_add(WORD_BYTES)
-        .expect("frame size overflow");
 
     // sp = mload(DYN_SP_SLOT); if sp == 0, initialize it.
     push_bytes(ctx, &[DYN_SP_SLOT]);
@@ -2858,21 +2855,8 @@ fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
     ctx.push(OpCode::MLOAD);
     emit_max_top_two(ctx);
 
-    // Save old fp at frame_base (sp): mstore(sp, mload(DYN_FP_SLOT))
-    push_bytes(ctx, &[DYN_FP_SLOT]);
-    ctx.push(OpCode::MLOAD);
-    ctx.push(OpCode::DUP2);
-    ctx.push(OpCode::MSTORE);
-
-    // new_fp = sp + WORD_BYTES; mstore(DYN_FP_SLOT, new_fp)
-    ctx.push(OpCode::DUP1);
-    push_bytes(ctx, &u32_to_be(WORD_BYTES));
-    ctx.push(OpCode::ADD);
-    push_bytes(ctx, &[DYN_FP_SLOT]);
-    ctx.push(OpCode::MSTORE);
-
-    // new_sp = frame_base + WORD_BYTES + frame_bytes; mstore(DYN_SP_SLOT, new_sp)
-    push_bytes(ctx, &u32_to_be(frame_plus_fp_bytes));
+    // new_sp = sp + frame_bytes; mstore(DYN_SP_SLOT, new_sp)
+    push_bytes(ctx, &u32_to_be(frame_bytes));
     ctx.push(OpCode::ADD);
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MSTORE);
@@ -2883,23 +2867,18 @@ fn leave_frame(ctx: &mut Lower<OpCode>, frame_slots: u32) {
         return;
     }
 
-    // frame_base = fp - WORD_BYTES
-    //
-    // NOTE: `SUB` computes `a - b` with `a` on top of stack.
-    push_bytes(ctx, &u32_to_be(WORD_BYTES));
-    push_bytes(ctx, &[DYN_FP_SLOT]);
+    // new_sp = sp - frame_bytes; mstore(DYN_SP_SLOT, new_sp)
+    push_bytes(
+        ctx,
+        &u32_to_be(
+            frame_slots
+                .checked_mul(WORD_BYTES)
+                .expect("frame size overflow"),
+        ),
+    );
+    push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MLOAD);
     ctx.push(OpCode::SUB);
-
-    // old_fp = mload(frame_base)
-    ctx.push(OpCode::DUP1);
-    ctx.push(OpCode::MLOAD);
-
-    // mstore(DYN_FP_SLOT, old_fp)
-    push_bytes(ctx, &[DYN_FP_SLOT]);
-    ctx.push(OpCode::MSTORE);
-
-    // mstore(DYN_SP_SLOT, frame_base)
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MSTORE);
 }
