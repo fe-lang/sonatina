@@ -470,6 +470,54 @@ func public %caller(v0.i256, v1.i256) -> (i256, i1) {
 }
 
 #[test]
+fn inliner_rewrites_wrappers_that_reorder_differently_typed_args() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %leaf(v0.*i8, v1.i256) {
+    block0:
+        mstore v0 v1 i256;
+        return;
+}
+
+func private %wrapper(v0.i256, v1.*i8) {
+    block0:
+        call %leaf v1 v0;
+        return;
+}
+
+func public %caller(v0.i256, v1.*i8) {
+    block0:
+        call %wrapper v0 v1;
+        return;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(InlinerConfig {
+        enable_single_block_splice: false,
+        ..Default::default()
+    });
+    let stats = inliner.run(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %wrapper"),
+        "wrapper call should be rewritten:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("call %leaf v1 v0"),
+        "rewritten call should preserve reordered args:\n{dumped}"
+    );
+    assert!(stats.calls_rewritten >= 1, "expected rewrite:\n{dumped}");
+    let report = verify_module(module, &VerifierConfig::for_level(VerificationLevel::Fast));
+    assert!(report.is_ok(), "module failed verification: {report:?}");
+}
+
+#[test]
 fn inliner_removes_multi_return_return_only_calls() {
     let source = r#"
 target = "evm-ethereum-osaka"

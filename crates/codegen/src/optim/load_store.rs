@@ -520,9 +520,15 @@ fn exit_commits_visible_writes(func: &Function, block: sonatina_ir::BlockId) -> 
 
     if <&EvmRevert as InstDowncast>::downcast(is, inst).is_some()
         || <&EvmInvalid as InstDowncast>::downcast(is, inst).is_some()
-        || <&control_flow::Unreachable as InstDowncast>::downcast(is, inst).is_some()
     {
         return false;
+    }
+
+    if <&control_flow::Unreachable as InstDowncast>::downcast(is, inst).is_some() {
+        return preceding_terminal_call(func, term).is_some_and(|call| {
+            let effects = func.ctx().func_effects(call.callee());
+            effects.noreturn && effects.may_commit_visible_writes
+        });
     }
 
     if <&control_flow::Return as InstDowncast>::downcast(is, inst).is_some()
@@ -534,6 +540,11 @@ fn exit_commits_visible_writes(func: &Function, block: sonatina_ir::BlockId) -> 
     }
 
     true
+}
+
+fn preceding_terminal_call(func: &Function, term: InstId) -> Option<&dyn control_flow::CallInfo> {
+    let prev = func.layout.prev_inst_of(term)?;
+    func.dfg.call_info(prev)
 }
 
 fn write_visible_at_committing_exit(func: &Function, key: &TrackedLocKey) -> bool {
@@ -554,8 +565,9 @@ fn remove_inst(func: &mut Function, inst: InstId) {
 mod tests {
     use super::*;
     use sonatina_ir::{
-        I256, Immediate, Type,
+        I256, Immediate, InstSetBase, Linkage, Signature, Type,
         builder::test_util::*,
+        effects::FuncEffectSummary,
         inst::{
             control_flow::Return,
             data::{Alloca, Mload},
@@ -893,6 +905,84 @@ mod tests {
 
         assert!(!run_solver(&mut builder.func));
         assert_eq!(count_insts::<EvmSstore>(&builder.func), 1);
+    }
+
+    #[test]
+    fn keeps_final_sstore_before_noreturn_call_exit() {
+        let mb = test_module_builder();
+        let callee = mb
+            .declare_function(Signature::new_unit(
+                "noreturn_helper",
+                Linkage::Private,
+                &[],
+            ))
+            .unwrap();
+        mb.ctx.set_func_effects(
+            callee,
+            FuncEffectSummary {
+                noreturn: true,
+                may_commit_visible_writes: true,
+                will_return: false,
+                will_terminate: true,
+                ..FuncEffectSummary::default()
+            },
+        );
+
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+        let has_call = is.has_call().expect("target ISA must support `call`");
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let slot = builder.make_imm_value(I256::from(1));
+        let value = builder.make_imm_value(I256::from(7));
+        builder.insert_inst_no_result_with(|| EvmSstore::new(is, slot, value));
+        builder.insert_inst_no_result_with(|| {
+            control_flow::Call::new(has_call, callee, smallvec::smallvec![])
+        });
+        builder.insert_inst_no_result_with(|| control_flow::Unreachable::new_unchecked(is));
+        builder.seal_all();
+
+        assert!(!run_solver(&mut builder.func));
+        assert_eq!(count_insts::<EvmSstore>(&builder.func), 1);
+    }
+
+    #[test]
+    fn removes_final_sstore_before_reverting_noreturn_call_exit() {
+        let mb = test_module_builder();
+        let callee = mb
+            .declare_function(Signature::new_unit("revert_helper", Linkage::Private, &[]))
+            .unwrap();
+        mb.ctx.set_func_effects(
+            callee,
+            FuncEffectSummary {
+                noreturn: true,
+                may_commit_visible_writes: false,
+                will_return: false,
+                will_terminate: true,
+                ..FuncEffectSummary::default()
+            },
+        );
+
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+        let has_call = is.has_call().expect("target ISA must support `call`");
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let slot = builder.make_imm_value(I256::from(1));
+        let value = builder.make_imm_value(I256::from(7));
+        builder.insert_inst_no_result_with(|| EvmSstore::new(is, slot, value));
+        builder.insert_inst_no_result_with(|| {
+            control_flow::Call::new(has_call, callee, smallvec::smallvec![])
+        });
+        builder.insert_inst_no_result_with(|| control_flow::Unreachable::new_unchecked(is));
+        builder.seal_all();
+
+        assert!(run_solver(&mut builder.func));
+        assert_eq!(count_insts::<EvmSstore>(&builder.func), 0);
     }
 
     #[test]

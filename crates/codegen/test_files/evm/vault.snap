@@ -6,8 +6,8 @@ input_file: test_files/evm/vault.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 4975 bytes
-  total: 4975 bytes
+  section runtime: 4964 bytes
+  total: 4964 bytes
 
 object: Vault
   section init: 1032 bytes
@@ -15,9 +15,9 @@ object: Vault
   total: 1892 bytes
 
 object: VaultUser
-  section init: 1273 bytes
-  section runtime: 1261 bytes
-  total: 2534 bytes
+  section init: 1262 bytes
+  section runtime: 1250 bytes
+  total: 2512 bytes
 
 functions:
   __Contract_runtime_entry: ir_blocks=1 ir_insts=85 vcode_ops=329 fixups=65 imm_bytes=50
@@ -30,11 +30,9 @@ functions:
     mem: scratch_words=0 stable_words=2 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=2
   __Vault_runtime: ir_blocks=13 ir_insts=44 vcode_ops=171 fixups=31 imm_bytes=13
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __VaultUser_recv_0_2: ir_blocks=1 ir_insts=2 vcode_ops=11 fixups=2 imm_bytes=1
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __VaultUser_init: ir_blocks=1 ir_insts=4 vcode_ops=9 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __VaultUser_runtime: ir_blocks=7 ir_insts=35 vcode_ops=154 fixups=31 imm_bytes=14
+  __VaultUser_runtime: ir_blocks=7 ir_insts=35 vcode_ops=157 fixups=31 imm_bytes=15
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8: ir_blocks=3 ir_insts=23 vcode_ops=85 fixups=6 imm_bytes=16
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -96,7 +94,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=569266 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=548266
+  case ok: calldata_len=0 success reason=Return gas_used=567036 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=546036
 
 
 --------------- DEBUG ---------------
@@ -948,21 +946,6 @@ __Vault_runtime:
     JUMPDEST
     INVALID  // unreachable;
 
-// func private %__VaultUser_recv_0_2(v0.i256, v1.i256) -> i256
-__VaultUser_recv_0_2:
-  block0:
-    JUMPDEST
-    PUSH3 0x186a0 (100000)  // v4.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872 v1 v0 100000.i256 0.i256;
-    PUSH0
-    SWAP2
-    PUSH1 `pc + (4)`
-    SWAP4
-    PUSH1 FuncRef(29)
-    JUMP
-    JUMPDEST
-    SWAP1  // return v4;
-    JUMP
-
 // func private %__VaultUser_init()
 __VaultUser_init:
   block0:
@@ -1125,10 +1108,13 @@ __VaultUser_runtime:
     PUSH1 FuncRef(100)
     JUMP
     JUMPDEST
-    PUSH0  // v17.i256 = call %__VaultUser_recv_0_2 v16 0.i256;
+    PUSH0  // v17.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872 0.i256 v16 100000.i256 0.i256;
+    PUSH3 0x186a0 (100000)
+    PUSH0
+    SWAP3
     PUSH1 `pc + (4)`
-    SWAP2
-    PUSH1 FuncRef(15)
+    SWAP4
+    PUSH1 FuncRef(29)
     JUMP
     JUMPDEST
     PUSH0  // call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v17;

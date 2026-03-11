@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 414
 expression: opt_ir_snapshot
 input_file: test_files/evm/vault.sntn
 ---
@@ -310,12 +311,6 @@ func private %__Vault_runtime() {
         br v15 block7 block1;
 }
 
-func private %__VaultUser_recv_0_2(v0.i256, v1.i256) -> i256 {
-    block0:
-        v4.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872 v1 v0 100000.i256 0.i256;
-        return v4;
-}
-
 func private %__VaultUser_init() {
     block0:
         v1.i256 = sym_addr &__VaultUser_runtime;
@@ -362,7 +357,7 @@ func private %__VaultUser_runtime() {
 
     block4:
         v16.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v17;
-        v17.i256 = call %__VaultUser_recv_0_2 v16 0.i256;
+        v17.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872 0.i256 v16 100000.i256 0.i256;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v17;
         unreachable;
 
