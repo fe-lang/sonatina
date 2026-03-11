@@ -59,6 +59,13 @@ impl LazyFramePlan {
             .any(|point| point == FrameInjectionPoint::BeforeSite(site))
     }
 
+    pub(crate) fn exit_before_action(&self, site: FrameSite, action_index: usize) -> bool {
+        self.exits
+            .iter()
+            .copied()
+            .any(|point| point == FrameInjectionPoint::BeforeAction { site, action_index })
+    }
+
     pub(crate) fn exit_after_action(&self, site: FrameSite, action_index: usize) -> bool {
         self.exits
             .iter()
@@ -362,6 +369,9 @@ fn apply_actions_state(
             .expect("lazy frame action index overflow");
         if plan.enter_before_action(site, index) {
             *active = true;
+        }
+        if plan.exit_before_action(site, index) {
+            *active = false;
         }
         if plan.exit_after_action(site, index) {
             *active = false;
@@ -1089,6 +1099,12 @@ block2:
         );
 
         assert!(!ctx.plan.enter_before_site(FrameSite::EnterFunction));
+        assert!(
+            ctx.plan
+                .exits
+                .iter()
+                .any(|point| matches!(point, FrameInjectionPoint::BeforeAction { .. }))
+        );
     }
 
     #[test]

@@ -574,6 +574,9 @@ impl EvmBackend {
             if self.current_lazy_frame_plan_matches(|plan| plan.enter_before_action(site, index)) {
                 self.emit_frame_enter(ctx, frame_size_slots);
             }
+            if self.current_lazy_frame_plan_matches(|plan| plan.exit_before_action(site, index)) {
+                leave_frame(ctx, frame_size_slots);
+            }
             perform_action(ctx, action, frame_size_slots);
             if self.current_lazy_frame_plan_matches(|plan| plan.exit_after_action(site, index)) {
                 leave_frame(ctx, frame_size_slots);
