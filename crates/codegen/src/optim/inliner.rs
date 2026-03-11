@@ -12,7 +12,7 @@ use sonatina_ir::{
     Function, GlobalVariableRef, Immediate, Inst, InstDowncast, InstId, Module, Type, Value,
     ValueId,
     inst::{SideEffect, control_flow},
-    module::{FuncRef, ModuleCtx},
+    module::FuncRef,
 };
 
 use crate::{
@@ -386,8 +386,7 @@ fn analyze_callee(
             return None;
         }
 
-        // Signature sanity: wrapper signature equals inner callee signature.
-        if !signatures_match(&module.ctx, callee_ref, *call_inst.callee()) {
+        if !wrapper_call_signatures_compatible(module, callee, callee_ref, call_inst) {
             return None;
         }
 
@@ -900,10 +899,28 @@ fn classify_value_template(func: &Function, value: ValueId) -> Option<ValueTempl
     }
 }
 
-fn signatures_match(ctx: &ModuleCtx, a: FuncRef, b: FuncRef) -> bool {
-    ctx.func_sig(a, |a_sig| {
-        ctx.func_sig(b, |b_sig| {
-            a_sig.args() == b_sig.args() && a_sig.ret_tys() == b_sig.ret_tys()
+fn wrapper_call_signatures_compatible(
+    module: &Module,
+    wrapper: &Function,
+    wrapper_ref: FuncRef,
+    inner_call: &control_flow::Call,
+) -> bool {
+    let forwarded_args_match = module.ctx.func_sig(*inner_call.callee(), |inner_sig| {
+        inner_sig.args().len() == inner_call.args().len()
+            && inner_sig
+                .args()
+                .iter()
+                .copied()
+                .zip(inner_call.args().iter().copied())
+                .all(|(expected_ty, arg)| wrapper.dfg.value_ty(arg) == expected_ty)
+    });
+    if !forwarded_args_match {
+        return false;
+    }
+
+    module.ctx.func_sig(wrapper_ref, |wrapper_sig| {
+        module.ctx.func_sig(*inner_call.callee(), |inner_sig| {
+            wrapper_sig.ret_tys() == inner_sig.ret_tys()
         })
     })
 }
