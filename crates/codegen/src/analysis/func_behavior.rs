@@ -237,6 +237,13 @@ fn has_reachable_committing_exit(
 
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(func);
+    let reachable = cfg.reachable_blocks();
+    let reachable_exit_blocks: FxHashSet<BlockId> = cfg
+        .exits
+        .iter()
+        .copied()
+        .filter(|&block| reachable[block])
+        .collect();
 
     let mut visited = FxHashSet::default();
     let mut stack = vec![entry];
@@ -251,10 +258,11 @@ fn has_reachable_committing_exit(
             None => {}
         }
 
-        if func
-            .layout
-            .last_inst_of(block)
-            .is_some_and(|term| is_committing_exit(func, term))
+        if reachable_exit_blocks.contains(&block)
+            && func
+                .layout
+                .last_inst_of(block)
+                .is_some_and(|term| is_committing_exit(func, term))
         {
             return true;
         }
@@ -619,6 +627,33 @@ func private %caller_revert() {
         let caller_revert_effects = module.ctx.func_effects(caller_revert);
         assert!(caller_revert_effects.noreturn);
         assert!(!caller_revert_effects.may_commit_visible_writes);
+    }
+
+    #[test]
+    fn internal_branches_do_not_mark_noreturn_loops_as_committing() {
+        let module = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %spin(v0.i1) {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block0;
+
+    block2:
+        jump block0;
+}
+"#,
+        );
+
+        analyze_module(&module);
+
+        let spin = find_func(&module, "spin");
+        let effects = module.ctx.func_effects(spin);
+        assert!(effects.noreturn);
+        assert!(!effects.may_commit_visible_writes);
     }
 
     #[test]
