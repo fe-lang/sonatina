@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef};
 
-use super::memory_plan::{MemScheme, ProgramMemoryPlan};
+use super::memory_plan::ProgramMemoryPlan;
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct FuncMemEffects {
@@ -45,13 +45,10 @@ pub(crate) fn compute_func_mem_effects(
     let mut local_effects: FxHashMap<FuncRef, FuncMemEffects> = FxHashMap::default();
     for &func in funcs {
         let func_plan = plan.funcs.get(&func);
-        let touches_static_arena = matches!(
-            func_plan.map(|p| &p.scheme),
-            Some(MemScheme::StaticArena(st)) if st.need_words != 0
-        );
-        let touches_dyn_frame =
-            matches!(func_plan.map(|p| &p.scheme), Some(MemScheme::DynamicFrame))
-                && func_plan.is_some_and(|p| p.locals_words != 0);
+        let touches_static_arena = func_plan.is_some_and(|p| {
+            p.scratch_words != 0 || p.stable_base_word().is_some() && p.stable_words != 0
+        });
+        let touches_dyn_frame = func_plan.is_some_and(|p| p.frame_words() != 0);
         let touches_heap_meta = module.func_store.view(func, |f| func_uses_malloc(f, isa));
         let touches_scratch = scratch_effects.contains(&func);
 

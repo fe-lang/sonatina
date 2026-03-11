@@ -9,17 +9,20 @@ use sonatina_ir::{
 };
 
 use super::{
-    memory_plan::{FuncAnalysis, FuncMemPlan, ProgramMemoryPlan, WORD_BYTES},
+    memory_plan::{
+        FuncAnalysis, FuncMemPlan, ObjLoc, ProgramMemoryPlan, WORD_BYTES, compute_abs_clobber_words,
+    },
     provenance::compute_value_provenance,
 };
 
-pub(crate) fn compute_malloc_future_static_words(
+pub(crate) fn compute_malloc_future_abs_words(
     module: &Module,
     funcs: &[FuncRef],
     plan: &ProgramMemoryPlan,
     analyses: &FxHashMap<FuncRef, FuncAnalysis>,
     isa: &Evm,
 ) -> FxHashMap<FuncRef, FxHashMap<InstId, u32>> {
+    let abs_clobber_words = compute_abs_clobber_words(module, funcs, plan);
     let mut out: FxHashMap<FuncRef, FxHashMap<InstId, u32>> = FxHashMap::default();
     for &f in funcs {
         let func_plan = plan
@@ -37,6 +40,7 @@ pub(crate) fn compute_malloc_future_static_words(
                 isa,
                 plan,
                 func_plan,
+                abs_clobber_words: &abs_clobber_words,
                 analysis,
             };
             compute_future_bounds_for_func(function, &cfg, &ctx)
@@ -51,6 +55,7 @@ struct FutureBoundsCtx<'a> {
     isa: &'a Evm,
     plan: &'a ProgramMemoryPlan,
     func_plan: &'a FuncMemPlan,
+    abs_clobber_words: &'a FxHashMap<FuncRef, u32>,
     analysis: &'a FuncAnalysis,
 }
 
@@ -65,19 +70,22 @@ fn compute_future_bounds_for_func(
     });
 
     let mut alloca_end_words: FxHashMap<InstId, u32> = FxHashMap::default();
-    for (&inst, &off) in &ctx.func_plan.alloca_offset_words {
+    for (&inst, &loc) in &ctx.func_plan.alloca_loc {
         let data = ctx.isa.inst_set().resolve_inst(function.dfg.inst(inst));
         let EvmInstKind::Alloca(alloca) = data else {
             continue;
         };
 
+        let Some(base_word) = absolute_base_word_for_loc(ctx.func_plan, loc) else {
+            continue;
+        };
         let size_bytes: u32 = ctx
             .isa
             .type_layout()
             .size_of(*alloca.ty(), ctx.module)
             .expect("alloca has invalid type") as u32;
         let size_words = size_bytes.div_ceil(WORD_BYTES);
-        let end_words = off
+        let end_words = base_word
             .checked_add(size_words)
             .expect("alloca end words overflow");
         alloca_end_words.insert(inst, end_words);
@@ -99,13 +107,11 @@ fn compute_future_bounds_for_func(
         }
         value_alloca_bound[value] = max_end;
 
-        if let Some(obj) = ctx.func_plan.spill_obj[value] {
-            let off = *ctx
-                .func_plan
-                .obj_offset_words
-                .get(&obj)
-                .expect("missing spilled object offset");
-            value_spill_bound[value] = off.checked_add(1).expect("spill end overflow");
+        if let Some(obj) = ctx.func_plan.spill_obj[value]
+            && let Some(loc) = ctx.func_plan.obj_loc.get(&obj).copied()
+            && let Some(start_word) = absolute_base_word_for_loc(ctx.func_plan, loc)
+        {
+            value_spill_bound[value] = start_word.checked_add(1).expect("spill end overflow");
         }
     }
 
@@ -120,7 +126,10 @@ fn compute_future_bounds_for_func(
                 callee.as_u32()
             )
         });
-        callee_plan.static_clobber_words
+        ctx.abs_clobber_words
+            .get(&callee)
+            .copied()
+            .unwrap_or_else(|| callee_plan.abs_words_end())
     }
 
     fn live_bound(
@@ -145,7 +154,7 @@ fn compute_future_bounds_for_func(
     }
 
     for block in function.layout.iter_block() {
-        let mut bound = 0;
+        let mut bound = ctx.func_plan.entry_abs_words;
         for inst in function.layout.iter_inst(block) {
             bound = bound.max(call_bound(ctx, function, inst));
             bound = bound.max(live_bound(
@@ -177,7 +186,7 @@ fn compute_future_bounds_for_func(
     let mut malloc_bounds: FxHashMap<InstId, u32> = FxHashMap::default();
     for block in function.layout.iter_block() {
         let out = cfg.succs_of(block).map(|b| block_in[*b]).max().unwrap_or(0);
-        let mut bound = out;
+        let mut bound = out.max(ctx.func_plan.entry_abs_words);
 
         let insts: Vec<InstId> = function.layout.iter_inst(block).collect();
         for inst in insts.into_iter().rev() {
@@ -199,4 +208,14 @@ fn compute_future_bounds_for_func(
     }
 
     malloc_bounds
+}
+
+fn absolute_base_word_for_loc(func_plan: &FuncMemPlan, loc: ObjLoc) -> Option<u32> {
+    match loc {
+        ObjLoc::ScratchAbs(off) => Some(off),
+        ObjLoc::StableAbs(off) => func_plan
+            .stable_base_word()
+            .and_then(|base| base.checked_add(off)),
+        ObjLoc::StableFrame(_) | ObjLoc::StackPinned(_) => None,
+    }
 }

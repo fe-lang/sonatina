@@ -1,0 +1,92 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/malloc_helper_before_lazy_enter.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 65 bytes
+  total: 65 bytes
+
+functions:
+  helper: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=0 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
+  ready: ir_blocks=3 ir_insts=7 vcode_ops=19 fixups=3 imm_bytes=1
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
+  entry: ir_blocks=1 ir_insts=8 vcode_ops=26 fixups=2 imm_bytes=4
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
+
+evm:
+  case before_enter: calldata_len=8 success reason=Return gas_used=21221 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=165
+  case active: calldata_len=8 success reason=Return gas_used=21178 gas_refunded=0 logs=0 output=call len=32 tx_gas=21044 runtime_gas=134
+
+
+--------------- DEBUG ---------------
+
+// func public %helper() -> i256
+helper:
+  block0:
+    JUMPDEST
+    PUSH1 0xc0 (192)  // v0.*i256 = evm_malloc 32.i256;
+    PUSH1 0x6f (111)  // mstore v0 111.i256 i256;
+    DUP2
+    MSTORE
+    MLOAD  // v2.i256 = mload v0 i256;
+    SWAP1  // return v2;
+    JUMP
+
+// func public %ready(v0.i1, v1.i256) -> i256
+ready:
+  block0:
+    JUMPDEST
+    ISZERO  // br v0 block1 block2;
+    PUSH1 block2
+    JUMPI
+  block1:
+    POP  // v2.i256 = call %helper;
+    PUSH1 `pc + (3)`
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    SWAP1  // return v2;
+    JUMP
+  block2:
+    JUMPDEST
+    PUSH1 0xa0 (160)  // v3.*i256 = alloca i256;
+    SWAP1  // mstore v3 v1 i256;
+    DUP2
+    MSTORE
+    MLOAD  // v4.i256 = mload v3 i256;
+    SWAP1  // return v4;
+    JUMP
+
+// func public %entry()
+entry:
+  block0:
+    JUMPDEST
+    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
+    CALLDATALOAD
+    DUP1  // v1.i256 = shr 224.i256 v0;
+    PUSH1 0xe0 (224)
+    SHR
+    SWAP1  // v2.i256 = shl 32.i256 v0;
+    PUSH1 0x20 (32)
+    SHL
+    PUSH1 0xe0 (224)  // v3.i256 = shr 224.i256 v2;
+    SHR
+    SWAP1  // v4.i1 = ne v1 0.i256;
+    PUSH0
+    EQ
+    ISZERO
+    SWAP1  // v5.i256 = call %ready v4 v3;
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH0  // mstore 0.i256 v5 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH0
+    RETURN

@@ -11,27 +11,26 @@ object: Contract
   total: 4412 bytes
 
 functions:
-  mem: dyn_base=0xc0 static_base=0xc0
   smt_store_zero_table: ir_blocks=1 ir_insts=33 vcode_ops=100 fixups=0 imm_bytes=64
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   abi_return_bool: ir_blocks=4 ir_insts=7 vcode_ops=16 fixups=2 imm_bytes=3
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   leanimt_root_from_calldata: ir_blocks=9 ir_insts=28 vcode_ops=75 fixups=5 imm_bytes=10
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   leanimt_update_root_from_calldata: ir_blocks=11 ir_insts=38 vcode_ops=98 fixups=6 imm_bytes=13
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   smt_root_from_calldata: ir_blocks=18 ir_insts=65 vcode_ops=177 fixups=13 imm_bytes=26
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   smt_update_root_from_calldata: ir_blocks=22 ir_insts=85 vcode_ops=247 fixups=15 imm_bytes=32
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   init__StorPtr_Evm___207f35a85ac4062e: ir_blocks=1 ir_insts=4 vcode_ops=9 fixups=2 imm_bytes=2
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   runtime__StorPtr_Evm___207f35a85ac4062e: ir_blocks=13 ir_insts=61 vcode_ops=180 fixups=22 imm_bytes=41
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   hash2_at: ir_blocks=1 ir_insts=5 vcode_ops=16 fixups=0 imm_bytes=2
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   hash2: ir_blocks=1 ir_insts=7 vcode_ops=26 fixups=1 imm_bytes=5
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
   deploy: success reason=Return gas_used=528903 gas_refunded=0 logs=0 output=create len=2200 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
@@ -2352,13 +2351,13 @@ hash2:
     JUMPDEST
     PUSH1 0x40 (64)  // v4.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     SWAP1  // mstore v5 v0 i256;
     DUP2

@@ -1,4 +1,7 @@
 #! evm.config: { stack_reach: 4 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(54)
 
 target = "evm-ethereum-osaka"
 

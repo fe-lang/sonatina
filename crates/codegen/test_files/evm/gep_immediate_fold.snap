@@ -1,28 +1,26 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/gep_immediate_fold.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 70 bytes
-  total: 70 bytes
+  section runtime: 69 bytes
+  total: 69 bytes
 
 functions:
-  mem: dyn_base=0x120 static_base=0xc0
   fold_simple: ir_blocks=1 ir_insts=5 vcode_ops=10 fixups=0 imm_bytes=3
-    mem: scheme=StaticArena need_words=3 locals_words=3
+    mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
   fold_nested: ir_blocks=1 ir_insts=6 vcode_ops=12 fixups=0 imm_bytes=4
-    mem: scheme=StaticArena need_words=3 locals_words=3
+    mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
   dynamic_index: ir_blocks=1 ir_insts=5 vcode_ops=12 fixups=0 imm_bytes=3
-    mem: scheme=StaticArena need_words=3 locals_words=3
+    mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
   entry: ir_blocks=1 ir_insts=7 vcode_ops=23 fixups=6 imm_bytes=2
-    mem: scheme=StaticArena need_words=3 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  case folded_and_fallback: calldata_len=8 success reason=Return gas_used=21254 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=198
+  case folded_and_fallback: calldata_len=8 success reason=Return gas_used=21251 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=195
 
 
 --------------- DEBUG ---------------
@@ -31,9 +29,9 @@ evm:
 fold_simple:
   block0:
     JUMPDEST
-    PUSH1 0xc0 (192)  // v0.*@triple = alloca @triple;
+    PUSH1 0xa0 (160)  // v0.*@triple = alloca @triple;
     POP  // v1.*i256 = gep v0 0.i256 1.i256;
-    PUSH1 0xe0 (224)
+    PUSH1 0xc0 (192)
     PUSH1 0x7 (7)  // mstore v1 7.i256 i256;
     DUP2
     MSTORE
@@ -45,7 +43,7 @@ fold_simple:
 fold_nested:
   block0:
     JUMPDEST
-    PUSH2 0x100 (256)  // v2.*i256 = gep v1 2.i256;
+    PUSH1 0xe0 (224)  // v2.*i256 = gep v1 2.i256;
     PUSH1 0x9 (9)  // mstore v2 9.i256 i256;
     DUP2
     MSTORE
@@ -57,7 +55,7 @@ fold_nested:
 dynamic_index:
   block0:
     JUMPDEST
-    PUSH1 0xc0 (192)  // v1.*[i256; 3] = alloca [i256; 3];
+    PUSH1 0xa0 (160)  // v1.*[i256; 3] = alloca [i256; 3];
     SWAP1  // v2.*i256 = gep v1 0.i256 v0;
     PUSH1 0x20 (32)
     MUL

@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/malloc_dynamic_frame_clamp_trace.sntn
 ---
@@ -11,16 +10,15 @@ object: Contract
   total: 23 bytes
 
 functions:
-  mem: dyn_base=0xc0 static_base=0xc0
-  dyn: ir_blocks=1 ir_insts=4 vcode_ops=58 fixups=4 imm_bytes=14
-    mem: scheme=DynamicFrame locals_words=1
-  main: ir_blocks=1 ir_insts=4 vcode_ops=27 fixups=2 imm_bytes=5
-    mem: scheme=StaticArena need_words=0 locals_words=0
+  dyn: ir_blocks=1 ir_insts=4 vcode_ops=38 fixups=3 imm_bytes=9
+    mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
+  main: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=0 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=1
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21130 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=74
+  case ok: calldata_len=8 success reason=Return gas_used=21127 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=71
 
 
 --------------- DEBUG ---------------
@@ -31,15 +29,6 @@ dyn:
     JUMPDEST
     PUSH1 0x80 (128)
     MLOAD
-    DUP1
-    PUSH1 `pc + (7)`
-    JUMPI
-    POP
-    PUSH1 0xc0 (192)
-    DUP1
-    PUSH1 0x80 (128)
-    MSTORE
-    JUMPDEST
     PUSH1 0x40 (64)
     MLOAD
     DUP2
@@ -50,22 +39,15 @@ dyn:
     SWAP1
     JUMPDEST
     POP
-    PUSH1 0xa0 (160)
-    MLOAD
-    DUP2
-    MSTORE
-    DUP1
     PUSH1 0x20 (32)
-    ADD
-    PUSH1 0xa0 (160)
-    MSTORE
-    PUSH1 0x40 (64)
     ADD
     PUSH1 0x80 (128)
     MSTORE
     POP  // v1.*i256 = alloca i256;
-    PUSH1 0xa0 (160)
+    PUSH1 0x20 (32)
+    PUSH1 0x80 (128)
     MLOAD
+    SUB
     PUSH0  // mstore v1 0.i256 i256;
     DUP2
     MSTORE
@@ -75,13 +57,9 @@ dyn:
     JUMP
     JUMPDEST
     PUSH1 0x20 (32)  // return v2;
-    PUSH1 0xa0 (160)
+    PUSH1 0x80 (128)
     MLOAD
     SUB
-    DUP1
-    MLOAD
-    PUSH1 0xa0 (160)
-    MSTORE
     PUSH1 0x80 (128)
     MSTORE
     SWAP1
@@ -91,26 +69,7 @@ dyn:
 main:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v0.*i256 = evm_malloc 32.i256;
-    MLOAD
-    PUSH1 0x80 (128)
-    MLOAD
-    DUP2
-    DUP2
-    LT
-    PUSH1 `pc + (3)`
-    JUMPI
-    SWAP1
-    JUMPDEST
-    POP
-    PUSH1 0xbf (191)
-    DUP2
-    GT
-    PUSH1 `pc + (4)`
-    JUMPI
-    POP
-    PUSH1 0xc0 (192)
-    JUMPDEST
+    PUSH1 0xa0 (160)  // v0.*i256 = evm_malloc 32.i256;
     PUSH1 0x6f (111)  // mstore v0 111.i256 i256;
     DUP2
     MSTORE

@@ -1,5 +1,6 @@
 mod heap_plan;
 mod late_alias;
+mod lazy_frame;
 mod legalize;
 pub use late_alias::canonicalize_alias_value;
 pub(crate) use late_alias::normalize_alias_map;
@@ -26,6 +27,7 @@ use crate::{
         lower::{FixupUpdate, Lower, LowerBackend, LoweredFunction, SectionLoweringCtx},
         vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
     },
+    module_analysis::{CallGraph, SccBuilder},
     optim::aggregate::{AggregateLowerToMemoryLegalize, assert_aggregate_legalized, shape},
     stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyBuilder},
 };
@@ -36,20 +38,23 @@ use sonatina_ir::{
     inst::{control_flow::BranchKind, data::SymbolRef, evm::inst_set::EvmInstKind},
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
+    object::Directive,
     types::{CompoundType, CompoundTypeRef},
 };
 use sonatina_triple::{EvmVersion, OperatingSystem};
 
 use cranelift_entity::{EntityList, SecondaryMap};
 use late_alias::compute_evm_late_aliases;
+use lazy_frame::{FrameSite, FrameSummary, LazyFramePlan, compute_frame_summary};
 use legalize::legalize_evm_section;
 use mem_effects::compute_func_mem_effects;
 pub(crate) use memory_plan::STATIC_BASE;
 use memory_plan::{
-    ArenaCostModel, CallPreserveChoice, DYN_FP_SLOT, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan,
-    MemScheme, ProgramMemoryPlan, WORD_BYTES, compute_program_memory_plan,
+    ArenaCostModel, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan, ObjLoc, PreserveMode,
+    ProgramMemoryPlan, StableMode, WORD_BYTES, compute_program_memory_plan, topo_sort_sccs,
 };
 use ptr_escape::{PtrEscapeSummary, compute_ptr_escape_summaries};
+use static_arena_alloc::StackObjId;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum PushWidthPolicy {
@@ -59,18 +64,44 @@ pub enum PushWidthPolicy {
 }
 
 struct PreparedSection {
+    section_entry: FuncRef,
     plan: ProgramMemoryPlan,
-    has_dynamic_frames: bool,
     has_persistent_mallocs: bool,
     has_explicit_free_ptr_writes: bool,
+    dyn_sp_plan: DynSpPlan,
     allocs: FxHashMap<FuncRef, StackifyAlloc>,
     block_orders: FxHashMap<FuncRef, Vec<BlockId>>,
+}
+
+#[derive(Clone, Default)]
+struct DynSpPlan {
+    entry_init: bool,
+    frontier_init_calls: FxHashMap<FuncRef, FxHashSet<InstId>>,
+    checked_frontier_init_calls: FxHashMap<FuncRef, FxHashSet<InstId>>,
+    entry_live_frame: FxHashMap<FuncRef, bool>,
+    frame_summaries: FxHashMap<FuncRef, FrameSummary>,
+}
+
+#[derive(Clone, Default)]
+struct FuncDynSpPlan {
+    entry_init: bool,
+    frontier_init_calls: FxHashSet<InstId>,
+    checked_frontier_init_calls: FxHashSet<InstId>,
+    entry_live_frame: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FrontierInitKind {
+    Always,
+    Checked,
 }
 
 struct PreparedLowering {
     alloc: StackifyAlloc,
     block_order: Vec<BlockId>,
     mem_plan: FuncMemPlan,
+    frame_summary: FrameSummary,
+    dyn_sp_plan: Option<FuncDynSpPlan>,
 }
 
 pub struct EvmBackend {
@@ -79,6 +110,8 @@ pub struct EvmBackend {
     arena_cost_model: ArenaCostModel,
     section_state: RefCell<Option<PreparedSection>>,
     current_mem_plan: RefCell<Option<FuncMemPlan>>,
+    current_frame_summary: RefCell<Option<FrameSummary>>,
+    current_dyn_sp_plan: RefCell<Option<FuncDynSpPlan>>,
     current_jump_targets: RefCell<Option<FxHashSet<BlockId>>>,
 }
 impl EvmBackend {
@@ -97,6 +130,8 @@ impl EvmBackend {
             arena_cost_model: ArenaCostModel::default(),
             section_state: RefCell::new(None),
             current_mem_plan: RefCell::new(None),
+            current_frame_summary: RefCell::new(None),
+            current_dyn_sp_plan: RefCell::new(None),
             current_jump_targets: RefCell::new(None),
         }
     }
@@ -152,8 +187,11 @@ impl EvmBackend {
         let mut out = String::new();
         writeln!(
             &mut out,
-            "evm mem plan: dyn_base=0x{:x} static_base=0x{:x}",
-            section.plan.dyn_base, STATIC_BASE
+            "evm mem plan: global_dyn_base=0x{:x} static_base=0x{:x} scratch_peak_words={} static_chain_peak_words={}",
+            section.plan.global_dyn_base,
+            STATIC_BASE,
+            section.plan.scratch_peak_words,
+            section.plan.static_chain_peak_words
         )
         .expect("mem plan write failed");
 
@@ -164,134 +202,105 @@ impl EvmBackend {
 
             let name = module.ctx.func_sig(func, |sig| sig.name().to_string());
 
-            match &func_plan.scheme {
-                MemScheme::StaticArena(st) => {
-                    writeln!(
-                        &mut out,
-                        "evm mem plan: {name} scheme=StaticArena need_words={} locals_words={}",
-                        st.need_words, func_plan.locals_words
+            let stable = match func_plan.stable_mode {
+                StableMode::None => "None".to_string(),
+                StableMode::DynamicFrame => "DynamicFrame".to_string(),
+                StableMode::StaticAbs { base_word } => {
+                    format!(
+                        "StaticAbs(base=0x{:x})",
+                        STATIC_BASE + (base_word * WORD_BYTES)
                     )
-                    .expect("mem plan write failed");
                 }
-                MemScheme::DynamicFrame => {
-                    writeln!(
-                        &mut out,
-                        "evm mem plan: {name} scheme=DynamicFrame locals_words={}",
-                        func_plan.locals_words
-                    )
-                    .expect("mem plan write failed");
-                }
-            }
+            };
+            writeln!(
+                &mut out,
+                "evm mem plan: {name} scratch_words={} stable_words={} stable_mode={} entry_abs_words={} abs_words_end={}",
+                func_plan.scratch_words,
+                func_plan.stable_words,
+                stable,
+                func_plan.entry_abs_words,
+                func_plan.abs_words_end(),
+            )
+            .expect("mem plan write failed");
 
-            let addr_of = |offset_words: u32| match &func_plan.scheme {
-                MemScheme::StaticArena(_) => {
+            let addr_of = |loc: ObjLoc| match loc {
+                ObjLoc::ScratchAbs(off) => {
+                    let addr_bytes = STATIC_BASE
+                        .checked_add(off.checked_mul(WORD_BYTES).expect("address bytes overflow"))
+                        .expect("address bytes overflow");
+                    format!("0x{addr_bytes:x}")
+                }
+                ObjLoc::StableAbs(off) => {
+                    let base_word = func_plan
+                        .stable_base_word()
+                        .expect("stable abs object missing stable base");
                     let addr_bytes = STATIC_BASE
                         .checked_add(
-                            offset_words
+                            base_word
+                                .checked_add(off)
+                                .expect("address words overflow")
                                 .checked_mul(WORD_BYTES)
                                 .expect("address bytes overflow"),
                         )
                         .expect("address bytes overflow");
                     format!("0x{addr_bytes:x}")
                 }
-                MemScheme::DynamicFrame => {
-                    let addr_bytes = offset_words
-                        .checked_mul(WORD_BYTES)
-                        .expect("address bytes overflow");
-                    if addr_bytes == 0 {
-                        "fp".to_string()
-                    } else {
-                        format!("fp+0x{addr_bytes:x}")
-                    }
+                ObjLoc::StableFrame(off) => {
+                    let addr_bytes =
+                        frame_slot_sp_relative_bytes(func_plan.frame_size_words(), off);
+                    format!("sp-0x{addr_bytes:x}")
                 }
+                ObjLoc::StackPinned(depth) => format!("stack[{depth}]"),
             };
 
             if detail {
-                let mut direct_callee_need_max: u32 = 0;
+                let mut call_info: FxHashMap<InstId, FuncRef> = FxHashMap::default();
                 module.func_store.view(func, |function| {
                     for block in function.layout.iter_block() {
-                        for insn in function.layout.iter_inst(block) {
-                            let Some(call) = function.dfg.call_info(insn) else {
+                        for inst in function.layout.iter_inst(block) {
+                            let Some(call) = function.dfg.call_info(inst) else {
                                 continue;
                             };
-                            let callee = call.callee();
-                            let callee_plan =
-                                section.plan.funcs.get(&callee).unwrap_or_else(|| {
-                                    panic!(
-                                        "missing memory plan for callee {} (called from {})",
-                                        callee.as_u32(),
-                                        func.as_u32()
-                                    )
-                                });
-                            let MemScheme::StaticArena(st) = &callee_plan.scheme else {
-                                continue;
-                            };
-                            direct_callee_need_max = direct_callee_need_max.max(st.need_words);
+                            call_info.insert(inst, call.callee());
                         }
                     }
                 });
 
-                if let MemScheme::StaticArena(st) = &func_plan.scheme {
-                    writeln!(
-                        &mut out,
-                        "  detail locals_words={} direct_callee_need_max_words={direct_callee_need_max} need_words={}",
-                        func_plan.locals_words, st.need_words
-                    )
-                    .expect("mem plan write failed");
-
-                    let mut call_info: FxHashMap<InstId, (FuncRef, usize)> = FxHashMap::default();
-                    module.func_store.view(func, |function| {
-                        for block in function.layout.iter_block() {
-                            for inst in function.layout.iter_inst(block) {
-                                let Some(call) = function.dfg.call_info(inst) else {
-                                    continue;
-                                };
-                                call_info.insert(
-                                    inst,
-                                    (call.callee(), function.dfg.inst_results(inst).len()),
-                                );
-                            }
-                        }
+                let mut call_preserve: Vec<(InstId, &memory_plan::CallPreservePlan)> = func_plan
+                    .call_preserve
+                    .iter()
+                    .map(|(inst, plan)| (*inst, plan))
+                    .collect();
+                call_preserve.sort_unstable_by_key(|(inst, _)| inst.as_u32());
+                for (inst, plan) in call_preserve {
+                    let callee = call_info.get(&inst).copied().unwrap_or_else(|| {
+                        panic!(
+                            "missing call info for preserve plan at inst {}",
+                            inst.as_u32()
+                        )
                     });
-
-                    let mut call_choices: Vec<(InstId, CallPreserveChoice)> =
-                        st.call_choice.iter().map(|(i, c)| (*i, *c)).collect();
-                    call_choices.sort_unstable_by_key(|(i, _)| i.as_u32());
-
-                    for (inst, choice) in call_choices {
-                        let (callee, result_count) =
-                            call_info.get(&inst).copied().unwrap_or_else(|| {
-                                panic!("missing call info for inst {}", inst.as_u32())
-                            });
-                        let callee_name = module.ctx.func_sig(callee, |sig| sig.name().to_string());
-                        let callee_need_words = section
-                            .plan
-                            .funcs
-                            .get(&callee)
-                            .unwrap_or_else(|| {
-                                panic!("missing memory plan for callee {}", callee.as_u32())
-                            })
-                            .static_clobber_words;
-
-                        let save_offsets = st
-                            .call_saves
-                            .get(&inst)
-                            .map(|p| p.save_word_offsets.as_slice())
-                            .unwrap_or(&[]);
-
-                        if save_offsets.is_empty() {
+                    let callee_name = module.ctx.func_sig(callee, |sig| sig.name().to_string());
+                    match &plan.mode {
+                        PreserveMode::None => {}
+                        PreserveMode::ShadowRuns { shadow_obj, runs } => {
+                            let save_words: u32 = runs.iter().map(|run| run.len_words).sum();
                             writeln!(
                                 &mut out,
-                                "  call inst{} callee=%{callee_name} callee_need_words={callee_need_words} choice={choice:?} result_count={result_count} save_words=0",
-                                inst.as_u32()
+                                "  call inst{} callee=%{callee_name} preserve=ShadowRuns shadow_obj={} result_count={} save_words={} runs={runs:?}",
+                                inst.as_u32(),
+                                shadow_obj.as_u32(),
+                                plan.result_count,
+                                save_words,
                             )
                             .expect("mem plan write failed");
-                        } else {
+                        }
+                        PreserveMode::TinyStackLift { word_offsets } => {
                             writeln!(
                                 &mut out,
-                                "  call inst{} callee=%{callee_name} callee_need_words={callee_need_words} choice={choice:?} result_count={result_count} save_words={} save_offsets={save_offsets:?}",
+                                "  call inst{} callee=%{callee_name} preserve=TinyStackLift result_count={} save_words={} save_offsets={word_offsets:?}",
                                 inst.as_u32(),
-                                save_offsets.len(),
+                                plan.result_count,
+                                word_offsets.len(),
                             )
                             .expect("mem plan write failed");
                         }
@@ -329,11 +338,15 @@ impl EvmBackend {
                         let Some(obj) = func_plan.spill_obj[v] else {
                             continue;
                         };
-                        let offset_words = *func_plan
-                            .obj_offset_words
+                        let loc = func_plan
+                            .obj_loc
                             .get(&obj)
+                            .copied()
+                            .expect("missing stack object location");
+                        let offset_words = func_plan
+                            .obj_word_offset(obj)
                             .expect("missing stack object offset");
-                        spills.push((v, offset_words, addr_of(offset_words)));
+                        spills.push((v, offset_words, addr_of(loc)));
                     }
                 });
 
@@ -359,10 +372,17 @@ impl EvmBackend {
                         let Some(value) = function.dfg.inst_result(insn) else {
                             continue;
                         };
-                        let offset_words = *func_plan
-                            .alloca_offset_words
+                        let loc = func_plan
+                            .alloca_loc
                             .get(&insn)
+                            .copied()
                             .expect("missing alloca plan");
+                        let offset_words = match loc {
+                            ObjLoc::ScratchAbs(off)
+                            | ObjLoc::StableAbs(off)
+                            | ObjLoc::StableFrame(off) => off,
+                            ObjLoc::StackPinned(depth) => u32::from(depth),
+                        };
 
                         let size_bytes = self
                             .isa
@@ -372,7 +392,7 @@ impl EvmBackend {
                             as u32;
                         let size_words = size_bytes.div_ceil(WORD_BYTES);
 
-                        allocas.push((value, offset_words, size_words, addr_of(offset_words)));
+                        allocas.push((value, offset_words, size_words, addr_of(loc)));
                     }
                 }
             });
@@ -402,11 +422,36 @@ impl EvmBackend {
         let alloc = section.allocs.remove(&func)?;
         let block_order = section.block_orders.remove(&func)?;
         let mem_plan = section.plan.funcs.get(&func).cloned()?;
+        let frame_summary = section
+            .dyn_sp_plan
+            .frame_summaries
+            .remove(&func)
+            .unwrap_or_default();
+        let dyn_sp_plan = Some(FuncDynSpPlan {
+            entry_init: func == section.section_entry && section.dyn_sp_plan.entry_init,
+            frontier_init_calls: section
+                .dyn_sp_plan
+                .frontier_init_calls
+                .remove(&func)
+                .unwrap_or_default(),
+            checked_frontier_init_calls: section
+                .dyn_sp_plan
+                .checked_frontier_init_calls
+                .remove(&func)
+                .unwrap_or_default(),
+            entry_live_frame: section
+                .dyn_sp_plan
+                .entry_live_frame
+                .remove(&func)
+                .unwrap_or(false),
+        });
 
         Some(PreparedLowering {
             alloc,
             block_order,
             mem_plan,
+            frame_summary,
+            dyn_sp_plan,
         })
     }
 
@@ -414,15 +459,128 @@ impl EvmBackend {
         self.section_state
             .borrow()
             .as_ref()
-            .map(|s| s.plan.dyn_base)
+            .map(|s| s.plan.global_dyn_base)
             .unwrap_or(STATIC_BASE)
     }
 
-    fn section_has_dynamic_frames(&self) -> bool {
-        self.section_state
+    fn emit_frame_enter(&self, ctx: &mut Lower<OpCode>, frame_size_slots: u32) {
+        if self.current_dyn_sp_plan.borrow().is_some() {
+            enter_frame_initialized(ctx, frame_size_slots);
+        } else {
+            enter_frame_compat(ctx, frame_size_slots, self.dyn_base());
+        }
+    }
+
+    fn current_lazy_frame_plan_matches(&self, pred: impl FnOnce(&LazyFramePlan) -> bool) -> bool {
+        self.current_frame_summary
             .borrow()
             .as_ref()
-            .is_none_or(|s| s.has_dynamic_frames)
+            .and_then(|summary| summary.lowering.as_ref())
+            .is_some_and(pred)
+    }
+
+    fn has_current_lazy_frame_lowering(&self) -> bool {
+        self.current_frame_summary
+            .borrow()
+            .as_ref()
+            .and_then(|summary| summary.lowering.as_ref())
+            .is_some()
+    }
+
+    fn current_local_frame_active_before_inst(&self, inst: InstId) -> bool {
+        self.current_frame_summary
+            .borrow()
+            .as_ref()
+            .is_some_and(|summary| summary.local_frame_active_before_inst(inst))
+    }
+
+    fn current_frontier_init_kind(&self, inst: InstId) -> Option<FrontierInitKind> {
+        let plan = self.current_dyn_sp_plan.borrow();
+        let plan = plan.as_ref()?;
+        if plan.checked_frontier_init_calls.contains(&inst) {
+            Some(FrontierInitKind::Checked)
+        } else if plan.frontier_init_calls.contains(&inst) {
+            Some(FrontierInitKind::Always)
+        } else {
+            None
+        }
+    }
+
+    fn current_malloc_needs_dyn_sp_clamp(&self, inst: InstId) -> bool {
+        let entry_live_frame = self
+            .current_dyn_sp_plan
+            .borrow()
+            .as_ref()
+            .map(|plan| plan.entry_live_frame);
+        entry_live_frame
+            .map(|entry_live_frame| {
+                entry_live_frame || self.current_local_frame_active_before_inst(inst)
+            })
+            .unwrap_or(true)
+    }
+
+    fn emit_lazy_frame_enter_if_site_matches(
+        &self,
+        ctx: &mut Lower<OpCode>,
+        frame_size_slots: u32,
+        site: FrameSite,
+    ) {
+        if self.current_lazy_frame_plan_matches(|plan| plan.enter_before_site(site)) {
+            self.emit_frame_enter(ctx, frame_size_slots);
+        }
+    }
+
+    fn emit_lazy_frame_leave_if_site_matches(
+        &self,
+        ctx: &mut Lower<OpCode>,
+        frame_size_slots: u32,
+        site: FrameSite,
+    ) {
+        if self.current_lazy_frame_plan_matches(|plan| plan.exit_before_site(site)) {
+            leave_frame(ctx, frame_size_slots);
+        }
+    }
+
+    fn emit_actions_for_site(
+        &self,
+        ctx: &mut Lower<OpCode>,
+        actions: &[Action],
+        frame_size_slots: u32,
+        site: FrameSite,
+    ) {
+        self.emit_actions_for_site_from_offset(ctx, actions, frame_size_slots, site, 0);
+    }
+
+    fn emit_actions_for_site_from_offset(
+        &self,
+        ctx: &mut Lower<OpCode>,
+        actions: &[Action],
+        frame_size_slots: u32,
+        site: FrameSite,
+        action_index_offset: usize,
+    ) {
+        self.emit_lazy_frame_enter_if_site_matches(ctx, frame_size_slots, site);
+
+        let folded = fold_stack_actions(actions);
+        for (index, action) in folded.iter().copied().enumerate() {
+            let index = action_index_offset
+                .checked_add(index)
+                .expect("lazy frame action index overflow");
+            if self.current_lazy_frame_plan_matches(|plan| plan.enter_before_action(site, index)) {
+                self.emit_frame_enter(ctx, frame_size_slots);
+            }
+            if self.current_lazy_frame_plan_matches(|plan| plan.exit_before_action(site, index)) {
+                leave_frame(ctx, frame_size_slots);
+            }
+            perform_action(ctx, action, frame_size_slots);
+            if self.current_lazy_frame_plan_matches(|plan| plan.exit_after_action(site, index)) {
+                leave_frame(ctx, frame_size_slots);
+            }
+        }
+
+        if self.current_lazy_frame_plan_matches(|plan| plan.exit_after_site(site)) {
+            leave_frame(ctx, frame_size_slots);
+        }
     }
 
     fn section_has_persistent_mallocs(&self) -> bool {
@@ -445,8 +603,13 @@ impl EvmBackend {
         func: FuncRef,
         prepared: PreparedLowering,
     ) -> Result<LoweredFunction<OpCode>, String> {
-        let mem_plan = prepared.mem_plan;
-        let block_order = prepared.block_order;
+        let PreparedLowering {
+            alloc,
+            block_order,
+            mem_plan,
+            frame_summary,
+            dyn_sp_plan,
+        } = prepared;
         let _span = trace_span!(
             "sonatina.codegen.evm.lower_prepared_function",
             func_ref = func.as_u32(),
@@ -461,10 +624,16 @@ impl EvmBackend {
             module.func_store.view(func, |function| {
                 let _plan_guard =
                     CurrentMemPlanGuard::new(&self.current_mem_plan, mem_plan.clone());
+                let _frame_summary_guard = CurrentFrameSummaryGuard::new(
+                    &self.current_frame_summary,
+                    frame_summary.clone(),
+                );
+                let _dyn_sp_plan_guard =
+                    CurrentDynSpPlanGuard::new(&self.current_dyn_sp_plan, dyn_sp_plan.clone());
                 let jump_targets = compute_explicit_jump_targets(function, &block_order);
                 let _jump_targets_guard =
                     CurrentJumpTargetsGuard::new(&self.current_jump_targets, jump_targets);
-                let mut alloc = FinalAlloc::new(prepared.alloc, mem_plan);
+                let mut alloc = FinalAlloc::new(alloc, mem_plan);
                 let lower = Lower::new(&module.ctx, function, &block_order);
                 lower.lower(self, &mut alloc).map_err(|e| format!("{e:?}"))
             })?
@@ -487,10 +656,6 @@ impl EvmBackend {
     ) -> Option<u32> {
         let mem_plan = self.current_mem_plan.borrow();
         let mem_plan = mem_plan.as_ref()?;
-        if !matches!(mem_plan.scheme, MemScheme::StaticArena(_)) {
-            return None;
-        }
-
         let &base = args.first()?;
         let base_addr = self.try_fold_static_arena_addr_value(ctx, mem_plan, base)?;
         let offset = gep_const_offset_bytes(steps)?;
@@ -507,8 +672,8 @@ impl EvmBackend {
         let data = self.isa.inst_set().resolve_inst(ctx.insn_data(inst));
         match data {
             EvmInstKind::Alloca(_) => {
-                let &offset_words = mem_plan.alloca_offset_words.get(&inst)?;
-                Some(static_arena_addr_bytes(offset_words))
+                let loc = mem_plan.alloca_loc.get(&inst).copied()?;
+                obj_loc_abs_addr_bytes(mem_plan, loc)
             }
             EvmInstKind::Bitcast(bitcast) => {
                 self.try_fold_static_arena_addr_value(ctx, mem_plan, *bitcast.from())
@@ -623,13 +788,13 @@ fn compute_return_escape_caller_clamp_words(
 
             let mut next = clamp_words.get(&func).copied().unwrap_or(0);
             for caller in func_callers.iter() {
-                let caller_clobber_words = plan
+                let caller_active_words = plan
                     .funcs
                     .get(caller)
-                    .map(|func_plan| func_plan.static_clobber_words)
+                    .map(FuncMemPlan::active_abs_words)
                     .unwrap_or(0);
                 let caller_transitive_words = clamp_words.get(caller).copied().unwrap_or(0);
-                next = next.max(caller_clobber_words.max(caller_transitive_words));
+                next = next.max(caller_active_words.max(caller_transitive_words));
             }
 
             let cur = clamp_words.get(&func).copied().unwrap_or(0);
@@ -641,6 +806,249 @@ fn compute_return_escape_caller_clamp_words(
     }
 
     clamp_words
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct EntryFrameState {
+    maybe_no_live_frame: bool,
+    maybe_live_frame: bool,
+}
+
+impl EntryFrameState {
+    fn no_live() -> Self {
+        Self {
+            maybe_no_live_frame: true,
+            maybe_live_frame: false,
+        }
+    }
+
+    fn live() -> Self {
+        Self {
+            maybe_no_live_frame: false,
+            maybe_live_frame: true,
+        }
+    }
+
+    fn is_reachable(self) -> bool {
+        self.maybe_no_live_frame || self.maybe_live_frame
+    }
+
+    fn merge(&mut self, other: Self) -> bool {
+        let next = Self {
+            maybe_no_live_frame: self.maybe_no_live_frame || other.maybe_no_live_frame,
+            maybe_live_frame: self.maybe_live_frame || other.maybe_live_frame,
+        };
+        let changed = next != *self;
+        *self = next;
+        changed
+    }
+}
+
+fn resolve_section_entry(
+    module: &Module,
+    section_ctx: &SectionLoweringCtx<'_>,
+    funcs: &[FuncRef],
+) -> FuncRef {
+    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
+    let object = module.objects.get(section_ctx.object.0.as_str());
+
+    object
+        .and_then(|object| {
+            object
+                .sections
+                .iter()
+                .find(|section| section.name == *section_ctx.section)
+                .or_else(|| {
+                    let mut matches = object.sections.iter().filter(|section| {
+                        section.directives.iter().all(|directive| match directive {
+                            Directive::Entry(func) | Directive::Include(func) => {
+                                funcs_set.contains(func)
+                            }
+                            Directive::Data(_) | Directive::Embed(_) => true,
+                        })
+                    });
+                    let first = matches.next()?;
+                    matches.next().is_none().then_some(first)
+                })
+        })
+        .and_then(|section| {
+            section
+                .directives
+                .iter()
+                .find_map(|directive| match directive {
+                    Directive::Entry(func) => Some(*func),
+                    Directive::Include(_) | Directive::Data(_) | Directive::Embed(_) => None,
+                })
+        })
+        .or_else(|| funcs.first().copied())
+        .expect("section must contain an entry function")
+}
+
+fn compute_dyn_sp_plan(
+    module: &Module,
+    funcs: &[FuncRef],
+    section_entry: FuncRef,
+    plan: &ProgramMemoryPlan,
+    analyses: &FxHashMap<FuncRef, memory_plan::FuncAnalysis>,
+    isa: &Evm,
+) -> DynSpPlan {
+    let mut frame_summaries: FxHashMap<FuncRef, FrameSummary> = FxHashMap::default();
+    for &func in funcs {
+        let analysis = analyses
+            .get(&func)
+            .unwrap_or_else(|| panic!("missing analysis for func {}", func.as_u32()));
+        let mem_plan = plan
+            .funcs
+            .get(&func)
+            .cloned()
+            .unwrap_or_else(|| panic!("missing memory plan for func {}", func.as_u32()));
+        let summary = module.func_store.view(func, |function| {
+            let alloc = FinalAlloc::new(analysis.alloc.clone(), mem_plan.clone());
+            compute_frame_summary(function, &alloc, &mem_plan, isa)
+        });
+        frame_summaries.insert(func, summary);
+    }
+
+    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
+    let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
+    let mut reachable_funcs: FxHashSet<FuncRef> = FxHashSet::default();
+    let mut worklist = vec![section_entry];
+    while let Some(func) = worklist.pop() {
+        if !reachable_funcs.insert(func) {
+            continue;
+        }
+        for &callee in call_graph.callee_of(func) {
+            worklist.push(callee);
+        }
+    }
+
+    let mut ordered_funcs: Vec<FuncRef> = funcs.to_vec();
+    ordered_funcs.sort_unstable_by_key(|func| func.as_u32());
+    let mut ordered_reachable: Vec<FuncRef> = reachable_funcs.iter().copied().collect();
+    ordered_reachable.sort_unstable_by_key(|func| func.as_u32());
+
+    let scc = SccBuilder::new().compute_scc(&call_graph);
+    let topo = topo_sort_sccs(&reachable_funcs, &call_graph, &scc);
+    let mut ready_sccs: FxHashSet<_> = FxHashSet::default();
+    for &scc_ref in &topo {
+        if scc
+            .scc_info(scc_ref)
+            .components
+            .iter()
+            .copied()
+            .filter(|func| reachable_funcs.contains(func))
+            .any(|func| {
+                plan.funcs
+                    .get(&func)
+                    .is_some_and(|func_plan| func_plan.frame_size_words() != 0)
+            })
+        {
+            ready_sccs.insert(scc_ref);
+        }
+    }
+
+    let mut entry_states: FxHashMap<FuncRef, EntryFrameState> = FxHashMap::default();
+    entry_states.insert(section_entry, EntryFrameState::no_live());
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &caller in &ordered_reachable {
+            let caller_state = entry_states.get(&caller).copied().unwrap_or_default();
+            if !caller_state.is_reachable() {
+                continue;
+            }
+            let caller_summary = frame_summaries
+                .get(&caller)
+                .unwrap_or_else(|| panic!("missing frame summary for func {}", caller.as_u32()));
+            module.func_store.view(caller, |function| {
+                for block in function.layout.iter_block() {
+                    for inst in function.layout.iter_inst(block) {
+                        let Some(call) = function.dfg.call_info(inst) else {
+                            continue;
+                        };
+                        let callee = call.callee();
+                        if !reachable_funcs.contains(&callee) {
+                            continue;
+                        }
+
+                        let edge_state = if caller_summary.local_frame_active_before_inst(inst) {
+                            EntryFrameState::live()
+                        } else {
+                            caller_state
+                        };
+                        changed |= entry_states.entry(callee).or_default().merge(edge_state);
+                    }
+                }
+            });
+        }
+    }
+
+    let entry_init = ready_sccs.contains(&scc.scc_ref(section_entry));
+    let mut frontier_init_calls: FxHashMap<FuncRef, FxHashSet<InstId>> = FxHashMap::default();
+    let mut checked_frontier_init_calls: FxHashMap<FuncRef, FxHashSet<InstId>> =
+        FxHashMap::default();
+    for &caller in &ordered_reachable {
+        let caller_scc = scc.scc_ref(caller);
+        if ready_sccs.contains(&caller_scc) {
+            continue;
+        }
+
+        let caller_summary = frame_summaries
+            .get(&caller)
+            .unwrap_or_else(|| panic!("missing frame summary for func {}", caller.as_u32()));
+        let caller_state = entry_states.get(&caller).copied().unwrap_or_default();
+        module.func_store.view(caller, |function| {
+            for block in function.layout.iter_block() {
+                for inst in function.layout.iter_inst(block) {
+                    let Some(call) = function.dfg.call_info(inst) else {
+                        continue;
+                    };
+                    let callee = call.callee();
+                    if !reachable_funcs.contains(&callee) {
+                        continue;
+                    }
+                    let callee_scc = scc.scc_ref(callee);
+                    if caller_scc == callee_scc || !ready_sccs.contains(&callee_scc) {
+                        continue;
+                    }
+                    if caller_summary.local_frame_active_before_inst(inst) {
+                        continue;
+                    }
+
+                    match (
+                        caller_state.maybe_no_live_frame,
+                        caller_state.maybe_live_frame,
+                    ) {
+                        (true, false) => {
+                            frontier_init_calls.entry(caller).or_default().insert(inst);
+                        }
+                        (true, true) => {
+                            frontier_init_calls.entry(caller).or_default().insert(inst);
+                            checked_frontier_init_calls
+                                .entry(caller)
+                                .or_default()
+                                .insert(inst);
+                        }
+                        (false, true) | (false, false) => {}
+                    }
+                }
+            }
+        });
+    }
+
+    let mut entry_live_frame: FxHashMap<FuncRef, bool> = FxHashMap::default();
+    for func in ordered_funcs {
+        let state = entry_states.get(&func).copied().unwrap_or_default();
+        entry_live_frame.insert(func, state.maybe_live_frame);
+    }
+
+    DynSpPlan {
+        entry_init,
+        frontier_init_calls,
+        checked_frontier_init_calls,
+        entry_live_frame,
+        frame_summaries,
+    }
 }
 
 fn is_push_opcode(op: OpCode) -> bool {
@@ -934,6 +1342,40 @@ impl Drop for CurrentMemPlanGuard<'_> {
     }
 }
 
+struct CurrentFrameSummaryGuard<'a> {
+    slot: &'a RefCell<Option<FrameSummary>>,
+}
+
+impl<'a> CurrentFrameSummaryGuard<'a> {
+    fn new(slot: &'a RefCell<Option<FrameSummary>>, summary: FrameSummary) -> Self {
+        *slot.borrow_mut() = Some(summary);
+        Self { slot }
+    }
+}
+
+impl Drop for CurrentFrameSummaryGuard<'_> {
+    fn drop(&mut self) {
+        *self.slot.borrow_mut() = None;
+    }
+}
+
+struct CurrentDynSpPlanGuard<'a> {
+    slot: &'a RefCell<Option<FuncDynSpPlan>>,
+}
+
+impl<'a> CurrentDynSpPlanGuard<'a> {
+    fn new(slot: &'a RefCell<Option<FuncDynSpPlan>>, plan: Option<FuncDynSpPlan>) -> Self {
+        *slot.borrow_mut() = plan;
+        Self { slot }
+    }
+}
+
+impl Drop for CurrentDynSpPlanGuard<'_> {
+    fn drop(&mut self) {
+        *self.slot.borrow_mut() = None;
+    }
+}
+
 struct CurrentJumpTargetsGuard<'a> {
     slot: &'a RefCell<Option<FxHashSet<BlockId>>>,
 }
@@ -1143,7 +1585,7 @@ impl LowerBackend for EvmBackend {
         &self,
         module: &Module,
         funcs: &[FuncRef],
-        _section_ctx: &SectionLoweringCtx<'_>,
+        section_ctx: &SectionLoweringCtx<'_>,
     ) {
         let _span =
             info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
@@ -1258,7 +1700,7 @@ impl LowerBackend for EvmBackend {
             let _span = trace_span!("sonatina.codegen.evm.compute_func_mem_effects").entered();
             compute_func_mem_effects(module, funcs, &plan, &scratch_effects, &self.isa)
         };
-        let return_escape_caller_clamp_words = {
+        let return_escape_caller_abs_words = {
             let _span = trace_span!("sonatina.codegen.evm.compute_return_escape_clamps").entered();
             compute_return_escape_caller_clamp_words(module, funcs, &plan)
         };
@@ -1290,7 +1732,7 @@ impl LowerBackend for EvmBackend {
                 });
             if let Some(mem_plan) = plan.funcs.get_mut(&func) {
                 mem_plan.malloc_escape_kinds = malloc_escape_kinds;
-                mem_plan.return_escape_caller_clamp_words = return_escape_caller_clamp_words
+                mem_plan.return_escape_caller_abs_words = return_escape_caller_abs_words
                     .get(&func)
                     .copied()
                     .unwrap_or(0);
@@ -1300,14 +1742,12 @@ impl LowerBackend for EvmBackend {
 
         let malloc_bounds = {
             let _span =
-                debug_span!("sonatina.codegen.evm.compute_malloc_future_static_words").entered();
-            heap_plan::compute_malloc_future_static_words(
-                module, funcs, &plan, &analyses, &self.isa,
-            )
+                debug_span!("sonatina.codegen.evm.compute_malloc_future_abs_words").entered();
+            heap_plan::compute_malloc_future_abs_words(module, funcs, &plan, &analyses, &self.isa)
         };
         for (func, bounds) in malloc_bounds {
             if let Some(mem_plan) = plan.funcs.get_mut(&func) {
-                mem_plan.malloc_future_static_words = bounds;
+                mem_plan.malloc_future_abs_words = bounds;
             }
         }
 
@@ -1358,10 +1798,12 @@ impl LowerBackend for EvmBackend {
             })
         };
 
-        let has_dynamic_frames = plan
-            .funcs
-            .values()
-            .any(|func_plan| matches!(&func_plan.scheme, MemScheme::DynamicFrame));
+        let section_entry = resolve_section_entry(module, section_ctx, funcs);
+        let dyn_sp_plan = {
+            let _span = trace_span!("sonatina.codegen.evm.compute_dyn_sp_plan").entered();
+            compute_dyn_sp_plan(module, funcs, section_entry, &plan, &analyses, &self.isa)
+        };
+        let has_dynamic_frames = plan.funcs.values().any(FuncMemPlan::uses_dynamic_frame);
 
         let (allocs, block_orders) = {
             let _span = trace_span!("sonatina.codegen.evm.extract_lowering_state").entered();
@@ -1383,10 +1825,11 @@ impl LowerBackend for EvmBackend {
             )
             .entered();
             *self.section_state.borrow_mut() = Some(PreparedSection {
+                section_entry,
                 plan,
-                has_dynamic_frames,
                 has_persistent_mallocs,
                 has_explicit_free_ptr_writes,
+                dyn_sp_plan,
                 allocs,
                 block_orders,
             });
@@ -1460,21 +1903,38 @@ impl LowerBackend for EvmBackend {
             })
         };
 
+        let mem_plan = FuncMemPlan {
+            scratch_words: 0,
+            stable_words: layout.locals_words,
+            stable_mode: StableMode::DynamicFrame,
+            entry_abs_words: 0,
+            obj_loc: layout
+                .obj_offset_words
+                .into_iter()
+                .map(|(id, off)| (id, ObjLoc::StableFrame(off)))
+                .collect(),
+            alloca_loc: layout
+                .alloca_offset_words
+                .into_iter()
+                .map(|(inst, off)| (inst, ObjLoc::StableFrame(off)))
+                .collect(),
+            spill_obj: layout.spill_obj,
+            call_preserve: FxHashMap::default(),
+            malloc_future_abs_words: FxHashMap::default(),
+            transient_mallocs: FxHashSet::default(),
+            malloc_escape_kinds: FxHashMap::default(),
+            return_escape_caller_abs_words: 0,
+        };
+        let frame_summary = module.func_store.view(func, |function| {
+            let alloc = FinalAlloc::new(analysis.alloc.clone(), mem_plan.clone());
+            compute_frame_summary(function, &alloc, &mem_plan, &self.isa)
+        });
         let lowering = PreparedLowering {
             alloc: analysis.alloc,
             block_order: analysis.block_order,
-            mem_plan: FuncMemPlan {
-                scheme: MemScheme::DynamicFrame,
-                static_clobber_words: 0,
-                obj_offset_words: layout.obj_offset_words,
-                alloca_offset_words: layout.alloca_offset_words,
-                spill_obj: layout.spill_obj,
-                locals_words: layout.locals_words,
-                malloc_future_static_words: FxHashMap::default(),
-                transient_mallocs: FxHashSet::default(),
-                malloc_escape_kinds: FxHashMap::default(),
-                return_escape_caller_clamp_words: 0,
-            },
+            mem_plan,
+            frame_summary,
+            dyn_sp_plan: None,
         };
         self.lower_prepared_function(module, func, lowering)
     }
@@ -1518,8 +1978,23 @@ impl LowerBackend for EvmBackend {
         alloc: &mut dyn Allocator,
         function: &Function,
     ) {
-        enter_frame(ctx, alloc.frame_size_slots(), self.dyn_base());
-        perform_actions(ctx, &alloc.enter_function(function));
+        let frame_size_slots = alloc.frame_size_slots();
+        let actions = alloc.enter_function(function);
+        if self
+            .current_dyn_sp_plan
+            .borrow()
+            .as_ref()
+            .is_some_and(|plan| plan.entry_init)
+        {
+            init_dyn_sp(ctx, self.dyn_base());
+        }
+
+        if self.has_current_lazy_frame_lowering() {
+            self.emit_actions_for_site(ctx, &actions, frame_size_slots, FrameSite::EnterFunction);
+        } else {
+            self.emit_frame_enter(ctx, frame_size_slots);
+            crate::isa::evm::perform_actions(ctx, &actions, frame_size_slots);
+        }
     }
 
     fn enter_block(
@@ -1538,19 +2013,36 @@ impl LowerBackend for EvmBackend {
         if ctx.is_entry(block) || is_jump_target {
             ctx.push(OpCode::JUMPDEST);
         }
+        self.emit_lazy_frame_enter_if_site_matches(
+            ctx,
+            _alloc.frame_size_slots(),
+            FrameSite::BlockEntry(block),
+        );
+        self.emit_lazy_frame_leave_if_site_matches(
+            ctx,
+            _alloc.frame_size_slots(),
+            FrameSite::BlockEntry(block),
+        );
     }
 
     fn lower(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, insn: InstId) {
+        let frame_size_slots = alloc.frame_size_slots();
+        let emit_pre_actions = |ctx: &mut Lower<Self::MInst>, actions: &[Action]| {
+            self.emit_actions_for_site(ctx, actions, frame_size_slots, FrameSite::PreInst(insn))
+        };
+        let emit_post_actions = |ctx: &mut Lower<Self::MInst>, actions: &[Action]| {
+            self.emit_actions_for_site(ctx, actions, frame_size_slots, FrameSite::PostInst(insn))
+        };
         let results: SmallVec<[ValueId; 4]> = ctx.insn_results(insn).iter().copied().collect();
         let args = ctx.insn_data(insn).collect_values();
         let data = self.isa.inst_set().resolve_inst(ctx.insn_data(insn));
 
         let basic_op = |ctx: &mut Lower<Self::MInst>, ops: &[OpCode]| {
-            perform_actions(ctx, &alloc.read(insn, &args));
+            emit_pre_actions(ctx, &alloc.read(insn, &args));
             for op in ops {
                 ctx.push(*op);
             }
-            perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+            emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
         };
 
         match &data {
@@ -1581,7 +2073,7 @@ impl LowerBackend for EvmBackend {
                 let src_ty = ctx.value_ty(from);
                 let src_bits = scalar_bit_width(src_ty, ctx.module).unwrap_or(256);
 
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
 
                 if src_bits == 1 {
                     // Canonicalize to low bit first in case the producer left a non-canonical
@@ -1602,38 +2094,38 @@ impl LowerBackend for EvmBackend {
                     ctx.push(OpCode::SIGNEXTEND);
                 }
 
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::Zext(_) => {
                 let from = args[0];
                 let src_ty = ctx.value_ty(from);
                 let src_bits = scalar_bit_width(src_ty, ctx.module).unwrap_or(256);
 
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
                 if let Some(mask) = low_bits_mask(src_bits) {
                     let bytes = u256_to_be(&mask);
                     push_bytes(ctx, &bytes);
                     ctx.push(OpCode::AND);
                 }
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
 
             EvmInstKind::Trunc(trunc) => {
                 let dst_ty = *trunc.ty();
                 let dst_bits = scalar_bit_width(dst_ty, ctx.module).unwrap_or(256);
 
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
                 if let Some(mask) = low_bits_mask(dst_bits) {
                     let bytes = u256_to_be(&mask);
                     push_bytes(ctx, &bytes);
                     ctx.push(OpCode::AND);
                 }
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::Bitcast(_) => {
                 // No-op.
-                perform_actions(ctx, &alloc.read(insn, &args));
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::IntToPtr(_) => {
                 // Pointers are represented as 256-bit integers on the EVM.
@@ -1641,25 +2133,25 @@ impl LowerBackend for EvmBackend {
                 let src_ty = ctx.value_ty(from);
                 let src_bits = scalar_bit_width(src_ty, ctx.module).unwrap_or(256);
 
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
                 if let Some(mask) = low_bits_mask(src_bits) {
                     let bytes = u256_to_be(&mask);
                     push_bytes(ctx, &bytes);
                     ctx.push(OpCode::AND);
                 }
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::PtrToInt(ptr_to_int) => {
                 let dst_ty = *ptr_to_int.ty();
                 let dst_bits = scalar_bit_width(dst_ty, ctx.module).unwrap_or(256);
 
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
                 if let Some(mask) = low_bits_mask(dst_bits) {
                     let bytes = u256_to_be(&mask);
                     push_bytes(ctx, &bytes);
                     ctx.push(OpCode::AND);
                 }
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::Lt(_) => basic_op(ctx, &[OpCode::LT]),
             EvmInstKind::Gt(_) => basic_op(ctx, &[OpCode::GT]),
@@ -1680,7 +2172,7 @@ impl LowerBackend for EvmBackend {
 
             EvmInstKind::Jump(jump) => {
                 let dest = *jump.dest();
-                perform_actions(ctx, &alloc.read(insn, &[]));
+                emit_pre_actions(ctx, &alloc.read(insn, &[]));
 
                 if !ctx.is_next_block(dest) {
                     let push_op = ctx.push(OpCode::PUSH1);
@@ -1693,7 +2185,7 @@ impl LowerBackend for EvmBackend {
                 let z_dest = *br.z_dest();
 
                 // JUMPI: dest is top of stack, bool val is next
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
 
                 if ctx.is_next_block(nz_dest) {
                     // Prefer fallthrough to the next block.
@@ -1712,7 +2204,7 @@ impl LowerBackend for EvmBackend {
             }
             EvmInstKind::Phi(_) => {}
             EvmInstKind::Unreachable(_) => {
-                perform_actions(ctx, &alloc.read(insn, &[]));
+                emit_pre_actions(ctx, &alloc.read(insn, &[]));
                 ctx.push(OpCode::INVALID);
             }
 
@@ -1730,7 +2222,12 @@ impl LowerBackend for EvmBackend {
                 );
 
                 for (case_val, dest) in table.iter() {
-                    perform_actions(ctx, &alloc.read(insn, &[scrutinee, *case_val]));
+                    self.emit_actions_for_site(
+                        ctx,
+                        &alloc.read(insn, &[scrutinee, *case_val]),
+                        frame_size_slots,
+                        FrameSite::PreInst(insn),
+                    );
                     ctx.push(OpCode::EQ);
 
                     ctx.push_jump_target(OpCode::PUSH1, Label::Block(*dest));
@@ -1746,8 +2243,6 @@ impl LowerBackend for EvmBackend {
             }
 
             EvmInstKind::Call(call) => {
-                // xxx if func uses memory, store new fp
-
                 let callee = *call.callee();
                 let mut actions = alloc.read(insn, &args);
 
@@ -1770,13 +2265,32 @@ impl LowerBackend for EvmBackend {
                 );
 
                 // Prefix actions run before the continuation address is pushed.
-                perform_actions(ctx, &actions);
+                let prefix_folded_len = fold_stack_actions(&actions).len();
+                self.emit_actions_for_site_from_offset(
+                    ctx,
+                    &actions,
+                    frame_size_slots,
+                    FrameSite::PreInst(insn),
+                    0,
+                );
 
                 // Push the return pc / continuation address.
                 let push_callback = ctx.push(OpCode::PUSH1);
 
                 // Move fn args onto stack
-                perform_actions(ctx, &suffix);
+                self.emit_actions_for_site_from_offset(
+                    ctx,
+                    &suffix,
+                    frame_size_slots,
+                    FrameSite::PreInst(insn),
+                    prefix_folded_len,
+                );
+
+                match self.current_frontier_init_kind(insn) {
+                    Some(FrontierInitKind::Always) => init_dyn_sp(ctx, self.dyn_base()),
+                    Some(FrontierInitKind::Checked) => ensure_dyn_sp_init(ctx, self.dyn_base()),
+                    None => {}
+                }
 
                 // Push fn address onto stack and jump
                 let p = ctx.push(OpCode::PUSH1);
@@ -1788,12 +2302,14 @@ impl LowerBackend for EvmBackend {
                 ctx.add_label_reference(push_callback, Label::Insn(jumpdest_op));
 
                 // Post-call: spill the call results if needed.
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
 
             EvmInstKind::Return(_) => {
-                perform_actions(ctx, &alloc.read(insn, &args));
-                leave_frame(ctx, alloc.frame_size_slots());
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                if !self.has_current_lazy_frame_lowering() {
+                    leave_frame(ctx, alloc.frame_size_slots());
+                }
 
                 // Caller pushes return location onto stack prior to call.
                 for depth in 1..=args.len() {
@@ -1809,7 +2325,7 @@ impl LowerBackend for EvmBackend {
                     .size_of(*mstore.ty(), ctx.module)
                     .unwrap();
 
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
                 if ty_size == 0 {
                     // TODO: optimize away mstores of size 0
                     // Pop the args, and don't do an mstore.
@@ -1839,16 +2355,26 @@ impl LowerBackend for EvmBackend {
                 if let Some(addr_bytes) =
                     self.try_fold_gep_static_arena_addr(ctx, &args, &gep_plan.steps)
                 {
-                    perform_actions(ctx, &alloc.read(insn, gep_plan.runtime_args.as_slice()));
+                    self.emit_actions_for_site(
+                        ctx,
+                        &alloc.read(insn, gep_plan.runtime_args.as_slice()),
+                        frame_size_slots,
+                        FrameSite::PreInst(insn),
+                    );
                     for _ in 0..gep_plan.runtime_args.len() {
                         ctx.push(OpCode::POP);
                     }
                     push_bytes(ctx, &u32_to_be(addr_bytes));
-                    perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                    emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
                     return;
                 }
 
-                perform_actions(ctx, &alloc.read(insn, gep_plan.runtime_args.as_slice()));
+                self.emit_actions_for_site(
+                    ctx,
+                    &alloc.read(insn, gep_plan.runtime_args.as_slice()),
+                    frame_size_slots,
+                    FrameSite::PreInst(insn),
+                );
                 for step in gep_plan.steps {
                     match step {
                         GepStep::AddConst {
@@ -1873,7 +2399,7 @@ impl LowerBackend for EvmBackend {
                     }
                 }
 
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::Alloca(_) => {
                 let mem_plan = self.current_mem_plan.borrow();
@@ -1881,32 +2407,33 @@ impl LowerBackend for EvmBackend {
                     .as_ref()
                     .expect("missing memory plan during lowering");
 
-                let offset_words = *mem_plan
-                    .alloca_offset_words
-                    .get(&insn)
-                    .expect("missing alloca plan");
+                let loc = *mem_plan.alloca_loc.get(&insn).expect("missing alloca plan");
 
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
 
-                match &mem_plan.scheme {
-                    MemScheme::StaticArena(_) => {
-                        let addr_bytes = static_arena_addr_bytes(offset_words);
+                match loc {
+                    ObjLoc::ScratchAbs(_) | ObjLoc::StableAbs(_) => {
+                        let addr_bytes =
+                            obj_loc_abs_addr_bytes(mem_plan, loc).expect("alloca abs addr missing");
                         push_bytes(ctx, &u32_to_be(addr_bytes));
                     }
-                    MemScheme::DynamicFrame => {
-                        let addr_bytes = offset_words
-                            .checked_mul(WORD_BYTES)
-                            .expect("alloca address bytes overflow");
-                        push_bytes(ctx, &[DYN_FP_SLOT]);
-                        ctx.push(OpCode::MLOAD);
-                        if addr_bytes != 0 {
-                            push_bytes(ctx, &u32_to_be(addr_bytes));
-                            ctx.push(OpCode::ADD);
+                    ObjLoc::StableFrame(offset_words) => {
+                        self.emit_lazy_frame_enter_if_site_matches(
+                            ctx,
+                            frame_size_slots,
+                            FrameSite::Inst(insn),
+                        );
+                        emit_dyn_frame_addr(ctx, frame_size_slots, offset_words);
+                        if self.current_lazy_frame_plan_matches(|plan| {
+                            plan.exit_after_site(FrameSite::Inst(insn))
+                        }) {
+                            leave_frame(ctx, frame_size_slots);
                         }
                     }
+                    ObjLoc::StackPinned(_) => panic!("stack-pinned allocas are not implemented"),
                 }
 
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
 
             EvmInstKind::EvmStop(_) => basic_op(ctx, &[OpCode::STOP]),
@@ -1975,7 +2502,7 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::EvmSelfDestruct(_) => basic_op(ctx, &[OpCode::SELFDESTRUCT]),
 
             EvmInstKind::EvmMalloc(_) => {
-                let needs_dyn_sp_clamp = self.section_has_dynamic_frames();
+                let needs_dyn_sp_clamp = self.current_malloc_needs_dyn_sp_clamp(insn);
                 let has_persistent_mallocs = self.section_has_persistent_mallocs();
                 let has_explicit_free_ptr_writes = self.section_has_explicit_free_ptr_writes();
                 let mem_plan = self.current_mem_plan.borrow();
@@ -1990,7 +2517,7 @@ impl LowerBackend for EvmBackend {
                     .expect("dyn base below static base")
                     / WORD_BYTES;
                 let mut future_words = mem_plan
-                    .malloc_future_static_words
+                    .malloc_future_abs_words
                     .get(&insn)
                     .copied()
                     .unwrap_or(dyn_base_words);
@@ -2006,7 +2533,7 @@ impl LowerBackend for EvmBackend {
                 } else if escape_kinds.is_return_only() {
                     // Return-only escapes only need to survive the transitive caller set of this
                     // function, not unrelated functions in the section.
-                    future_words = future_words.max(mem_plan.return_escape_caller_clamp_words);
+                    future_words = future_words.max(mem_plan.return_escape_caller_abs_words);
                 }
 
                 let min_base_bytes = STATIC_BASE
@@ -2024,7 +2551,12 @@ impl LowerBackend for EvmBackend {
                 } else {
                     smallvec![size]
                 };
-                perform_actions(ctx, &alloc.read(insn, runtime_args.as_slice()));
+                self.emit_actions_for_site(
+                    ctx,
+                    &alloc.read(insn, runtime_args.as_slice()),
+                    frame_size_slots,
+                    FrameSite::PreInst(insn),
+                );
 
                 if is_transient {
                     // Drop the requested size if it was materialized at runtime; transient bump
@@ -2045,7 +2577,7 @@ impl LowerBackend for EvmBackend {
                         emit_malloc_base(ctx, min_base_bytes, needs_dyn_sp_clamp);
                     }
 
-                    perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                    emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
                     return;
                 }
 
@@ -2076,7 +2608,7 @@ impl LowerBackend for EvmBackend {
                 push_bytes(ctx, &[FREE_PTR_SLOT]);
                 ctx.push(OpCode::MSTORE);
 
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::InsertValue(_) => {
                 panic!(
@@ -2090,15 +2622,15 @@ impl LowerBackend for EvmBackend {
             }
             EvmInstKind::GetFunctionPtr(get_fn) => {
                 let func = *get_fn.func();
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
                 ctx.push_jump_target(OpCode::PUSH1, Label::Function(func));
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::EvmInvalid(_) => basic_op(ctx, &[OpCode::INVALID]),
 
             EvmInstKind::SymAddr(sym_addr) => {
                 let sym = sym_addr.sym().clone();
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
                 ctx.push_sym_fixup(
                     OpCode::PUSH0,
                     SymFixup {
@@ -2106,11 +2638,11 @@ impl LowerBackend for EvmBackend {
                         sym,
                     },
                 );
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::SymSize(sym_size) => {
                 let sym = sym_size.sym().clone();
-                perform_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
                 ctx.push_sym_fixup(
                     OpCode::PUSH0,
                     SymFixup {
@@ -2118,7 +2650,7 @@ impl LowerBackend for EvmBackend {
                         sym,
                     },
                 );
-                perform_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
         }
     }
@@ -2183,44 +2715,121 @@ impl FinalAlloc {
             .expect("stack object addr bytes overflow")
     }
 
+    fn obj_loc_for_id(&self, id: StackObjId) -> ObjLoc {
+        self.mem_plan
+            .obj_loc
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| panic!("missing stack object location for obj {}", id.as_u32()))
+    }
+
+    fn action_load_for_loc(&self, loc: ObjLoc, extra_words: u32) -> Action {
+        match loc {
+            ObjLoc::ScratchAbs(off) => Action::MemLoadAbs(
+                self.abs_addr_for_word(
+                    off.checked_add(extra_words)
+                        .expect("scratch load offset overflow"),
+                ),
+            ),
+            ObjLoc::StableAbs(off) => {
+                let base_word = self
+                    .mem_plan
+                    .stable_base_word()
+                    .expect("stable abs object missing stable base");
+                Action::MemLoadAbs(
+                    self.abs_addr_for_word(
+                        base_word
+                            .checked_add(off)
+                            .and_then(|w| w.checked_add(extra_words))
+                            .expect("stable load offset overflow"),
+                    ),
+                )
+            }
+            ObjLoc::StableFrame(off) => Action::MemLoadFrameSlot(
+                off.checked_add(extra_words)
+                    .expect("frame load offset overflow"),
+            ),
+            ObjLoc::StackPinned(depth) => {
+                panic!("stack-pinned objects are not supported in EVM lowering (depth={depth})")
+            }
+        }
+    }
+
+    fn action_store_for_loc(&self, loc: ObjLoc, extra_words: u32) -> Action {
+        match loc {
+            ObjLoc::ScratchAbs(off) => Action::MemStoreAbs(
+                self.abs_addr_for_word(
+                    off.checked_add(extra_words)
+                        .expect("scratch store offset overflow"),
+                ),
+            ),
+            ObjLoc::StableAbs(off) => {
+                let base_word = self
+                    .mem_plan
+                    .stable_base_word()
+                    .expect("stable abs object missing stable base");
+                Action::MemStoreAbs(
+                    self.abs_addr_for_word(
+                        base_word
+                            .checked_add(off)
+                            .and_then(|w| w.checked_add(extra_words))
+                            .expect("stable store offset overflow"),
+                    ),
+                )
+            }
+            ObjLoc::StableFrame(off) => Action::MemStoreFrameSlot(
+                off.checked_add(extra_words)
+                    .expect("frame store offset overflow"),
+            ),
+            ObjLoc::StackPinned(depth) => {
+                panic!("stack-pinned objects are not supported in EVM lowering (depth={depth})")
+            }
+        }
+    }
+
     fn inject_call_save_pre(
         &self,
         inst: InstId,
-        operand_count: usize,
+        _operand_count: usize,
         actions: Actions,
     ) -> Actions {
-        let MemScheme::StaticArena(st) = &self.mem_plan.scheme else {
+        let Some(plan) = self.mem_plan.call_preserve.get(&inst) else {
             return actions;
         };
-        let Some(plan) = st.call_saves.get(&inst) else {
+        let PreserveMode::ShadowRuns { shadow_obj, runs } = &plan.mode else {
             return actions;
         };
-        if plan.save_word_offsets.is_empty() {
+        if runs.is_empty() {
             return actions;
         }
 
-        assert!(
-            operand_count <= 16,
-            "call operand count exceeds SWAP16: {operand_count}"
-        );
         let Some(cont_pos) = actions
             .iter()
             .position(|a| matches!(a, Action::PushContinuationOffset))
         else {
             panic!("call save expected Action::PushContinuationOffset");
         };
+        let shadow_loc = self.obj_loc_for_id(*shadow_obj);
 
         let mut out = Actions::new();
         for (idx, act) in actions.into_iter().enumerate() {
             if idx == cont_pos {
-                for &w in &plan.save_word_offsets {
-                    out.push(Action::MemLoadAbs(self.abs_addr_for_word(w)));
-                    if operand_count != 0 {
-                        for depth in (1..=operand_count).rev() {
-                            out.push(Action::StackSwap(
-                                u8::try_from(depth).expect("swap depth too large"),
-                            ));
-                        }
+                for run in runs {
+                    for word in 0..run.len_words {
+                        out.push(
+                            self.action_load_for_loc(
+                                ObjLoc::ScratchAbs(run.scratch_src_word),
+                                word,
+                            ),
+                        );
+                        out.push(
+                            self.action_store_for_loc(
+                                shadow_loc,
+                                run.shadow_dst_word
+                                    .checked_add(word)
+                                    .expect("shadow save offset overflow"),
+                            ),
+                        );
                     }
                 }
             }
@@ -2230,35 +2839,37 @@ impl FinalAlloc {
     }
 
     fn inject_call_save_post(&self, inst: InstId, actions: Actions) -> Actions {
-        let MemScheme::StaticArena(st) = &self.mem_plan.scheme else {
+        let Some(plan) = self.mem_plan.call_preserve.get(&inst) else {
             return actions;
         };
-        let Some(plan) = st.call_saves.get(&inst) else {
+        let PreserveMode::ShadowRuns { shadow_obj, runs } = &plan.mode else {
             return actions;
         };
-        if plan.save_word_offsets.is_empty() {
+        if runs.is_empty() {
             return actions;
         }
 
         let mut restore: Actions = Actions::new();
-        let result_count = usize::from(plan.result_count);
-        assert!(
-            result_count <= 16,
-            "call result count exceeds SWAP16: {result_count}"
-        );
-
-        for &w in plan.save_word_offsets.iter().rev() {
-            for depth in 1..=result_count {
-                restore.push(Action::StackSwap(
-                    u8::try_from(depth).expect("swap depth too large"),
-                ));
+        let shadow_loc = self.obj_loc_for_id(*shadow_obj);
+        for run in runs.iter().rev() {
+            for word in (0..run.len_words).rev() {
+                restore.push(
+                    self.action_load_for_loc(
+                        shadow_loc,
+                        run.shadow_dst_word
+                            .checked_add(word)
+                            .expect("shadow restore offset overflow"),
+                    ),
+                );
+                restore.push(
+                    self.action_store_for_loc(ObjLoc::ScratchAbs(run.scratch_src_word), word),
+                );
             }
-            restore.push(Action::MemStoreAbs(self.abs_addr_for_word(w)));
         }
 
         let mut out: Actions = Actions::new();
-        out.extend(restore);
         out.extend(actions);
+        out.extend(restore);
         out
     }
 
@@ -2266,40 +2877,10 @@ impl FinalAlloc {
         for action in actions.iter_mut() {
             match action {
                 Action::MemLoadObj(id) => {
-                    // Invariant: every stackify `Mem*Obj` must have a planned offset.
-                    // Should be checked by a post-plan verifier.
-                    let off = *self.mem_plan.obj_offset_words.get(id).unwrap_or_else(|| {
-                        panic!("missing stack object offset for obj {}", id.as_u32())
-                    });
-                    *action = match &self.mem_plan.scheme {
-                        MemScheme::StaticArena(_) => Action::MemLoadAbs(
-                            STATIC_BASE
-                                .checked_add(
-                                    off.checked_mul(WORD_BYTES)
-                                        .expect("stack object addr bytes overflow"),
-                                )
-                                .expect("stack object addr bytes overflow"),
-                        ),
-                        MemScheme::DynamicFrame => Action::MemLoadFrameSlot(off),
-                    };
+                    *action = self.action_load_for_loc(self.obj_loc_for_id(*id), 0);
                 }
                 Action::MemStoreObj(id) => {
-                    // Invariant: every stackify `Mem*Obj` must have a planned offset.
-                    // Should be checked by a post-plan verifier.
-                    let off = *self.mem_plan.obj_offset_words.get(id).unwrap_or_else(|| {
-                        panic!("missing stack object offset for obj {}", id.as_u32())
-                    });
-                    *action = match &self.mem_plan.scheme {
-                        MemScheme::StaticArena(_) => Action::MemStoreAbs(
-                            STATIC_BASE
-                                .checked_add(
-                                    off.checked_mul(WORD_BYTES)
-                                        .expect("stack object addr bytes overflow"),
-                                )
-                                .expect("stack object addr bytes overflow"),
-                        ),
-                        MemScheme::DynamicFrame => Action::MemStoreFrameSlot(off),
-                    };
+                    *action = self.action_store_for_loc(self.obj_loc_for_id(*id), 0);
                 }
                 _ => {}
             }
@@ -2315,10 +2896,7 @@ impl Allocator for FinalAlloc {
     }
 
     fn frame_size_slots(&self) -> u32 {
-        match self.mem_plan.scheme {
-            MemScheme::StaticArena(_) => 0,
-            MemScheme::DynamicFrame => self.mem_plan.locals_words,
-        }
+        self.mem_plan.frame_size_words()
     }
 
     fn read(&self, inst: InstId, vals: &[sonatina_ir::ValueId]) -> Actions {
@@ -2461,14 +3039,8 @@ fn gep_step(elem_size_bytes: u32, idx: Option<u32>) -> GepStep {
     }
 }
 
-fn static_arena_addr_bytes(offset_words: u32) -> u32 {
-    STATIC_BASE
-        .checked_add(
-            offset_words
-                .checked_mul(WORD_BYTES)
-                .expect("alloca address bytes overflow"),
-        )
-        .expect("alloca address bytes overflow")
+fn obj_loc_abs_addr_bytes(mem_plan: &FuncMemPlan, loc: ObjLoc) -> Option<u32> {
+    mem_plan.abs_addr_for_loc(loc)
 }
 
 pub(crate) fn immediate_u32(imm: Immediate) -> Option<u32> {
@@ -2550,89 +3122,98 @@ fn fold_stack_actions(actions: &[Action]) -> SmallVec<[Action; 8]> {
     out
 }
 
-fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action]) {
-    let folded = fold_stack_actions(actions);
-    for action in folded {
-        match action {
-            Action::StackDup(slot) => {
-                debug_assert!(slot < 16, "DUP out of range: {slot}");
-                ctx.push(dup_op(slot));
-            }
-            Action::StackSwap(n) => {
-                debug_assert!((1..=16).contains(&n), "SWAP out of range: {n}");
-                ctx.push(swap_op(n));
-            }
-            Action::Push(imm) => {
-                if imm.is_zero() {
-                    ctx.push(OpCode::PUSH0);
-                } else {
-                    let bytes = match imm {
-                        Immediate::I1(v) => smallvec![v as u8],
-                        Immediate::I8(v) => SmallVec::from_slice(&v.to_be_bytes()),
-                        Immediate::I16(v) => shrink_bytes(&v.to_be_bytes()),
-                        Immediate::I32(v) => shrink_bytes(&v.to_be_bytes()),
-                        Immediate::I64(v) => shrink_bytes(&v.to_be_bytes()),
-                        Immediate::I128(v) => shrink_bytes(&v.to_be_bytes()),
-                        Immediate::I256(v) => shrink_bytes(&v.to_u256().to_big_endian()),
-                    };
-                    push_bytes(ctx, &bytes);
+fn frame_slot_sp_relative_bytes(frame_size_slots: u32, offset_words: u32) -> u32 {
+    let sp_relative_words = frame_size_slots
+        .checked_sub(offset_words)
+        .filter(|words| *words != 0)
+        .unwrap_or_else(|| {
+            panic!(
+                "frame slot offset {} out of range for frame size {}",
+                offset_words, frame_size_slots
+            )
+        });
+    sp_relative_words
+        .checked_mul(WORD_BYTES)
+        .expect("frame slot byte offset overflow")
+}
 
-                    // Sign-extend negative numbers to 32 bytes
-                    // TODO: signextend isn't always needed (eg push then mstore8)
-                    if imm.is_negative() && bytes.len() < 32 {
-                        push_bytes(ctx, &u32_to_be((bytes.len() - 1) as u32));
-                        ctx.push(OpCode::SIGNEXTEND);
-                    }
-                }
-            }
-            Action::Pop => {
-                ctx.push(OpCode::POP);
-            }
-            Action::MemLoadAbs(offset) => {
-                let bytes = u32_to_be(offset);
+fn emit_dyn_frame_addr(ctx: &mut Lower<OpCode>, frame_size_slots: u32, offset_words: u32) {
+    let sp_relative_bytes = frame_slot_sp_relative_bytes(frame_size_slots, offset_words);
+    push_bytes(ctx, &u32_to_be(sp_relative_bytes));
+    push_bytes(ctx, &[DYN_SP_SLOT]);
+    ctx.push(OpCode::MLOAD);
+    ctx.push(OpCode::SUB);
+}
+
+fn perform_action(ctx: &mut Lower<OpCode>, action: Action, frame_size_slots: u32) {
+    match action {
+        Action::StackDup(slot) => {
+            debug_assert!(slot < 16, "DUP out of range: {slot}");
+            ctx.push(dup_op(slot));
+        }
+        Action::StackSwap(n) => {
+            debug_assert!((1..=16).contains(&n), "SWAP out of range: {n}");
+            ctx.push(swap_op(n));
+        }
+        Action::Push(imm) => {
+            if imm.is_zero() {
+                ctx.push(OpCode::PUSH0);
+            } else {
+                let bytes = match imm {
+                    Immediate::I1(v) => smallvec![v as u8],
+                    Immediate::I8(v) => SmallVec::from_slice(&v.to_be_bytes()),
+                    Immediate::I16(v) => shrink_bytes(&v.to_be_bytes()),
+                    Immediate::I32(v) => shrink_bytes(&v.to_be_bytes()),
+                    Immediate::I64(v) => shrink_bytes(&v.to_be_bytes()),
+                    Immediate::I128(v) => shrink_bytes(&v.to_be_bytes()),
+                    Immediate::I256(v) => shrink_bytes(&v.to_u256().to_big_endian()),
+                };
                 push_bytes(ctx, &bytes);
-                ctx.push(OpCode::MLOAD);
-            }
-            Action::MemLoadFrameSlot(offset) => {
-                push_bytes(ctx, &[DYN_FP_SLOT]);
-                ctx.push(OpCode::MLOAD);
-                let byte_offset = offset
-                    .checked_mul(WORD_BYTES)
-                    .expect("frame slot offset overflow");
-                if byte_offset != 0 {
-                    let bytes = u32_to_be(byte_offset);
-                    push_bytes(ctx, &bytes);
-                    ctx.push(OpCode::ADD);
+
+                // Sign-extend negative numbers to 32 bytes
+                // TODO: signextend isn't always needed (eg push then mstore8)
+                if imm.is_negative() && bytes.len() < 32 {
+                    push_bytes(ctx, &u32_to_be((bytes.len() - 1) as u32));
+                    ctx.push(OpCode::SIGNEXTEND);
                 }
-                ctx.push(OpCode::MLOAD);
-            }
-            Action::MemStoreAbs(offset) => {
-                let bytes = u32_to_be(offset);
-                push_bytes(ctx, &bytes);
-                ctx.push(OpCode::MSTORE);
-            }
-            Action::MemStoreFrameSlot(offset) => {
-                push_bytes(ctx, &[DYN_FP_SLOT]);
-                ctx.push(OpCode::MLOAD);
-                let byte_offset = offset
-                    .checked_mul(WORD_BYTES)
-                    .expect("frame slot offset overflow");
-                if byte_offset != 0 {
-                    let bytes = u32_to_be(byte_offset);
-                    push_bytes(ctx, &bytes);
-                    ctx.push(OpCode::ADD);
-                }
-                ctx.push(OpCode::MSTORE);
-            }
-            Action::MemLoadObj(_) | Action::MemStoreObj(_) => {
-                // Invariant: stack-object ops must be rewritten by the allocator wrapper
-                // (`FinalAlloc`) before lowering.
-                panic!("unlowered Mem*Obj action");
-            }
-            Action::PushContinuationOffset => {
-                panic!("handle PushContinuationOffset elsewhere");
             }
         }
+        Action::Pop => {
+            ctx.push(OpCode::POP);
+        }
+        Action::MemLoadAbs(offset) => {
+            let bytes = u32_to_be(offset);
+            push_bytes(ctx, &bytes);
+            ctx.push(OpCode::MLOAD);
+        }
+        Action::MemLoadFrameSlot(offset) => {
+            emit_dyn_frame_addr(ctx, frame_size_slots, offset);
+            ctx.push(OpCode::MLOAD);
+        }
+        Action::MemStoreAbs(offset) => {
+            let bytes = u32_to_be(offset);
+            push_bytes(ctx, &bytes);
+            ctx.push(OpCode::MSTORE);
+        }
+        Action::MemStoreFrameSlot(offset) => {
+            emit_dyn_frame_addr(ctx, frame_size_slots, offset);
+            ctx.push(OpCode::MSTORE);
+        }
+        Action::MemLoadObj(_) | Action::MemStoreObj(_) => {
+            // Invariant: stack-object ops must be rewritten by the allocator wrapper
+            // (`FinalAlloc`) before lowering.
+            panic!("unlowered Mem*Obj action");
+        }
+        Action::PushContinuationOffset => {
+            panic!("handle PushContinuationOffset elsewhere");
+        }
+    }
+}
+
+fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action], frame_size_slots: u32) {
+    let folded = fold_stack_actions(actions);
+    for action in folded {
+        perform_action(ctx, action, frame_size_slots);
     }
 }
 
@@ -2775,28 +3356,20 @@ fn emit_malloc_base(ctx: &mut Lower<OpCode>, min_base_bytes: u32, needs_dyn_sp_c
     emit_max_top_with_const(ctx, &min_base);
 }
 
-fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
-    if frame_slots == 0 {
-        return;
-    }
+fn init_dyn_sp(ctx: &mut Lower<OpCode>, dyn_base: u32) {
+    push_bytes(ctx, &u32_to_be(dyn_base));
+    push_bytes(ctx, &[DYN_SP_SLOT]);
+    ctx.push(OpCode::MSTORE);
+}
 
-    let frame_bytes = frame_slots
-        .checked_mul(WORD_BYTES)
-        .expect("frame size overflow");
-    let frame_plus_fp_bytes = frame_bytes
-        .checked_add(WORD_BYTES)
-        .expect("frame size overflow");
-
-    // sp = mload(DYN_SP_SLOT); if sp == 0, initialize it.
+fn ensure_dyn_sp_init(ctx: &mut Lower<OpCode>, dyn_base: u32) {
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MLOAD);
-
-    // if sp != 0, skip init.
     ctx.push(OpCode::DUP1);
+
     let skip_init_push = ctx.push(OpCode::PUSH1);
     ctx.push(OpCode::JUMPI);
 
-    // init: pop 0 sp; sp = dyn_base; mstore(DYN_SP_SLOT, sp)
     ctx.push(OpCode::POP);
     push_bytes(ctx, &u32_to_be(dyn_base));
     ctx.push(OpCode::DUP1);
@@ -2805,30 +3378,40 @@ fn enter_frame(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
 
     let skip_init = ctx.push(OpCode::JUMPDEST);
     ctx.add_label_reference(skip_init_push, Label::Insn(skip_init));
+    ctx.push(OpCode::POP);
+}
+
+fn enter_frame_initialized(ctx: &mut Lower<OpCode>, frame_slots: u32) {
+    if frame_slots == 0 {
+        return;
+    }
+
+    let frame_bytes = frame_slots
+        .checked_mul(WORD_BYTES)
+        .expect("frame size overflow");
+
+    push_bytes(ctx, &[DYN_SP_SLOT]);
+    ctx.push(OpCode::MLOAD);
 
     // Clamp dynamic stack pointer above any heap allocations.
     push_bytes(ctx, &[FREE_PTR_SLOT]);
     ctx.push(OpCode::MLOAD);
     emit_max_top_two(ctx);
 
-    // Save old fp at frame_base (sp): mstore(sp, mload(DYN_FP_SLOT))
-    push_bytes(ctx, &[DYN_FP_SLOT]);
-    ctx.push(OpCode::MLOAD);
-    ctx.push(OpCode::DUP2);
-    ctx.push(OpCode::MSTORE);
-
-    // new_fp = sp + WORD_BYTES; mstore(DYN_FP_SLOT, new_fp)
-    ctx.push(OpCode::DUP1);
-    push_bytes(ctx, &u32_to_be(WORD_BYTES));
-    ctx.push(OpCode::ADD);
-    push_bytes(ctx, &[DYN_FP_SLOT]);
-    ctx.push(OpCode::MSTORE);
-
-    // new_sp = frame_base + WORD_BYTES + frame_bytes; mstore(DYN_SP_SLOT, new_sp)
-    push_bytes(ctx, &u32_to_be(frame_plus_fp_bytes));
+    // new_sp = sp + frame_bytes; mstore(DYN_SP_SLOT, new_sp)
+    push_bytes(ctx, &u32_to_be(frame_bytes));
     ctx.push(OpCode::ADD);
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MSTORE);
+}
+
+fn enter_frame_compat(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
+    if frame_slots == 0 {
+        return;
+    }
+
+    ensure_dyn_sp_init(ctx, dyn_base);
+    enter_frame_initialized(ctx, frame_slots);
 }
 
 fn leave_frame(ctx: &mut Lower<OpCode>, frame_slots: u32) {
@@ -2836,23 +3419,18 @@ fn leave_frame(ctx: &mut Lower<OpCode>, frame_slots: u32) {
         return;
     }
 
-    // frame_base = fp - WORD_BYTES
-    //
-    // NOTE: `SUB` computes `a - b` with `a` on top of stack.
-    push_bytes(ctx, &u32_to_be(WORD_BYTES));
-    push_bytes(ctx, &[DYN_FP_SLOT]);
+    // new_sp = sp - frame_bytes; mstore(DYN_SP_SLOT, new_sp)
+    push_bytes(
+        ctx,
+        &u32_to_be(
+            frame_slots
+                .checked_mul(WORD_BYTES)
+                .expect("frame size overflow"),
+        ),
+    );
+    push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MLOAD);
     ctx.push(OpCode::SUB);
-
-    // old_fp = mload(frame_base)
-    ctx.push(OpCode::DUP1);
-    ctx.push(OpCode::MLOAD);
-
-    // mstore(DYN_FP_SLOT, old_fp)
-    push_bytes(ctx, &[DYN_FP_SLOT]);
-    ctx.push(OpCode::MSTORE);
-
-    // mstore(DYN_SP_SLOT, frame_base)
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MSTORE);
 }
@@ -3082,8 +3660,8 @@ fn debug_print_mem_plan(module: &Module, funcs: &[FuncRef], plan: &ProgramMemory
     funcs_by_name.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
     eprintln!(
-        "evm mem debug: dyn_base=0x{:x} static_base=0x{:x}",
-        plan.dyn_base, STATIC_BASE
+        "evm mem debug: global_dyn_base=0x{:x} static_base=0x{:x} scratch_peak_words={} static_chain_peak_words={}",
+        plan.global_dyn_base, STATIC_BASE, plan.scratch_peak_words, plan.static_chain_peak_words
     );
     eprintln!("evm mem debug: entry_mem_init_stores=0");
 
@@ -3091,42 +3669,52 @@ fn debug_print_mem_plan(module: &Module, funcs: &[FuncRef], plan: &ProgramMemory
         let Some(func_plan) = plan.funcs.get(&func) else {
             continue;
         };
-        let (scheme, need_words) = match &func_plan.scheme {
-            MemScheme::StaticArena(st) => ("StaticArena", Some(st.need_words)),
-            MemScheme::DynamicFrame => ("DynamicFrame", None),
+        let stable_mode = match func_plan.stable_mode {
+            StableMode::None => "None".to_string(),
+            StableMode::DynamicFrame => "DynamicFrame".to_string(),
+            StableMode::StaticAbs { base_word } => {
+                format!("StaticAbs(base_word={base_word})")
+            }
         };
-        let clobber_words = func_plan.static_clobber_words;
 
-        let (malloc_min, malloc_max, malloc_count) =
-            if func_plan.malloc_future_static_words.is_empty() {
-                (None, None, 0)
-            } else {
-                let mut min: u32 = u32::MAX;
-                let mut max: u32 = 0;
-                for &w in func_plan.malloc_future_static_words.values() {
-                    min = min.min(w);
-                    max = max.max(w);
-                }
-                (
-                    Some(min),
-                    Some(max),
-                    func_plan.malloc_future_static_words.len(),
-                )
-            };
+        let (malloc_min, malloc_max, malloc_count) = if func_plan.malloc_future_abs_words.is_empty()
+        {
+            (None, None, 0)
+        } else {
+            let mut min: u32 = u32::MAX;
+            let mut max: u32 = 0;
+            for &w in func_plan.malloc_future_abs_words.values() {
+                min = min.min(w);
+                max = max.max(w);
+            }
+            (
+                Some(min),
+                Some(max),
+                func_plan.malloc_future_abs_words.len(),
+            )
+        };
 
-        let clobber_end = (clobber_words != 0).then(|| {
+        let abs_end_words = func_plan.abs_words_end();
+        let abs_end = (abs_end_words != 0).then(|| {
             STATIC_BASE
                 .checked_add(
-                    clobber_words
+                    abs_end_words
                         .checked_mul(WORD_BYTES)
-                        .expect("clobber end overflow"),
+                        .expect("absolute end overflow"),
                 )
-                .expect("clobber end overflow")
+                .expect("absolute end overflow")
         });
 
         eprintln!(
-            "evm mem debug: {name} scheme={scheme} locals_words={} need_words={:?} static_clobber_words={clobber_words} malloc_bounds(min,max,count)=({:?},{:?},{malloc_count}) clobber_end={:?}",
-            func_plan.locals_words, need_words, malloc_min, malloc_max, clobber_end
+            "evm mem debug: {name} scratch_words={} stable_words={} stable_mode={} entry_abs_words={} abs_words_end={} malloc_bounds(min,max,count)=({:?},{:?},{malloc_count}) abs_end={:?}",
+            func_plan.scratch_words,
+            func_plan.stable_words,
+            stable_mode,
+            func_plan.entry_abs_words,
+            abs_end_words,
+            malloc_min,
+            malloc_max,
+            abs_end,
         );
     }
 }
@@ -3154,6 +3742,102 @@ mod tests {
     use sonatina_ir::cfg::ControlFlowGraph;
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, TargetTriple, Vendor};
+
+    struct DynSpTestCtx {
+        module: sonatina_ir::Module,
+        names: FxHashMap<String, FuncRef>,
+        plan: DynSpPlan,
+    }
+
+    fn dyn_sp_plan_from_src(src: &str) -> DynSpTestCtx {
+        let parsed = parse_module(src).expect("module parses");
+        let funcs = parsed.module.funcs();
+        let isa = Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        });
+        let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
+
+        let mut analyses: FxHashMap<FuncRef, memory_plan::FuncAnalysis> = FxHashMap::default();
+        for &func in &funcs {
+            parsed.module.func_store.modify(func, |function| {
+                let mut cfg = ControlFlowGraph::default();
+                cfg.compute(function);
+
+                let mut splitter = CriticalEdgeSplitter::new();
+                splitter.run(function, &mut cfg);
+
+                let mut liveness = Liveness::new();
+                liveness.compute(function, &cfg);
+
+                let mut inst_liveness = InstLiveness::new();
+                inst_liveness.compute(function, &cfg, &liveness);
+
+                let mut dom = DomTree::new();
+                dom.compute(&cfg);
+
+                analyses.insert(
+                    func,
+                    memory_plan::FuncAnalysis {
+                        alloc: StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute(),
+                        inst_liveness,
+                        block_order: dom.rpo().to_vec(),
+                    },
+                );
+            });
+        }
+
+        let plan = compute_program_memory_plan(
+            &parsed.module,
+            &funcs,
+            &analyses,
+            &ptr_escape,
+            &isa,
+            &ArenaCostModel::default(),
+        );
+        let section_entry = parsed
+            .module
+            .objects
+            .values()
+            .find_map(|object| {
+                object.sections.iter().find_map(|section| {
+                    section
+                        .directives
+                        .iter()
+                        .find_map(|directive| match directive {
+                            Directive::Entry(func) => Some(*func),
+                            Directive::Include(_) | Directive::Data(_) | Directive::Embed(_) => {
+                                None
+                            }
+                        })
+                })
+            })
+            .unwrap_or(funcs[0]);
+        let dyn_sp_plan = compute_dyn_sp_plan(
+            &parsed.module,
+            &funcs,
+            section_entry,
+            &plan,
+            &analyses,
+            &isa,
+        );
+
+        let mut names: FxHashMap<String, FuncRef> = FxHashMap::default();
+        for &func in &funcs {
+            let name = parsed
+                .module
+                .ctx
+                .func_sig(func, |sig| sig.name().to_string());
+            names.insert(name, func);
+        }
+
+        DynSpTestCtx {
+            module: parsed.module,
+            names,
+            plan: dyn_sp_plan,
+        }
+    }
 
     #[test]
     fn fold_stack_actions_cancels_swap_self_inverse() {
@@ -3202,28 +3886,379 @@ mod tests {
     }
 
     #[test]
+    fn dyn_sp_entry_init_covers_ready_recursive_entry_scc() {
+        let ctx = dyn_sp_plan_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i256) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v2.*i256 = alloca i256;
+    mstore v2 v1 i256;
+    v3.i256 = call %f 1.i1 v1;
+    v4.i256 = mload v2 i256;
+    v5.i256 = add v3 v4;
+    return v5;
+}
+"#,
+        );
+
+        let f = ctx.names["f"];
+        assert!(ctx.plan.entry_init);
+        assert!(
+            ctx.plan
+                .frontier_init_calls
+                .get(&f)
+                .is_none_or(FxHashSet::is_empty)
+        );
+        assert!(ctx.plan.entry_live_frame[&f]);
+    }
+
+    #[test]
+    fn dyn_sp_frontier_init_marks_call_from_non_ready_entry_into_ready_scc() {
+        let ctx = dyn_sp_plan_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %dispatch(v0.i1, v1.i256) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v2.*i8 = evm_malloc 32.i256;
+    v3.*i256 = bitcast v2 *i256;
+    mstore v3 111.i256 i256;
+    v4.i256 = mload v3 i256;
+    return v4;
+
+block2:
+    v5.i256 = call %ready v1;
+    return v5;
+}
+
+func private %ready(v0.i256) -> i256 {
+block0:
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    return 7.i256;
+
+block2:
+    v2.*i256 = alloca i256;
+    mstore v2 v0 i256;
+    v3.i256 = sub v0 1.i256;
+    v4.i256 = call %ready v3;
+    v5.i256 = mload v2 i256;
+    v6.i256 = add v4 v5;
+    return v6;
+}
+"#,
+        );
+
+        let dispatch = ctx.names["dispatch"];
+        let ready = ctx.names["ready"];
+        let frontier_calls = ctx
+            .plan
+            .frontier_init_calls
+            .get(&dispatch)
+            .expect("dispatch should have a frontier init call");
+        let call_inst = ctx.module.func_store.view(dispatch, |function| {
+            function
+                .layout
+                .iter_block()
+                .flat_map(|block| function.layout.iter_inst(block))
+                .find(|&inst| {
+                    function
+                        .dfg
+                        .call_info(inst)
+                        .is_some_and(|call| call.callee() == ready)
+                })
+                .expect("call to ready")
+        });
+
+        assert!(!ctx.plan.entry_init);
+        assert!(frontier_calls.contains(&call_inst));
+        assert!(
+            ctx.plan
+                .checked_frontier_init_calls
+                .get(&dispatch)
+                .is_none_or(|calls| !calls.contains(&call_inst))
+        );
+    }
+
+    #[test]
+    fn dyn_sp_entry_live_frame_propagates_only_from_active_callsites() {
+        let ctx = dyn_sp_plan_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %ready(v0.i1, v1.i256) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v2.i256 = call %helper;
+    return v2;
+
+block2:
+    v3.i1 = eq v1 0.i256;
+    br v3 block3 block4;
+
+block3:
+    return 0.i256;
+
+block4:
+    v4.*i256 = alloca i256;
+    mstore v4 v1 i256;
+    v5.i256 = call %helper;
+    v6.i256 = sub v1 1.i256;
+    v7.i256 = call %ready 0.i1 v6;
+    v8.i256 = mload v4 i256;
+    v9.i256 = add v5 v8;
+    return v9;
+}
+
+func private %helper() -> i256 {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.*i256 = bitcast v0 *i256;
+    mstore v1 111.i256 i256;
+    v2.i256 = mload v1 i256;
+    return v2;
+}
+"#,
+        );
+
+        let ready = ctx.names["ready"];
+        let helper = ctx.names["helper"];
+        let helper_calls: Vec<InstId> = ctx.module.func_store.view(ready, |function| {
+            function
+                .layout
+                .iter_block()
+                .flat_map(|block| function.layout.iter_inst(block))
+                .filter(|&inst| {
+                    function
+                        .dfg
+                        .call_info(inst)
+                        .is_some_and(|call| call.callee() == helper)
+                })
+                .collect()
+        });
+        assert_eq!(
+            helper_calls.len(),
+            2,
+            "expected one cold and one hot helper call"
+        );
+
+        let summary = ctx
+            .plan
+            .frame_summaries
+            .get(&ready)
+            .expect("missing ready summary");
+        let active_count = helper_calls
+            .iter()
+            .copied()
+            .filter(|&inst| summary.local_frame_active_before_inst(inst))
+            .count();
+
+        assert_eq!(
+            active_count, 1,
+            "only the hot helper call should be frame-active"
+        );
+        assert!(ctx.plan.entry_live_frame[&helper]);
+    }
+
+    #[test]
+    fn dyn_sp_helper_before_lazy_enter_stays_not_live() {
+        let ctx = dyn_sp_plan_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %helper() -> i256 {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.*i256 = bitcast v0 *i256;
+    mstore v1 111.i256 i256;
+    v2.i256 = mload v1 i256;
+    return v2;
+}
+
+func public %ready(v0.i1, v1.i256) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v2.i256 = call %helper;
+    return v2;
+
+block2:
+    v3.*i256 = alloca i256;
+    mstore v3 v1 i256;
+    v4.i256 = mload v3 i256;
+    return v4;
+}
+
+func public %entry(v0.i1, v1.i256) -> i256 {
+block0:
+    v2.i256 = call %ready v0 v1;
+    return v2;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        );
+
+        let helper = ctx.names["helper"];
+        let ready = ctx.names["ready"];
+        let ready_summary = ctx
+            .plan
+            .frame_summaries
+            .get(&ready)
+            .expect("missing ready summary");
+        let helper_call = ctx.module.func_store.view(ready, |function| {
+            function
+                .layout
+                .iter_block()
+                .flat_map(|block| function.layout.iter_inst(block))
+                .find(|&inst| {
+                    function
+                        .dfg
+                        .call_info(inst)
+                        .is_some_and(|call| call.callee() == helper)
+                })
+                .expect("call to helper")
+        });
+
+        assert!(
+            !ready_summary.local_frame_active_before_inst(helper_call),
+            "helper call should stay before lazy frame entry"
+        );
+        assert!(!ctx.plan.entry_live_frame[&helper]);
+    }
+
+    #[test]
+    fn dyn_sp_mixed_entry_helper_uses_checked_frontier_init() {
+        let ctx = dyn_sp_plan_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i1, v1.i256) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v2.i256 = call %helper v1;
+    return v2;
+
+block2:
+    v3.i256 = call %ready_caller v1;
+    return v3;
+}
+
+func private %helper(v0.i256) -> i256 {
+block0:
+    v1.i256 = call %target v0;
+    return v1;
+}
+
+func private %ready_caller(v0.i256) -> i256 {
+block0:
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v2.*i256 = alloca i256;
+    mstore v2 v0 i256;
+    v3.i256 = call %helper 0.i256;
+    v4.i256 = sub v0 1.i256;
+    v5.i256 = call %ready_caller v4;
+    v6.i256 = mload v2 i256;
+    v7.i256 = add v3 v5;
+    v8.i256 = add v7 v6;
+    return v8;
+}
+
+func private %target(v0.i256) -> i256 {
+block0:
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v2.*i256 = alloca i256;
+    mstore v2 v0 i256;
+    v3.i256 = sub v0 1.i256;
+    v4.i256 = call %target v3;
+    v5.i256 = mload v2 i256;
+    v6.i256 = add v4 v5;
+    return v6;
+}
+"#,
+        );
+
+        let helper = ctx.names["helper"];
+        let target = ctx.names["target"];
+        let helper_call = ctx.module.func_store.view(helper, |function| {
+            function
+                .layout
+                .iter_block()
+                .flat_map(|block| function.layout.iter_inst(block))
+                .find(|&inst| {
+                    function
+                        .dfg
+                        .call_info(inst)
+                        .is_some_and(|call| call.callee() == target)
+                })
+                .expect("helper call to target")
+        });
+
+        assert!(
+            ctx.plan
+                .frontier_init_calls
+                .get(&helper)
+                .is_some_and(|calls| calls.contains(&helper_call))
+        );
+        assert!(
+            ctx.plan
+                .checked_frontier_init_calls
+                .get(&helper)
+                .is_some_and(|calls| calls.contains(&helper_call))
+        );
+    }
+
+    #[test]
     fn call_save_pre_tucks_saved_words_below_operands() {
         let parsed = parse_module(
             r#"
 target = "evm-ethereum-osaka"
 
-func public %callee(v0.i256, v1.i256) -> i256 {
+func public %caller(v0.i256, v1.i256) -> i256 {
 block0:
     v2.*i256 = alloca i256;
-    mstore v2 v0 i256;
+    mstore v2 1.i256 i256;
     v3.i256 = mload v2 i256;
-    v4.i256 = add v3 v1;
-    return v4;
-}
-
-func public %caller() -> i256 {
-block0:
-    v0.*i256 = alloca i256;
-    mstore v0 1.i256 i256;
-    v1.i256 = call %callee 11.i256 22.i256;
-    v2.i256 = mload v0 i256;
-    v3.i256 = add v1 v2;
-    return v3;
+    v4.i256 = add v3 v0;
+    mstore v2 v4 i256;
+    v5.i256 = call %caller 11.i256 22.i256;
+    v6.i256 = mload v2 i256;
+    v7.i256 = add v5 v6;
+    return v7;
 }
 "#,
         )
@@ -3313,17 +4348,15 @@ block0:
             .clone();
         let alloc = FinalAlloc::new(analysis.alloc, mem_plan);
 
-        let MemScheme::StaticArena(st) = &alloc.mem_plan.scheme else {
-            panic!("expected StaticArena plan for caller");
-        };
-        let save_plan = st
-            .call_saves
+        let save_plan = alloc
+            .mem_plan
+            .call_preserve
             .get(&call_inst)
-            .expect("expected non-empty call_saves entry for call");
-        assert!(
-            !save_plan.save_word_offsets.is_empty(),
-            "expected at least one saved word"
-        );
+            .expect("expected non-empty call preserve entry for call");
+        let PreserveMode::ShadowRuns { shadow_obj, runs } = &save_plan.mode else {
+            panic!("expected shadow preserve plan for caller");
+        };
+        assert!(!runs.is_empty(), "expected at least one saved run");
 
         let actions = alloc.read(call_inst, &call_args);
         let cont_pos = actions
@@ -3331,31 +4364,35 @@ block0:
             .position(|a| matches!(a, Action::PushContinuationOffset))
             .expect("missing continuation marker");
 
-        let arity = call_args.len();
-        let expected_len = save_plan
-            .save_word_offsets
-            .len()
-            .checked_mul(arity + 1)
+        let expected_len = runs
+            .iter()
+            .map(|run| usize::try_from(run.len_words).expect("run length overflow"))
+            .sum::<usize>()
+            .checked_mul(2)
             .expect("expected injected length overflow");
         assert!(
             cont_pos >= expected_len,
             "expected injected actions immediately before continuation marker"
         );
         let injected = &actions[cont_pos - expected_len..cont_pos];
-
-        for (i, &w) in save_plan.save_word_offsets.iter().enumerate() {
-            let base = i * (arity + 1);
-            assert_eq!(
-                injected[base],
-                Action::MemLoadAbs(alloc.abs_addr_for_word(w))
-            );
-            for (j, depth) in (1..=arity).rev().enumerate() {
-                assert_eq!(
-                    injected[base + 1 + j],
-                    Action::StackSwap(u8::try_from(depth).expect("swap depth too large"))
+        let shadow_loc = alloc.obj_loc_for_id(*shadow_obj);
+        let mut expected = Actions::new();
+        for run in runs {
+            for word in 0..run.len_words {
+                expected.push(
+                    alloc.action_load_for_loc(ObjLoc::ScratchAbs(run.scratch_src_word), word),
+                );
+                expected.push(
+                    alloc.action_store_for_loc(
+                        shadow_loc,
+                        run.shadow_dst_word
+                            .checked_add(word)
+                            .expect("shadow save offset overflow"),
+                    ),
                 );
             }
         }
+        assert_eq!(injected, expected.as_slice());
     }
 
     #[test]
@@ -3364,34 +4401,24 @@ block0:
             r#"
 target = "evm-ethereum-osaka"
 
-func public %callee(v0.i256, v1.i256) -> (i256, i1) {
+func public %caller(v0.i256, v1.i256) -> (i256, i1) {
 block0:
     v2.*i256 = alloca i256;
-    mstore v2 v0 i256;
+    mstore v2 1.i256 i256;
     v3.i256 = mload v2 i256;
-    v4.i256 = add v3 v1;
-    v5.i1 = lt v4 v3;
-    return (v4, v5);
-}
-
-func public %caller() -> i256 {
-block0:
-    v0.*i256 = alloca i256;
-    v1.*i256 = alloca i256;
-    mstore v0 1.i256 i256;
-    mstore v1 2.i256 i256;
-    (v2.i256, v3.i1) = call %callee 11.i256 22.i256;
-    v4.i256 = mload v0 i256;
-    v5.i256 = mload v1 i256;
-    br v3 block1 block2;
+    v4.i256 = add v3 v0;
+    mstore v2 v4 i256;
+    (v5.i256, v6.i1) = call %caller 11.i256 22.i256;
+    v7.i256 = mload v2 i256;
+    br v6 block1 block2;
 
 block1:
-    v6.i256 = add v4 v5;
-    return v6;
+    v8.i256 = add v5 v7;
+    return (v8, v6);
 
 block2:
-    v7.i256 = add v2 v4;
-    return v7;
+    v9.i256 = add v7 1.i256;
+    return (v9, v6);
 }
 "#,
         )
@@ -3482,30 +4509,39 @@ block2:
             .clone();
         let alloc = FinalAlloc::new(analysis.alloc, mem_plan);
 
-        let MemScheme::StaticArena(st) = &alloc.mem_plan.scheme else {
-            panic!("expected StaticArena plan for caller");
-        };
-        let save_plan = st
-            .call_saves
+        let save_plan = alloc
+            .mem_plan
+            .call_preserve
             .get(&call_inst)
-            .expect("expected non-empty call_saves entry for call");
+            .expect("expected non-empty call preserve entry for call");
         assert_eq!(save_plan.result_count, 2);
-        assert!(
-            !save_plan.save_word_offsets.is_empty(),
-            "expected at least one saved word"
-        );
+        let PreserveMode::ShadowRuns { shadow_obj, runs } = &save_plan.mode else {
+            panic!("expected shadow preserve plan for caller");
+        };
+        assert!(!runs.is_empty(), "expected at least one saved run");
 
         let actions = alloc.write(call_inst, &call_results);
         let mut expected = Actions::new();
-        for &w in save_plan.save_word_offsets.iter().rev() {
-            expected.push(Action::StackSwap(1));
-            expected.push(Action::StackSwap(2));
-            expected.push(Action::MemStoreAbs(alloc.abs_addr_for_word(w)));
+        let shadow_loc = alloc.obj_loc_for_id(*shadow_obj);
+        for run in runs.iter().rev() {
+            for word in (0..run.len_words).rev() {
+                expected.push(
+                    alloc.action_load_for_loc(
+                        shadow_loc,
+                        run.shadow_dst_word
+                            .checked_add(word)
+                            .expect("shadow restore offset overflow"),
+                    ),
+                );
+                expected.push(
+                    alloc.action_store_for_loc(ObjLoc::ScratchAbs(run.scratch_src_word), word),
+                );
+            }
         }
         assert_eq!(
             actions.as_slice(),
             expected.as_slice(),
-            "multi-result call-save restore must preserve both results above restored words"
+            "multi-result call preserve restore must copy saved scratch words back after post-actions"
         );
     }
 
