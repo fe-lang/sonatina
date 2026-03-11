@@ -4,7 +4,11 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, FuncEffectSummary, Function, InstDowncast, Module,
-    inst::control_flow, module::FuncRef,
+    inst::{
+        control_flow,
+        evm::{EvmInvalid, EvmReturn, EvmRevert, EvmSelfDestruct, EvmStop},
+    },
+    module::FuncRef,
 };
 
 use crate::{cfg_scc::CfgSccAnalysis, module_analysis};
@@ -96,7 +100,8 @@ impl<'a> FuncBehaviorAnalyzer<'a> {
 
     fn analyze(mut self) {
         self.propagate_effects();
-        self.propagate_noreturn_and_will();
+        self.propagate_terminal_behavior();
+        self.propagate_may_commit_visible_writes();
 
         let mut effects = FxHashMap::default();
         for func_ref in self.module.func_store.funcs() {
@@ -136,7 +141,7 @@ impl<'a> FuncBehaviorAnalyzer<'a> {
         }
     }
 
-    fn propagate_noreturn_and_will(&mut self) {
+    fn propagate_terminal_behavior(&mut self) {
         for &scc in self.topo.iter().rev() {
             let scc_info = self.info.scc.scc_info(scc);
             if scc_info.is_cycle {
@@ -188,6 +193,78 @@ impl<'a> FuncBehaviorAnalyzer<'a> {
             }
         }
     }
+
+    fn propagate_may_commit_visible_writes(&mut self) {
+        for &scc in self.topo.iter().rev() {
+            let scc_info = self.info.scc.scc_info(scc);
+            let mut comps: Vec<_> = scc_info.components.iter().copied().collect();
+            comps.sort_unstable_by_key(|f| f.as_u32());
+
+            let mut changed = true;
+            while changed {
+                changed = false;
+
+                for &func_ref in &comps {
+                    if self.is_external[func_ref] || !self.locals[func_ref].has_body {
+                        continue;
+                    }
+
+                    let effects = &self.effects;
+                    let may_commit = self.module.func_store.view(func_ref, |func| {
+                        has_reachable_committing_exit(func, effects)
+                    });
+                    if may_commit != self.effects[func_ref].may_commit_visible_writes {
+                        self.effects[func_ref].may_commit_visible_writes = may_commit;
+                        changed = true;
+                    }
+                }
+
+                if !scc_info.is_cycle {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn has_reachable_committing_exit(
+    func: &Function,
+    effects: &SecondaryMap<FuncRef, FuncEffectSummary>,
+) -> bool {
+    let Some(entry) = func.layout.entry_block() else {
+        return false;
+    };
+
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(func);
+
+    let mut visited = FxHashSet::default();
+    let mut stack = vec![entry];
+    while let Some(block) = stack.pop() {
+        if !visited.insert(block) {
+            continue;
+        }
+
+        match block_terminal_call_commits_visible_writes(func, block, effects) {
+            Some(true) => return true,
+            Some(false) => continue,
+            None => {}
+        }
+
+        if func
+            .layout
+            .last_inst_of(block)
+            .is_some_and(|term| is_committing_exit(func, term))
+        {
+            return true;
+        }
+
+        for &succ in cfg.succs_of(block) {
+            stack.push(succ);
+        }
+    }
+
+    false
 }
 
 fn has_reachable_return(
@@ -244,6 +321,26 @@ fn has_noreturn_call(
     }
 
     false
+}
+
+fn block_terminal_call_commits_visible_writes(
+    func: &Function,
+    block: BlockId,
+    effects: &SecondaryMap<FuncRef, FuncEffectSummary>,
+) -> Option<bool> {
+    for inst in func.layout.iter_inst(block) {
+        if let Some(call) = func.dfg.call_info(inst)
+            && effects[call.callee()].noreturn
+        {
+            return Some(effects[call.callee()].may_commit_visible_writes);
+        }
+
+        if func.dfg.is_terminator(inst) {
+            break;
+        }
+    }
+
+    None
 }
 
 fn compute_local_facts(func: &Function) -> LocalFacts {
@@ -329,6 +426,23 @@ fn is_return_like_exit(func: &Function, inst: sonatina_ir::InstId) -> bool {
     let inst_data = func.dfg.inst(inst);
     let is = func.inst_set();
     <&control_flow::Return as InstDowncast>::downcast(is, inst_data).is_some()
+}
+
+fn is_committing_exit(func: &Function, inst: sonatina_ir::InstId) -> bool {
+    let inst_data = func.dfg.inst(inst);
+    let is = func.inst_set();
+
+    if <&control_flow::Return as InstDowncast>::downcast(is, inst_data).is_some()
+        || <&EvmReturn as InstDowncast>::downcast(is, inst_data).is_some()
+        || <&EvmSelfDestruct as InstDowncast>::downcast(is, inst_data).is_some()
+        || <&EvmStop as InstDowncast>::downcast(is, inst_data).is_some()
+    {
+        return true;
+    }
+
+    <&EvmRevert as InstDowncast>::downcast(is, inst_data).is_none()
+        && <&EvmInvalid as InstDowncast>::downcast(is, inst_data).is_none()
+        && <&control_flow::Unreachable as InstDowncast>::downcast(is, inst_data).is_none()
 }
 
 fn topo_sort_sccs(
@@ -451,6 +565,60 @@ func private %caller() {
         assert!(caller_effects.noreturn);
         assert!(!caller_effects.will_return);
         assert!(caller_effects.will_terminate);
+        assert!(caller_effects.may_commit_visible_writes);
+    }
+
+    #[test]
+    fn distinguishes_committing_noreturn_helpers_from_reverting_helpers() {
+        let module = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %commit() {
+    block0:
+        evm_return 0.i256 0.i256;
+}
+
+func private %revert_now() {
+    block0:
+        evm_revert 0.i256 0.i256;
+}
+
+func private %caller_commit() {
+    block0:
+        call %commit;
+        unreachable;
+}
+
+func private %caller_revert() {
+    block0:
+        call %revert_now;
+        unreachable;
+}
+"#,
+        );
+
+        analyze_module(&module);
+
+        let commit = find_func(&module, "commit");
+        let commit_effects = module.ctx.func_effects(commit);
+        assert!(commit_effects.noreturn);
+        assert!(commit_effects.may_commit_visible_writes);
+
+        let revert_now = find_func(&module, "revert_now");
+        let revert_effects = module.ctx.func_effects(revert_now);
+        assert!(revert_effects.noreturn);
+        assert!(!revert_effects.may_commit_visible_writes);
+
+        let caller_commit = find_func(&module, "caller_commit");
+        let caller_commit_effects = module.ctx.func_effects(caller_commit);
+        assert!(caller_commit_effects.noreturn);
+        assert!(caller_commit_effects.may_commit_visible_writes);
+
+        let caller_revert = find_func(&module, "caller_revert");
+        let caller_revert_effects = module.ctx.func_effects(caller_revert);
+        assert!(caller_revert_effects.noreturn);
+        assert!(!caller_revert_effects.may_commit_visible_writes);
     }
 
     #[test]

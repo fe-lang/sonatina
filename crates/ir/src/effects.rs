@@ -145,6 +145,7 @@ pub struct FuncEffectSummary {
     pub may_write_unknown: bool,
     pub other: OtherEffects,
     pub noreturn: bool,
+    pub may_commit_visible_writes: bool,
     pub will_return: bool,
     pub will_terminate: bool,
 }
@@ -154,6 +155,7 @@ impl FuncEffectSummary {
         Self {
             may_read_unknown: true,
             may_write_unknown: true,
+            may_commit_visible_writes: true,
             ..Self::default()
         }
     }
@@ -162,6 +164,8 @@ impl FuncEffectSummary {
         Self {
             may_read_unknown: attrs.contains(FuncAttrs::MEM_READ),
             may_write_unknown: attrs.contains(FuncAttrs::MEM_WRITE),
+            may_commit_visible_writes: !attrs.contains(FuncAttrs::NORETURN)
+                || attrs.contains(FuncAttrs::WILLTERMINATE),
             noreturn: attrs.contains(FuncAttrs::NORETURN),
             will_return: attrs.contains(FuncAttrs::WILLRETURN),
             will_terminate: attrs.contains(FuncAttrs::WILLTERMINATE),
@@ -228,6 +232,7 @@ impl FuncEffectSummary {
         self.may_write_unknown |= other.may_write_unknown;
         self.other |= other.other;
         self.noreturn |= other.noreturn;
+        self.may_commit_visible_writes |= other.may_commit_visible_writes;
         self.will_return |= other.will_return;
         self.will_terminate |= other.will_terminate;
     }
