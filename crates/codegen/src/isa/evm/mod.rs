@@ -50,13 +50,8 @@ use legalize::legalize_evm_section;
 use mem_effects::compute_func_mem_effects;
 pub(crate) use memory_plan::STATIC_BASE;
 use memory_plan::{
-    ArenaCostModel, CallPreserveChoice, DYN_FP_SLOT, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan,
-    MemScheme, ProgramMemoryPlan, WORD_BYTES, compute_program_memory_plan,
-};
-use memory_plan::{
     ArenaCostModel, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan, ObjLoc, PreserveMode,
-    ProgramMemoryPlan, STATIC_BASE, StableMode, WORD_BYTES, compute_program_memory_plan,
-    topo_sort_sccs,
+    ProgramMemoryPlan, StableMode, WORD_BYTES, compute_program_memory_plan, topo_sort_sccs,
 };
 use ptr_escape::{PtrEscapeSummary, compute_ptr_escape_summaries};
 use static_arena_alloc::StackObjId;
