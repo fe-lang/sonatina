@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/array_iter_reverse.sntn
 ---
@@ -18,9 +17,9 @@ functions:
     mem: scheme=StaticArena need_words=0 locals_words=0
   test_view_param_local_ref_take_reverse: ir_blocks=1 ir_insts=28 vcode_ops=89 fixups=9 imm_bytes=22
     mem: scheme=StaticArena need_words=0 locals_words=0
-  take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Reverse_u256___u256__8____3cbd747f44bd7a69: ir_blocks=4 ir_insts=9 vcode_ops=16 fixups=2 imm_bytes=2
+  take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Reverse_u256___u256__8____3cbd747f44bd7a69: ir_blocks=4 ir_insts=9 vcode_ops=15 fixups=2 imm_bytes=2
     mem: scheme=StaticArena need_words=0 locals_words=0
-  take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93f2650f4: ir_blocks=4 ir_insts=9 vcode_ops=16 fixups=2 imm_bytes=2
+  take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93f2650f4: ir_blocks=4 ir_insts=9 vcode_ops=15 fixups=2 imm_bytes=2
     mem: scheme=StaticArena need_words=0 locals_words=0
   assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scheme=StaticArena need_words=0 locals_words=0
@@ -63,7 +62,7 @@ sum_last4:
     PUSH1 FuncRef(5)
     JUMP
     JUMPDEST
-    SWAP2  // v19.*i256 = gep v18 0.i256 1.i256;
+    SWAP2  // v16.*i256 = gep v15 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
     PUSH0  // jump block1;
@@ -80,7 +79,7 @@ sum_last4:
     PUSH1 block4
     JUMPI
   block2:
-    DUP3  // v20.i256 = mload v19 i256;
+    DUP3  // v17.i256 = mload v16 i256;
     MLOAD
     DUP3  // v43.i256 = sub 7.i256 v6;
     PUSH1 0x7 (7)
@@ -288,16 +287,15 @@ take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Reverse_u256___u256
     PUSH1 0x8 (8)  // v10.i1 = lt v9 8.i256;
     DUP2
     LT
-    ISZERO  // br v10 block1 block5;
-    PUSH1 block5
+    PUSH1 block5  // br v10 block5 block4;
     JUMPI
-  block1:
-    PUSH1 block3  // jump block3;
+  block4:
+    POP  // jump block3;
+    PUSH1 0x8 (8)
+    PUSH1 block3
     JUMP
   block5:
     JUMPDEST
-    POP  // jump block3;
-    PUSH1 0x8 (8)
   block3:
     JUMPDEST
     SWAP1  // return v19;
@@ -311,16 +309,15 @@ take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93
     PUSH1 0x8 (8)  // v10.i1 = lt v9 8.i256;
     DUP2
     LT
-    ISZERO  // br v10 block1 block5;
-    PUSH1 block5
+    PUSH1 block5  // br v10 block5 block4;
     JUMPI
-  block1:
-    PUSH1 block3  // jump block3;
+  block4:
+    POP  // jump block3;
+    PUSH1 0x8 (8)
+    PUSH1 block3
     JUMP
   block5:
     JUMPDEST
-    POP  // jump block3;
-    PUSH1 0x8 (8)
   block3:
     JUMPDEST
     SWAP1  // return v19;

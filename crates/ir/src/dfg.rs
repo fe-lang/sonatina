@@ -9,7 +9,8 @@ use vec_collections::VecSet;
 
 use super::{Immediate, Type, Value, ValueId};
 use crate::{
-    GlobalVariableRef, Inst, InstDowncast, InstDowncastMut, InstSetBase,
+    GlobalVariableRef, Inst, InstDowncast, InstDowncastMut, InstEffects, InstSetBase,
+    effects::classify_inst_effects,
     inst::{
         InstId, SideEffect,
         control_flow::{self, BranchInfo, CallInfo, Jump, Phi},
@@ -587,14 +588,11 @@ impl DataFlowGraph {
     }
 
     pub fn side_effect(&self, inst_id: InstId) -> SideEffect {
-        let side_effect = self.inst(inst_id).side_effect();
-        if side_effect != SideEffect::Write {
-            return side_effect;
-        }
+        self.effects(inst_id).to_legacy_side_effect()
+    }
 
-        self.cast_call(inst_id).map_or(side_effect, |call| {
-            self.ctx.call_side_effect(*call.callee())
-        })
+    pub fn effects(&self, inst_id: InstId) -> InstEffects {
+        classify_inst_effects(self, inst_id)
     }
 
     pub fn is_branch(&self, inst_id: InstId) -> bool {

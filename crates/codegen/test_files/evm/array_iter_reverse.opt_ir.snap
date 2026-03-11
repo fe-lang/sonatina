@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 414
 expression: opt_ir_snapshot
 input_file: test_files/evm/array_iter_reverse.sntn
 ---
@@ -19,8 +18,8 @@ func private %sum_last4(v0.i256) -> i256 {
         v28.*i256 = gep v41 0.i256 1.i256;
         mstore v28 v0 i256;
         v5.i256 = call %take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Reverse_u256___u256__8____3cbd747f44bd7a69 v24;
-        v18.*@__fe_Take_0 = int_to_ptr v24 *@__fe_Take_0;
-        v19.*i256 = gep v18 0.i256 1.i256;
+        v15.*@__fe_Take_0 = int_to_ptr v24 *@__fe_Take_0;
+        v16.*i256 = gep v15 0.i256 1.i256;
         jump block1;
 
     block1:
@@ -30,8 +29,8 @@ func private %sum_last4(v0.i256) -> i256 {
         br v8 block2 block4;
 
     block2:
-        v20.i256 = mload v19 i256;
-        v32.*[i256; 8] = int_to_ptr v20 *[i256; 8];
+        v17.i256 = mload v16 i256;
+        v32.*[i256; 8] = int_to_ptr v17 *[i256; 8];
         v43.i256 = sub 7.i256 v6;
         v33.*i256 = gep v32 0.i256 v43;
         v34.i256 = mload v33 i256;
@@ -114,14 +113,14 @@ func private %take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Rever
         v8.*i256 = bitcast v7 *i256;
         v9.i256 = mload v8 i256;
         v10.i1 = lt v9 8.i256;
-        br v10 block1 block3;
-
-    block1:
-        jump block3;
+        br v10 block3 block4;
 
     block3:
-        v19.i256 = phi (v9 block1) (8.i256 block0);
+        v19.i256 = phi (v9 block0) (8.i256 block4);
         return v19;
+
+    block4:
+        jump block3;
 }
 
 func private %take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93f2650f4(v0.i256) -> i256 {
@@ -130,14 +129,14 @@ func private %take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256
         v8.*i256 = bitcast v7 *i256;
         v9.i256 = mload v8 i256;
         v10.i1 = lt v9 8.i256;
-        br v10 block1 block3;
-
-    block1:
-        jump block3;
+        br v10 block3 block4;
 
     block3:
-        v19.i256 = phi (v9 block1) (8.i256 block0);
+        v19.i256 = phi (v9 block0) (8.i256 block4);
         return v19;
+
+    block4:
+        jump block3;
 }
 
 func public %assert(v0.i256) {

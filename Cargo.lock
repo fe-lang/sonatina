@@ -2636,6 +2636,7 @@ dependencies = [
 name = "sonatina-ir"
 version = "0.0.3-alpha"
 dependencies = [
+ "bit-set",
  "bitflags",
  "cranelift-entity",
  "dashmap",

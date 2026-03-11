@@ -25,6 +25,7 @@ use super::{
     gvn::GvnSolver,
     inliner::{Inliner, InlinerConfig},
     licm::LicmSolver,
+    load_store::LoadStoreSolver,
     multi_result_legalize::legalize_multi_result,
     sccp::SccpSolver,
 };
@@ -43,6 +44,8 @@ pub enum Pass {
     AggregateCombine,
     /// Aggregate scalarization (SROA + closed SSA-web scalarization).
     AggregateScalarize,
+    /// Per-space load/store forwarding and dead-store elimination.
+    LoadStore,
     /// Sparse conditional constant propagation (composite: CfgCleanup + SCCP + CfgCleanup + ADCE).
     Sccp,
     /// Standalone aggressive dead code elimination.
@@ -67,6 +70,7 @@ impl Pass {
             Pass::CfgCleanup => "cfg_cleanup",
             Pass::AggregateCombine => "aggregate_combine",
             Pass::AggregateScalarize => "aggregate_scalarize",
+            Pass::LoadStore => "load_store",
             Pass::Sccp => "sccp",
             Pass::Adce => "adce",
             Pass::Licm => "licm",
@@ -122,7 +126,7 @@ pub struct Pipeline {
 fn pass_needs_func_behavior(pass: Pass) -> bool {
     matches!(
         pass,
-        Pass::CfgCleanup | Pass::Sccp | Pass::Adce | Pass::Egraph | Pass::Gvn
+        Pass::CfgCleanup | Pass::LoadStore | Pass::Sccp | Pass::Adce | Pass::Egraph | Pass::Gvn
     )
 }
 
@@ -136,6 +140,7 @@ fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
         Pass::CfgCleanup
             | Pass::AggregateCombine
             | Pass::AggregateScalarize
+            | Pass::LoadStore
             | Pass::Sccp
             | Pass::Adce
             | Pass::Licm
@@ -177,6 +182,7 @@ impl Pipeline {
             Pass::CfgCleanup,
             Pass::AggregateCombine,
             Pass::AggregateScalarize,
+            Pass::LoadStore,
             Pass::Sccp,
             Pass::Gvn,
             Pass::Licm,
@@ -200,6 +206,7 @@ impl Pipeline {
             Pass::CfgCleanup,
             Pass::AggregateCombine,
             Pass::AggregateScalarize,
+            Pass::LoadStore,
             Pass::Sccp,
             Pass::Gvn,
             Pass::Licm,
@@ -214,6 +221,7 @@ impl Pipeline {
             Pass::CfgCleanup,
             Pass::AggregateCombine,
             Pass::AggregateScalarize,
+            Pass::LoadStore,
             Pass::Sccp,
             Pass::Gvn,
             Pass::CfgCleanup,
@@ -378,6 +386,18 @@ fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
         Pass::AggregateScalarize => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_scalarize").entered();
             AggregateScalarize::default().run(func);
+        }
+        Pass::LoadStore => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.load_store").entered();
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.load_store.compute_cfg").entered();
+                ctx.cfg.compute(func);
+            }
+            let mut solver = LoadStoreSolver::new();
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.load_store.solve").entered();
+                solver.run(func, &mut ctx.cfg);
+            }
         }
         Pass::Sccp => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.sccp").entered();

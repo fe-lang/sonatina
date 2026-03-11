@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 414
 expression: opt_ir_snapshot
 input_file: test_files/evm/zk.sntn
 ---
@@ -136,7 +135,6 @@ func private %leanimt_update_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i2
         mstore 0.i256 v25 i256;
         mstore 32.i256 v59 i256;
         v74.i256 = evm_keccak256 0.i256 64.i256;
-        mstore 0.i256 v25 i256;
         mstore 32.i256 v65 i256;
         v76.i256 = evm_keccak256 0.i256 64.i256;
         jump block7;
@@ -152,7 +150,6 @@ func private %leanimt_update_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i2
         mstore 32.i256 v25 i256;
         v78.i256 = evm_keccak256 0.i256 64.i256;
         mstore 0.i256 v65 i256;
-        mstore 32.i256 v25 i256;
         v80.i256 = evm_keccak256 0.i256 64.i256;
         jump block7;
 
@@ -295,7 +292,6 @@ func private %smt_update_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256, 
         mstore 0.i256 v21 i256;
         mstore 32.i256 v101 i256;
         v163.i256 = evm_keccak256 0.i256 64.i256;
-        mstore 0.i256 v21 i256;
         mstore 32.i256 v107 i256;
         v165.i256 = evm_keccak256 0.i256 64.i256;
         jump block7;
@@ -311,7 +307,6 @@ func private %smt_update_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256, 
         mstore 32.i256 v21 i256;
         v167.i256 = evm_keccak256 0.i256 64.i256;
         mstore 0.i256 v107 i256;
-        mstore 32.i256 v21 i256;
         v169.i256 = evm_keccak256 0.i256 64.i256;
         jump block7;
 
@@ -362,7 +357,6 @@ func private %smt_update_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256, 
         mstore 0.i256 v75 i256;
         mstore 32.i256 v117 i256;
         v171.i256 = evm_keccak256 0.i256 64.i256;
-        mstore 0.i256 v75 i256;
         mstore 32.i256 v137 i256;
         v173.i256 = evm_keccak256 0.i256 64.i256;
         jump block18;
@@ -378,7 +372,6 @@ func private %smt_update_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256, 
         mstore 32.i256 v75 i256;
         v175.i256 = evm_keccak256 0.i256 64.i256;
         mstore 0.i256 v137 i256;
-        mstore 32.i256 v75 i256;
         v177.i256 = evm_keccak256 0.i256 64.i256;
         jump block18;
 
