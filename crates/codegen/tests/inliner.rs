@@ -228,6 +228,53 @@ func public %caller(v0.i1) -> i32 {
 }
 
 #[test]
+fn full_inliner_clones_multi_result_body_and_returns() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %pair_helper(v0.i256, v1.i256, v2.i1) -> (i256, i1) {
+    block0:
+        (v3.i256, v4.i1) = uaddo v0 v1;
+        br v2 block1 block2;
+
+    block1:
+        return (v3, v4);
+
+    block2:
+        return (v1, v4);
+}
+
+func public %caller(v0.i256, v1.i256, v2.i1) -> (i256, i1) {
+    block0:
+        (v3.i256, v4.i1) = call %pair_helper v0 v1 v2;
+        return (v3, v4);
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(full_only_inliner_test_config());
+    let stats = inliner.run(module);
+    let dumped = dump_module(module);
+
+    assert!(
+        !dumped.contains("call %pair_helper"),
+        "full inliner should eliminate the multi-return callsite:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("uaddo"),
+        "full inliner should preserve multi-result body instructions:\n{dumped}"
+    );
+    assert!(
+        stats.full_calls_inlined > 0,
+        "expected full inline:\n{dumped}"
+    );
+    assert_module_verified(module);
+}
+
+#[test]
 fn splice_require_pure_allows_proven_pure_calls() {
     let source = r#"
 target = "evm-ethereum-london"

@@ -1,7 +1,8 @@
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, Inst, InstId, Module, Value, ValueId, module::FuncRef,
-    visitor::Visitor,
+    BlockId, ControlFlowGraph, Function, Inst, InstId, Module, Type, Value, ValueId,
+    module::FuncRef, visitor::Visitor,
 };
 use sonatina_verifier::{VerifierConfig, verify_function};
 
@@ -29,10 +30,10 @@ pub(super) struct FullInlineResult {
     pub cont_reachable: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct ReturnSite {
     from_block: BlockId,
-    value: Option<ValueId>,
+    values: SmallVec<[ValueId; 2]>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -67,34 +68,32 @@ pub(super) fn try_inline_callsite_full(
     }
 
     let call_args = call.args().clone();
-    let call_res = caller.dfg.inst_result(call_inst);
+    let call_results: SmallVec<[ValueId; 2]> =
+        caller.dfg.inst_results(call_inst).iter().copied().collect();
 
     if callee.arg_values.len() != call_args.len() {
         return Err(FullInlineFail::SignatureMismatch);
     }
 
-    let sig_mismatch = module.ctx.func_sig(callee_ref, |sig| {
-        if sig.args().len() != call_args.len() {
-            return true;
-        }
-        if sig
-            .args()
-            .iter()
-            .zip(call_args.iter())
-            .any(|(expected_ty, &arg)| caller.dfg.value_ty(arg) != *expected_ty)
-        {
-            return true;
-        }
-
-        if sig.ret_ty().is_unit() {
-            call_res.is_some()
-        } else {
-            let Some(call_res) = call_res else {
+    let sig_mismatch =
+        module.ctx.func_sig(callee_ref, |sig| {
+            if sig.args().len() != call_args.len() {
                 return true;
-            };
-            sig.ret_ty() != caller.dfg.value_ty(call_res)
-        }
-    });
+            }
+            if sig
+                .args()
+                .iter()
+                .zip(call_args.iter())
+                .any(|(expected_ty, &arg)| caller.dfg.value_ty(arg) != *expected_ty)
+            {
+                return true;
+            }
+
+            sig.ret_tys().len() != call_results.len()
+                || sig.ret_tys().iter().zip(call_results.iter()).any(
+                    |(expected_ty, &call_result)| caller.dfg.value_ty(call_result) != *expected_ty,
+                )
+        });
     if sig_mismatch {
         return Err(FullInlineFail::SignatureMismatch);
     }
@@ -162,8 +161,11 @@ pub(super) fn try_inline_callsite_full(
         let body = &inst_ids[..inst_ids.len() - 1];
 
         for &old_inst in body {
-            let old_result = callee.dfg.inst_result(old_inst);
-            let result_ty = old_result.map(|value| callee.dfg.value_ty(value));
+            let old_results = callee.dfg.inst_results(old_inst);
+            let result_tys: SmallVec<[Type; 2]> = old_results
+                .iter()
+                .map(|&value| callee.dfg.value_ty(value))
+                .collect();
 
             let mut cloned: Box<dyn Inst> = callee.dfg.clone_inst(old_inst);
             let is_phi = callee.dfg.is_phi(old_inst);
@@ -176,13 +178,16 @@ pub(super) fn try_inline_callsite_full(
                     .expect("validated callee should be rewriteable")
             };
 
-            let (new_inst, new_result) =
-                editor.append_inst_with_result(new_block, cloned, result_ty);
+            let (new_inst, new_results) =
+                editor.append_inst_with_results(new_block, cloned, result_tys.as_slice());
             inserted_insts += 1;
 
-            if let Some(old_result) = old_result
-                && let Some(new_result) = new_result
-            {
+            assert_eq!(
+                old_results.len(),
+                new_results.len(),
+                "cloned instruction results should match source instruction results"
+            );
+            for (&old_result, &new_result) in old_results.iter().zip(new_results.iter()) {
                 value_map.insert(old_result, new_result);
             }
 
@@ -198,14 +203,18 @@ pub(super) fn try_inline_callsite_full(
         }
 
         if callee.dfg.is_return(term_id) {
-            let ret_value = callee
+            let ret_values = callee
                 .dfg
                 .return_args(term_id)
-                .and_then(|args| args.first().copied())
-                .map(|value| {
-                    map_or_materialize(callee, editor.func_mut(), &mut value_map, value)
-                        .expect("verified return value should rewrite")
-                });
+                .map(|args| {
+                    args.iter()
+                        .map(|&value| {
+                            map_or_materialize(callee, editor.func_mut(), &mut value_map, value)
+                                .expect("verified return value should rewrite")
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
 
             let jump = editor.func_mut().dfg.make_jump(cont_block);
             editor.append_inst_with_result(new_block, Box::new(jump), None);
@@ -213,7 +222,7 @@ pub(super) fn try_inline_callsite_full(
 
             returns.push(ReturnSite {
                 from_block: new_block,
-                value: ret_value,
+                values: ret_values,
             });
         } else {
             let mut term = callee.dfg.clone_inst(term_id);
@@ -253,44 +262,51 @@ pub(super) fn try_inline_callsite_full(
         func.dfg.rewrite_branch_dest(term, cont_block, entry_new);
     }
 
-    if let Some(call_res) = call_res {
+    if !call_results.is_empty() {
         let func = editor.func_mut();
-        let call_res_ty = func.dfg.value_ty(call_res);
 
-        match returns.len() {
-            0 => {
-                let undef = func.dfg.make_undef_value(call_res_ty);
-                func.dfg.change_to_alias(call_res, undef);
-            }
-            1 => {
-                let value = match returns[0].value {
-                    Some(value) if func.dfg.value_ty(value) == call_res_ty => value,
-                    _ => func.dfg.make_undef_value(call_res_ty),
-                };
-                func.dfg.change_to_alias(call_res, value);
-            }
-            _ => {
-                let mut args = Vec::with_capacity(returns.len());
-                for return_site in &returns {
-                    let value = match return_site.value {
-                        Some(value) if func.dfg.value_ty(value) == call_res_ty => value,
-                        _ => func.dfg.make_undef_value(call_res_ty),
-                    };
-                    args.push((value, return_site.from_block));
+        for (result_idx, &call_result) in call_results.iter().enumerate() {
+            let call_result_ty = func.dfg.value_ty(call_result);
+
+            match returns.len() {
+                0 => {
+                    let undef = func.dfg.make_undef_value(call_result_ty);
+                    func.dfg.change_to_alias(call_result, undef);
                 }
+                1 => {
+                    let value = returns[0]
+                        .values
+                        .get(result_idx)
+                        .copied()
+                        .filter(|&value| func.dfg.value_ty(value) == call_result_ty)
+                        .unwrap_or_else(|| func.dfg.make_undef_value(call_result_ty));
+                    func.dfg.change_to_alias(call_result, value);
+                }
+                _ => {
+                    let mut args = Vec::with_capacity(returns.len());
+                    for return_site in &returns {
+                        let value = return_site
+                            .values
+                            .get(result_idx)
+                            .copied()
+                            .filter(|&value| func.dfg.value_ty(value) == call_result_ty)
+                            .unwrap_or_else(|| func.dfg.make_undef_value(call_result_ty));
+                        args.push((value, return_site.from_block));
+                    }
 
-                let phi = func.dfg.make_phi(args);
-                let phi_inst = func.dfg.make_inst(phi);
-                func.layout.prepend_inst(phi_inst, cont_block);
+                    let phi = func.dfg.make_phi(args);
+                    let phi_inst = func.dfg.make_inst(phi);
+                    func.layout.prepend_inst(phi_inst, cont_block);
 
-                let phi_value = func.dfg.make_value(Value::Inst {
-                    inst: phi_inst,
-                    result_idx: 0,
-                    ty: call_res_ty,
-                });
-                func.dfg.attach_result(phi_inst, phi_value);
-                func.dfg.change_to_alias(call_res, phi_value);
-                inserted_insts += 1;
+                    let phi_value = func.dfg.make_value(Value::Inst {
+                        inst: phi_inst,
+                        result_idx: 0,
+                        ty: call_result_ty,
+                    });
+                    func.dfg.attach_result(phi_inst, phi_value);
+                    func.dfg.change_to_alias(call_result, phi_value);
+                    inserted_insts += 1;
+                }
             }
         }
     }
@@ -422,8 +438,8 @@ fn validate_full_inline_callee_rewriteability(
                 return Err(FullInlineFail::MalformedCallee);
             }
 
-            if let Some(res) = callee.dfg.inst_result(inst_id) {
-                seen_values.insert(res);
+            for &result in callee.dfg.inst_results(inst_id) {
+                seen_values.insert(result);
             }
         }
 
