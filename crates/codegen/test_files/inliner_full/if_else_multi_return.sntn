@@ -1,0 +1,18 @@
+target = "evm-ethereum-london"
+
+func private %pick(v0.i1) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return 10.i32;
+
+    block2:
+        return 20.i32;
+}
+
+func public %caller(v0.i1) -> i32 {
+    block0:
+        v1.i32 = call %pick v0;
+        return v1;
+}

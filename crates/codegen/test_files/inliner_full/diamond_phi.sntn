@@ -1,0 +1,25 @@
+target = "evm-ethereum-london"
+
+func private %diamond(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v2.i32 = add v1 1.i32;
+        jump block3;
+
+    block2:
+        v3.i32 = add v1 2.i32;
+        jump block3;
+
+    block3:
+        v4.i32 = phi (v2 block1) (v3 block2);
+        v5.i32 = mul v4 3.i32;
+        return v5;
+}
+
+func public %caller(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %diamond v0 v1;
+        return v2;
+}

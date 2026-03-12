@@ -115,7 +115,7 @@ fn run_optimize(input: &Path, profile: bool) -> i32 {
     }
 
     measure_stage(&mut stages, "optimize", || {
-        Pipeline::balanced().run(&mut parsed.module);
+        Pipeline::size().run(&mut parsed.module);
     });
 
     let optimized = measure_stage(&mut stages, "emit_ir", || {
@@ -155,7 +155,7 @@ fn run_build(input: &Path, profile: bool) -> i32 {
     }
 
     measure_stage(&mut stages, "optimize", || {
-        Pipeline::balanced().run(&mut parsed.module);
+        Pipeline::size().run(&mut parsed.module);
     });
 
     let artifacts =

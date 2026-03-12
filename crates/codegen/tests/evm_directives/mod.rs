@@ -16,16 +16,16 @@ pub(crate) struct EvmConfig {
 pub(crate) enum EvmOptPipeline {
     #[default]
     None,
-    Balanced,
-    Aggressive,
+    Size,
+    Speed,
 }
 
 impl EvmOptPipeline {
     pub(crate) fn as_u8(self) -> u8 {
         match self {
             Self::None => 0,
-            Self::Balanced => 1,
-            Self::Aggressive => 2,
+            Self::Size => 1,
+            Self::Speed => 2,
         }
     }
 }
@@ -324,11 +324,11 @@ fn parse_bool_literal(lit: &str) -> Result<bool, String> {
 }
 
 fn parse_opt_level_literal(lit: &str) -> Result<EvmOptPipeline, String> {
-    match parse_u8_literal(lit)? {
-        0 => Ok(EvmOptPipeline::None),
-        1 => Ok(EvmOptPipeline::Balanced),
-        2 => Ok(EvmOptPipeline::Aggressive),
-        _ => Err("expected one of `0`, `1`, `2`".to_string()),
+    match lit.trim() {
+        "0" => Ok(EvmOptPipeline::None),
+        "s" => Ok(EvmOptPipeline::Size),
+        "2" => Ok(EvmOptPipeline::Speed),
+        _ => Err("expected one of `0`, `s`, `2`".to_string()),
     }
 }
 
@@ -363,22 +363,22 @@ mod tests {
     use super::{EvmOptPipeline, parse_evm_config};
 
     #[test]
-    fn parse_opt_level_balanced() {
-        let comments = vec!["#! evm.config: { opt: 1 }".to_string()];
+    fn parse_opt_level_size() {
+        let comments = vec!["#! evm.config: { opt: s }".to_string()];
         let cfg = parse_evm_config(&comments).expect("config parse should succeed");
-        assert_eq!(cfg.opt, Some(EvmOptPipeline::Balanced));
+        assert_eq!(cfg.opt, Some(EvmOptPipeline::Size));
     }
 
     #[test]
-    fn parse_opt_level_aggressive() {
+    fn parse_opt_level_speed() {
         let comments = vec!["#! evm.config: { opt: 2 }".to_string()];
         let cfg = parse_evm_config(&comments).expect("config parse should succeed");
-        assert_eq!(cfg.opt, Some(EvmOptPipeline::Aggressive));
+        assert_eq!(cfg.opt, Some(EvmOptPipeline::Speed));
     }
 
     #[test]
     fn parse_opt_level_rejects_duplicate() {
-        let comments = vec!["#! evm.config: { opt: 0, opt: 1 }".to_string()];
+        let comments = vec!["#! evm.config: { opt: 0, opt: s }".to_string()];
         let err = parse_evm_config(&comments).expect_err("duplicate key must fail");
         assert_eq!(err, "duplicate `opt`");
     }

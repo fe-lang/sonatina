@@ -28,6 +28,15 @@ bitflags! {
     }
 }
 
+bitflags! {
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct FuncHints: u16 {
+        const NOINLINE = 1 << 0;
+        const ALWAYSINLINE = 1 << 1;
+        const INLINEHINT = 1 << 2;
+    }
+}
+
 pub struct Module {
     pub func_store: FuncStore,
     pub ctx: ModuleCtx,
@@ -57,6 +66,15 @@ pub struct FuncStore {
 impl FuncStore {
     pub fn update(&self, func_ref: FuncRef, func: Function) {
         self.funcs.insert(func_ref, func).unwrap();
+    }
+
+    pub fn restore(&self, func_ref: FuncRef, func: Function) {
+        let _guard = self._guard.lock().unwrap();
+        let prev = self.funcs.insert(func_ref, func);
+        assert!(
+            prev.is_none(),
+            "restore expected vacant slot for {func_ref:?}"
+        );
     }
 
     pub fn insert(&self, func: Function) -> FuncRef {
@@ -167,6 +185,7 @@ pub struct ModuleCtx {
     pub declared_funcs: Arc<DashMap<FuncRef, Signature>>,
     func_attrs: Arc<RwLock<FxHashMap<FuncRef, FuncAttrs>>>,
     func_effects: Arc<RwLock<FxHashMap<FuncRef, FuncEffectSummary>>>,
+    func_hints: Arc<RwLock<FxHashMap<FuncRef, FuncHints>>>,
     type_store: Arc<RwLock<TypeStore>>,
     gv_store: Arc<RwLock<GlobalVariableStore>>,
 }
@@ -187,6 +206,7 @@ impl ModuleCtx {
             declared_funcs: Arc::new(DashMap::new()),
             func_attrs: Arc::new(RwLock::new(FxHashMap::default())),
             func_effects: Arc::new(RwLock::new(FxHashMap::default())),
+            func_hints: Arc::new(RwLock::new(FxHashMap::default())),
             gv_store: Arc::new(RwLock::new(GlobalVariableStore::default())),
         }
     }
@@ -293,6 +313,41 @@ impl ModuleCtx {
 
     pub fn address_spaces(&self) -> &'static dyn AddressSpaceInfo {
         self.address_spaces
+    }
+
+    pub fn func_hints(&self, func_ref: FuncRef) -> FuncHints {
+        self.func_hints
+            .read()
+            .unwrap()
+            .get(&func_ref)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn has_func_hints(&self, func_ref: FuncRef) -> bool {
+        self.func_hints.read().unwrap().contains_key(&func_ref)
+    }
+
+    pub fn set_all_func_hints(&self, new: FxHashMap<FuncRef, FuncHints>) {
+        *self.func_hints.write().unwrap() = new;
+    }
+
+    pub fn set_func_hints(&self, func_ref: FuncRef, hints: FuncHints) {
+        self.func_hints
+            .write()
+            .unwrap()
+            .entry(func_ref)
+            .and_modify(|entry| *entry |= hints)
+            .or_insert(hints);
+    }
+
+    pub fn clear_func_hints(&self, func_ref: FuncRef) {
+        self.func_hints.write().unwrap().remove(&func_ref);
+    }
+
+    pub fn clear_func_metadata(&self, func_ref: FuncRef) {
+        self.clear_func_attrs(func_ref);
+        self.clear_func_hints(func_ref);
     }
 
     /// Updated the function signature with the given linkage.

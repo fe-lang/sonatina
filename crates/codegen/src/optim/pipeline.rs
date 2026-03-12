@@ -108,7 +108,7 @@ impl Step {
 
 /// An ordered sequence of optimization steps.
 ///
-/// Use [`Pipeline::default_pipeline`] for a conservative preset, or build a
+/// Use [`Pipeline::default_pipeline`] for the default speed-oriented preset, or build a
 /// custom sequence with [`Pipeline::new`] and [`Pipeline::add_step`].
 ///
 /// # Analysis lifecycle
@@ -123,6 +123,31 @@ pub struct Pipeline {
     pub inliner_config: InlinerConfig,
 }
 
+const PRIMARY_FUNC_PASSES: &[Pass] = &[
+    Pass::CfgCleanup,
+    Pass::AggregateCombine,
+    Pass::AggregateScalarize,
+    Pass::LoadStore,
+    Pass::Sccp,
+    Pass::Gvn,
+    Pass::Licm,
+    Pass::CfgCleanup,
+    Pass::Egraph,
+    Pass::RebuildUsers,
+    Pass::Sccp,
+    Pass::CfgCleanup,
+];
+
+const SECONDARY_FUNC_PASSES: &[Pass] = &[
+    Pass::CfgCleanup,
+    Pass::AggregateCombine,
+    Pass::AggregateScalarize,
+    Pass::LoadStore,
+    Pass::Sccp,
+    Pass::Gvn,
+    Pass::CfgCleanup,
+];
+
 fn pass_needs_func_behavior(pass: Pass) -> bool {
     matches!(
         pass,
@@ -130,8 +155,16 @@ fn pass_needs_func_behavior(pass: Pass) -> bool {
     )
 }
 
-fn step_needs_func_behavior(passes: &[Pass]) -> bool {
+fn func_passes_need_func_behavior(passes: &[Pass]) -> bool {
     passes.iter().copied().any(pass_needs_func_behavior)
+}
+
+fn step_needs_func_behavior(step: &Step) -> bool {
+    match step {
+        Step::Inline => true,
+        Step::FuncPasses(passes) => func_passes_need_func_behavior(passes),
+        Step::DeadFuncElim => false,
+    }
 }
 
 fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
@@ -156,7 +189,63 @@ fn step_may_invalidate_func_behavior(passes: &[Pass]) -> bool {
         .any(pass_may_invalidate_func_behavior)
 }
 
+fn size_inliner_config() -> InlinerConfig {
+    InlinerConfig {
+        // The size-oriented mode still runs the full optimization schedule, but
+        // uses a wider full-inlining budget because that tends to reduce overall
+        // bytecode once later cleanup and dead-function elimination run.
+        enable_full_inliner: true,
+        splice_max_insts: 6,
+        max_inlinee_blocks: 8,
+        max_inlinee_insts: 48,
+        max_multi_use_inlinee_blocks: 1,
+        max_multi_use_inlinee_insts: 6,
+        max_growth_per_caller: 32,
+        max_total_growth: 160,
+        max_inline_depth: 3,
+        inline_threshold: 10,
+        inline_threshold_cold: 5,
+        single_use_bonus: 8,
+        leaf_bonus: 2,
+        loop_penalty: 32,
+        ..InlinerConfig::default()
+    }
+}
+
+fn speed_inliner_config() -> InlinerConfig {
+    InlinerConfig {
+        // The speed-oriented mode stays more selective about inlining, because
+        // on the EVM a smaller post-inline body often wins on runtime gas.
+        enable_full_inliner: true,
+        splice_max_insts: 4,
+        max_inlinee_blocks: 6,
+        max_inlinee_insts: 32,
+        max_multi_use_inlinee_blocks: 1,
+        max_multi_use_inlinee_insts: 6,
+        max_growth_per_caller: 24,
+        max_total_growth: 128,
+        max_inline_depth: 3,
+        inline_threshold: 8,
+        inline_threshold_cold: 4,
+        single_use_bonus: 8,
+        leaf_bonus: 2,
+        loop_penalty: 32,
+        ..InlinerConfig::default()
+    }
+}
+
 impl Pipeline {
+    fn optimized_with_inliner_config(inliner_config: InlinerConfig) -> Self {
+        let mut p = Self::new();
+        p.inliner_config = inliner_config;
+        p.add_step(Step::Inline);
+        p.add_step(Step::FuncPasses(PRIMARY_FUNC_PASSES.to_vec()));
+        p.add_step(Step::Inline);
+        p.add_step(Step::FuncPasses(SECONDARY_FUNC_PASSES.to_vec()));
+        p.add_step(Step::DeadFuncElim);
+        p
+    }
+
     /// Create an empty pipeline with default inliner configuration.
     pub fn new() -> Self {
         Self {
@@ -172,68 +261,26 @@ impl Pipeline {
         Self::new()
     }
 
-    /// Conservative optimization pipeline preset.
+    /// Size-oriented optimization pipeline preset.
     ///
-    /// This is the recommended baseline (O1-style) pipeline.
-    pub fn balanced() -> Self {
-        let mut p = Self::new();
-        p.add_step(Step::Inline);
-        p.add_step(Step::FuncPasses(vec![
-            Pass::CfgCleanup,
-            Pass::AggregateCombine,
-            Pass::AggregateScalarize,
-            Pass::LoadStore,
-            Pass::Sccp,
-            Pass::Gvn,
-            Pass::Licm,
-            Pass::CfgCleanup,
-            Pass::Egraph,
-            Pass::RebuildUsers,
-            Pass::Sccp,
-            Pass::CfgCleanup,
-        ]));
-        p.add_step(Step::DeadFuncElim);
-        p
+    /// It uses the same aggressive pass schedule as [`Pipeline::speed`], but
+    /// keeps inlining biased toward avoiding code size growth.
+    pub fn size() -> Self {
+        Self::optimized_with_inliner_config(size_inliner_config())
     }
 
-    /// Aggressive optimization pipeline preset.
+    /// Speed-oriented optimization pipeline preset.
     ///
-    /// Uses a larger inliner budget and a second inline+SCCP round.
-    pub fn aggressive() -> Self {
-        let mut p = Self::new();
-        p.add_step(Step::Inline);
-        p.add_step(Step::FuncPasses(vec![
-            Pass::CfgCleanup,
-            Pass::AggregateCombine,
-            Pass::AggregateScalarize,
-            Pass::LoadStore,
-            Pass::Sccp,
-            Pass::Gvn,
-            Pass::Licm,
-            Pass::CfgCleanup,
-            Pass::Egraph,
-            Pass::RebuildUsers,
-            Pass::Sccp,
-            Pass::CfgCleanup,
-        ]));
-        p.add_step(Step::Inline);
-        p.add_step(Step::FuncPasses(vec![
-            Pass::CfgCleanup,
-            Pass::AggregateCombine,
-            Pass::AggregateScalarize,
-            Pass::LoadStore,
-            Pass::Sccp,
-            Pass::Gvn,
-            Pass::CfgCleanup,
-        ]));
-        p.add_step(Step::DeadFuncElim);
-        p
+    /// Uses the same pass schedule as [`Pipeline::size`], but widens the
+    /// inliner budget for runtime speed.
+    pub fn speed() -> Self {
+        Self::optimized_with_inliner_config(speed_inliner_config())
     }
 
-    /// Default optimization pipeline with a conservative ordering.
+    /// Default optimization pipeline with a speed-oriented ordering.
     ///
     /// Current sequence:
-    /// 1. `Inline` — single-block inlining (module-level)
+    /// 1. `Inline` — module-level inlining (trivial + constrained full inliner)
     /// 2. Per-function passes (parallel):
     ///    - `CfgCleanup` — normalize CFG before analysis-heavy passes
     ///    - `Sccp` — constant propagation + dead code elimination (composite)
@@ -244,9 +291,18 @@ impl Pipeline {
     ///    - `RebuildUsers` — fix stale `dfg.users` after egraph
     ///    - `Sccp` — second round catches constants exposed by egraph
     ///    - `CfgCleanup` — final cleanup
-    /// 3. `DeadFuncElim` — prune unreachable private definitions from object roots
+    /// 3. `Inline` — repeat inlining with freshly simplified callees/callers
+    /// 4. Per-function passes (parallel):
+    ///    - `CfgCleanup`
+    ///    - `AggregateCombine`
+    ///    - `AggregateScalarize`
+    ///    - `LoadStore`
+    ///    - `Sccp`
+    ///    - `Gvn`
+    ///    - `CfgCleanup`
+    /// 5. `DeadFuncElim` — prune unreachable private definitions from object roots
     pub fn default_pipeline() -> Self {
-        Self::balanced()
+        Self::speed()
     }
 
     /// Append a step to the pipeline. Returns `&mut Self` for chaining.
@@ -261,9 +317,9 @@ impl Pipeline {
     /// directly; [`Step::FuncPasses`] parallelizes across functions via
     /// `FuncStore::par_for_each`.
     ///
-    /// Function behavior analysis runs lazily before each pass round that
-    /// needs call attributes, and is marked dirty again after mutating rounds.
-    /// This keeps attrs fresh without recomputing before every step.
+    /// Function behavior analysis runs lazily before each inline/pass round
+    /// that needs call attributes, and is marked dirty again after mutating
+    /// rounds. This keeps attrs fresh without recomputing before every step.
     ///
     /// The invalidation boundary is per [`Step::FuncPasses`], because function
     /// rounds execute function-major in parallel.
@@ -283,6 +339,11 @@ impl Pipeline {
                 step = step.as_str()
             )
             .entered();
+            if func_behavior_dirty && step_needs_func_behavior(step) {
+                let _span = trace_span!("sonatina.optim.pipeline.func_behavior_analyze").entered();
+                func_behavior::analyze_module(module);
+                func_behavior_dirty = false;
+            }
             match step {
                 Step::Inline => {
                     let _span = debug_span!("sonatina.optim.pipeline.inline").entered();
@@ -299,12 +360,6 @@ impl Pipeline {
                         pass_count = passes.len()
                     )
                     .entered();
-                    if func_behavior_dirty && step_needs_func_behavior(passes) {
-                        let _span =
-                            trace_span!("sonatina.optim.pipeline.func_behavior_analyze").entered();
-                        func_behavior::analyze_module(module);
-                        func_behavior_dirty = false;
-                    }
                     module.func_store.par_for_each(|func_ref, func| {
                         let _span = debug_span!(
                             "sonatina.optim.pipeline.function",
@@ -331,7 +386,7 @@ impl Pipeline {
 impl Default for Pipeline {
     /// Returns [`Pipeline::default_pipeline`], not an empty pipeline.
     fn default() -> Self {
-        Self::balanced()
+        Self::default_pipeline()
     }
 }
 
@@ -480,6 +535,7 @@ mod tests {
         builder::test_util::*,
         inst::{arith::Add, control_flow::Return},
         ir_writer::FuncWriter,
+        module::FuncHints,
         prelude::*,
     };
     use sonatina_parser::parse_module;
@@ -508,6 +564,23 @@ mod tests {
         let pipeline = Pipeline::default_pipeline();
         let mut module = build_test_module();
         pipeline.run(&mut module);
+    }
+
+    #[test]
+    fn default_pipeline_uses_speed_profile() {
+        let pipeline = Pipeline::default_pipeline();
+        assert_eq!(
+            pipeline.inliner_config.splice_max_insts,
+            Pipeline::speed().inliner_config.splice_max_insts
+        );
+        assert_eq!(
+            Pipeline::default().inliner_config.splice_max_insts,
+            Pipeline::speed().inliner_config.splice_max_insts
+        );
+        assert_ne!(
+            pipeline.inliner_config.splice_max_insts,
+            Pipeline::size().inliner_config.splice_max_insts
+        );
     }
 
     #[test]
@@ -1060,6 +1133,225 @@ func private %entry(v0.i32, v1.i32) -> i32 {
             assert!(
                 dumped.contains("return 0.i32;"),
                 "expected inferred equality from eq(ne x y, 0) to fold sub in true branch:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn size_and_speed_use_distinct_inliner_profiles() {
+        let size = Pipeline::size();
+        assert!(size.inliner_config.enable_full_inliner);
+        assert_eq!(size.inliner_config.splice_max_insts, 6);
+        assert_eq!(size.inliner_config.max_multi_use_inlinee_blocks, 1);
+        assert_eq!(size.inliner_config.max_multi_use_inlinee_insts, 6);
+
+        let speed = Pipeline::speed();
+        assert!(speed.inliner_config.enable_full_inliner);
+        assert!(size.inliner_config.splice_max_insts > speed.inliner_config.splice_max_insts);
+        assert!(speed.inliner_config.max_inlinee_blocks > 0);
+        assert!(speed.inliner_config.max_inlinee_insts > 0);
+        assert!(
+            size.inliner_config.max_growth_per_caller >= speed.inliner_config.max_growth_per_caller
+        );
+        assert!(size.inliner_config.max_total_growth >= speed.inliner_config.max_total_growth);
+        assert_ne!(
+            speed.inliner_config.inline_threshold,
+            size.inliner_config.inline_threshold
+        );
+        assert_ne!(
+            speed.inliner_config.inline_threshold_cold,
+            size.inliner_config.inline_threshold_cold
+        );
+    }
+
+    #[test]
+    fn size_and_speed_share_same_step_schedule() {
+        let size = Pipeline::size();
+        let speed = Pipeline::speed();
+        assert_eq!(size.steps.len(), speed.steps.len());
+        for (size_step, speed_step) in size.steps.iter().zip(speed.steps.iter()) {
+            match (size_step, speed_step) {
+                (Step::Inline, Step::Inline) | (Step::DeadFuncElim, Step::DeadFuncElim) => {}
+                (Step::FuncPasses(size_passes), Step::FuncPasses(speed_passes)) => {
+                    assert_eq!(size_passes, speed_passes);
+                }
+                _ => panic!("size and speed should differ only in inliner config"),
+            }
+        }
+    }
+
+    #[test]
+    fn optimized_pipelines_preserve_noinline_hint_across_second_inline_round() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %id(v0.i32) -> i32 {
+    block0:
+        return v0;
+}
+
+func public %caller(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %id v0;
+        return v1;
+}
+"#;
+
+        for (name, pipeline) in [("size", Pipeline::size()), ("speed", Pipeline::speed())] {
+            let mut module = parse_module(source).expect("parse should succeed").module;
+            let id = module
+                .funcs()
+                .into_iter()
+                .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == "id"))
+                .expect("id function should exist");
+            let caller = module
+                .funcs()
+                .into_iter()
+                .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == "caller"))
+                .expect("caller function should exist");
+
+            module.ctx.set_func_hints(id, FuncHints::NOINLINE);
+
+            pipeline.run(&mut module);
+
+            module.func_store.view(caller, |func| {
+                let dumped = FuncWriter::new(caller, func).dump_string();
+                assert!(
+                    dumped.contains("call %id"),
+                    "NOINLINE hint should survive the {name} pipeline:\n{dumped}"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn inline_analyzes_func_behavior_before_first_round() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %pure(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 2.i32;
+        return v2;
+}
+
+func private %helper(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %pure v0 v1;
+        v3.i32 = add v2 1.i32;
+        return v3;
+}
+
+func public %caller(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %helper v0 v1;
+        return v2;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let caller = module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == "caller"))
+            .expect("caller function should exist");
+        let mut pipeline = Pipeline::new();
+        pipeline.inliner_config = InlinerConfig {
+            splice_require_pure: true,
+            ..InlinerConfig::default()
+        };
+        pipeline.add_step(Step::Inline);
+
+        pipeline.run(&mut module);
+
+        module.func_store.view(caller, |func| {
+            let dumped = FuncWriter::new(caller, func).dump_string();
+            assert!(
+                !dumped.contains("call %helper"),
+                "first inline round should splice helper once callee purity is analyzed:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("call %pure"),
+                "multi-block pure callee should remain as a call after helper splicing:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn inline_recomputes_func_behavior_before_second_round() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %pure_after_cleanup(v0.i1, v1.*i32, v2.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        br 0.i1 block3 block4;
+
+    block2:
+        return v2;
+
+    block3:
+        mstore v1 1.i32 i32;
+        return 99.i32;
+
+    block4:
+        v3.i32 = add v2 2.i32;
+        return v3;
+}
+
+func private %helper(v0.i1, v1.*i32, v2.i32) -> i32 {
+    block0:
+        v3.i32 = call %pure_after_cleanup v0 v1 v2;
+        v4.i32 = add v3 1.i32;
+        return v4;
+}
+
+func public %caller(v0.i1, v1.*i32, v2.i32) -> i32 {
+    block0:
+        v3.i32 = call %helper v0 v1 v2;
+        return v3;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let caller = module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == "caller"))
+            .expect("caller function should exist");
+        let mut pipeline = Pipeline::new();
+        pipeline.inliner_config = InlinerConfig {
+            splice_require_pure: true,
+            ..InlinerConfig::default()
+        };
+        pipeline
+            .add_step(Step::Inline)
+            .add_step(Step::FuncPasses(vec![
+                Pass::CfgCleanup,
+                Pass::Sccp,
+                Pass::CfgCleanup,
+            ]))
+            .add_step(Step::Inline);
+
+        pipeline.run(&mut module);
+
+        module.func_store.view(caller, |func| {
+            let dumped = FuncWriter::new(caller, func).dump_string();
+            assert!(
+                !dumped.contains("call %helper"),
+                "second inline round should see updated callee purity after optimization:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("call %pure_after_cleanup"),
+                "helper splicing should leave the still-multi-block inner call in place:\n{dumped}"
             );
         });
     }

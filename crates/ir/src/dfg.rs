@@ -75,6 +75,29 @@ pub struct DataFlowGraph {
     users: SecondaryMap<ValueId, ValueUsers>,
 }
 
+impl Clone for DataFlowGraph {
+    fn clone(&self) -> Self {
+        let mut insts = PrimaryMap::with_capacity(self.insts.len());
+        for inst in self.insts.values() {
+            insts.push(clone_box(inst.as_ref()));
+        }
+
+        Self {
+            ctx: self.ctx.clone(),
+            blocks: self.blocks.clone(),
+            live_blocks: self.live_blocks.clone(),
+            values: self.values.clone(),
+            live_values: self.live_values.clone(),
+            insts,
+            live_insts: self.live_insts.clone(),
+            inst_results: self.inst_results.clone(),
+            immediates: self.immediates.clone(),
+            globals: self.globals.clone(),
+            users: self.users.clone(),
+        }
+    }
+}
+
 impl DataFlowGraph {
     pub fn new(ctx: ModuleCtx) -> Self {
         Self {

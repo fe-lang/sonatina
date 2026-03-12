@@ -1,0 +1,47 @@
+---
+source: crates/codegen/tests/inliner.rs
+input_file: test_files/inliner_full/callsite_with_leading_phi.sntn
+---
+func private %branchy(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v2.i32 = add v1 1.i32;
+        return v2;
+
+    block2:
+        v3.i32 = add v1 2.i32;
+        return v3;
+}
+
+
+func public %caller(v0.i1, v1.i32, v2.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v3.i32 = phi (v1 block1) (v2 block2);
+        jump block5;
+
+    block5:
+        br v0 block6 block7;
+
+    block6:
+        v6.i32 = add v3 1.i32;
+        jump block4;
+
+    block7:
+        v8.i32 = add v3 2.i32;
+        jump block4;
+
+    block4:
+        v9.i32 = phi (v6 block6) (v8 block7);
+        return v9;
+}

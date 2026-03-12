@@ -1,0 +1,39 @@
+---
+source: crates/codegen/tests/inliner.rs
+input_file: test_files/inliner_full/br_table.sntn
+---
+func private %dispatch(v0.i8) -> i32 {
+    block0:
+        br_table v0 block3 (0.i8 block1) (1.i8 block2);
+
+    block1:
+        return 7.i32;
+
+    block2:
+        return 11.i32;
+
+    block3:
+        return 13.i32;
+}
+
+
+func public %caller(v0.i8) -> i32 {
+    block0:
+        jump block2;
+
+    block2:
+        br_table v0 block5 (0.i8 block3) (1.i8 block4);
+
+    block3:
+        jump block1;
+
+    block4:
+        jump block1;
+
+    block5:
+        jump block1;
+
+    block1:
+        v7.i32 = phi (7.i32 block3) (11.i32 block4) (13.i32 block5);
+        return v7;
+}

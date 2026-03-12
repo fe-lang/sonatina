@@ -10,31 +10,30 @@ type @__fe_Take_1 = {i256, i256};
 
 func private %sum_last4(v0.i256) -> i256 {
     block0:
-        v23.*i8 = evm_malloc 64.i256;
-        v24.i256 = ptr_to_int v23 i256;
-        v41.*@__fe_Take_0 = bitcast v23 *@__fe_Take_0;
-        v26.*i256 = bitcast v41 *i256;
-        mstore v26 4.i256 i256;
-        v28.*i256 = gep v41 0.i256 1.i256;
-        mstore v28 v0 i256;
-        v5.i256 = call %take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Reverse_u256___u256__8____3cbd747f44bd7a69 v24;
-        v15.*@__fe_Take_0 = int_to_ptr v24 *@__fe_Take_0;
-        v16.*i256 = gep v15 0.i256 1.i256;
+        v16.*i8 = evm_malloc 64.i256;
+        v17.i256 = ptr_to_int v16 i256;
+        v54.*@__fe_Take_0 = bitcast v16 *@__fe_Take_0;
+        v19.*i256 = bitcast v54 *i256;
+        mstore v19 4.i256 i256;
+        v21.*i256 = gep v54 0.i256 1.i256;
+        mstore v21 v0 i256;
+        v37.*@__fe_Take_0 = int_to_ptr v17 *@__fe_Take_0;
+        v38.*i256 = gep v37 0.i256 1.i256;
         jump block1;
 
     block1:
         v23.i256 = phi (0.i256 block0) (v15 block2);
         v6.i256 = phi (0.i256 block0) (v18 block2);
-        v8.i1 = lt v6 v5;
+        v8.i1 = lt v6 4.i256;
         br v8 block2 block4;
 
     block2:
-        v17.i256 = mload v16 i256;
-        v32.*[i256; 8] = int_to_ptr v17 *[i256; 8];
-        v43.i256 = sub 7.i256 v6;
-        v33.*i256 = gep v32 0.i256 v43;
-        v34.i256 = mload v33 i256;
-        v15.i256 = add v34 v23;
+        v39.i256 = mload v38 i256;
+        v45.*[i256; 8] = int_to_ptr v39 *[i256; 8];
+        v56.i256 = sub 7.i256 v6;
+        v46.*i256 = gep v45 0.i256 v56;
+        v47.i256 = mload v46 i256;
+        v15.i256 = add v47 v23;
         v18.i256 = add 1.i256 v6;
         jump block1;
 
@@ -44,30 +43,29 @@ func private %sum_last4(v0.i256) -> i256 {
 
 func private %sum_first4(v0.i256) -> i256 {
     block0:
-        v19.*i8 = evm_malloc 64.i256;
-        v20.i256 = ptr_to_int v19 i256;
-        v31.*@__fe_Take_1 = bitcast v19 *@__fe_Take_1;
-        v22.*i256 = bitcast v31 *i256;
-        mstore v22 4.i256 i256;
-        v24.*i256 = gep v31 0.i256 1.i256;
-        mstore v24 v0 i256;
-        v4.i256 = call %take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93f2650f4 v20;
-        v14.*@__fe_Take_1 = int_to_ptr v20 *@__fe_Take_1;
-        v15.*i256 = gep v14 0.i256 1.i256;
+        v15.*i8 = evm_malloc 64.i256;
+        v16.i256 = ptr_to_int v15 i256;
+        v45.*@__fe_Take_1 = bitcast v15 *@__fe_Take_1;
+        v18.*i256 = bitcast v45 *i256;
+        mstore v18 4.i256 i256;
+        v20.*i256 = gep v45 0.i256 1.i256;
+        mstore v20 v0 i256;
+        v36.*@__fe_Take_1 = int_to_ptr v16 *@__fe_Take_1;
+        v37.*i256 = gep v36 0.i256 1.i256;
         jump block1;
 
     block1:
         v22.i256 = phi (0.i256 block0) (v14 block2);
         v5.i256 = phi (0.i256 block0) (v17 block2);
-        v7.i1 = lt v5 v4;
+        v7.i1 = lt v5 4.i256;
         br v7 block2 block4;
 
     block2:
-        v16.i256 = mload v15 i256;
-        v25.*[i256; 8] = int_to_ptr v16 *[i256; 8];
-        v26.*i256 = gep v25 0.i256 v5;
-        v27.i256 = mload v26 i256;
-        v14.i256 = add v27 v22;
+        v38.i256 = mload v37 i256;
+        v39.*[i256; 8] = int_to_ptr v38 *[i256; 8];
+        v40.*i256 = gep v39 0.i256 v5;
+        v41.i256 = mload v40 i256;
+        v14.i256 = add v41 v22;
         v17.i256 = add 1.i256 v5;
         jump block1;
 
@@ -105,38 +103,6 @@ func private %test_view_param_local_ref_take_reverse() {
         v35.i256 = zext v45 i256;
         call %assert v35;
         evm_return 0.i256 0.i256;
-}
-
-func private %take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256_Reverse_u256___u256__8____3cbd747f44bd7a69(v0.i256) -> i256 {
-    block0:
-        v7.*@__fe_Take_0 = int_to_ptr v0 *@__fe_Take_0;
-        v8.*i256 = bitcast v7 *i256;
-        v9.i256 = mload v8 i256;
-        v10.i1 = lt v9 8.i256;
-        br v10 block3 block4;
-
-    block3:
-        v19.i256 = phi (v9 block0) (8.i256 block4);
-        return v19;
-
-    block4:
-        jump block3;
-}
-
-func private %take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_len__u256__u256__8___ac380d93f2650f4(v0.i256) -> i256 {
-    block0:
-        v7.*@__fe_Take_1 = int_to_ptr v0 *@__fe_Take_1;
-        v8.*i256 = bitcast v7 *i256;
-        v9.i256 = mload v8 i256;
-        v10.i1 = lt v9 8.i256;
-        br v10 block3 block4;
-
-    block3:
-        v19.i256 = phi (v9 block0) (8.i256 block4);
-        return v19;
-
-    block4:
-        jump block3;
 }
 
 func public %assert(v0.i256) {

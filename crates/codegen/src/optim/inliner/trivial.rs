@@ -1,8 +1,4 @@
-//! Module-level inliner pass (single-block callees).
-//!
-//! This pass intentionally avoids CFG surgery: it only removes calls, rewrites
-//! wrapper calls, or splices a straight-line single-block callee body into the
-//! caller block. Purity filtering is optional (`splice_require_pure`).
+//! Trivial inliner (single-block, no multi-block CFG cloning).
 
 use std::collections::BTreeMap;
 
@@ -20,6 +16,8 @@ use crate::{
     optim::call_purity::is_removable_pure_call,
 };
 
+use super::{InlineStats, InlinerConfig};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ValueTemplate {
     Arg(usize),
@@ -32,7 +30,8 @@ type ReturnedTemplates = SmallVec<[ValueTemplate; 2]>;
 type ReturnedValues = SmallVec<[ValueId; 2]>;
 type InstResultTemplates = SmallVec<[(ValueId, Type); 2]>;
 
-enum InlinePlan {
+#[allow(private_interfaces)]
+pub(super) enum InlinePlan {
     /// Delete the call; optionally alias its result to a materialized value.
     RemoveCall { returned: ReturnedTemplates },
     /// Rewrite the call into a call to a different direct callee.
@@ -88,7 +87,8 @@ struct TerminatorSplicePlanSummary {
 }
 
 #[derive(Clone)]
-enum InlinePlanSummary {
+#[allow(private_interfaces)]
+pub(super) enum InlinePlanSummary {
     RemoveCall {
         returned: ReturnedTemplates,
     },
@@ -100,196 +100,20 @@ enum InlinePlanSummary {
     SpliceSingleBlockTerminator(TerminatorSplicePlanSummary),
 }
 
+pub(super) fn summary_changes_cfg(summary: &InlinePlanSummary) -> bool {
+    matches!(summary, InlinePlanSummary::SpliceSingleBlockTerminator(_))
+}
+
 struct CollectedSpliceBody {
     const_values: BTreeMap<ValueId, ValueTemplate>,
     body: Vec<TemplateInstSummary>,
 }
 
-#[derive(Clone, Copy)]
-struct CallSite {
-    call_inst: InstId,
-    callee: FuncRef,
-}
-
-#[derive(Clone, Copy)]
-pub struct InlinerConfig {
-    pub enable_noop: bool,
-    pub enable_return_alias: bool,
-    pub enable_wrapper_rewrite: bool,
-    pub enable_single_block_splice: bool,
-
-    /// Max splice body size when a callee has multiple callsites.
-    pub splice_max_insts: usize,
-    pub splice_require_pure: bool,
-
-    // Future multi-block inlining knobs (kept for API continuity).
-    pub max_inlinee_blocks: usize,
-    pub max_inlinee_insts: usize,
-    pub max_growth_per_caller: usize,
-    pub allow_inline_recursive: bool,
-}
-
-impl Default for InlinerConfig {
-    fn default() -> Self {
-        Self {
-            enable_noop: true,
-            enable_return_alias: true,
-            enable_wrapper_rewrite: true,
-            enable_single_block_splice: true,
-
-            splice_max_insts: 6,
-            splice_require_pure: false,
-
-            max_inlinee_blocks: 0,
-            max_inlinee_insts: 0,
-            max_growth_per_caller: 0,
-            allow_inline_recursive: false,
-        }
-    }
-}
-
-#[derive(Default)]
-pub struct InlineStats {
-    pub calls_removed: usize,
-    pub calls_rewritten: usize,
-    pub calls_spliced: usize,
-    pub skipped_no_body: usize,
-    pub skipped_multi_block: usize,
-    pub skipped_non_straight_line: usize,
-    pub skipped_not_pure: usize,
-    /// Aggregate of non-straight-line and not-pure skips.
-    pub skipped_effectful: usize,
-    pub skipped_too_large: usize,
-}
-
-pub struct Inliner {
-    pub config: InlinerConfig,
-}
-
-impl Inliner {
-    pub fn new(config: InlinerConfig) -> Self {
-        Self { config }
-    }
-
-    pub fn run(&mut self, module: &mut Module) -> InlineStats {
-        const MAX_ITERS: usize = 8;
-        let mut stats = InlineStats::default();
-
-        let mut iter = 0;
-        while iter < MAX_ITERS {
-            let mut changed = false;
-            let funcs = module.funcs();
-            let (sites_by_caller, call_counts) = collect_iteration_call_data(module, &funcs);
-            let mut callee_summary_cache: FxHashMap<FuncRef, Option<InlinePlanSummary>> =
-                FxHashMap::default();
-
-            for caller in funcs {
-                let sites = sites_by_caller.get(&caller).cloned().unwrap_or_default();
-                let mut caller_changed = false;
-
-                for site in sites {
-                    if site.callee == caller && !self.config.allow_inline_recursive {
-                        continue;
-                    }
-
-                    let plan_summary = if let Some(cached) = callee_summary_cache.get(&site.callee)
-                    {
-                        cached.clone()
-                    } else {
-                        let callee_callsite_count =
-                            call_counts.get(&site.callee).copied().unwrap_or(0);
-                        let analyzed = module.func_store.view(site.callee, |callee_func| {
-                            analyze_callee(
-                                module,
-                                site.callee,
-                                callee_func,
-                                callee_callsite_count,
-                                &self.config,
-                                &mut stats,
-                            )
-                        });
-                        callee_summary_cache.insert(site.callee, analyzed.clone());
-                        analyzed
-                    };
-
-                    let Some(plan_summary) = plan_summary else {
-                        continue;
-                    };
-                    let plan = module.func_store.view(site.callee, |callee_func| {
-                        materialize_plan(callee_func, &plan_summary)
-                    });
-
-                    let applied = module.func_store.modify(caller, |caller_func| {
-                        apply_plan(caller_func, site.call_inst, plan, &mut stats)
-                    });
-
-                    changed |= applied;
-                    caller_changed |= applied;
-                    if applied {
-                        callee_summary_cache.remove(&caller);
-                    }
-                }
-
-                if caller_changed {
-                    callee_summary_cache.remove(&caller);
-                }
-            }
-
-            if !changed {
-                break;
-            }
-
-            iter += 1;
-        }
-
-        stats
-    }
-}
-
-fn collect_call_sites(func: &Function) -> Vec<CallSite> {
-    let is = func.inst_set();
-    let mut sites = Vec::new();
-
-    for block in func.layout.iter_block() {
-        for inst_id in func.layout.iter_inst(block) {
-            let inst = func.dfg.inst(inst_id);
-            let Some(call) = <&control_flow::Call as InstDowncast>::downcast(is, inst) else {
-                continue;
-            };
-
-            sites.push(CallSite {
-                call_inst: inst_id,
-                callee: *call.callee(),
-            });
-        }
-    }
-
-    sites
-}
-
-fn collect_iteration_call_data(
-    module: &Module,
-    funcs: &[FuncRef],
-) -> (FxHashMap<FuncRef, Vec<CallSite>>, FxHashMap<FuncRef, usize>) {
-    let mut sites_by_caller: FxHashMap<FuncRef, Vec<CallSite>> = FxHashMap::default();
-    let mut call_counts: FxHashMap<FuncRef, usize> = FxHashMap::default();
-
-    for &caller in funcs {
-        let sites = module.func_store.view(caller, collect_call_sites);
-        for site in &sites {
-            *call_counts.entry(site.callee).or_insert(0) += 1;
-        }
-        sites_by_caller.insert(caller, sites);
-    }
-
-    (sites_by_caller, call_counts)
-}
-
-fn analyze_callee(
+pub(super) fn analyze_callee(
     module: &Module,
     callee_ref: FuncRef,
     callee: &Function,
-    callee_callsite_count: usize,
+    callee_call_count: usize,
     config: &InlinerConfig,
     stats: &mut InlineStats,
 ) -> Option<InlinePlanSummary> {
@@ -334,7 +158,7 @@ fn analyze_callee(
     else {
         return analyze_terminator_splice(
             callee,
-            callee_callsite_count,
+            callee_call_count,
             config,
             stats,
             term_inst_id,
@@ -374,7 +198,7 @@ fn analyze_callee(
             // Not a wrapper; fall through to splicing.
             return analyze_splice(
                 callee,
-                callee_callsite_count,
+                callee_call_count,
                 config,
                 stats,
                 &ret_values,
@@ -404,7 +228,7 @@ fn analyze_callee(
 
     analyze_splice(
         callee,
-        callee_callsite_count,
+        callee_call_count,
         config,
         stats,
         &ret_values,
@@ -414,7 +238,7 @@ fn analyze_callee(
 
 fn analyze_splice(
     callee: &Function,
-    callee_callsite_count: usize,
+    callee_call_count: usize,
     config: &InlinerConfig,
     stats: &mut InlineStats,
     ret_values: &[ValueId],
@@ -425,8 +249,7 @@ fn analyze_splice(
     }
 
     let (_, body_insts) = insts.split_last()?;
-    let mut collected =
-        collect_splice_body(callee, callee_callsite_count, config, stats, body_insts)?;
+    let mut collected = collect_splice_body(callee, callee_call_count, config, stats, body_insts)?;
 
     for &ret_value in ret_values {
         if let Some(tpl) = classify_value_template(callee, ret_value) {
@@ -447,7 +270,7 @@ fn analyze_splice(
 
 fn analyze_terminator_splice(
     callee: &Function,
-    callee_callsite_count: usize,
+    callee_call_count: usize,
     config: &InlinerConfig,
     stats: &mut InlineStats,
     term_inst_id: InstId,
@@ -463,8 +286,7 @@ fn analyze_terminator_splice(
     }
 
     let (_, body_insts) = insts.split_last()?;
-    let mut collected =
-        collect_splice_body(callee, callee_callsite_count, config, stats, body_insts)?;
+    let mut collected = collect_splice_body(callee, callee_call_count, config, stats, body_insts)?;
 
     extend_const_values_from_inst_operands(callee, term_inst_id, &mut collected.const_values);
     let callee_args: Vec<ValueId> = callee.arg_values.iter().copied().collect();
@@ -480,12 +302,13 @@ fn analyze_terminator_splice(
 
 fn collect_splice_body(
     callee: &Function,
-    callee_callsite_count: usize,
+    callee_call_count: usize,
     config: &InlinerConfig,
     stats: &mut InlineStats,
     body_insts: &[InstId],
 ) -> Option<CollectedSpliceBody> {
-    if callee_callsite_count > 1 && body_insts.len() > config.splice_max_insts {
+    let is_single_use = callee_call_count == 1;
+    if !is_single_use && body_insts.len() > config.splice_max_insts {
         stats.skipped_too_large += 1;
         return None;
     }
@@ -531,7 +354,7 @@ fn is_pure_splice_inst(callee: &Function, inst_id: InstId) -> bool {
     callee.dfg.side_effect(inst_id) == SideEffect::None
 }
 
-fn materialize_plan(callee: &Function, summary: &InlinePlanSummary) -> InlinePlan {
+pub(super) fn materialize_plan(callee: &Function, summary: &InlinePlanSummary) -> InlinePlan {
     match summary {
         InlinePlanSummary::RemoveCall { returned } => InlinePlan::RemoveCall {
             returned: returned.clone(),
@@ -574,7 +397,7 @@ fn materialize_body_templates(
         .collect()
 }
 
-fn apply_plan(
+pub(super) fn apply_plan(
     caller: &mut Function,
     call_inst_id: InstId,
     plan: InlinePlan,
