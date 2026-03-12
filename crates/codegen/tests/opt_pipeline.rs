@@ -23,7 +23,7 @@ use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 )]
 fn test_opt_pipeline(fixture: Fixture<&str>) {
     let mut parsed = common::parse_module(fixture.path());
-    Pipeline::balanced().run(&mut parsed.module);
+    Pipeline::size().run(&mut parsed.module);
 
     let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
     snap_test!(writer.dump_string(), fixture.path());
@@ -340,7 +340,7 @@ fn standalone_function_passes_support_live_multi_result_input() {
 #[test]
 fn balanced_pipeline_preserves_live_multi_result_ir_until_lowering() {
     let (mut module, func_ref) = parse_test_module(STANDALONE_MULTI_RESULT_SRC);
-    Pipeline::balanced().run(&mut module);
+    Pipeline::size().run(&mut module);
     assert_func_contains(&module, func_ref, "uaddo");
     assert_fast_verified(&module);
 }

@@ -119,8 +119,8 @@ fn parse_sona(content: &str) -> ParsedModule {
 fn run_opt_pipeline(module: &mut Module, opt_pipeline: EvmOptPipeline) {
     match opt_pipeline {
         EvmOptPipeline::None => {}
-        EvmOptPipeline::Balanced => Pipeline::balanced().run(module),
-        EvmOptPipeline::Aggressive => Pipeline::aggressive().run(module),
+        EvmOptPipeline::Size => Pipeline::size().run(module),
+        EvmOptPipeline::Speed => Pipeline::speed().run(module),
     }
 }
 

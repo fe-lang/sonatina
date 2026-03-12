@@ -10,18 +10,17 @@ object: Contract
   total: 266 bytes
 
 functions:
-  mem: dyn_base=0xc0 static_base=0xc0
   sum_last4: ir_blocks=4 ir_insts=23 vcode_ops=56 fixups=3 imm_bytes=10
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   sum_first4: ir_blocks=4 ir_insts=22 vcode_ops=54 fixups=3 imm_bytes=9
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   test_view_param_local_ref_take_reverse: ir_blocks=1 ir_insts=28 vcode_ops=89 fixups=9 imm_bytes=22
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
-    mem: scheme=StaticArena need_words=0 locals_words=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=22272 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1272
+  case ok: calldata_len=0 success reason=Return gas_used=22269 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1269
 
 
 --------------- DEBUG ---------------
@@ -32,13 +31,13 @@ sum_last4:
     JUMPDEST
     PUSH1 0x40 (64)  // v16.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     PUSH1 0x4 (4)  // mstore v19 4.i256 i256;
     DUP2
@@ -95,13 +94,13 @@ sum_first4:
     JUMPDEST
     PUSH1 0x40 (64)  // v15.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     PUSH1 0x4 (4)  // mstore v18 4.i256 i256;
     DUP2
@@ -156,13 +155,13 @@ test_view_param_local_ref_take_reverse:
     JUMPDEST
     PUSH1 0x40 (64)  // v2.*i256 = evm_malloc 256.i256;
     MLOAD
-    PUSH1 0xbf (191)
+    PUSH1 0x9f (159)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xa0 (160)
     JUMPDEST
     DUP1
     PUSH2 0x100 (256)
