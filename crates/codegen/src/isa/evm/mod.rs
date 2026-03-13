@@ -1746,9 +1746,9 @@ impl LowerBackend for EvmBackend {
 
         let _span =
             info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
-        AggregateExpandAbi::default().run(module);
         ObjectReturnOutParam.run(module);
         ObjectLowerToMemory.run(module);
+        AggregateExpandAbi::default().run(module);
         legalize_evm_section(module, funcs);
         for &func in funcs {
             module.func_store.modify(func, |function| {

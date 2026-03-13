@@ -1,4 +1,4 @@
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use sonatina_ir::{
     Function, Type, Value, ValueId,
@@ -47,8 +47,7 @@ impl AggregateExpandAbi {
     pub fn run(&mut self, module: &Module) -> bool {
         self.layout_cache.clear();
 
-        let entry_funcs = private_abi::collect_entry_funcs(module);
-        let mut plans = self.collect_plans(module, &entry_funcs);
+        let mut plans = self.collect_plans(module);
         private_abi::retain_higher_order_safe_plans(module, &mut plans);
         if plans.is_empty() {
             return false;
@@ -77,22 +76,14 @@ impl AggregateExpandAbi {
         true
     }
 
-    fn collect_plans(
-        &mut self,
-        module: &Module,
-        entry_funcs: &FxHashSet<FuncRef>,
-    ) -> FxHashMap<FuncRef, FuncPlan> {
+    fn collect_plans(&mut self, module: &Module) -> FxHashMap<FuncRef, FuncPlan> {
         let mut plans = FxHashMap::default();
 
         for func in module.funcs() {
-            if entry_funcs.contains(&func) {
-                continue;
-            }
-
             let Some(sig) = module.ctx.get_sig(func) else {
                 continue;
             };
-            if !sig.linkage().has_definition() {
+            if !private_abi::is_owned_private_abi_func(&sig) {
                 continue;
             }
 
@@ -442,7 +433,7 @@ mod tests {
         isa::evm::{EvmBackend, PushWidthPolicy},
         object::{CompileOptions, compile_all_objects},
     };
-    use sonatina_ir::{Module, isa::evm::Evm};
+    use sonatina_ir::{Module, isa::evm::Evm, types::CompoundType};
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
@@ -655,5 +646,78 @@ block0:
         });
         assert_eq!(takes_swap_sig.args(), &[expected_cb]);
         assert_eq!(takes_swap_sig.ret_tys(), &[]);
+    }
+
+    #[test]
+    fn higher_order_aggregate_callback_on_public_non_entry_surface_blocks_rewrite() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+type @swap_box = { *(@pair) -> @pair };
+
+func public %consume_swap(v0.@swap_box) {
+block0:
+    return;
+}
+
+func private %swap(v0.@pair) -> @pair {
+block0:
+    v1.i256 = extract_value v0 0.i8;
+    v2.i256 = extract_value v0 1.i8;
+    v3.@pair = insert_value undef.@pair 0.i8 v2;
+    v4.@pair = insert_value v3 1.i8 v1;
+    return v4;
+}
+
+func private %register_swap() {
+block0:
+    v0.*(@pair) -> @pair = get_function_ptr %swap;
+    v1.@swap_box = insert_value undef.@swap_box 0.i8 v0;
+    call %consume_swap v1;
+    return;
+}
+"#,
+        );
+
+        AggregateExpandAbi::default().run(&module);
+
+        let report = verify_module(
+            &module,
+            &VerifierConfig::for_level(VerificationLevel::Standard),
+        );
+        assert!(
+            !report.has_errors(),
+            "aggregate ABI expansion should preserve public non-entry callback surfaces:\n{report}"
+        );
+
+        let swap = lookup_func(&module, "swap");
+        let sig = module.ctx.get_sig(swap).expect("signature should exist");
+        let pair = sig.args()[0];
+        assert_eq!(sig.args(), &[pair]);
+        assert_eq!(sig.ret_tys(), &[pair]);
+
+        let consume_swap = lookup_func(&module, "consume_swap");
+        let consume_swap_sig = module
+            .ctx
+            .get_sig(consume_swap)
+            .expect("signature should exist");
+        let Type::Compound(swap_box) = consume_swap_sig.args()[0] else {
+            panic!("swap box should be compound");
+        };
+        let field_tys = module.ctx.with_ty_store(|store| {
+            let CompoundType::Struct(data) = store.resolve_compound(swap_box) else {
+                panic!("swap box should be a struct");
+            };
+            data.fields.clone()
+        });
+        let expected_cb = module.ctx.with_ty_store_mut(|store| {
+            let Type::Compound(func_ty) = store.make_func(&[pair], &[pair]) else {
+                unreachable!();
+            };
+            store.make_ptr(Type::Compound(func_ty))
+        });
+        assert_eq!(field_tys, vec![expected_cb]);
     }
 }

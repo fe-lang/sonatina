@@ -3,7 +3,6 @@ use sonatina_ir::{
     Function, Signature, Type, Value,
     inst::{data, downcast},
     module::{FuncRef, Module, ModuleCtx},
-    object::Directive,
     types::{CompoundType, CompoundTypeRef, StructData},
     visitor::VisitorMut,
 };
@@ -13,18 +12,8 @@ pub(crate) trait PrivateAbiPlan {
     fn new_ret_tys(&self) -> &[Type];
 }
 
-pub(crate) fn collect_entry_funcs(module: &Module) -> FxHashSet<FuncRef> {
-    let mut entries = FxHashSet::default();
-    for object in module.objects.values() {
-        for section in &object.sections {
-            for directive in &section.directives {
-                if let Directive::Entry(func) = directive {
-                    entries.insert(*func);
-                }
-            }
-        }
-    }
-    entries
+pub(crate) fn is_owned_private_abi_func(sig: &Signature) -> bool {
+    sig.linkage().is_private()
 }
 
 pub(crate) fn rewrite_declared_signatures<P: PrivateAbiPlan>(
@@ -70,8 +59,7 @@ pub(crate) fn retain_higher_order_safe_plans<P: PrivateAbiPlan>(
         return;
     }
 
-    let entry_funcs = collect_entry_funcs(module);
-    let exposed_types = collect_non_owned_exposed_func_types(module, &planned_types, &entry_funcs);
+    let exposed_types = collect_non_owned_exposed_func_types(module, &planned_types);
     let class_info = collect_rewrite_class_info(ctx, plans);
     let mut blocked_types = FxHashSet::default();
 
@@ -235,7 +223,6 @@ fn rewrite_signature_types(
     old_sigs: &FxHashMap<FuncRef, Signature>,
     types: &mut PrivateAbiTypeRewriter,
 ) {
-    let entry_funcs = collect_entry_funcs(module);
     let funcs: Vec<_> = module
         .ctx
         .declared_funcs
@@ -247,9 +234,7 @@ fn rewrite_signature_types(
         let Some(sig) = module.ctx.get_sig(func) else {
             continue;
         };
-        if !old_sigs.contains_key(&func)
-            && (!sig.linkage().has_definition() || entry_funcs.contains(&func))
-        {
+        if !old_sigs.contains_key(&func) && !is_owned_private_abi_func(&sig) {
             continue;
         }
 
@@ -530,14 +515,12 @@ fn collect_live_get_function_ptr_uses(
 fn collect_non_owned_exposed_func_types(
     module: &Module,
     planned_types: &FxHashSet<CompoundTypeRef>,
-    entry_funcs: &FxHashSet<FuncRef>,
 ) -> FxHashSet<CompoundTypeRef> {
     let mut exposed = FxHashSet::default();
 
     for entry in module.ctx.declared_funcs.iter() {
-        let func = *entry.key();
         let sig = entry.value();
-        if sig.linkage().has_definition() && !entry_funcs.contains(&func) {
+        if is_owned_private_abi_func(sig) {
             continue;
         }
         for &ty in sig.args().iter().chain(sig.ret_tys().iter()) {

@@ -1,0 +1,26 @@
+---
+source: crates/codegen/tests/object_abi.rs
+input_file: test_files/object_abi/local_stack_materialize_keeps_return_root_rewritable.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func private %make_pair_checked(v12.objref<@pair>, v0.i256, v1.i256) {
+    block0:
+        v3.objref<i256> = obj.proj v12 0.i8;
+        obj.store v3 v0;
+        v4.objref<i256> = obj.proj v12 1.i8;
+        obj.store v4 v1;
+        v5.*@pair = obj.materialize.stack v12;
+        v6.*i256 = gep v5 0.i64 0.i8;
+        v7.i256 = mload v6 i256;
+        v8.i256 = add v7 v1;
+        return;
+}
+
+func private %forward_checked(v4.objref<@pair>, v0.i256, v1.i256) {
+    block0:
+        call %make_pair_checked v4 v0 v1;
+        return;
+}

@@ -4,6 +4,7 @@ pub mod combine;
 pub mod legalize;
 mod object;
 mod object_abi;
+mod object_locality;
 mod private_abi;
 pub mod promotion;
 mod reconstruct;

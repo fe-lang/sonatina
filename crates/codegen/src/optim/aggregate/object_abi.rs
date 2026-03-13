@@ -1,4 +1,4 @@
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use sonatina_ir::{
     Function, InstId, Module, Type, Value, ValueId,
@@ -8,7 +8,10 @@ use sonatina_ir::{
     types::CompoundType,
 };
 
-use super::private_abi::{self, PrivateAbiPlan};
+use super::{
+    object_locality::{self, LocalObjectArgs},
+    private_abi::{self, PrivateAbiPlan},
+};
 
 #[derive(Clone)]
 struct FuncPlan {
@@ -35,12 +38,11 @@ pub struct ObjectReturnOutParam;
 
 impl ObjectReturnOutParam {
     pub fn run(&mut self, module: &Module) -> bool {
-        let entry_funcs = private_abi::collect_entry_funcs(module);
         let mut changed = false;
 
         loop {
-            let in_place_helpers = collect_in_place_object_helpers(module);
-            let mut plans = self.collect_plans(module, &entry_funcs, &in_place_helpers);
+            let local_object_args = object_locality::collect_local_object_args(module);
+            let mut plans = self.collect_plans(module, &local_object_args);
             private_abi::retain_higher_order_safe_plans(module, &mut plans);
             if plans.is_empty() {
                 return changed;
@@ -70,23 +72,15 @@ impl ObjectReturnOutParam {
     fn collect_plans(
         &self,
         module: &Module,
-        entry_funcs: &FxHashSet<FuncRef>,
-        in_place_helpers: &FxHashSet<FuncRef>,
+        local_object_args: &LocalObjectArgs,
     ) -> FxHashMap<FuncRef, FuncPlan> {
         let mut plans = FxHashMap::default();
 
         for func in module.funcs() {
-            if entry_funcs.contains(&func) {
-                continue;
-            }
-
             let Some(sig) = module.ctx.get_sig(func) else {
                 continue;
             };
-            if !sig.linkage().is_private()
-                || !sig.linkage().has_definition()
-                || !sig.returns_single()
-            {
+            if !private_abi::is_owned_private_abi_func(&sig) || !sig.returns_single() {
                 continue;
             }
 
@@ -98,7 +92,7 @@ impl ObjectReturnOutParam {
             };
 
             let Some((root_alloc_inst, root_value)) = module.func_store.view(func, |function| {
-                self.analyze_return_root(function, out_ty, in_place_helpers)
+                self.analyze_return_root(function, out_ty, local_object_args)
             }) else {
                 continue;
             };
@@ -127,7 +121,7 @@ impl ObjectReturnOutParam {
         &self,
         function: &Function,
         out_ty: Type,
-        in_place_helpers: &FxHashSet<FuncRef>,
+        local_object_args: &LocalObjectArgs,
     ) -> Option<(InstId, ValueId)> {
         let mut return_root = None;
         let mut saw_return = false;
@@ -168,7 +162,7 @@ impl ObjectReturnOutParam {
         if !function.layout.is_inst_inserted(root_alloc_inst)
             || downcast::<&data::ObjAlloc>(function.inst_set(), function.dfg.inst(root_alloc_inst))
                 .is_none()
-            || !self.root_is_rewritable(function, root_value, out_ty, in_place_helpers)
+            || !self.root_is_rewritable(function, root_value, out_ty, local_object_args)
         {
             return None;
         }
@@ -181,9 +175,9 @@ impl ObjectReturnOutParam {
         function: &Function,
         root: ValueId,
         root_ty: Type,
-        in_place_helpers: &FxHashSet<FuncRef>,
+        local_object_args: &LocalObjectArgs,
     ) -> bool {
-        object_root_stays_local(function, root, root_ty, in_place_helpers, true)
+        object_locality::object_root_stays_local(function, root, root_ty, local_object_args, true)
     }
 
     fn rewrite_function(&self, function: &mut Function, plan: &FuncPlan) {
@@ -302,147 +296,6 @@ impl ObjectReturnOutParam {
         function.layout.remove_inst(inst);
         function.erase_inst(inst);
     }
-}
-
-pub(crate) fn collect_in_place_object_helpers(module: &Module) -> FxHashSet<FuncRef> {
-    let mut helpers = FxHashSet::default();
-
-    loop {
-        let mut changed = false;
-
-        for func in module.funcs() {
-            if helpers.contains(&func) || !is_in_place_object_helper(module, func, &helpers) {
-                continue;
-            }
-            helpers.insert(func);
-            changed = true;
-        }
-
-        if !changed {
-            return helpers;
-        }
-    }
-}
-
-pub(crate) fn call_passes_object_to_in_place_helper(
-    ctx: &ModuleCtx,
-    call: &control_flow::Call,
-    value: ValueId,
-    value_ty: Type,
-    helpers: &FxHashSet<FuncRef>,
-) -> bool {
-    helpers.contains(call.callee())
-        && call.args().first() == Some(&value)
-        && call.args().iter().filter(|&&arg| arg == value).count() == 1
-        && ctx
-            .get_sig(*call.callee())
-            .is_some_and(|sig| sig.returns_unit() && sig.args().first() == Some(&value_ty))
-}
-
-fn is_in_place_object_helper(module: &Module, func: FuncRef, helpers: &FxHashSet<FuncRef>) -> bool {
-    let Some(sig) = module.ctx.get_sig(func) else {
-        return false;
-    };
-    let Some(&root_ty) = sig.args().first() else {
-        return false;
-    };
-    if !sig.linkage().has_definition() || !sig.returns_unit() || !root_ty.is_obj_ref(&module.ctx) {
-        return false;
-    }
-
-    module.func_store.view(func, |function| {
-        let Some(&root) = function.arg_values.first() else {
-            return false;
-        };
-        function.dfg.value_ty(root) == root_ty
-            && object_root_stays_local(function, root, root_ty, helpers, false)
-    })
-}
-
-fn object_root_stays_local(
-    function: &Function,
-    root: ValueId,
-    root_ty: Type,
-    in_place_helpers: &FxHashSet<FuncRef>,
-    allow_return_root: bool,
-) -> bool {
-    let mut worklist = vec![root];
-    let mut seen = FxHashSet::default();
-
-    while let Some(value) = worklist.pop() {
-        if !seen.insert(value) {
-            continue;
-        }
-
-        for &user in function.dfg.users(value) {
-            if !function.layout.is_inst_inserted(user) {
-                continue;
-            }
-
-            if let Some(proj) =
-                downcast::<&data::ObjProj>(function.inst_set(), function.dfg.inst(user))
-                && proj.values().first() == Some(&value)
-            {
-                if let Some(result) = function.dfg.inst_result(user) {
-                    worklist.push(result);
-                }
-                continue;
-            }
-
-            if let Some(index) =
-                downcast::<&data::ObjIndex>(function.inst_set(), function.dfg.inst(user))
-                && *index.object() == value
-            {
-                if let Some(result) = function.dfg.inst_result(user) {
-                    worklist.push(result);
-                }
-                continue;
-            }
-
-            if let Some(load) =
-                downcast::<&data::ObjLoad>(function.inst_set(), function.dfg.inst(user))
-                && *load.object() == value
-            {
-                continue;
-            }
-
-            if let Some(store) =
-                downcast::<&data::ObjStore>(function.inst_set(), function.dfg.inst(user))
-                && *store.object() == value
-            {
-                continue;
-            }
-
-            if let Some(ret) =
-                downcast::<&control_flow::Return>(function.inst_set(), function.dfg.inst(user))
-                && allow_return_root
-                && value == root
-                && ret.returns_single()
-                && ret.arg() == Some(&value)
-            {
-                continue;
-            }
-
-            if let Some(call) =
-                downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(user))
-                && function.dfg.inst_results(user).is_empty()
-                && value == root
-                && call_passes_object_to_in_place_helper(
-                    function.ctx(),
-                    call,
-                    value,
-                    root_ty,
-                    in_place_helpers,
-                )
-            {
-                continue;
-            }
-
-            return false;
-        }
-    }
-
-    true
 }
 
 fn objref_element_ty(ctx: &ModuleCtx, ty: Type) -> Option<Type> {

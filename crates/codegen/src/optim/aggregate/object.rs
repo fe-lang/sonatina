@@ -1,13 +1,15 @@
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     Function, I256, Immediate, Module, Type, Value, ValueId,
-    inst::{control_flow, data, downcast, evm},
-    module::FuncRef,
+    inst::{data, downcast, evm},
+    module::{FuncRef, ModuleCtx},
+    types::{CompoundType, CompoundTypeRef, StructData},
+    visitor::VisitorMut,
 };
 
 use super::{
-    object_abi,
+    object_locality::{self, LocalObjectArgs, SpecialObjectUse},
     private_abi::{self, PrivateAbiPlan},
 };
 
@@ -38,23 +40,31 @@ pub struct ObjectLowerToMemory;
 
 impl ObjectLowerToMemory {
     pub fn run(&mut self, module: &Module) -> bool {
-        let in_place_helpers = object_abi::collect_in_place_object_helpers(module);
-        let mut plans = self.collect_plans(module);
+        let local_object_args = object_locality::collect_local_object_args(module);
+        let mut type_lowerer = ObjRefTypeLowerer::default();
+        let mut plans = self.collect_plans(module, &mut type_lowerer);
         private_abi::retain_higher_order_safe_plans(module, &mut plans);
-        let mut changed = !plans.is_empty();
+        let mut changed = type_lowerer.changed || !plans.is_empty();
         let old_sigs = private_abi::rewrite_declared_signatures(module, &plans);
+        changed |= rewrite_global_types(module, &mut type_lowerer);
+        changed |= type_lowerer.changed;
 
         for func_ref in module.funcs() {
             changed |= module.func_store.modify(func_ref, |function| {
-                self.rewrite_function(function, &in_place_helpers)
+                self.rewrite_function(function, &local_object_args, &mut type_lowerer)
             });
+            changed |= type_lowerer.changed;
         }
 
         private_abi::propagate_private_abi_types(module, &old_sigs);
         changed
     }
 
-    fn collect_plans(&self, module: &Module) -> FxHashMap<FuncRef, FuncPlan> {
+    fn collect_plans(
+        &self,
+        module: &Module,
+        type_lowerer: &mut ObjRefTypeLowerer,
+    ) -> FxHashMap<FuncRef, FuncPlan> {
         let mut plans = FxHashMap::default();
 
         for func in module.funcs() {
@@ -66,13 +76,13 @@ impl ObjectLowerToMemory {
                 .args()
                 .iter()
                 .copied()
-                .map(|ty| lower_objref_ty(&module.ctx, ty))
+                .map(|ty| type_lowerer.rewrite_type(&module.ctx, ty))
                 .collect();
             let new_ret_tys: SmallVec<[Type; 8]> = sig
                 .ret_tys()
                 .iter()
                 .copied()
-                .map(|ty| lower_objref_ty(&module.ctx, ty))
+                .map(|ty| type_lowerer.rewrite_type(&module.ctx, ty))
                 .collect();
 
             if new_arg_tys.as_slice() == sig.args() && new_ret_tys.as_slice() == sig.ret_tys() {
@@ -94,10 +104,11 @@ impl ObjectLowerToMemory {
     fn rewrite_function(
         &mut self,
         func: &mut Function,
-        in_place_helpers: &FxHashSet<FuncRef>,
+        local_object_args: &LocalObjectArgs,
+        type_lowerer: &mut ObjRefTypeLowerer,
     ) -> bool {
-        let mut changed = self.rewrite_value_types(func);
-        let alloc_kinds = self.collect_alloc_kinds(func, in_place_helpers);
+        let mut changed = self.rewrite_types(func, type_lowerer);
+        let alloc_kinds = self.collect_alloc_kinds(func, local_object_args);
         if alloc_kinds.is_empty() && !has_object_lowering_work(func) {
             if changed {
                 func.rebuild_users();
@@ -122,11 +133,11 @@ impl ObjectLowerToMemory {
         changed
     }
 
-    fn rewrite_value_types(&self, func: &mut Function) -> bool {
+    fn rewrite_types(&self, func: &mut Function, type_lowerer: &mut ObjRefTypeLowerer) -> bool {
         let mut changed = false;
         for value in func.dfg.value_ids().collect::<Vec<_>>() {
             let old_ty = func.dfg.value_ty(value);
-            let new_ty = lower_objref_ty(func.ctx(), old_ty);
+            let new_ty = type_lowerer.rewrite_type(func.ctx(), old_ty);
             if new_ty == old_ty {
                 continue;
             }
@@ -147,13 +158,43 @@ impl ObjectLowerToMemory {
             func.dfg.values[value] = replacement;
             changed = true;
         }
-        changed
+
+        struct TypeVisitor<'a> {
+            ctx: ModuleCtx,
+            type_lowerer: &'a mut ObjRefTypeLowerer,
+            changed: bool,
+        }
+
+        impl VisitorMut for TypeVisitor<'_> {
+            fn visit_ty(&mut self, item: &mut Type) {
+                let new_ty = self.type_lowerer.rewrite_type(&self.ctx, *item);
+                self.changed |= new_ty != *item;
+                *item = new_ty;
+            }
+        }
+
+        let mut visitor = TypeVisitor {
+            ctx: func.ctx().clone(),
+            type_lowerer,
+            changed: false,
+        };
+        let blocks: Vec<_> = func.layout.iter_block().collect();
+        for block in blocks {
+            let insts: Vec<_> = func.layout.iter_inst(block).collect();
+            for inst in insts {
+                if func.layout.is_inst_inserted(inst) {
+                    func.dfg.inst_mut(inst).accept_mut(&mut visitor);
+                }
+            }
+        }
+
+        changed || visitor.changed
     }
 
     fn collect_alloc_kinds(
         &self,
         func: &Function,
-        in_place_helpers: &FxHashSet<FuncRef>,
+        local_object_args: &LocalObjectArgs,
     ) -> FxHashMap<sonatina_ir::InstId, Materialization> {
         let mut alloc_kinds = FxHashMap::default();
 
@@ -171,7 +212,7 @@ impl ObjectLowerToMemory {
                         func,
                         result,
                         func.dfg.value_ty(result),
-                        in_place_helpers,
+                        local_object_args,
                     ),
                 );
             }
@@ -185,107 +226,39 @@ impl ObjectLowerToMemory {
         func: &Function,
         root: ValueId,
         root_value_ty: Type,
-        in_place_helpers: &FxHashSet<FuncRef>,
+        local_object_args: &LocalObjectArgs,
     ) -> Materialization {
-        let mut worklist = vec![root];
-        let mut seen = FxHashSet::default();
         let mut kind = Materialization::Stack;
-
-        while let Some(value) = worklist.pop() {
-            if !seen.insert(value) {
-                continue;
-            }
-
-            for &user in func.dfg.users(value) {
-                if !func.layout.is_inst_inserted(user) {
-                    continue;
-                }
-
-                if let Some(proj) = downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(user))
-                    && proj.values().first() == Some(&value)
+        if let Some(materialization) =
+            object_locality::walk_object_root_uses(func, root, |special| match special {
+                SpecialObjectUse::MaterializeStack(Some(ptr))
+                    if object_locality::raw_pointer_stays_local(func, ptr) =>
                 {
-                    if let Some(result) = func.dfg.inst_result(user) {
-                        worklist.push(result);
-                    }
-                    continue;
+                    std::ops::ControlFlow::Continue(())
                 }
-
-                if let Some(index) =
-                    downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(user))
-                    && *index.object() == value
-                {
-                    if let Some(result) = func.dfg.inst_result(user) {
-                        worklist.push(result);
-                    }
-                    continue;
+                SpecialObjectUse::MaterializeStack(_) => {
+                    std::ops::ControlFlow::Break(Materialization::Heap)
                 }
-
-                if let Some(phi) =
-                    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(user))
-                    && phi.args().iter().any(|(arg, _)| *arg == value)
-                {
-                    if let Some(result) = func.dfg.inst_result(user) {
-                        worklist.push(result);
-                    }
-                    continue;
-                }
-
-                if let Some(load) = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(user))
-                    && *load.object() == value
-                {
-                    continue;
-                }
-
-                if let Some(store) =
-                    downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(user))
-                    && *store.object() == value
-                {
-                    continue;
-                }
-
-                if let Some(mat_stack) =
-                    downcast::<&data::ObjMaterializeStack>(func.inst_set(), func.dfg.inst(user))
-                    && *mat_stack.object() == value
-                {
-                    continue;
-                }
-
-                if let Some(mat_heap) =
-                    downcast::<&data::ObjMaterializeHeap>(func.inst_set(), func.dfg.inst(user))
-                    && *mat_heap.object() == value
-                {
+                SpecialObjectUse::MaterializeHeap => {
                     kind = Materialization::Heap;
-                    continue;
+                    std::ops::ControlFlow::Continue(())
                 }
-
-                if let Some(call) =
-                    downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(user))
-                    && call.args().contains(&value)
-                {
+                SpecialObjectUse::Call { value, call }
                     if value == root
-                        && func.dfg.inst_results(user).is_empty()
-                        && object_abi::call_passes_object_to_in_place_helper(
+                        && object_locality::call_passes_object_to_local_args(
                             func.ctx(),
                             call,
                             value,
                             root_value_ty,
-                            in_place_helpers,
-                        )
-                    {
-                        continue;
-                    }
-                    return Materialization::Heap;
-                }
-
-                if let Some(ret) =
-                    downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(user))
-                    && ret.args().iter().copied().any(|arg| arg == value)
+                            local_object_args,
+                        ) =>
                 {
-                    return Materialization::Heap;
+                    std::ops::ControlFlow::Continue(())
                 }
-
-                return Materialization::Heap;
-            }
+                _ => std::ops::ControlFlow::Break(Materialization::Heap),
+            })
+        {
+            return materialization;
         }
 
         kind
@@ -460,14 +433,115 @@ fn has_object_lowering_work(func: &Function) -> bool {
     false
 }
 
-fn lower_objref_ty(ctx: &sonatina_ir::module::ModuleCtx, ty: Type) -> Type {
-    let Some(cmpd) = ty.resolve_compound(ctx) else {
-        return ty;
-    };
-    let sonatina_ir::types::CompoundType::ObjRef(elem) = cmpd else {
-        return ty;
-    };
-    elem.to_ptr(ctx)
+#[derive(Default)]
+struct ObjRefTypeLowerer {
+    changed: bool,
+    compound_map: FxHashMap<CompoundTypeRef, CompoundTypeRef>,
+}
+
+impl ObjRefTypeLowerer {
+    fn rewrite_type(&mut self, ctx: &ModuleCtx, ty: Type) -> Type {
+        match ty {
+            Type::Compound(compound) => Type::Compound(self.rewrite_compound(ctx, compound)),
+            _ => ty,
+        }
+    }
+
+    fn rewrite_compound(&mut self, ctx: &ModuleCtx, compound: CompoundTypeRef) -> CompoundTypeRef {
+        if let Some(&mapped) = self.compound_map.get(&compound) {
+            return mapped;
+        }
+
+        let current = ctx.with_ty_store(|store| store.resolve_compound(compound).clone());
+        self.compound_map.insert(compound, compound);
+
+        let mapped = match current {
+            CompoundType::Array { elem, len } => {
+                let elem = self.rewrite_type(ctx, elem);
+                ctx.with_ty_store_mut(|store| {
+                    let Type::Compound(mapped) = store.make_array(elem, len) else {
+                        unreachable!();
+                    };
+                    mapped
+                })
+            }
+            CompoundType::Ptr(elem) => {
+                let elem = self.rewrite_type(ctx, elem);
+                ctx.with_ty_store_mut(|store| {
+                    let Type::Compound(mapped) = store.make_ptr(elem) else {
+                        unreachable!();
+                    };
+                    mapped
+                })
+            }
+            CompoundType::ObjRef(elem) => {
+                let elem = self.rewrite_type(ctx, elem);
+                let mapped = ctx.with_ty_store_mut(|store| {
+                    let Type::Compound(mapped) = store.make_ptr(elem) else {
+                        unreachable!();
+                    };
+                    mapped
+                });
+                self.changed = true;
+                mapped
+            }
+            CompoundType::Func { args, ret_tys } => {
+                let args: Vec<_> = args
+                    .iter()
+                    .map(|&arg| self.rewrite_type(ctx, arg))
+                    .collect();
+                let ret_tys: Vec<_> = ret_tys
+                    .iter()
+                    .map(|&ret| self.rewrite_type(ctx, ret))
+                    .collect();
+                ctx.with_ty_store_mut(|store| {
+                    let Type::Compound(mapped) = store.make_func(&args, &ret_tys) else {
+                        unreachable!();
+                    };
+                    mapped
+                })
+            }
+            CompoundType::Struct(StructData { name, fields, .. }) => {
+                let new_fields: Vec<_> = fields
+                    .iter()
+                    .map(|&field| self.rewrite_type(ctx, field))
+                    .collect();
+                if new_fields != fields {
+                    ctx.with_ty_store_mut(|store| store.update_struct_fields(&name, &new_fields));
+                    self.changed = true;
+                }
+                compound
+            }
+        };
+
+        if mapped != compound {
+            self.changed = true;
+        }
+        self.compound_map.insert(compound, mapped);
+        mapped
+    }
+}
+
+fn rewrite_global_types(module: &Module, type_lowerer: &mut ObjRefTypeLowerer) -> bool {
+    let globals: Vec<_> = module
+        .ctx
+        .with_gv_store(|store| store.all_gv_refs().collect());
+    let mut changed = false;
+
+    module.ctx.with_gv_store_mut(|store| {
+        for gv in globals {
+            let Some(gv_data) = store.get(gv).cloned() else {
+                continue;
+            };
+            let new_ty = type_lowerer.rewrite_type(&module.ctx, gv_data.ty);
+            if new_ty != gv_data.ty {
+                store.update_ty(gv, new_ty);
+                changed = true;
+            }
+        }
+    });
+
+    changed
 }
 
 fn pointer_elem_ty(func: &Function, value: ValueId) -> Option<Type> {
@@ -482,6 +556,7 @@ mod tests {
         isa::evm::{EvmBackend, PushWidthPolicy},
         object::{CompileOptions, compile_all_objects},
     };
+    use rustc_hash::FxHashSet;
     use sonatina_ir::{
         Module,
         inst::{control_flow, data, evm},
@@ -490,6 +565,32 @@ mod tests {
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
     use sonatina_verifier::{VerificationLevel, VerifierConfig};
+
+    fn has_nested_objref(ctx: &ModuleCtx, ty: Type) -> bool {
+        let mut visited = FxHashSet::default();
+        let mut worklist = vec![ty];
+
+        while let Some(current) = worklist.pop() {
+            let Type::Compound(compound) = current else {
+                continue;
+            };
+            if !visited.insert(compound) {
+                continue;
+            }
+
+            match ctx.with_ty_store(|store| store.resolve_compound(compound).clone()) {
+                CompoundType::Array { elem, .. } | CompoundType::Ptr(elem) => worklist.push(elem),
+                CompoundType::ObjRef(_) => return true,
+                CompoundType::Struct(data) => worklist.extend(data.fields),
+                CompoundType::Func { args, ret_tys } => {
+                    worklist.extend(args);
+                    worklist.extend(ret_tys);
+                }
+            }
+        }
+
+        false
+    }
 
     fn parse_test_module(src: &str) -> Module {
         parse_module(src).expect("parse should succeed").module
@@ -519,12 +620,16 @@ mod tests {
                 .get_sig(func_ref)
                 .expect("signature should exist");
             assert!(
-                sig.args().iter().all(|&ty| !ty.is_obj_ref(&module.ctx)),
+                sig.args()
+                    .iter()
+                    .all(|&ty| !has_nested_objref(&module.ctx, ty)),
                 "object refs should be removed from args of {}",
                 sig.name()
             );
             assert!(
-                sig.ret_tys().iter().all(|&ty| !ty.is_obj_ref(&module.ctx)),
+                sig.ret_tys()
+                    .iter()
+                    .all(|&ty| !has_nested_objref(&module.ctx, ty)),
                 "object refs should be removed from returns of {}",
                 sig.name()
             );
@@ -532,7 +637,7 @@ mod tests {
             module.func_store.view(func_ref, |func| {
                 for value in func.dfg.value_ids() {
                     assert!(
-                        !func.dfg.value_ty(value).is_obj_ref(&module.ctx),
+                        !has_nested_objref(&module.ctx, func.dfg.value_ty(value)),
                         "value {value:?} in {} still has objref type",
                         sig.name()
                     );
@@ -725,5 +830,109 @@ object @Contract {
             );
             assert!(saw_forward_pair, "entry should still call forward_pair");
         });
+    }
+
+    #[test]
+    fn materialize_stack_return_escapes_to_heap() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    v1.objref<@pair> = obj.alloc @pair;
+    v2.objref<i256> = obj.proj v1 0.i8;
+    obj.store v2 v0;
+    v3.*@pair = obj.materialize.stack v1;
+    v4.i256 = call %sum_ptr v3;
+    return v4;
+}
+
+func private %sum_ptr(v0.*@pair) -> i256 {
+block0:
+    v1.*i256 = gep v0 0.i64 0.i8;
+    v2.i256 = mload v1 i256;
+    return v2;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        );
+
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::MinimalRelax,
+            emit_symtab: false,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
+        };
+        compile_all_objects(&module, &test_backend(), &opts).expect("compile should succeed");
+
+        let entry = lookup_func(&module, "entry");
+        module.func_store.view(entry, |func| {
+            assert!(
+                func.layout
+                    .iter_block()
+                    .flat_map(|block| func.layout.iter_inst(block))
+                    .any(
+                        |inst| downcast::<&evm::EvmMalloc>(func.inst_set(), func.dfg.inst(inst))
+                            .is_some()
+                    ),
+                "escaping stack materialization must force heap allocation"
+            );
+        });
+    }
+
+    #[test]
+    fn nested_objref_compound_arg_compiles_through_evm() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+type @wrapper = { objref<@pair> };
+
+func private %sum_wrapper(v0.@wrapper) -> i256 {
+block0:
+    v1.objref<@pair> = extract_value v0 0.i8;
+    v2.objref<i256> = obj.proj v1 0.i8;
+    v3.i256 = obj.load v2;
+    return v3;
+}
+
+func public %entry(v0.i256, v1.i256) -> i256 {
+block0:
+    v2.objref<@pair> = obj.alloc @pair;
+    v3.objref<i256> = obj.proj v2 0.i8;
+    obj.store v3 v0;
+    v4.objref<i256> = obj.proj v2 1.i8;
+    obj.store v4 v1;
+    v5.@wrapper = insert_value undef.@wrapper 0.i8 v2;
+    v6.i256 = call %sum_wrapper v5;
+    return v6;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        );
+
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::MinimalRelax,
+            emit_symtab: false,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
+        };
+        compile_all_objects(&module, &test_backend(), &opts).expect("compile should succeed");
+
+        assert_no_object_ir(&module);
     }
 }
