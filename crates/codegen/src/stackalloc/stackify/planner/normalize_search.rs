@@ -2485,6 +2485,33 @@ pub(super) fn solve_optimal_operand_prep_plan(
     })
 }
 
+pub(super) fn rebuild_operand_prep_plan(
+    ctx: &StackifyContext<'_>,
+    stack: &SymStack,
+    args: &[ValueId],
+    consume_last_use: &BitSet<ValueId>,
+    cost: &impl CostModel,
+    cfg: SearchCfg,
+    steps: Vec<Step>,
+) -> Option<NormalizePlan> {
+    if args.is_empty() {
+        return Some(NormalizePlan {
+            cost: Cost::default(),
+            steps,
+            key_infos: Vec::new(),
+            goal_keys: Vec::new(),
+        });
+    }
+
+    let problem = build_operand_prep_problem(ctx, stack, args, consume_last_use, cfg)?;
+    Some(NormalizePlan {
+        cost: cost_for_steps(&steps, &problem.key_infos, cost),
+        steps,
+        key_infos: problem.key_infos,
+        goal_keys: problem.goal_keys,
+    })
+}
+
 fn canonical_key(ctx: &StackifyContext<'_>, v: ValueId) -> Key {
     if ctx.func.dfg.value_is_imm(v) {
         let imm = ctx
