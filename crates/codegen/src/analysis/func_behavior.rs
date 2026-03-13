@@ -45,6 +45,7 @@ impl<'a> FuncBehaviorAnalyzer<'a> {
     fn new(module: &'a Module) -> Self {
         let mut funcs = module.func_store.funcs();
         funcs.sort_unstable_by_key(|f| f.as_u32());
+        let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
 
         let mut is_external = SecondaryMap::<FuncRef, bool>::new();
         let mut locals = SecondaryMap::<FuncRef, LocalFacts>::new();
@@ -69,14 +70,38 @@ impl<'a> FuncBehaviorAnalyzer<'a> {
         // Aggregate legalization can introduce helper call refs that are not part of the
         // broader module-linkage analysis. Build only the call graph/SCC data we need here.
         let call_graph = CallGraph::build_graph(module);
+        let mut all_funcs = funcs.clone();
+        let mut all_funcs_set = funcs_set.clone();
+        for &func_ref in &funcs {
+            for &callee in call_graph.callee_of(func_ref) {
+                if all_funcs_set.insert(callee) {
+                    all_funcs.push(callee);
+                }
+            }
+        }
+        all_funcs.sort_unstable_by_key(|f| f.as_u32());
+
+        for &func_ref in &all_funcs {
+            if funcs_set.contains(&func_ref) {
+                continue;
+            }
+
+            is_external[func_ref] = module
+                .ctx
+                .get_sig(func_ref)
+                .is_none_or(|sig| sig.linkage().is_external());
+            locals[func_ref] = LocalFacts::default();
+            effects[func_ref] = FuncEffectSummary::unknown_call();
+        }
+
         let scc = SccBuilder::default().compute_scc(&call_graph);
 
-        let mut scc_refs: Vec<_> = funcs.iter().map(|&f| scc.scc_ref(f)).collect();
+        let mut scc_refs: Vec<_> = all_funcs.iter().map(|&f| scc.scc_ref(f)).collect();
         scc_refs.sort_unstable_by_key(|s| s.as_u32());
         scc_refs.dedup();
 
         let mut succ_sccs = SecondaryMap::<SccRef, Vec<SccRef>>::new();
-        for &func_ref in &funcs {
+        for &func_ref in &all_funcs {
             let from_scc = scc.scc_ref(func_ref);
             for &callee in call_graph.callee_of(func_ref) {
                 let to_scc = scc.scc_ref(callee);
@@ -716,5 +741,32 @@ func private %caller() -> *i8 {
         assert!(effects.may_read_spaces.contains(MEMORY));
         assert!(effects.may_write_spaces.contains(MEMORY));
         assert!(effects.other.contains(OtherEffects::ALLOC));
+    }
+
+    #[test]
+    fn propagates_unknown_effects_through_external_callees() {
+        let module = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+declare external %ext();
+
+func private %caller() {
+    block0:
+        call %ext;
+        return;
+}
+"#,
+        );
+
+        analyze_module(&module);
+
+        let caller = find_func(&module, "caller");
+        let effects = module.ctx.func_effects(caller);
+        assert!(effects.may_read_unknown);
+        assert!(effects.may_write_unknown);
+        assert!(effects.may_commit_visible_writes);
+        assert!(!effects.will_return);
+        assert!(!effects.will_terminate);
     }
 }
