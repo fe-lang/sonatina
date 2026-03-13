@@ -1,16 +1,17 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/spill.sntn
 ---
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 179 bytes
-  total: 179 bytes
+  section runtime: 178 bytes
+  total: 178 bytes
 
 functions:
-  entry: ir_blocks=1 ir_insts=7 vcode_ops=28 fixups=2 imm_bytes=5
+  entry: ir_blocks=1 ir_insts=7 vcode_ops=27 fixups=2 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   sum8: ir_blocks=1 ir_insts=8 vcode_ops=19 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
@@ -18,4 +19,4 @@ functions:
     mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=1
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21588 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=532
+  case ok: calldata_len=8 success reason=Return gas_used=21587 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=531

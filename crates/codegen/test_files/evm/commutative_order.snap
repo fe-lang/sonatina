@@ -1,19 +1,20 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/commutative_order.sntn
 ---
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 72 bytes
-  total: 72 bytes
+  section runtime: 71 bytes
+  total: 71 bytes
 
 functions:
-  entry: ir_blocks=1 ir_insts=3 vcode_ops=27 fixups=2 imm_bytes=16
+  entry: ir_blocks=1 ir_insts=3 vcode_ops=26 fixups=2 imm_bytes=16
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   comm_add16: ir_blocks=1 ir_insts=3 vcode_ops=22 fixups=0 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21189 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=133
+  case ok: calldata_len=8 success reason=Return gas_used=21188 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=132

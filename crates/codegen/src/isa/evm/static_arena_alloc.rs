@@ -16,7 +16,7 @@ use sonatina_ir::{
     BlockId, Function, InstId, InstSetExt, ValueId,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
-    module::{FuncRef, ModuleCtx},
+    module::{FuncAttrs, FuncRef, ModuleCtx},
 };
 use std::{
     cmp::Reverse,
@@ -470,6 +470,8 @@ pub(crate) fn compute_func_stack_objects(
                 continue;
             };
             let pos = inst_pos.get(&inst).copied().unwrap_or_default();
+            let callee = *call.callee();
+            let local_return = !ctx.module.func_attrs(callee).contains(FuncAttrs::NORETURN);
             let arg_count = u8::try_from(call.args().len()).expect("call arg count too large");
             let call_results = function.dfg.inst_results(inst);
             let canonical_call_results: FxHashSet<ValueId> = call_results
@@ -481,18 +483,20 @@ pub(crate) fn compute_func_stack_objects(
 
             let mut set: FxHashSet<StackObjId> = FxHashSet::default();
             let mut roots: FxHashSet<InstId> = FxHashSet::default();
-            for v in analysis.inst_liveness.live_out(inst).iter() {
-                let v = analysis.canonicalize_value(v);
-                if canonical_call_results.contains(&v) {
-                    continue;
-                }
+            if local_return {
+                for v in analysis.inst_liveness.live_out(inst).iter() {
+                    let v = analysis.canonicalize_value(v);
+                    if canonical_call_results.contains(&v) {
+                        continue;
+                    }
 
-                if let Some(obj) = spill_obj[v] {
-                    set.insert(obj);
-                }
+                    if let Some(obj) = spill_obj[v] {
+                        set.insert(obj);
+                    }
 
-                for base in prov[v].alloca_insts() {
-                    roots.insert(base);
+                    for base in prov[v].alloca_insts() {
+                        roots.insert(base);
+                    }
                 }
             }
 
@@ -540,7 +544,7 @@ pub(crate) fn compute_func_stack_objects(
             call_sites.push(CallSiteObjects {
                 inst,
                 inst_pos: pos,
-                callee: *call.callee(),
+                callee,
                 result_count,
                 arg_count,
                 live_out_objs: live_objs,

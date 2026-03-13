@@ -1,23 +1,24 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/multi_return_call.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 64 bytes
-  total: 64 bytes
+  section runtime: 63 bytes
+  total: 63 bytes
 
 functions:
-  entry: ir_blocks=3 ir_insts=12 vcode_ops=38 fixups=3 imm_bytes=6
+  entry: ir_blocks=3 ir_insts=12 vcode_ops=37 fixups=3 imm_bytes=6
     mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0xc0) entry_abs_words=1 abs_words_end=2
   pair_add: ir_blocks=1 ir_insts=6 vcode_ops=16 fixups=0 imm_bytes=1
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=1
 
 evm:
-  case no_overflow: calldata_len=64 success reason=Return gas_used=21445 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=165
-  case overflow: calldata_len=64 success reason=Return gas_used=21821 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=169
+  case no_overflow: calldata_len=64 success reason=Return gas_used=21444 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=164
+  case overflow: calldata_len=64 success reason=Return gas_used=21820 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=168
 
 
 --------------- DEBUG ---------------
@@ -105,7 +106,6 @@ evm:
 // func public %entry()
 entry:
   block0:
-    JUMPDEST
     PUSH0  // v0.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
     PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i256;

@@ -1,14 +1,15 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/zk.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 2212 bytes
-  section runtime: 2200 bytes
-  total: 4412 bytes
+  section init: 2201 bytes
+  section runtime: 2190 bytes
+  total: 4391 bytes
 
 functions:
   smt_store_zero_table: ir_blocks=1 ir_insts=33 vcode_ops=100 fixups=0 imm_bytes=64
@@ -23,29 +24,29 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   smt_update_root_from_calldata: ir_blocks=22 ir_insts=85 vcode_ops=247 fixups=15 imm_bytes=32
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  init__StorPtr_Evm___207f35a85ac4062e: ir_blocks=1 ir_insts=4 vcode_ops=9 fixups=2 imm_bytes=2
+  init__StorPtr_Evm___207f35a85ac4062e: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  runtime__StorPtr_Evm___207f35a85ac4062e: ir_blocks=13 ir_insts=61 vcode_ops=180 fixups=22 imm_bytes=41
+  runtime__StorPtr_Evm___207f35a85ac4062e: ir_blocks=13 ir_insts=61 vcode_ops=173 fixups=20 imm_bytes=41
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  hash2_at: ir_blocks=1 ir_insts=5 vcode_ops=16 fixups=0 imm_bytes=2
+  hash2_at: ir_blocks=1 ir_insts=5 vcode_ops=15 fixups=0 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  hash2: ir_blocks=1 ir_insts=7 vcode_ops=26 fixups=1 imm_bytes=5
+  hash2: ir_blocks=1 ir_insts=7 vcode_ops=25 fixups=1 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=528903 gas_refunded=0 logs=0 output=create len=2200 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case bench_lean_typical_root: calldata_len=1124 success reason=Return gas_used=30035 gas_refunded=0 logs=0 output=call len=32 tx_gas=28616 runtime_gas=1419
-  case bench_lean_typical_verify: calldata_len=1156 success reason=Return gas_used=30624 gas_refunded=0 logs=0 output=call len=32 tx_gas=29128 runtime_gas=1496
-  case bench_lean_typical_update: calldata_len=1188 success reason=Return gas_used=31569 gas_refunded=0 logs=0 output=call len=32 tx_gas=29640 runtime_gas=1929
-  case bench_lean_32_root: calldata_len=1124 success reason=Return gas_used=44030 gas_refunded=0 logs=0 output=call len=32 tx_gas=38216 runtime_gas=5814
-  case bench_lean_32_verify: calldata_len=1156 success reason=Return gas_used=44619 gas_refunded=0 logs=0 output=call len=32 tx_gas=38728 runtime_gas=5891
-  case bench_lean_32_update: calldata_len=1188 success reason=Return gas_used=47074 gas_refunded=0 logs=0 output=call len=32 tx_gas=39240 runtime_gas=7834
-  case bench_smt_typical_root: calldata_len=1124 success reason=Return gas_used=36798 gas_refunded=0 logs=0 output=call len=32 tx_gas=27932 runtime_gas=8866
-  case bench_smt_typical_verify: calldata_len=1156 success reason=Return gas_used=37387 gas_refunded=0 logs=0 output=call len=32 tx_gas=28444 runtime_gas=8943
-  case bench_smt_typical_update: calldata_len=1188 success reason=Return gas_used=40196 gas_refunded=0 logs=0 output=call len=32 tx_gas=28956 runtime_gas=11240
-  case bench_smt_all_enabled_root: calldata_len=1124 success reason=Return gas_used=44183 gas_refunded=0 logs=0 output=call len=32 tx_gas=38300 runtime_gas=5883
-  case bench_smt_all_enabled_verify: calldata_len=1156 success reason=Return gas_used=44772 gas_refunded=0 logs=0 output=call len=32 tx_gas=38812 runtime_gas=5960
-  case bench_smt_all_enabled_update: calldata_len=1188 success reason=Return gas_used=47740 gas_refunded=0 logs=0 output=call len=32 tx_gas=39324 runtime_gas=8416
+  deploy: success reason=Return gas_used=526724 gas_refunded=0 logs=0 output=create len=2190 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case bench_lean_typical_root: calldata_len=1124 success reason=Return gas_used=30034 gas_refunded=0 logs=0 output=call len=32 tx_gas=28616 runtime_gas=1418
+  case bench_lean_typical_verify: calldata_len=1156 success reason=Return gas_used=30617 gas_refunded=0 logs=0 output=call len=32 tx_gas=29128 runtime_gas=1489
+  case bench_lean_typical_update: calldata_len=1188 success reason=Return gas_used=31568 gas_refunded=0 logs=0 output=call len=32 tx_gas=29640 runtime_gas=1928
+  case bench_lean_32_root: calldata_len=1124 success reason=Return gas_used=44029 gas_refunded=0 logs=0 output=call len=32 tx_gas=38216 runtime_gas=5813
+  case bench_lean_32_verify: calldata_len=1156 success reason=Return gas_used=44612 gas_refunded=0 logs=0 output=call len=32 tx_gas=38728 runtime_gas=5884
+  case bench_lean_32_update: calldata_len=1188 success reason=Return gas_used=47073 gas_refunded=0 logs=0 output=call len=32 tx_gas=39240 runtime_gas=7833
+  case bench_smt_typical_root: calldata_len=1124 success reason=Return gas_used=36797 gas_refunded=0 logs=0 output=call len=32 tx_gas=27932 runtime_gas=8865
+  case bench_smt_typical_verify: calldata_len=1156 success reason=Return gas_used=37380 gas_refunded=0 logs=0 output=call len=32 tx_gas=28444 runtime_gas=8936
+  case bench_smt_typical_update: calldata_len=1188 success reason=Return gas_used=40195 gas_refunded=0 logs=0 output=call len=32 tx_gas=28956 runtime_gas=11239
+  case bench_smt_all_enabled_root: calldata_len=1124 success reason=Return gas_used=44182 gas_refunded=0 logs=0 output=call len=32 tx_gas=38300 runtime_gas=5882
+  case bench_smt_all_enabled_verify: calldata_len=1156 success reason=Return gas_used=44765 gas_refunded=0 logs=0 output=call len=32 tx_gas=38812 runtime_gas=5953
+  case bench_smt_all_enabled_update: calldata_len=1188 success reason=Return gas_used=47739 gas_refunded=0 logs=0 output=call len=32 tx_gas=39324 runtime_gas=8415
 
 
 --------------- DEBUG ---------------
@@ -1096,7 +1097,6 @@ evm:
       bitcast [v65] -> v65
     // call %abi_return_bool v72;
     - stack=[v65], last_use=[v65]
-      pre: [PUSH_CONT, SWAP1]
       call [v65]
     // unreachable;
     - stack=[]
@@ -1221,7 +1221,6 @@ evm:
       bitcast [v66] -> v66
     // call %abi_return_bool v73;
     - stack=[v66], last_use=[v66]
-      pre: [PUSH_CONT, SWAP1]
       call [v66]
     // unreachable;
     - stack=[]
@@ -2119,7 +2118,6 @@ smt_update_root_from_calldata:
 // func private %init__StorPtr_Evm___207f35a85ac4062e()
 init__StorPtr_Evm___207f35a85ac4062e:
   block0:
-    JUMPDEST
     PUSH0 0x0 (0)  // v1.i256 = sym_size &runtime__StorPtr_Evm___207f35a85ac4062e;
     PUSH0 0x0 (0)  // v2.i256 = sym_addr &runtime__StorPtr_Evm___207f35a85ac4062e;
     DUP2  // evm_code_copy 0.i256 v2 v1;
@@ -2132,7 +2130,6 @@ init__StorPtr_Evm___207f35a85ac4062e:
 // func private %runtime__StorPtr_Evm___207f35a85ac4062e()
 runtime__StorPtr_Evm___207f35a85ac4062e:
   block0:
-    JUMPDEST
     PUSH0  // v1.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
     PUSH1 0xe0 (224)  // v64.i256 = shr 224.i256 v1;
@@ -2189,11 +2186,8 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     JUMP
     JUMPDEST
     EQ  // v65.i1 = eq v17 v12;
-    PUSH1 `pc + (4)`  // call %abi_return_bool v72;
-    SWAP1
-    PUSH1 FuncRef(1)
+    PUSH1 FuncRef(1)  // call %abi_return_bool v72;
     JUMP
-    JUMPDEST
     INVALID  // unreachable;
   block10:
     JUMPDEST
@@ -2282,11 +2276,8 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     JUMP
     JUMPDEST
     EQ  // v66.i1 = eq v31 v35;
-    PUSH1 `pc + (4)`  // call %abi_return_bool v73;
-    SWAP1
-    PUSH1 FuncRef(1)
+    PUSH1 FuncRef(1)  // call %abi_return_bool v73;
     JUMP
-    JUMPDEST
     INVALID  // unreachable;
   block13:
     JUMPDEST
@@ -2328,7 +2319,6 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
 // func public %hash2_at(v0.i256, v1.i256, v2.i256) -> i256
 hash2_at:
   block0:
-    JUMPDEST
     SWAP1  // mstore v0 v1 i256;
     DUP2
     MSTORE
@@ -2348,7 +2338,6 @@ hash2_at:
 // func public %hash2(v0.i256, v1.i256) -> i256
 hash2:
   block0:
-    JUMPDEST
     PUSH1 0x40 (64)  // v4.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0x9f (159)

@@ -97,7 +97,11 @@ impl<Op> FuncLayout<Op> {
         let mut block_offsets = SecondaryMap::default();
         for b in &block_order {
             block_offsets[*b] = offset;
-            let block_size = vcode.blocks.get(*b).unwrap().len(&vcode.insts_pool) as u32;
+            let block_size = vcode
+                .blocks
+                .get(*b)
+                .map(|block| block.len(&vcode.insts_pool) as u32)
+                .unwrap_or(0);
             offset += block_size;
         }
 

@@ -1,6 +1,9 @@
 use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
-use sonatina_ir::{BlockId, Function, Immediate, InstId, ValueId, inst::control_flow::BranchKind};
+use sonatina_ir::{
+    BlockId, Function, Immediate, InstId, ValueId, inst::control_flow::BranchKind,
+    module::FuncAttrs,
+};
 use std::collections::BTreeMap;
 
 use crate::{bitset::BitSet, isa::evm::immediate_u32, stackalloc::Actions};
@@ -243,6 +246,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         }
 
         let is_call = self.ctx.func.dfg.is_call(inst);
+        let call_has_local_return = is_call && call_has_local_return(self.ctx.func, inst);
         let is_normal =
             self.ctx.func.dfg.branch_info(inst).is_none() && !self.ctx.func.dfg.is_return(inst);
         let skip_cleanup = skip_pre_exit_cleanup(self.ctx.func, inst);
@@ -544,7 +548,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             p.prepare_operands_for_inst(inst, &mut args, &consume_last_use);
         });
 
-        if is_call {
+        if call_has_local_return {
             // Insert the continuation marker after operand preparation so operand prep cannot
             // reorder it relative to the call operands.
             state
@@ -577,7 +581,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         state.stack.pop_n_operands(arity);
 
         // Call consumes the temporary continuation target (not an SSA value).
-        if is_call {
+        if call_has_local_return {
             state.stack.remove_call_ret_addr();
         }
 
@@ -753,11 +757,20 @@ pub(super) fn operand_order_for_evm(
     // operands. We arrange the operands as a left rotation so that after the backend pushes the
     // continuation (at the `Action::PushContinuationOffset` marker), a single `SWAP{arity}` places
     // it under the operands and restores the callee ABI operand order.
-    if func.dfg.is_call(inst) && !args.is_empty() {
+    if call_has_local_return(func, inst) && !args.is_empty() {
         args.as_mut_slice().rotate_left(1);
     }
 
     args
+}
+
+fn call_has_local_return(func: &Function, inst: InstId) -> bool {
+    func.dfg.call_info(inst).is_some_and(|call| {
+        !func
+            .ctx()
+            .func_attrs(call.callee())
+            .contains(FuncAttrs::NORETURN)
+    })
 }
 
 pub(super) fn inst_is_noop_alias_cast(

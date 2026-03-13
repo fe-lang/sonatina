@@ -6,15 +6,15 @@ input_file: test_files/evm/gvn_loop_uaddo_internal_call_reuse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 187 bytes
-  total: 187 bytes
+  section runtime: 186 bytes
+  total: 186 bytes
 
 functions:
-  entry: ir_blocks=15 ir_insts=53 vcode_ops=143 fixups=12 imm_bytes=29
+  entry: ir_blocks=15 ir_insts=53 vcode_ops=142 fixups=12 imm_bytes=29
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21499 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=499
+  case ok: calldata_len=0 success reason=Return gas_used=21498 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=498
 
 
 --------------- DEBUG ---------------
@@ -225,7 +225,6 @@ evm:
 // func public %entry()
 entry:
   block0:
-    JUMPDEST
     PUSH1 0x40 (64)  // v0.*i256 = evm_malloc 32.i256;
     MLOAD
     PUSH1 0x9f (159)

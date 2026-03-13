@@ -1,26 +1,27 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/array_iter_reverse.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 266 bytes
-  total: 266 bytes
+  section runtime: 265 bytes
+  total: 265 bytes
 
 functions:
   sum_last4: ir_blocks=4 ir_insts=23 vcode_ops=56 fixups=3 imm_bytes=10
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   sum_first4: ir_blocks=4 ir_insts=22 vcode_ops=54 fixups=3 imm_bytes=9
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  test_view_param_local_ref_take_reverse: ir_blocks=1 ir_insts=28 vcode_ops=89 fixups=9 imm_bytes=22
+  test_view_param_local_ref_take_reverse: ir_blocks=1 ir_insts=28 vcode_ops=88 fixups=9 imm_bytes=22
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=22269 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1269
+  case ok: calldata_len=0 success reason=Return gas_used=22268 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1268
 
 
 --------------- DEBUG ---------------
@@ -152,7 +153,6 @@ sum_first4:
 // func private %test_view_param_local_ref_take_reverse()
 test_view_param_local_ref_take_reverse:
   block0:
-    JUMPDEST
     PUSH1 0x40 (64)  // v2.*i256 = evm_malloc 256.i256;
     MLOAD
     PUSH1 0x9f (159)

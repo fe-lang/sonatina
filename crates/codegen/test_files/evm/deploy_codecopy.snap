@@ -1,24 +1,25 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/deploy_codecopy.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section init: 32 bytes
-  section runtime: 21 bytes
-  total: 53 bytes
+  section init: 30 bytes
+  section runtime: 20 bytes
+  total: 50 bytes
 
 functions:
-  entry: ir_blocks=1 ir_insts=7 vcode_ops=17 fixups=0 imm_bytes=4
+  entry: ir_blocks=1 ir_insts=7 vcode_ops=16 fixups=0 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  init: ir_blocks=1 ir_insts=4 vcode_ops=9 fixups=2 imm_bytes=2
+  init: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=57740 gas_refunded=0 logs=0 output=create len=21 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case ok: calldata_len=8 success reason=Return gas_used=21102 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=46
+  deploy: success reason=Return gas_used=57507 gas_refunded=0 logs=0 output=create len=20 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case ok: calldata_len=8 success reason=Return gas_used=21101 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=45
 
 
 --------------- DEBUG ---------------
@@ -26,7 +27,6 @@ evm:
 // func public %entry()
 entry:
   block0:
-    JUMPDEST
     PUSH0  // v0.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
     DUP1  // v1.i256 = shr 224.i256 v0;
@@ -47,7 +47,6 @@ entry:
 // func public %init()
 init:
   block0:
-    JUMPDEST
     PUSH0 0x0 (0)  // v0.i256 = sym_addr &runtime;
     PUSH0 0x0 (0)  // v1.i256 = sym_size &runtime;
     DUP1  // evm_code_copy 0.i256 v0 v1;

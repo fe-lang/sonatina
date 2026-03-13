@@ -6,11 +6,11 @@ input_file: test_files/evm/internal_call_preserve_with_lower_live_values.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 98 bytes
-  total: 98 bytes
+  section runtime: 97 bytes
+  total: 97 bytes
 
 functions:
-  entry: ir_blocks=3 ir_insts=11 vcode_ops=44 fixups=5 imm_bytes=6
+  entry: ir_blocks=3 ir_insts=11 vcode_ops=43 fixups=5 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   is_lt: ir_blocks=3 ir_insts=4 vcode_ops=14 fixups=1 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -18,7 +18,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=21355 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=215
+  case ok: calldata_len=32 success reason=Return gas_used=21354 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=214
 
 
 --------------- DEBUG ---------------
@@ -135,7 +135,6 @@ evm:
 // func public %entry()
 entry:
   block0:
-    JUMPDEST
     PUSH0  // v0.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
     PUSH1 0x1 (1)  // v1.i256 = add v0 1.i256;

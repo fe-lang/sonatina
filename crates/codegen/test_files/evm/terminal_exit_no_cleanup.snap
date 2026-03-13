@@ -1,28 +1,29 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/terminal_exit_no_cleanup.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 4 bytes
-  total: 4 bytes
+  section runtime: 3 bytes
+  total: 3 bytes
 
 functions:
-  entry: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=0
+  entry: ir_blocks=1 ir_insts=1 vcode_ops=3 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  exit_return: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=0
+  exit_return: ir_blocks=1 ir_insts=1 vcode_ops=3 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  exit_revert: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=0
+  exit_revert: ir_blocks=1 ir_insts=1 vcode_ops=3 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  exit_stop: ir_blocks=1 ir_insts=1 vcode_ops=2 fixups=0 imm_bytes=0
+  exit_stop: ir_blocks=1 ir_insts=1 vcode_ops=1 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  exit_invalid: ir_blocks=1 ir_insts=1 vcode_ops=2 fixups=0 imm_bytes=0
+  exit_invalid: ir_blocks=1 ir_insts=1 vcode_ops=1 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case empty: calldata_len=0 success reason=Return gas_used=21005 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=5
+  case empty: calldata_len=0 success reason=Return gas_used=21004 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=4
 
 
 --------------- DEBUG ---------------
@@ -63,7 +64,6 @@ evm:
 // func public %entry()
 entry:
   block0:
-    JUMPDEST
     PUSH0  // evm_return 0.i256 0.i256;
     PUSH0
     RETURN
@@ -71,7 +71,6 @@ entry:
 // func private %exit_return()
 exit_return:
   block0:
-    JUMPDEST
     PUSH0  // evm_return 0.i256 0.i256;
     PUSH0
     RETURN
@@ -79,7 +78,6 @@ exit_return:
 // func private %exit_revert()
 exit_revert:
   block0:
-    JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
@@ -87,11 +85,9 @@ exit_revert:
 // func private %exit_stop()
 exit_stop:
   block0:
-    JUMPDEST
     STOP  // evm_stop;
 
 // func private %exit_invalid()
 exit_invalid:
   block0:
-    JUMPDEST
     INVALID  // evm_invalid;

@@ -6,15 +6,15 @@ input_file: test_files/evm/gvn_cross_block_tuple_call_reuse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 75 bytes
-  total: 75 bytes
+  section runtime: 74 bytes
+  total: 74 bytes
 
 functions:
-  entry: ir_blocks=8 ir_insts=24 vcode_ops=59 fixups=4 imm_bytes=12
+  entry: ir_blocks=8 ir_insts=24 vcode_ops=58 fixups=4 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=21302 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=162
+  case ok: calldata_len=32 success reason=Return gas_used=21301 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=161
 
 
 --------------- DEBUG ---------------
@@ -125,7 +125,6 @@ evm:
 // func public %entry()
 entry:
   block0:
-    JUMPDEST
     PUSH1 0xa0 (160)  // v0.*i256 = evm_malloc 32.i256;
     PUSH1 0x63 (99)  // mstore v0 99.i256 i256;
     SWAP1
