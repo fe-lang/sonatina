@@ -92,6 +92,61 @@ pub struct Alloca {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(text = "obj.alloc")]
+pub struct ObjAlloc {
+    ty: Type,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(arity(at_least(2)))]
+#[inst(text = "obj.proj")]
+pub struct ObjProj {
+    values: SmallVec<[ValueId; 4]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(text = "obj.index")]
+pub struct ObjIndex {
+    object: ValueId,
+    index: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(text = "obj.load")]
+pub struct ObjLoad {
+    object: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(super::SideEffect::Write))]
+#[inst(text = "obj.store")]
+pub struct ObjStore {
+    object: ValueId,
+    value: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(super::SideEffect::Write))]
+#[inst(text = "obj.materialize.stack")]
+pub struct ObjMaterializeStack {
+    object: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(super::SideEffect::Write))]
+#[inst(text = "obj.materialize.heap")]
+pub struct ObjMaterializeHeap {
+    object: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(super::SideEffect::Write))]
+#[inst(text = "mem.alloc_dynamic")]
+pub struct MemAllocDynamic {
+    size: ValueId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 pub struct InsertValue {
     dest: ValueId,
     idx: ValueId,

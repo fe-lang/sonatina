@@ -21,6 +21,11 @@ impl TypeStore {
         Type::Compound(ty)
     }
 
+    pub fn make_obj_ref(&mut self, ty: Type) -> Type {
+        let ty = self.make_compound(CompoundType::ObjRef(ty));
+        Type::Compound(ty)
+    }
+
     pub fn make_array(&mut self, elem: Type, len: usize) -> Type {
         let ty = self.make_compound(CompoundType::Array { elem, len });
         Type::Compound(ty)
@@ -137,6 +142,13 @@ impl TypeStore {
         }
     }
 
+    pub fn is_obj_ref(&self, ty: Type) -> bool {
+        match ty {
+            Type::Compound(cmpd_ref) => self.compounds[cmpd_ref].is_obj_ref(),
+            _ => false,
+        }
+    }
+
     pub fn is_array(&self, ty: Type) -> bool {
         match ty {
             Type::Compound(cmpd_ref) => self.compounds[cmpd_ref].is_array(),
@@ -222,6 +234,10 @@ impl Type {
         ctx.with_ty_store(|store| store.is_ptr(self))
     }
 
+    pub fn is_obj_ref(self, ctx: &ModuleCtx) -> bool {
+        ctx.with_ty_store(|store| store.is_obj_ref(self))
+    }
+
     pub fn resolve_compound(self, ctx: &ModuleCtx) -> Option<CompoundType> {
         let Self::Compound(cmpd) = self else {
             return None;
@@ -232,6 +248,10 @@ impl Type {
 
     pub fn to_ptr(self, ctx: &ModuleCtx) -> Type {
         ctx.with_ty_store_mut(|s| s.make_ptr(self))
+    }
+
+    pub fn to_obj_ref(self, ctx: &ModuleCtx) -> Type {
+        ctx.with_ty_store_mut(|s| s.make_obj_ref(self))
     }
 }
 
@@ -311,6 +331,11 @@ where
                     write!(w, "*")?;
                     ty.write(w, ctx)
                 }
+                CompoundType::ObjRef(ty) => {
+                    write!(w, "objref<")?;
+                    ty.write(w, ctx)?;
+                    write!(w, ">")
+                }
                 CompoundType::Struct(StructData { name, packed, .. }) => {
                     if *packed {
                         write!(w, "@<{name}>")
@@ -344,6 +369,7 @@ pub enum CompoundType {
         len: usize,
     },
     Ptr(Type),
+    ObjRef(Type),
     Struct(StructData),
     Func {
         args: SmallVec<[Type; 8]>,
@@ -389,6 +415,10 @@ impl CompoundType {
 
     pub fn is_ptr(&self) -> bool {
         matches!(self, Self::Ptr(_))
+    }
+
+    pub fn is_obj_ref(&self) -> bool {
+        matches!(self, Self::ObjRef(_))
     }
 
     pub fn is_struct(&self) -> bool {

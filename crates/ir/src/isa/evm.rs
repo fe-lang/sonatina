@@ -124,6 +124,9 @@ impl TypeLayout for EvmTypeLayout {
                     CompoundType::Array { elem, len } => self.size_of(elem, ctx)? * len,
 
                     CompoundType::Ptr(_) => 32,
+                    CompoundType::ObjRef(_) => {
+                        return Err(TypeLayoutError::UnrepresentableType(ty));
+                    }
 
                     CompoundType::Struct(s) => {
                         if s.packed {

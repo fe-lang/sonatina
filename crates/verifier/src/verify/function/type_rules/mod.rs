@@ -338,6 +338,14 @@ impl FunctionVerifier<'_> {
             current_ty = match cmpd {
                 CompoundType::Ptr(elem) => elem,
                 CompoundType::Array { elem, .. } => elem,
+                CompoundType::ObjRef(_) => {
+                    self.emit(Diagnostic::error(
+                        DiagnosticCode::GepTypeComputationFailed,
+                        "gep cannot index into object-reference type",
+                        location.clone(),
+                    ));
+                    return None;
+                }
                 CompoundType::Struct(s) => {
                     let Some(imm) = self.value_imm(idx_value) else {
                         self.emit(Diagnostic::error(
@@ -465,7 +473,7 @@ impl FunctionVerifier<'_> {
 
                 Some(field_ty)
             }
-            CompoundType::Ptr(_) | CompoundType::Func { .. } => {
+            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => {
                 self.emit(Diagnostic::error(
                     DiagnosticCode::InstOperandTypeMismatch,
                     "aggregate operation destination must be struct or array",

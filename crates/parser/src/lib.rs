@@ -394,6 +394,10 @@ impl BuildCtx {
                 let t = self.type_(mb, t);
                 mb.ptr_type(t)
             }
+            ast::TypeKind::ObjRef(t) => {
+                let t = self.type_(mb, t);
+                mb.objref_type(t)
+            }
             ast::TypeKind::Array(t, n) => {
                 let elem = self.type_(mb, t);
                 mb.declare_array_type(elem, *n)
@@ -914,6 +918,42 @@ func public %caller(v0.i32, v1.i32) -> (i32, i1) {
         assert!(printed.contains("func private %pair_add(v0.i32, v1.i32) -> (i32, i1) {"));
         assert!(printed.contains("(v2.i32, v3.i1) = call %pair_add v0 v1;"));
         assert!(printed.contains("return (v2, v3);"));
+    }
+
+    #[test]
+    fn test_dotted_object_ops_roundtrip() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+type @pair = {i256, [i256; 2]};
+
+func private %ops(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.objref<@pair> = obj.alloc @pair;
+        v4.objref<i256> = obj.proj v3 0.i8;
+        v5.objref<[i256; 2]> = obj.proj v3 1.i8;
+        v6.objref<i256> = obj.index v5 0.i8;
+        obj.store v4 v0;
+        obj.store v6 v1;
+        v7.i256 = obj.load v6;
+        v8.*@pair = obj.materialize.stack v3;
+        v9.*i8 = mem.alloc_dynamic v2;
+        v10.*@pair = obj.materialize.heap v3;
+        return v7;
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let mut w = ir::ir_writer::ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
+        let printed = w.dump_string();
+        assert!(printed.contains("obj.alloc @pair"));
+        assert!(printed.contains("obj.proj v3 0.i8"));
+        assert!(printed.contains("obj.index v5 0.i8"));
+        assert!(printed.contains("obj.store v4 v0"));
+        assert!(printed.contains("obj.load v6"));
+        assert!(printed.contains("obj.materialize.stack v3"));
+        assert!(printed.contains("mem.alloc_dynamic v2"));
+        assert!(printed.contains("obj.materialize.heap v3"));
     }
 
     #[test]

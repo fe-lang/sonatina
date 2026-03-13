@@ -52,6 +52,34 @@ impl<'a> AggregateValueReconstructor<'a> {
         }
 
         if !shape::is_supported_aggregate_ty(func.ctx(), result_ty) {
+            let child_count = shape::aggregate_child_count(func.ctx(), source_ty)?;
+            for idx in 0..child_count {
+                let idx = u32::try_from(idx).ok()?;
+                let child_slice = shape::aggregate_slice_for_index(func.ctx(), source_ty, idx)?;
+                if source_slice.first_leaf < child_slice.first_leaf
+                    || source_slice.first_leaf + source_slice.leaf_count
+                        > child_slice.first_leaf + child_slice.leaf_count
+                {
+                    continue;
+                }
+
+                let child_value =
+                    self.lookup_immediate_child_value(func, inst, source, source_ty, idx)?;
+                let nested_slice = shape::aggregate_slice_for_leaf_range(
+                    func.ctx(),
+                    child_slice.ty,
+                    source_slice.first_leaf - child_slice.first_leaf,
+                    source_slice.leaf_count,
+                )?;
+                return self.rebuild_slice(
+                    func,
+                    inst,
+                    child_value,
+                    child_slice.ty,
+                    nested_slice,
+                    result_ty,
+                );
+            }
             return None;
         }
 

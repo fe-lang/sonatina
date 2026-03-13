@@ -77,6 +77,10 @@ impl Interpret for Gep {
                     current_ty = ty;
                 }
 
+                CompoundType::ObjRef(_) => {
+                    panic!("Invalid GEP: indexing into an object reference");
+                }
+
                 CompoundType::Struct(s) => {
                     let mut local_offset = 0;
                     for i in 0..idx_value {
@@ -145,6 +149,7 @@ impl Interpret for InsertValue {
                     CompoundType::Array { len, .. } => len,
                     CompoundType::Struct(s) => s.fields.len(),
                     CompoundType::Ptr(_) => unreachable!(),
+                    CompoundType::ObjRef(_) => unreachable!(),
                     CompoundType::Func { .. } => unreachable!(),
                 };
                 vec![EvalValue::Undef; len]

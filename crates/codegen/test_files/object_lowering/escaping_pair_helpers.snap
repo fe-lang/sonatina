@@ -1,0 +1,27 @@
+---
+source: crates/codegen/tests/object_lowering.rs
+input_file: test_files/object_lowering/escaping_pair_helpers.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func private %make_pair(v0.i256, v1.i256) -> *@pair {
+    block0:
+        v2.*@pair = evm_malloc 64.i256;
+        v3.*i256 = gep v2 0.i64 0.i8;
+        mstore v3 v0 i256;
+        v4.*i256 = gep v2 0.i64 1.i8;
+        mstore v4 v1 i256;
+        return v2;
+}
+
+func private %sum_pair(v0.*@pair) -> i256 {
+    block0:
+        v1.*i256 = gep v0 0.i64 0.i8;
+        v2.i256 = mload v1 i256;
+        v3.*i256 = gep v0 0.i64 1.i8;
+        v4.i256 = mload v3 i256;
+        v5.i256 = add v2 v4;
+        return v5;
+}

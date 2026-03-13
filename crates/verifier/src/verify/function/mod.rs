@@ -445,6 +445,21 @@ impl<'a> FunctionVerifier<'a> {
         })
     }
 
+    pub(super) fn objref_ty(&self, ty: Type) -> Option<Type> {
+        let Type::Compound(cmpd_ref) = ty else {
+            return None;
+        };
+
+        self.ctx.with_ty_store(|store| {
+            let cmpd = store.get_compound(cmpd_ref)?;
+            if let CompoundType::ObjRef(elem) = cmpd {
+                Some(*elem)
+            } else {
+                None
+            }
+        })
+    }
+
     pub(super) fn block_position_map(&self) -> FxHashMap<BlockId, usize> {
         self.block_order
             .iter()

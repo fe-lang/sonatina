@@ -10,6 +10,14 @@ super::impl_inst_build! {GetFunctionPtr, (func: FuncRef)}
 super::impl_inst_build_common! {SymAddr, build_sym_addr}
 super::impl_inst_build_common! {SymSize, build_sym_size}
 super::impl_inst_build! {Alloca, (ty: Type)}
+super::impl_inst_build! {ObjAlloc, (ty: Type)}
+super::impl_inst_build_common! {ObjProj, build_obj_proj}
+super::impl_inst_build! {ObjIndex, (object: ValueId, index: ValueId)}
+super::impl_inst_build! {ObjLoad, (object: ValueId)}
+super::impl_inst_build! {ObjStore, (object: ValueId, value: ValueId)}
+super::impl_inst_build! {ObjMaterializeStack, (object: ValueId)}
+super::impl_inst_build! {ObjMaterializeHeap, (object: ValueId)}
+super::impl_inst_build! {MemAllocDynamic, (size: ValueId)}
 super::impl_inst_build! {InsertValue, (dest: ValueId, idx: ValueId, value: ValueId)}
 super::impl_inst_build! {ExtractValue, (dest: ValueId, idx: ValueId)}
 
@@ -104,5 +112,24 @@ fn build_gep(
         Err(Box::new(Error::UnexpectedTrailingInstArg(arg.span)))
     } else {
         Ok(Gep::new(has_inst, values))
+    }
+}
+
+fn build_obj_proj(
+    ctx: &mut BuildCtx,
+    fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
+    args: &[ast::InstArg],
+    has_inst: &dyn HasInst<ObjProj>,
+) -> Result<ObjProj, Box<Error>> {
+    let mut values = SmallVec::new();
+    let mut ast_args = args.iter().peekable();
+    while ast_args.peek().is_some() {
+        values.push(super::process_arg!(ctx, fb, ast_args, ValueId));
+    }
+
+    if let Some(arg) = ast_args.next() {
+        Err(Box::new(Error::UnexpectedTrailingInstArg(arg.span)))
+    } else {
+        Ok(ObjProj::new(has_inst, values))
     }
 }

@@ -224,6 +224,134 @@ func public %bad_type() -> (i32, i1) {
 }
 
 #[test]
+fn private_objref_helpers_verify() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+type @pair = { i256, i256 };
+
+func private %make_pair(v0.i256, v1.i256) -> objref<@pair> {
+    block0:
+        v2.objref<@pair> = obj.alloc @pair;
+        v3.objref<i256> = obj.proj v2 0.i8;
+        obj.store v3 v0;
+        v4.objref<i256> = obj.proj v2 1.i8;
+        obj.store v4 v1;
+        return v2;
+}
+
+func private %sum_pair(v0.objref<@pair>) -> i256 {
+    block0:
+        v1.objref<i256> = obj.proj v0 0.i8;
+        v2.i256 = obj.load v1;
+        v3.objref<i256> = obj.proj v0 1.i8;
+        v4.i256 = obj.load v3;
+        v5.i256 = add v2 v4;
+        return v5;
+}
+
+func public %entry(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.objref<@pair> = call %make_pair v0 v1;
+        v3.i256 = call %sum_pair v2;
+        return v3;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn public_objref_signature_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+type @pair = { i256, i256 };
+
+func public %entry(v0.objref<@pair>) -> i256 {
+    block0:
+        v1.objref<i256> = obj.proj v0 0.i8;
+        v2.i256 = obj.load v1;
+        return v2;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("must not expose object references")),
+        "expected objref signature rejection, got {report}"
+    );
+}
+
+#[test]
+fn private_section_entry_objref_signature_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+type @pair = { i256, i256 };
+
+func private %entry(v0.objref<@pair>) -> i256 {
+    block0:
+        v1.objref<i256> = obj.proj v0 0.i8;
+        v2.i256 = obj.load v1;
+        return v2;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("section entry signatures must not expose object references")),
+        "expected section-entry objref rejection, got {report}"
+    );
+}
+
+#[test]
+fn bitcast_objref_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+type @pair = { i256, i256 };
+
+func private %f(v0.objref<@pair>) -> *@pair {
+    block0:
+        v1.*@pair = bitcast v0 *@pair;
+        return v1;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("bitcast does not allow object-reference types")),
+        "expected objref bitcast rejection, got {report}"
+    );
+}
+
+#[test]
 fn missing_terminator_is_reported() {
     let src = r#"
 target = "evm-ethereum-london"

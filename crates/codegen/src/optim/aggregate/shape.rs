@@ -246,11 +246,52 @@ pub fn aggregate_slice_for_gep_path(
                 path.push(u32::try_from(idx).ok()?);
                 current_ty = elem;
             }
-            CompoundType::Ptr(_) | CompoundType::Func { .. } => return None,
+            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => {
+                return None;
+            }
         }
     }
 
     aggregate_slice_for_path(module, base_pointee_ty, &path)
+}
+
+pub fn aggregate_slice_for_object_path(
+    module: &ModuleCtx,
+    root_ty: Type,
+    indices: &[ValueId],
+    dfg: &DataFlowGraph,
+) -> Option<AggregateSlice> {
+    if !is_supported_aggregate_ty(module, root_ty) {
+        return None;
+    }
+
+    let mut current_ty = root_ty;
+    let mut path: FieldPath = smallvec![];
+    for &idx_value in indices {
+        let idx = usize::try_from(const_u32(dfg, idx_value)?).ok()?;
+        match current_ty.resolve_compound(module)? {
+            CompoundType::Struct(s) => {
+                if s.packed {
+                    return None;
+                }
+                let field_ty = *s.fields.get(idx)?;
+                path.push(u32::try_from(idx).ok()?);
+                current_ty = field_ty;
+            }
+            CompoundType::Array { elem, len } => {
+                if idx >= len {
+                    return None;
+                }
+                path.push(u32::try_from(idx).ok()?);
+                current_ty = elem;
+            }
+            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => {
+                return None;
+            }
+        }
+    }
+
+    aggregate_slice_for_path(module, root_ty, &path)
 }
 
 pub fn aggregate_child_ty(module: &ModuleCtx, agg_ty: Type, idx: u32) -> Option<Type> {
@@ -258,7 +299,7 @@ pub fn aggregate_child_ty(module: &ModuleCtx, agg_ty: Type, idx: u32) -> Option<
     match agg_ty.resolve_compound(module)? {
         CompoundType::Struct(s) => (!s.packed).then_some(*s.fields.get(idx)?),
         CompoundType::Array { elem, len } => (idx < len).then_some(elem),
-        CompoundType::Ptr(_) | CompoundType::Func { .. } => None,
+        CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => None,
     }
 }
 
@@ -266,7 +307,7 @@ pub fn aggregate_child_count(module: &ModuleCtx, agg_ty: Type) -> Option<usize> 
     match agg_ty.resolve_compound(module)? {
         CompoundType::Struct(s) => (!s.packed).then_some(s.fields.len()),
         CompoundType::Array { len, .. } => Some(len),
-        CompoundType::Ptr(_) | CompoundType::Func { .. } => None,
+        CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => None,
     }
 }
 
@@ -367,7 +408,7 @@ fn aggregate_slice_info(
                 leaf_count,
             ))
         }
-        CompoundType::Ptr(_) | CompoundType::Func { .. } => None,
+        CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => None,
     }
 }
 
@@ -437,7 +478,7 @@ fn aggregate_slice_for_leaf_range_impl(
             }
             None
         }
-        CompoundType::Ptr(_) | CompoundType::Func { .. } => None,
+        CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => None,
     }
 }
 
@@ -457,7 +498,7 @@ fn flattened_leaf_count(module: &ModuleCtx, ty: Type) -> Option<usize> {
         Some(CompoundType::Array { elem, len }) => {
             flattened_leaf_count(module, elem)?.checked_mul(len)
         }
-        Some(CompoundType::Func { .. }) => None,
+        Some(CompoundType::Func { .. }) | Some(CompoundType::ObjRef(_)) => None,
         Some(CompoundType::Ptr(_)) | None => Some(1),
     }
 }
@@ -507,7 +548,7 @@ fn flatten_aggregate(
             });
             Some(())
         }
-        Some(CompoundType::Func { .. }) => None,
+        Some(CompoundType::ObjRef(_)) | Some(CompoundType::Func { .. }) => None,
     }
 }
 

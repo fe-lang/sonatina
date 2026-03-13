@@ -1326,7 +1326,7 @@ impl<'a> Elaborator<'a> {
                     let field_idx = self.func.dfg.value_imm(index)?.as_usize();
                     *data.fields.get(field_idx)?
                 }
-                CompoundType::Func { .. } => return None,
+                CompoundType::ObjRef(_) | CompoundType::Func { .. } => return None,
             };
         }
 

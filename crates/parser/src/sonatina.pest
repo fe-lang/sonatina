@@ -47,9 +47,10 @@ block_ident  = ${ "block" ~ block_number }
 block_number =  { ASCII_DIGIT+ }
 value_name   = ${ "v" ~ ASCII_DIGIT+ }
 
-type_name          =  { primitive_type | ptr_type | array_type | unit_type | struct_identifier | function_type }
+type_name          =  { primitive_type | ptr_type | objref_type | array_type | unit_type | struct_identifier | function_type }
 primitive_type     =  { "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "i1" }
 ptr_type           = ${ "*" ~ type_name }
+objref_type        = ${ "objref" ~ "<" ~ type_name ~ ">" }
 array_type         = !{ "[" ~ type_name ~ ";" ~ array_size ~ "]" }
 array_size         =  { ASCII_DIGIT+ }
 function_type      = !{ function_type_arg ~ function_ret_type }
@@ -88,7 +89,7 @@ inst_stmt   = { inst }
 
 inst            = { inst_name ~ inst_arg* }
 inst_name       = { inst_identifier }
-inst_identifier = @{ ident_start_char ~ ident_body_char* }
+inst_identifier = @{ ident_start_char ~ (ident_body_char | ".")* }
 inst_arg        = { multi_value_list | value | type_name | block_ident | value_block_map | function_identifier | embed_symbol | current_section_symbol }
 multi_value_list = { "(" ~ value ~ ("," ~ value)+ ~ ")" }
 value_block_map = { "(" ~ value ~ block_ident ~ ")" }

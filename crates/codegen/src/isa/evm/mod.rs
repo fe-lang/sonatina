@@ -25,6 +25,7 @@ use tracing::{debug_span, info_span, trace_span};
 
 use crate::{
     analysis::func_behavior,
+    cfg_edit::CleanupMode,
     critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
@@ -33,7 +34,13 @@ use crate::{
         vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
     },
     module_analysis::{CallGraph, SccBuilder},
-    optim::aggregate::{AggregateLowerToMemoryLegalize, assert_aggregate_legalized, shape},
+    optim::{
+        aggregate::{
+            AggregateExpandAbi, AggregateLowerToMemoryLegalize, AggregateScalarize,
+            ObjectLowerToMemory, assert_aggregate_legalized, shape,
+        },
+        cfg_cleanup::CfgCleanup,
+    },
     stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyBuilder},
 };
 use smallvec::{SmallVec, smallvec};
@@ -1551,6 +1558,7 @@ fn type_is_legalized_evm(ctx: &ModuleCtx, ty: Type, seen: &mut FxHashSet<Compoun
                 CompoundType::Array { elem, .. } | CompoundType::Ptr(elem) => {
                     type_is_legalized_evm(ctx, elem, seen)
                 }
+                CompoundType::ObjRef(_) => false,
                 CompoundType::Func { args, ret_tys } => args
                     .iter()
                     .chain(ret_tys.iter())
@@ -1738,7 +1746,15 @@ impl LowerBackend for EvmBackend {
 
         let _span =
             info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
+        AggregateExpandAbi::default().run(module);
+        ObjectLowerToMemory.run(module);
         legalize_evm_section(module, funcs);
+        for &func in funcs {
+            module.func_store.modify(func, |function| {
+                CfgCleanup::new(CleanupMode::Strict).run(function);
+                AggregateScalarize::default().run(function);
+            });
+        }
         for &func in funcs {
             module.func_store.view(func, |function| {
                 assert_supported_lowering_ir(func, function)
@@ -1968,7 +1984,15 @@ impl LowerBackend for EvmBackend {
         }
 
         let closure = collect_call_closure(module, std::slice::from_ref(&func));
+        AggregateExpandAbi::default().run(module);
+        ObjectLowerToMemory.run(module);
         legalize_evm_section(module, &closure);
+        for &callee in &closure {
+            module.func_store.modify(callee, |function| {
+                CfgCleanup::new(CleanupMode::Strict).run(function);
+                AggregateScalarize::default().run(function);
+            });
+        }
         module.func_store.view(func, |function| {
             assert_supported_lowering_ir(func, function)
         });
@@ -2560,6 +2584,18 @@ impl LowerBackend for EvmBackend {
 
                 emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
+            EvmInstKind::ObjAlloc(_)
+            | EvmInstKind::ObjProj(_)
+            | EvmInstKind::ObjIndex(_)
+            | EvmInstKind::ObjLoad(_)
+            | EvmInstKind::ObjStore(_)
+            | EvmInstKind::ObjMaterializeStack(_)
+            | EvmInstKind::ObjMaterializeHeap(_)
+            | EvmInstKind::MemAllocDynamic(_) => {
+                panic!(
+                    "object lowering invariant violated: object-level instruction reached EVM lowering"
+                )
+            }
 
             EvmInstKind::EvmStop(_) => basic_op(ctx, &[OpCode::STOP]),
 
@@ -2625,7 +2661,6 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::EvmStaticCall(_) => basic_op(ctx, &[OpCode::STATICCALL]),
             EvmInstKind::EvmRevert(_) => basic_op(ctx, &[OpCode::REVERT]),
             EvmInstKind::EvmSelfDestruct(_) => basic_op(ctx, &[OpCode::SELFDESTRUCT]),
-
             EvmInstKind::EvmMalloc(_) => {
                 let needs_dyn_sp_clamp = self.current_malloc_needs_dyn_sp_clamp(insn);
                 let has_persistent_mallocs = self.section_has_persistent_mallocs();
@@ -3123,6 +3158,9 @@ fn build_gep_lower_plan(ctx: &Lower<OpCode>, args: &[ValueId]) -> GepLowerPlan {
             }
             CompoundType::Func { .. } => {
                 panic!("invalid gep: indexing into function type");
+            }
+            CompoundType::ObjRef(_) => {
+                panic!("invalid gep: indexing into object-reference type");
             }
         }
     }

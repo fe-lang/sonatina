@@ -18,6 +18,7 @@ pub fn derive_inst(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
 struct InstStruct {
     struct_name: syn::Ident,
+    text_name: Option<String>,
     side_effect: Option<syn::Path>,
     is_terminator: bool,
     arity: InstAritySpec,
@@ -31,6 +32,7 @@ struct InstField {
 }
 
 struct InstAttrs {
+    text_name: Option<String>,
     side_effect: Option<syn::Path>,
     is_terminator: bool,
     arity: Option<InstAritySpec>,
@@ -218,6 +220,7 @@ impl InstAritySpec {
 impl InstStruct {
     fn new(item_struct: syn::ItemStruct) -> syn::Result<Self> {
         let InstAttrs {
+            text_name,
             side_effect,
             is_terminator,
             arity,
@@ -238,6 +241,7 @@ impl InstStruct {
 
         Ok(Self {
             struct_name: struct_ident,
+            text_name,
             side_effect,
             is_terminator,
             arity,
@@ -264,6 +268,7 @@ impl InstStruct {
     }
 
     fn check_attr(item_struct: &syn::ItemStruct) -> syn::Result<InstAttrs> {
+        let mut text_name = None;
         let mut side_effect = None;
         let mut is_terminator = false;
         let mut arity = None;
@@ -280,6 +285,29 @@ impl InstStruct {
                     }
 
                     side_effect = Some(syn::parse2(ml.tokens.clone())?);
+                }
+                if let syn::Meta::NameValue(nv) = &meta
+                    && nv.path.is_ident("text")
+                {
+                    if text_name.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            nv,
+                            "duplicate `text = ...` attribute",
+                        ));
+                    }
+
+                    let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(text),
+                        ..
+                    }) = &nv.value
+                    else {
+                        return Err(syn::Error::new_spanned(
+                            &nv.value,
+                            "expected string literal for `text = ...`",
+                        ));
+                    };
+
+                    text_name = Some(text.value());
                 }
                 if let syn::Meta::Path(path) = &meta
                     && path.is_ident("terminator")
@@ -315,6 +343,7 @@ impl InstStruct {
         }
 
         Ok(InstAttrs {
+            text_name,
             side_effect,
             is_terminator,
             arity,
@@ -432,7 +461,10 @@ impl InstStruct {
 
     fn impl_method(&self) -> proc_macro2::TokenStream {
         let struct_name = &self.struct_name;
-        let text_form = convert_to_snake(&self.struct_name.to_string());
+        let text_form = self
+            .text_name
+            .clone()
+            .unwrap_or_else(|| convert_to_snake(&self.struct_name.to_string()));
         let arity = self.arity.to_tokens();
         let ctor = self.make_ctor();
         let accessors = self.make_accessors();

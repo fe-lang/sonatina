@@ -553,7 +553,7 @@ impl MemoryAccessAnalysis {
                     total = total.checked_add(i64::from(field_offset))?;
                     current_ty = field_ty;
                 }
-                CompoundType::Func { .. } => return None,
+                CompoundType::ObjRef(_) | CompoundType::Func { .. } => return None,
             }
         }
 
