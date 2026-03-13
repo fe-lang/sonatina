@@ -14,21 +14,50 @@ func public %entry() {
         mstore v1 99.i256 i256;
         v2.i256 = evm_calldata_load 0.i32;
         (v3.i256, v4.i1) = uaddo v2 1.i256;
-        br v4 block9 block1;
+        br v4 block9 block11;
 
-    block1:
-        v5.i1 = call %is_ge v3 10.i256;
-        br v5 block8 block3;
+    block11:
+        v20.i1 = lt v3 10.i256;
+        br v20 block10 block13;
 
-    block3:
-        v8.*@pair = call %helper v1 0.i256 v3;
-        v9.*i256 = bitcast v8 *i256;
-        v10.i256 = mload v9 i256;
+    block13:
+        jump block10;
+
+    block10:
+        v23.i1 = phi (0.i1 block11) (1.i1 block13);
+        br v23 block8 block15;
+
+    block15:
+        v27.i1 = eq v3 5.i256;
+        br v27 block16 block17;
+
+    block16:
+        v32.*i8 = evm_malloc 64.i256;
+        v33.*@pair = bitcast v32 *@pair;
+        v34.*i256 = bitcast v33 *i256;
+        mstore v34 1.i256 i256;
+        v35.*i256 = gep v33 0.i256 1.i256;
+        mstore v35 42.i256 i256;
+        jump block14;
+
+    block17:
+        v37.*i8 = evm_malloc 64.i256;
+        v38.*@pair = bitcast v37 *@pair;
+        v39.*i256 = bitcast v38 *i256;
+        mstore v39 0.i256 i256;
+        v40.*i256 = gep v38 0.i256 1.i256;
+        mstore v40 0.i256 i256;
+        jump block14;
+
+    block14:
+        v42.*i256 = phi (v34 block16) (v39 block17);
+        v41.*@pair = phi (v33 block16) (v38 block17);
+        v10.i256 = mload v42 i256;
         v11.i1 = eq v10 1.i256;
         br v11 block4 block8;
 
     block4:
-        v12.*i256 = gep v8 0.i256 1.i256;
+        v12.*i256 = gep v41 0.i256 1.i256;
         v13.i256 = mload v12 i256;
         mstore 0.i256 v13 i256;
         evm_return 0.i256 32.i256;
@@ -39,51 +68,6 @@ func public %entry() {
 
     block9:
         evm_revert 0.i256 0.i256;
-}
-
-func private %is_ge(v0.i256, v1.i256) -> i1 {
-    block0:
-        v2.i1 = lt v0 v1;
-        br v2 block1 block2;
-
-    block1:
-        return 0.i1;
-
-    block2:
-        return 1.i1;
-}
-
-func private %helper(v0.*i256, v1.i256, v2.i256) -> *@pair {
-    block0:
-        v3.i256 = mload v0 i256;
-        v27.i1 = eq 5.i256 v2;
-        v28.i1 = is_zero v1;
-        v29.i1 = and v27 v28;
-        v30.i1 = eq 99.i256 v3;
-        v8.i1 = and v29 v30;
-        br v8 block1 block2;
-
-    block1:
-        v9.*i8 = evm_malloc 64.i256;
-        v10.*@pair = bitcast v9 *@pair;
-        v31.*@pair = bitcast v9 *@pair;
-        v11.*i256 = bitcast v31 *i256;
-        mstore v11 1.i256 i256;
-        v32.*@pair = bitcast v9 *@pair;
-        v12.*i256 = gep v32 0.i256 1.i256;
-        mstore v12 42.i256 i256;
-        return v10;
-
-    block2:
-        v13.*i8 = evm_malloc 64.i256;
-        v14.*@pair = bitcast v13 *@pair;
-        v33.*@pair = bitcast v13 *@pair;
-        v15.*i256 = bitcast v33 *i256;
-        mstore v15 0.i256 i256;
-        v34.*@pair = bitcast v13 *@pair;
-        v16.*i256 = gep v34 0.i256 1.i256;
-        mstore v16 0.i256 i256;
-        return v14;
 }
 
 

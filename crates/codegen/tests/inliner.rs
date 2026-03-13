@@ -89,8 +89,38 @@ func public %caller(v0.i32) -> i32 {
     let mut inliner = Inliner::new(InlinerConfig::default());
     let stats = inliner.run(module);
 
+    assert!(!stats.changed);
     assert_eq!(stats.calls_rewritten, 0);
     assert_eq!(before, dump_module(module));
+}
+
+#[test]
+fn trivial_inlining_sets_changed_flag() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %id(v0.i32) -> i32 {
+    block0:
+        return v0;
+}
+
+func public %caller(v0.i32) -> i32 {
+    block0:
+        v1.i32 = call %id v0;
+        return v1;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(InlinerConfig::default());
+    let stats = inliner.run(module);
+
+    assert!(stats.changed);
+    assert!(stats.calls_removed > 0 || stats.calls_rewritten > 0 || stats.calls_spliced > 0);
+    assert!(!dump_module(module).contains("call %id"));
 }
 
 #[test]
@@ -120,6 +150,7 @@ func public %caller(v0.i32) -> i32 {
     let stats = inliner.run(module);
 
     let dumped = dump_module(module);
+    assert!(!stats.changed);
     assert!(
         dumped.contains("call %id"),
         "NOINLINE callee should not be trivially inlined:\n{dumped}"

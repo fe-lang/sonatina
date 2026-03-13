@@ -1,4 +1,4 @@
-#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: true, evm_trace: false, opt: 1 }
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: true, evm_trace: false, opt: s }
 #! evm.case: ok
 #!   calldata: u256(4)
 #!   expect: return u256(5)

@@ -301,8 +301,8 @@ impl Pipeline {
     ///
     /// Function behavior analysis runs lazily before `Inline` and before each
     /// pass round in [`Step::FuncPasses`] that needs call attributes. Mutating
-    /// rounds mark summaries dirty again so later passes in the same step see
-    /// refreshed cross-function behavior.
+    /// rounds mark summaries dirty again, while no-op inline rounds keep the
+    /// already-analyzed summaries live for later passes.
     pub fn run(&self, module: &mut Module) {
         let _run_span = info_span!(
             "sonatina.optim.pipeline.run",
@@ -328,11 +328,11 @@ impl Pipeline {
                     }
                     let _span = debug_span!("sonatina.optim.pipeline.inline").entered();
                     let mut inliner = Inliner::new(self.inliner_config);
-                    {
+                    let stats = {
                         let _span = trace_span!("sonatina.optim.pipeline.pass.inliner").entered();
-                        inliner.run(module);
-                    }
-                    func_behavior_dirty = true;
+                        inliner.run(module)
+                    };
+                    func_behavior_dirty = stats.changed;
                 }
                 Step::FuncPasses(passes) => {
                     let _span = debug_span!(
