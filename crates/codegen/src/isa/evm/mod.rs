@@ -37,7 +37,7 @@ use crate::{
     optim::{
         aggregate::{
             AggregateExpandAbi, AggregateLowerToMemoryLegalize, AggregateScalarize,
-            ObjectLowerToMemory, assert_aggregate_legalized, shape,
+            ObjectLowerToMemory, ObjectReturnOutParam, assert_aggregate_legalized, shape,
         },
         cfg_cleanup::CfgCleanup,
     },
@@ -1747,6 +1747,7 @@ impl LowerBackend for EvmBackend {
         let _span =
             info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
         AggregateExpandAbi::default().run(module);
+        ObjectReturnOutParam.run(module);
         ObjectLowerToMemory.run(module);
         legalize_evm_section(module, funcs);
         for &func in funcs {
@@ -1985,6 +1986,7 @@ impl LowerBackend for EvmBackend {
 
         let closure = collect_call_closure(module, std::slice::from_ref(&func));
         AggregateExpandAbi::default().run(module);
+        ObjectReturnOutParam.run(module);
         ObjectLowerToMemory.run(module);
         legalize_evm_section(module, &closure);
         for &callee in &closure {

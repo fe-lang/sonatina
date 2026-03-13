@@ -1,0 +1,22 @@
+---
+source: crates/codegen/tests/object_abi.rs
+input_file: test_files/object_abi/handwritten_out_param_helper.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func private %init_pair(v0.objref<@pair>, v1.i256, v2.i256) {
+    block0:
+        v3.objref<i256> = obj.proj v0 0.i8;
+        obj.store v3 v1;
+        v4.objref<i256> = obj.proj v0 1.i8;
+        obj.store v4 v2;
+        return;
+}
+
+func private %forward_pair(v3.objref<@pair>, v0.i256, v1.i256) {
+    block0:
+        call %init_pair v3 v0 v1;
+        return;
+}

@@ -1,0 +1,25 @@
+---
+source: crates/codegen/tests/object_lowering.rs
+input_file: test_files/object_lowering/duplicate_root_helper_arg_escapes.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func private %identity(v0.*@pair) -> *@pair {
+    block0:
+        return v0;
+}
+
+func private %touch_pair(v0.*@pair, v1.*@pair) {
+    block0:
+        v2.*@pair = call %identity v1;
+        return;
+}
+
+func private %driver() {
+    block0:
+        v0.*@pair = evm_malloc 64.i256;
+        call %touch_pair v0 v0;
+        return;
+}

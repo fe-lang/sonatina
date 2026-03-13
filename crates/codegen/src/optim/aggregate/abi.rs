@@ -1,14 +1,17 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
-    Function, Signature, Type, Value, ValueId,
+    Function, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{control_flow, data, downcast},
     module::{FuncRef, Module},
-    object::Directive,
 };
 
-use super::{reconstruct::AggregateValueReconstructor, shape};
+use super::{
+    private_abi::{self, PrivateAbiPlan},
+    reconstruct::AggregateValueReconstructor,
+    shape,
+};
 
 #[derive(Clone)]
 struct TypeExpansion {
@@ -25,6 +28,16 @@ struct FuncPlan {
     new_ret_tys: SmallVec<[Type; 8]>,
 }
 
+impl PrivateAbiPlan for FuncPlan {
+    fn new_arg_tys(&self) -> &[Type] {
+        &self.new_arg_tys
+    }
+
+    fn new_ret_tys(&self) -> &[Type] {
+        &self.new_ret_tys
+    }
+}
+
 #[derive(Default)]
 pub struct AggregateExpandAbi {
     layout_cache: shape::AggregateLayoutCache,
@@ -34,14 +47,14 @@ impl AggregateExpandAbi {
     pub fn run(&mut self, module: &Module) -> bool {
         self.layout_cache.clear();
 
-        let entry_funcs = collect_entry_funcs(module);
-        let plans = self.collect_plans(module, &entry_funcs);
+        let entry_funcs = private_abi::collect_entry_funcs(module);
+        let mut plans = self.collect_plans(module, &entry_funcs);
+        private_abi::retain_higher_order_safe_plans(module, &mut plans);
         if plans.is_empty() {
             return false;
         }
 
-        self.update_signatures(module, &plans);
-        self.update_get_function_ptr_results(module, &plans);
+        let old_sigs = private_abi::rewrite_declared_signatures(module, &plans);
 
         for &func in plans.keys() {
             let plan = plans
@@ -60,6 +73,7 @@ impl AggregateExpandAbi {
             });
         }
 
+        private_abi::propagate_private_abi_types(module, &old_sigs);
         true
     }
 
@@ -138,70 +152,6 @@ impl AggregateExpandAbi {
             original_ty: ty,
             is_aggregate,
             scalar_tys,
-        }
-    }
-
-    fn update_signatures(&self, module: &Module, plans: &FxHashMap<FuncRef, FuncPlan>) {
-        for (&func, plan) in plans {
-            let sig = module
-                .ctx
-                .get_sig(func)
-                .expect("planned function should have signature");
-            module
-                .ctx
-                .declared_funcs
-                .get_mut(&func)
-                .expect("planned function signature should exist")
-                .clone_from(&Signature::new(
-                    sig.name(),
-                    sig.linkage(),
-                    &plan.new_arg_tys,
-                    &plan.new_ret_tys,
-                ));
-        }
-    }
-
-    fn update_get_function_ptr_results(
-        &self,
-        module: &Module,
-        plans: &FxHashMap<FuncRef, FuncPlan>,
-    ) {
-        if plans.is_empty() {
-            return;
-        }
-
-        let funcs = module.funcs();
-        for func in funcs {
-            module.func_store.modify(func, |function| {
-                let blocks: Vec<_> = function.layout.iter_block().collect();
-                for block in blocks {
-                    let insts: Vec<_> = function.layout.iter_inst(block).collect();
-                    for inst in insts {
-                        let Some(get_fn) = downcast::<&data::GetFunctionPtr>(
-                            function.inst_set(),
-                            function.dfg.inst(inst),
-                        ) else {
-                            continue;
-                        };
-                        if !plans.contains_key(get_fn.func()) {
-                            continue;
-                        }
-                        let Some(result) = function.dfg.inst_result(inst) else {
-                            continue;
-                        };
-                        let ty = module
-                            .ctx
-                            .get_sig(*get_fn.func())
-                            .expect("get_function_ptr callee should still have signature")
-                            .func_ptr_type(&module.ctx);
-                        function.dfg.values[result] = Value::Inst {
-                            inst,
-                            result_idx: 0,
-                            ty,
-                        };
-                    }
-                }
-            });
         }
     }
 
@@ -458,20 +408,6 @@ impl AggregateExpandAbi {
     }
 }
 
-fn collect_entry_funcs(module: &Module) -> FxHashSet<FuncRef> {
-    let mut entries = FxHashSet::default();
-    for object in module.objects.values() {
-        for section in &object.sections {
-            for directive in &section.directives {
-                if let Directive::Entry(func) = directive {
-                    entries.insert(*func);
-                }
-            }
-        }
-    }
-    entries
-}
-
 fn insert_value_before_inst(
     func: &mut Function,
     inst: sonatina_ir::InstId,
@@ -521,6 +457,15 @@ mod tests {
             .into_iter()
             .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
             .expect("function should exist")
+    }
+
+    fn lookup_declared_func(module: &Module, name: &str) -> FuncRef {
+        module
+            .ctx
+            .declared_funcs
+            .iter()
+            .find_map(|entry| (entry.value().name() == name).then_some(*entry.key()))
+            .expect("declared function should exist")
     }
 
     fn test_backend() -> EvmBackend {
@@ -650,5 +595,65 @@ object @Contract {
         let sig = module.ctx.get_sig(swap).expect("signature should exist");
         assert_eq!(sig.args(), &[Type::I256, Type::I256]);
         assert_eq!(sig.ret_tys(), &[Type::I256, Type::I256]);
+    }
+
+    #[test]
+    fn higher_order_aggregate_callback_on_external_surface_blocks_rewrite() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+declare external %takes_swap(*(@pair) -> @pair);
+
+func private %swap(v0.@pair) -> @pair {
+block0:
+    v1.i256 = extract_value v0 0.i8;
+    v2.i256 = extract_value v0 1.i8;
+    v3.@pair = insert_value undef.@pair 0.i8 v2;
+    v4.@pair = insert_value v3 1.i8 v1;
+    return v4;
+}
+
+func private %register_swap() {
+block0:
+    v0.*(@pair) -> @pair = get_function_ptr %swap;
+    call %takes_swap v0;
+    return;
+}
+"#,
+        );
+
+        AggregateExpandAbi::default().run(&module);
+
+        let report = verify_module(
+            &module,
+            &VerifierConfig::for_level(VerificationLevel::Standard),
+        );
+        assert!(
+            !report.has_errors(),
+            "aggregate ABI expansion should stay verifiable around external callback surfaces:\n{report}"
+        );
+
+        let swap = lookup_func(&module, "swap");
+        let sig = module.ctx.get_sig(swap).expect("signature should exist");
+        let pair = sig.args()[0];
+        assert_eq!(sig.args(), &[pair]);
+        assert_eq!(sig.ret_tys(), &[pair]);
+
+        let takes_swap = lookup_declared_func(&module, "takes_swap");
+        let takes_swap_sig = module
+            .ctx
+            .get_sig(takes_swap)
+            .expect("signature should exist");
+        let expected_cb = module.ctx.with_ty_store_mut(|store| {
+            let Type::Compound(func_ty) = store.make_func(&[pair], &[pair]) else {
+                unreachable!();
+            };
+            store.make_ptr(Type::Compound(func_ty))
+        });
+        assert_eq!(takes_swap_sig.args(), &[expected_cb]);
+        assert_eq!(takes_swap_sig.ret_tys(), &[]);
     }
 }

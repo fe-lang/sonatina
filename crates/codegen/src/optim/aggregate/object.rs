@@ -6,6 +6,11 @@ use sonatina_ir::{
     module::FuncRef,
 };
 
+use super::{
+    object_abi,
+    private_abi::{self, PrivateAbiPlan},
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Materialization {
     Stack,
@@ -14,9 +19,18 @@ enum Materialization {
 
 #[derive(Clone)]
 struct FuncPlan {
-    func: FuncRef,
     new_arg_tys: SmallVec<[Type; 8]>,
     new_ret_tys: SmallVec<[Type; 8]>,
+}
+
+impl PrivateAbiPlan for FuncPlan {
+    fn new_arg_tys(&self) -> &[Type] {
+        &self.new_arg_tys
+    }
+
+    fn new_ret_tys(&self) -> &[Type] {
+        &self.new_ret_tys
+    }
 }
 
 #[derive(Default)]
@@ -24,19 +38,19 @@ pub struct ObjectLowerToMemory;
 
 impl ObjectLowerToMemory {
     pub fn run(&mut self, module: &Module) -> bool {
-        let plans = self.collect_plans(module);
+        let in_place_helpers = object_abi::collect_in_place_object_helpers(module);
+        let mut plans = self.collect_plans(module);
+        private_abi::retain_higher_order_safe_plans(module, &mut plans);
         let mut changed = !plans.is_empty();
-        if !plans.is_empty() {
-            self.update_signatures(module, &plans);
-            self.update_get_function_ptr_results(module, &plans);
-        }
+        let old_sigs = private_abi::rewrite_declared_signatures(module, &plans);
 
         for func_ref in module.funcs() {
-            changed |= module
-                .func_store
-                .modify(func_ref, |function| self.rewrite_function(function));
+            changed |= module.func_store.modify(func_ref, |function| {
+                self.rewrite_function(function, &in_place_helpers)
+            });
         }
 
+        private_abi::propagate_private_abi_types(module, &old_sigs);
         changed
     }
 
@@ -68,7 +82,6 @@ impl ObjectLowerToMemory {
             plans.insert(
                 func,
                 FuncPlan {
-                    func,
                     new_arg_tys,
                     new_ret_tys,
                 },
@@ -78,72 +91,13 @@ impl ObjectLowerToMemory {
         plans
     }
 
-    fn update_signatures(&self, module: &Module, plans: &FxHashMap<FuncRef, FuncPlan>) {
-        for (&func, plan) in plans {
-            let sig = module
-                .ctx
-                .get_sig(func)
-                .expect("planned function should have signature");
-            module
-                .ctx
-                .declared_funcs
-                .get_mut(&func)
-                .expect("planned function signature should exist")
-                .clone_from(&sonatina_ir::Signature::new(
-                    sig.name(),
-                    sig.linkage(),
-                    &plan.new_arg_tys,
-                    &plan.new_ret_tys,
-                ));
-        }
-    }
-
-    fn update_get_function_ptr_results(
-        &self,
-        module: &Module,
-        plans: &FxHashMap<FuncRef, FuncPlan>,
-    ) {
-        if plans.is_empty() {
-            return;
-        }
-
-        for func in module.funcs() {
-            module.func_store.modify(func, |function| {
-                let blocks: Vec<_> = function.layout.iter_block().collect();
-                for block in blocks {
-                    let insts: Vec<_> = function.layout.iter_inst(block).collect();
-                    for inst in insts {
-                        let Some(get_fn) = downcast::<&data::GetFunctionPtr>(
-                            function.inst_set(),
-                            function.dfg.inst(inst),
-                        ) else {
-                            continue;
-                        };
-                        let Some(plan) = plans.get(get_fn.func()) else {
-                            continue;
-                        };
-                        let Some(result) = function.dfg.inst_result(inst) else {
-                            continue;
-                        };
-                        let ty = module
-                            .ctx
-                            .get_sig(plan.func)
-                            .expect("get_function_ptr callee should still have signature")
-                            .func_ptr_type(&module.ctx);
-                        function.dfg.values[result] = Value::Inst {
-                            inst,
-                            result_idx: 0,
-                            ty,
-                        };
-                    }
-                }
-            });
-        }
-    }
-
-    fn rewrite_function(&mut self, func: &mut Function) -> bool {
+    fn rewrite_function(
+        &mut self,
+        func: &mut Function,
+        in_place_helpers: &FxHashSet<FuncRef>,
+    ) -> bool {
         let mut changed = self.rewrite_value_types(func);
-        let alloc_kinds = self.collect_alloc_kinds(func);
+        let alloc_kinds = self.collect_alloc_kinds(func, in_place_helpers);
         if alloc_kinds.is_empty() && !has_object_lowering_work(func) {
             if changed {
                 func.rebuild_users();
@@ -199,22 +153,26 @@ impl ObjectLowerToMemory {
     fn collect_alloc_kinds(
         &self,
         func: &Function,
+        in_place_helpers: &FxHashSet<FuncRef>,
     ) -> FxHashMap<sonatina_ir::InstId, Materialization> {
         let mut alloc_kinds = FxHashMap::default();
 
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                let Some(obj_alloc) =
-                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
-                else {
+                if downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst)).is_none() {
                     continue;
-                };
+                }
                 let Some(result) = func.dfg.inst_result(inst) else {
                     continue;
                 };
                 alloc_kinds.insert(
                     inst,
-                    self.choose_materialization(func, result, *obj_alloc.ty()),
+                    self.choose_materialization(
+                        func,
+                        result,
+                        func.dfg.value_ty(result),
+                        in_place_helpers,
+                    ),
                 );
             }
         }
@@ -226,7 +184,8 @@ impl ObjectLowerToMemory {
         &self,
         func: &Function,
         root: ValueId,
-        root_ty: Type,
+        root_value_ty: Type,
+        in_place_helpers: &FxHashSet<FuncRef>,
     ) -> Materialization {
         let mut worklist = vec![root];
         let mut seen = FxHashSet::default();
@@ -303,6 +262,18 @@ impl ObjectLowerToMemory {
                     downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(user))
                     && call.args().contains(&value)
                 {
+                    if value == root
+                        && func.dfg.inst_results(user).is_empty()
+                        && object_abi::call_passes_object_to_in_place_helper(
+                            func.ctx(),
+                            call,
+                            value,
+                            root_value_ty,
+                            in_place_helpers,
+                        )
+                    {
+                        continue;
+                    }
                     return Materialization::Heap;
                 }
 
@@ -313,7 +284,6 @@ impl ObjectLowerToMemory {
                     return Materialization::Heap;
                 }
 
-                let _ = root_ty;
                 return Materialization::Heap;
             }
         }
@@ -514,7 +484,7 @@ mod tests {
     };
     use sonatina_ir::{
         Module,
-        inst::{control_flow, data},
+        inst::{control_flow, data, evm},
         isa::evm::Evm,
     };
     use sonatina_parser::parse_module;
@@ -651,21 +621,21 @@ block0:
     return v2;
 }
 
-func private %sum_pair(v0.objref<@pair>) -> i256 {
+func private %forward_pair(v0.i256, v1.i256) -> objref<@pair> {
 block0:
-    v1.objref<i256> = obj.proj v0 0.i8;
-    v2.i256 = obj.load v1;
-    v3.objref<i256> = obj.proj v0 1.i8;
-    v4.i256 = obj.load v3;
-    v5.i256 = add v2 v4;
-    return v5;
+    v2.objref<@pair> = call %make_pair v0 v1;
+    return v2;
 }
 
 func public %entry(v0.i256, v1.i256) -> i256 {
 block0:
-    v2.objref<@pair> = call %make_pair v0 v1;
-    v3.i256 = call %sum_pair v2;
-    return v3;
+    v2.objref<@pair> = call %forward_pair v0 v1;
+    v3.objref<i256> = obj.proj v2 0.i8;
+    v4.i256 = obj.load v3;
+    v5.objref<i256> = obj.proj v2 1.i8;
+    v6.i256 = obj.load v5;
+    v7.i256 = add v4 v6;
+    return v7;
 }
 
 object @Contract {
@@ -686,18 +656,74 @@ object @Contract {
 
         assert_no_object_ir(&module);
         let entry = lookup_func(&module, "entry");
-        module.func_store.view(entry, |func| {
+        let make_pair = lookup_func(&module, "make_pair");
+        let forward_pair = lookup_func(&module, "forward_pair");
+        let make_pair_sig = module
+            .ctx
+            .get_sig(make_pair)
+            .expect("make_pair signature should exist");
+        assert_eq!(make_pair_sig.args().len(), 3);
+        assert!(make_pair_sig.returns_unit());
+        let forward_pair_sig = module
+            .ctx
+            .get_sig(forward_pair)
+            .expect("forward_pair signature should exist");
+        assert_eq!(forward_pair_sig.args().len(), 3);
+        assert!(forward_pair_sig.returns_unit());
+
+        module.func_store.view(make_pair, |func| {
             assert!(
                 func.layout
                     .iter_block()
                     .flat_map(|block| func.layout.iter_inst(block))
-                    .any(|inst| downcast::<&control_flow::Call>(
-                        func.inst_set(),
-                        func.dfg.inst(inst)
-                    )
-                    .is_some()),
+                    .all(
+                        |inst| downcast::<&evm::EvmMalloc>(func.inst_set(), func.dfg.inst(inst))
+                            .is_none()
+                    ),
+                "make_pair should initialize the caller-provided object in place"
+            );
+        });
+        module.func_store.view(forward_pair, |func| {
+            assert!(
+                func.layout
+                    .iter_block()
+                    .flat_map(|block| func.layout.iter_inst(block))
+                    .all(
+                        |inst| downcast::<&evm::EvmMalloc>(func.inst_set(), func.dfg.inst(inst))
+                            .is_none()
+                    ),
+                "forward_pair should forward the caller-provided object without heap allocation"
+            );
+        });
+        module.func_store.view(entry, |func| {
+            let mut saw_forward_pair = false;
+            assert!(
+                func.layout
+                    .iter_block()
+                    .flat_map(|block| func.layout.iter_inst(block))
+                    .all(|inst| {
+                        assert!(
+                            downcast::<&evm::EvmMalloc>(func.inst_set(), func.dfg.inst(inst))
+                                .is_none(),
+                            "entry should keep the returned object caller-local"
+                        );
+                        let Some(call) =
+                            downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+                        else {
+                            return true;
+                        };
+                        if *call.callee() == forward_pair {
+                            saw_forward_pair = true;
+                            assert!(
+                                func.dfg.inst_results(inst).is_empty(),
+                                "rewritten forward_pair call should return through the out arg"
+                            );
+                        }
+                        true
+                    }),
                 "entry should still contain lowered calls"
             );
+            assert!(saw_forward_pair, "entry should still call forward_pair");
         });
     }
 }

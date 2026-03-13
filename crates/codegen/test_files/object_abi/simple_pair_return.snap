@@ -1,0 +1,32 @@
+---
+source: crates/codegen/tests/object_abi.rs
+input_file: test_files/object_abi/simple_pair_return.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func private %make_pair(v7.objref<@pair>, v0.i256, v1.i256) {
+    block0:
+        v3.objref<i256> = obj.proj v7 0.i8;
+        obj.store v3 v0;
+        v4.objref<i256> = obj.proj v7 1.i8;
+        obj.store v4 v1;
+        return;
+}
+
+func public %entry(v0.i256, v1.i256) -> i256 {
+    block0:
+        v6.objref<@pair> = obj.alloc @pair;
+        call %make_pair v6 v0 v1;
+        v3.objref<i256> = obj.proj v6 0.i8;
+        v4.i256 = obj.load v3;
+        return v4;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
