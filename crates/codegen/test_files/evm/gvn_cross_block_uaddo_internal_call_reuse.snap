@@ -1,0 +1,297 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/gvn_cross_block_uaddo_internal_call_reuse.sntn
+---
+evm.config: stack_reach=4 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=1
+
+object: Contract
+  section runtime: 118 bytes
+  total: 118 bytes
+
+functions:
+  entry: ir_blocks=14 ir_insts=42 vcode_ops=93 fixups=8 imm_bytes=16
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case ok: calldata_len=32 success reason=Return gas_used=21377 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=237
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+  block0 P=[] T=[]
+    // v0.*i256 = evm_malloc 32.i256;
+    - stack=[]
+      evm_malloc [] -> v0
+    // mstore v0 99.i256 i256;
+    - stack=[v0], last_use=[v0]
+      pre: [PUSH(99), SWAP1]
+      mstore [v0, 99]
+    // v2.i256 = evm_calldata_load 0.i256;
+    - stack=[]
+      pre: [PUSH(0)]
+      evm_calldata_load [0] -> v2
+    // v43.i256 = add v2 1.i256;
+    - stack=[v2]
+      pre: [PUSH(1), DUP2]
+      add [v2, 1] -> v43
+    // v44.i1 = lt v43 v2;
+    - stack=[v43, v2], last_use=[v2]
+      pre: [SWAP1, DUP2]
+      lt [v43, v2] -> v44
+    // br v44 block9 block11;
+    - stack=[v44, v43]
+      br [v44] -> [block9, block11]
+  block9 P=[] T=[]
+    inherited from block0: [v43x]
+    // evm_revert 0.i256 0.i256;
+    - stack=[v43x]
+      pre: [PUSH(0), PUSH(0)]
+      evm_revert [0, 0]
+  block11 P=[] T=[v43]
+    inherited from block0: [v43]
+    // v20.i1 = lt v43 10.i256;
+    - stack=[v43]
+      pre: [PUSH(10), DUP2]
+      lt [v43, 10] -> v20
+    // br v20 block18 block13;
+    - stack=[v20, v43]
+      br [v20] -> [block18, block13]
+  block13 P=[] T=[v43]
+    inherited from block11: [v43]
+    // jump block10;
+    - stack=[v43]
+      exit(block10): [PUSH(true)]
+      jump -> block10
+  block18 P=[] T=[v43]
+    inherited from block11: [v43]
+    // jump block10;
+    - stack=[v43]
+      exit(block10): [PUSH(false)]
+      jump -> block10
+  block10 P=[v23] T=[v43]
+    // br v23 block19 block15;
+    - stack=[v23, v43]
+      br [v23] -> [block19, block15]
+  block15 P=[] T=[v43]
+    inherited from block10: [v43]
+    // v27.i1 = eq v43 5.i256;
+    - stack=[v43], last_use=[v43]
+      pre: [PUSH(5)]
+      eq [5, v43] -> v27
+    // br v27 block16 block17;
+    - stack=[v27]
+      br [v27] -> [block16, block17]
+  block16 P=[] T=[]
+    inherited from block15: []
+    // v32.*i256 = evm_malloc 64.i256;
+    - stack=[]
+      evm_malloc [] -> v32
+    // v33.*@pair = bitcast v32 *@pair;
+    - stack=[v32]
+      bitcast [v32] -> v32
+    // v34.*i256 = bitcast v33 *i256;
+    - stack=[v32]
+      bitcast [v32] -> v32
+    // mstore v34 1.i256 i256;
+    - stack=[v32]
+      pre: [PUSH(1), DUP2]
+      mstore [v32, 1]
+    // v35.*i256 = gep v33 0.i256 1.i256;
+    - stack=[v32]
+      pre: [DUP1]
+      gep [v32, 0, 1] -> v35
+    // mstore v35 42.i256 i256;
+    - stack=[v35, v32], last_use=[v35]
+      pre: [PUSH(42), SWAP1]
+      mstore [v35, 42]
+    // jump block14;
+    - stack=[v32]
+      exit(block14): [DUP1]
+      jump -> block14
+  block17 P=[] T=[]
+    inherited from block15: []
+    // v37.*i256 = evm_malloc 64.i256;
+    - stack=[]
+      evm_malloc [] -> v37
+    // v38.*@pair = bitcast v37 *@pair;
+    - stack=[v37]
+      bitcast [v37] -> v37
+    // v39.*i256 = bitcast v38 *i256;
+    - stack=[v37]
+      bitcast [v37] -> v37
+    // mstore v39 0.i256 i256;
+    - stack=[v37]
+      pre: [PUSH(0), DUP2]
+      mstore [v37, 0]
+    // v40.*i256 = gep v38 0.i256 1.i256;
+    - stack=[v37]
+      pre: [DUP1]
+      gep [v37, 0, 1] -> v40
+    // mstore v40 0.i256 i256;
+    - stack=[v40, v37], last_use=[v40]
+      pre: [PUSH(0), SWAP1]
+      mstore [v40, 0]
+    // jump block14;
+    - stack=[v37]
+      exit(block14): [DUP1]
+      jump -> block14
+  block14 P=[v42, v41] T=[]
+    // v10.i256 = mload v42 i256;
+    - stack=[v42, v41], last_use=[v42]
+      mload [v42] -> v10
+    // v11.i1 = eq v10 1.i256;
+    - stack=[v10, v41], last_use=[v10]
+      pre: [PUSH(1)]
+      eq [1, v10] -> v11
+    // br v11 block4 block20;
+    - stack=[v11, v41]
+      br [v11] -> [block4, block20]
+  block4 P=[] T=[v41]
+    inherited from block14: [v41]
+    // v12.*i256 = gep v41 0.i256 1.i256;
+    - stack=[v41], last_use=[v41]
+      gep [v41, 0, 1] -> v12
+    // v13.i256 = mload v12 i256;
+    - stack=[v12], last_use=[v12]
+      mload [v12] -> v13
+    // mstore 0.i256 v13 i256;
+    - stack=[v13], last_use=[v13]
+      pre: [PUSH(0)]
+      mstore [0, v13]
+    // evm_return 0.i256 32.i256;
+    - stack=[]
+      pre: [PUSH(32), PUSH(0)]
+      evm_return [0, 32]
+  block20 P=[] T=[]
+    inherited from block14: [v41x]
+    // jump block8;
+    - stack=[v41x]
+      cleanup: [POP]
+      jump -> block8
+  block19 P=[] T=[]
+    inherited from block10: [v43x]
+    // jump block8;
+    - stack=[v43x]
+      cleanup: [POP]
+      jump -> block8
+  block8 P=[] T=[]
+    // mstore 0.i256 0.i256 i256;
+    - stack=[]
+      pre: [PUSH(0), PUSH(0)]
+      mstore [0, 0]
+    // evm_return 0.i256 32.i256;
+    - stack=[]
+      pre: [PUSH(32), PUSH(0)]
+      evm_return [0, 32]
+
+// func public %entry()
+entry:
+  block0:
+    JUMPDEST
+    PUSH1 0xa0 (160)  // v0.*i256 = evm_malloc 32.i256;
+    PUSH1 0x63 (99)  // mstore v0 99.i256 i256;
+    SWAP1
+    MSTORE
+    PUSH0  // v2.i256 = evm_calldata_load 0.i256;
+    CALLDATALOAD
+    PUSH1 0x1 (1)  // v43.i256 = add v2 1.i256;
+    DUP2
+    ADD
+    SWAP1  // v44.i1 = lt v43 v2;
+    DUP2
+    LT
+    ISZERO  // br v44 block9 block11;
+    PUSH1 block11
+    JUMPI
+  block9:
+    PUSH0  // evm_revert 0.i256 0.i256;
+    PUSH0
+    REVERT
+  block11:
+    JUMPDEST
+    PUSH1 0xa (10)  // v20.i1 = lt v43 10.i256;
+    DUP2
+    LT
+    PUSH1 block18  // br v20 block18 block13;
+    JUMPI
+  block13:
+    PUSH1 0x1 (1)  // jump block10;
+    PUSH0
+    SIGNEXTEND
+    PUSH1 block10
+    JUMP
+  block18:
+    JUMPDEST
+    PUSH0  // jump block10;
+  block10:
+    JUMPDEST
+    PUSH1 block19  // br v23 block19 block15;
+    JUMPI
+  block15:
+    PUSH1 0x5 (5)  // v27.i1 = eq v43 5.i256;
+    EQ
+    ISZERO  // br v27 block16 block17;
+    PUSH1 block17
+    JUMPI
+  block16:
+    PUSH1 0xa0 (160)  // v32.*i256 = evm_malloc 64.i256;
+    PUSH1 0x1 (1)  // mstore v34 1.i256 i256;
+    DUP2
+    MSTORE
+    DUP1  // v35.*i256 = gep v33 0.i256 1.i256;
+    PUSH1 0x20 (32)
+    ADD
+    PUSH1 0x2a (42)  // mstore v35 42.i256 i256;
+    SWAP1
+    MSTORE
+    DUP1  // jump block14;
+    PUSH1 block14
+    JUMP
+  block17:
+    JUMPDEST
+    PUSH1 0xa0 (160)  // v37.*i256 = evm_malloc 64.i256;
+    PUSH0  // mstore v39 0.i256 i256;
+    DUP2
+    MSTORE
+    DUP1  // v40.*i256 = gep v38 0.i256 1.i256;
+    PUSH1 0x20 (32)
+    ADD
+    PUSH0  // mstore v40 0.i256 i256;
+    SWAP1
+    MSTORE
+    DUP1  // jump block14;
+  block14:
+    JUMPDEST
+    MLOAD  // v10.i256 = mload v42 i256;
+    PUSH1 0x1 (1)  // v11.i1 = eq v10 1.i256;
+    EQ
+    ISZERO  // br v11 block4 block20;
+    PUSH1 block20
+    JUMPI
+  block4:
+    PUSH1 0x20 (32)  // v12.*i256 = gep v41 0.i256 1.i256;
+    ADD
+    MLOAD  // v13.i256 = mload v12 i256;
+    PUSH0  // mstore 0.i256 v13 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH0
+    RETURN
+  block20:
+    JUMPDEST
+    POP  // jump block8;
+    PUSH1 block8
+    JUMP
+  block19:
+    JUMPDEST
+    POP  // jump block8;
+  block8:
+    JUMPDEST
+    PUSH0  // mstore 0.i256 0.i256 i256;
+    PUSH0
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH0
+    RETURN

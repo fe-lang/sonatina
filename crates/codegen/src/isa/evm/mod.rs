@@ -51,7 +51,8 @@ use mem_effects::compute_func_mem_effects;
 pub(crate) use memory_plan::STATIC_BASE;
 use memory_plan::{
     ArenaCostModel, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan, ObjLoc, PreserveMode,
-    ProgramMemoryPlan, StableMode, WORD_BYTES, compute_program_memory_plan, topo_sort_sccs,
+    ProgramMemoryPlan, StableMode, WORD_BYTES, compute_abs_clobber_words,
+    compute_program_memory_plan, topo_sort_sccs,
 };
 use ptr_escape::{PtrEscapeSummary, compute_ptr_escape_summaries};
 use static_arena_alloc::StackObjId;
@@ -753,6 +754,7 @@ fn compute_return_escape_caller_clamp_words(
     plan: &ProgramMemoryPlan,
 ) -> FxHashMap<FuncRef, u32> {
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
+    let abs_clobber_words = compute_abs_clobber_words(module, funcs, plan);
 
     let mut callers: FxHashMap<FuncRef, FxHashSet<FuncRef>> = FxHashMap::default();
     let mut clamp_words: FxHashMap<FuncRef, u32> = FxHashMap::default();
@@ -788,13 +790,13 @@ fn compute_return_escape_caller_clamp_words(
 
             let mut next = clamp_words.get(&func).copied().unwrap_or(0);
             for caller in func_callers.iter() {
-                let caller_active_words = plan
-                    .funcs
+                let caller_clobber_words = abs_clobber_words
                     .get(caller)
-                    .map(FuncMemPlan::active_abs_words)
+                    .copied()
+                    .or_else(|| plan.funcs.get(caller).map(FuncMemPlan::active_abs_words))
                     .unwrap_or(0);
                 let caller_transitive_words = clamp_words.get(caller).copied().unwrap_or(0);
-                next = next.max(caller_active_words.max(caller_transitive_words));
+                next = next.max(caller_clobber_words.max(caller_transitive_words));
             }
 
             let cur = clamp_words.get(&func).copied().unwrap_or(0);
@@ -2531,8 +2533,8 @@ impl LowerBackend for EvmBackend {
                     // static arena state up to the section dynamic base.
                     future_words = future_words.max(dyn_base_words);
                 } else if escape_kinds.is_return_only() {
-                    // Return-only escapes only need to survive the transitive caller set of this
-                    // function, not unrelated functions in the section.
+                    // Return-only escapes only need to survive the transitive caller-clobber set
+                    // of this function, not unrelated functions in the section.
                     future_words = future_words.max(mem_plan.return_escape_caller_abs_words);
                 }
 
@@ -3648,6 +3650,7 @@ fn prepare_stackify_analysis(
         alloc,
         inst_liveness,
         block_order,
+        value_aliases,
     }
 }
 
@@ -3743,13 +3746,21 @@ mod tests {
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, TargetTriple, Vendor};
 
+    struct PlanTestCtx {
+        module: sonatina_ir::Module,
+        funcs: Vec<FuncRef>,
+        names: FxHashMap<String, FuncRef>,
+        plan: ProgramMemoryPlan,
+        analyses: FxHashMap<FuncRef, memory_plan::FuncAnalysis>,
+    }
+
     struct DynSpTestCtx {
         module: sonatina_ir::Module,
         names: FxHashMap<String, FuncRef>,
         plan: DynSpPlan,
     }
 
-    fn dyn_sp_plan_from_src(src: &str) -> DynSpTestCtx {
+    fn plan_test_ctx_from_src(src: &str) -> PlanTestCtx {
         let parsed = parse_module(src).expect("module parses");
         let funcs = parsed.module.funcs();
         let isa = Evm::new(TargetTriple {
@@ -3783,6 +3794,13 @@ mod tests {
                         alloc: StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute(),
                         inst_liveness,
                         block_order: dom.rpo().to_vec(),
+                        value_aliases: {
+                            let mut value_aliases = SecondaryMap::new();
+                            for value in function.dfg.value_ids() {
+                                value_aliases[value] = Some(value);
+                            }
+                            value_aliases
+                        },
                     },
                 );
             });
@@ -3796,7 +3814,33 @@ mod tests {
             &isa,
             &ArenaCostModel::default(),
         );
-        let section_entry = parsed
+
+        let mut names: FxHashMap<String, FuncRef> = FxHashMap::default();
+        for &func in &funcs {
+            let name = parsed
+                .module
+                .ctx
+                .func_sig(func, |sig| sig.name().to_string());
+            names.insert(name, func);
+        }
+
+        PlanTestCtx {
+            module: parsed.module,
+            funcs,
+            names,
+            plan,
+            analyses,
+        }
+    }
+
+    fn dyn_sp_plan_from_src(src: &str) -> DynSpTestCtx {
+        let ctx = plan_test_ctx_from_src(src);
+        let isa = Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        });
+        let section_entry = ctx
             .module
             .objects
             .values()
@@ -3813,28 +3857,19 @@ mod tests {
                         })
                 })
             })
-            .unwrap_or(funcs[0]);
+            .unwrap_or(ctx.funcs[0]);
         let dyn_sp_plan = compute_dyn_sp_plan(
-            &parsed.module,
-            &funcs,
+            &ctx.module,
+            &ctx.funcs,
             section_entry,
-            &plan,
-            &analyses,
+            &ctx.plan,
+            &ctx.analyses,
             &isa,
         );
 
-        let mut names: FxHashMap<String, FuncRef> = FxHashMap::default();
-        for &func in &funcs {
-            let name = parsed
-                .module
-                .ctx
-                .func_sig(func, |sig| sig.name().to_string());
-            names.insert(name, func);
-        }
-
         DynSpTestCtx {
-            module: parsed.module,
-            names,
+            module: ctx.module,
+            names: ctx.names,
             plan: dyn_sp_plan,
         }
     }
@@ -3918,6 +3953,82 @@ block2:
                 .is_none_or(FxHashSet::is_empty)
         );
         assert!(ctx.plan.entry_live_frame[&f]);
+    }
+
+    #[test]
+    fn return_escape_clamp_uses_caller_transitive_clobber_bound() {
+        let ctx = plan_test_ctx_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %sum8(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256, v7.i256) -> i256 {
+block0:
+    v8.i256 = add v0 v1;
+    v9.i256 = add v2 v3;
+    v10.i256 = add v4 v5;
+    v11.i256 = add v6 v7;
+    v12.i256 = add v8 v9;
+    v13.i256 = add v10 v11;
+    v14.i256 = add v12 v13;
+    return v14;
+}
+
+func public %spill(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256, v7.i256) -> i256 {
+block1:
+    v8.i256 = add v0 v1;
+    v9.i256 = add v2 v3;
+    v10.i256 = add v4 v5;
+    v11.i256 = add v6 v7;
+    v12.i256 = add v8 v9;
+    v13.i256 = add v10 v11;
+    v14.i256 = add v12 v13;
+    jump block2;
+
+block2:
+    v15.i256 = phi (v14 block1) (v19 block2);
+    v16.i256 = call %sum8 v0 v1 v2 v3 v4 v5 v6 v7;
+    v17.i256 = call %sum8 v8 v9 v10 v11 v12 v13 v14 v15;
+    v18.i256 = add v16 v17;
+    v19.i256 = add v7 v18;
+    v20.i1 = gt v19 1000.i256;
+    br v20 block3 block2;
+
+block3:
+    return v18;
+}
+
+func public %mk() -> *i256 {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.*i256 = bitcast v0 *i256;
+    mstore v1 111.i256 i256;
+    return v1;
+}
+
+func public %main(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256, v7.i256) -> i256 {
+block0:
+    v8.*i256 = call %mk;
+    v9.i256 = call %spill v0 v1 v2 v3 v4 v5 v6 v7;
+    v10.i256 = mload v8 i256;
+    v11.i256 = add v9 v10;
+    return v11;
+}
+"#,
+        );
+
+        let mk = ctx.names["mk"];
+        let main = ctx.names["main"];
+        let abs_clobber_words = compute_abs_clobber_words(&ctx.module, &ctx.funcs, &ctx.plan);
+        let clamp_words =
+            compute_return_escape_caller_clamp_words(&ctx.module, &ctx.funcs, &ctx.plan);
+        let main_active_words = ctx.plan.funcs[&main].active_abs_words();
+        let main_clobber_words = abs_clobber_words[&main];
+
+        assert!(
+            main_clobber_words > main_active_words,
+            "test setup requires a caller whose future callee clobber exceeds its own active frame"
+        );
+        assert_eq!(clamp_words[&mk], main_clobber_words);
     }
 
     #[test]
@@ -4299,6 +4410,13 @@ block0:
                         alloc,
                         inst_liveness,
                         block_order,
+                        value_aliases: {
+                            let mut value_aliases = SecondaryMap::new();
+                            for value in function.dfg.value_ids() {
+                                value_aliases[value] = Some(value);
+                            }
+                            value_aliases
+                        },
                     },
                 );
             });
@@ -4459,6 +4577,13 @@ block2:
                         alloc,
                         inst_liveness,
                         block_order,
+                        value_aliases: {
+                            let mut value_aliases = SecondaryMap::new();
+                            for value in function.dfg.value_ids() {
+                                value_aliases[value] = Some(value);
+                            }
+                            value_aliases
+                        },
                     },
                 );
             });

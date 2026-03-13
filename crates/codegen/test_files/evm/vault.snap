@@ -96,7 +96,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=559449 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=538449
+  case ok: calldata_len=0 success reason=Return gas_used=559473 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=538473
 
 
 --------------- DEBUG ---------------
@@ -2240,13 +2240,13 @@ runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2:
     MSTORE
     PUSH1 0x40 (64)  // v23.*i256 = evm_malloc 96.i256;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH1 0xdf (223)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH1 0xe0 (224)
     JUMPDEST
     DUP1
     PUSH1 0x60 (96)

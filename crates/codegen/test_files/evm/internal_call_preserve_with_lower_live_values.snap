@@ -1,0 +1,231 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/internal_call_preserve_with_lower_live_values.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 98 bytes
+  total: 98 bytes
+
+functions:
+  entry: ir_blocks=3 ir_insts=11 vcode_ops=44 fixups=5 imm_bytes=6
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  is_lt: ir_blocks=3 ir_insts=4 vcode_ops=14 fixups=1 imm_bytes=1
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  helper: ir_blocks=3 ir_insts=8 vcode_ops=22 fixups=1 imm_bytes=4
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case ok: calldata_len=32 success reason=Return gas_used=21355 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=215
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+  block0 P=[] T=[]
+    // v0.i256 = evm_calldata_load 0.i256;
+    - stack=[]
+      pre: [PUSH(0)]
+      evm_calldata_load [0] -> v0
+    // v1.i256 = add v0 1.i256;
+    - stack=[v0]
+      pre: [PUSH(1), DUP2]
+      add [v0, 1] -> v1
+    // v2.i256 = add v0 3.i256;
+    - stack=[v1, v0]
+      pre: [PUSH(3), DUP3]
+      add [v0, 3] -> v2
+    // v3.i256 = add v0 4.i256;
+    - stack=[v2, v1, v0], last_use=[v0]
+      pre: [SWAP2, PUSH(4)]
+      add [4, v0] -> v3
+    // v4.i1 = call %is_lt v1 10.i256;
+    - stack=[v3, v1, v2]
+      pre: [DUP2, PUSH(10), PUSH_CONT, SWAP2]
+      call [10, v1] -> v4
+    // br v4 block1 block2;
+    - stack=[v4, v3, v1, v2]
+      br [v4] -> [block1, block2]
+  block1 P=[] T=[v3, v1, v2]
+    inherited from block0: [v3, v1, v2]
+    // v5.i256 = call %helper v1 v2 v3;
+    - stack=[v3, v1, v2], last_use=[v1, v2, v3]
+      pre: [SWAP1, SWAP2, PUSH_CONT, SWAP3]
+      call [v2, v3, v1] -> v5
+    // mstore 0.i256 v5 i256;
+    - stack=[v5], last_use=[v5]
+      pre: [PUSH(0)]
+      mstore [0, v5]
+    // evm_return 0.i256 32.i256;
+    - stack=[]
+      pre: [PUSH(32), PUSH(0)]
+      evm_return [0, 32]
+  block2 P=[] T=[]
+    inherited from block0: [v3x, v1x, v2x]
+    // mstore 0.i256 0.i256 i256;
+    - stack=[v3x, v1x, v2x]
+      cleanup: [POP, POP, POP]
+      pre: [PUSH(0), PUSH(0)]
+      mstore [0, 0]
+    // evm_return 0.i256 32.i256;
+    - stack=[]
+      pre: [PUSH(32), PUSH(0)]
+      evm_return [0, 32]
+
+// func private %is_lt(v0.i256, v1.i256) -> i1
+  block0 P=[v0, v1] T=[]
+    // v2.i1 = lt v0 v1;
+    - stack=[v0, v1, <RET>], last_use=[v0, v1]
+      lt [v0, v1] -> v2
+    // br v2 block1 block2;
+    - stack=[v2, <RET>]
+      br [v2] -> [block1, block2]
+  block1 P=[] T=[]
+    inherited from block0: [<RET>]
+    // return 1.i1;
+    - stack=[<RET>]
+      return: [PUSH(true)]
+      return [true]
+  block2 P=[] T=[]
+    inherited from block0: [<RET>]
+    // return 0.i1;
+    - stack=[<RET>]
+      return: [PUSH(false)]
+      return [false]
+
+// func private %helper(v0.i256, v1.i256, v2.i256) -> i256
+  block0 P=[v0, v1, v2] T=[]
+    // v3.i1 = eq v0 5.i256;
+    - stack=[v0, v1, v2, <RET>], last_use=[v0]
+      pre: [PUSH(5)]
+      eq [5, v0] -> v3
+    // v4.i1 = eq v1 7.i256;
+    - stack=[v3, v1, v2, <RET>], last_use=[v1]
+      pre: [SWAP1, PUSH(7)]
+      eq [7, v1] -> v4
+    // v5.i1 = eq v2 8.i256;
+    - stack=[v4, v3, v2, <RET>], last_use=[v2]
+      pre: [SWAP2, PUSH(8)]
+      eq [8, v2] -> v5
+    // v6.i1 = and v3 v4;
+    - stack=[v5, v3, v4, <RET>], last_use=[v3, v4]
+      pre: [SWAP2]
+      and [v4, v3] -> v6
+    // v7.i1 = and v6 v5;
+    - stack=[v6, v5, <RET>], last_use=[v5, v6]
+      and [v6, v5] -> v7
+    // br v7 block1 block2;
+    - stack=[v7, <RET>]
+      br [v7] -> [block1, block2]
+  block1 P=[] T=[]
+    inherited from block0: [<RET>]
+    // return 42.i256;
+    - stack=[<RET>]
+      return: [PUSH(42)]
+      return [42]
+  block2 P=[] T=[]
+    inherited from block0: [<RET>]
+    // return 0.i256;
+    - stack=[<RET>]
+      return: [PUSH(0)]
+      return [0]
+
+// func public %entry()
+entry:
+  block0:
+    JUMPDEST
+    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
+    CALLDATALOAD
+    PUSH1 0x1 (1)  // v1.i256 = add v0 1.i256;
+    DUP2
+    ADD
+    PUSH1 0x3 (3)  // v2.i256 = add v0 3.i256;
+    DUP3
+    ADD
+    SWAP2  // v3.i256 = add v0 4.i256;
+    PUSH1 0x4 (4)
+    ADD
+    DUP2  // v4.i1 = call %is_lt v1 10.i256;
+    PUSH1 0xa (10)
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    ISZERO  // br v4 block1 block2;
+    PUSH1 block2
+    JUMPI
+  block1:
+    SWAP1  // v5.i256 = call %helper v1 v2 v3;
+    SWAP2
+    PUSH1 `pc + (4)`
+    SWAP3
+    PUSH1 FuncRef(2)
+    JUMP
+    JUMPDEST
+    PUSH0  // mstore 0.i256 v5 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH0
+    RETURN
+  block2:
+    JUMPDEST
+    POP  // mstore 0.i256 0.i256 i256;
+    POP
+    POP
+    PUSH0
+    PUSH0
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH0
+    RETURN
+
+// func private %is_lt(v0.i256, v1.i256) -> i1
+is_lt:
+  block0:
+    JUMPDEST
+    LT  // v2.i1 = lt v0 v1;
+    ISZERO  // br v2 block1 block2;
+    PUSH1 block2
+    JUMPI
+  block1:
+    PUSH1 0x1 (1)  // return 1.i1;
+    PUSH0
+    SIGNEXTEND
+    SWAP1
+    JUMP
+  block2:
+    JUMPDEST
+    PUSH0  // return 0.i1;
+    SWAP1
+    JUMP
+
+// func private %helper(v0.i256, v1.i256, v2.i256) -> i256
+helper:
+  block0:
+    JUMPDEST
+    PUSH1 0x5 (5)  // v3.i1 = eq v0 5.i256;
+    EQ
+    SWAP1  // v4.i1 = eq v1 7.i256;
+    PUSH1 0x7 (7)
+    EQ
+    SWAP2  // v5.i1 = eq v2 8.i256;
+    PUSH1 0x8 (8)
+    EQ
+    SWAP2  // v6.i1 = and v3 v4;
+    AND
+    AND  // v7.i1 = and v6 v5;
+    ISZERO  // br v7 block1 block2;
+    PUSH1 block2
+    JUMPI
+  block1:
+    PUSH1 0x2a (42)  // return 42.i256;
+    SWAP1
+    JUMP
+  block2:
+    JUMPDEST
+    PUSH0  // return 0.i256;
+    SWAP1
+    JUMP

@@ -1,0 +1,51 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/gvn_cross_block_tuple_call_reuse.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func public %entry() {
+    block0:
+        v0.*i8 = evm_malloc 32.i256;
+        v1.*i256 = bitcast v0 *i256;
+        mstore v1 99.i256 i256;
+        v2.i256 = evm_calldata_load 0.i32;
+        v3.i256 = and v2 1.i256;
+        v4.i1 = eq v3 0.i256;
+        br v4 block1 block8;
+
+    block1:
+        (v5.i256, v6.i1) = uaddo v2 1.i256;
+        br v6 block9 block2;
+
+    block2:
+        v7.i1 = eq v5 5.i256;
+        br v7 block12 block8;
+
+    block12:
+        v29.*i8 = evm_malloc 64.i256;
+        v30.*@pair = bitcast v29 *@pair;
+        v31.*i256 = bitcast v30 *i256;
+        mstore v31 1.i256 i256;
+        v32.*i256 = gep v30 0.i256 1.i256;
+        mstore v32 42.i256 i256;
+        mstore 0.i256 42.i256 i256;
+        evm_return 0.i256 32.i256;
+
+    block8:
+        mstore 0.i256 0.i256 i256;
+        evm_return 0.i256 32.i256;
+
+    block9:
+        evm_revert 0.i256 0.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

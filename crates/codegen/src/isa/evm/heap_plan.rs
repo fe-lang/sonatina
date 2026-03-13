@@ -133,14 +133,16 @@ fn compute_future_bounds_for_func(
     }
 
     fn live_bound(
-        inst_liveness: &crate::liveness::InstLiveness,
+        analysis: &FuncAnalysis,
         value_alloca_bound: &SecondaryMap<ValueId, u32>,
         value_spill_bound: &SecondaryMap<ValueId, u32>,
         inst: InstId,
     ) -> u32 {
-        inst_liveness
+        analysis
+            .inst_liveness
             .live_out(inst)
             .iter()
+            .map(|v| analysis.canonicalize_value(v))
             .map(|v| value_alloca_bound[v].max(value_spill_bound[v]))
             .max()
             .unwrap_or(0)
@@ -158,7 +160,7 @@ fn compute_future_bounds_for_func(
         for inst in function.layout.iter_inst(block) {
             bound = bound.max(call_bound(ctx, function, inst));
             bound = bound.max(live_bound(
-                &ctx.analysis.inst_liveness,
+                ctx.analysis,
                 &value_alloca_bound,
                 &value_spill_bound,
                 inst,
@@ -192,7 +194,7 @@ fn compute_future_bounds_for_func(
         for inst in insts.into_iter().rev() {
             bound = bound.max(call_bound(ctx, function, inst));
             bound = bound.max(live_bound(
-                &ctx.analysis.inst_liveness,
+                ctx.analysis,
                 &value_alloca_bound,
                 &value_spill_bound,
                 inst,

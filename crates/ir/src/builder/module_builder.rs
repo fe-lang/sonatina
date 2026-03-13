@@ -202,7 +202,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        Linkage, ObjectName,
+        FuncEffectSummary, Linkage, ObjectName,
         builder::test_util::{test_isa, test_module_builder},
         inst::{
             SideEffect,
@@ -316,6 +316,45 @@ mod tests {
         assert_eq!(new_ref, refs[3]);
         assert!(!builder.ctx.has_func_attrs(new_ref));
         assert!(!builder.ctx.has_func_hints(new_ref));
+    }
+
+    #[test]
+    fn test_effect_summary_and_legacy_attr_views_stay_consistent() {
+        let builder = test_module_builder();
+        let callee = builder
+            .declare_function(Signature::new_unit("callee", Linkage::Private, &[]))
+            .unwrap();
+
+        assert_eq!(builder.ctx.func_attrs(callee), FuncAttrs::empty());
+        assert!(!builder.ctx.has_func_attrs(callee));
+        assert_eq!(
+            builder.ctx.func_effects(callee),
+            FuncEffectSummary::unknown_call()
+        );
+        assert!(!builder.ctx.has_func_effects(callee));
+
+        let effects = FuncEffectSummary {
+            may_read_unknown: true,
+            will_return: true,
+            will_terminate: true,
+            ..FuncEffectSummary::default()
+        };
+        builder.ctx.set_func_effects(callee, effects.clone());
+
+        assert_eq!(builder.ctx.func_effects(callee), effects);
+        assert!(builder.ctx.has_func_effects(callee));
+        assert_eq!(builder.ctx.func_attrs(callee), effects.to_legacy_attrs());
+        assert!(builder.ctx.has_func_attrs(callee));
+
+        builder.ctx.clear_func_effects(callee);
+
+        assert_eq!(builder.ctx.func_attrs(callee), FuncAttrs::empty());
+        assert!(!builder.ctx.has_func_attrs(callee));
+        assert_eq!(
+            builder.ctx.func_effects(callee),
+            FuncEffectSummary::unknown_call()
+        );
+        assert!(!builder.ctx.has_func_effects(callee));
     }
 
     #[test]

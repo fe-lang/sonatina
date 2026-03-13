@@ -114,9 +114,10 @@ impl Step {
 /// # Analysis lifecycle
 ///
 /// Each per-function pass that requires analyses (CFG, dominator tree, loop
-/// tree) recomputes them from the current IR state. Allocated storage is
-/// reused within a function's pass sequence to avoid repeated allocation,
-/// but the data is always fresh.
+/// tree) recomputes them from the current IR state. Standalone
+/// [`run_func_passes`] calls reuse analysis storage within one function's pass
+/// sequence; module pipelines execute pass-major function rounds so
+/// cross-function behavior summaries stay fresh between passes.
 pub struct Pipeline {
     steps: Vec<Step>,
     /// Configuration for all [`Step::Inline`] steps in this pipeline.
@@ -155,18 +156,6 @@ fn pass_needs_func_behavior(pass: Pass) -> bool {
     )
 }
 
-fn func_passes_need_func_behavior(passes: &[Pass]) -> bool {
-    passes.iter().copied().any(pass_needs_func_behavior)
-}
-
-fn step_needs_func_behavior(step: &Step) -> bool {
-    match step {
-        Step::Inline => true,
-        Step::FuncPasses(passes) => func_passes_need_func_behavior(passes),
-        Step::DeadFuncElim => false,
-    }
-}
-
 fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
     matches!(
         pass,
@@ -180,13 +169,6 @@ fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
             | Pass::Egraph
             | Pass::Gvn
     )
-}
-
-fn step_may_invalidate_func_behavior(passes: &[Pass]) -> bool {
-    passes
-        .iter()
-        .copied()
-        .any(pass_may_invalidate_func_behavior)
 }
 
 fn size_inliner_config() -> InlinerConfig {
@@ -317,12 +299,10 @@ impl Pipeline {
     /// directly; [`Step::FuncPasses`] parallelizes across functions via
     /// `FuncStore::par_for_each`.
     ///
-    /// Function behavior analysis runs lazily before each inline/pass round
-    /// that needs call attributes, and is marked dirty again after mutating
-    /// rounds. This keeps attrs fresh without recomputing before every step.
-    ///
-    /// The invalidation boundary is per [`Step::FuncPasses`], because function
-    /// rounds execute function-major in parallel.
+    /// Function behavior analysis runs lazily before `Inline` and before each
+    /// pass round in [`Step::FuncPasses`] that needs call attributes. Mutating
+    /// rounds mark summaries dirty again, while no-op inline rounds keep the
+    /// already-analyzed summaries live for later passes.
     pub fn run(&self, module: &mut Module) {
         let _run_span = info_span!(
             "sonatina.optim.pipeline.run",
@@ -339,20 +319,20 @@ impl Pipeline {
                 step = step.as_str()
             )
             .entered();
-            if func_behavior_dirty && step_needs_func_behavior(step) {
-                let _span = trace_span!("sonatina.optim.pipeline.func_behavior_analyze").entered();
-                func_behavior::analyze_module(module);
-                func_behavior_dirty = false;
-            }
             match step {
                 Step::Inline => {
+                    if func_behavior_dirty {
+                        let _span =
+                            trace_span!("sonatina.optim.pipeline.func_behavior_analyze").entered();
+                        func_behavior::analyze_module(module);
+                    }
                     let _span = debug_span!("sonatina.optim.pipeline.inline").entered();
                     let mut inliner = Inliner::new(self.inliner_config);
-                    {
+                    let stats = {
                         let _span = trace_span!("sonatina.optim.pipeline.pass.inliner").entered();
-                        inliner.run(module);
-                    }
-                    func_behavior_dirty = true;
+                        inliner.run(module)
+                    };
+                    func_behavior_dirty = stats.changed;
                 }
                 Step::FuncPasses(passes) => {
                     let _span = debug_span!(
@@ -360,16 +340,18 @@ impl Pipeline {
                         pass_count = passes.len()
                     )
                     .entered();
-                    module.func_store.par_for_each(|func_ref, func| {
-                        let _span = debug_span!(
-                            "sonatina.optim.pipeline.function",
-                            func_ref = func_ref.as_u32()
-                        )
-                        .entered();
-                        run_func_passes(passes, func);
-                    });
-                    if step_may_invalidate_func_behavior(passes) {
-                        func_behavior_dirty = true;
+                    for &pass in passes {
+                        if func_behavior_dirty && pass_needs_func_behavior(pass) {
+                            let _span =
+                                trace_span!("sonatina.optim.pipeline.func_behavior_analyze")
+                                    .entered();
+                            func_behavior::analyze_module(module);
+                            func_behavior_dirty = false;
+                        }
+                        run_module_pass(pass, module);
+                        if pass_may_invalidate_func_behavior(pass) {
+                            func_behavior_dirty = true;
+                        }
                     }
                 }
                 Step::DeadFuncElim => {
@@ -392,8 +374,7 @@ impl Default for Pipeline {
 
 /// Run a sequence of per-function passes on a single function.
 ///
-/// This is the building block for [`Step::FuncPasses`] and is also useful
-/// for testing individual pass sequences without a full module.
+/// This is useful for testing individual pass sequences without a full module.
 ///
 /// This helper cannot run module-level analyses. Callers that include
 /// attribute-dependent passes must ensure function attrs are computed first.
@@ -407,6 +388,19 @@ pub fn run_func_passes(passes: &[Pass], func: &mut Function) {
     for &pass in passes {
         run_pass(pass, func, &mut ctx);
     }
+}
+
+fn run_module_pass(pass: Pass, module: &Module) {
+    let _span = debug_span!("sonatina.optim.pipeline.pass_round", pass = pass.as_str()).entered();
+    module.func_store.par_for_each(|func_ref, func| {
+        let _span = debug_span!(
+            "sonatina.optim.pipeline.function",
+            func_ref = func_ref.as_u32()
+        )
+        .entered();
+        let mut ctx = PassContext::default();
+        run_pass(pass, func, &mut ctx);
+    });
 }
 
 /// Reusable analysis allocations for a single pass sequence on one function.
@@ -620,6 +614,56 @@ mod tests {
         let func_ref = module.funcs()[0];
         module.func_store.modify(func_ref, |func| {
             run_func_passes(&[Pass::CfgCleanup, Pass::Sccp, Pass::Egraph], func);
+        });
+    }
+
+    #[test]
+    fn func_passes_refresh_func_behavior_between_passes() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %exit_now() {
+    block0:
+        br 1.i1 block1 block2;
+
+    block1:
+        evm_return 0.i256 0.i256;
+
+    block2:
+        return;
+}
+
+func private %caller() {
+    block0:
+        call %exit_now;
+        return;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let mut pipeline = Pipeline::new();
+        pipeline.add_step(Step::FuncPasses(vec![
+            Pass::CfgCleanup,
+            Pass::Sccp,
+            Pass::CfgCleanup,
+        ]));
+        pipeline.run(&mut module);
+
+        let caller = module
+            .funcs()
+            .into_iter()
+            .find(|func_ref| module.ctx.func_sig(*func_ref, |sig| sig.name() == "caller"))
+            .expect("caller should exist");
+        module.func_store.view(caller, |func| {
+            let dumped = FuncWriter::new(caller, func).dump_string();
+            assert!(
+                dumped.contains("unreachable;"),
+                "caller should be trimmed after a now-noreturn call:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("return;"),
+                "return after noreturn call should be removed:\n{dumped}"
+            );
         });
     }
 

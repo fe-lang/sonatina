@@ -88,6 +88,8 @@ impl Default for InlinerConfig {
 
 #[derive(Default)]
 pub struct InlineStats {
+    /// Whether any inline transformation mutated the module.
+    pub changed: bool,
     pub calls_removed: usize,
     pub calls_rewritten: usize,
     pub calls_spliced: usize,
@@ -123,6 +125,7 @@ impl Inliner {
     pub fn run(&mut self, module: &mut Module) -> InlineStats {
         const MAX_ITERS: usize = 8;
         let mut stats = InlineStats::default();
+        let mut any_changed = false;
 
         let mut total_growth = 0usize;
         let mut inline_depth_by_func: FxHashMap<FuncRef, usize> = FxHashMap::default();
@@ -360,9 +363,11 @@ impl Inliner {
                 break;
             }
 
+            any_changed = true;
             iter += 1;
         }
 
+        stats.changed = any_changed;
         stats
     }
 }

@@ -309,11 +309,11 @@ pub(crate) fn compute_func_stack_objects(
 
     let spill_intervals = compute_spill_intervals(
         function,
+        analysis,
         ctx.isa,
         &inst_order,
         &inst_pos,
         &block_end_pos,
-        &analysis.inst_liveness,
         &spilled_values,
     );
 
@@ -422,6 +422,7 @@ pub(crate) fn compute_func_stack_objects(
             }
 
             function.dfg.inst(inst).for_each_value(&mut |v| {
+                let v = analysis.canonicalize_value(v);
                 if let Some(id) = spill_obj[v]
                     && let Some(obj) = obj_index.get(&id).and_then(|idx| objects.get_mut(*idx))
                 {
@@ -471,13 +472,18 @@ pub(crate) fn compute_func_stack_objects(
             let pos = inst_pos.get(&inst).copied().unwrap_or_default();
             let arg_count = u8::try_from(call.args().len()).expect("call arg count too large");
             let call_results = function.dfg.inst_results(inst);
+            let canonical_call_results: FxHashSet<ValueId> = call_results
+                .iter()
+                .map(|&value| analysis.canonicalize_value(value))
+                .collect();
             let result_count =
                 u8::try_from(call_results.len()).expect("call result count too large");
 
             let mut set: FxHashSet<StackObjId> = FxHashSet::default();
             let mut roots: FxHashSet<InstId> = FxHashSet::default();
             for v in analysis.inst_liveness.live_out(inst).iter() {
-                if call_results.contains(&v) {
+                let v = analysis.canonicalize_value(v);
+                if canonical_call_results.contains(&v) {
                     continue;
                 }
 
@@ -652,11 +658,11 @@ pub(crate) fn build_func_object_layout(
 
 fn compute_spill_intervals(
     function: &Function,
+    analysis: &FuncAnalysis,
     isa: &Evm,
     inst_order: &[InstId],
     inst_pos: &FxHashMap<InstId, u32>,
     block_end_pos: &FxHashMap<BlockId, u32>,
-    inst_liveness: &InstLiveness,
     spilled: &BitSet<ValueId>,
 ) -> FxHashMap<ValueId, LiveInterval> {
     let mut start: FxHashMap<ValueId, u32> = FxHashMap::default();
@@ -679,20 +685,23 @@ fn compute_spill_intervals(
         let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
         if let EvmInstKind::Phi(phi) = data {
             for (val, pred) in phi.args().iter() {
-                if spilled.contains(*val) {
+                let val = analysis.canonicalize_value(*val);
+                if spilled.contains(val) {
                     let use_pos = block_end_pos.get(pred).copied().unwrap_or_default();
-                    end.entry(*val).and_modify(|e| *e = (*e).max(use_pos));
+                    end.entry(val).and_modify(|e| *e = (*e).max(use_pos));
                 }
             }
         } else {
             function.dfg.inst(inst).for_each_value(&mut |v| {
+                let v = analysis.canonicalize_value(v);
                 if spilled.contains(v) {
                     end.entry(v).and_modify(|e| *e = (*e).max(pos));
                 }
             });
         }
 
-        for v in inst_liveness.live_out(inst).iter() {
+        for v in analysis.inst_liveness.live_out(inst).iter() {
+            let v = analysis.canonicalize_value(v);
             if spilled.contains(v) {
                 end.entry(v).and_modify(|e| *e = (*e).max(pos));
             }
@@ -1070,4 +1079,114 @@ fn render_alloca_escapes(
         }
     }
     msg
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        critical_edge::CriticalEdgeSplitter,
+        domtree::DomTree,
+        isa::evm::{EvmBackend, canonicalize_alias_value},
+        liveness::{InstLiveness, Liveness},
+        stackalloc::StackifyBuilder,
+    };
+    use sonatina_parser::parse_module;
+    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
+    fn test_isa() -> Evm {
+        Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        })
+    }
+
+    #[test]
+    fn aliased_spill_is_marked_live_out_at_internal_call() {
+        let parsed = parse_module(include_str!(
+            "../../../tests/fixtures/fe_lazy_merkle_proof_element_1_pass6.sntn"
+        ))
+        .expect("module parses");
+        let funcs = parsed.module.funcs();
+        let isa = test_isa();
+        let backend = EvmBackend::new(test_isa());
+        let ptr_escape =
+            super::super::ptr_escape::compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
+
+        let func_ref = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&func| {
+                parsed.module.ctx.func_sig(func, |sig| {
+                    sig.name() == "lazyimtdata_hb575fd00dcf9c59f_merkle_proof_elements"
+                })
+            })
+            .expect("merkle_proof_elements exists");
+
+        let mut analysis = None;
+        parsed.module.func_store.modify(func_ref, |function| {
+            let mut cfg = sonatina_ir::cfg::ControlFlowGraph::new();
+            cfg.compute(function);
+            CriticalEdgeSplitter::new().run(function, &mut cfg);
+
+            let mut liveness = Liveness::new();
+            liveness.compute(function, &cfg);
+
+            let mut inst_liveness = InstLiveness::new();
+            inst_liveness.compute(function, &cfg, &liveness);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let value_aliases =
+                backend.compute_stackify_value_aliases(function, &parsed.module.ctx);
+
+            let mut stack_liveness = Liveness::new();
+            stack_liveness.compute_with_value_normalizer(function, &cfg, |value| {
+                canonicalize_alias_value(&value_aliases, value)
+            });
+
+            let alloc = StackifyBuilder::new(function, &cfg, &dom, &stack_liveness, 16)
+                .with_value_aliases(&value_aliases)
+                .compute();
+
+            analysis = Some(FuncAnalysis {
+                alloc,
+                inst_liveness,
+                block_order: dom.rpo().to_vec(),
+                value_aliases,
+            });
+        });
+        let analysis = analysis.expect("analysis computed");
+
+        let spill_value = analysis.canonicalize_value(
+            parsed
+                .debug
+                .value(func_ref, "v5")
+                .expect("aliased pointer value exists"),
+        );
+        let spill_obj = analysis.alloc.spill_obj[spill_value].expect("spill object exists");
+
+        let alloc_ctx = StaticArenaAllocCtx::new(&parsed.module.ctx, &isa, &ptr_escape);
+        let stack = parsed.module.func_store.view(func_ref, |function| {
+            alloc_ctx.compute_func_stack_objects(func_ref, function, &analysis)
+        });
+
+        let call = stack
+            .call_sites
+            .iter()
+            .find(|call| {
+                parsed.module.ctx.func_sig(call.callee, |sig| {
+                    sig.name() == "lazyimtdata_hb575fd00dcf9c59f_levels_for_root"
+                })
+            })
+            .expect("levels_for_root call exists");
+
+        assert!(
+            call.live_out_objs.contains(&spill_obj),
+            "canonical spill object for aliased pointer should be live across the internal call"
+        );
+    }
 }

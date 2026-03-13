@@ -1,0 +1,78 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/gvn_cross_block_uaddo_internal_call_reuse.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func public %entry() {
+    block0:
+        v0.*i8 = evm_malloc 32.i256;
+        v1.*i256 = bitcast v0 *i256;
+        mstore v1 99.i256 i256;
+        v2.i256 = evm_calldata_load 0.i32;
+        (v3.i256, v4.i1) = uaddo v2 1.i256;
+        br v4 block9 block11;
+
+    block11:
+        v20.i1 = lt v3 10.i256;
+        br v20 block10 block13;
+
+    block13:
+        jump block10;
+
+    block10:
+        v23.i1 = phi (0.i1 block11) (1.i1 block13);
+        br v23 block8 block15;
+
+    block15:
+        v27.i1 = eq v3 5.i256;
+        br v27 block16 block17;
+
+    block16:
+        v32.*i8 = evm_malloc 64.i256;
+        v33.*@pair = bitcast v32 *@pair;
+        v34.*i256 = bitcast v33 *i256;
+        mstore v34 1.i256 i256;
+        v35.*i256 = gep v33 0.i256 1.i256;
+        mstore v35 42.i256 i256;
+        jump block14;
+
+    block17:
+        v37.*i8 = evm_malloc 64.i256;
+        v38.*@pair = bitcast v37 *@pair;
+        v39.*i256 = bitcast v38 *i256;
+        mstore v39 0.i256 i256;
+        v40.*i256 = gep v38 0.i256 1.i256;
+        mstore v40 0.i256 i256;
+        jump block14;
+
+    block14:
+        v42.*i256 = phi (v34 block16) (v39 block17);
+        v41.*@pair = phi (v33 block16) (v38 block17);
+        v10.i256 = mload v42 i256;
+        v11.i1 = eq v10 1.i256;
+        br v11 block4 block8;
+
+    block4:
+        v12.*i256 = gep v41 0.i256 1.i256;
+        v13.i256 = mload v12 i256;
+        mstore 0.i256 v13 i256;
+        evm_return 0.i256 32.i256;
+
+    block8:
+        mstore 0.i256 0.i256 i256;
+        evm_return 0.i256 32.i256;
+
+    block9:
+        evm_revert 0.i256 0.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

@@ -11,6 +11,7 @@ use crate::{
 };
 
 use super::{
+    canonicalize_alias_value,
     malloc_plan::MallocEscapeKind,
     ptr_escape::PtrEscapeSummary,
     static_arena_alloc::{
@@ -183,6 +184,13 @@ pub(crate) struct FuncAnalysis {
     pub(crate) alloc: StackifyAlloc,
     pub(crate) inst_liveness: InstLiveness,
     pub(crate) block_order: Vec<BlockId>,
+    pub(crate) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
+}
+
+impl FuncAnalysis {
+    pub(crate) fn canonicalize_value(&self, value: ValueId) -> ValueId {
+        canonicalize_alias_value(&self.value_aliases, value)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1192,6 +1200,13 @@ mod tests {
             alloc,
             inst_liveness,
             block_order,
+            value_aliases: {
+                let mut value_aliases: SecondaryMap<ValueId, Option<ValueId>> = SecondaryMap::new();
+                for value in function.dfg.value_ids() {
+                    value_aliases[value] = Some(value);
+                }
+                value_aliases
+            },
         }
     }
 

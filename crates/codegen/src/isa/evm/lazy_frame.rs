@@ -921,6 +921,7 @@ mod tests {
         liveness::{InstLiveness, Liveness},
         stackalloc::StackifyBuilder,
     };
+    use cranelift_entity::SecondaryMap;
     use rustc_hash::FxHashMap;
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
@@ -974,6 +975,13 @@ mod tests {
                         alloc: StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute(),
                         inst_liveness,
                         block_order: dom.rpo().to_vec(),
+                        value_aliases: {
+                            let mut value_aliases = SecondaryMap::new();
+                            for value in function.dfg.value_ids() {
+                                value_aliases[value] = Some(value);
+                            }
+                            value_aliases
+                        },
                     },
                 );
             });

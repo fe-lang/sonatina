@@ -1,0 +1,84 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/internal_call_preserved_uaddo_result_tuple.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func public %entry() {
+    block0:
+        v0.*i8 = evm_malloc 32.i256;
+        v1.*i256 = bitcast v0 *i256;
+        mstore v1 99.i256 i256;
+        v30.i256 = bitcast v0 i256;
+        mstore 512.i256 v30 i256;
+        v2.i256 = evm_calldata_load 0.i32;
+        (v3.i256, v4.i1) = uaddo v2 1.i256;
+        br v4 block9 block11;
+
+    block11:
+        v22.i1 = lt v3 10.i256;
+        br v22 block10 block13;
+
+    block13:
+        jump block10;
+
+    block10:
+        v25.i1 = phi (0.i1 block11) (1.i1 block13);
+        br v25 block8 block2;
+
+    block2:
+        v7.*i256 = bitcast v30 *i256;
+        v26.i256 = mload v7 i256;
+        v29.i1 = eq v3 5.i256;
+        v30.i1 = eq v26 99.i256;
+        v32.i1 = and v29 v30;
+        br v32 block16 block17;
+
+    block16:
+        v34.*i8 = evm_malloc 64.i256;
+        v35.*@pair = bitcast v34 *@pair;
+        v36.*i256 = bitcast v35 *i256;
+        mstore v36 1.i256 i256;
+        v37.*i256 = gep v35 0.i256 1.i256;
+        mstore v37 42.i256 i256;
+        jump block14;
+
+    block17:
+        v39.*i8 = evm_malloc 64.i256;
+        v40.*@pair = bitcast v39 *@pair;
+        v41.*i256 = bitcast v40 *i256;
+        mstore v41 0.i256 i256;
+        v42.*i256 = gep v40 0.i256 1.i256;
+        mstore v42 0.i256 i256;
+        jump block14;
+
+    block14:
+        v44.*i256 = phi (v36 block16) (v41 block17);
+        v43.*@pair = phi (v35 block16) (v40 block17);
+        v10.i256 = mload v44 i256;
+        v11.i1 = eq v10 1.i256;
+        br v11 block3 block8;
+
+    block3:
+        v12.*i256 = gep v43 0.i256 1.i256;
+        v13.i256 = mload v12 i256;
+        mstore 0.i256 v13 i256;
+        evm_return 0.i256 32.i256;
+
+    block8:
+        mstore 0.i256 0.i256 i256;
+        evm_return 0.i256 32.i256;
+
+    block9:
+        evm_revert 0.i256 0.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
