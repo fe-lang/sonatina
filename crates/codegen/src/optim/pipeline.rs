@@ -761,6 +761,77 @@ func private %entry(v0.*i256, v1.i256) -> *i256 {
     }
 
     #[test]
+    fn gvn_keeps_distinct_obj_allocs_unique() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+type @box = { i256 };
+
+func private %entry() -> i256 {
+    block0:
+        v0.objref<@box> = obj.alloc @box;
+        v1.objref<i256> = obj.proj v0 0.i8;
+        obj.store v1 1.i256;
+        v2.objref<@box> = obj.alloc @box;
+        v3.objref<i256> = obj.proj v2 0.i8;
+        obj.store v3 2.i256;
+        v4.i256 = obj.load v1;
+        v5.i256 = obj.load v3;
+        v6.i256 = add v4 v5;
+        return v6;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            let alloc_count = dumped.matches(" = obj.alloc ").count();
+            assert_eq!(
+                alloc_count, 2,
+                "distinct object allocations must not CSE:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_does_not_reuse_obj_load_across_obj_store() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i256 {
+    block0:
+        v0.objref<i256> = obj.alloc i256;
+        obj.store v0 1.i256;
+        v1.i256 = obj.load v0;
+        obj.store v0 2.i256;
+        v2.i256 = obj.load v0;
+        v3.i256 = add v1 v2;
+        return v3;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            let load_count = dumped.matches(" = obj.load ").count();
+            assert_eq!(
+                load_count, 2,
+                "object loads must not CSE across intervening stores:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn gvn_treats_globals_as_always_available() {
         let source = r#"
 target = "evm-ethereum-london"

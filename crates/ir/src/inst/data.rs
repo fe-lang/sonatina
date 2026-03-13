@@ -92,6 +92,7 @@ pub struct Alloca {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(super::SideEffect::Write))]
 #[inst(text = "obj.alloc")]
 pub struct ObjAlloc {
     ty: Type,
@@ -112,6 +113,7 @@ pub struct ObjIndex {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(super::SideEffect::Read))]
 #[inst(text = "obj.load")]
 pub struct ObjLoad {
     object: ValueId,

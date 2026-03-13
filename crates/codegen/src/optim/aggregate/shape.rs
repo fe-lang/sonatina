@@ -498,8 +498,8 @@ fn flattened_leaf_count(module: &ModuleCtx, ty: Type) -> Option<usize> {
         Some(CompoundType::Array { elem, len }) => {
             flattened_leaf_count(module, elem)?.checked_mul(len)
         }
-        Some(CompoundType::Func { .. }) | Some(CompoundType::ObjRef(_)) => None,
-        Some(CompoundType::Ptr(_)) | None => Some(1),
+        Some(CompoundType::Func { .. }) => None,
+        Some(CompoundType::Ptr(_)) | Some(CompoundType::ObjRef(_)) | None => Some(1),
     }
 }
 
@@ -538,7 +538,7 @@ fn flatten_aggregate(
             }
             Some(())
         }
-        Some(CompoundType::Ptr(_)) | None => {
+        Some(CompoundType::Ptr(_)) | Some(CompoundType::ObjRef(_)) | None => {
             let size = u32::try_from(module.size_of_unchecked(ty)).ok()?;
             out.push(AggregateLeaf {
                 path: path.clone(),
@@ -548,7 +548,7 @@ fn flatten_aggregate(
             });
             Some(())
         }
-        Some(CompoundType::ObjRef(_)) | Some(CompoundType::Func { .. }) => None,
+        Some(CompoundType::Func { .. }) => None,
     }
 }
 

@@ -286,6 +286,27 @@ pub fn classify_inst_effects(dfg: &DataFlowGraph, inst_id: InstId) -> InstEffect
         };
     }
 
+    if <&data::ObjAlloc as InstDowncast>::downcast(is, inst).is_some() {
+        return InstEffects {
+            other: OtherEffects::ALLOC,
+            ..InstEffects::default()
+        };
+    }
+
+    if <&data::ObjLoad as InstDowncast>::downcast(is, inst).is_some() {
+        return InstEffects {
+            other: OtherEffects::OBSERVE,
+            ..InstEffects::default()
+        };
+    }
+
+    if <&data::ObjStore as InstDowncast>::downcast(is, inst).is_some() {
+        return InstEffects {
+            other: OtherEffects::MUTATE,
+            ..InstEffects::default()
+        };
+    }
+
     if let Some(call) = dfg.call_info(inst_id) {
         return inst_effects_from_func_summary(&dfg.ctx.func_effects(call.callee()), spaces);
     }
@@ -761,7 +782,11 @@ mod tests {
     use super::*;
     use crate::{
         builder::test_util::*,
-        inst::{control_flow::Return, data::Alloca, evm::EvmMalloc},
+        inst::{
+            control_flow::Return,
+            data::{Alloca, ObjAlloc, ObjLoad, ObjStore},
+            evm::EvmMalloc,
+        },
         isa::{Isa, evm::Evm},
     };
 
@@ -834,6 +859,25 @@ mod tests {
         let size = builder.make_imm_value(Immediate::from_i256(I256::from(32), Type::I256));
         let ptr = builder.insert_inst_with(|| EvmMalloc::new(is, size), mb.ptr_type(Type::I8));
         builder.insert_inst_no_result_with(|| Return::new_single(is, ptr));
+        builder.seal_all();
+
+        builder.func
+    }
+
+    fn build_object_memory_func() -> crate::Function {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I256);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let obj =
+            builder.insert_inst_with(|| ObjAlloc::new(is, Type::I256), mb.objref_type(Type::I256));
+        let one = builder.make_imm_value(1i32);
+        builder.insert_inst_no_result_with(|| ObjStore::new(is, obj, one));
+        let loaded = builder.insert_inst_with(|| ObjLoad::new(is, obj), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, loaded));
         builder.seal_all();
 
         builder.func
@@ -960,5 +1004,27 @@ mod tests {
                 ref other => panic!("expected exact immediate access, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn obj_alloc_effects_are_tracked_as_alloc() {
+        let func = build_object_memory_func();
+        let effects = effects_for_inst::<ObjAlloc>(&func);
+
+        assert!(effects.accesses.is_empty());
+        assert_eq!(effects.other, OtherEffects::ALLOC);
+    }
+
+    #[test]
+    fn obj_load_store_effects_do_not_fall_back_to_whole_space_barriers() {
+        let func = build_object_memory_func();
+
+        let load_effects = effects_for_inst::<ObjLoad>(&func);
+        assert!(load_effects.accesses.is_empty());
+        assert_eq!(load_effects.other, OtherEffects::OBSERVE);
+
+        let store_effects = effects_for_inst::<ObjStore>(&func);
+        assert!(store_effects.accesses.is_empty());
+        assert_eq!(store_effects.other, OtherEffects::MUTATE);
     }
 }

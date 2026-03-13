@@ -654,10 +654,10 @@ impl VerifyInst for data::ObjLoad {
             ));
             return;
         };
-        if verifier.is_function_ty(value_ty) || is_obj_ref_ty(verifier.ctx, value_ty) {
+        if verifier.is_function_ty(value_ty) {
             verifier.emit(Diagnostic::error(
                 DiagnosticCode::InstOperandTypeMismatch,
-                "obj.load cannot load function or object-reference values",
+                "obj.load cannot load function values",
                 location.clone(),
             ));
         }
@@ -679,10 +679,10 @@ impl VerifyInst for data::ObjStore {
             ));
             return;
         };
-        if verifier.is_function_ty(expected_ty) || is_obj_ref_ty(verifier.ctx, expected_ty) {
+        if verifier.is_function_ty(expected_ty) {
             verifier.emit(Diagnostic::error(
                 DiagnosticCode::InstOperandTypeMismatch,
-                "obj.store cannot store function or object-reference values",
+                "obj.store cannot store function values",
                 location.clone(),
             ));
         }

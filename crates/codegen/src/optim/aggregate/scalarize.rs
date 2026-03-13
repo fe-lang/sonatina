@@ -1419,13 +1419,13 @@ impl AggregateScalarize {
         loop {
             func.rebuild_users();
             let removed_mloads = self.cleanup_dead_aggregate_mloads_with_current_users(func);
-            let removed_allocas = self.cleanup_dead_promoted_allocas_with_current_users(
+            let removed_promoted_paths = self.cleanup_dead_promoted_paths_with_current_users(
                 func,
                 projection_of,
                 promoted_by_inst,
             );
             let removed_pure = self.dead_pure_cleanup.run_with_current_users(func);
-            if !removed_mloads && !removed_allocas && !removed_pure {
+            if !removed_mloads && !removed_promoted_paths && !removed_pure {
                 return changed;
             }
             changed = true;
@@ -1475,7 +1475,7 @@ impl AggregateScalarize {
         changed
     }
 
-    fn cleanup_dead_promoted_allocas_with_current_users(
+    fn cleanup_dead_promoted_paths_with_current_users(
         &self,
         func: &mut Function,
         projection_of: &SecondaryMap<ValueId, Option<Projection>>,
@@ -1501,8 +1501,12 @@ impl AggregateScalarize {
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
                 }
-                if downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none()
-                    && downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)).is_none()
+                let inst_data = func.dfg.inst(inst);
+                if downcast::<&data::Alloca>(func.inst_set(), inst_data).is_none()
+                    && downcast::<&data::Gep>(func.inst_set(), inst_data).is_none()
+                    && downcast::<&data::ObjAlloc>(func.inst_set(), inst_data).is_none()
+                    && downcast::<&data::ObjProj>(func.inst_set(), inst_data).is_none()
+                    && downcast::<&data::ObjIndex>(func.inst_set(), inst_data).is_none()
                 {
                     continue;
                 }
