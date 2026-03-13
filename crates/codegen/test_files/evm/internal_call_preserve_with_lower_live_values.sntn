@@ -1,0 +1,59 @@
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: true, evm_trace: false, opt: 0 }
+#! evm.case: ok
+#!   calldata: u256(4)
+#!   expect: return u256(42)
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = add v0 1.i256;
+        v2.i256 = add v0 3.i256;
+        v3.i256 = add v0 4.i256;
+        v4.i1 = call %is_lt v1 10.i256;
+        br v4 block1 block2;
+
+    block1:
+        v5.i256 = call %helper v1 v2 v3;
+        mstore 0.i256 v5 i256;
+        evm_return 0.i256 32.i256;
+
+    block2:
+        mstore 0.i256 0.i256 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func private %is_lt(v0.i256, v1.i256) -> i1 {
+    block0:
+        v2.i1 = lt v0 v1;
+        br v2 block1 block2;
+
+    block1:
+        return 1.i1;
+
+    block2:
+        return 0.i1;
+}
+
+func private %helper(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.i1 = eq v0 5.i256;
+        v4.i1 = eq v1 7.i256;
+        v5.i1 = eq v2 8.i256;
+        v6.i1 = and v3 v4;
+        v7.i1 = and v6 v5;
+        br v7 block1 block2;
+
+    block1:
+        return 42.i256;
+
+    block2:
+        return 0.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

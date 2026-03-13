@@ -1,0 +1,40 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/gvn_cross_block_uaddo_reuse.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = and v0 1.i256;
+        v2.i1 = eq v1 0.i256;
+        br v2 block1 block6;
+
+    block1:
+        (v3.i256, v4.i1) = uaddo v0 1.i256;
+        br v4 block7 block2;
+
+    block2:
+        v5.i1 = eq v3 5.i256;
+        br v5 block4 block6;
+
+    block4:
+        mstore 0.i256 v3 i256;
+        evm_return 0.i256 32.i256;
+
+    block6:
+        mstore 0.i256 0.i256 i256;
+        evm_return 0.i256 32.i256;
+
+    block7:
+        evm_revert 0.i256 0.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
