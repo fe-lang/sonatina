@@ -17,6 +17,7 @@ pub(super) enum StackItem {
 pub(super) struct SymStack {
     /// Top-first.
     items: VecDeque<StackItem>,
+    func_ret_index: Option<usize>,
 }
 
 impl SymStack {
@@ -27,10 +28,14 @@ impl SymStack {
             .copied()
             .map(StackItem::Value)
             .collect();
+        let func_ret_index = has_internal_return.then_some(items.len());
         if has_internal_return {
             items.push_back(StackItem::FuncRetAddr);
         }
-        Self { items }
+        Self {
+            items,
+            func_ret_index,
+        }
     }
 
     pub(super) fn from_template(template: &BlockTemplate, has_internal_return: bool) -> Self {
@@ -41,18 +46,31 @@ impl SymStack {
             .chain(template.transfer.iter().copied())
             .map(StackItem::Value)
             .collect();
+        let func_ret_index = has_internal_return.then_some(items.len());
         if has_internal_return {
             items.push_back(StackItem::FuncRetAddr);
         }
-        Self { items }
-    }
-
-    pub(super) fn func_ret_index(&self) -> Option<usize> {
-        self.items.iter().position(|i| *i == StackItem::FuncRetAddr)
+        Self {
+            items,
+            func_ret_index,
+        }
     }
 
     pub(super) fn len_above_func_ret(&self) -> usize {
-        self.func_ret_index().unwrap_or(self.items.len())
+        self.func_ret_index.unwrap_or(self.items.len())
+    }
+
+    fn pushed_above_barrier(&mut self) {
+        if let Some(idx) = self.func_ret_index.as_mut() {
+            *idx += 1;
+        }
+    }
+
+    fn popped_above_barrier(&mut self) {
+        if let Some(idx) = self.func_ret_index.as_mut() {
+            debug_assert!(*idx != 0, "popped through function return barrier");
+            *idx -= 1;
+        }
     }
 
     pub(super) fn common_suffix_len(&self, desired: &[ValueId]) -> usize {
@@ -107,6 +125,7 @@ impl SymStack {
 
     pub(super) fn push_value(&mut self, v: ValueId) {
         self.items.push_front(StackItem::Value(v));
+        self.pushed_above_barrier();
     }
 
     pub(super) fn push_imm(&mut self, stack_as: ValueId, imm: Immediate, actions: &mut Actions) {
@@ -129,6 +148,7 @@ impl SymStack {
 
         let item = self.items[pos].clone();
         self.items.push_front(item);
+        self.pushed_above_barrier();
         actions.push(Action::StackDup(pos as u8));
     }
 
@@ -184,6 +204,7 @@ impl SymStack {
 
     pub(super) fn push_call_ret_addr(&mut self) {
         self.items.push_front(StackItem::CallRetAddr);
+        self.pushed_above_barrier();
     }
 
     pub(super) fn push_call_continuation(&mut self, actions: &mut Actions) {
@@ -237,6 +258,9 @@ impl SymStack {
             panic!("expected StackItem::CallRetAddr")
         };
         self.items.remove(pos);
+        if self.func_ret_index.is_some_and(|idx| pos < idx) {
+            self.popped_above_barrier();
+        }
     }
 
     pub(super) fn pop_operand(&mut self) {
@@ -246,6 +270,7 @@ impl SymStack {
             }
             Some(_) => {
                 self.items.pop_front();
+                self.popped_above_barrier();
             }
             None => {
                 panic!("stack underflow")

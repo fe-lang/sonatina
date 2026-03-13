@@ -1,6 +1,11 @@
 use crate::bitset::BitSet;
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use sonatina_ir::{InstId, ValueId};
+use std::{
+    collections::VecDeque,
+    sync::{Mutex, OnceLock},
+};
 
 use super::{
     Planner,
@@ -11,6 +16,62 @@ use super::{
 };
 
 use super::super::{CONSUME_LAST_USE_MAX_SWAPS, sym_stack::StackItem};
+
+const OPERAND_PREP_PLAN_CACHE_CAP: usize = 4096;
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct OperandPrepQueryKey {
+    func_ptr: usize,
+    dup_max: u8,
+    swap_max: u8,
+    max_len: u8,
+    max_expansions: u32,
+    stack: SmallVec<[StackItem; 21]>,
+    args: SmallVec<[ValueId; 8]>,
+    last_use_mask: u64,
+    spilled_arg_mask: u64,
+    deep_preserve_mask: u64,
+}
+
+struct OperandPrepPlanCache {
+    map: FxHashMap<OperandPrepQueryKey, NormalizePlan>,
+    order: VecDeque<OperandPrepQueryKey>,
+}
+
+impl OperandPrepPlanCache {
+    fn new() -> Self {
+        Self {
+            map: FxHashMap::default(),
+            order: VecDeque::new(),
+        }
+    }
+
+    fn get(&self, key: &OperandPrepQueryKey) -> Option<&NormalizePlan> {
+        self.map.get(key)
+    }
+
+    fn insert(&mut self, key: OperandPrepQueryKey, val: NormalizePlan) {
+        if let Some(existing) = self.map.get_mut(&key) {
+            *existing = val;
+            return;
+        }
+
+        self.map.insert(key.clone(), val);
+        self.order.push_back(key);
+
+        while self.order.len() > OPERAND_PREP_PLAN_CACHE_CAP {
+            let Some(old) = self.order.pop_front() else {
+                break;
+            };
+            self.map.remove(&old);
+        }
+    }
+}
+
+fn operand_prep_plan_cache() -> &'static Mutex<OperandPrepPlanCache> {
+    static CACHE: OnceLock<Mutex<OperandPrepPlanCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(OperandPrepPlanCache::new()))
+}
 
 fn commutative_plan_cmp_key(
     plan: &NormalizePlan,
@@ -28,6 +89,111 @@ fn commutative_plan_cmp_key(
 }
 
 impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
+    fn use_operand_prep_query_cache(&self, args_len: usize) -> bool {
+        // The exact solver already has its own structural cache. On the hot binary/unary path,
+        // building and hashing the outer query key can cost more than it saves.
+        args_len > 2
+    }
+
+    fn operand_prep_query_mask(
+        &self,
+        args: &[ValueId],
+        predicate: impl Fn(ValueId) -> bool,
+    ) -> u64 {
+        args.iter().enumerate().fold(0u64, |mask, (idx, &arg)| {
+            mask | (u64::from(predicate(arg)) << idx)
+        })
+    }
+
+    fn operand_prep_deep_preserve_mask(
+        &self,
+        args: &[ValueId],
+        consume_last_use: &BitSet<ValueId>,
+        search_cfg: SearchCfg,
+    ) -> u64 {
+        let start_limit = self.stack.len_above_func_ret();
+        let window_len = start_limit.min(search_cfg.max_len);
+        if start_limit == window_len {
+            return 0;
+        }
+
+        let mut mask = 0u64;
+        for (idx, &arg) in args.iter().enumerate() {
+            if self.ctx.func.dfg.value_is_imm(arg) || consume_last_use.contains(arg) {
+                continue;
+            }
+
+            let found_in_tail = (window_len..start_limit)
+                .any(|depth| self.stack.item_at(depth) == Some(&StackItem::Value(arg)));
+            if found_in_tail {
+                mask |= 1u64 << idx;
+            }
+        }
+        mask
+    }
+
+    fn operand_prep_query_key(
+        &self,
+        args: &[ValueId],
+        consume_last_use: &BitSet<ValueId>,
+        search_cfg: SearchCfg,
+    ) -> OperandPrepQueryKey {
+        let stack_len = self.stack.len_above_func_ret().min(search_cfg.max_len);
+        OperandPrepQueryKey {
+            func_ptr: self.ctx.func as *const _ as usize,
+            dup_max: search_cfg.dup_max as u8,
+            swap_max: search_cfg.swap_max as u8,
+            max_len: search_cfg.max_len as u8,
+            max_expansions: search_cfg.max_expansions as u32,
+            stack: self.stack.iter().take(stack_len).cloned().collect(),
+            args: args.iter().copied().collect(),
+            last_use_mask: self.operand_prep_query_mask(args, |arg| consume_last_use.contains(arg)),
+            spilled_arg_mask: self.operand_prep_query_mask(args, |arg| {
+                !self.ctx.func.dfg.value_is_imm(arg) && self.mem.spill_set().contains(arg)
+            }),
+            deep_preserve_mask: self.operand_prep_deep_preserve_mask(
+                args,
+                consume_last_use,
+                search_cfg,
+            ),
+        }
+    }
+
+    fn solve_operand_prep_cached(
+        &mut self,
+        args: &[ValueId],
+        consume_last_use: &BitSet<ValueId>,
+    ) -> Option<NormalizePlan> {
+        let search_cfg = self.operand_prep_search_cfg(args.len());
+        let use_query_cache = self.use_operand_prep_query_cache(args.len());
+        let cache_key = use_query_cache
+            .then(|| self.operand_prep_query_key(args, consume_last_use, search_cfg));
+
+        if let Some(hit) = cache_key.as_ref().and_then(|cache_key| {
+            let cache = operand_prep_plan_cache().lock().unwrap();
+            cache.get(cache_key).cloned()
+        }) {
+            return Some(hit);
+        }
+
+        let cost = SpillAwareCostModel::new(self.mem.spill_set());
+        let plan = solve_optimal_operand_prep_plan(
+            self.ctx,
+            self.stack,
+            args,
+            consume_last_use,
+            &cost,
+            search_cfg,
+        );
+        if let (Some(cache_key), Some(plan)) = (cache_key, &plan) {
+            operand_prep_plan_cache()
+                .lock()
+                .unwrap()
+                .insert(cache_key, plan.clone());
+        }
+        plan
+    }
+
     fn inst_is_commutative(&self, inst: InstId) -> bool {
         use sonatina_ir::{
             InstDowncast,
@@ -104,12 +270,16 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             );
 
             let (plan, swapped) = match (original_plan, swapped_plan) {
-                (Some(p), None) => (p, false),
-                (None, Some(p)) => (p, true),
-                (Some(p0), Some(p1)) => {
-                    let c0 = commutative_plan_cmp_key(&p0, &cost);
-                    let c1 = commutative_plan_cmp_key(&p1, &cost);
-                    if c1 < c0 { (p1, true) } else { (p0, false) }
+                (Some(plan), None) => (plan, false),
+                (None, Some(plan)) => (plan, true),
+                (Some(original), Some(swapped)) => {
+                    let original_cost = commutative_plan_cmp_key(&original, &cost);
+                    let swapped_cost = commutative_plan_cmp_key(&swapped, &cost);
+                    if swapped_cost < original_cost {
+                        (swapped, true)
+                    } else {
+                        (original, false)
+                    }
                 }
                 (None, None) => {
                     self.prepare_operands_greedy(args.as_slice(), consume_last_use);
@@ -212,17 +382,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             return;
         }
 
-        let cost = SpillAwareCostModel::new(self.mem.spill_set());
-        let search_cfg = self.operand_prep_search_cfg(args.len());
-
-        let Some(plan) = solve_optimal_operand_prep_plan(
-            self.ctx,
-            self.stack,
-            args,
-            consume_last_use,
-            &cost,
-            search_cfg,
-        ) else {
+        let Some(plan) = self.solve_operand_prep_cached(args, consume_last_use) else {
             self.prepare_operands_greedy(args, consume_last_use);
             return;
         };
