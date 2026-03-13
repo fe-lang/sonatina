@@ -268,23 +268,39 @@ fn compute_active_pre_insts(
             match &data {
                 EvmInstKind::Call(_) => {
                     let mut actions = alloc.read(inst, &args);
-                    let cont_pos = actions
+                    if let Some(cont_pos) = actions
                         .iter()
-                        .position(|a| matches!(a, Action::PushContinuationOffset))?;
-                    let suffix: Vec<Action> = actions.drain(cont_pos + 1..).collect();
-                    let marker = actions.remove(cont_pos);
-                    if marker != Action::PushContinuationOffset {
-                        return None;
+                        .position(|a| matches!(a, Action::PushContinuationOffset))
+                    {
+                        let suffix: Vec<Action> = actions.drain(cont_pos + 1..).collect();
+                        let marker = actions.remove(cont_pos);
+                        if marker != Action::PushContinuationOffset {
+                            return None;
+                        }
+                        let prefix_folded_len = fold_stack_actions(&actions).len();
+                        apply_actions_state(
+                            plan,
+                            FrameSite::PreInst(inst),
+                            &actions,
+                            0,
+                            &mut active,
+                        );
+                        apply_actions_state(
+                            plan,
+                            FrameSite::PreInst(inst),
+                            &suffix,
+                            prefix_folded_len,
+                            &mut active,
+                        );
+                    } else {
+                        apply_actions_state(
+                            plan,
+                            FrameSite::PreInst(inst),
+                            &actions,
+                            0,
+                            &mut active,
+                        );
                     }
-                    let prefix_folded_len = fold_stack_actions(&actions).len();
-                    apply_actions_state(plan, FrameSite::PreInst(inst), &actions, 0, &mut active);
-                    apply_actions_state(
-                        plan,
-                        FrameSite::PreInst(inst),
-                        &suffix,
-                        prefix_folded_len,
-                        &mut active,
-                    );
                 }
                 EvmInstKind::BrTable(br) => {
                     for (case_val, _) in br.table().iter() {
@@ -416,33 +432,45 @@ fn collect_dep_points(
             match &data {
                 EvmInstKind::Call(_) => {
                     let mut actions = alloc.read(inst, &args);
-                    let cont_pos = actions
+                    if let Some(cont_pos) = actions
                         .iter()
-                        .position(|a| matches!(a, Action::PushContinuationOffset))?;
-                    let suffix: Vec<Action> = actions.drain(cont_pos + 1..).collect();
-                    let marker = actions.remove(cont_pos);
-                    if marker != Action::PushContinuationOffset {
-                        return None;
+                        .position(|a| matches!(a, Action::PushContinuationOffset))
+                    {
+                        let suffix: Vec<Action> = actions.drain(cont_pos + 1..).collect();
+                        let marker = actions.remove(cont_pos);
+                        if marker != Action::PushContinuationOffset {
+                            return None;
+                        }
+                        let prefix_len = fold_stack_actions(&actions).len();
+                        collect_action_dep_points(
+                            &mut out,
+                            &mut seen,
+                            &order,
+                            block,
+                            FrameSite::PreInst(inst),
+                            &actions,
+                            0,
+                        );
+                        collect_action_dep_points(
+                            &mut out,
+                            &mut seen,
+                            &order,
+                            block,
+                            FrameSite::PreInst(inst),
+                            &suffix,
+                            prefix_len,
+                        );
+                    } else {
+                        collect_action_dep_points(
+                            &mut out,
+                            &mut seen,
+                            &order,
+                            block,
+                            FrameSite::PreInst(inst),
+                            &actions,
+                            0,
+                        );
                     }
-                    let prefix_len = fold_stack_actions(&actions).len();
-                    collect_action_dep_points(
-                        &mut out,
-                        &mut seen,
-                        &order,
-                        block,
-                        FrameSite::PreInst(inst),
-                        &actions,
-                        0,
-                    );
-                    collect_action_dep_points(
-                        &mut out,
-                        &mut seen,
-                        &order,
-                        block,
-                        FrameSite::PreInst(inst),
-                        &suffix,
-                        prefix_len,
-                    );
                 }
                 EvmInstKind::BrTable(br) => {
                     for (case_val, _) in br.table().iter() {

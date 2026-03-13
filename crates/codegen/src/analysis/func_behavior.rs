@@ -11,7 +11,10 @@ use sonatina_ir::{
     module::FuncRef,
 };
 
-use crate::{cfg_scc::CfgSccAnalysis, module_analysis};
+use crate::{
+    cfg_scc::CfgSccAnalysis,
+    module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef},
+};
 
 #[derive(Debug, Default, Clone)]
 struct LocalFacts {
@@ -33,15 +36,16 @@ struct FuncBehaviorAnalyzer<'a> {
     is_external: SecondaryMap<FuncRef, bool>,
     locals: SecondaryMap<FuncRef, LocalFacts>,
     effects: SecondaryMap<FuncRef, FuncEffectSummary>,
-    info: module_analysis::ModuleInfo,
-    topo: Vec<module_analysis::SccRef>,
-    succ_sccs: SecondaryMap<module_analysis::SccRef, Vec<module_analysis::SccRef>>,
+    scc: CallGraphSccs,
+    topo: Vec<SccRef>,
+    succ_sccs: SecondaryMap<SccRef, Vec<SccRef>>,
 }
 
 impl<'a> FuncBehaviorAnalyzer<'a> {
     fn new(module: &'a Module) -> Self {
         let mut funcs = module.func_store.funcs();
         funcs.sort_unstable_by_key(|f| f.as_u32());
+        let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
 
         let mut is_external = SecondaryMap::<FuncRef, bool>::new();
         let mut locals = SecondaryMap::<FuncRef, LocalFacts>::new();
@@ -63,18 +67,44 @@ impl<'a> FuncBehaviorAnalyzer<'a> {
             }
         }
 
-        let info = module_analysis::analyze_module(module);
+        // Aggregate legalization can introduce helper call refs that are not part of the
+        // broader module-linkage analysis. Build only the call graph/SCC data we need here.
+        let call_graph = CallGraph::build_graph(module);
+        let mut all_funcs = funcs.clone();
+        let mut all_funcs_set = funcs_set.clone();
+        for &func_ref in &funcs {
+            for &callee in call_graph.callee_of(func_ref) {
+                if all_funcs_set.insert(callee) {
+                    all_funcs.push(callee);
+                }
+            }
+        }
+        all_funcs.sort_unstable_by_key(|f| f.as_u32());
 
-        let mut scc_refs: Vec<_> = funcs.iter().map(|&f| info.scc.scc_ref(f)).collect();
+        for &func_ref in &all_funcs {
+            if funcs_set.contains(&func_ref) {
+                continue;
+            }
+
+            is_external[func_ref] = module
+                .ctx
+                .get_sig(func_ref)
+                .is_none_or(|sig| sig.linkage().is_external());
+            locals[func_ref] = LocalFacts::default();
+            effects[func_ref] = FuncEffectSummary::unknown_call();
+        }
+
+        let scc = SccBuilder::default().compute_scc(&call_graph);
+
+        let mut scc_refs: Vec<_> = all_funcs.iter().map(|&f| scc.scc_ref(f)).collect();
         scc_refs.sort_unstable_by_key(|s| s.as_u32());
         scc_refs.dedup();
 
-        let mut succ_sccs =
-            SecondaryMap::<module_analysis::SccRef, Vec<module_analysis::SccRef>>::new();
-        for &func_ref in &funcs {
-            let from_scc = info.scc.scc_ref(func_ref);
-            for &callee in info.call_graph.callee_of(func_ref) {
-                let to_scc = info.scc.scc_ref(callee);
+        let mut succ_sccs = SecondaryMap::<SccRef, Vec<SccRef>>::new();
+        for &func_ref in &all_funcs {
+            let from_scc = scc.scc_ref(func_ref);
+            for &callee in call_graph.callee_of(func_ref) {
+                let to_scc = scc.scc_ref(callee);
                 if from_scc != to_scc {
                     succ_sccs[from_scc].push(to_scc);
                 }
@@ -92,7 +122,7 @@ impl<'a> FuncBehaviorAnalyzer<'a> {
             is_external,
             locals,
             effects,
-            info,
+            scc,
             topo,
             succ_sccs,
         }
@@ -111,9 +141,9 @@ impl<'a> FuncBehaviorAnalyzer<'a> {
     }
 
     fn propagate_effects(&mut self) {
-        let mut scc_effects = SecondaryMap::<module_analysis::SccRef, FuncEffectSummary>::new();
+        let mut scc_effects = SecondaryMap::<SccRef, FuncEffectSummary>::new();
         for &scc in self.topo.iter().rev() {
-            let scc_info = self.info.scc.scc_info(scc);
+            let scc_info = self.scc.scc_info(scc);
             let mut comps: Vec<_> = scc_info.components.iter().copied().collect();
             comps.sort_unstable_by_key(|f| f.as_u32());
 
@@ -143,7 +173,7 @@ impl<'a> FuncBehaviorAnalyzer<'a> {
 
     fn propagate_terminal_behavior(&mut self) {
         for &scc in self.topo.iter().rev() {
-            let scc_info = self.info.scc.scc_info(scc);
+            let scc_info = self.scc.scc_info(scc);
             if scc_info.is_cycle {
                 continue;
             }
@@ -196,7 +226,7 @@ impl<'a> FuncBehaviorAnalyzer<'a> {
 
     fn propagate_may_commit_visible_writes(&mut self) {
         for &scc in self.topo.iter().rev() {
-            let scc_info = self.info.scc.scc_info(scc);
+            let scc_info = self.scc.scc_info(scc);
             let mut comps: Vec<_> = scc_info.components.iter().copied().collect();
             comps.sort_unstable_by_key(|f| f.as_u32());
 
@@ -453,11 +483,8 @@ fn is_committing_exit(func: &Function, inst: sonatina_ir::InstId) -> bool {
         && <&control_flow::Unreachable as InstDowncast>::downcast(is, inst_data).is_none()
 }
 
-fn topo_sort_sccs(
-    sccs: &[module_analysis::SccRef],
-    succ_sccs: &SecondaryMap<module_analysis::SccRef, Vec<module_analysis::SccRef>>,
-) -> Vec<module_analysis::SccRef> {
-    let mut indegree = SecondaryMap::<module_analysis::SccRef, u32>::new();
+fn topo_sort_sccs(sccs: &[SccRef], succ_sccs: &SecondaryMap<SccRef, Vec<SccRef>>) -> Vec<SccRef> {
+    let mut indegree = SecondaryMap::<SccRef, u32>::new();
     for &scc in sccs {
         indegree[scc] = 0;
     }
@@ -714,5 +741,32 @@ func private %caller() -> *i8 {
         assert!(effects.may_read_spaces.contains(MEMORY));
         assert!(effects.may_write_spaces.contains(MEMORY));
         assert!(effects.other.contains(OtherEffects::ALLOC));
+    }
+
+    #[test]
+    fn propagates_unknown_effects_through_external_callees() {
+        let module = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+declare external %ext();
+
+func private %caller() {
+    block0:
+        call %ext;
+        return;
+}
+"#,
+        );
+
+        analyze_module(&module);
+
+        let caller = find_func(&module, "caller");
+        let effects = module.ctx.func_effects(caller);
+        assert!(effects.may_read_unknown);
+        assert!(effects.may_write_unknown);
+        assert!(effects.may_commit_visible_writes);
+        assert!(!effects.will_return);
+        assert!(!effects.will_terminate);
     }
 }

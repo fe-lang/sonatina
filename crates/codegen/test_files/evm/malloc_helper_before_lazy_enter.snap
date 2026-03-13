@@ -1,25 +1,26 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/malloc_helper_before_lazy_enter.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 65 bytes
-  total: 65 bytes
+  section runtime: 64 bytes
+  total: 64 bytes
 
 functions:
   helper: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=0 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
   ready: ir_blocks=3 ir_insts=7 vcode_ops=19 fixups=3 imm_bytes=1
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
-  entry: ir_blocks=1 ir_insts=8 vcode_ops=26 fixups=2 imm_bytes=4
+  entry: ir_blocks=1 ir_insts=8 vcode_ops=25 fixups=2 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
 
 evm:
-  case before_enter: calldata_len=8 success reason=Return gas_used=21221 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=165
-  case active: calldata_len=8 success reason=Return gas_used=21178 gas_refunded=0 logs=0 output=call len=32 tx_gas=21044 runtime_gas=134
+  case before_enter: calldata_len=8 success reason=Return gas_used=21220 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=164
+  case active: calldata_len=8 success reason=Return gas_used=21177 gas_refunded=0 logs=0 output=call len=32 tx_gas=21044 runtime_gas=133
 
 
 --------------- DEBUG ---------------
@@ -64,7 +65,6 @@ ready:
 // func public %entry()
 entry:
   block0:
-    JUMPDEST
     PUSH0  // v0.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
     DUP1  // v1.i256 = shr 224.i256 v0;

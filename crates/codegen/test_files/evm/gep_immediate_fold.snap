@@ -1,13 +1,14 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/gep_immediate_fold.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 69 bytes
-  total: 69 bytes
+  section runtime: 68 bytes
+  total: 68 bytes
 
 functions:
   fold_simple: ir_blocks=1 ir_insts=5 vcode_ops=10 fixups=0 imm_bytes=3
@@ -16,11 +17,11 @@ functions:
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
   dynamic_index: ir_blocks=1 ir_insts=5 vcode_ops=12 fixups=0 imm_bytes=3
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
-  entry: ir_blocks=1 ir_insts=7 vcode_ops=23 fixups=6 imm_bytes=2
+  entry: ir_blocks=1 ir_insts=7 vcode_ops=22 fixups=6 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  case folded_and_fallback: calldata_len=8 success reason=Return gas_used=21251 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=195
+  case folded_and_fallback: calldata_len=8 success reason=Return gas_used=21250 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=194
 
 
 --------------- DEBUG ---------------
@@ -70,7 +71,6 @@ dynamic_index:
 // func public %entry()
 entry:
   block0:
-    JUMPDEST
     PUSH1 `pc + (3)`  // v0.i256 = call %fold_simple;
     PUSH1 FuncRef(0)
     JUMP

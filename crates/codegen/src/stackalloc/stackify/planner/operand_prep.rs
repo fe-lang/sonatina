@@ -1,16 +1,92 @@
 use crate::bitset::BitSet;
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
-use sonatina_ir::{InstId, ValueId};
+use sonatina_ir::{Immediate, InstId, ValueId};
+use std::{
+    collections::VecDeque,
+    sync::{Mutex, OnceLock},
+};
 
 use super::{
     Planner,
     normalize::SpillAwareCostModel,
     normalize_search::{
-        CostModel, NormalizePlan, SearchCfg, cost_for_steps, solve_optimal_operand_prep_plan,
+        CostModel, NormalizePlan, SearchCfg, Step, cost_for_steps, rebuild_operand_prep_plan,
+        solve_optimal_operand_prep_plan,
     },
 };
 
 use super::super::{CONSUME_LAST_USE_MAX_SWAPS, sym_stack::StackItem};
+
+const OPERAND_PREP_PLAN_CACHE_CAP: usize = 4096;
+const OPERAND_PREP_QUERY_MASK_BITS: usize = u64::BITS as usize;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum OperandPrepValueKey {
+    Imm(Immediate),
+    Val(ValueId),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum OperandPrepStackKey {
+    Value(OperandPrepValueKey),
+    FuncRetAddr,
+    CallRetAddr,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct OperandPrepQueryKey {
+    func_ptr: usize,
+    dup_max: u8,
+    swap_max: u8,
+    max_len: u8,
+    max_expansions: u32,
+    stack: SmallVec<[OperandPrepStackKey; 21]>,
+    args: SmallVec<[OperandPrepValueKey; 8]>,
+    last_use_mask: u64,
+    spilled_arg_mask: u64,
+    deep_preserve_mask: u64,
+}
+
+struct OperandPrepPlanCache {
+    map: FxHashMap<OperandPrepQueryKey, Vec<Step>>,
+    order: VecDeque<OperandPrepQueryKey>,
+}
+
+impl OperandPrepPlanCache {
+    fn new() -> Self {
+        Self {
+            map: FxHashMap::default(),
+            order: VecDeque::new(),
+        }
+    }
+
+    fn get(&self, key: &OperandPrepQueryKey) -> Option<&Vec<Step>> {
+        self.map.get(key)
+    }
+
+    fn insert(&mut self, key: OperandPrepQueryKey, val: Vec<Step>) {
+        if let Some(existing) = self.map.get_mut(&key) {
+            *existing = val;
+            return;
+        }
+
+        self.map.insert(key.clone(), val);
+        self.order.push_back(key);
+
+        while self.order.len() > OPERAND_PREP_PLAN_CACHE_CAP {
+            let Some(old) = self.order.pop_front() else {
+                break;
+            };
+            self.map.remove(&old);
+        }
+    }
+}
+
+fn operand_prep_plan_cache() -> &'static Mutex<OperandPrepPlanCache> {
+    static CACHE: OnceLock<Mutex<OperandPrepPlanCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(OperandPrepPlanCache::new()))
+}
 
 fn commutative_plan_cmp_key(
     plan: &NormalizePlan,
@@ -28,6 +104,149 @@ fn commutative_plan_cmp_key(
 }
 
 impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
+    fn use_operand_prep_query_cache(&self, args_len: usize) -> bool {
+        // The exact solver already has its own structural cache. On the hot binary/unary path,
+        // building and hashing the outer query key can cost more than it saves. Queries beyond
+        // the operand-prep solver's exact-state limits cannot use the cache path at all.
+        args_len > 2 && args_len <= 21 && args_len <= OPERAND_PREP_QUERY_MASK_BITS
+    }
+
+    fn operand_prep_query_mask(
+        &self,
+        args: &[ValueId],
+        predicate: impl Fn(ValueId) -> bool,
+    ) -> u64 {
+        args.iter()
+            .take(OPERAND_PREP_QUERY_MASK_BITS)
+            .enumerate()
+            .fold(0u64, |mask, (idx, &arg)| {
+                mask | (u64::from(predicate(arg)) << idx)
+            })
+    }
+
+    fn operand_prep_deep_preserve_mask(
+        &self,
+        args: &[ValueId],
+        consume_last_use: &BitSet<ValueId>,
+        search_cfg: SearchCfg,
+    ) -> u64 {
+        let start_limit = self.stack.len_above_func_ret();
+        let window_len = start_limit.min(search_cfg.max_len);
+        if start_limit == window_len {
+            return 0;
+        }
+
+        let mut mask = 0u64;
+        for (idx, &arg) in args.iter().take(OPERAND_PREP_QUERY_MASK_BITS).enumerate() {
+            if self.ctx.func.dfg.value_is_imm(arg) || consume_last_use.contains(arg) {
+                continue;
+            }
+
+            let found_in_tail = (window_len..start_limit)
+                .any(|depth| self.stack.item_at(depth) == Some(&StackItem::Value(arg)));
+            if found_in_tail {
+                mask |= 1u64 << idx;
+            }
+        }
+        mask
+    }
+
+    fn operand_prep_value_key(&self, value: ValueId) -> OperandPrepValueKey {
+        if let Some(imm) = self.ctx.func.dfg.value_imm(value) {
+            OperandPrepValueKey::Imm(imm)
+        } else {
+            OperandPrepValueKey::Val(value)
+        }
+    }
+
+    fn operand_prep_stack_key(&self, item: &StackItem) -> OperandPrepStackKey {
+        match *item {
+            StackItem::Value(value) => {
+                OperandPrepStackKey::Value(self.operand_prep_value_key(value))
+            }
+            StackItem::FuncRetAddr => OperandPrepStackKey::FuncRetAddr,
+            StackItem::CallRetAddr => OperandPrepStackKey::CallRetAddr,
+        }
+    }
+
+    fn operand_prep_query_key(
+        &self,
+        args: &[ValueId],
+        consume_last_use: &BitSet<ValueId>,
+        search_cfg: SearchCfg,
+    ) -> OperandPrepQueryKey {
+        let stack_len = self.stack.len_above_func_ret().min(search_cfg.max_len);
+        OperandPrepQueryKey {
+            func_ptr: self.ctx.func as *const _ as usize,
+            dup_max: search_cfg.dup_max as u8,
+            swap_max: search_cfg.swap_max as u8,
+            max_len: search_cfg.max_len as u8,
+            max_expansions: search_cfg.max_expansions as u32,
+            stack: self
+                .stack
+                .iter()
+                .take(stack_len)
+                .map(|item| self.operand_prep_stack_key(item))
+                .collect(),
+            args: args
+                .iter()
+                .map(|&arg| self.operand_prep_value_key(arg))
+                .collect(),
+            last_use_mask: self.operand_prep_query_mask(args, |arg| consume_last_use.contains(arg)),
+            spilled_arg_mask: self.operand_prep_query_mask(args, |arg| {
+                !self.ctx.func.dfg.value_is_imm(arg) && self.mem.spill_set().contains(arg)
+            }),
+            deep_preserve_mask: self.operand_prep_deep_preserve_mask(
+                args,
+                consume_last_use,
+                search_cfg,
+            ),
+        }
+    }
+
+    fn solve_operand_prep_cached(
+        &mut self,
+        args: &[ValueId],
+        consume_last_use: &BitSet<ValueId>,
+    ) -> Option<NormalizePlan> {
+        let search_cfg = self.operand_prep_search_cfg(args.len());
+        let cost = SpillAwareCostModel::new(self.mem.spill_set());
+        let use_query_cache = self.use_operand_prep_query_cache(args.len());
+        let cache_key = use_query_cache
+            .then(|| self.operand_prep_query_key(args, consume_last_use, search_cfg));
+
+        if let Some(hit) = cache_key.as_ref().and_then(|cache_key| {
+            let cache = operand_prep_plan_cache().lock().unwrap();
+            cache.get(cache_key).cloned()
+        }) && let Some(plan) = rebuild_operand_prep_plan(
+            self.ctx,
+            self.stack,
+            args,
+            consume_last_use,
+            &cost,
+            search_cfg,
+            hit,
+        ) {
+            return Some(plan);
+        }
+
+        let plan = solve_optimal_operand_prep_plan(
+            self.ctx,
+            self.stack,
+            args,
+            consume_last_use,
+            &cost,
+            search_cfg,
+        );
+        if let (Some(cache_key), Some(plan)) = (cache_key, &plan) {
+            operand_prep_plan_cache()
+                .lock()
+                .unwrap()
+                .insert(cache_key, plan.steps.clone());
+        }
+        plan
+    }
+
     fn inst_is_commutative(&self, inst: InstId) -> bool {
         use sonatina_ir::{
             InstDowncast,
@@ -104,12 +323,16 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             );
 
             let (plan, swapped) = match (original_plan, swapped_plan) {
-                (Some(p), None) => (p, false),
-                (None, Some(p)) => (p, true),
-                (Some(p0), Some(p1)) => {
-                    let c0 = commutative_plan_cmp_key(&p0, &cost);
-                    let c1 = commutative_plan_cmp_key(&p1, &cost);
-                    if c1 < c0 { (p1, true) } else { (p0, false) }
+                (Some(plan), None) => (plan, false),
+                (None, Some(plan)) => (plan, true),
+                (Some(original), Some(swapped)) => {
+                    let original_cost = commutative_plan_cmp_key(&original, &cost);
+                    let swapped_cost = commutative_plan_cmp_key(&swapped, &cost);
+                    if swapped_cost < original_cost {
+                        (swapped, true)
+                    } else {
+                        (original, false)
+                    }
                 }
                 (None, None) => {
                     self.prepare_operands_greedy(args.as_slice(), consume_last_use);
@@ -212,17 +435,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             return;
         }
 
-        let cost = SpillAwareCostModel::new(self.mem.spill_set());
-        let search_cfg = self.operand_prep_search_cfg(args.len());
-
-        let Some(plan) = solve_optimal_operand_prep_plan(
-            self.ctx,
-            self.stack,
-            args,
-            consume_last_use,
-            &cost,
-            search_cfg,
-        ) else {
+        let Some(plan) = self.solve_operand_prep_cached(args, consume_last_use) else {
             self.prepare_operands_greedy(args, consume_last_use);
             return;
         };
@@ -307,7 +520,7 @@ mod tests {
                 builder::StackifyReachability,
                 planner::{
                     MemPlan, Planner,
-                    normalize_search::{Cost, EstimatedCostModel, Step},
+                    normalize_search::{Cost, EstimatedCostModel, KeyInfo, Step},
                     test_utils::build_stackify_test_context,
                 },
                 slots::{FreeSlotPools, SpillSlotPools},
@@ -317,7 +530,7 @@ mod tests {
         },
     };
     use cranelift_entity::SecondaryMap;
-    use sonatina_ir::cfg::ControlFlowGraph;
+    use sonatina_ir::{Immediate, Type, Value, cfg::ControlFlowGraph};
     use sonatina_parser::parse_module;
 
     #[test]
@@ -340,6 +553,264 @@ mod tests {
             commutative_plan_cmp_key(&cheaper_emitted, &cost)
                 < commutative_plan_cmp_key(&pricier_emitted, &cost)
         );
+    }
+
+    #[test]
+    fn operand_prep_query_key_tracks_immediate_payloads() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() {
+block0:
+    return;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let imm = func.dfg.make_imm_value(Immediate::I8(1));
+
+            let key_before = {
+                let mut cfg = ControlFlowGraph::new();
+                cfg.compute(func);
+                let entry = cfg.entry().expect("missing entry block");
+
+                let mut liveness = Liveness::new();
+                liveness.compute(func, &cfg);
+
+                let mut dom = DomTree::new();
+                dom.compute(&cfg);
+
+                let mut scc = CfgSccAnalysis::new();
+                scc.compute(&cfg);
+
+                let reach = StackifyReachability::new(16);
+                let ctx =
+                    build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+
+                let spill_set = BitSet::default();
+                let mut spill_requests = BitSet::default();
+                let spill_obj = SecondaryMap::new();
+                let mut free_slots = FreeSlotPools::default();
+                let mut slots = SpillSlotPools::default();
+                let mem = MemPlan::new(
+                    SpillSet::new(&spill_set),
+                    &mut spill_requests,
+                    &ctx,
+                    &spill_obj,
+                    &mut free_slots,
+                    &mut slots,
+                );
+
+                let mut stack = SymStack::entry_stack(func, false);
+                let mut actions = crate::stackalloc::Actions::new();
+                let planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+                let search_cfg = planner.operand_prep_search_cfg(1);
+                planner.operand_prep_query_key(&[imm], &BitSet::default(), search_cfg)
+            };
+
+            func.dfg.immediates.remove(&Immediate::I8(1));
+            func.dfg.values[imm] = Value::Immediate {
+                imm: Immediate::I8(2),
+                ty: Type::I8,
+            };
+            func.dfg.immediates.insert(Immediate::I8(2), imm);
+
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(16);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+
+            let spill_set = BitSet::default();
+            let mut spill_requests = BitSet::default();
+            let spill_obj = SecondaryMap::new();
+            let mut free_slots = FreeSlotPools::default();
+            let mut slots = SpillSlotPools::default();
+            let mem = MemPlan::new(
+                SpillSet::new(&spill_set),
+                &mut spill_requests,
+                &ctx,
+                &spill_obj,
+                &mut free_slots,
+                &mut slots,
+            );
+
+            let mut stack = SymStack::entry_stack(func, false);
+            let mut actions = crate::stackalloc::Actions::new();
+            let planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+            let search_cfg = planner.operand_prep_search_cfg(1);
+            let key_after = planner.operand_prep_query_key(&[imm], &BitSet::default(), search_cfg);
+
+            assert_ne!(key_before, key_after);
+        });
+    }
+
+    #[test]
+    fn operand_prep_query_cache_rebuilds_current_immediate_key_infos() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() {
+block0:
+    return;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let old_imm = func.dfg.make_imm_value(Immediate::I8(1));
+            let current_imm = func.dfg.make_value(Value::Immediate {
+                imm: Immediate::I8(1),
+                ty: Type::I8,
+            });
+            let imm2 = func.dfg.make_imm_value(Immediate::I8(2));
+            let imm3 = func.dfg.make_imm_value(Immediate::I8(3));
+
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(16);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+
+            let spill_set = BitSet::default();
+            let mut spill_requests = BitSet::default();
+            let spill_obj = SecondaryMap::new();
+            let mut free_slots = FreeSlotPools::default();
+            let mut slots = SpillSlotPools::default();
+            let mem = MemPlan::new(
+                SpillSet::new(&spill_set),
+                &mut spill_requests,
+                &ctx,
+                &spill_obj,
+                &mut free_slots,
+                &mut slots,
+            );
+
+            let old_args = [old_imm, imm2, imm3];
+            let current_args = [current_imm, imm2, imm3];
+            let mut stack = SymStack::entry_stack(func, false);
+            let mut actions = crate::stackalloc::Actions::new();
+            let mut planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+            let search_cfg = planner.operand_prep_search_cfg(current_args.len());
+            let old_key = planner.operand_prep_query_key(&old_args, &BitSet::default(), search_cfg);
+            let current_key =
+                planner.operand_prep_query_key(&current_args, &BitSet::default(), search_cfg);
+
+            assert_eq!(old_key, current_key);
+
+            operand_prep_plan_cache()
+                .lock()
+                .unwrap()
+                .insert(old_key, vec![Step::PushImm(0)]);
+
+            let plan = planner
+                .solve_operand_prep_cached(&current_args, &BitSet::default())
+                .expect("cache hit should rebuild a plan");
+
+            let [
+                KeyInfo::Imm {
+                    rep_vid, rep_imm, ..
+                },
+                ..,
+            ] = plan.key_infos.as_slice()
+            else {
+                panic!("expected first cached key info to be immediate")
+            };
+
+            assert_eq!(*rep_vid, current_imm);
+            assert_eq!(*rep_imm, Immediate::I8(1));
+        });
+    }
+
+    #[test]
+    fn operand_prep_query_masks_cap_at_u64_width() {
+        let params = (0..65)
+            .map(|idx| format!("v{idx}.i256"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let src = format!(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f({params}) {{
+block0:
+    return;
+}}
+"#
+        );
+
+        let parsed = parse_module(&src).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(16);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+
+            let spill_set = BitSet::default();
+            let mut spill_requests = BitSet::default();
+            let spill_obj = SecondaryMap::new();
+            let mut free_slots = FreeSlotPools::default();
+            let mut slots = SpillSlotPools::default();
+            let mem = MemPlan::new(
+                SpillSet::new(&spill_set),
+                &mut spill_requests,
+                &ctx,
+                &spill_obj,
+                &mut free_slots,
+                &mut slots,
+            );
+
+            let args: Vec<_> = func.arg_values.iter().copied().collect();
+            let mut stack = SymStack::entry_stack(func, false);
+            let mut actions = crate::stackalloc::Actions::new();
+            let planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+            let search_cfg = planner.operand_prep_search_cfg(args.len());
+
+            assert!(!planner.use_operand_prep_query_cache(args.len()));
+            assert_eq!(planner.operand_prep_query_mask(&args, |_| true), u64::MAX);
+            assert_eq!(
+                planner.operand_prep_deep_preserve_mask(&args, &BitSet::default(), search_cfg),
+                u64::MAX << search_cfg.max_len
+            );
+        });
     }
 
     #[test]

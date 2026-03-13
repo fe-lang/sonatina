@@ -16,10 +16,15 @@ pub(crate) mod static_arena_alloc;
 
 use opcode::OpCode;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::cell::RefCell;
+use std::{
+    cell::RefCell,
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+};
 use tracing::{debug_span, info_span, trace_span};
 
 use crate::{
+    analysis::func_behavior,
     critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
@@ -35,10 +40,11 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, Immediate, InstId, InstSetExt, Module, Type, U256, ValueId,
     cfg::ControlFlowGraph,
-    inst::{control_flow::BranchKind, data::SymbolRef, evm::inst_set::EvmInstKind},
+    inst::{data::SymbolRef, evm::inst_set::EvmInstKind},
+    ir_writer::{FuncWriter, IrWrite},
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
-    object::Directive,
+    object::{Directive, ObjectName, SectionName},
     types::{CompoundType, CompoundTypeRef},
 };
 use sonatina_triple::{EvmVersion, OperatingSystem};
@@ -64,12 +70,19 @@ pub enum PushWidthPolicy {
     MinimalRelax,
 }
 
+#[derive(Clone)]
 struct PreparedSection {
+    module_ptr: usize,
+    object: ObjectName,
+    section: SectionName,
+    funcs: Vec<FuncRef>,
+    fingerprint: u64,
     section_entry: FuncRef,
     plan: ProgramMemoryPlan,
     has_persistent_mallocs: bool,
     has_explicit_free_ptr_writes: bool,
     dyn_sp_plan: DynSpPlan,
+    function_entry_jump_targets: FxHashSet<FuncRef>,
     allocs: FxHashMap<FuncRef, StackifyAlloc>,
     block_orders: FxHashMap<FuncRef, Vec<BlockId>>,
 }
@@ -97,12 +110,49 @@ enum FrontierInitKind {
     Checked,
 }
 
+#[derive(Clone)]
 struct PreparedLowering {
     alloc: StackifyAlloc,
     block_order: Vec<BlockId>,
     mem_plan: FuncMemPlan,
     frame_summary: FrameSummary,
     dyn_sp_plan: Option<FuncDynSpPlan>,
+    function_entry_jumpdest: bool,
+}
+
+fn canonicalize_prepared_funcs(funcs: &[FuncRef]) -> Vec<FuncRef> {
+    let mut funcs = funcs.to_vec();
+    funcs.sort_unstable_by_key(|func| func.as_u32());
+    funcs
+}
+
+fn compute_prepared_section_fingerprint(
+    module: &Module,
+    funcs: &[FuncRef],
+    section_ctx: &SectionLoweringCtx<'_>,
+) -> u64 {
+    let funcs = canonicalize_prepared_funcs(funcs);
+    let mut hasher = DefaultHasher::new();
+    section_ctx.object.hash(&mut hasher);
+    section_ctx.section.hash(&mut hasher);
+
+    if let Some(object) = module.objects.get(section_ctx.object.0.as_str()) {
+        let mut bytes = Vec::new();
+        object
+            .write(&mut bytes, &module.ctx)
+            .expect("object fingerprint write failed");
+        bytes.hash(&mut hasher);
+    }
+
+    for &func in &funcs {
+        func.as_u32().hash(&mut hasher);
+        let func_text = module.func_store.view(func, |function| {
+            FuncWriter::new(func, function).dump_string()
+        });
+        func_text.hash(&mut hasher);
+    }
+
+    hasher.finish()
 }
 
 pub struct EvmBackend {
@@ -113,7 +163,6 @@ pub struct EvmBackend {
     current_mem_plan: RefCell<Option<FuncMemPlan>>,
     current_frame_summary: RefCell<Option<FrameSummary>>,
     current_dyn_sp_plan: RefCell<Option<FuncDynSpPlan>>,
-    current_jump_targets: RefCell<Option<FxHashSet<BlockId>>>,
 }
 impl EvmBackend {
     pub fn new(isa: Evm) -> Self {
@@ -133,7 +182,6 @@ impl EvmBackend {
             current_mem_plan: RefCell::new(None),
             current_frame_summary: RefCell::new(None),
             current_dyn_sp_plan: RefCell::new(None),
-            current_jump_targets: RefCell::new(None),
         }
     }
 
@@ -416,34 +464,92 @@ impl EvmBackend {
         out
     }
 
-    fn take_prepared_function(&self, func: FuncRef) -> Option<PreparedLowering> {
-        let mut state = self.section_state.borrow_mut();
-        let section = state.as_mut()?;
+    fn prepared_section_matches(
+        &self,
+        module: &Module,
+        funcs: &[FuncRef],
+        section_ctx: &SectionLoweringCtx<'_>,
+    ) -> bool {
+        let Some((module_ptr, object, section, prepared_funcs, fingerprint)) =
+            self.section_state.borrow().as_ref().map(|state| {
+                (
+                    state.module_ptr,
+                    state.object.clone(),
+                    state.section.clone(),
+                    state.funcs.clone(),
+                    state.fingerprint,
+                )
+            })
+        else {
+            return false;
+        };
 
-        let alloc = section.allocs.remove(&func)?;
-        let block_order = section.block_orders.remove(&func)?;
+        module_ptr == module as *const _ as usize
+            && object == *section_ctx.object
+            && section == *section_ctx.section
+            && prepared_funcs == canonicalize_prepared_funcs(funcs)
+            && fingerprint
+                == compute_prepared_section_fingerprint(module, &prepared_funcs, section_ctx)
+    }
+
+    fn prepared_function(
+        &self,
+        module: &Module,
+        func: FuncRef,
+        section_ctx: &SectionLoweringCtx<'_>,
+    ) -> Option<PreparedLowering> {
+        let (module_ptr, object, section, funcs, fingerprint) =
+            self.section_state.borrow().as_ref().map(|state| {
+                (
+                    state.module_ptr,
+                    state.object.clone(),
+                    state.section.clone(),
+                    state.funcs.clone(),
+                    state.fingerprint,
+                )
+            })?;
+
+        if module_ptr != module as *const _ as usize
+            || object != *section_ctx.object
+            || section != *section_ctx.section
+            || !funcs.contains(&func)
+            || fingerprint != compute_prepared_section_fingerprint(module, &funcs, section_ctx)
+        {
+            *self.section_state.borrow_mut() = None;
+            return None;
+        }
+
+        let state = self.section_state.borrow();
+        let section = state.as_ref()?;
+
+        let alloc = section.allocs.get(&func)?.clone();
+        let block_order = section.block_orders.get(&func)?.clone();
         let mem_plan = section.plan.funcs.get(&func).cloned()?;
         let frame_summary = section
             .dyn_sp_plan
             .frame_summaries
-            .remove(&func)
+            .get(&func)
+            .cloned()
             .unwrap_or_default();
         let dyn_sp_plan = Some(FuncDynSpPlan {
             entry_init: func == section.section_entry && section.dyn_sp_plan.entry_init,
             frontier_init_calls: section
                 .dyn_sp_plan
                 .frontier_init_calls
-                .remove(&func)
+                .get(&func)
+                .cloned()
                 .unwrap_or_default(),
             checked_frontier_init_calls: section
                 .dyn_sp_plan
                 .checked_frontier_init_calls
-                .remove(&func)
+                .get(&func)
+                .cloned()
                 .unwrap_or_default(),
             entry_live_frame: section
                 .dyn_sp_plan
                 .entry_live_frame
-                .remove(&func)
+                .get(&func)
+                .copied()
                 .unwrap_or(false),
         });
 
@@ -453,6 +559,7 @@ impl EvmBackend {
             mem_plan,
             frame_summary,
             dyn_sp_plan,
+            function_entry_jumpdest: section.function_entry_jump_targets.contains(&func),
         })
     }
 
@@ -610,6 +717,7 @@ impl EvmBackend {
             mem_plan,
             frame_summary,
             dyn_sp_plan,
+            function_entry_jumpdest,
         } = prepared;
         let _span = trace_span!(
             "sonatina.codegen.evm.lower_prepared_function",
@@ -631,9 +739,6 @@ impl EvmBackend {
                 );
                 let _dyn_sp_plan_guard =
                     CurrentDynSpPlanGuard::new(&self.current_dyn_sp_plan, dyn_sp_plan.clone());
-                let jump_targets = compute_explicit_jump_targets(function, &block_order);
-                let _jump_targets_guard =
-                    CurrentJumpTargetsGuard::new(&self.current_jump_targets, jump_targets);
                 let mut alloc = FinalAlloc::new(alloc, mem_plan);
                 let lower = Lower::new(&module.ctx, function, &block_order);
                 lower.lower(self, &mut alloc).map_err(|e| format!("{e:?}"))
@@ -644,6 +749,14 @@ impl EvmBackend {
                 trace_span!("sonatina.codegen.evm.lower_prepared_function.prune_redundant_opcodes")
                     .entered();
             prune_redundant_opcode_sequences(&mut vcode, &block_order);
+        }
+        {
+            let _span =
+                trace_span!("sonatina.codegen.evm.lower_prepared_function.materialize_jumpdests")
+                    .entered();
+            module.func_store.view(func, |function| {
+                materialize_jumpdests(&mut vcode, function, &block_order, function_entry_jumpdest);
+            });
         }
 
         Ok(LoweredFunction { vcode, block_order })
@@ -692,60 +805,112 @@ impl EvmBackend {
     }
 }
 
-fn compute_explicit_jump_targets(
-    function: &Function,
-    block_order: &[BlockId],
-) -> FxHashSet<BlockId> {
-    let mut next_in_layout: FxHashMap<BlockId, BlockId> = FxHashMap::default();
-    for window in block_order.windows(2) {
-        next_in_layout.insert(window[0], window[1]);
-    }
+fn compute_function_entry_jump_targets(module: &Module, funcs: &[FuncRef]) -> FxHashSet<FuncRef> {
+    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
+    let mut targets = FxHashSet::default();
+    let evm_inst_set = Evm::new(module.ctx.triple).inst_set();
 
-    let mut targets: FxHashSet<BlockId> = FxHashSet::default();
-
-    for block in function.layout.iter_block() {
-        let Some(term) = function.layout.last_inst_of(block) else {
-            continue;
-        };
-        let Some(branch) = function.dfg.branch_info(term) else {
-            continue;
-        };
-
-        let next = next_in_layout.get(&block).copied();
-        match branch.branch_kind() {
-            BranchKind::Jump(jump) => {
-                let dest = *jump.dest();
-                if Some(dest) != next {
-                    targets.insert(dest);
-                }
-            }
-            BranchKind::Br(br) => {
-                let nz_dest = *br.nz_dest();
-                let z_dest = *br.z_dest();
-
-                if Some(nz_dest) == next {
-                    targets.insert(z_dest);
-                } else {
-                    targets.insert(nz_dest);
-                    if Some(z_dest) != next {
-                        targets.insert(z_dest);
+    for &func_ref in funcs {
+        module.func_store.view(func_ref, |function| {
+            for block in function.layout.iter_block() {
+                for inst in function.layout.iter_inst(block) {
+                    match evm_inst_set.resolve_inst(function.dfg.inst(inst)) {
+                        EvmInstKind::Call(call) => {
+                            let callee = *call.callee();
+                            if funcs_set.contains(&callee) {
+                                targets.insert(callee);
+                            }
+                        }
+                        EvmInstKind::GetFunctionPtr(get_fn) => {
+                            let func = *get_fn.func();
+                            if funcs_set.contains(&func) {
+                                targets.insert(func);
+                            }
+                        }
+                        EvmInstKind::SymAddr(sym_addr) => {
+                            if let SymbolRef::Func(func) = sym_addr.sym()
+                                && funcs_set.contains(func)
+                            {
+                                targets.insert(*func);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
-            BranchKind::BrTable(table) => {
-                for &(_, dest) in table.table().iter() {
-                    targets.insert(dest);
-                }
-                if let Some(default) = table.default()
-                    && Some(*default) != next
-                {
-                    targets.insert(*default);
-                }
-            }
-        }
+        });
     }
 
     targets
+}
+
+fn referenced_insn_label_targets(vcode: &VCode<OpCode>) -> FxHashSet<VCodeInst> {
+    let mut targets = FxHashSet::default();
+    for (_, fixup) in vcode.fixups.values() {
+        let VCodeFixup::Label(label) = fixup else {
+            continue;
+        };
+        if let Label::Insn(inst) = vcode.labels[*label] {
+            targets.insert(inst);
+        }
+    }
+    targets
+}
+
+fn referenced_block_label_targets(vcode: &VCode<OpCode>) -> FxHashSet<BlockId> {
+    let mut targets = FxHashSet::default();
+    for (_, fixup) in vcode.fixups.values() {
+        let VCodeFixup::Label(label) = fixup else {
+            continue;
+        };
+        if let Label::Block(block) = vcode.labels[*label] {
+            targets.insert(block);
+        }
+    }
+    targets
+}
+
+fn prepend_block_inst(vcode: &mut VCode<OpCode>, block: BlockId, op: OpCode) -> VCodeInst {
+    let inst = vcode.insts.push(op);
+    vcode.inst_ir[inst] = None.into();
+
+    let existing: Vec<_> = vcode.block_insns(block).collect();
+    let mut list: EntityList<VCodeInst> = Default::default();
+    list.push(inst, &mut vcode.insts_pool);
+    for inst in existing {
+        list.push(inst, &mut vcode.insts_pool);
+    }
+    vcode.blocks[block] = list;
+
+    inst
+}
+
+fn ensure_block_starts_with_jumpdest(vcode: &mut VCode<OpCode>, block: BlockId) {
+    if vcode
+        .block_insns(block)
+        .next()
+        .is_some_and(|inst| (vcode.insts[inst] as u8) == (OpCode::JUMPDEST as u8))
+    {
+        return;
+    }
+
+    prepend_block_inst(vcode, block, OpCode::JUMPDEST);
+}
+
+fn materialize_jumpdests(
+    vcode: &mut VCode<OpCode>,
+    function: &Function,
+    block_order: &[BlockId],
+    function_entry_jumpdest: bool,
+) {
+    let jump_targets = referenced_block_label_targets(vcode);
+    let entry = function.layout.entry_block();
+
+    for &block in block_order {
+        if jump_targets.contains(&block) || (Some(block) == entry && function_entry_jumpdest) {
+            ensure_block_starts_with_jumpdest(vcode, block);
+        }
+    }
 }
 
 fn compute_return_escape_caller_clamp_words(
@@ -1191,12 +1356,7 @@ fn is_noop_stack_peephole_sequence(
 }
 
 fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_order: &[BlockId]) {
-    let mut label_targets: FxHashSet<VCodeInst> = FxHashSet::default();
-    for label in vcode.labels.values() {
-        if let Label::Insn(inst) = *label {
-            label_targets.insert(inst);
-        }
-    }
+    let label_targets = referenced_insn_label_targets(vcode);
 
     for block in block_order.iter().copied() {
         let insts: Vec<VCodeInst> = vcode.block_insns(block).collect();
@@ -1373,23 +1533,6 @@ impl<'a> CurrentDynSpPlanGuard<'a> {
 }
 
 impl Drop for CurrentDynSpPlanGuard<'_> {
-    fn drop(&mut self) {
-        *self.slot.borrow_mut() = None;
-    }
-}
-
-struct CurrentJumpTargetsGuard<'a> {
-    slot: &'a RefCell<Option<FxHashSet<BlockId>>>,
-}
-
-impl<'a> CurrentJumpTargetsGuard<'a> {
-    fn new(slot: &'a RefCell<Option<FxHashSet<BlockId>>>, targets: FxHashSet<BlockId>) -> Self {
-        *slot.borrow_mut() = Some(targets);
-        Self { slot }
-    }
-}
-
-impl Drop for CurrentJumpTargetsGuard<'_> {
     fn drop(&mut self) {
         *self.slot.borrow_mut() = None;
     }
@@ -1589,6 +1732,10 @@ impl LowerBackend for EvmBackend {
         funcs: &[FuncRef],
         section_ctx: &SectionLoweringCtx<'_>,
     ) {
+        if self.prepared_section_matches(module, funcs, section_ctx) {
+            return;
+        }
+
         let _span =
             info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
         legalize_evm_section(module, funcs);
@@ -1632,59 +1779,13 @@ impl LowerBackend for EvmBackend {
             }
         }
 
-        // Scratch fixed point: scratch spills depend on transitive scratch barriers.
-        let mut scratch_spill_funcs: FxHashSet<FuncRef> = FxHashSet::default();
-        let mut scratch_effects = {
-            let _span =
-                debug_span!("sonatina.codegen.evm.compute_scratch_effects_initial").entered();
-            scratch_effects::compute_scratch_effects(module, funcs, &scratch_spill_funcs, &self.isa)
-        };
-
-        let mut analyses: FxHashMap<FuncRef, memory_plan::FuncAnalysis> = FxHashMap::default();
-        let mut iter = 0usize;
-        loop {
-            let _span =
-                debug_span!("sonatina.codegen.evm.scratch_fixed_point_iter", iter).entered();
-            analyses.clear();
-            let mut new_scratch_spill_funcs: FxHashSet<FuncRef> = FxHashSet::default();
-
-            for &func in funcs {
-                let _span = trace_span!(
-                    "sonatina.codegen.evm.prepare_stackify_analysis",
-                    func_ref = func.as_u32()
-                )
-                .entered();
-                let analysis = module.func_store.modify(func, |function| {
-                    prepare_stackify_analysis(
-                        function,
-                        &module.ctx,
-                        self,
-                        &ptr_escape,
-                        Some(&scratch_effects),
-                    )
-                });
-                if analysis.alloc.uses_scratch_spills() {
-                    new_scratch_spill_funcs.insert(func);
-                }
-                analyses.insert(func, analysis);
-            }
-
-            if new_scratch_spill_funcs == scratch_spill_funcs {
-                break;
-            }
-
-            scratch_spill_funcs = new_scratch_spill_funcs;
-            scratch_effects = {
-                let _span = trace_span!("sonatina.codegen.evm.recompute_scratch_effects").entered();
-                scratch_effects::compute_scratch_effects(
-                    module,
-                    funcs,
-                    &scratch_spill_funcs,
-                    &self.isa,
-                )
-            };
-            iter += 1;
+        {
+            let _span = debug_span!("sonatina.codegen.evm.func_behavior").entered();
+            func_behavior::analyze_module(module);
         }
+
+        let (analyses, scratch_effects) =
+            compute_scratch_effect_analyses(module, funcs, self, &ptr_escape);
 
         let mut plan = {
             let _span = debug_span!("sonatina.codegen.evm.compute_program_memory_plan").entered();
@@ -1801,6 +1902,11 @@ impl LowerBackend for EvmBackend {
         };
 
         let section_entry = resolve_section_entry(module, section_ctx, funcs);
+        let function_entry_jump_targets = {
+            let _span =
+                trace_span!("sonatina.codegen.evm.compute_function_entry_jump_targets").entered();
+            compute_function_entry_jump_targets(module, funcs)
+        };
         let dyn_sp_plan = {
             let _span = trace_span!("sonatina.codegen.evm.compute_dyn_sp_plan").entered();
             compute_dyn_sp_plan(module, funcs, section_entry, &plan, &analyses, &self.isa)
@@ -1827,11 +1933,17 @@ impl LowerBackend for EvmBackend {
             )
             .entered();
             *self.section_state.borrow_mut() = Some(PreparedSection {
+                module_ptr: module as *const _ as usize,
+                object: section_ctx.object.clone(),
+                section: section_ctx.section.clone(),
+                funcs: canonicalize_prepared_funcs(funcs),
+                fingerprint: compute_prepared_section_fingerprint(module, funcs, section_ctx),
                 section_entry,
                 plan,
                 has_persistent_mallocs,
                 has_explicit_free_ptr_writes,
                 dyn_sp_plan,
+                function_entry_jump_targets,
                 allocs,
                 block_orders,
             });
@@ -1844,9 +1956,7 @@ impl LowerBackend for EvmBackend {
         func: FuncRef,
         section_ctx: &SectionLoweringCtx<'_>,
     ) -> Result<LoweredFunction<Self::MInst>, Self::Error> {
-        let _ = section_ctx;
-
-        let prepared = self.take_prepared_function(func);
+        let prepared = self.prepared_function(module, func, section_ctx);
         let _span = debug_span!(
             "sonatina.codegen.evm.lower_function",
             func_ref = func.as_u32(),
@@ -1884,6 +1994,11 @@ impl LowerBackend for EvmBackend {
                 AggregateLowerToMemoryLegalize::default().run(function, &module.ctx);
                 assert_aggregate_legalized(function, &module.ctx);
             });
+        }
+
+        {
+            let _span = trace_span!("sonatina.codegen.evm.lower_function.func_behavior").entered();
+            func_behavior::analyze_module(module);
         }
 
         let analysis = {
@@ -1937,6 +2052,7 @@ impl LowerBackend for EvmBackend {
             mem_plan,
             frame_summary,
             dyn_sp_plan: None,
+            function_entry_jumpdest: true,
         };
         self.lower_prepared_function(module, func, lowering)
     }
@@ -2005,16 +2121,6 @@ impl LowerBackend for EvmBackend {
         _alloc: &mut dyn Allocator,
         block: BlockId,
     ) {
-        // Entry blocks and explicit jump targets need a `JUMPDEST`.
-        // Blocks reached purely by fallthrough do not.
-        let is_jump_target = self
-            .current_jump_targets
-            .borrow()
-            .as_ref()
-            .is_none_or(|targets| targets.contains(&block));
-        if ctx.is_entry(block) || is_jump_target {
-            ctx.push(OpCode::JUMPDEST);
-        }
         self.emit_lazy_frame_enter_if_site_matches(
             ctx,
             _alloc.frame_size_slots(),
@@ -2248,63 +2354,80 @@ impl LowerBackend for EvmBackend {
                 let callee = *call.callee();
                 let mut actions = alloc.read(insn, &args);
 
-                let Some(cont_pos) = actions
+                let cont_pos = actions
                     .iter()
-                    .position(|a| matches!(a, Action::PushContinuationOffset))
-                else {
-                    panic!("call lowering expected Action::PushContinuationOffset");
-                };
+                    .position(|a| matches!(a, Action::PushContinuationOffset));
+                if let Some(cont_pos) = cont_pos {
+                    // Some allocators need to run block-entry prologues before pushing the
+                    // continuation address for the call. We therefore allow the marker to
+                    // appear anywhere in the action list and split around it.
+                    let suffix: SmallVec<[Action; 2]> = actions.drain(cont_pos + 1..).collect();
+                    let marker = actions.remove(cont_pos);
+                    debug_assert_eq!(
+                        marker,
+                        Action::PushContinuationOffset,
+                        "expected continuation marker at split point"
+                    );
 
-                // Some allocators need to run block-entry prologues before pushing the
-                // continuation address for the call. We therefore allow the marker to
-                // appear anywhere in the action list and split around it.
-                let suffix: SmallVec<[Action; 2]> = actions.drain(cont_pos + 1..).collect();
-                let marker = actions.remove(cont_pos);
-                debug_assert_eq!(
-                    marker,
-                    Action::PushContinuationOffset,
-                    "expected continuation marker at split point"
-                );
+                    // Prefix actions run before the continuation address is pushed.
+                    let prefix_folded_len = fold_stack_actions(&actions).len();
+                    self.emit_actions_for_site_from_offset(
+                        ctx,
+                        &actions,
+                        frame_size_slots,
+                        FrameSite::PreInst(insn),
+                        0,
+                    );
 
-                // Prefix actions run before the continuation address is pushed.
-                let prefix_folded_len = fold_stack_actions(&actions).len();
-                self.emit_actions_for_site_from_offset(
-                    ctx,
-                    &actions,
-                    frame_size_slots,
-                    FrameSite::PreInst(insn),
-                    0,
-                );
+                    // Push the return pc / continuation address.
+                    let push_callback = ctx.push(OpCode::PUSH1);
 
-                // Push the return pc / continuation address.
-                let push_callback = ctx.push(OpCode::PUSH1);
+                    // Move fn args onto stack
+                    self.emit_actions_for_site_from_offset(
+                        ctx,
+                        &suffix,
+                        frame_size_slots,
+                        FrameSite::PreInst(insn),
+                        prefix_folded_len,
+                    );
 
-                // Move fn args onto stack
-                self.emit_actions_for_site_from_offset(
-                    ctx,
-                    &suffix,
-                    frame_size_slots,
-                    FrameSite::PreInst(insn),
-                    prefix_folded_len,
-                );
+                    match self.current_frontier_init_kind(insn) {
+                        Some(FrontierInitKind::Always) => init_dyn_sp(ctx, self.dyn_base()),
+                        Some(FrontierInitKind::Checked) => ensure_dyn_sp_init(ctx, self.dyn_base()),
+                        None => {}
+                    }
 
-                match self.current_frontier_init_kind(insn) {
-                    Some(FrontierInitKind::Always) => init_dyn_sp(ctx, self.dyn_base()),
-                    Some(FrontierInitKind::Checked) => ensure_dyn_sp_init(ctx, self.dyn_base()),
-                    None => {}
+                    // Push fn address onto stack and jump
+                    let p = ctx.push(OpCode::PUSH1);
+                    ctx.add_label_reference(p, Label::Function(callee));
+                    ctx.push(OpCode::JUMP);
+
+                    // Mark return pc as jumpdest
+                    let jumpdest_op = ctx.push(OpCode::JUMPDEST);
+                    ctx.add_label_reference(push_callback, Label::Insn(jumpdest_op));
+
+                    // Post-call: spill the call results if needed.
+                    emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
+                } else {
+                    // `noreturn` callees never re-enter the caller, so there is no local
+                    // continuation address to materialize or post-call state to restore.
+                    self.emit_actions_for_site(
+                        ctx,
+                        &actions,
+                        frame_size_slots,
+                        FrameSite::PreInst(insn),
+                    );
+
+                    match self.current_frontier_init_kind(insn) {
+                        Some(FrontierInitKind::Always) => init_dyn_sp(ctx, self.dyn_base()),
+                        Some(FrontierInitKind::Checked) => ensure_dyn_sp_init(ctx, self.dyn_base()),
+                        None => {}
+                    }
+
+                    let p = ctx.push(OpCode::PUSH1);
+                    ctx.add_label_reference(p, Label::Function(callee));
+                    ctx.push(OpCode::JUMP);
                 }
-
-                // Push fn address onto stack and jump
-                let p = ctx.push(OpCode::PUSH1);
-                ctx.add_label_reference(p, Label::Function(callee));
-                ctx.push(OpCode::JUMP);
-
-                // Mark return pc as jumpdest
-                let jumpdest_op = ctx.push(OpCode::JUMPDEST);
-                ctx.add_label_reference(push_callback, Label::Insn(jumpdest_op));
-
-                // Post-call: spill the call results if needed.
-                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
 
             EvmInstKind::Return(_) => {
@@ -3654,6 +3777,87 @@ fn prepare_stackify_analysis(
     }
 }
 
+fn compute_scratch_effect_analyses(
+    module: &Module,
+    funcs: &[FuncRef],
+    backend: &EvmBackend,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+) -> (
+    FxHashMap<FuncRef, memory_plan::FuncAnalysis>,
+    FxHashSet<FuncRef>,
+) {
+    let _span = debug_span!("sonatina.codegen.evm.compute_scratch_effect_analyses").entered();
+    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
+    let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
+    let scc = SccBuilder::new().compute_scc(&call_graph);
+    let topo = topo_sort_sccs(&funcs_set, &call_graph, &scc);
+    let local_scratch_clobbers =
+        scratch_effects::compute_local_scratch_clobbers(module, funcs, &backend.isa);
+
+    let mut analyses: FxHashMap<FuncRef, memory_plan::FuncAnalysis> = FxHashMap::default();
+    let mut scratch_effects: FxHashSet<FuncRef> = FxHashSet::default();
+
+    for &scc_ref in topo.iter().rev() {
+        let mut components: Vec<FuncRef> = scc
+            .scc_info(scc_ref)
+            .components
+            .iter()
+            .copied()
+            .filter(|func| funcs_set.contains(func))
+            .collect();
+        components.sort_unstable_by_key(|func| func.as_u32());
+
+        // Recursive SCCs are self-referential scratch barriers: if any member uses scratch
+        // spills, every intra-SCC call must preserve them. Analyze the SCC under that barrier
+        // assumption up front so scratch-spill eligibility remains monotone instead of
+        // oscillating between "self-call is a barrier" and "self-call is not a barrier".
+        let cycle_scratch_effects = scc.scc_info(scc_ref).is_cycle.then(|| {
+            let mut cycle_scratch_effects = scratch_effects.clone();
+            cycle_scratch_effects.extend(components.iter().copied());
+            cycle_scratch_effects
+        });
+        let analysis_scratch_effects = cycle_scratch_effects.as_ref().unwrap_or(&scratch_effects);
+
+        let mut scc_uses_scratch_spills = false;
+        for func in components.iter().copied() {
+            let _span = trace_span!(
+                "sonatina.codegen.evm.prepare_stackify_analysis",
+                func_ref = func.as_u32()
+            )
+            .entered();
+            let analysis = module.func_store.modify(func, |function| {
+                prepare_stackify_analysis(
+                    function,
+                    &module.ctx,
+                    backend,
+                    ptr_escape,
+                    Some(analysis_scratch_effects),
+                )
+            });
+            scc_uses_scratch_spills |= analysis.alloc.uses_scratch_spills();
+            analyses.insert(func, analysis);
+        }
+
+        let scc_touches_scratch = scc_uses_scratch_spills
+            || components
+                .iter()
+                .copied()
+                .any(|func| local_scratch_clobbers.contains(&func))
+            || components.iter().copied().any(|func| {
+                call_graph
+                    .callee_of(func)
+                    .iter()
+                    .copied()
+                    .any(|callee| scratch_effects.contains(&callee))
+            });
+        if scc_touches_scratch {
+            scratch_effects.extend(components);
+        }
+    }
+
+    (analyses, scratch_effects)
+}
+
 fn debug_print_mem_plan(module: &Module, funcs: &[FuncRef], plan: &ProgramMemoryPlan) {
     let mut funcs_by_name: Vec<(String, FuncRef)> = funcs
         .iter()
@@ -3742,7 +3946,12 @@ fn u32_to_evm_push_bytes(value: u32, policy: PushWidthPolicy) -> SmallVec<[u8; 4
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonatina_ir::cfg::ControlFlowGraph;
+    use crate::analysis::func_behavior;
+    use sonatina_ir::{
+        InstSetBase,
+        cfg::ControlFlowGraph,
+        object::{EmbedSymbol, ObjectName, SectionName},
+    };
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, TargetTriple, Vendor};
 
@@ -4350,6 +4559,558 @@ block2:
                 .checked_frontier_init_calls
                 .get(&helper)
                 .is_some_and(|calls| calls.contains(&helper_call))
+        );
+    }
+
+    #[test]
+    fn noreturn_call_skips_continuation_marker_and_preserve() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %abort() -> i256 {
+block0:
+    evm_revert 0.i256 0.i256;
+}
+
+func public %caller(v0.i256) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    mstore v1 v0 i256;
+    v2.i256 = call %abort;
+    v3.i256 = mload v1 i256;
+    return v3;
+}
+"#,
+        )
+        .unwrap();
+
+        func_behavior::analyze_module(&parsed.module);
+
+        let funcs = parsed.module.funcs();
+        let isa = Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        });
+        let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
+
+        let mut names: FxHashMap<String, FuncRef> = FxHashMap::default();
+        for &f in &funcs {
+            let name = parsed.module.ctx.func_sig(f, |sig| sig.name().to_string());
+            names.insert(name, f);
+        }
+        let caller = names["caller"];
+
+        let mut analyses: FxHashMap<FuncRef, memory_plan::FuncAnalysis> = FxHashMap::default();
+        for &func in &funcs {
+            parsed.module.func_store.modify(func, |function| {
+                let mut cfg = ControlFlowGraph::new();
+                cfg.compute(function);
+
+                let mut splitter = CriticalEdgeSplitter::new();
+                splitter.run(function, &mut cfg);
+
+                let mut liveness = Liveness::new();
+                liveness.compute(function, &cfg);
+
+                let mut inst_liveness = InstLiveness::new();
+                inst_liveness.compute(function, &cfg, &liveness);
+
+                let mut dom = DomTree::new();
+                dom.compute(&cfg);
+
+                analyses.insert(
+                    func,
+                    memory_plan::FuncAnalysis {
+                        alloc: StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute(),
+                        inst_liveness,
+                        block_order: dom.rpo().to_vec(),
+                        value_aliases: {
+                            let mut value_aliases = SecondaryMap::new();
+                            for value in function.dfg.value_ids() {
+                                value_aliases[value] = Some(value);
+                            }
+                            value_aliases
+                        },
+                    },
+                );
+            });
+        }
+
+        let (call_inst, call_args) = parsed.module.func_store.view(caller, |function| {
+            function
+                .layout
+                .iter_block()
+                .flat_map(|block| function.layout.iter_inst(block))
+                .find_map(|inst| {
+                    function
+                        .dfg
+                        .cast_call(inst)
+                        .map(|call| (inst, call.args().clone()))
+                })
+                .expect("missing call inst")
+        });
+
+        let actions = analyses
+            .get(&caller)
+            .expect("missing caller analysis")
+            .alloc
+            .read(call_inst, &call_args);
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, Action::PushContinuationOffset)),
+            "noreturn call should not materialize a local continuation: {actions:?}"
+        );
+
+        let plan = compute_program_memory_plan(
+            &parsed.module,
+            &funcs,
+            &analyses,
+            &ptr_escape,
+            &isa,
+            &ArenaCostModel::default(),
+        );
+        assert!(
+            !plan
+                .funcs
+                .get(&caller)
+                .expect("missing caller plan")
+                .call_preserve
+                .contains_key(&call_inst),
+            "noreturn call should not preserve caller scratch state"
+        );
+    }
+
+    #[test]
+    fn prepare_section_handles_recursive_scratch_barriers_without_oscillation() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256) -> i256 {
+block0:
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v2.*i256 = alloca i256;
+    mstore v2 v0 i256;
+    v3.i256 = mload v2 i256;
+    v4.i256 = add v3 1.i256;
+    v5.i256 = add v3 2.i256;
+    v6.i256 = add v3 3.i256;
+    v7.i256 = add v3 4.i256;
+    mstore v2 v7 i256;
+    v8.i256 = sub v3 1.i256;
+    v9.i256 = call %f v8;
+    v10.i256 = mload v2 i256;
+    v11.i256 = add v9 v10;
+    v12.i256 = add v11 v4;
+    v13.i256 = add v12 v5;
+    v14.i256 = add v13 v6;
+    return v14;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = call %f 3.i256;
+    mstore 0.i32 v0 i256;
+    evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let funcs = parsed.module.funcs();
+        let mut names: FxHashMap<String, FuncRef> = FxHashMap::default();
+        for &func in &funcs {
+            let name = parsed
+                .module
+                .ctx
+                .func_sig(func, |sig| sig.name().to_string());
+            names.insert(name, func);
+        }
+
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }))
+        .with_stackify_reach_depth(4);
+        let object = ObjectName::from("Contract");
+        let section = SectionName::from("runtime");
+        let embeds: Vec<EmbedSymbol> = Vec::new();
+        let section_ctx = SectionLoweringCtx {
+            object: &object,
+            section: &section,
+            embed_symbols: &embeds,
+        };
+
+        backend.prepare_section(&parsed.module, &funcs, &section_ctx);
+
+        let section_state = backend.section_state.borrow();
+        let prepared = section_state.as_ref().expect("section prepared");
+        assert!(
+            !prepared.allocs[&names["f"]].uses_scratch_spills(),
+            "recursive caller should treat self-call as a scratch barrier"
+        );
+    }
+
+    #[test]
+    fn lowering_elides_section_entry_jumpdest_for_noreturn_call() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %abort() {
+block0:
+    evm_revert 0.i256 0.i256;
+}
+
+func public %caller() {
+block0:
+    call %abort;
+    unreachable;
+}
+
+object @Contract {
+  section runtime {
+    entry %caller;
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let funcs = parsed.module.funcs();
+        let mut names: FxHashMap<String, FuncRef> = FxHashMap::default();
+        for &f in &funcs {
+            let name = parsed.module.ctx.func_sig(f, |sig| sig.name().to_string());
+            names.insert(name, f);
+        }
+
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }));
+        let object = ObjectName::from("Contract");
+        let section = SectionName::from("runtime");
+        let embeds: Vec<EmbedSymbol> = Vec::new();
+        let section_ctx = SectionLoweringCtx {
+            object: &object,
+            section: &section,
+            embed_symbols: &embeds,
+        };
+
+        backend.prepare_section(&parsed.module, &funcs, &section_ctx);
+        let lowered = backend
+            .lower_function(&parsed.module, names["caller"], &section_ctx)
+            .expect("caller lowers");
+
+        assert_eq!(lowered.block_order.len(), 1, "expected single caller block");
+        let block = lowered.block_order[0];
+        let jumpdest_count = lowered
+            .vcode
+            .block_insns(block)
+            .filter(|&inst| (lowered.vcode.insts[inst] as u8) == (OpCode::JUMPDEST as u8))
+            .count();
+        assert_eq!(
+            jumpdest_count, 0,
+            "section-entry caller should not need a JUMPDEST without incoming jumps"
+        );
+
+        let lowered_abort = backend
+            .lower_function(&parsed.module, names["abort"], &section_ctx)
+            .expect("abort lowers");
+        let abort_block = lowered_abort.block_order[0];
+        let abort_jumpdest_count = lowered_abort
+            .vcode
+            .block_insns(abort_block)
+            .filter(|&inst| (lowered_abort.vcode.insts[inst] as u8) == (OpCode::JUMPDEST as u8))
+            .count();
+        assert_eq!(
+            abort_jumpdest_count, 1,
+            "direct call target should still materialize an entry JUMPDEST"
+        );
+    }
+
+    #[test]
+    fn lowering_materializes_jumpdest_for_nonfallthrough_block_target() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i1) -> i256 {
+block0:
+    br v0 block2 block1;
+
+block1:
+    return 1.i256;
+
+block2:
+    return 2.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %main;
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let func = parsed.module.funcs()[0];
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }));
+        let object = ObjectName::from("Contract");
+        let section = SectionName::from("runtime");
+        let embeds: Vec<EmbedSymbol> = Vec::new();
+        let section_ctx = SectionLoweringCtx {
+            object: &object,
+            section: &section,
+            embed_symbols: &embeds,
+        };
+
+        backend.prepare_section(&parsed.module, &[func], &section_ctx);
+        let lowered = backend
+            .lower_function(&parsed.module, func, &section_ctx)
+            .expect("main lowers");
+
+        let block2 = lowered
+            .block_order
+            .iter()
+            .copied()
+            .find(|block| block.0 == 2)
+            .expect("missing block2");
+        assert!(
+            lowered
+                .vcode
+                .block_insns(block2)
+                .next()
+                .is_some_and(|inst| {
+                    (lowered.vcode.insts[inst] as u8) == (OpCode::JUMPDEST as u8)
+                }),
+            "non-fallthrough branch target should start with JUMPDEST"
+        );
+    }
+
+    #[test]
+    fn materialize_jumpdests_uses_final_block_fixups() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %main() -> i256 {
+block0:
+    return 0.i256;
+
+block1:
+    return 1.i256;
+}
+"#,
+        )
+        .unwrap();
+
+        let func = parsed.module.funcs()[0];
+        parsed.module.func_store.view(func, |function| {
+            let block_order: Vec<_> = function.layout.iter_block().collect();
+            assert_eq!(block_order.len(), 2, "expected two blocks");
+
+            let mut vcode = VCode::<OpCode>::default();
+            let push = vcode.add_inst_to_block(OpCode::PUSH1, None, block_order[0]);
+            let label = vcode.labels.push(Label::Block(block_order[1]));
+            vcode.fixups.insert((push, VCodeFixup::Label(label)));
+            vcode.add_inst_to_block(OpCode::JUMP, None, block_order[0]);
+            vcode.add_inst_to_block(OpCode::STOP, None, block_order[1]);
+
+            materialize_jumpdests(&mut vcode, function, &block_order, false);
+
+            assert!(
+                vcode
+                    .block_insns(block_order[1])
+                    .next()
+                    .is_some_and(|inst| (vcode.insts[inst] as u8) == (OpCode::JUMPDEST as u8)),
+                "final block fixup should force a block-entry JUMPDEST"
+            );
+            assert!(
+                vcode
+                    .block_insns(block_order[0])
+                    .next()
+                    .is_some_and(|inst| (vcode.insts[inst] as u8) != (OpCode::JUMPDEST as u8)),
+                "entry block should remain unpadded without function-entry targeting"
+            );
+        });
+    }
+
+    #[test]
+    fn prepared_section_state_is_reusable_across_lower_calls() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i256) -> i256 {
+block0:
+    v1.i256 = add v0 1.i256;
+    return v1;
+}
+
+object @Contract {
+  section runtime {
+    entry %main;
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let func = parsed.module.funcs()[0];
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }));
+        let object = ObjectName::from("Contract");
+        let section = SectionName::from("runtime");
+        let embeds: Vec<EmbedSymbol> = Vec::new();
+        let section_ctx = SectionLoweringCtx {
+            object: &object,
+            section: &section,
+            embed_symbols: &embeds,
+        };
+
+        backend.prepare_section(&parsed.module, &[func], &section_ctx);
+        assert!(backend.prepared_section_matches(&parsed.module, &[func], &section_ctx));
+
+        backend
+            .lower_function(&parsed.module, func, &section_ctx)
+            .expect("first lower succeeds");
+        assert!(backend.prepared_section_matches(&parsed.module, &[func], &section_ctx));
+        assert!(
+            backend
+                .section_state
+                .borrow()
+                .as_ref()
+                .is_some_and(|state| state.allocs.contains_key(&func)),
+            "prepared alloc should remain cached after lowering"
+        );
+
+        backend
+            .lower_function(&parsed.module, func, &section_ctx)
+            .expect("second lower succeeds");
+        assert!(backend.prepared_section_matches(&parsed.module, &[func], &section_ctx));
+    }
+
+    #[test]
+    fn prepared_section_state_is_invalidated_after_module_mutation() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %main() {
+block0:
+    evm_return 0.i256 0.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %main;
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let func = parsed.module.funcs()[0];
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }));
+        let object = ObjectName::from("Contract");
+        let section = SectionName::from("runtime");
+        let embeds: Vec<EmbedSymbol> = Vec::new();
+        let section_ctx = SectionLoweringCtx {
+            object: &object,
+            section: &section,
+            embed_symbols: &embeds,
+        };
+
+        backend.prepare_section(&parsed.module, &[func], &section_ctx);
+        assert!(
+            backend
+                .prepared_function(&parsed.module, func, &section_ctx)
+                .is_some()
+        );
+
+        parsed.module.func_store.modify(func, |function| {
+            let block = function.layout.entry_block().expect("entry block exists");
+            let term = function
+                .layout
+                .last_inst_of(block)
+                .expect("entry block terminator exists");
+            let (addr, len) = match backend.isa.inst_set().resolve_inst(function.dfg.inst(term)) {
+                EvmInstKind::EvmReturn(ret) => (*ret.addr(), *ret.len()),
+                _ => panic!("terminator should be evm_return"),
+            };
+            function.dfg.replace_inst(
+                term,
+                Box::new(sonatina_ir::inst::evm::EvmRevert::new(
+                    backend
+                        .isa
+                        .inst_set()
+                        .has_evm_revert()
+                        .expect("evm_revert supported"),
+                    addr,
+                    len,
+                )),
+            );
+        });
+
+        assert!(!backend.prepared_section_matches(&parsed.module, &[func], &section_ctx));
+        assert!(
+            backend
+                .prepared_function(&parsed.module, func, &section_ctx)
+                .is_none()
+        );
+        assert!(
+            backend.section_state.borrow().is_none(),
+            "stale prepared section should be cleared after invalidation"
+        );
+
+        let lowered = backend
+            .lower_function(&parsed.module, func, &section_ctx)
+            .expect("lower after mutation succeeds");
+        assert!(
+            lowered
+                .vcode
+                .insts
+                .values()
+                .any(|&op| (op as u8) == (OpCode::REVERT as u8)),
+            "updated lowering should reflect the mutated terminator"
+        );
+        assert!(
+            !lowered
+                .vcode
+                .insts
+                .values()
+                .any(|&op| (op as u8) == (OpCode::RETURN as u8)),
+            "stale prepared lowering should not survive module mutation"
         );
     }
 

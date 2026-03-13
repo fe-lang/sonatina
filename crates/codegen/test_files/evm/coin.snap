@@ -6,24 +6,24 @@ input_file: test_files/evm/coin.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Coin
-  section init: 929 bytes
-  section runtime: 734 bytes
-  total: 1663 bytes
+  section init: 904 bytes
+  section runtime: 710 bytes
+  total: 1614 bytes
 
 object: Contract
-  section runtime: 2422 bytes
-  total: 2422 bytes
+  section runtime: 2393 bytes
+  total: 2393 bytes
 
 functions:
-  __Contract_runtime_entry: ir_blocks=1 ir_insts=62 vcode_ops=233 fixups=36 imm_bytes=44
+  __Contract_runtime_entry: ir_blocks=1 ir_insts=62 vcode_ops=232 fixups=36 imm_bytes=44
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Coin_recv_0_0: ir_blocks=3 ir_insts=26 vcode_ops=54 fixups=1 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Coin_recv_0_1: ir_blocks=7 ir_insts=30 vcode_ops=79 fixups=3 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __Coin_init: ir_blocks=3 ir_insts=24 vcode_ops=89 fixups=7 imm_bytes=16
+  __Coin_init: ir_blocks=3 ir_insts=24 vcode_ops=88 fixups=7 imm_bytes=16
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __Coin_runtime: ir_blocks=14 ir_insts=73 vcode_ops=233 fixups=34 imm_bytes=32
+  __Coin_runtime: ir_blocks=14 ir_insts=73 vcode_ops=216 fixups=30 imm_bytes=32
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e: ir_blocks=3 ir_insts=14 vcode_ops=51 fixups=5 imm_bytes=8
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -37,7 +37,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__TotalSupply_h7bb395110a25abc2__8d4065b5d6bedb33: ir_blocks=3 ir_insts=25 vcode_ops=86 fixups=10 imm_bytes=13
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  alloc: ir_blocks=7 ir_insts=15 vcode_ops=33 fixups=4 imm_bytes=4
+  alloc: ir_blocks=7 ir_insts=15 vcode_ops=32 fixups=4 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f: ir_blocks=1 ir_insts=10 vcode_ops=34 fixups=8 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -53,21 +53,21 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   solencoder_h1b9228b90dad6928_new: ir_blocks=1 ir_insts=10 vcode_ops=33 fixups=1 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=1 ir_insts=15 vcode_ops=36 fixups=1 imm_bytes=8
+  cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=1 ir_insts=15 vcode_ops=35 fixups=1 imm_bytes=8
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=22 vcode_ops=70 fixups=3 imm_bytes=15
+  soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=22 vcode_ops=69 fixups=3 imm_bytes=15
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=3 ir_insts=21 vcode_ops=40 fixups=1 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=3 ir_insts=24 vcode_ops=40 fixups=1 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=8 vcode_ops=27 fixups=1 imm_bytes=6
+  cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=8 vcode_ops=26 fixups=1 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=11 vcode_ops=29 fixups=1 imm_bytes=6
+  cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=1 ir_insts=11 vcode_ops=28 fixups=1 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=287403 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=266403
+  case ok: calldata_len=0 success reason=Return gas_used=282507 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=261507
 
 
 --------------- DEBUG ---------------
@@ -771,8 +771,8 @@ evm:
       call [0, v64] -> v5
     // call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v5;
     - stack=[v5], last_use=[v5]
-      pre: [PUSH(0), SWAP1, PUSH_CONT, SWAP2]
-      call [v5, 0]
+      pre: [PUSH(0)]
+      call [0, v5]
     // unreachable;
     - stack=[]
       unreachable []
@@ -825,8 +825,8 @@ evm:
       call [0, v72] -> v7
     // call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v7;
     - stack=[v7], last_use=[v7]
-      pre: [PUSH(0), SWAP1, PUSH_CONT, SWAP2]
-      call [v7, 0]
+      pre: [PUSH(0)]
+      call [0, v7]
     // unreachable;
     - stack=[]
       unreachable []
@@ -873,8 +873,8 @@ evm:
   block13 P=[v85] T=[]
     // call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v85;
     - stack=[v85], last_use=[v85]
-      pre: [PUSH(0), SWAP1, PUSH_CONT, SWAP2]
-      call [v85, 0]
+      pre: [PUSH(0)]
+      call [0, v85]
     // unreachable;
     - stack=[]
       unreachable []
@@ -902,8 +902,8 @@ evm:
       evm_sload [2] -> v88
     // call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v88;
     - stack=[v88], last_use=[v88]
-      pre: [PUSH(0), SWAP1, PUSH_CONT, SWAP2]
-      call [v88, 0]
+      pre: [PUSH(0)]
+      call [0, v88]
     // unreachable;
     - stack=[]
       unreachable []
@@ -2248,7 +2248,6 @@ evm:
 // func private %__Contract_runtime_entry()
 __Contract_runtime_entry:
   block0:
-    JUMPDEST
     PUSH0  // v11.i256 = call %create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e 0.i256 0.i256 0.i256;
     PUSH0
     PUSH0
@@ -2630,7 +2629,6 @@ __Coin_recv_0_1:
 // func private %__Coin_init()
 __Coin_init:
   block0:
-    JUMPDEST
     PUSH0 0x0 (0)  // v2.i256 = sym_addr &__Coin_runtime;
     PUSH0 0x0 (0)  // v3.i256 = sym_size &__Coin_runtime;
     CODESIZE  // v4.i256 = evm_code_size;
@@ -2725,7 +2723,6 @@ __Coin_init:
 // func private %__Coin_runtime()
 __Coin_runtime:
   block0:
-    JUMPDEST
     CALLDATASIZE  // v19.i256 = evm_calldata_size;
     PUSH1 0x4 (4)  // v22.i1 = lt v19 4.i256;
     SWAP1
@@ -2849,12 +2846,8 @@ __Coin_runtime:
     JUMP
     JUMPDEST
     PUSH0  // call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v15;
-    SWAP1
-    PUSH1 `pc + (4)`
-    SWAP2
     PUSH1 FuncRef(25)
     JUMP
-    JUMPDEST
     INVALID  // unreachable;
   block6:
     JUMPDEST
@@ -2902,12 +2895,8 @@ __Coin_runtime:
     JUMP
     JUMPDEST
     PUSH0  // call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v19;
-    SWAP1
-    PUSH1 `pc + (4)`
-    SWAP2
     PUSH1 FuncRef(25)
     JUMP
-    JUMPDEST
     INVALID  // unreachable;
   block7:
     JUMPDEST
@@ -2938,12 +2927,8 @@ __Coin_runtime:
   block13:
     JUMPDEST
     PUSH0  // call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v85;
-    SWAP1
-    PUSH1 `pc + (4)`
-    SWAP2
     PUSH1 FuncRef(25)
     JUMP
-    JUMPDEST
     INVALID  // unreachable;
   block8:
     JUMPDEST
@@ -2962,12 +2947,8 @@ __Coin_runtime:
     PUSH1 0x2 (2)  // v88.i256 = evm_sload 2.i256;
     SLOAD
     PUSH0  // call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v88;
-    SWAP1
-    PUSH1 `pc + (4)`
-    SWAP2
     PUSH1 FuncRef(25)
     JUMP
-    JUMPDEST
     INVALID  // unreachable;
 
 // func private %create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e(v0.i256, v1.i256, v2.i256) -> i256
@@ -3448,7 +3429,6 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__TotalSupply_h7bb395110a2
 // func public %alloc(v0.i256) -> i256
 alloc:
   block0:
-    JUMPDEST
     PUSH1 0x40 (64)  // v3.i256 = mload 64.i256 i256;
     MLOAD
     DUP1  // v4.i1 = is_zero v3;
@@ -3810,7 +3790,6 @@ solencoder_h1b9228b90dad6928_new:
 // func public %cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.i256) -> i256
 cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b:
   block0:
-    JUMPDEST
     PUSH1 0x40 (64)  // v3.*i256 = evm_malloc 96.i256;
     MLOAD
     PUSH1 0x9f (159)
@@ -3850,7 +3829,6 @@ cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b
 // func public %soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256, v1.i256) -> i256
 soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563:
   block0:
-    JUMPDEST
     PUSH1 0x40 (64)  // v22.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0x9f (159)
@@ -4012,7 +3990,6 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBy
 // func public %cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256) -> i256
 cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563:
   block0:
-    JUMPDEST
     PUSH1 0x40 (64)  // v3.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0x9f (159)
@@ -4043,7 +4020,6 @@ cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563:
 // func public %cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256, v1.i256) -> i256
 cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563:
   block0:
-    JUMPDEST
     MLOAD  // v5.i256 = mload v4 i256;
     PUSH1 0x40 (64)  // v7.*i256 = evm_malloc 64.i256;
     MLOAD
