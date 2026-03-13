@@ -183,7 +183,6 @@ pub struct ModuleCtx {
     pub type_layout: &'static dyn TypeLayout,
     address_spaces: &'static dyn AddressSpaceInfo,
     pub declared_funcs: Arc<DashMap<FuncRef, Signature>>,
-    func_attrs: Arc<RwLock<FxHashMap<FuncRef, FuncAttrs>>>,
     func_effects: Arc<RwLock<FxHashMap<FuncRef, FuncEffectSummary>>>,
     func_hints: Arc<RwLock<FxHashMap<FuncRef, FuncHints>>>,
     type_store: Arc<RwLock<TypeStore>>,
@@ -204,7 +203,6 @@ impl ModuleCtx {
             address_spaces: isa.address_spaces(),
             type_store: Arc::new(RwLock::new(TypeStore::default())),
             declared_funcs: Arc::new(DashMap::new()),
-            func_attrs: Arc::new(RwLock::new(FxHashMap::default())),
             func_effects: Arc::new(RwLock::new(FxHashMap::default())),
             func_hints: Arc::new(RwLock::new(FxHashMap::default())),
             gv_store: Arc::new(RwLock::new(GlobalVariableStore::default())),
@@ -245,16 +243,16 @@ impl ModuleCtx {
     }
 
     pub fn func_attrs(&self, func_ref: FuncRef) -> FuncAttrs {
-        self.func_attrs
+        self.func_effects
             .read()
             .unwrap()
             .get(&func_ref)
-            .copied()
+            .map(FuncEffectSummary::to_legacy_attrs)
             .unwrap_or_default()
     }
 
     pub fn has_func_attrs(&self, func_ref: FuncRef) -> bool {
-        self.func_attrs.read().unwrap().contains_key(&func_ref)
+        self.has_func_effects(func_ref)
     }
 
     pub fn set_all_func_attrs(&self, new: FxHashMap<FuncRef, FuncAttrs>) {
@@ -287,23 +285,14 @@ impl ModuleCtx {
     }
 
     pub fn set_all_func_effects(&self, new: FxHashMap<FuncRef, FuncEffectSummary>) {
-        *self.func_attrs.write().unwrap() = new
-            .iter()
-            .map(|(&func_ref, effects)| (func_ref, effects.to_legacy_attrs()))
-            .collect();
         *self.func_effects.write().unwrap() = new;
     }
 
     pub fn set_func_effects(&self, func_ref: FuncRef, effects: FuncEffectSummary) {
-        self.func_attrs
-            .write()
-            .unwrap()
-            .insert(func_ref, effects.to_legacy_attrs());
         self.func_effects.write().unwrap().insert(func_ref, effects);
     }
 
     pub fn clear_func_effects(&self, func_ref: FuncRef) {
-        self.func_attrs.write().unwrap().remove(&func_ref);
         self.func_effects.write().unwrap().remove(&func_ref);
     }
 
