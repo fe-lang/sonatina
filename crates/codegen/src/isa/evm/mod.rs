@@ -16,7 +16,11 @@ pub(crate) mod static_arena_alloc;
 
 use opcode::OpCode;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::cell::RefCell;
+use std::{
+    cell::RefCell,
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+};
 use tracing::{debug_span, info_span, trace_span};
 
 use crate::{
@@ -37,6 +41,7 @@ use sonatina_ir::{
     BlockId, Function, Immediate, InstId, InstSetExt, Module, Type, U256, ValueId,
     cfg::ControlFlowGraph,
     inst::{data::SymbolRef, evm::inst_set::EvmInstKind},
+    ir_writer::{FuncWriter, IrWrite},
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
     object::{Directive, ObjectName, SectionName},
@@ -71,6 +76,7 @@ struct PreparedSection {
     object: ObjectName,
     section: SectionName,
     funcs: Vec<FuncRef>,
+    fingerprint: u64,
     section_entry: FuncRef,
     plan: ProgramMemoryPlan,
     has_persistent_mallocs: bool,
@@ -118,6 +124,35 @@ fn canonicalize_prepared_funcs(funcs: &[FuncRef]) -> Vec<FuncRef> {
     let mut funcs = funcs.to_vec();
     funcs.sort_unstable_by_key(|func| func.as_u32());
     funcs
+}
+
+fn compute_prepared_section_fingerprint(
+    module: &Module,
+    funcs: &[FuncRef],
+    section_ctx: &SectionLoweringCtx<'_>,
+) -> u64 {
+    let funcs = canonicalize_prepared_funcs(funcs);
+    let mut hasher = DefaultHasher::new();
+    section_ctx.object.hash(&mut hasher);
+    section_ctx.section.hash(&mut hasher);
+
+    if let Some(object) = module.objects.get(section_ctx.object.0.as_str()) {
+        let mut bytes = Vec::new();
+        object
+            .write(&mut bytes, &module.ctx)
+            .expect("object fingerprint write failed");
+        bytes.hash(&mut hasher);
+    }
+
+    for &func in &funcs {
+        func.as_u32().hash(&mut hasher);
+        let func_text = module.func_store.view(func, |function| {
+            FuncWriter::new(func, function).dump_string()
+        });
+        func_text.hash(&mut hasher);
+    }
+
+    hasher.finish()
 }
 
 pub struct EvmBackend {
@@ -435,18 +470,55 @@ impl EvmBackend {
         funcs: &[FuncRef],
         section_ctx: &SectionLoweringCtx<'_>,
     ) -> bool {
-        let state = self.section_state.borrow();
-        let Some(section) = state.as_ref() else {
+        let Some((module_ptr, object, section, prepared_funcs, fingerprint)) =
+            self.section_state.borrow().as_ref().map(|state| {
+                (
+                    state.module_ptr,
+                    state.object.clone(),
+                    state.section.clone(),
+                    state.funcs.clone(),
+                    state.fingerprint,
+                )
+            })
+        else {
             return false;
         };
 
-        section.module_ptr == module as *const _ as usize
-            && section.object == *section_ctx.object
-            && section.section == *section_ctx.section
-            && section.funcs == canonicalize_prepared_funcs(funcs)
+        module_ptr == module as *const _ as usize
+            && object == *section_ctx.object
+            && section == *section_ctx.section
+            && prepared_funcs == canonicalize_prepared_funcs(funcs)
+            && fingerprint
+                == compute_prepared_section_fingerprint(module, &prepared_funcs, section_ctx)
     }
 
-    fn prepared_function(&self, func: FuncRef) -> Option<PreparedLowering> {
+    fn prepared_function(
+        &self,
+        module: &Module,
+        func: FuncRef,
+        section_ctx: &SectionLoweringCtx<'_>,
+    ) -> Option<PreparedLowering> {
+        let (module_ptr, object, section, funcs, fingerprint) =
+            self.section_state.borrow().as_ref().map(|state| {
+                (
+                    state.module_ptr,
+                    state.object.clone(),
+                    state.section.clone(),
+                    state.funcs.clone(),
+                    state.fingerprint,
+                )
+            })?;
+
+        if module_ptr != module as *const _ as usize
+            || object != *section_ctx.object
+            || section != *section_ctx.section
+            || !funcs.contains(&func)
+            || fingerprint != compute_prepared_section_fingerprint(module, &funcs, section_ctx)
+        {
+            *self.section_state.borrow_mut() = None;
+            return None;
+        }
+
         let state = self.section_state.borrow();
         let section = state.as_ref()?;
 
@@ -1865,6 +1937,7 @@ impl LowerBackend for EvmBackend {
                 object: section_ctx.object.clone(),
                 section: section_ctx.section.clone(),
                 funcs: canonicalize_prepared_funcs(funcs),
+                fingerprint: compute_prepared_section_fingerprint(module, funcs, section_ctx),
                 section_entry,
                 plan,
                 has_persistent_mallocs,
@@ -1883,9 +1956,7 @@ impl LowerBackend for EvmBackend {
         func: FuncRef,
         section_ctx: &SectionLoweringCtx<'_>,
     ) -> Result<LoweredFunction<Self::MInst>, Self::Error> {
-        let _ = section_ctx;
-
-        let prepared = self.prepared_function(func);
+        let prepared = self.prepared_function(module, func, section_ctx);
         let _span = debug_span!(
             "sonatina.codegen.evm.lower_function",
             func_ref = func.as_u32(),
@@ -3877,6 +3948,7 @@ mod tests {
     use super::*;
     use crate::analysis::func_behavior;
     use sonatina_ir::{
+        InstSetBase,
         cfg::ControlFlowGraph,
         object::{EmbedSymbol, ObjectName, SectionName},
     };
@@ -4942,6 +5014,104 @@ object @Contract {
             .lower_function(&parsed.module, func, &section_ctx)
             .expect("second lower succeeds");
         assert!(backend.prepared_section_matches(&parsed.module, &[func], &section_ctx));
+    }
+
+    #[test]
+    fn prepared_section_state_is_invalidated_after_module_mutation() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %main() {
+block0:
+    evm_return 0.i256 0.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %main;
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let func = parsed.module.funcs()[0];
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }));
+        let object = ObjectName::from("Contract");
+        let section = SectionName::from("runtime");
+        let embeds: Vec<EmbedSymbol> = Vec::new();
+        let section_ctx = SectionLoweringCtx {
+            object: &object,
+            section: &section,
+            embed_symbols: &embeds,
+        };
+
+        backend.prepare_section(&parsed.module, &[func], &section_ctx);
+        assert!(
+            backend
+                .prepared_function(&parsed.module, func, &section_ctx)
+                .is_some()
+        );
+
+        parsed.module.func_store.modify(func, |function| {
+            let block = function.layout.entry_block().expect("entry block exists");
+            let term = function
+                .layout
+                .last_inst_of(block)
+                .expect("entry block terminator exists");
+            let (addr, len) = match backend.isa.inst_set().resolve_inst(function.dfg.inst(term)) {
+                EvmInstKind::EvmReturn(ret) => (*ret.addr(), *ret.len()),
+                _ => panic!("terminator should be evm_return"),
+            };
+            function.dfg.replace_inst(
+                term,
+                Box::new(sonatina_ir::inst::evm::EvmRevert::new(
+                    backend
+                        .isa
+                        .inst_set()
+                        .has_evm_revert()
+                        .expect("evm_revert supported"),
+                    addr,
+                    len,
+                )),
+            );
+        });
+
+        assert!(!backend.prepared_section_matches(&parsed.module, &[func], &section_ctx));
+        assert!(
+            backend
+                .prepared_function(&parsed.module, func, &section_ctx)
+                .is_none()
+        );
+        assert!(
+            backend.section_state.borrow().is_none(),
+            "stale prepared section should be cleared after invalidation"
+        );
+
+        let lowered = backend
+            .lower_function(&parsed.module, func, &section_ctx)
+            .expect("lower after mutation succeeds");
+        assert!(
+            lowered
+                .vcode
+                .insts
+                .values()
+                .any(|&op| (op as u8) == (OpCode::REVERT as u8)),
+            "updated lowering should reflect the mutated terminator"
+        );
+        assert!(
+            !lowered
+                .vcode
+                .insts
+                .values()
+                .any(|&op| (op as u8) == (OpCode::RETURN as u8)),
+            "stale prepared lowering should not survive module mutation"
+        );
     }
 
     #[test]
