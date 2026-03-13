@@ -1,14 +1,13 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/vault.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 4862 bytes
-  total: 4862 bytes
+  section runtime: 4847 bytes
+  total: 4847 bytes
 
 object: Vault
   section init: 954 bytes
@@ -16,9 +15,9 @@ object: Vault
   total: 1737 bytes
 
 object: VaultUser
-  section init: 1251 bytes
-  section runtime: 1240 bytes
-  total: 2491 bytes
+  section init: 1248 bytes
+  section runtime: 1237 bytes
+  total: 2485 bytes
 
 functions:
   __Contract_runtime_entry: ir_blocks=1 ir_insts=85 vcode_ops=328 fixups=65 imm_bytes=50

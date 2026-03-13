@@ -193,7 +193,6 @@ impl<'a> StackifyBuilder<'a> {
         // can rely on loads being correct.
         let mut spill_set: BitSet<ValueId> = BitSet::default();
         let mut slots: SpillSlotPools = SpillSlotPools::default();
-
         loop {
             let checkpoint = observer.checkpoint();
 

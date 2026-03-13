@@ -39,7 +39,7 @@ use sonatina_ir::{
     inst::{data::SymbolRef, evm::inst_set::EvmInstKind},
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
-    object::Directive,
+    object::{Directive, ObjectName, SectionName},
     types::{CompoundType, CompoundTypeRef},
 };
 use sonatina_triple::{EvmVersion, OperatingSystem};
@@ -65,7 +65,12 @@ pub enum PushWidthPolicy {
     MinimalRelax,
 }
 
+#[derive(Clone)]
 struct PreparedSection {
+    module_ptr: usize,
+    object: ObjectName,
+    section: SectionName,
+    funcs: Vec<FuncRef>,
     section_entry: FuncRef,
     plan: ProgramMemoryPlan,
     has_persistent_mallocs: bool,
@@ -99,6 +104,7 @@ enum FrontierInitKind {
     Checked,
 }
 
+#[derive(Clone)]
 struct PreparedLowering {
     alloc: StackifyAlloc,
     block_order: Vec<BlockId>,
@@ -106,6 +112,12 @@ struct PreparedLowering {
     frame_summary: FrameSummary,
     dyn_sp_plan: Option<FuncDynSpPlan>,
     function_entry_jumpdest: bool,
+}
+
+fn canonicalize_prepared_funcs(funcs: &[FuncRef]) -> Vec<FuncRef> {
+    let mut funcs = funcs.to_vec();
+    funcs.sort_unstable_by_key(|func| func.as_u32());
+    funcs
 }
 
 pub struct EvmBackend {
@@ -417,34 +429,55 @@ impl EvmBackend {
         out
     }
 
-    fn take_prepared_function(&self, func: FuncRef) -> Option<PreparedLowering> {
-        let mut state = self.section_state.borrow_mut();
-        let section = state.as_mut()?;
+    fn prepared_section_matches(
+        &self,
+        module: &Module,
+        funcs: &[FuncRef],
+        section_ctx: &SectionLoweringCtx<'_>,
+    ) -> bool {
+        let state = self.section_state.borrow();
+        let Some(section) = state.as_ref() else {
+            return false;
+        };
 
-        let alloc = section.allocs.remove(&func)?;
-        let block_order = section.block_orders.remove(&func)?;
+        section.module_ptr == module as *const _ as usize
+            && section.object == *section_ctx.object
+            && section.section == *section_ctx.section
+            && section.funcs == canonicalize_prepared_funcs(funcs)
+    }
+
+    fn prepared_function(&self, func: FuncRef) -> Option<PreparedLowering> {
+        let state = self.section_state.borrow();
+        let section = state.as_ref()?;
+
+        let alloc = section.allocs.get(&func)?.clone();
+        let block_order = section.block_orders.get(&func)?.clone();
         let mem_plan = section.plan.funcs.get(&func).cloned()?;
         let frame_summary = section
             .dyn_sp_plan
             .frame_summaries
-            .remove(&func)
+            .get(&func)
+            .cloned()
             .unwrap_or_default();
         let dyn_sp_plan = Some(FuncDynSpPlan {
             entry_init: func == section.section_entry && section.dyn_sp_plan.entry_init,
             frontier_init_calls: section
                 .dyn_sp_plan
                 .frontier_init_calls
-                .remove(&func)
+                .get(&func)
+                .cloned()
                 .unwrap_or_default(),
             checked_frontier_init_calls: section
                 .dyn_sp_plan
                 .checked_frontier_init_calls
-                .remove(&func)
+                .get(&func)
+                .cloned()
                 .unwrap_or_default(),
             entry_live_frame: section
                 .dyn_sp_plan
                 .entry_live_frame
-                .remove(&func)
+                .get(&func)
+                .copied()
                 .unwrap_or(false),
         });
 
@@ -1627,6 +1660,10 @@ impl LowerBackend for EvmBackend {
         funcs: &[FuncRef],
         section_ctx: &SectionLoweringCtx<'_>,
     ) {
+        if self.prepared_section_matches(module, funcs, section_ctx) {
+            return;
+        }
+
         let _span =
             info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
         legalize_evm_section(module, funcs);
@@ -1675,59 +1712,8 @@ impl LowerBackend for EvmBackend {
             func_behavior::analyze_module(module);
         }
 
-        // Scratch fixed point: scratch spills depend on transitive scratch barriers.
-        let mut scratch_spill_funcs: FxHashSet<FuncRef> = FxHashSet::default();
-        let mut scratch_effects = {
-            let _span =
-                debug_span!("sonatina.codegen.evm.compute_scratch_effects_initial").entered();
-            scratch_effects::compute_scratch_effects(module, funcs, &scratch_spill_funcs, &self.isa)
-        };
-
-        let mut analyses: FxHashMap<FuncRef, memory_plan::FuncAnalysis> = FxHashMap::default();
-        let mut iter = 0usize;
-        loop {
-            let _span =
-                debug_span!("sonatina.codegen.evm.scratch_fixed_point_iter", iter).entered();
-            analyses.clear();
-            let mut new_scratch_spill_funcs: FxHashSet<FuncRef> = FxHashSet::default();
-
-            for &func in funcs {
-                let _span = trace_span!(
-                    "sonatina.codegen.evm.prepare_stackify_analysis",
-                    func_ref = func.as_u32()
-                )
-                .entered();
-                let analysis = module.func_store.modify(func, |function| {
-                    prepare_stackify_analysis(
-                        function,
-                        &module.ctx,
-                        self,
-                        &ptr_escape,
-                        Some(&scratch_effects),
-                    )
-                });
-                if analysis.alloc.uses_scratch_spills() {
-                    new_scratch_spill_funcs.insert(func);
-                }
-                analyses.insert(func, analysis);
-            }
-
-            if new_scratch_spill_funcs == scratch_spill_funcs {
-                break;
-            }
-
-            scratch_spill_funcs = new_scratch_spill_funcs;
-            scratch_effects = {
-                let _span = trace_span!("sonatina.codegen.evm.recompute_scratch_effects").entered();
-                scratch_effects::compute_scratch_effects(
-                    module,
-                    funcs,
-                    &scratch_spill_funcs,
-                    &self.isa,
-                )
-            };
-            iter += 1;
-        }
+        let (analyses, scratch_effects) =
+            compute_scratch_effect_analyses(module, funcs, self, &ptr_escape);
 
         let mut plan = {
             let _span = debug_span!("sonatina.codegen.evm.compute_program_memory_plan").entered();
@@ -1875,6 +1861,10 @@ impl LowerBackend for EvmBackend {
             )
             .entered();
             *self.section_state.borrow_mut() = Some(PreparedSection {
+                module_ptr: module as *const _ as usize,
+                object: section_ctx.object.clone(),
+                section: section_ctx.section.clone(),
+                funcs: canonicalize_prepared_funcs(funcs),
                 section_entry,
                 plan,
                 has_persistent_mallocs,
@@ -1895,7 +1885,7 @@ impl LowerBackend for EvmBackend {
     ) -> Result<LoweredFunction<Self::MInst>, Self::Error> {
         let _ = section_ctx;
 
-        let prepared = self.take_prepared_function(func);
+        let prepared = self.prepared_function(func);
         let _span = debug_span!(
             "sonatina.codegen.evm.lower_function",
             func_ref = func.as_u32(),
@@ -3716,6 +3706,87 @@ fn prepare_stackify_analysis(
     }
 }
 
+fn compute_scratch_effect_analyses(
+    module: &Module,
+    funcs: &[FuncRef],
+    backend: &EvmBackend,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+) -> (
+    FxHashMap<FuncRef, memory_plan::FuncAnalysis>,
+    FxHashSet<FuncRef>,
+) {
+    let _span = debug_span!("sonatina.codegen.evm.compute_scratch_effect_analyses").entered();
+    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
+    let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
+    let scc = SccBuilder::new().compute_scc(&call_graph);
+    let topo = topo_sort_sccs(&funcs_set, &call_graph, &scc);
+    let local_scratch_clobbers =
+        scratch_effects::compute_local_scratch_clobbers(module, funcs, &backend.isa);
+
+    let mut analyses: FxHashMap<FuncRef, memory_plan::FuncAnalysis> = FxHashMap::default();
+    let mut scratch_effects: FxHashSet<FuncRef> = FxHashSet::default();
+
+    for &scc_ref in topo.iter().rev() {
+        let mut components: Vec<FuncRef> = scc
+            .scc_info(scc_ref)
+            .components
+            .iter()
+            .copied()
+            .filter(|func| funcs_set.contains(func))
+            .collect();
+        components.sort_unstable_by_key(|func| func.as_u32());
+
+        // Recursive SCCs are self-referential scratch barriers: if any member uses scratch
+        // spills, every intra-SCC call must preserve them. Analyze the SCC under that barrier
+        // assumption up front so scratch-spill eligibility remains monotone instead of
+        // oscillating between "self-call is a barrier" and "self-call is not a barrier".
+        let cycle_scratch_effects = scc.scc_info(scc_ref).is_cycle.then(|| {
+            let mut cycle_scratch_effects = scratch_effects.clone();
+            cycle_scratch_effects.extend(components.iter().copied());
+            cycle_scratch_effects
+        });
+        let analysis_scratch_effects = cycle_scratch_effects.as_ref().unwrap_or(&scratch_effects);
+
+        let mut scc_uses_scratch_spills = false;
+        for func in components.iter().copied() {
+            let _span = trace_span!(
+                "sonatina.codegen.evm.prepare_stackify_analysis",
+                func_ref = func.as_u32()
+            )
+            .entered();
+            let analysis = module.func_store.modify(func, |function| {
+                prepare_stackify_analysis(
+                    function,
+                    &module.ctx,
+                    backend,
+                    ptr_escape,
+                    Some(analysis_scratch_effects),
+                )
+            });
+            scc_uses_scratch_spills |= analysis.alloc.uses_scratch_spills();
+            analyses.insert(func, analysis);
+        }
+
+        let scc_touches_scratch = scc_uses_scratch_spills
+            || components
+                .iter()
+                .copied()
+                .any(|func| local_scratch_clobbers.contains(&func))
+            || components.iter().copied().any(|func| {
+                call_graph
+                    .callee_of(func)
+                    .iter()
+                    .copied()
+                    .any(|callee| scratch_effects.contains(&callee))
+            });
+        if scc_touches_scratch {
+            scratch_effects.extend(components);
+        }
+    }
+
+    (analyses, scratch_effects)
+}
+
 fn debug_print_mem_plan(module: &Module, funcs: &[FuncRef], plan: &ProgramMemoryPlan) {
     let mut funcs_by_name: Vec<(String, FuncRef)> = funcs
         .iter()
@@ -4541,6 +4612,90 @@ block0:
     }
 
     #[test]
+    fn prepare_section_handles_recursive_scratch_barriers_without_oscillation() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256) -> i256 {
+block0:
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v2.*i256 = alloca i256;
+    mstore v2 v0 i256;
+    v3.i256 = mload v2 i256;
+    v4.i256 = add v3 1.i256;
+    v5.i256 = add v3 2.i256;
+    v6.i256 = add v3 3.i256;
+    v7.i256 = add v3 4.i256;
+    mstore v2 v7 i256;
+    v8.i256 = sub v3 1.i256;
+    v9.i256 = call %f v8;
+    v10.i256 = mload v2 i256;
+    v11.i256 = add v9 v10;
+    v12.i256 = add v11 v4;
+    v13.i256 = add v12 v5;
+    v14.i256 = add v13 v6;
+    return v14;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = call %f 3.i256;
+    mstore 0.i32 v0 i256;
+    evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let funcs = parsed.module.funcs();
+        let mut names: FxHashMap<String, FuncRef> = FxHashMap::default();
+        for &func in &funcs {
+            let name = parsed
+                .module
+                .ctx
+                .func_sig(func, |sig| sig.name().to_string());
+            names.insert(name, func);
+        }
+
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }))
+        .with_stackify_reach_depth(4);
+        let object = ObjectName::from("Contract");
+        let section = SectionName::from("runtime");
+        let embeds: Vec<EmbedSymbol> = Vec::new();
+        let section_ctx = SectionLoweringCtx {
+            object: &object,
+            section: &section,
+            embed_symbols: &embeds,
+        };
+
+        backend.prepare_section(&parsed.module, &funcs, &section_ctx);
+
+        let section_state = backend.section_state.borrow();
+        let prepared = section_state.as_ref().expect("section prepared");
+        assert!(
+            !prepared.allocs[&names["f"]].uses_scratch_spills(),
+            "recursive caller should treat self-call as a scratch barrier"
+        );
+    }
+
+    #[test]
     fn lowering_elides_section_entry_jumpdest_for_noreturn_call() {
         let parsed = parse_module(
             r#"
@@ -4729,6 +4884,64 @@ block1:
                 "entry block should remain unpadded without function-entry targeting"
             );
         });
+    }
+
+    #[test]
+    fn prepared_section_state_is_reusable_across_lower_calls() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i256) -> i256 {
+block0:
+    v1.i256 = add v0 1.i256;
+    return v1;
+}
+
+object @Contract {
+  section runtime {
+    entry %main;
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let func = parsed.module.funcs()[0];
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }));
+        let object = ObjectName::from("Contract");
+        let section = SectionName::from("runtime");
+        let embeds: Vec<EmbedSymbol> = Vec::new();
+        let section_ctx = SectionLoweringCtx {
+            object: &object,
+            section: &section,
+            embed_symbols: &embeds,
+        };
+
+        backend.prepare_section(&parsed.module, &[func], &section_ctx);
+        assert!(backend.prepared_section_matches(&parsed.module, &[func], &section_ctx));
+
+        backend
+            .lower_function(&parsed.module, func, &section_ctx)
+            .expect("first lower succeeds");
+        assert!(backend.prepared_section_matches(&parsed.module, &[func], &section_ctx));
+        assert!(
+            backend
+                .section_state
+                .borrow()
+                .as_ref()
+                .is_some_and(|state| state.allocs.contains_key(&func)),
+            "prepared alloc should remain cached after lowering"
+        );
+
+        backend
+            .lower_function(&parsed.module, func, &section_ctx)
+            .expect("second lower succeeds");
+        assert!(backend.prepared_section_matches(&parsed.module, &[func], &section_ctx));
     }
 
     #[test]
