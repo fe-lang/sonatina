@@ -6,11 +6,11 @@ input_file: test_files/evm/internal_call_preserve_with_lower_live_values.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 97 bytes
-  total: 97 bytes
+  section runtime: 94 bytes
+  total: 94 bytes
 
 functions:
-  entry: ir_blocks=3 ir_insts=11 vcode_ops=43 fixups=5 imm_bytes=6
+  entry: ir_blocks=3 ir_insts=11 vcode_ops=40 fixups=5 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   is_lt: ir_blocks=3 ir_insts=4 vcode_ops=14 fixups=1 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -63,10 +63,8 @@ evm:
       pre: [PUSH(32), PUSH(0)]
       evm_return [0, 32]
   block2 P=[] T=[]
-    inherited from block0: [v3x, v1x, v2x]
     // mstore 0.i256 0.i256 i256;
-    - stack=[v3x, v1x, v2x]
-      cleanup: [POP, POP, POP]
+    - stack=[]
       pre: [PUSH(0), PUSH(0)]
       mstore [0, 0]
     // evm_return 0.i256 32.i256;
@@ -171,10 +169,7 @@ entry:
     RETURN
   block2:
     JUMPDEST
-    POP  // mstore 0.i256 0.i256 i256;
-    POP
-    POP
-    PUSH0
+    PUSH0  // mstore 0.i256 0.i256 i256;
     PUSH0
     MSTORE
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;

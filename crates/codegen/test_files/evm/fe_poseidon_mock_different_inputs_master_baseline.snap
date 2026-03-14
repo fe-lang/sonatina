@@ -6,17 +6,17 @@ input_file: test_files/evm/fe_poseidon_mock_different_inputs_master_baseline.snt
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 2605 bytes
-  total: 2605 bytes
+  section runtime: 2553 bytes
+  total: 2553 bytes
 
 functions:
-  ark: ir_blocks=12 ir_insts=59 vcode_ops=201 fixups=15 imm_bytes=31
+  ark: ir_blocks=12 ir_insts=59 vcode_ops=169 fixups=15 imm_bytes=31
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   sigma_full: ir_blocks=1 ir_insts=24 vcode_ops=81 fixups=1 imm_bytes=18
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   mix: ir_blocks=7 ir_insts=35 vcode_ops=108 fixups=10 imm_bytes=22
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  poseidon_mock: ir_blocks=16 ir_insts=58 vcode_ops=225 fixups=30 imm_bytes=29
+  poseidon_mock: ir_blocks=16 ir_insts=58 vcode_ops=209 fixups=30 imm_bytes=29
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   test_poseidon_different_inputs: ir_blocks=3 ir_insts=8 vcode_ops=25 fixups=5 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -193,54 +193,22 @@ ark:
     JUMP
   block11:
     JUMPDEST
-    POP  // jump block1;
-    POP
-    POP
-    POP
-    POP
-    PUSH1 block1
+    PUSH1 block1  // jump block1;
     JUMP
   block10:
     JUMPDEST
-    POP  // jump block1;
-    POP
-    POP
-    POP
-    POP
-    PUSH1 block1
+    PUSH1 block1  // jump block1;
     JUMP
   block9:
     JUMPDEST
-    POP  // jump block1;
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    PUSH1 block1
+    PUSH1 block1  // jump block1;
     JUMP
   block8:
     JUMPDEST
-    POP  // jump block1;
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    PUSH1 block1
+    PUSH1 block1  // jump block1;
     JUMP
   block7:
     JUMPDEST
-    POP  // jump block1;
-    POP
-    POP
-    POP
-    POP
-    POP
   block1:
     JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
@@ -576,12 +544,7 @@ poseidon_mock:
     JUMP
   block17:
     JUMPDEST
-    POP  // jump block9;
-    POP
-    POP
-    POP
-    POP
-    PUSH1 block9
+    PUSH1 block9  // jump block9;
     JUMP
   block14:
     JUMPDEST
@@ -657,12 +620,7 @@ poseidon_mock:
     JUMP
   block18:
     JUMPDEST
-    POP  // jump block9;
-    POP
-    POP
-    POP
-    POP
-    PUSH1 block9
+    PUSH1 block9  // jump block9;
     JUMP
   block8:
     JUMPDEST
@@ -678,16 +636,10 @@ poseidon_mock:
     JUMP
   block19:
     JUMPDEST
-    POP  // jump block9;
-    POP
-    POP
-    PUSH1 block9
+    PUSH1 block9  // jump block9;
     JUMP
   block16:
     JUMPDEST
-    POP  // jump block9;
-    POP
-    POP
   block9:
     JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;

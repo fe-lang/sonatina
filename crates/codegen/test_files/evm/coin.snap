@@ -11,8 +11,8 @@ object: Coin
   total: 1614 bytes
 
 object: Contract
-  section runtime: 2393 bytes
-  total: 2393 bytes
+  section runtime: 2392 bytes
+  total: 2392 bytes
 
 functions:
   __Contract_runtime_entry: ir_blocks=1 ir_insts=62 vcode_ops=232 fixups=36 imm_bytes=44
@@ -25,7 +25,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Coin_runtime: ir_blocks=14 ir_insts=73 vcode_ops=216 fixups=30 imm_bytes=32
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e: ir_blocks=3 ir_insts=14 vcode_ops=51 fixups=5 imm_bytes=8
+  create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e: ir_blocks=3 ir_insts=14 vcode_ops=50 fixups=5 imm_bytes=8
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -553,9 +553,8 @@ evm:
     - stack=[v6, v5, v3, v2, v1]
       br [v6] -> [block1, block2]
   block1 P=[] T=[]
-    inherited from block0: [v5x, v3x, v2x, v1x]
     // evm_revert 0.i256 0.i256;
-    - stack=[v5x, v3x, v2x, v1x]
+    - stack=[]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
   block2 P=[] T=[v5, v3, v2, v1]
@@ -637,7 +636,6 @@ evm:
     - stack=[v22]
       br [v22] -> [block11, block12]
   block11 P=[] T=[]
-    inherited from block0: []
     // evm_revert 0.i256 0.i256;
     - stack=[]
       pre: [PUSH(0), PUSH(0)]
@@ -889,13 +887,11 @@ evm:
     - stack=[v13]
       br [v13] -> [block5, block1]
   block1 P=[] T=[]
-    inherited from block8: []
     // evm_revert 0.i256 0.i256;
     - stack=[]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
   block5 P=[] T=[]
-    inherited from block8: []
     // v88.i256 = evm_sload 2.i256;
     - stack=[]
       pre: [PUSH(2)]
@@ -940,10 +936,8 @@ evm:
     - stack=[v16, v27, <RET>]
       br [v16] -> [block1, block2]
   block1 P=[] T=[]
-    inherited from block0: [v27x, <RET>]
     // v19.i256 = evm_return_data_size;
-    - stack=[v27x, <RET>]
-      cleanup: [POP]
+    - stack=[<RET>]
       evm_return_data_size [] -> v19
     // v20.*i256 = evm_malloc v19;
     - stack=[v19, <RET>]
@@ -974,7 +968,6 @@ evm:
     - stack=[v1, <RET>]
       br [v1] -> [block1, block2]
   block1 P=[] T=[]
-    inherited from block0: [<RET>]
     // evm_revert 0.i256 0.i256;
     - stack=[<RET>]
       pre: [PUSH(0), PUSH(0)]
@@ -1551,9 +1544,8 @@ evm:
     - stack=[v2, v22, v0, v1, <RET>]
       br [v2] -> [block1, block2]
   block1 P=[] T=[]
-    inherited from block0: [v22x, v0x, v1x, <RET>]
     // evm_revert 0.i256 0.i256;
-    - stack=[v22x, v0x, v1x, <RET>]
+    - stack=[<RET>]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
   block2 P=[] T=[v22, v0, v1]
@@ -2064,9 +2056,8 @@ evm:
     - stack=[v23, v11, v10, v12, v5, <RET>]
       br [v23] -> [block1, block2]
   block1 P=[] T=[]
-    inherited from block0: [v11x, v10x, v12x, v5x, <RET>]
     // evm_revert 0.i256 0.i256;
-    - stack=[v11x, v10x, v12x, v5x, <RET>]
+    - stack=[<RET>]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
   block2 P=[] T=[v11, v10, v12, v5]
@@ -2147,9 +2138,8 @@ evm:
     - stack=[v23, v11, v10, v12, v0, <RET>]
       br [v23] -> [block1, block2]
   block1 P=[] T=[]
-    inherited from block0: [v11x, v10x, v12x, v0x, <RET>]
     // evm_revert 0.i256 0.i256;
-    - stack=[v11x, v10x, v12x, v0x, <RET>]
+    - stack=[<RET>]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
   block2 P=[] T=[v11, v10, v12, v0]
@@ -2982,8 +2972,7 @@ create2_stor__Evm_hef0af3106e109414_Coin_h690a60df6720eb85__139b6eceaab4e08e:
     PUSH1 block2  // br v19 block1 block2;
     JUMPI
   block1:
-    POP  // v22.i256 = evm_return_data_size;
-    RETURNDATASIZE
+    RETURNDATASIZE  // v22.i256 = evm_return_data_size;
     DUP1  // v23.*i256 = evm_malloc v22;
     POP
     PUSH1 0x40 (64)

@@ -1,15 +1,14 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/zk.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 2201 bytes
-  section runtime: 2190 bytes
-  total: 4391 bytes
+  section init: 2193 bytes
+  section runtime: 2182 bytes
+  total: 4375 bytes
 
 functions:
   smt_store_zero_table: ir_blocks=1 ir_insts=33 vcode_ops=100 fixups=0 imm_bytes=64
@@ -26,7 +25,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   init__StorPtr_Evm___207f35a85ac4062e: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  runtime__StorPtr_Evm___207f35a85ac4062e: ir_blocks=13 ir_insts=61 vcode_ops=173 fixups=20 imm_bytes=41
+  runtime__StorPtr_Evm___207f35a85ac4062e: ir_blocks=13 ir_insts=61 vcode_ops=168 fixups=20 imm_bytes=41
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   hash2_at: ir_blocks=1 ir_insts=5 vcode_ops=15 fixups=0 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -34,18 +33,18 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=526724 gas_refunded=0 logs=0 output=create len=2190 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case bench_lean_typical_root: calldata_len=1124 success reason=Return gas_used=30034 gas_refunded=0 logs=0 output=call len=32 tx_gas=28616 runtime_gas=1418
-  case bench_lean_typical_verify: calldata_len=1156 success reason=Return gas_used=30617 gas_refunded=0 logs=0 output=call len=32 tx_gas=29128 runtime_gas=1489
-  case bench_lean_typical_update: calldata_len=1188 success reason=Return gas_used=31568 gas_refunded=0 logs=0 output=call len=32 tx_gas=29640 runtime_gas=1928
-  case bench_lean_32_root: calldata_len=1124 success reason=Return gas_used=44029 gas_refunded=0 logs=0 output=call len=32 tx_gas=38216 runtime_gas=5813
-  case bench_lean_32_verify: calldata_len=1156 success reason=Return gas_used=44612 gas_refunded=0 logs=0 output=call len=32 tx_gas=38728 runtime_gas=5884
-  case bench_lean_32_update: calldata_len=1188 success reason=Return gas_used=47073 gas_refunded=0 logs=0 output=call len=32 tx_gas=39240 runtime_gas=7833
-  case bench_smt_typical_root: calldata_len=1124 success reason=Return gas_used=36797 gas_refunded=0 logs=0 output=call len=32 tx_gas=27932 runtime_gas=8865
-  case bench_smt_typical_verify: calldata_len=1156 success reason=Return gas_used=37380 gas_refunded=0 logs=0 output=call len=32 tx_gas=28444 runtime_gas=8936
+  deploy: success reason=Return gas_used=524996 gas_refunded=0 logs=0 output=create len=2182 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case bench_lean_typical_root: calldata_len=1124 success reason=Return gas_used=30032 gas_refunded=0 logs=0 output=call len=32 tx_gas=28616 runtime_gas=1416
+  case bench_lean_typical_verify: calldata_len=1156 success reason=Return gas_used=30615 gas_refunded=0 logs=0 output=call len=32 tx_gas=29128 runtime_gas=1487
+  case bench_lean_typical_update: calldata_len=1188 success reason=Return gas_used=31566 gas_refunded=0 logs=0 output=call len=32 tx_gas=29640 runtime_gas=1926
+  case bench_lean_32_root: calldata_len=1124 success reason=Return gas_used=44027 gas_refunded=0 logs=0 output=call len=32 tx_gas=38216 runtime_gas=5811
+  case bench_lean_32_verify: calldata_len=1156 success reason=Return gas_used=44610 gas_refunded=0 logs=0 output=call len=32 tx_gas=38728 runtime_gas=5882
+  case bench_lean_32_update: calldata_len=1188 success reason=Return gas_used=47071 gas_refunded=0 logs=0 output=call len=32 tx_gas=39240 runtime_gas=7831
+  case bench_smt_typical_root: calldata_len=1124 success reason=Return gas_used=36795 gas_refunded=0 logs=0 output=call len=32 tx_gas=27932 runtime_gas=8863
+  case bench_smt_typical_verify: calldata_len=1156 success reason=Return gas_used=37378 gas_refunded=0 logs=0 output=call len=32 tx_gas=28444 runtime_gas=8934
   case bench_smt_typical_update: calldata_len=1188 success reason=Return gas_used=40195 gas_refunded=0 logs=0 output=call len=32 tx_gas=28956 runtime_gas=11239
-  case bench_smt_all_enabled_root: calldata_len=1124 success reason=Return gas_used=44182 gas_refunded=0 logs=0 output=call len=32 tx_gas=38300 runtime_gas=5882
-  case bench_smt_all_enabled_verify: calldata_len=1156 success reason=Return gas_used=44765 gas_refunded=0 logs=0 output=call len=32 tx_gas=38812 runtime_gas=5953
+  case bench_smt_all_enabled_root: calldata_len=1124 success reason=Return gas_used=44180 gas_refunded=0 logs=0 output=call len=32 tx_gas=38300 runtime_gas=5880
+  case bench_smt_all_enabled_verify: calldata_len=1156 success reason=Return gas_used=44763 gas_refunded=0 logs=0 output=call len=32 tx_gas=38812 runtime_gas=5951
   case bench_smt_all_enabled_update: calldata_len=1188 success reason=Return gas_used=47739 gas_refunded=0 logs=0 output=call len=32 tx_gas=39324 runtime_gas=8415
 
 
@@ -226,9 +225,8 @@ evm:
     - stack=[v4, v0, v1, v2, v3, <RET>]
       br [v4] -> [block1, block9]
   block1 P=[] T=[]
-    inherited from block0: [v0x, v1x, v2x, v3x, <RET>]
     // evm_revert 0.i256 0.i256;
-    - stack=[v0x, v1x, v2x, v3x, <RET>]
+    - stack=[<RET>]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
   block9 P=[] T=[v0, v1, v2, v3]
@@ -331,9 +329,8 @@ evm:
     - stack=[v6, v0, v1, v2, v3, v4, v5, <RET>]
       br [v6] -> [block1, block11]
   block1 P=[] T=[]
-    inherited from block0: [v0x, v1x, v2x, v3x, v4x, v5x, <RET>]
     // evm_revert 0.i256 0.i256;
-    - stack=[v0x, v1x, v2x, v3x, v4x, v5x, <RET>]
+    - stack=[<RET>]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
   block11 P=[] T=[v0, v1, v2, v3, v4, v5]
@@ -452,9 +449,8 @@ evm:
     - stack=[v19, v7, <RET>]
       br [v19] -> [block9, block10]
   block9 P=[] T=[]
-    inherited from block5: [v7x, <RET>]
     // evm_revert 0.i256 0.i256;
-    - stack=[v7x, <RET>]
+    - stack=[<RET>]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
   block10 P=[] T=[v7]
@@ -860,9 +856,8 @@ evm:
     - stack=[v41, v27, <RET>]
       br [v41] -> [block20, block21]
   block20 P=[] T=[]
-    inherited from block13: [v27x, <RET>]
     // evm_revert 0.i256 0.i256;
-    - stack=[v27x, <RET>]
+    - stack=[<RET>]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
   block21 P=[] T=[v27]
@@ -985,9 +980,8 @@ evm:
     - stack=[v19, v7, <RET>]
       br [v19] -> [block9, block10]
   block9 P=[] T=[]
-    inherited from block5: [v7x, <RET>]
     // evm_revert 0.i256 0.i256;
-    - stack=[v7x, <RET>]
+    - stack=[<RET>]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
   block10 P=[] T=[v7]
@@ -1031,10 +1025,8 @@ evm:
     - stack=[v2, v64]
       br [v2] -> [block1, block9]
   block1 P=[] T=[]
-    inherited from block0: [v64x]
     // v3.i256 = evm_calldata_load 4.i256;
-    - stack=[v64x]
-      cleanup: [POP]
+    - stack=[]
       pre: [PUSH(4)]
       evm_calldata_load [4] -> v3
     // v4.i256 = evm_calldata_load 36.i256;
@@ -1067,10 +1059,8 @@ evm:
     - stack=[v38, v64]
       br [v38] -> [block2, block10]
   block2 P=[] T=[]
-    inherited from block9: [v64x]
     // v7.i256 = evm_calldata_load 4.i256;
-    - stack=[v64x]
-      cleanup: [POP]
+    - stack=[]
       pre: [PUSH(4)]
       evm_calldata_load [4] -> v7
     // v8.i256 = evm_calldata_load 36.i256;
@@ -1111,10 +1101,8 @@ evm:
     - stack=[v40, v64]
       br [v40] -> [block3, block11]
   block3 P=[] T=[]
-    inherited from block10: [v64x]
     // v14.i256 = evm_calldata_load 4.i256;
-    - stack=[v64x]
-      cleanup: [POP]
+    - stack=[]
       pre: [PUSH(4)]
       evm_calldata_load [4] -> v14
     // v15.i256 = evm_calldata_load 36.i256;
@@ -1155,10 +1143,8 @@ evm:
     - stack=[v42, v64]
       br [v42] -> [block4, block12]
   block4 P=[] T=[]
-    inherited from block11: [v64x]
     // v20.i256 = evm_calldata_load 4.i256;
-    - stack=[v64x]
-      cleanup: [POP]
+    - stack=[]
       pre: [PUSH(4)]
       evm_calldata_load [4] -> v20
     // v21.i256 = evm_calldata_load 36.i256;
@@ -1191,10 +1177,8 @@ evm:
     - stack=[v44, v64]
       br [v44] -> [block5, block13]
   block5 P=[] T=[]
-    inherited from block12: [v64x]
     // v24.i256 = evm_calldata_load 4.i256;
-    - stack=[v64x]
-      cleanup: [POP]
+    - stack=[]
       pre: [PUSH(4)]
       evm_calldata_load [4] -> v24
     // v25.i256 = evm_calldata_load 36.i256;
@@ -1235,7 +1219,6 @@ evm:
     - stack=[v46]
       br [v46] -> [block6, block7]
   block6 P=[] T=[]
-    inherited from block13: []
     // v31.i256 = evm_calldata_load 4.i256;
     - stack=[]
       pre: [PUSH(4)]
@@ -1269,7 +1252,6 @@ evm:
       pre: [PUSH(32), PUSH(0)]
       evm_return [0, 32]
   block7 P=[] T=[]
-    inherited from block13: []
     // evm_revert 0.i256 0.i256;
     - stack=[]
       pre: [PUSH(0), PUSH(0)]
@@ -2141,8 +2123,7 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 block9
     JUMPI
   block1:
-    POP  // v5.i256 = evm_calldata_load 4.i256;
-    PUSH1 0x4 (4)
+    PUSH1 0x4 (4)  // v5.i256 = evm_calldata_load 4.i256;
     CALLDATALOAD
     PUSH1 0x24 (36)  // v7.i256 = evm_calldata_load 36.i256;
     CALLDATALOAD
@@ -2169,8 +2150,7 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 block10
     JUMPI
   block2:
-    POP  // v12.i256 = evm_calldata_load 4.i256;
-    PUSH1 0x4 (4)
+    PUSH1 0x4 (4)  // v12.i256 = evm_calldata_load 4.i256;
     CALLDATALOAD
     PUSH1 0x24 (36)  // v13.i256 = evm_calldata_load 36.i256;
     CALLDATALOAD
@@ -2198,8 +2178,7 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 block11
     JUMPI
   block3:
-    POP  // v20.i256 = evm_calldata_load 4.i256;
-    PUSH1 0x4 (4)
+    PUSH1 0x4 (4)  // v20.i256 = evm_calldata_load 4.i256;
     CALLDATALOAD
     PUSH1 0x24 (36)  // v21.i256 = evm_calldata_load 36.i256;
     CALLDATALOAD
@@ -2231,8 +2210,7 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 block12
     JUMPI
   block4:
-    POP  // v27.i256 = evm_calldata_load 4.i256;
-    PUSH1 0x4 (4)
+    PUSH1 0x4 (4)  // v27.i256 = evm_calldata_load 4.i256;
     CALLDATALOAD
     PUSH1 0x24 (36)  // v28.i256 = evm_calldata_load 36.i256;
     CALLDATALOAD
@@ -2259,8 +2237,7 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 block13
     JUMPI
   block5:
-    POP  // v31.i256 = evm_calldata_load 4.i256;
-    PUSH1 0x4 (4)
+    PUSH1 0x4 (4)  // v31.i256 = evm_calldata_load 4.i256;
     CALLDATALOAD
     PUSH1 0x24 (36)  // v32.i256 = evm_calldata_load 36.i256;
     CALLDATALOAD

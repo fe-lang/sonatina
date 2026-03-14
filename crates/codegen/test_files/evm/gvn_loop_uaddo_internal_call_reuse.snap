@@ -6,15 +6,15 @@ input_file: test_files/evm/gvn_loop_uaddo_internal_call_reuse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 186 bytes
-  total: 186 bytes
+  section runtime: 182 bytes
+  total: 182 bytes
 
 functions:
-  entry: ir_blocks=15 ir_insts=53 vcode_ops=142 fixups=12 imm_bytes=29
+  entry: ir_blocks=15 ir_insts=53 vcode_ops=138 fixups=12 imm_bytes=29
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21498 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=498
+  case ok: calldata_len=0 success reason=Return gas_used=21494 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=494
 
 
 --------------- DEBUG ---------------
@@ -56,9 +56,8 @@ evm:
     - stack=[v54, v53, v3]
       br [v54] -> [block9, block11]
   block9 P=[] T=[]
-    inherited from block1: [v53x, v3x]
     // evm_revert 0.i256 0.i256;
-    - stack=[v53x, v3x]
+    - stack=[]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
   block11 P=[] T=[v53, v3]
@@ -205,16 +204,12 @@ evm:
     - stack=[v17]
       jump -> block1
   block20 P=[] T=[]
-    inherited from block14: [v48x, v3x]
     // jump block8;
-    - stack=[v48x, v3x]
-      cleanup: [POP, POP]
+    - stack=[]
       jump -> block8
   block19 P=[] T=[]
-    inherited from block10: [v53x, v3x]
     // jump block8;
-    - stack=[v53x, v3x]
-      cleanup: [POP, POP]
+    - stack=[]
       jump -> block8
   block8 P=[] T=[]
     // evm_return 0.i256 32.i256;
@@ -368,14 +363,10 @@ entry:
     JUMP
   block20:
     JUMPDEST
-    POP  // jump block8;
-    POP
-    PUSH1 block8
+    PUSH1 block8  // jump block8;
     JUMP
   block19:
     JUMPDEST
-    POP  // jump block8;
-    POP
   block8:
     JUMPDEST
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
