@@ -4,7 +4,7 @@ use ast::{StmtKind, ValueDeclaration};
 use cranelift_entity::SecondaryMap;
 use inst::InstBuild;
 use ir::{
-    self, Function, GlobalVariableData, GlobalVariableRef, Immediate, Signature, Type,
+    self, Function, GlobalVariableData, GlobalVariableRef, I256, Immediate, Signature, Type,
     builder::{FunctionBuilder, ModuleBuilder},
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     global_variable::GvInitializer,
@@ -55,26 +55,30 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
     let mut ctx = BuildCtx::default();
 
     {
-        let _span = debug_span!("sonatina.parse.declare_structs").entered();
-        for st in ast.struct_types {
-            let name = &st.name.0;
-            builder.declare_struct_type(name, &[], false);
+        let _span = debug_span!("sonatina.parse.declare_type_placeholders").entered();
+        for st in &ast.struct_types {
+            builder.declare_struct_type(&st.name.0, &[], false);
+        }
+        for enum_ in &ast.enum_types {
+            builder.declare_enum_type(&enum_.name.0, &[], ir::types::EnumReprHint::Default);
+        }
+    }
 
+    {
+        let _span = debug_span!("sonatina.parse.define_structs").entered();
+        for st in &ast.struct_types {
             let fields = st
                 .fields
                 .iter()
                 .map(|t| ctx.type_(&builder, t))
                 .collect::<Vec<_>>();
-            builder.update_struct_fields(name, &fields);
+            builder.update_struct_fields(&st.name.0, &fields);
         }
     }
 
     {
-        let _span = debug_span!("sonatina.parse.declare_enums").entered();
-        for enum_ in ast.enum_types {
-            let name = &enum_.name.0;
-            builder.declare_enum_type(name, &[], ir::types::EnumReprHint::Default);
-
+        let _span = debug_span!("sonatina.parse.define_enums").entered();
+        for enum_ in &ast.enum_types {
             let variants = enum_
                 .variants
                 .iter()
@@ -88,7 +92,11 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
                         .collect(),
                 })
                 .collect::<Vec<_>>();
-            builder.update_enum_variants(name, &variants, ir::types::EnumReprHint::Default);
+            builder.update_enum_variants(
+                &enum_.name.0,
+                &variants,
+                ir::types::EnumReprHint::Default,
+            );
         }
     }
 
@@ -405,6 +413,21 @@ impl BuildCtx {
     fn value(&mut self, fb: &mut FunctionBuilder<InstInserter>, val: &ast::Value) -> ir::ValueId {
         match &val.kind {
             ast::ValueKind::Immediate(imm) => fb.make_imm_value(*imm),
+            ast::ValueKind::EnumTagImmediate { enum_ty, value } => fb.make_imm_value(
+                fb.module_builder
+                    .lookup_enum(&enum_ty.0)
+                    .map(|enum_ty| ir::Immediate::EnumTag {
+                        enum_ty,
+                        value: *value,
+                    })
+                    .unwrap_or_else(|| {
+                        self.errors.push(Error::Undefined(
+                            UndefinedKind::Type(enum_ty.0.clone()),
+                            val.span,
+                        ));
+                        ir::Immediate::I256(I256::zero())
+                    }),
+            ),
             ast::ValueKind::Named(name) => self
                 .func_value_names
                 .get_by_right(&name.string)
@@ -744,6 +767,29 @@ func public %foo(v0.i8) -> unit {
 "#;
 
         assert!(parse_module(s).is_err());
+    }
+
+    #[test]
+    fn test_enumtag_immediates_parse() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+type @E = enum {
+    #A,
+    #B,
+};
+
+func public %entry(v0.enumtag(@E)) -> unit {
+    block0:
+        br_table v0 block2 (1.enumtag(@E) block1) (0.enumtag(@E) block2);
+    block1:
+        return;
+    block2:
+        return;
+}
+"#;
+
+        assert!(parse_module(s).is_ok());
     }
 
     #[test]

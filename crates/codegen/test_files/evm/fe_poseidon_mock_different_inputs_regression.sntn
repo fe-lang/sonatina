@@ -3,12 +3,8 @@
 #!   calldata:
 #!   expect: return u256(1)
 
-# Reduced from Fe `poseidon_mock::test_poseidon_different_inputs`.
-# This is the worst remaining Sonatina call-gas regression after the Fe enum/object
-# allocation work rebased on `master`: master 50_506 gas vs agg 64_200 gas
-# (+13_694, +27.11%) in release mode.
-# Keep the object-ref `[i256; 3]` helper boundaries and constant materialization
-# shape intact so this fixture stays representative of the real regression.
+# Full unoptimized (-O 0) Fe Sonatina IR for poseidon_mock::test_poseidon_different_inputs on the object-ref branch.
+# Only the dummy Fe fixture entry is replaced with a runnable EVM test entry.
 
 target = "evm-ethereum-osaka"
 
@@ -17,6 +13,8 @@ type @__fe_obj_Range_0 = {unit, i256};
 global private const [i8; 768] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 107, -117, 69, 103, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 50, 123, 35, -58, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 60, -104, 105, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 102, 51, 72, 115, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 116, -80, -36, 81, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25, 73, 92, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 42, -24, -108, 74, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 98, 85, 88, -20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 35, -114, 31, 41, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, -24, 124, -51, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 61, 27, 88, -70, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 80, 126, -41, -85, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 46, -79, 65, -14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 65, -73, 30, -5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 121, -30, -87, -29, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 117, 69, -31, 70, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 81, 95, 0, 124, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 91, -48, 98, -62, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 18, 32, 8, 84, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 77, -79, 39, -8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 22, 35, 27, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 31, 22, -23, -24, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 17, -112, -51, -25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 102, -17, 67, -115];
 global private const [i8; 96] $__fe_const_data_1 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 global private const [i8; 288] $__fe_const_data_2 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+global private const [i8; 96] $__fe_const_data_3 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+global private const [i8; 96] $__fe_const_data_4 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
 func private %ark(v0.objref<[i256; 3]>, v1.i256) -> objref<[i256; 3]> {
     block0:
@@ -299,12 +297,105 @@ func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
         jump block7;
 }
 
+func private %test_poseidon_zero_inputs() {
+    block0:
+        v1.i256 = call %poseidon_mock 0.i256 0.i256;
+        v3.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt v1 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        call %assert v3;
+        return;
+}
+
+func private %test_poseidon_deterministic() {
+    block0:
+        v2.i256 = call %poseidon_mock 42.i256 17.i256;
+        v3.i256 = call %poseidon_mock 42.i256 17.i256;
+        v4.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v2 v3;
+        call %assert v4;
+        v6.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt v2 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        call %assert v6;
+        return;
+}
+
 func private %test_poseidon_different_inputs() {
     block0:
         v2.i256 = call %poseidon_mock 1.i256 2.i256;
         v5.i256 = call %poseidon_mock 3.i256 4.i256;
         v6.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne v2 v5;
         call %assert v6;
+        return;
+}
+
+func private %test_sigma_identity() {
+    block0:
+        v1.i256 = call %sigma 0.i256;
+        v2.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v1 0.i256;
+        call %assert v2;
+        v4.i256 = call %sigma 1.i256;
+        v5.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v4 1.i256;
+        call %assert v5;
+        return;
+}
+
+func private %test_mix_structure() {
+    block0:
+        v0.objref<[i256; 3]> = obj.alloc [i256; 3];
+        v1.*[i256; 3] = obj.materialize.stack v0;
+        v2.i256 = sym_addr $__fe_const_data_3;
+        v3.i256 = sym_size $__fe_const_data_3;
+        v4.i256 = ptr_to_int v1 i256;
+        evm_code_copy v4 v2 v3;
+        v5.objref<[i256; 3]> = call %mix v0;
+        v7.objref<i256> = obj.index v5 0.i256;
+        v8.i256 = obj.load v7;
+        v10.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v8 2.i256;
+        call %assert v10;
+        v12.objref<i256> = obj.index v5 1.i256;
+        v13.i256 = obj.load v12;
+        v14.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v13 1.i256;
+        call %assert v14;
+        v15.objref<i256> = obj.index v5 2.i256;
+        v16.i256 = obj.load v15;
+        v17.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v16 1.i256;
+        call %assert v17;
+        return;
+}
+
+func private %test_ark_applies_constants() {
+    block0:
+        v0.objref<[i256; 3]> = obj.alloc [i256; 3];
+        v1.*[i256; 3] = obj.materialize.stack v0;
+        v2.i256 = sym_addr $__fe_const_data_4;
+        v3.i256 = sym_size $__fe_const_data_4;
+        v4.i256 = ptr_to_int v1 i256;
+        evm_code_copy v4 v2 v3;
+        v6.objref<[i256; 3]> = call %ark v0 0.i256;
+        v7.objref<i256> = obj.index v6 0.i256;
+        v8.i256 = obj.load v7;
+        (v11.i256, v12.i1) = evm_umodo 1804289383.i256 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        br v12 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v14.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v8 v11;
+        call %assert v14;
+        v17.objref<i256> = obj.index v6 1.i256;
+        v18.i256 = obj.load v17;
+        (v20.i256, v21.i1) = evm_umodo 846930886.i256 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        br v21 block1 block3;
+
+    block3:
+        v23.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v18 v20;
+        call %assert v23;
+        v26.objref<i256> = obj.index v6 2.i256;
+        v27.i256 = obj.load v26;
+        (v29.i256, v30.i1) = evm_umodo 1681692777.i256 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        br v30 block1 block4;
+
+    block4:
+        v32.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v27 v29;
+        call %assert v32;
         return;
 }
 
@@ -370,11 +461,10 @@ func private %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d
         return v3;
 }
 
-func private %u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v0.i256, v1.i256) -> i1 {
+func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i1 {
     block0:
-        v2.i1 = eq v0 v1;
-        v3.i1 = is_zero v2;
-        return v3;
+        v2.i1 = lt v0 v1;
+        return v2;
 }
 
 func private %assert(v0.i1) {
@@ -387,6 +477,19 @@ func private %assert(v0.i1) {
 
     block2:
         return;
+}
+
+func private %u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i1 {
+    block0:
+        v2.i1 = eq v0 v1;
+        return v2;
+}
+
+func private %u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v0.i256, v1.i256) -> i1 {
+    block0:
+        v2.i1 = eq v0 v1;
+        v3.i1 = is_zero v2;
+        return v3;
 }
 
 func private %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i1 {
@@ -402,11 +505,14 @@ func public %entry() {
         evm_return 0.i256 32.i256;
 }
 
+
 object @Contract {
     section runtime {
         entry %entry;
         data $__fe_const_data_0;
         data $__fe_const_data_1;
         data $__fe_const_data_2;
+        data $__fe_const_data_3;
+        data $__fe_const_data_4;
     }
 }

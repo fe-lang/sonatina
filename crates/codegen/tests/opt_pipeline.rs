@@ -14,17 +14,11 @@ use sonatina_codegen::{
     },
 };
 use sonatina_ir::{
-    ControlFlowGraph, I256, Linkage, Module, Signature, Type,
-    builder::ModuleBuilder,
-    func_cursor::InstInserter,
-    inst::{control_flow, data},
+    ControlFlowGraph, Module,
     ir_writer::{FuncWriter, ModuleWriter},
-    isa::{Isa, evm::Evm},
     module::FuncRef,
-    types::{EnumReprHint, EnumVariantRef, VariantData},
 };
 use sonatina_parser::parse_module;
-use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
 #[dir_test(
@@ -230,81 +224,33 @@ func public %complex_loop() -> i8 {
 
 #[test]
 fn optimization_pipeline_rejects_enum_bearing_product_scalarization_without_panicking() {
-    let triple = TargetTriple::new(
-        Architecture::Evm,
-        Vendor::Ethereum,
-        OperatingSystem::Evm(EvmVersion::Osaka),
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+type @option_i256 = enum {
+    #None,
+    #Some(i256),
+};
+
+type @wrapper = {@option_i256, i256};
+
+func private %entry(v0.@wrapper) -> i256 {
+    block0:
+        v1.@option_i256 = extract_value v0 0.i8;
+        v2.enumtag(@option_i256) = enum.tag v1;
+        v3.i1 = enum.is_variant v1 #Some;
+        br v3 block1 block2;
+
+    block1:
+        v4.i256 = extract_value v0 1.i8;
+        return v4;
+
+    block2:
+        return 0.i256;
+}
+"#,
     );
-    let isa = Evm::new(triple);
-    let builder = ModuleBuilder::new(sonatina_ir::module::ModuleCtx::new(&isa));
-    let option_ty = builder.declare_enum_type(
-        "option_i256",
-        &[
-            VariantData {
-                name: "None".to_string(),
-                explicit_discriminant: None,
-                fields: vec![],
-            },
-            VariantData {
-                name: "Some".to_string(),
-                explicit_discriminant: None,
-                fields: vec![Type::I256],
-            },
-        ],
-        EnumReprHint::Default,
-    );
-    let Type::Compound(option_enum_ty) = option_ty else {
-        panic!("enum type must be compound");
-    };
-    let wrapper_ty = builder.declare_struct_type("wrapper", &[option_ty, Type::I256], false);
-    let some_variant = EnumVariantRef::new(option_enum_ty, 1);
-    let func_ref = builder
-        .declare_function(Signature::new_single(
-            "entry",
-            Linkage::Private,
-            &[wrapper_ty],
-            Type::I256,
-        ))
-        .expect("function declaration should succeed");
-
-    {
-        let is = isa.inst_set();
-        let mut fb = builder.func_builder::<InstInserter>(func_ref);
-        let entry = fb.append_block();
-        let some_block = fb.append_block();
-        let none_block = fb.append_block();
-        fb.switch_to_block(entry);
-        let wrapper = fb.args()[0];
-        let zero = fb.make_imm_value(0i8);
-        let opt = fb.insert_inst_with(|| data::ExtractValue::new(is, wrapper, zero), option_ty);
-        let tag = fb.insert_inst_with(
-            || data::EnumTag::new(is, opt),
-            Type::EnumTag(option_enum_ty),
-        );
-        let _ = tag;
-        let is_some =
-            fb.insert_inst_with(|| data::EnumIsVariant::new(is, opt, some_variant), Type::I1);
-        fb.insert_inst_no_result_with(|| {
-            control_flow::Br::new(is, is_some, some_block, none_block)
-        });
-
-        fb.switch_to_block(some_block);
-        let one = fb.make_imm_value(1i8);
-        let payload = fb.insert_inst_with(|| data::ExtractValue::new(is, wrapper, one), Type::I256);
-        fb.insert_inst_no_result_with(|| {
-            control_flow::Return::new(is, smallvec::smallvec![payload].into())
-        });
-
-        fb.switch_to_block(none_block);
-        let zero_ret = fb.make_imm_value(I256::from(0));
-        fb.insert_inst_no_result_with(|| {
-            control_flow::Return::new(is, smallvec::smallvec![zero_ret].into())
-        });
-        fb.seal_all();
-        fb.finish();
-    }
-
-    let module = builder.build();
     module.func_store.modify(func_ref, |func| {
         AggregateCombine::default().run(func);
         AggregateScalarize::default().run(func);

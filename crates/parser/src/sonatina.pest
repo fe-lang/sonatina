@@ -106,7 +106,7 @@ multi_value_list = { "(" ~ (value ~ ("," ~ value)*)? ~ ")" }
 value_block_map = { "(" ~ value ~ block_ident ~ ")" }
 
 value        =  { value_name | imm_number | undef | global_value }
-imm_number   = ${ number ~ "." ~ primitive_type }
+imm_number   = ${ number ~ "." ~ (primitive_type | enumtag_type) }
 global_value =  { gv_identifier }
 undef        = ${ "undef" ~ "." ~ type_name }
 number       = _{ hex | decimal }

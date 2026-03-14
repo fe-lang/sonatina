@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_poseidon_mock_different_inputs_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 2508 bytes
-  total: 2508 bytes
+  section runtime: 2702 bytes
+  total: 2702 bytes
 
 functions:
   ark: ir_blocks=12 ir_insts=54 vcode_ops=154 fixups=14 imm_bytes=26
@@ -18,15 +18,15 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=0
   poseidon_mock: ir_blocks=16 ir_insts=63 vcode_ops=201 fixups=28 imm_bytes=27
     mem: scratch_words=0 stable_words=7 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=7
-  test_poseidon_different_inputs: ir_blocks=3 ir_insts=8 vcode_ops=25 fixups=5 imm_bytes=4
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5: ir_blocks=4 ir_insts=9 vcode_ops=17 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=0
-  entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=2
+  assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  entry: ir_blocks=1 ir_insts=7 vcode_ops=27 fixups=6 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=49769 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=28769
+  case ok: calldata_len=0 success reason=Return gas_used=49776 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=28776
 
 
 --------------- DEBUG ---------------
@@ -450,7 +450,7 @@ poseidon_mock:
     MSTORE
     PUSH1 `pc + (4)`  // v21.i256 = call %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5 v19;
     SWAP1
-    PUSH1 FuncRef(7)
+    PUSH1 FuncRef(12)
     JUMP
     JUMPDEST
     SWAP1  // jump block1;
@@ -521,7 +521,7 @@ poseidon_mock:
     MSTORE
     PUSH1 `pc + (4)`  // v41.i256 = call %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5 v39;
     SWAP1
-    PUSH1 FuncRef(7)
+    PUSH1 FuncRef(12)
     JUMP
     JUMPDEST
     SWAP4  // jump block5;
@@ -605,35 +605,6 @@ poseidon_mock:
     PUSH0
     REVERT
 
-// func private %test_poseidon_different_inputs()
-test_poseidon_different_inputs:
-  block0:
-    JUMPDEST
-    PUSH1 0x1 (1)  // v2.i256 = call %poseidon_mock 1.i256 2.i256;
-    PUSH1 0x2 (2)
-    PUSH1 `pc + (4)`
-    SWAP2
-    PUSH1 FuncRef(4)
-    JUMP
-    JUMPDEST
-    PUSH1 0x3 (3)  // v5.i256 = call %poseidon_mock 3.i256 4.i256;
-    PUSH1 0x4 (4)
-    PUSH1 `pc + (4)`
-    SWAP2
-    PUSH1 FuncRef(4)
-    JUMP
-    JUMPDEST
-    EQ  // v14.i1 = eq v2 v5;
-    PUSH1 block3  // br v9 block3 block1;
-    JUMPI
-  block1:
-    JUMP  // return;
-  block3:
-    JUMPDEST
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
-
 // func private %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5(v0.*@__fe_obj_Range_0) -> i256
 range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5:
   block0:
@@ -658,11 +629,42 @@ range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_le
     SWAP1  // return v11;
     JUMP
 
+// func private %assert(v0.i1)
+assert:
+  block0:
+    JUMPDEST
+    PUSH1 block2  // br v1 block1 block2;
+    JUMPI
+  block1:
+    PUSH0  // evm_revert 0.i256 0.i256;
+    PUSH0
+    REVERT
+  block2:
+    JUMPDEST
+    JUMP  // return;
+
 // func public %entry()
 entry:
   block0:
-    PUSH1 `pc + (3)`  // call %test_poseidon_different_inputs;
-    PUSH1 FuncRef(5)
+    PUSH1 0x1 (1)  // v6.i256 = call %poseidon_mock 1.i256 2.i256;
+    PUSH1 0x2 (2)
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(4)
+    JUMP
+    JUMPDEST
+    PUSH1 0x3 (3)  // v7.i256 = call %poseidon_mock 3.i256 4.i256;
+    PUSH1 0x4 (4)
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(4)
+    JUMP
+    JUMPDEST
+    EQ  // v10.i1 = eq v6 v7;
+    ISZERO  // v9.i1 = is_zero v10;
+    PUSH1 `pc + (4)`  // call %assert v9;
+    SWAP1
+    PUSH1 FuncRef(15)
     JUMP
     JUMPDEST
     PUSH1 0x1 (1)  // mstore 0.i256 1.i256 i256;

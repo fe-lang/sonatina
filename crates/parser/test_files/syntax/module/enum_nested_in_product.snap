@@ -1,0 +1,42 @@
+---
+source: crates/parser/tests/syntax.rs
+input_file: test_files/syntax/module/enum_nested_in_product.sntn
+---
+module "target = "evm-ethereum-osaka"
+
+type @option_i256 = enum {
+    #None,
+    #Some(i256),
+};
+
+type @wrapper = { @option_i256, i256 };
+"
+  target_triple "evm-ethereum-osaka"
+  enum_declaration "type @option_i256 = enum {
+      #None,
+      #Some(i256),
+  };"
+    struct_identifier "@option_i256"
+      struct_name "option_i256"
+    enum_variant_list "#None,
+        #Some(i256),
+    "
+      enum_variant "#None"
+        variant_identifier "#None"
+          variant_name "None"
+      enum_variant "#Some(i256)"
+        variant_identifier "#Some"
+          variant_name "Some"
+        enum_variant_fields "(i256)"
+          type_name "i256"
+            primitive_type "i256"
+  struct_declaration "type @wrapper = { @option_i256, i256 };"
+    struct_identifier "@wrapper"
+      struct_name "wrapper"
+    normal_field_list "{ @option_i256, i256 }"
+      type_name "@option_i256"
+        struct_identifier "@option_i256"
+          struct_name "option_i256"
+      type_name "i256"
+        primitive_type "i256"
+  EOI ""

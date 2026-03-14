@@ -290,7 +290,7 @@ impl FromSyntax<Error> for Struct {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct StructName(pub SmolStr);
 
 impl FromSyntax<Error> for StructName {
@@ -805,6 +805,7 @@ pub struct Value {
 #[derive(Debug)]
 pub enum ValueKind {
     Immediate(Immediate),
+    EnumTagImmediate { enum_ty: StructName, value: I256 },
     Undef(Type),
     Named(ValueName),
     Global(GvName),
@@ -849,12 +850,27 @@ impl FromSyntax<Error> for Value {
         let kind = match node.rule {
             Rule::value_name => ValueKind::Named(ValueName::from_syntax(node)),
             Rule::imm_number => {
-                let ty: IntType = node.parse_str(Rule::primitive_type);
+                let ty = if let Some(ty) = node.parse_str_opt::<IntType>(Rule::primitive_type) {
+                    TypeKind::Int(ty)
+                } else if let Some(enum_ty) = node.get_opt(Rule::enumtag_type) {
+                    let mut enum_ty = Node::new(enum_ty);
+                    TypeKind::EnumTag(enum_ty.single(Rule::struct_identifier))
+                } else {
+                    unreachable!()
+                };
+                let imm_from_i256 = |i256| match &ty {
+                    TypeKind::Int(IntType::I256) => ValueKind::Immediate(Immediate::I256(i256)),
+                    TypeKind::EnumTag(enum_ty) => ValueKind::EnumTagImmediate {
+                        enum_ty: enum_ty.clone(),
+                        value: i256,
+                    },
+                    _ => unreachable!(),
+                };
                 node.descend();
                 let mut txt = node.txt;
                 match node.rule {
                     Rule::decimal => match ty {
-                        IntType::I1 => imm_or_err(
+                        TypeKind::Int(IntType::I1) => imm_or_err(
                             node,
                             || {
                                 let b = match u8::from_str(txt).ok()? {
@@ -866,42 +882,59 @@ impl FromSyntax<Error> for Value {
                             },
                             ValueKind::Error,
                         ),
-                        IntType::I8 => parse_dec!(node, Immediate::I8, i8, u8),
-                        IntType::I16 => parse_dec!(node, Immediate::I16, i16, u16),
-                        IntType::I32 => parse_dec!(node, Immediate::I32, i32, u32),
-                        IntType::I64 => parse_dec!(node, Immediate::I64, i64, u64),
-                        IntType::I128 => parse_dec!(node, Immediate::I128, i128, u128),
-
-                        IntType::I256 => {
+                        TypeKind::Int(IntType::I8) => parse_dec!(node, Immediate::I8, i8, u8),
+                        TypeKind::Int(IntType::I16) => {
+                            parse_dec!(node, Immediate::I16, i16, u16)
+                        }
+                        TypeKind::Int(IntType::I32) => {
+                            parse_dec!(node, Immediate::I32, i32, u32)
+                        }
+                        TypeKind::Int(IntType::I64) => {
+                            parse_dec!(node, Immediate::I64, i64, u64)
+                        }
+                        TypeKind::Int(IntType::I128) => {
+                            parse_dec!(node, Immediate::I128, i128, u128)
+                        }
+                        TypeKind::Int(IntType::I256) | TypeKind::EnumTag(_) => {
                             let s = txt.strip_prefix('-');
                             let is_negative = s.is_some();
                             txt = s.unwrap_or(txt);
 
-                            imm_or_err(
-                                node,
-                                || {
-                                    let mut i256 = U256::from_dec_str(txt).ok()?.into();
-                                    if is_negative {
-                                        i256 = I256::zero().overflowing_sub(i256).0;
-                                    }
-                                    Some(Immediate::I256(i256))
-                                },
-                                ValueKind::Error,
-                            )
+                            let Some(mut i256) = U256::from_dec_str(txt).ok().map(Into::into)
+                            else {
+                                node.error(Error::NumberOutOfBounds(node.span));
+                                return Value {
+                                    kind: ValueKind::Error,
+                                    span: node.span,
+                                };
+                            };
+                            if is_negative {
+                                i256 = I256::zero().overflowing_sub(i256).0;
+                            }
+                            imm_from_i256(i256)
                         }
+                        _ => unreachable!(),
                     },
 
                     Rule::hex => match ty {
-                        IntType::I1 => {
+                        TypeKind::Int(IntType::I1) => {
                             node.error(Error::NumberOutOfBounds(node.span));
                             ValueKind::Error
                         }
-                        IntType::I8 => parse_hex!(node, Immediate::I8, i8),
-                        IntType::I16 => parse_hex!(node, Immediate::I16, i16),
-                        IntType::I32 => parse_hex!(node, Immediate::I32, i32),
-                        IntType::I64 => parse_hex!(node, Immediate::I64, i64),
-                        IntType::I128 => parse_hex!(node, Immediate::I128, i128),
-                        IntType::I256 => {
+                        TypeKind::Int(IntType::I8) => parse_hex!(node, Immediate::I8, i8),
+                        TypeKind::Int(IntType::I16) => {
+                            parse_hex!(node, Immediate::I16, i16)
+                        }
+                        TypeKind::Int(IntType::I32) => {
+                            parse_hex!(node, Immediate::I32, i32)
+                        }
+                        TypeKind::Int(IntType::I64) => {
+                            parse_hex!(node, Immediate::I64, i64)
+                        }
+                        TypeKind::Int(IntType::I128) => {
+                            parse_hex!(node, Immediate::I128, i128)
+                        }
+                        TypeKind::Int(IntType::I256) | TypeKind::EnumTag(_) => {
                             let s = txt.strip_prefix('-');
                             let is_negative = s.is_some();
                             txt = s.unwrap_or(txt);
@@ -911,12 +944,13 @@ impl FromSyntax<Error> for Value {
                                 if is_negative {
                                     i256 = I256::zero().overflowing_sub(i256).0;
                                 }
-                                ValueKind::Immediate(Immediate::I256(i256))
+                                imm_from_i256(i256)
                             } else {
                                 node.error(Error::NumberOutOfBounds(node.span));
                                 ValueKind::Error
                             }
                         }
+                        _ => unreachable!(),
                     },
                     _ => unreachable!(),
                 }
