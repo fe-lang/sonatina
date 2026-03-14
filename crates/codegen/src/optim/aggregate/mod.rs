@@ -9,6 +9,7 @@ mod object_load_store;
 mod object_locality;
 mod private_abi;
 pub mod promotion;
+mod provenance;
 mod reconstruct;
 pub mod scalarize;
 pub mod shape;
@@ -20,4 +21,9 @@ pub use legalize::{AggregateLowerToMemoryLegalize, assert_aggregate_legalized};
 pub use object::ObjectLowerToMemory;
 pub use object_abi::ObjectReturnOutParam;
 pub use object_load_store::ObjectLoadStore;
+pub(crate) use object_locality::{
+    LocalObjectArgInfo, LocalObjectArgMap, RootInit, collect_local_object_arg_info,
+    merge_local_object_arg_info,
+};
+pub(crate) use provenance::{Projection, RootProvenance, collect_root_provenance};
 pub use scalarize::AggregateScalarize;

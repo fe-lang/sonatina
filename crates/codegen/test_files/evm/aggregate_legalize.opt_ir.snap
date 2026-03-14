@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 414
 expression: opt_ir_snapshot
 input_file: test_files/evm/aggregate_legalize.sntn
 ---
@@ -19,8 +20,8 @@ func public %entry() {
 
     block5:
         v32.i256 = phi (v0 block0) (v1 block4);
-        v40.i256 = add v0 v1;
-        v4.i256 = add v40 v32;
+        v41.i256 = add v0 v1;
+        v4.i256 = add v41 v32;
         mstore 0.i32 v4 i256;
         evm_return 0.i8 32.i8;
 }

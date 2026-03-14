@@ -18,7 +18,10 @@ use crate::{
 
 use super::{
     adce::AdceSolver,
-    aggregate::{AggregateCombine, AggregateScalarize, ObjectLoadStore},
+    aggregate::{
+        AggregateCombine, AggregateScalarize, LocalObjectArgMap, ObjectLoadStore,
+        collect_local_object_arg_info,
+    },
     cfg_cleanup::CfgCleanup,
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
     egraph::run_egraph_pass,
@@ -392,12 +395,14 @@ pub fn run_func_passes(passes: &[Pass], func: &mut Function) {
     .entered();
     let mut ctx = PassContext::default();
     for &pass in passes {
-        run_pass(pass, func, &mut ctx);
+        run_pass(pass, None, func, &mut ctx, None);
     }
 }
 
 fn run_module_pass(pass: Pass, module: &Module) {
     let _span = debug_span!("sonatina.optim.pipeline.pass_round", pass = pass.as_str()).entered();
+    let local_object_args = matches!(pass, Pass::ObjectLoadStore | Pass::AggregateScalarize)
+        .then(|| collect_local_object_arg_info(module));
     module.func_store.par_for_each(|func_ref, func| {
         let _span = debug_span!(
             "sonatina.optim.pipeline.function",
@@ -405,7 +410,13 @@ fn run_module_pass(pass: Pass, module: &Module) {
         )
         .entered();
         let mut ctx = PassContext::default();
-        run_pass(pass, func, &mut ctx);
+        run_pass(
+            pass,
+            Some(func_ref),
+            func,
+            &mut ctx,
+            local_object_args.as_ref(),
+        );
     });
 }
 
@@ -423,7 +434,13 @@ struct PassContext {
 
 /// Dispatch a single pass, recomputing any required analyses from the
 /// current function state.
-fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
+fn run_pass(
+    pass: Pass,
+    func_ref: Option<sonatina_ir::module::FuncRef>,
+    func: &mut Function,
+    ctx: &mut PassContext,
+    local_object_args: Option<&LocalObjectArgMap>,
+) {
     let _span = trace_span!("sonatina.optim.pipeline.pass", pass = pass.as_str()).entered();
     match pass {
         Pass::LegalizeMultiResult => {
@@ -440,11 +457,19 @@ fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
         }
         Pass::ObjectLoadStore => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.object_load_store").entered();
-            ObjectLoadStore::default().run(func);
+            if let (Some(func_ref), Some(local_object_args)) = (func_ref, local_object_args) {
+                ObjectLoadStore::default().run_for_func(func_ref, func, local_object_args);
+            } else {
+                ObjectLoadStore::default().run(func);
+            }
         }
         Pass::AggregateScalarize => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_scalarize").entered();
-            AggregateScalarize::default().run(func);
+            if let (Some(func_ref), Some(local_object_args)) = (func_ref, local_object_args) {
+                AggregateScalarize::default().run_for_func(func_ref, func, local_object_args);
+            } else {
+                AggregateScalarize::default().run(func);
+            }
         }
         Pass::LoadStore => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.load_store").entered();

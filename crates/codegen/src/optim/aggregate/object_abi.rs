@@ -9,8 +9,10 @@ use sonatina_ir::{
 };
 
 use super::{
-    object_locality::{self, LocalObjectArgs},
+    collect_root_provenance,
+    object_locality::{self, LocalObjectArgInfo, LocalObjectArgMap, RootInit},
     private_abi::{self, PrivateAbiPlan},
+    shape,
 };
 
 #[derive(Clone)]
@@ -38,17 +40,30 @@ pub struct ObjectReturnOutParam;
 
 impl ObjectReturnOutParam {
     pub fn run(&mut self, module: &Module) -> bool {
-        let mut changed = false;
+        !self.run_with_synthetic_out_args(module).is_empty()
+    }
+
+    pub(crate) fn run_with_synthetic_out_args(&mut self, module: &Module) -> LocalObjectArgMap {
+        let mut synthetic_out_args = LocalObjectArgMap::default();
 
         loop {
-            let local_object_args = object_locality::collect_local_object_args(module);
+            let local_object_args = object_locality::collect_local_object_arg_info(module);
             let mut plans = self.collect_plans(module, &local_object_args);
             private_abi::retain_higher_order_safe_plans(module, &mut plans);
             if plans.is_empty() {
-                return changed;
+                return synthetic_out_args;
             }
-            changed = true;
             let old_sigs = private_abi::rewrite_declared_signatures(module, &plans);
+
+            for &func in plans.keys() {
+                synthetic_out_args.entry(func).or_default().insert(
+                    0,
+                    LocalObjectArgInfo {
+                        init: RootInit::UndefFresh,
+                        fresh_result_out: true,
+                    },
+                );
+            }
 
             for (&func, plan) in &plans {
                 module.func_store.modify(func, |function| {
@@ -72,7 +87,7 @@ impl ObjectReturnOutParam {
     fn collect_plans(
         &self,
         module: &Module,
-        local_object_args: &LocalObjectArgs,
+        local_object_args: &LocalObjectArgMap,
     ) -> FxHashMap<FuncRef, FuncPlan> {
         let mut plans = FxHashMap::default();
 
@@ -92,7 +107,7 @@ impl ObjectReturnOutParam {
             };
 
             let Some((root_alloc_inst, root_value)) = module.func_store.view(func, |function| {
-                self.analyze_return_root(function, out_ty, local_object_args)
+                self.analyze_return_root(function, out_ty, out_elem_ty, local_object_args)
             }) else {
                 continue;
             };
@@ -121,8 +136,16 @@ impl ObjectReturnOutParam {
         &self,
         function: &Function,
         out_ty: Type,
-        local_object_args: &LocalObjectArgs,
+        out_elem_ty: Type,
+        local_object_args: &LocalObjectArgMap,
     ) -> Option<(InstId, ValueId)> {
+        let root_slices = self.collect_return_root_slices(function, out_elem_ty);
+        if root_slices.is_empty() {
+            return None;
+        }
+        let mut layout_cache = shape::AggregateLayoutCache::default();
+        let provenance =
+            collect_root_provenance(function, function.ctx(), &root_slices, &mut layout_cache);
         let mut return_root = None;
         let mut saw_return = false;
 
@@ -143,12 +166,17 @@ impl ObjectReturnOutParam {
                     return None;
                 }
 
+                let projection = provenance.exact_projection(root)?;
+                if root_slices.get(&projection.root_value) != Some(&projection.slice) {
+                    return None;
+                }
+
                 if let Some(existing) = return_root {
-                    if existing != root {
+                    if existing != projection.root_value {
                         return None;
                     }
                 } else {
-                    return_root = Some(root);
+                    return_root = Some(projection.root_value);
                 }
             }
         }
@@ -162,7 +190,14 @@ impl ObjectReturnOutParam {
         if !function.layout.is_inst_inserted(root_alloc_inst)
             || downcast::<&data::ObjAlloc>(function.inst_set(), function.dfg.inst(root_alloc_inst))
                 .is_none()
-            || !self.root_is_rewritable(function, root_value, out_ty, local_object_args)
+            || !self.root_is_rewritable(
+                function,
+                root_value,
+                out_ty,
+                local_object_args,
+                &root_slices,
+                &provenance,
+            )
         {
             return None;
         }
@@ -175,9 +210,55 @@ impl ObjectReturnOutParam {
         function: &Function,
         root: ValueId,
         root_ty: Type,
-        local_object_args: &LocalObjectArgs,
+        local_object_args: &LocalObjectArgMap,
+        root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
+        provenance: &super::provenance::RootProvenanceMap,
     ) -> bool {
-        object_locality::object_root_stays_local(function, root, root_ty, local_object_args, true)
+        let Some(&root_slice) = root_slices.get(&root) else {
+            return false;
+        };
+        object_locality::object_root_stays_local_with(
+            function,
+            root,
+            root_ty,
+            local_object_args,
+            |value| {
+                provenance
+                    .exact_projection(value)
+                    .is_some_and(|projection| {
+                        projection.root_value == root && projection.slice == root_slice
+                    })
+            },
+            true,
+        )
+    }
+
+    fn collect_return_root_slices(
+        &self,
+        function: &Function,
+        out_elem_ty: Type,
+    ) -> FxHashMap<ValueId, shape::AggregateSlice> {
+        let mut layout_cache = shape::AggregateLayoutCache::default();
+        let root_slice = whole_object_slice(&mut layout_cache, function.ctx(), out_elem_ty);
+        let mut root_slices = FxHashMap::default();
+
+        for block in function.layout.iter_block() {
+            for inst in function.layout.iter_inst(block) {
+                let Some(obj_alloc) =
+                    downcast::<&data::ObjAlloc>(function.inst_set(), function.dfg.inst(inst))
+                else {
+                    continue;
+                };
+                let Some(result) = function.dfg.inst_result(inst) else {
+                    continue;
+                };
+                if *obj_alloc.ty() == out_elem_ty {
+                    root_slices.insert(result, root_slice);
+                }
+            }
+        }
+
+        root_slices
     }
 
     fn rewrite_function(&self, function: &mut Function, plan: &FuncPlan) {
@@ -303,4 +384,23 @@ fn objref_element_ty(ctx: &ModuleCtx, ty: Type) -> Option<Type> {
         return None;
     };
     Some(elem)
+}
+
+fn whole_object_slice(
+    layout_cache: &mut shape::AggregateLayoutCache,
+    ctx: &ModuleCtx,
+    ty: Type,
+) -> shape::AggregateSlice {
+    let leaf_count = if ty == Type::Unit {
+        0
+    } else {
+        layout_cache
+            .shape(ctx, ty)
+            .map_or(1, |shape| shape.leaves.len())
+    };
+    shape::AggregateSlice {
+        ty,
+        first_leaf: 0,
+        leaf_count,
+    }
 }

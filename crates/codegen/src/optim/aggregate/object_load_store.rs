@@ -3,11 +3,14 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, InstId, Type, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::{control_flow, data, downcast},
-    module::ModuleCtx,
+    inst::{cast, control_flow, data, downcast},
+    module::{FuncRef, ModuleCtx},
 };
 
-use super::{cleanup::DeadPureInstCleanup, reconstruct::AggregateValueReconstructor, shape};
+use super::{
+    LocalObjectArgInfo, LocalObjectArgMap, RootProvenance, cleanup::DeadPureInstCleanup,
+    collect_root_provenance, reconstruct::AggregateValueReconstructor, shape,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct ObjectSlice {
@@ -39,16 +42,38 @@ pub struct ObjectLoadStore {
 
 impl ObjectLoadStore {
     pub fn run(&mut self, func: &mut Function) -> bool {
+        self.run_with_local_object_args(func, None)
+    }
+
+    // `local_object_args` must be computed before entering `func_store.modify(...)`.
+    pub(crate) fn run_for_func(
+        &mut self,
+        func_ref: FuncRef,
+        func: &mut Function,
+        local_object_args: &LocalObjectArgMap,
+    ) -> bool {
+        self.run_with_local_object_args(func, local_object_args.get(&func_ref))
+    }
+
+    fn run_with_local_object_args(
+        &mut self,
+        func: &mut Function,
+        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
+    ) -> bool {
         self.changed = false;
         self.layout_cache.clear();
 
         loop {
             func.rebuild_users();
-            let tracked = self.collect_tracked_objects(func);
-            let possible_roots = self.collect_possible_roots(func);
+            let root_slices = self.collect_root_slices(func, local_object_args);
+            let provenance =
+                collect_root_provenance(func, func.ctx(), &root_slices, &mut self.layout_cache);
+            let tracked = self.collect_tracked_objects(func, &provenance);
+            let possible_roots = provenance.into_possible_roots();
+            let live_out_roots = self.collect_live_out_roots(&tracked, func, local_object_args);
 
             let mut iter_changed = self.run_forward(func, &tracked, &possible_roots);
-            iter_changed |= self.run_backward(func, &tracked, &possible_roots);
+            iter_changed |= self.run_backward(func, &tracked, &possible_roots, &live_out_roots);
 
             if iter_changed {
                 func.rebuild_users();
@@ -68,169 +93,87 @@ impl ObjectLoadStore {
     fn collect_tracked_objects(
         &mut self,
         func: &Function,
+        provenance: &super::provenance::RootProvenanceMap,
     ) -> SecondaryMap<ValueId, Option<TrackedObject>> {
         let mut tracked = SecondaryMap::default();
 
-        for block in func.layout.iter_block() {
-            for inst in func.layout.iter_inst(block) {
-                if let Some(obj_alloc) =
-                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
-                    && let Some(result) = func.dfg.inst_result(inst)
-                    && let Some(slice) =
-                        self.whole_object_slice(func.ctx(), result, *obj_alloc.ty())
-                {
-                    tracked[result] = Some(TrackedObject::Exact(slice));
-                }
+        for value in func.dfg.value_ids() {
+            if objref_element_ty(func.ctx(), func.dfg.value_ty(value)).is_none() {
+                continue;
             }
+            tracked[value] =
+                self.tracked_object_from_provenance(func, provenance.provenance(value));
         }
 
-        loop {
-            let mut changed = false;
-
-            for block in func.layout.iter_block() {
-                for inst in func.layout.iter_inst(block) {
-                    if !func.layout.is_inst_inserted(inst) {
-                        continue;
-                    }
-
-                    let updated = if let Some(obj_proj) =
-                        downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst))
-                    {
-                        if func.dfg.inst_result(inst).is_none() {
-                            continue;
-                        }
-                        let Some((&base, indices)) = obj_proj.values().split_first() else {
-                            continue;
-                        };
-                        self.project_tracked_object(func, tracked[base].as_ref().copied(), indices)
-                    } else if let Some(obj_index) =
-                        downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst))
-                    {
-                        if func.dfg.inst_result(inst).is_none() {
-                            continue;
-                        }
-                        self.project_tracked_object(
-                            func,
-                            tracked[*obj_index.object()].as_ref().copied(),
-                            &[*obj_index.index()],
-                        )
-                    } else if let Some(phi) =
-                        downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
-                    {
-                        let Some(result) = func.dfg.inst_result(inst) else {
-                            continue;
-                        };
-                        let merged = merge_phi_tracked(
-                            phi.args()
-                                .iter()
-                                .map(|(arg, _)| tracked[*arg].as_ref().copied()),
-                        );
-                        if merged != tracked[result] {
-                            tracked[result] = merged;
-                            changed = true;
-                        }
-                        continue;
-                    } else {
-                        continue;
-                    };
-
-                    let Some(result) = func.dfg.inst_result(inst) else {
-                        continue;
-                    };
-                    if updated != tracked[result] {
-                        tracked[result] = updated;
-                        changed = true;
-                    }
-                }
-            }
-
-            if !changed {
-                return tracked;
-            }
-        }
+        tracked
     }
 
-    fn collect_possible_roots(
+    fn collect_root_slices(
         &mut self,
         func: &Function,
-    ) -> SecondaryMap<ValueId, FxHashSet<ValueId>> {
-        let mut possible_roots: SecondaryMap<ValueId, FxHashSet<ValueId>> = SecondaryMap::default();
+        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
+    ) -> FxHashMap<ValueId, shape::AggregateSlice> {
+        let mut root_slices = FxHashMap::default();
+
+        if let Some(local_object_args) = local_object_args {
+            for &idx in local_object_args.keys() {
+                if let Some(&root) = func.arg_values.get(idx)
+                    && let Some(root_ty) = objref_element_ty(func.ctx(), func.dfg.value_ty(root))
+                {
+                    root_slices.insert(root, self.whole_root_slice(func.ctx(), root_ty));
+                }
+            }
+        }
 
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
                 if let Some(obj_alloc) =
                     downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
                     && let Some(result) = func.dfg.inst_result(inst)
-                    && self
-                        .whole_object_slice(func.ctx(), result, *obj_alloc.ty())
-                        .is_some()
+                    && objref_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
                 {
-                    possible_roots[result].insert(result);
+                    root_slices.insert(result, self.whole_root_slice(func.ctx(), *obj_alloc.ty()));
                 }
             }
         }
 
-        loop {
-            let mut changed = false;
+        root_slices
+    }
 
-            for block in func.layout.iter_block() {
-                for inst in func.layout.iter_inst(block) {
-                    if !func.layout.is_inst_inserted(inst) {
-                        continue;
-                    }
-
-                    let updated = if let Some(obj_proj) =
-                        downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst))
-                    {
-                        obj_proj
-                            .values()
-                            .first()
-                            .map_or_else(FxHashSet::default, |base| possible_roots[*base].clone())
-                    } else if let Some(obj_index) =
-                        downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst))
-                    {
-                        possible_roots[*obj_index.object()].clone()
-                    } else if let Some(phi) =
-                        downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
-                    {
-                        phi.args()
-                            .iter()
-                            .flat_map(|(arg, _)| possible_roots[*arg].iter().copied())
-                            .collect()
-                    } else {
-                        continue;
-                    };
-
-                    let Some(result) = func.dfg.inst_result(inst) else {
-                        continue;
-                    };
-                    if updated != possible_roots[result] {
-                        possible_roots[result] = updated;
-                        changed = true;
-                    }
-                }
-            }
-
-            if !changed {
-                return possible_roots;
-            }
+    fn tracked_object_from_provenance(
+        &mut self,
+        func: &Function,
+        provenance: RootProvenance,
+    ) -> Option<TrackedObject> {
+        match provenance {
+            RootProvenance::Exact(projection) => Some(TrackedObject::Exact(ObjectSlice {
+                root: projection.root_value,
+                ty: projection.slice.ty,
+                first_leaf: projection.slice.first_leaf,
+                leaf_count: projection.slice.leaf_count,
+                total_leaves: self.root_total_leaves_for_value(func, projection.root_value)?,
+            })),
+            RootProvenance::SameRoot(root) => Some(TrackedObject::RootUnknown {
+                root,
+                total_leaves: self.root_total_leaves_for_value(func, root)?,
+            }),
+            RootProvenance::Maybe(_) | RootProvenance::Unknown => None,
         }
     }
 
-    fn whole_object_slice(
-        &mut self,
-        ctx: &ModuleCtx,
-        root: ValueId,
-        pointee_ty: Type,
-    ) -> Option<ObjectSlice> {
-        let total_leaves = self.root_leaf_count(ctx, pointee_ty);
-        Some(ObjectSlice {
-            root,
+    fn whole_root_slice(&mut self, ctx: &ModuleCtx, pointee_ty: Type) -> shape::AggregateSlice {
+        shape::AggregateSlice {
             ty: pointee_ty,
             first_leaf: 0,
-            leaf_count: total_leaves,
-            total_leaves,
-        })
+            leaf_count: self.root_leaf_count(ctx, pointee_ty),
+        }
+    }
+
+    fn root_total_leaves_for_value(&mut self, func: &Function, root: ValueId) -> Option<usize> {
+        Some(self.root_leaf_count(
+            func.ctx(),
+            objref_element_ty(func.ctx(), func.dfg.value_ty(root))?,
+        ))
     }
 
     fn root_leaf_count(&mut self, ctx: &ModuleCtx, ty: Type) -> usize {
@@ -240,35 +183,6 @@ impl ObjectLoadStore {
         self.layout_cache
             .shape(ctx, ty)
             .map_or(1, |shape| shape.leaves.len())
-    }
-
-    fn project_tracked_object(
-        &mut self,
-        func: &Function,
-        base: Option<TrackedObject>,
-        indices: &[ValueId],
-    ) -> Option<TrackedObject> {
-        let base = base?;
-        let Some(exact) = base.exact() else {
-            return Some(TrackedObject::RootUnknown {
-                root: base.root(),
-                total_leaves: base.total_leaves(),
-            });
-        };
-        shape::aggregate_slice_for_object_path(func.ctx(), exact.ty, indices, &func.dfg)
-            .map(|sub| {
-                TrackedObject::Exact(ObjectSlice {
-                    root: exact.root,
-                    ty: sub.ty,
-                    first_leaf: exact.first_leaf + sub.first_leaf,
-                    leaf_count: sub.leaf_count,
-                    total_leaves: exact.total_leaves,
-                })
-            })
-            .or(Some(TrackedObject::RootUnknown {
-                root: exact.root,
-                total_leaves: exact.total_leaves,
-            }))
     }
 
     fn run_forward(
@@ -397,6 +311,7 @@ impl ObjectLoadStore {
         func: &mut Function,
         tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
         possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+        live_out_roots: &FxHashMap<ValueId, usize>,
     ) -> bool {
         let mut cfg = ControlFlowGraph::new();
         cfg.compute(func);
@@ -414,12 +329,17 @@ impl ObjectLoadStore {
                     continue;
                 }
 
-                let out_state = meet_live(
+                let mut out_state = meet_live(
                     cfg.succs_of(block)
                         .copied()
                         .filter(|succ| reachable[*succ])
                         .map(|succ| in_states[succ].clone()),
                 );
+                if ends_with_return(func, block) {
+                    for (&root, &total_leaves) in live_out_roots {
+                        mark_root_live(&mut out_state, root, total_leaves);
+                    }
+                }
                 if out_state != out_states[block] {
                     out_states[block] = out_state.clone();
                     dataflow_changed = true;
@@ -515,35 +435,29 @@ impl ObjectLoadStore {
             func.rebuild_users();
         }
     }
-}
 
-fn merge_phi_tracked(values: impl Iterator<Item = Option<TrackedObject>>) -> Option<TrackedObject> {
-    let values: Vec<_> = values.collect();
-    let first = values.first().copied().flatten()?;
-    let same_root = values
-        .iter()
-        .copied()
-        .all(|value| value.is_some_and(|value| value.root() == first.root()));
-    if !same_root {
-        return None;
-    }
-    let Some(first_exact) = first.exact() else {
-        return Some(TrackedObject::RootUnknown {
-            root: first.root(),
-            total_leaves: first.total_leaves(),
-        });
-    };
-    if values
-        .iter()
-        .copied()
-        .all(|value| value.and_then(TrackedObject::exact) == Some(first_exact))
-    {
-        Some(TrackedObject::Exact(first_exact))
-    } else {
-        Some(TrackedObject::RootUnknown {
-            root: first.root(),
-            total_leaves: first.total_leaves(),
-        })
+    fn collect_live_out_roots(
+        &self,
+        tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
+        func: &Function,
+        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
+    ) -> FxHashMap<ValueId, usize> {
+        let mut live_out_roots = FxHashMap::default();
+        let Some(local_object_args) = local_object_args else {
+            return live_out_roots;
+        };
+
+        for &idx in local_object_args.keys() {
+            let Some(&root) = func.arg_values.get(idx) else {
+                continue;
+            };
+            let Some(tracked_root) = tracked[root].as_ref().copied() else {
+                continue;
+            };
+            live_out_roots.insert(root, tracked_root.total_leaves());
+        }
+
+        live_out_roots
     }
 }
 
@@ -554,6 +468,8 @@ fn observed_roots(
     skip: &[ValueId],
 ) -> Vec<ValueId> {
     if downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst)).is_some()
+        || downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)).is_some()
+        || downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)).is_some()
         || downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)).is_some()
         || downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)).is_some()
         || downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).is_some()
@@ -750,17 +666,82 @@ impl TrackedObject {
         }
     }
 
-    fn root(self) -> ValueId {
-        match self {
-            Self::Exact(slice) => slice.root,
-            Self::RootUnknown { root, .. } => root,
-        }
-    }
-
     fn total_leaves(self) -> usize {
         match self {
             Self::Exact(slice) => slice.total_leaves,
             Self::RootUnknown { total_leaves, .. } => total_leaves,
         }
+    }
+}
+
+fn objref_element_ty(ctx: &ModuleCtx, ty: Type) -> Option<Type> {
+    let sonatina_ir::types::CompoundType::ObjRef(elem) = ty.resolve_compound(ctx)? else {
+        return None;
+    };
+    Some(elem)
+}
+
+fn ends_with_return(func: &Function, block: BlockId) -> bool {
+    func.layout.last_inst_of(block).is_some_and(|inst| {
+        downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(inst)).is_some()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sonatina_ir::{ir_writer::FuncWriter, module::FuncRef};
+    use sonatina_parser::parse_module;
+
+    fn parse_test_module(src: &str) -> sonatina_ir::Module {
+        parse_module(src).expect("parse should succeed").module
+    }
+
+    fn lookup_func(module: &sonatina_ir::Module, name: &str) -> FuncRef {
+        module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
+            .expect("function should exist")
+    }
+
+    #[test]
+    fn forwards_local_object_arg_field_store_then_load() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %f(v0.objref<@pair>, v1.i256) -> i256 {
+    block0:
+        v2.objref<i256> = obj.proj v0 0.i8;
+        obj.store v2 v1;
+        v3.i256 = obj.load v2;
+        return v3;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        let local_object_args = crate::optim::aggregate::collect_local_object_arg_info(&module);
+        module.func_store.modify(func_ref, |func| {
+            ObjectLoadStore::default().run_for_func(func_ref, func, &local_object_args);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains("obj.load"),
+                "local object arg load should be forwarded:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("obj.store v2 v1;"),
+                "local object arg mutation must remain visible to the caller:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("return v1;"),
+                "forwarded local object arg result should return the stored scalar:\n{dumped}"
+            );
+        });
     }
 }

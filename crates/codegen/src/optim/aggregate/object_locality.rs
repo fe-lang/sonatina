@@ -6,6 +6,19 @@ use sonatina_ir::{
 };
 use std::ops::ControlFlow;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RootInit {
+    UndefFresh,
+    LoadLiveIn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LocalObjectArgInfo {
+    pub init: RootInit,
+    pub fresh_result_out: bool,
+}
+
+pub(crate) type LocalObjectArgMap = FxHashMap<FuncRef, FxHashMap<usize, LocalObjectArgInfo>>;
 pub(crate) type LocalObjectArgs = FxHashMap<FuncRef, FxHashSet<usize>>;
 
 pub(crate) enum SpecialObjectUse<'a> {
@@ -22,8 +35,9 @@ pub(crate) enum SpecialObjectUse<'a> {
     Unknown,
 }
 
-pub(crate) fn collect_local_object_args(module: &Module) -> LocalObjectArgs {
-    let mut local_object_args = LocalObjectArgs::default();
+// This walks the full module and must run before any `func_store.modify(...)` loop.
+pub(crate) fn collect_local_object_arg_info(module: &Module) -> LocalObjectArgMap {
+    let mut local_object_args = LocalObjectArgMap::default();
 
     loop {
         let mut changed = false;
@@ -40,7 +54,7 @@ pub(crate) fn collect_local_object_args(module: &Module) -> LocalObjectArgs {
                 if !root_ty.is_obj_ref(&module.ctx)
                     || local_object_args
                         .get(&func)
-                        .is_some_and(|local_args| local_args.contains(&idx))
+                        .is_some_and(|local_args| local_args.contains_key(&idx))
                 {
                     continue;
                 }
@@ -59,7 +73,13 @@ pub(crate) fn collect_local_object_args(module: &Module) -> LocalObjectArgs {
                         )
                 });
                 if stays_local {
-                    local_object_args.entry(func).or_default().insert(idx);
+                    local_object_args.entry(func).or_default().insert(
+                        idx,
+                        LocalObjectArgInfo {
+                            init: RootInit::LoadLiveIn,
+                            fresh_result_out: false,
+                        },
+                    );
                     changed = true;
                 }
             }
@@ -68,6 +88,29 @@ pub(crate) fn collect_local_object_args(module: &Module) -> LocalObjectArgs {
         if !changed {
             return local_object_args;
         }
+    }
+}
+
+pub(crate) fn collect_local_object_args(module: &Module) -> LocalObjectArgs {
+    info_to_local_object_args(&collect_local_object_arg_info(module))
+}
+
+pub(crate) fn info_to_local_object_args(local_object_args: &LocalObjectArgMap) -> LocalObjectArgs {
+    local_object_args
+        .iter()
+        .map(|(&func, args)| (func, args.keys().copied().collect()))
+        .collect()
+}
+
+pub(crate) fn merge_local_object_arg_info(
+    local_object_args: &mut LocalObjectArgMap,
+    extra: &LocalObjectArgMap,
+) {
+    for (&func, args) in extra {
+        local_object_args
+            .entry(func)
+            .or_default()
+            .extend(args.iter().map(|(&idx, &info)| (idx, info)));
     }
 }
 
@@ -99,11 +142,57 @@ pub(crate) fn call_passes_object_to_local_args(
     saw_value
 }
 
+fn call_passes_object_to_local_arg_info(
+    ctx: &ModuleCtx,
+    call: &control_flow::Call,
+    value: ValueId,
+    value_ty: Type,
+    local_object_args: &LocalObjectArgMap,
+) -> bool {
+    let Some(sig) = ctx.get_sig(*call.callee()) else {
+        return false;
+    };
+    let Some(local_args) = local_object_args.get(call.callee()) else {
+        return false;
+    };
+
+    let mut saw_value = false;
+    for (idx, &arg) in call.args().iter().enumerate() {
+        if arg != value {
+            continue;
+        }
+        saw_value = true;
+        if sig.args().get(idx) != Some(&value_ty) || !local_args.contains_key(&idx) {
+            return false;
+        }
+    }
+
+    saw_value
+}
+
 pub(crate) fn object_root_stays_local(
     function: &Function,
     root: ValueId,
     root_ty: Type,
-    local_object_args: &LocalObjectArgs,
+    local_object_args: &LocalObjectArgMap,
+    allow_return_root: bool,
+) -> bool {
+    object_root_stays_local_with(
+        function,
+        root,
+        root_ty,
+        local_object_args,
+        |value| value == root,
+        allow_return_root,
+    )
+}
+
+pub(crate) fn object_root_stays_local_with(
+    function: &Function,
+    root: ValueId,
+    root_ty: Type,
+    local_object_args: &LocalObjectArgMap,
+    mut is_allowed_root_value: impl FnMut(ValueId) -> bool,
     allow_return_root: bool,
 ) -> bool {
     walk_object_root_uses(function, root, |special| match special {
@@ -112,15 +201,15 @@ pub(crate) fn object_root_stays_local(
         }
         SpecialObjectUse::Return { value, ret }
             if allow_return_root
-                && value == root
+                && is_allowed_root_value(value)
                 && ret.returns_single()
                 && ret.arg() == Some(&value) =>
         {
             ControlFlow::Continue(())
         }
         SpecialObjectUse::Call { value, call }
-            if value == root
-                && call_passes_object_to_local_args(
+            if is_allowed_root_value(value)
+                && call_passes_object_to_local_arg_info(
                     function.ctx(),
                     call,
                     value,

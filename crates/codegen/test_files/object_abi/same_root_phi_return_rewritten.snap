@@ -1,0 +1,42 @@
+---
+source: crates/codegen/tests/object_abi.rs
+input_file: test_files/object_abi/same_root_phi_return_rewritten.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func private %choose_pair(v9.objref<@pair>, v0.i1, v1.i256, v2.i256) {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v4.objref<i256> = obj.proj v9 0.i8;
+        obj.store v4 v1;
+        jump block3;
+
+    block2:
+        v5.objref<i256> = obj.proj v9 1.i8;
+        obj.store v5 v2;
+        jump block3;
+
+    block3:
+        v6.objref<@pair> = phi (v9 block1) (v9 block2);
+        return;
+}
+
+func public %entry(v0.i1, v1.i256, v2.i256) -> i256 {
+    block0:
+        v7.objref<@pair> = obj.alloc @pair;
+        call %choose_pair v7 v0 v1 v2;
+        v4.objref<i256> = obj.proj v7 0.i8;
+        v5.i256 = obj.load v4;
+        return v5;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

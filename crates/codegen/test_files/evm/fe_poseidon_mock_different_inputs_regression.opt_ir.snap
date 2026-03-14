@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 414
 expression: opt_ir_snapshot
 input_file: test_files/evm/fe_poseidon_mock_different_inputs_regression.sntn
 ---
@@ -15,8 +16,12 @@ global private const [i8; 96] $__fe_const_data_4 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 func private %ark(v0.objref<[i256; 3]>, v1.i256) -> objref<[i256; 3]> {
     block0:
-        v3.objref<i256> = obj.index v0 0.i256;
-        v4.i256 = obj.load v3;
+        v71.objref<i256> = obj.proj v0 2.i64;
+        v72.i256 = obj.load v71;
+        v69.objref<i256> = obj.proj v0 1.i64;
+        v70.i256 = obj.load v69;
+        v67.objref<i256> = obj.proj v0 0.i64;
+        v68.i256 = obj.load v67;
         v5.objref<[i256; 24]> = obj.alloc [i256; 24];
         v6.*[i256; 24] = obj.materialize.stack v5;
         v7.i256 = sym_addr $__fe_const_data_0;
@@ -33,9 +38,7 @@ func private %ark(v0.objref<[i256; 3]>, v1.i256) -> objref<[i256; 3]> {
     block2:
         v13.objref<i256> = obj.index v5 v1;
         v14.i256 = obj.load v13;
-        v17.i256 = evm_add_mod v4 v14 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v20.objref<i256> = obj.index v0 1.i256;
-        v21.i256 = obj.load v20;
+        v17.i256 = evm_add_mod v68 v14 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v22.objref<[i256; 24]> = obj.alloc [i256; 24];
         v23.*[i256; 24] = obj.materialize.stack v22;
         v26.i256 = ptr_to_int v23 i256;
@@ -51,9 +54,7 @@ func private %ark(v0.objref<[i256; 3]>, v1.i256) -> objref<[i256; 3]> {
     block4:
         v33.objref<i256> = obj.index v22 v28;
         v34.i256 = obj.load v33;
-        v36.i256 = evm_add_mod v21 v34 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v39.objref<i256> = obj.index v0 2.i256;
-        v40.i256 = obj.load v39;
+        v36.i256 = evm_add_mod v70 v34 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v41.objref<[i256; 24]> = obj.alloc [i256; 24];
         v42.*[i256; 24] = obj.materialize.stack v41;
         v45.i256 = ptr_to_int v42 i256;
@@ -69,7 +70,7 @@ func private %ark(v0.objref<[i256; 3]>, v1.i256) -> objref<[i256; 3]> {
     block6:
         v52.objref<i256> = obj.index v41 v47;
         v53.i256 = obj.load v52;
-        v55.i256 = evm_add_mod v40 v53 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v55.i256 = evm_add_mod v72 v53 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v56.objref<[i256; 3]> = obj.alloc [i256; 3];
         v58.objref<i256> = obj.index v56 0.i256;
         obj.store v58 v17;
@@ -82,21 +83,21 @@ func private %ark(v0.objref<[i256; 3]>, v1.i256) -> objref<[i256; 3]> {
 
 func private %sigma_full(v0.objref<[i256; 3]>) -> objref<[i256; 3]> {
     block0:
-        v2.objref<i256> = obj.index v0 0.i256;
-        v3.i256 = obj.load v2;
-        v28.i256 = evm_mul_mod v3 v3 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v29.i256 = evm_mul_mod v28 v28 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v20.i256 = evm_mul_mod v29 v3 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v6.objref<i256> = obj.index v0 1.i256;
-        v7.i256 = obj.load v6;
-        v31.i256 = evm_mul_mod v7 v7 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v32.i256 = evm_mul_mod v31 v31 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v23.i256 = evm_mul_mod v32 v7 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v10.objref<i256> = obj.index v0 2.i256;
-        v11.i256 = obj.load v10;
-        v34.i256 = evm_mul_mod v11 v11 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v35.i256 = evm_mul_mod v34 v34 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v26.i256 = evm_mul_mod v35 v11 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v52.objref<i256> = obj.proj v0 2.i64;
+        v53.i256 = obj.load v52;
+        v50.objref<i256> = obj.proj v0 1.i64;
+        v51.i256 = obj.load v50;
+        v48.objref<i256> = obj.proj v0 0.i64;
+        v49.i256 = obj.load v48;
+        v40.i256 = evm_mul_mod v49 v49 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v41.i256 = evm_mul_mod v40 v40 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v20.i256 = evm_mul_mod v41 v49 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v43.i256 = evm_mul_mod v51 v51 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v44.i256 = evm_mul_mod v43 v43 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v23.i256 = evm_mul_mod v44 v51 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v46.i256 = evm_mul_mod v53 v53 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v47.i256 = evm_mul_mod v46 v46 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v26.i256 = evm_mul_mod v47 v53 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v13.objref<[i256; 3]> = obj.alloc [i256; 3];
         v14.objref<i256> = obj.index v13 0.i256;
         obj.store v14 v20;
@@ -235,17 +236,16 @@ func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
 
 func private %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5(v0.objref<@__fe_obj_Range_0>) -> i256 {
     block0:
-        v3.objref<i256> = obj.proj v0 1.i256;
-        v4.i256 = obj.load v3;
-        v11.i1 = lt v4 0.i256;
+        v25.objref<i256> = obj.proj v0 1.i64;
+        v26.i256 = obj.load v25;
+        v11.i1 = lt v26 0.i256;
         br v11 block3 block2;
 
     block2:
-        v8.i256 = obj.load v3;
         jump block3;
 
     block3:
-        v11.i256 = phi (0.i256 block0) (v8 block2);
+        v11.i256 = phi (0.i256 block0) (v26 block2);
         return v11;
 }
 

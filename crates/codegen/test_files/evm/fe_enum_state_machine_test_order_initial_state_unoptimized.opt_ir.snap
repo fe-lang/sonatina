@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 414
 expression: opt_ir_snapshot
 input_file: test_files/evm/fe_enum_state_machine_test_order_initial_state_unoptimized.sntn
 ---
@@ -326,11 +327,11 @@ func private %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482
 
 func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0.objref<@__fe_obj_SolEncoder_1>) -> objref<@__fe_obj_tuple_0> {
     block0:
-        v2.objref<i256> = obj.proj v0 0.i256;
-        v3.i256 = obj.load v2;
-        v5.objref<i256> = obj.proj v0 2.i256;
-        v6.i256 = obj.load v5;
-        (v7.i256, v8.i1) = usubo v6 v3;
+        v30.objref<i256> = obj.proj v0 2.i64;
+        v31.i256 = obj.load v30;
+        v26.objref<i256> = obj.proj v0 0.i64;
+        v27.i256 = obj.load v26;
+        (v7.i256, v8.i1) = usubo v31 v27;
         br v8 block1 block2;
 
     block1:
@@ -339,7 +340,7 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v
     block2:
         v9.objref<@__fe_obj_tuple_0> = obj.alloc @__fe_obj_tuple_0;
         v11.objref<i256> = obj.proj v9 0.i256;
-        obj.store v11 v3;
+        obj.store v11 v27;
         v13.objref<i256> = obj.proj v9 1.i256;
         obj.store v13 v7;
         return v9;

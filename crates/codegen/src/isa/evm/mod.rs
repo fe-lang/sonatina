@@ -1755,10 +1755,15 @@ impl LowerBackend for EvmBackend {
                 AggregateCombine::default().run(function)
             });
         }
-        ObjectReturnOutParam.run(module);
+        let mut local_object_args = crate::optim::aggregate::collect_local_object_arg_info(module);
+        let synthetic_out_args = ObjectReturnOutParam.run_with_synthetic_out_args(module);
+        crate::optim::aggregate::merge_local_object_arg_info(
+            &mut local_object_args,
+            &synthetic_out_args,
+        );
         for func_ref in module.funcs() {
             module.func_store.modify(func_ref, |function| {
-                ObjectLoadStore::default().run(function)
+                ObjectLoadStore::default().run_for_func(func_ref, function, &local_object_args)
             });
         }
         ObjectLowerToMemory.run(module);
@@ -1768,7 +1773,7 @@ impl LowerBackend for EvmBackend {
             module.func_store.modify(func, |function| {
                 CfgCleanup::new(CleanupMode::Strict).run(function);
                 AggregateCombine::default().run(function);
-                AggregateScalarize::default().run(function);
+                AggregateScalarize::default().run_for_func(func, function, &local_object_args);
             });
         }
         for &func in funcs {
@@ -2006,10 +2011,15 @@ impl LowerBackend for EvmBackend {
                 AggregateCombine::default().run(function)
             });
         }
-        ObjectReturnOutParam.run(module);
+        let mut local_object_args = crate::optim::aggregate::collect_local_object_arg_info(module);
+        let synthetic_out_args = ObjectReturnOutParam.run_with_synthetic_out_args(module);
+        crate::optim::aggregate::merge_local_object_arg_info(
+            &mut local_object_args,
+            &synthetic_out_args,
+        );
         for func_ref in module.funcs() {
             module.func_store.modify(func_ref, |function| {
-                ObjectLoadStore::default().run(function)
+                ObjectLoadStore::default().run_for_func(func_ref, function, &local_object_args)
             });
         }
         ObjectLowerToMemory.run(module);
@@ -2019,7 +2029,7 @@ impl LowerBackend for EvmBackend {
             module.func_store.modify(callee, |function| {
                 CfgCleanup::new(CleanupMode::Strict).run(function);
                 AggregateCombine::default().run(function);
-                AggregateScalarize::default().run(function);
+                AggregateScalarize::default().run_for_func(callee, function, &local_object_args);
             });
         }
         module.func_store.view(func, |function| {
