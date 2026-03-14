@@ -44,8 +44,6 @@ func private %__EnumContract_runtime() {
         obj.store v31 0.i256;
         v35.objref<i256> = obj.proj v30 1.i256;
         obj.store v35 4.i256;
-        v36.objref<i256> = obj.proj v27 1.i256;
-        obj.store v36 4.i256;
         br_table v17 block1 (1817627404.i32 block2) (1163776883.i32 block3) (-722541534.i32 block4);
 
     block1:
@@ -191,8 +189,6 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_s
         evm_revert 0.i256 0.i256;
 
     block7:
-        v27.objref<i256> = obj.proj v20 1.i256;
-        obj.store v27 v25;
         v28.objref<@__fe_obj_tuple_2> = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v20;
         v8.objref<i256> = obj.proj v28 0.i256;
         v9.i256 = obj.load v8;
@@ -245,8 +241,6 @@ func private %decode_returndata__u256__3271ca15373d4483(v0.i256, v1.i256) -> i25
         obj.store v34 v1;
         v38.objref<i256> = obj.proj v26 1.i256;
         obj.store v38 0.i256;
-        v39.objref<i256> = obj.proj v22 1.i256;
-        obj.store v39 0.i256;
         v12.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v22;
         return v12;
 }
@@ -370,9 +364,7 @@ func private %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_
         evm_revert 0.i256 0.i256;
 
     block2:
-        v21.i256 = obj.load v3;
-        v24.i256 = obj.load v8;
-        v25.i256 = call %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at v21 v24;
+        v25.i256 = call %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at v4 v9;
         obj.store v8 v11;
         return v25;
 
@@ -384,8 +376,7 @@ func private %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_
         evm_revert 0.i256 0.i256;
 
     block5:
-        v16.i256 = obj.load v8;
-        v28.i1 = lt v11 v16;
+        v28.i1 = lt v11 v9;
         br v28 block1 block3;
 }
 
@@ -404,10 +395,9 @@ func private %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_
         evm_revert 0.i256 0.i256;
 
     block2:
-        v21.i256 = obj.load v8;
         v29.objref<i256> = obj.proj v4 0.i256;
         v30.i256 = obj.load v29;
-        (v31.i256, v32.i1) = uaddo v30 v21;
+        (v31.i256, v32.i1) = uaddo v30 v9;
         br v32 block8 block9;
 
     block8:
@@ -426,8 +416,7 @@ func private %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_
         evm_revert 0.i256 0.i256;
 
     block5:
-        v16.i256 = obj.load v8;
-        v35.i1 = lt v11 v16;
+        v35.i1 = lt v11 v9;
         br v35 block1 block3;
 }
 

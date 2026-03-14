@@ -7,7 +7,7 @@ use sonatina_ir::{
     types::CompoundType,
 };
 
-use super::shape;
+use super::{ObjectEffectSummaryMap, ObjectReturnEffect, shape};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Projection {
@@ -72,6 +72,7 @@ pub(crate) fn collect_root_provenance(
     module: &ModuleCtx,
     root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
     layout_cache: &mut shape::AggregateLayoutCache,
+    object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> RootProvenanceMap {
     let mut provenance = RootProvenanceMap::default();
     let mut exact_states = SecondaryMap::default();
@@ -81,7 +82,7 @@ pub(crate) fn collect_root_provenance(
         exact_states[root_value] = Some(ExactState::Exact(Projection { root_value, slice }));
     }
 
-    compute_possible_roots(func, &mut provenance.possible_roots);
+    compute_possible_roots(func, &mut provenance.possible_roots, object_effects);
     let value_sccs = compute_supported_value_sccs(func, root_slices);
 
     loop {
@@ -102,6 +103,10 @@ pub(crate) fn collect_root_provenance(
                         root_value: result,
                         slice,
                     })
+                } else if let Some(projection) =
+                    fresh_call_root_projection(func, result, inst, object_effects, layout_cache)
+                {
+                    ExactState::Exact(projection)
                 } else {
                     derive_exact_state(
                         func,
@@ -112,6 +117,7 @@ pub(crate) fn collect_root_provenance(
                         &provenance.possible_roots,
                         &value_sccs,
                         layout_cache,
+                        object_effects,
                     )
                 };
 
@@ -142,6 +148,7 @@ pub(crate) fn collect_root_provenance(
 fn compute_possible_roots(
     func: &Function,
     possible_roots: &mut SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    object_effects: Option<&ObjectEffectSummaryMap>,
 ) {
     loop {
         let mut changed = false;
@@ -152,7 +159,9 @@ fn compute_possible_roots(
                     continue;
                 }
 
-                let Some(updated) = possible_root_transfer(func, inst, possible_roots) else {
+                let Some(updated) =
+                    possible_root_transfer(func, inst, possible_roots, object_effects)
+                else {
                     continue;
                 };
                 let Some(result) = single_result_value(func, inst) else {
@@ -176,6 +185,7 @@ fn possible_root_transfer(
     func: &Function,
     inst: InstId,
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> Option<FxHashSet<ValueId>> {
     if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)) {
         return gep
@@ -203,6 +213,10 @@ fn possible_root_transfer(
         return Some(possible_roots[*enum_proj.object()].clone());
     }
 
+    if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
+        return call_return_root_transfer(func, inst, call, possible_roots, object_effects);
+    }
+
     downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).map(|phi| {
         phi.args()
             .iter()
@@ -221,6 +235,7 @@ fn derive_exact_state(
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
     value_sccs: &FxHashMap<ValueId, usize>,
     layout_cache: &mut shape::AggregateLayoutCache,
+    object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> ExactState {
     if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)) {
         let Some(&base) = gep.values().first() else {
@@ -338,6 +353,18 @@ fn derive_exact_state(
                 leaf_count: sub.leaf_count,
             },
         });
+    }
+
+    if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
+        return derive_call_exact_state(
+            func,
+            inst,
+            call,
+            exact_states,
+            possible_roots,
+            layout_cache,
+            object_effects,
+        );
     }
 
     downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
@@ -542,8 +569,117 @@ fn supported_value_deps(func: &Function, inst: InstId) -> Option<Vec<ValueId>> {
         return Some(vec![*enum_proj.object()]);
     }
 
+    if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
+        return Some(call.args().iter().copied().collect());
+    }
+
     downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
         .map(|phi| phi.args().iter().map(|(arg, _)| *arg).collect())
+}
+
+fn call_return_root_transfer(
+    func: &Function,
+    inst: InstId,
+    call: &control_flow::Call,
+    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+) -> Option<FxHashSet<ValueId>> {
+    let [result] = func.dfg.inst_results(inst) else {
+        return None;
+    };
+    let summary = object_effects.and_then(|effects| effects.get(call.callee()))?;
+    match summary.ret_effect {
+        ObjectReturnEffect::SameAsArg { index } | ObjectReturnEffect::DerivedFromArg { index } => {
+            call.args()
+                .get(index)
+                .map(|arg| possible_roots[*arg].clone())
+        }
+        ObjectReturnEffect::FreshObject => {
+            let mut roots = FxHashSet::default();
+            roots.insert(*result);
+            Some(roots)
+        }
+        ObjectReturnEffect::None | ObjectReturnEffect::Unknown => None,
+    }
+}
+
+fn derive_call_exact_state(
+    func: &Function,
+    inst: InstId,
+    call: &control_flow::Call,
+    exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
+    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    layout_cache: &mut shape::AggregateLayoutCache,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+) -> ExactState {
+    let Some(result) = single_result_value(func, inst) else {
+        return ExactState::Blocked;
+    };
+    let Some(summary) = object_effects.and_then(|effects| effects.get(call.callee())) else {
+        return exact_state_or_unknown(exact_states, result, possible_roots);
+    };
+
+    match summary.ret_effect {
+        ObjectReturnEffect::SameAsArg { index } => {
+            let Some(&arg) = call.args().get(index) else {
+                return ExactState::Blocked;
+            };
+            let Some(projection) = exact_projection_of(exact_states, arg) else {
+                return pending_or_blocked(exact_states, arg);
+            };
+            if projection_value_ty_matches(
+                func.dfg.value_ty(result),
+                projection.slice.ty,
+                func.ctx(),
+            ) {
+                ExactState::Exact(projection)
+            } else {
+                ExactState::Blocked
+            }
+        }
+        ObjectReturnEffect::DerivedFromArg { index } => {
+            let Some(&arg) = call.args().get(index) else {
+                return ExactState::Blocked;
+            };
+            exact_state_or_unknown(exact_states, arg, possible_roots)
+        }
+        ObjectReturnEffect::FreshObject => {
+            fresh_call_root_projection(func, result, inst, object_effects, layout_cache)
+                .map_or(ExactState::Blocked, ExactState::Exact)
+        }
+        ObjectReturnEffect::None | ObjectReturnEffect::Unknown => {
+            exact_state_or_unknown(exact_states, result, possible_roots)
+        }
+    }
+}
+
+fn fresh_call_root_projection(
+    func: &Function,
+    result: ValueId,
+    inst: InstId,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+    layout_cache: &mut shape::AggregateLayoutCache,
+) -> Option<Projection> {
+    let call = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))?;
+    if !matches!(
+        object_effects
+            .and_then(|effects| effects.get(call.callee()))
+            .map(|summary| &summary.ret_effect),
+        Some(ObjectReturnEffect::FreshObject)
+    ) {
+        return None;
+    }
+    let pointee_ty = reference_element_ty(func.ctx(), func.dfg.value_ty(result))?;
+    Some(Projection {
+        root_value: result,
+        slice: shape::AggregateSlice {
+            ty: pointee_ty,
+            first_leaf: 0,
+            leaf_count: layout_cache
+                .shape(func.ctx(), pointee_ty)
+                .map_or(1, |shape| shape.leaves.len()),
+        },
+    })
 }
 
 fn single_result_value(func: &Function, inst: InstId) -> Option<ValueId> {

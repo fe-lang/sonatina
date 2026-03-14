@@ -23,9 +23,12 @@ use sonatina_ir::{
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode, remove_phi_incoming_from, simplify_trivial_phis_in_block},
     domtree::{DomTree, DominatorTreeTraversable},
-    optim::simplify_expr::{
-        SimplifyExprResult, simplify_binary_with_known_imm, simplify_cast,
-        simplify_unary_with_same_inner,
+    optim::{
+        aggregate::{ObjectMemoryAnalysis, ObjectReadGvnKey},
+        simplify_expr::{
+            SimplifyExprResult, simplify_binary_with_known_imm, simplify_cast,
+            simplify_unary_with_same_inner,
+        },
     },
 };
 
@@ -90,6 +93,16 @@ impl GvnSolver {
     /// The main entry point of the struct.
     /// `cfg` and `domtree` is modified to reflect graph structure change.
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph, domtree: &mut DomTree) {
+        self.run_with_object_memory(func, cfg, domtree, None);
+    }
+
+    pub(crate) fn run_with_object_memory(
+        &mut self,
+        func: &mut Function,
+        cfg: &mut ControlFlowGraph,
+        domtree: &mut DomTree,
+        object_memory: Option<&ObjectMemoryAnalysis>,
+    ) {
         self.clear();
         cfg.compute(func);
         domtree.compute(cfg);
@@ -220,7 +233,13 @@ impl GvnSolver {
                     // Reassign congruence class to the result value of the insn.
                     let inst_results = func.dfg.inst_results(insn).to_vec();
                     for inst_result in inst_results {
-                        let result = self.reassign_congruence(func, domtree, insn, inst_result);
+                        let result = self.reassign_congruence(
+                            func,
+                            domtree,
+                            object_memory,
+                            insn,
+                            inst_result,
+                        );
                         if result.changed {
                             changed = true;
                             block_changed = true;
@@ -290,7 +309,7 @@ impl GvnSolver {
 
         // Remove redundant insn and unreachable block.
         let mut remover = RedundantCodeRemover::new(self);
-        remover.remove_redundant_code(func, cfg, domtree);
+        remover.remove_redundant_code(func, cfg, domtree, object_memory);
     }
 
     /// Clear all internal data of the solver.
@@ -412,25 +431,30 @@ impl GvnSolver {
         &mut self,
         func: &mut Function,
         domtree: &DomTree,
+        object_memory: Option<&ObjectMemoryAnalysis>,
         insn: InstId,
         inst_result: ValueId,
     ) -> ReassignResult {
-        // Perform symbolic evaluation for the insn.
-        let block = func.layout.inst_block(insn);
-        let Some(result_idx) = func.dfg.value_result_idx(inst_result) else {
-            return ReassignResult::default();
+        let object_read = self.object_read_gvn_insn(func, object_memory, insn, inst_result);
+        let gvn_insn = if let Some(gvn_insn) = object_read.clone() {
+            gvn_insn
+        } else {
+            let block = func.layout.inst_block(insn);
+            let Some(result_idx) = func.dfg.value_result_idx(inst_result) else {
+                return ReassignResult::default();
+            };
+            self.perform_symbolic_evaluation(
+                func,
+                domtree,
+                inst_to_gvn_key(func, insn),
+                result_idx,
+                block,
+            )
         };
-        let gvn_insn = self.perform_symbolic_evaluation(
-            func,
-            domtree,
-            inst_to_gvn_key(func, insn),
-            result_idx,
-            block,
-        );
 
         // If insn has a side effect, create new class if the value still belongs to
         // `INITIAL_CLASS`.
-        if func.dfg.side_effect(insn).has_effect() {
+        if func.dfg.side_effect(insn).has_effect() && object_read.is_none() {
             if self.value_class(inst_result) == INITIAL_CLASS {
                 let class = self.make_class(gvn_insn, None);
                 self.assign_class(inst_result, class);
@@ -481,6 +505,43 @@ impl GvnSolver {
                 class_changed: true,
                 value_phi_changed,
             }
+        }
+    }
+
+    fn object_read_gvn_insn(
+        &self,
+        func: &Function,
+        object_memory: Option<&ObjectMemoryAnalysis>,
+        insn: InstId,
+        inst_result: ValueId,
+    ) -> Option<GvnInsn> {
+        let read = object_memory?.read_state(insn)?;
+        if read.may_be_undef() {
+            return None;
+        }
+
+        match read.key() {
+            ObjectReadGvnKey::ValueCarrier {
+                value,
+                carrier_slice,
+                read_slice,
+            } => {
+                if self.may_be_undef(func, value) {
+                    return None;
+                }
+                if carrier_slice == read_slice
+                    && func.dfg.value_ty(value) == func.dfg.value_ty(inst_result)
+                {
+                    Some(GvnInsn::Value(value))
+                } else {
+                    Some(GvnInsn::ObjectRead(ObjectReadGvnKey::ValueCarrier {
+                        value,
+                        carrier_slice,
+                        read_slice,
+                    }))
+                }
+            }
+            key @ ObjectReadGvnKey::Memory { .. } => Some(GvnInsn::ObjectRead(key)),
         }
     }
 
@@ -1791,6 +1852,8 @@ impl Default for GvnValue {
 enum GvnInsn {
     /// A value which occurs when insn is simplified/folded to value.
     Value(ValueId),
+    /// A memory-backed object read keyed by reaching object-memory state.
+    ObjectRead(ObjectReadGvnKey),
     /// A canonicalized expression key.
     Expr {
         key: OwnedInstKey,
@@ -1821,7 +1884,7 @@ impl GvnInsn {
     fn expr_parts(&self) -> Option<(&OwnedInstKey, usize)> {
         match self {
             Self::Expr { key, result_idx } => Some((key, *result_idx)),
-            Self::Value(..) => None,
+            Self::Value(..) | Self::ObjectRead(..) => None,
         }
     }
 }
@@ -2337,6 +2400,7 @@ impl<'a> RedundantCodeRemover<'a> {
         func: &mut Function,
         cfg: &mut ControlFlowGraph,
         domtree: &mut DomTree,
+        object_memory: Option<&ObjectMemoryAnalysis>,
     ) {
         // Remove unreachable edges and blocks before redundant code removal to calculate precise
         // dominator tree.
@@ -2354,7 +2418,7 @@ impl<'a> RedundantCodeRemover<'a> {
         let mut blocks = vec![entry];
         while let Some(block) = blocks.pop() {
             blocks.extend_from_slice(domtree_traversable.children_of(block));
-            self.remove_code_in_block(func, domtree, block);
+            self.remove_code_in_block(func, domtree, object_memory, block);
         }
 
         // Resolve value phis in the function.
@@ -2366,7 +2430,13 @@ impl<'a> RedundantCodeRemover<'a> {
     }
 
     /// Remove redundant code in the block.
-    fn remove_code_in_block(&mut self, func: &mut Function, domtree: &DomTree, block: BlockId) {
+    fn remove_code_in_block(
+        &mut self,
+        func: &mut Function,
+        domtree: &DomTree,
+        object_memory: Option<&ObjectMemoryAnalysis>,
+        block: BlockId,
+    ) {
         let (parent, mut local_avails) = if block == func.layout.entry_block().unwrap() {
             // Insert always available values to avail set of the entry block.
             let mut avails = FxHashMap::default();
@@ -2401,7 +2471,9 @@ impl<'a> RedundantCodeRemover<'a> {
 
                     let mut changed = false;
                     let mut aliased_results = FxHashSet::default();
-                    if !func.dfg.side_effect(insn).has_effect() {
+                    if !func.dfg.side_effect(insn).has_effect()
+                        || self.inst_is_eliminable_object_read(func, object_memory, insn)
+                    {
                         for &inst_result in &inst_results {
                             let class = self.solver.value_class(inst_result);
                             if let Some(value) =
@@ -2490,6 +2562,20 @@ impl<'a> RedundantCodeRemover<'a> {
                 }
             }
         }
+    }
+
+    fn inst_is_eliminable_object_read(
+        &self,
+        func: &Function,
+        object_memory: Option<&ObjectMemoryAnalysis>,
+        insn: InstId,
+    ) -> bool {
+        let Some(inst_result) = func.dfg.inst_result(insn) else {
+            return false;
+        };
+        self.solver
+            .object_read_gvn_insn(func, object_memory, insn, inst_result)
+            .is_some()
     }
 
     /// Returns `true` if the `value_phi` can be resolved, i.e. all phi args are dominated by
@@ -2827,7 +2913,7 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                 Some(stale_phi.clone()),
             );
 
-            let result = solver.reassign_congruence(func, &domtree, add_inst, add_result);
+            let result = solver.reassign_congruence(func, &domtree, None, add_inst, add_result);
             assert!(result.changed);
             assert!(result.class_changed);
             assert!(result.value_phi_changed);

@@ -1,14 +1,13 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fe_enum_state_machine_test_order_initial_state_unoptimized.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 1365 bytes
-  total: 1365 bytes
+  section runtime: 1340 bytes
+  total: 1340 bytes
 
 object: Order
   section init: 571 bytes
@@ -26,15 +25,15 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Which_hfc83a4c81bdb00b2__3f276d0d504e07da: ir_blocks=5 ir_insts=28 vcode_ops=96 fixups=11 imm_bytes=13
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Which_hfc83a4c81bdb00b2__3f276d0d504e07da: ir_blocks=5 ir_insts=26 vcode_ops=90 fixups=11 imm_bytes=12
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=5
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Confirm_h67936812d51d0893__aed46e41f390dba4: ir_blocks=5 ir_insts=28 vcode_ops=96 fixups=11 imm_bytes=13
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Confirm_h67936812d51d0893__aed46e41f390dba4: ir_blocks=5 ir_insts=26 vcode_ops=90 fixups=11 imm_bytes=12
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=5
   runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2: ir_blocks=3 ir_insts=9 vcode_ops=22 fixups=1 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f: ir_blocks=1 ir_insts=11 vcode_ops=41 fixups=8 imm_bytes=5
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=5
-  decode_returndata__u256__3271ca15373d4483: ir_blocks=3 ir_insts=16 vcode_ops=50 fixups=3 imm_bytes=8
+  decode_returndata__u256__3271ca15373d4483: ir_blocks=3 ir_insts=14 vcode_ops=44 fixups=3 imm_bytes=7
     mem: scratch_words=0 stable_words=4 stable_mode=StaticAbs(base=0x140) entry_abs_words=5 abs_words_end=9
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=6 ir_insts=19 vcode_ops=69 fixups=4 imm_bytes=8
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
@@ -44,13 +43,13 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
   solencoder_h1b9228b90dad6928_new: ir_blocks=1 ir_insts=7 vcode_ops=17 fixups=0 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
-  soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=10 ir_insts=28 vcode_ops=67 fixups=5 imm_bytes=3
+  soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=10 ir_insts=26 vcode_ops=64 fixups=5 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=9 abs_words_end=0
   entry: ir_blocks=1 ir_insts=12 vcode_ops=48 fixups=12 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=191313 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=170313
+  case ok: calldata_len=0 success reason=Return gas_used=191229 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=170229
 
 
 --------------- DEBUG ---------------
@@ -431,9 +430,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Which_hfc
     PUSH1 0x4 (4)  // v37.i256 = add v21 4.i256;
     DUP2
     ADD
-    SWAP1  // v38.i1 = lt v37 v21;
-    DUP2
-    LT
+    LT  // v38.i1 = lt v37 v21;
     ISZERO  // br v38 block5 block7;
     PUSH1 block7
     JUMPI
@@ -443,10 +440,6 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Which_hfc
     REVERT
   block7:
     JUMPDEST
-    DUP2  // v27.*i256 = gep v34 0.i256 1.i256;
-    POP
-    PUSH1 0xc0 (192)
-    MSTORE  // mstore v27 v37 i256;
     PUSH2 0x100 (256)  // v35.*@__fe_obj_tuple_0 = alloca @__fe_obj_tuple_0;
     DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v35 v34;
     SWAP2
@@ -535,9 +528,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Confirm_h
     PUSH1 0x4 (4)  // v36.i256 = add v21 4.i256;
     DUP2
     ADD
-    SWAP1  // v37.i1 = lt v36 v21;
-    DUP2
-    LT
+    LT  // v37.i1 = lt v36 v21;
     ISZERO  // br v37 block5 block7;
     PUSH1 block7
     JUMPI
@@ -547,10 +538,6 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Confirm_h
     REVERT
   block7:
     JUMPDEST
-    DUP2  // v27.*i256 = gep v33 0.i256 1.i256;
-    POP
-    PUSH1 0xc0 (192)
-    MSTORE  // mstore v27 v36 i256;
     PUSH2 0x100 (256)  // v34.*@__fe_obj_tuple_0 = alloca @__fe_obj_tuple_0;
     DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v34 v33;
     SWAP2
@@ -726,12 +713,6 @@ decode_returndata__u256__3271ca15373d4483:
     POP  // v38.*i256 = gep v26 0.i256 1.i256;
     PUSH2 0x180 (384)
     PUSH0  // mstore v38 0.i256 i256;
-    SWAP1
-    MSTORE
-    DUP1  // v39.*i256 = gep v22 0.i256 1.i256;
-    POP
-    PUSH2 0x1a0 (416)
-    PUSH0  // mstore v39 0.i256 i256;
     SWAP1
     MSTORE
     PUSH1 `pc + (4)`  // v12.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v22;
@@ -924,7 +905,7 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBy
     PUSH1 0x20 (32)  // v39.i256 = add v9 32.i256;
     DUP2
     ADD
-    SWAP1  // v40.i1 = lt v39 v9;
+    DUP2  // v40.i1 = lt v39 v9;
     DUP2
     LT
     ISZERO  // br v40 block4 block5;
@@ -936,24 +917,21 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBy
     REVERT
   block5:
     JUMPDEST
-    DUP2  // v16.i256 = mload v8 i256;
-    MLOAD
-    DUP2  // v35.i1 = lt v39 v16;
+    DUP2  // v35.i1 = lt v39 v9;
+    DUP2
     LT
     PUSH1 block11  // br v35 block11 block3;
     JUMPI
   block3:
-    SWAP3  // v34.i1 = gt v39 v28;
-    DUP4
+    SWAP4  // v34.i1 = gt v39 v28;
+    DUP5
     GT
     PUSH1 block10  // br v34 block10 block2;
     JUMPI
   block2:
-    DUP1  // v21.i256 = mload v8 i256;
-    MLOAD
     SWAP2  // v29.*i256 = gep v4 0.i256 0.i256;
     MLOAD  // v30.i256 = mload v29 i256;
-    SWAP2  // v41.i256 = add v30 v21;
+    SWAP2  // v41.i256 = add v30 v9;
     DUP3
     ADD
     SWAP2  // v42.i1 = lt v41 v30;

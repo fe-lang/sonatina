@@ -6,6 +6,8 @@ use sonatina_ir::{
 };
 use std::ops::ControlFlow;
 
+use super::{ObjectEffectSummaryMap, ObjectReturnEffect, compute_object_effect_summaries};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RootInit {
     UndefFresh,
@@ -37,58 +39,41 @@ pub(crate) enum SpecialObjectUse<'a> {
 
 // This walks the full module and must run before any `func_store.modify(...)` loop.
 pub(crate) fn collect_local_object_arg_info(module: &Module) -> LocalObjectArgMap {
+    let object_effects = compute_object_effect_summaries(module);
+    collect_local_object_arg_info_with_effects(module, &object_effects)
+}
+
+pub(crate) fn collect_local_object_arg_info_with_effects(
+    module: &Module,
+    object_effects: &ObjectEffectSummaryMap,
+) -> LocalObjectArgMap {
     let mut local_object_args = LocalObjectArgMap::default();
-
-    loop {
-        let mut changed = false;
-
-        for func in module.funcs() {
-            let Some(sig) = module.ctx.get_sig(func) else {
-                continue;
-            };
-            if !sig.linkage().has_definition() {
+    for func in module.funcs() {
+        let Some(sig) = module.ctx.get_sig(func) else {
+            continue;
+        };
+        let Some(summary) = object_effects.get(&func) else {
+            continue;
+        };
+        for (idx, &root_ty) in sig.args().iter().enumerate() {
+            if !root_ty.is_obj_ref(&module.ctx)
+                || !summary
+                    .arg_effects
+                    .get(idx)
+                    .is_some_and(|effect| effect.local_only)
+            {
                 continue;
             }
-
-            for (idx, &root_ty) in sig.args().iter().enumerate() {
-                if !root_ty.is_obj_ref(&module.ctx)
-                    || local_object_args
-                        .get(&func)
-                        .is_some_and(|local_args| local_args.contains_key(&idx))
-                {
-                    continue;
-                }
-
-                let stays_local = module.func_store.view(func, |function| {
-                    let Some(&root) = function.arg_values.get(idx) else {
-                        return false;
-                    };
-                    function.dfg.value_ty(root) == root_ty
-                        && object_root_stays_local(
-                            function,
-                            root,
-                            root_ty,
-                            &local_object_args,
-                            false,
-                        )
-                });
-                if stays_local {
-                    local_object_args.entry(func).or_default().insert(
-                        idx,
-                        LocalObjectArgInfo {
-                            init: RootInit::LoadLiveIn,
-                            fresh_result_out: false,
-                        },
-                    );
-                    changed = true;
-                }
-            }
-        }
-
-        if !changed {
-            return local_object_args;
+            local_object_args.entry(func).or_default().insert(
+                idx,
+                LocalObjectArgInfo {
+                    init: RootInit::LoadLiveIn,
+                    fresh_result_out: false,
+                },
+            );
         }
     }
+    local_object_args
 }
 
 pub(crate) fn collect_local_object_args(module: &Module) -> LocalObjectArgs {
@@ -185,6 +170,43 @@ pub(crate) fn object_root_stays_local(
         |value| value == root,
         allow_return_root,
     )
+}
+
+pub(crate) fn object_root_stays_local_with_effects(
+    function: &Function,
+    root: ValueId,
+    root_ty: Type,
+    object_effects: &ObjectEffectSummaryMap,
+    mut is_allowed_root_value: impl FnMut(ValueId) -> bool,
+    allow_return_root: bool,
+) -> bool {
+    walk_object_root_uses_with_effects(function, root, object_effects, |special| match special {
+        SpecialObjectUse::MaterializeStack(Some(ptr)) if raw_pointer_stays_local(function, ptr) => {
+            ControlFlow::Continue(())
+        }
+        SpecialObjectUse::Return { value, ret }
+            if allow_return_root
+                && is_allowed_root_value(value)
+                && ret.returns_single()
+                && ret.arg() == Some(&value) =>
+        {
+            ControlFlow::Continue(())
+        }
+        SpecialObjectUse::Call { value, call }
+            if is_allowed_root_value(value)
+                && call_root_preserves_locality(
+                    function.ctx(),
+                    call,
+                    value,
+                    root_ty,
+                    object_effects,
+                ) =>
+        {
+            ControlFlow::Continue(())
+        }
+        _ => ControlFlow::Break(()),
+    })
+    .is_none()
 }
 
 pub(crate) fn object_root_stays_local_with(
@@ -306,6 +328,24 @@ pub(crate) fn walk_object_root_uses<T>(
     function: &Function,
     root: ValueId,
     mut on_special: impl FnMut(SpecialObjectUse<'_>) -> ControlFlow<T>,
+) -> Option<T> {
+    walk_object_root_uses_impl(function, root, None, &mut on_special)
+}
+
+pub(crate) fn walk_object_root_uses_with_effects<T>(
+    function: &Function,
+    root: ValueId,
+    object_effects: &ObjectEffectSummaryMap,
+    mut on_special: impl FnMut(SpecialObjectUse<'_>) -> ControlFlow<T>,
+) -> Option<T> {
+    walk_object_root_uses_impl(function, root, Some(object_effects), &mut on_special)
+}
+
+fn walk_object_root_uses_impl<T>(
+    function: &Function,
+    root: ValueId,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+    on_special: &mut impl FnMut(SpecialObjectUse<'_>) -> ControlFlow<T>,
 ) -> Option<T> {
     let mut worklist = vec![root];
     let mut seen = FxHashSet::default();
@@ -435,9 +475,13 @@ pub(crate) fn walk_object_root_uses<T>(
                 downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(user))
                 && call.args().contains(&value)
             {
-                if let ControlFlow::Break(result) =
-                    on_special(SpecialObjectUse::Call { value, call })
+                let flow = on_special(SpecialObjectUse::Call { value, call });
+                if let Some(result) =
+                    call_same_root_result(function, user, call, value, object_effects)
                 {
+                    worklist.push(result);
+                }
+                if let ControlFlow::Break(result) = flow {
                     return Some(result);
                 }
                 continue;
@@ -461,6 +505,63 @@ pub(crate) fn walk_object_root_uses<T>(
         }
     }
 
+    None
+}
+
+fn call_root_preserves_locality(
+    ctx: &ModuleCtx,
+    call: &control_flow::Call,
+    value: ValueId,
+    value_ty: Type,
+    object_effects: &ObjectEffectSummaryMap,
+) -> bool {
+    let Some(sig) = ctx.get_sig(*call.callee()) else {
+        return false;
+    };
+    let Some(summary) = object_effects.get(call.callee()) else {
+        return false;
+    };
+
+    let mut saw_value = false;
+    for (idx, &arg) in call.args().iter().enumerate() {
+        if arg != value {
+            continue;
+        }
+        saw_value = true;
+        let Some(effect) = summary.arg_effects.get(idx) else {
+            return false;
+        };
+        if sig.args().get(idx) != Some(&value_ty) || effect.escapes || effect.materializes_heap {
+            return false;
+        }
+    }
+
+    saw_value
+}
+
+fn call_same_root_result(
+    function: &Function,
+    inst: sonatina_ir::InstId,
+    call: &control_flow::Call,
+    value: ValueId,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+) -> Option<ValueId> {
+    let result = function.dfg.inst_result(inst)?;
+    let summary = object_effects.and_then(|effects| effects.get(call.callee()))?;
+    for (idx, &arg) in call.args().iter().enumerate() {
+        if arg != value {
+            continue;
+        }
+        match summary.ret_effect {
+            ObjectReturnEffect::SameAsArg { index }
+            | ObjectReturnEffect::DerivedFromArg { index }
+                if index == idx =>
+            {
+                return Some(result);
+            }
+            _ => {}
+        }
+    }
     None
 }
 
@@ -594,6 +695,126 @@ block3:
         assert!(
             local.get(&func).is_some_and(|args| args.contains_key(&0)),
             "enum.proj + phi + nested enum op should keep the outer enum root local"
+        );
+    }
+
+    #[test]
+    fn collect_local_object_arg_info_follows_same_root_call_results() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %id(v0.objref<@pair>) -> objref<@pair> {
+block0:
+    return v0;
+}
+
+func private %f(v0.objref<@pair>, v1.i256) {
+block0:
+    v2.objref<@pair> = call %id v0;
+    v3.objref<i256> = obj.proj v2 0.i8;
+    obj.store v3 v1;
+    return;
+}
+"#,
+        );
+
+        let func = lookup_func(&module, "f");
+        let local = collect_local_object_arg_info(&module);
+        assert!(
+            local.get(&func).is_some_and(|args| args.contains_key(&0)),
+            "same-root helper return should keep the arg local"
+        );
+    }
+
+    #[test]
+    fn collect_local_object_arg_info_rejects_returned_arg() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %f(v0.objref<@pair>) -> objref<@pair> {
+block0:
+    return v0;
+}
+"#,
+        );
+
+        let func = lookup_func(&module, "f");
+        let local = collect_local_object_arg_info(&module);
+        assert!(
+            !local.get(&func).is_some_and(|args| args.contains_key(&0)),
+            "returned arg should not stay local"
+        );
+    }
+
+    #[test]
+    fn collect_local_object_arg_info_rejects_phi_escape_for_all_roots() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %f(v0.objref<@pair>, v1.objref<@pair>, v2.i1) {
+block0:
+    br v2 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v3.objref<@pair> = phi (v0 block1) (v1 block2);
+    obj.materialize.heap v3;
+    return;
+}
+"#,
+        );
+
+        let func = lookup_func(&module, "f");
+        let local = collect_local_object_arg_info(&module);
+        assert!(
+            !local
+                .get(&func)
+                .is_some_and(|args| args.contains_key(&0) || args.contains_key(&1)),
+            "phi-merged escape should block local-object classification for every root"
+        );
+    }
+
+    #[test]
+    fn collect_local_object_arg_info_rejects_escaping_callee() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %escape(v0.objref<@pair>) {
+block0:
+    obj.materialize.heap v0;
+    return;
+}
+
+func private %f(v0.objref<@pair>) {
+block0:
+    call %escape v0;
+    return;
+}
+"#,
+        );
+
+        let func = lookup_func(&module, "f");
+        let local = collect_local_object_arg_info(&module);
+        assert!(
+            !local.get(&func).is_some_and(|args| args.contains_key(&0)),
+            "escaping callee should block local-object classification"
         );
     }
 }

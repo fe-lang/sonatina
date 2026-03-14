@@ -271,6 +271,62 @@ func private %entry(v0.i256) -> i256 {
 }
 
 #[test]
+fn function_passes_use_object_effect_summaries_across_private_calls() {
+    let mut parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %peek(v0.objref<@pair>) {
+    block0:
+        v1.objref<i256> = obj.proj v0 0.i8;
+        v2.i256 = obj.load v1;
+        return;
+}
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.objref<@pair> = obj.alloc @pair;
+        v2.objref<i256> = obj.proj v1 0.i8;
+        obj.store v2 v0;
+        call %peek v1;
+        v3.i256 = obj.load v2;
+        return v3;
+}
+"#,
+    )
+    .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let entry = find_func_by_name(&parsed.module, "entry");
+
+    let mut pipeline = Pipeline::new();
+    pipeline.add_step(Step::FuncPasses(vec![
+        Pass::AggregateCombine,
+        Pass::ObjectLoadStore,
+        Pass::CfgCleanup,
+    ]));
+    pipeline.run(&mut parsed.module);
+
+    let dumped = parsed
+        .module
+        .func_store
+        .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+    assert!(
+        dumped.contains("call %peek v1;"),
+        "read-only helper call should remain visible:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains("obj.load"),
+        "summary-aware object load/store should forward across the call:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("return v0;"),
+        "entry should return the stored value after the read-only call:\n{dumped}"
+    );
+    assert_fast_verified(&parsed.module);
+}
+
+#[test]
 fn sccp_deletes_unreachable_region_with_cross_block_uses() {
     let (module, func_ref) = parse_test_module(
         r#"
@@ -441,6 +497,14 @@ fn parse_test_module(src: &str) -> (Module, FuncRef) {
         .next()
         .expect("test module must contain a function");
     (parsed.module, func_ref)
+}
+
+fn find_func_by_name(module: &Module, name: &str) -> FuncRef {
+    module
+        .funcs()
+        .into_iter()
+        .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
+        .unwrap_or_else(|| panic!("function `{name}` should exist"))
 }
 
 fn assert_func_not_contains(module: &Module, func_ref: FuncRef, needle: &str) {

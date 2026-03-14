@@ -427,7 +427,7 @@ impl AggregateScalarize {
         }
 
         let provenance =
-            collect_root_provenance(func, module, &root_slices, &mut self.layout_cache);
+            collect_root_provenance(func, module, &root_slices, &mut self.layout_cache, None);
         for (root_value, root_kind, shape_data) in candidate_roots {
             if !self.root_use_chain_is_promotable(func, module, root_value, &provenance) {
                 continue;
@@ -3049,6 +3049,7 @@ func private %f(v0.objref<@one>, v1.i256) -> i256 {
 "#,
         );
         let func_ref = lookup_func(&module, "f");
+        let object_effects = crate::optim::aggregate::compute_object_effect_summaries(&module);
         let local_object_args = crate::optim::aggregate::collect_local_object_arg_info(&module);
 
         module.func_store.modify(func_ref, |func| {
@@ -3056,6 +3057,7 @@ func private %f(v0.objref<@one>, v1.i256) -> i256 {
                 func_ref,
                 func,
                 &local_object_args,
+                &object_effects,
             );
             AggregateScalarize::default().run_for_func(func_ref, func, &local_object_args);
         });

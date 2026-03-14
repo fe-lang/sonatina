@@ -19,8 +19,9 @@ use crate::{
 use super::{
     adce::AdceSolver,
     aggregate::{
-        AggregateCombine, AggregateScalarize, LocalObjectArgMap, ObjectLoadStore,
-        collect_local_object_arg_info,
+        AggregateCombine, AggregateScalarize, LocalObjectArgMap, ObjectEffectSummaryMap,
+        ObjectLoadStore, ObjectMemoryAnalysis, collect_local_object_arg_info,
+        collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
     },
     cfg_cleanup::CfgCleanup,
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
@@ -120,10 +121,9 @@ impl Step {
 /// # Analysis lifecycle
 ///
 /// Each per-function pass that requires analyses (CFG, dominator tree, loop
-/// tree) recomputes them from the current IR state. Standalone
-/// [`run_func_passes`] calls reuse analysis storage within one function's pass
-/// sequence; module pipelines execute pass-major function rounds so
-/// cross-function behavior summaries stay fresh between passes.
+/// tree) recomputes them from the current IR state. Module pipelines execute
+/// pass-major function rounds so cross-function behavior summaries stay fresh
+/// between passes.
 pub struct Pipeline {
     steps: Vec<Step>,
     /// Configuration for all [`Step::Inline`] steps in this pipeline.
@@ -381,28 +381,23 @@ impl Default for Pipeline {
     }
 }
 
-/// Run a sequence of per-function passes on a single function.
-///
-/// This is useful for testing individual pass sequences without a full module.
-///
-/// This helper cannot run module-level analyses. Callers that include
-/// attribute-dependent passes must ensure function attrs are computed first.
-pub fn run_func_passes(passes: &[Pass], func: &mut Function) {
-    let _span = debug_span!(
-        "sonatina.optim.pipeline.run_func_passes",
-        pass_count = passes.len()
-    )
-    .entered();
-    let mut ctx = PassContext::default();
-    for &pass in passes {
-        run_pass(pass, None, func, &mut ctx, None);
-    }
-}
-
 fn run_module_pass(pass: Pass, module: &Module) {
     let _span = debug_span!("sonatina.optim.pipeline.pass_round", pass = pass.as_str()).entered();
-    let local_object_args = matches!(pass, Pass::ObjectLoadStore | Pass::AggregateScalarize)
-        .then(|| collect_local_object_arg_info(module));
+    let object_effects = matches!(
+        pass,
+        Pass::ObjectLoadStore | Pass::AggregateScalarize | Pass::Gvn | Pass::Licm
+    )
+    .then(|| compute_object_effect_summaries(module));
+    let local_object_args = object_effects
+        .as_ref()
+        .map(|effects| collect_local_object_arg_info_with_effects(module, effects))
+        .or_else(|| {
+            matches!(
+                pass,
+                Pass::ObjectLoadStore | Pass::AggregateScalarize | Pass::Gvn | Pass::Licm
+            )
+            .then(|| collect_local_object_arg_info(module))
+        });
     module.func_store.par_for_each(|func_ref, func| {
         let _span = debug_span!(
             "sonatina.optim.pipeline.function",
@@ -416,6 +411,7 @@ fn run_module_pass(pass: Pass, module: &Module) {
             func,
             &mut ctx,
             local_object_args.as_ref(),
+            object_effects.as_ref(),
         );
     });
 }
@@ -440,6 +436,7 @@ fn run_pass(
     func: &mut Function,
     ctx: &mut PassContext,
     local_object_args: Option<&LocalObjectArgMap>,
+    object_effects: Option<&ObjectEffectSummaryMap>,
 ) {
     let _span = trace_span!("sonatina.optim.pipeline.pass", pass = pass.as_str()).entered();
     match pass {
@@ -457,8 +454,15 @@ fn run_pass(
         }
         Pass::ObjectLoadStore => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.object_load_store").entered();
-            if let (Some(func_ref), Some(local_object_args)) = (func_ref, local_object_args) {
-                ObjectLoadStore::default().run_for_func(func_ref, func, local_object_args);
+            if let (Some(func_ref), Some(local_object_args), Some(object_effects)) =
+                (func_ref, local_object_args, object_effects)
+            {
+                ObjectLoadStore::default().run_for_func(
+                    func_ref,
+                    func,
+                    local_object_args,
+                    object_effects,
+                );
             } else {
                 ObjectLoadStore::default().run(func);
             }
@@ -520,9 +524,18 @@ fn run_pass(
                 ctx.lpt.compute(&ctx.cfg, &ctx.domtree);
             }
             let mut solver = LicmSolver::new();
+            let mut object_memory = ObjectMemoryAnalysis::default();
+            let func_local_object_args = func_ref
+                .and_then(|func_ref| local_object_args.and_then(|args| args.get(&func_ref)));
+            object_memory.compute(func, func_local_object_args, object_effects);
             {
                 let _span = trace_span!("sonatina.optim.pipeline.licm.solve").entered();
-                solver.run(func, &mut ctx.cfg, &mut ctx.lpt);
+                solver.run_with_object_memory(
+                    func,
+                    &mut ctx.cfg,
+                    &mut ctx.lpt,
+                    Some(&object_memory),
+                );
             }
             {
                 let _span = trace_span!("sonatina.optim.pipeline.licm.cleanup").entered();
@@ -544,9 +557,18 @@ fn run_pass(
                 ctx.domtree.compute(&ctx.cfg);
             }
             let mut solver = GvnSolver::new();
+            let mut object_memory = ObjectMemoryAnalysis::default();
+            let func_local_object_args = func_ref
+                .and_then(|func_ref| local_object_args.and_then(|args| args.get(&func_ref)));
+            object_memory.compute(func, func_local_object_args, object_effects);
             {
                 let _span = trace_span!("sonatina.optim.pipeline.gvn.solve").entered();
-                solver.run(func, &mut ctx.cfg, &mut ctx.domtree);
+                solver.run_with_object_memory(
+                    func,
+                    &mut ctx.cfg,
+                    &mut ctx.domtree,
+                    Some(&object_memory),
+                );
             }
         }
         Pass::RebuildUsers => {
@@ -586,6 +608,12 @@ mod tests {
         builder.finish();
 
         mb.build()
+    }
+
+    fn run_test_func_passes(module: &mut sonatina_ir::module::Module, passes: &[Pass]) {
+        let mut pipeline = Pipeline::new();
+        pipeline.add_step(Step::FuncPasses(passes.to_vec()));
+        pipeline.run(module);
     }
 
     #[test]
@@ -644,12 +672,9 @@ mod tests {
     }
 
     #[test]
-    fn func_passes_standalone() {
-        let module = build_test_module();
-        let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Sccp, Pass::Egraph], func);
-        });
+    fn func_passes_single_function_module() {
+        let mut module = build_test_module();
+        run_test_func_passes(&mut module, &[Pass::CfgCleanup, Pass::Sccp, Pass::Egraph]);
     }
 
     #[test]
@@ -749,11 +774,12 @@ func private %entry(v0.*i256) -> *i256 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -779,11 +805,12 @@ func private %entry(v0.*i256, v1.i256) -> *i256 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -817,11 +844,12 @@ func private %entry() -> i256 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -850,18 +878,156 @@ func private %entry() -> i256 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains(" = obj.load "),
+                "GVN should fold each load to its reaching stored value:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("return 3.i256;"),
+                "intervening store must still keep the two load results distinct:\n{dumped}"
+            );
         });
+    }
+
+    #[test]
+    fn gvn_does_not_cse_uninitialized_obj_loads_from_fresh_alloc() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i256 {
+    block0:
+        v0.objref<i256> = obj.alloc i256;
+        v1.i256 = obj.load v0;
+        v2.i256 = obj.load v0;
+        v3.i256 = add v1 v2;
+        return v3;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
             let load_count = dumped.matches(" = obj.load ").count();
             assert_eq!(
                 load_count, 2,
-                "object loads must not CSE across intervening stores:\n{dumped}"
+                "fresh uninitialized loads must remain distinct:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_cses_obj_loads_across_read_only_helper_call() {
+        let mut parsed = parse_module(
+            r#"
+target = "evm-ethereum-london"
+
+func private %peek(v0.objref<i256>) {
+    block0:
+        v1.i256 = obj.load v0;
+        return;
+}
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.objref<i256> = obj.alloc i256;
+        obj.store v1 v0;
+        call %peek v1;
+        v2.i256 = obj.load v1;
+        v3.i256 = obj.load v1;
+        v4.i256 = add v2 v3;
+        return v4;
+}
+"#,
+        )
+        .expect("parse should succeed");
+        let entry = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| {
+                parsed
+                    .module
+                    .ctx
+                    .func_sig(func_ref, |sig| sig.name() == "entry")
+            })
+            .expect("entry should exist");
+
+        let mut pipeline = Pipeline::new();
+        pipeline.add_step(Step::FuncPasses(vec![
+            Pass::CfgCleanup,
+            Pass::Gvn,
+            Pass::CfgCleanup,
+        ]));
+        pipeline.run(&mut parsed.module);
+
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert!(
+            dumped.contains("call %peek v1;"),
+            "helper call should remain visible:\n{dumped}"
+        );
+        assert!(
+            !dumped.contains("obj.load v1"),
+            "summary-aware GVN should eliminate repeated loads after the read-only helper:\n{dumped}"
+        );
+    }
+
+    #[test]
+    fn gvn_cses_repeated_join_obj_loads_through_object_memory_phi() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i1, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.objref<i256> = obj.alloc i256;
+        br v0 block1 block2;
+
+    block1:
+        obj.store v3 v1;
+        jump block3;
+
+    block2:
+        obj.store v3 v2;
+        jump block3;
+
+    block3:
+        v4.i256 = obj.load v3;
+        v5.i256 = obj.load v3;
+        v6.i256 = add v4 v5;
+        return v6;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            let load_count = dumped.matches(" = obj.load ").count();
+            assert_eq!(
+                load_count, 1,
+                "GVN should CSE repeated join loads keyed by the same object-memory phi:\n{dumped}"
             );
         });
     }
@@ -889,11 +1055,12 @@ func private %entry(v0.i1) -> *i256 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -904,6 +1071,219 @@ func private %entry(v0.i1) -> *i256 {
             assert!(
                 !dumped.contains(" = phi "),
                 "phi over identical globals should be eliminated:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn licm_hoists_initialized_obj_load_out_of_loop() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i256, v1.i1) -> i256 {
+    block0:
+        v2.objref<i256> = obj.alloc i256;
+        obj.store v2 v0;
+        jump block1;
+
+    block1:
+        br v1 block2 block3;
+
+    block2:
+        v3.i256 = obj.load v2;
+        v4.i256 = add v3 1.i256;
+        jump block1;
+
+    block3:
+        return 0.i256;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.view(func_ref, |func| {
+            let mut object_memory = ObjectMemoryAnalysis::default();
+            object_memory.compute(func, None, None);
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let mut domtree = DomTree::new();
+            domtree.compute(&cfg);
+            let mut lpt = LoopTree::new();
+            lpt.compute(&cfg, &domtree);
+            let load = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find(|&inst| {
+                    sonatina_ir::inst::downcast::<&sonatina_ir::inst::data::ObjLoad>(
+                        func.inst_set(),
+                        func.dfg.inst(inst),
+                    )
+                    .is_some()
+                })
+                .expect("loop load should exist before LICM");
+            let lp = lpt.loops().next().expect("loop should exist");
+            assert!(
+                object_memory.read_is_loop_invariant(func, &cfg, &lpt, lp, load),
+                "object-memory analysis should mark the loop load as invariant before LICM"
+            );
+        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Licm, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            let block0 = dumped
+                .split("block0:")
+                .nth(1)
+                .and_then(|tail| tail.split("block1:").next())
+                .expect("block0 section should exist");
+            let block2 = dumped
+                .split("block2:")
+                .nth(1)
+                .and_then(|tail| tail.split("block3:").next())
+                .expect("block2 section should exist");
+            assert!(
+                block0.contains("obj.load"),
+                "loop-invariant object load should hoist to the preheader:\n{dumped}"
+            );
+            assert!(
+                !block2.contains("obj.load"),
+                "loop body should no longer contain the hoisted object load:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn licm_hoists_initialized_obj_load_out_of_loop_across_read_only_helper_call() {
+        let mut parsed = parse_module(
+            r#"
+target = "evm-ethereum-london"
+
+func private %peek(v0.objref<i256>) {
+    block0:
+        v1.i256 = obj.load v0;
+        return;
+}
+
+func private %entry(v0.i256, v1.i1) -> i256 {
+    block0:
+        v2.objref<i256> = obj.alloc i256;
+        obj.store v2 v0;
+        jump block1;
+
+    block1:
+        br v1 block2 block3;
+
+    block2:
+        call %peek v2;
+        v3.i256 = obj.load v2;
+        v4.i256 = add v3 1.i256;
+        jump block1;
+
+    block3:
+        return 0.i256;
+}
+"#,
+        )
+        .expect("parse should succeed");
+        let entry = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| {
+                parsed
+                    .module
+                    .ctx
+                    .func_sig(func_ref, |sig| sig.name() == "entry")
+            })
+            .expect("entry should exist");
+
+        let mut pipeline = Pipeline::new();
+        pipeline.add_step(Step::FuncPasses(vec![
+            Pass::CfgCleanup,
+            Pass::Licm,
+            Pass::CfgCleanup,
+        ]));
+        pipeline.run(&mut parsed.module);
+
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        let block0 = dumped
+            .split("block0:")
+            .nth(1)
+            .and_then(|tail| tail.split("block1:").next())
+            .expect("block0 section should exist");
+        let block2 = dumped
+            .split("block2:")
+            .nth(1)
+            .and_then(|tail| tail.split("block3:").next())
+            .expect("block2 section should exist");
+        assert!(
+            block0.contains("obj.load"),
+            "LICM should hoist the loop-invariant load into the preheader even across a read-only helper call:\n{dumped}"
+        );
+        assert!(
+            !block2.contains("obj.load"),
+            "loop body should no longer contain the hoisted load:\n{dumped}"
+        );
+    }
+
+    #[test]
+    fn licm_does_not_hoist_obj_load_across_loop_store() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i256, v1.i1) -> i256 {
+    block0:
+        v2.objref<i256> = obj.alloc i256;
+        obj.store v2 0.i256;
+        jump block1;
+
+    block1:
+        br v1 block2 block3;
+
+    block2:
+        obj.store v2 v0;
+        v3.i256 = obj.load v2;
+        v4.i256 = add v3 1.i256;
+        jump block1;
+
+    block3:
+        return 0.i256;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Licm, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            let block0 = dumped
+                .split("block0:")
+                .nth(1)
+                .and_then(|tail| tail.split("block1:").next())
+                .expect("block0 section should exist");
+            let block2 = dumped
+                .split("block2:")
+                .nth(1)
+                .and_then(|tail| tail.split("block3:").next())
+                .expect("block2 section should exist");
+            assert!(
+                !block0.contains("obj.load"),
+                "loop-clobbered object load must not hoist:\n{dumped}"
+            );
+            assert!(
+                block2.contains("obj.load"),
+                "loop body should retain the load when the slice is clobbered each iteration:\n{dumped}"
             );
         });
     }
@@ -923,14 +1303,12 @@ func private %entry() -> i256 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(
-                &[Pass::CfgCleanup, Pass::Sccp, Pass::Gvn, Pass::CfgCleanup],
-                func,
-            );
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Sccp, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -965,11 +1343,12 @@ func private %entry() -> i32 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -1008,11 +1387,12 @@ func private %entry() -> i32 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -1045,11 +1425,12 @@ func private %entry() -> i32 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -1089,14 +1470,12 @@ func private %entry(v0.i1, v1.i32) -> i32 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(
-                &[Pass::CfgCleanup, Pass::Gvn, Pass::Egraph, Pass::CfgCleanup],
-                func,
-            );
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::Egraph, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -1126,11 +1505,12 @@ func private %entry() -> i256 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -1165,11 +1545,12 @@ func private %entry() -> i256 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -1197,11 +1578,12 @@ func private %entry(v0.i256, v1.i256) -> i256 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -1229,11 +1611,12 @@ func private %entry() -> i32 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -1272,11 +1655,12 @@ func private %entry(v0.i32, v1.i32) -> i32 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();

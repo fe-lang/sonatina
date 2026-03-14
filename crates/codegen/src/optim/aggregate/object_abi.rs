@@ -9,7 +9,7 @@ use sonatina_ir::{
 };
 
 use super::{
-    collect_root_provenance,
+    ObjectEffectSummaryMap, collect_root_provenance, compute_object_effect_summaries,
     object_locality::{self, LocalObjectArgInfo, LocalObjectArgMap, RootInit},
     private_abi::{self, PrivateAbiPlan},
     shape,
@@ -47,8 +47,8 @@ impl ObjectReturnOutParam {
         let mut synthetic_out_args = LocalObjectArgMap::default();
 
         loop {
-            let local_object_args = object_locality::collect_local_object_arg_info(module);
-            let mut plans = self.collect_plans(module, &local_object_args);
+            let object_effects = compute_object_effect_summaries(module);
+            let mut plans = self.collect_plans(module, &object_effects);
             private_abi::retain_higher_order_safe_plans(module, &mut plans);
             if plans.is_empty() {
                 return synthetic_out_args;
@@ -87,7 +87,7 @@ impl ObjectReturnOutParam {
     fn collect_plans(
         &self,
         module: &Module,
-        local_object_args: &LocalObjectArgMap,
+        object_effects: &ObjectEffectSummaryMap,
     ) -> FxHashMap<FuncRef, FuncPlan> {
         let mut plans = FxHashMap::default();
 
@@ -107,7 +107,7 @@ impl ObjectReturnOutParam {
             };
 
             let Some((root_alloc_inst, root_value)) = module.func_store.view(func, |function| {
-                self.analyze_return_root(function, out_ty, out_elem_ty, local_object_args)
+                self.analyze_return_root(function, out_ty, out_elem_ty, object_effects)
             }) else {
                 continue;
             };
@@ -137,15 +137,20 @@ impl ObjectReturnOutParam {
         function: &Function,
         out_ty: Type,
         out_elem_ty: Type,
-        local_object_args: &LocalObjectArgMap,
+        object_effects: &ObjectEffectSummaryMap,
     ) -> Option<(InstId, ValueId)> {
-        let root_slices = self.collect_return_root_slices(function, out_elem_ty);
+        let root_slices = self.collect_return_root_slices(function, out_elem_ty, object_effects);
         if root_slices.is_empty() {
             return None;
         }
         let mut layout_cache = shape::AggregateLayoutCache::default();
-        let provenance =
-            collect_root_provenance(function, function.ctx(), &root_slices, &mut layout_cache);
+        let provenance = collect_root_provenance(
+            function,
+            function.ctx(),
+            &root_slices,
+            &mut layout_cache,
+            Some(object_effects),
+        );
         let mut return_root = None;
         let mut saw_return = false;
 
@@ -194,9 +199,9 @@ impl ObjectReturnOutParam {
                 function,
                 root_value,
                 out_ty,
-                local_object_args,
                 &root_slices,
                 &provenance,
+                object_effects,
             )
         {
             return None;
@@ -210,18 +215,18 @@ impl ObjectReturnOutParam {
         function: &Function,
         root: ValueId,
         root_ty: Type,
-        local_object_args: &LocalObjectArgMap,
         root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
         provenance: &super::provenance::RootProvenanceMap,
+        object_effects: &ObjectEffectSummaryMap,
     ) -> bool {
         let Some(&root_slice) = root_slices.get(&root) else {
             return false;
         };
-        object_locality::object_root_stays_local_with(
+        object_locality::object_root_stays_local_with_effects(
             function,
             root,
             root_ty,
-            local_object_args,
+            object_effects,
             |value| {
                 provenance
                     .exact_projection(value)
@@ -237,6 +242,7 @@ impl ObjectReturnOutParam {
         &self,
         function: &Function,
         out_elem_ty: Type,
+        object_effects: &ObjectEffectSummaryMap,
     ) -> FxHashMap<ValueId, shape::AggregateSlice> {
         let mut layout_cache = shape::AggregateLayoutCache::default();
         let root_slice = whole_object_slice(&mut layout_cache, function.ctx(), out_elem_ty);
@@ -258,6 +264,7 @@ impl ObjectReturnOutParam {
             }
         }
 
+        let _ = object_effects;
         root_slices
     }
 

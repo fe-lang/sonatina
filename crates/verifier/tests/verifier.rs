@@ -210,6 +210,37 @@ block0:
 }
 
 #[test]
+fn branch_proven_enum_variant_ref_proves_object_field_load() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %ok(v0.objref<@OptionI256>) -> i256 {
+block0:
+    v1.enumtag(@OptionI256) = enum.get_tag v0;
+    br_table v1 block2 (1.enumtag(@OptionI256) block1) (0.enumtag(@OptionI256) block2);
+
+block1:
+    v2.objref<i256> = enum.proj v0 #Some 0.i8;
+    v3.i256 = obj.load v2;
+    return v3;
+
+block2:
+    return 0.i256;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
 fn multi_return_functions_and_calls_verify() {
     let src = r#"
 target = "evm-ethereum-london"

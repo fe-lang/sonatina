@@ -38,7 +38,8 @@ use crate::{
         aggregate::{
             AggregateCombine, AggregateExpandAbi, AggregateLowerToMemoryLegalize,
             AggregateScalarize, EnumLowerToProduct, ObjectLoadStore, ObjectLowerToMemory,
-            ObjectReturnOutParam, assert_aggregate_legalized, shape,
+            ObjectReturnOutParam, assert_aggregate_legalized,
+            collect_local_object_arg_info_with_effects, compute_object_effect_summaries, shape,
         },
         cfg_cleanup::CfgCleanup,
     },
@@ -1755,15 +1756,22 @@ impl LowerBackend for EvmBackend {
                 AggregateCombine::default().run(function)
             });
         }
-        let mut local_object_args = crate::optim::aggregate::collect_local_object_arg_info(module);
         let synthetic_out_args = ObjectReturnOutParam.run_with_synthetic_out_args(module);
+        let object_effects = compute_object_effect_summaries(module);
+        let mut local_object_args =
+            collect_local_object_arg_info_with_effects(module, &object_effects);
         crate::optim::aggregate::merge_local_object_arg_info(
             &mut local_object_args,
             &synthetic_out_args,
         );
         for func_ref in module.funcs() {
             module.func_store.modify(func_ref, |function| {
-                ObjectLoadStore::default().run_for_func(func_ref, function, &local_object_args)
+                ObjectLoadStore::default().run_for_func(
+                    func_ref,
+                    function,
+                    &local_object_args,
+                    &object_effects,
+                )
             });
         }
         ObjectLowerToMemory.run(module);
@@ -2011,15 +2019,22 @@ impl LowerBackend for EvmBackend {
                 AggregateCombine::default().run(function)
             });
         }
-        let mut local_object_args = crate::optim::aggregate::collect_local_object_arg_info(module);
         let synthetic_out_args = ObjectReturnOutParam.run_with_synthetic_out_args(module);
+        let object_effects = compute_object_effect_summaries(module);
+        let mut local_object_args =
+            collect_local_object_arg_info_with_effects(module, &object_effects);
         crate::optim::aggregate::merge_local_object_arg_info(
             &mut local_object_args,
             &synthetic_out_args,
         );
         for func_ref in module.funcs() {
             module.func_store.modify(func_ref, |function| {
-                ObjectLoadStore::default().run_for_func(func_ref, function, &local_object_args)
+                ObjectLoadStore::default().run_for_func(
+                    func_ref,
+                    function,
+                    &local_object_args,
+                    &object_effects,
+                )
             });
         }
         ObjectLowerToMemory.run(module);

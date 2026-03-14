@@ -564,6 +564,155 @@ fn same_block_dominating_obj_store(
     false
 }
 
+fn predecessor_edge_proves_enum_assert_ref(
+    verifier: &FunctionVerifier<'_>,
+    use_inst: InstId,
+    object: ValueId,
+    variant: EnumVariantRef,
+) -> bool {
+    let Some(block) = verifier.inst_to_block.get(&use_inst).copied() else {
+        return false;
+    };
+    let Some(preds) = verifier.preds.get(&block) else {
+        return false;
+    };
+
+    let mut saw_reachable_pred = false;
+    for &pred in preds {
+        if !verifier.reachable.contains(&pred) {
+            continue;
+        }
+        saw_reachable_pred = true;
+        if !br_table_edge_proves_enum_variant(verifier, pred, block, object, variant) {
+            return false;
+        }
+    }
+
+    saw_reachable_pred
+}
+
+fn br_table_edge_proves_enum_variant(
+    verifier: &FunctionVerifier<'_>,
+    pred: sonatina_ir::BlockId,
+    succ: sonatina_ir::BlockId,
+    object: ValueId,
+    variant: EnumVariantRef,
+) -> bool {
+    let Some(term) = verifier.func.layout.last_inst_of(pred) else {
+        return false;
+    };
+    let Some(br_table) = sonatina_ir::inst::downcast::<&control_flow::BrTable>(
+        verifier.ctx.inst_set,
+        verifier.func.dfg.inst(term),
+    ) else {
+        return false;
+    };
+    br_table_edge_variant(verifier, br_table, succ).is_some_and(
+        |(proved_object, proved_variant)| proved_object == object && proved_variant == variant,
+    )
+}
+
+fn br_table_edge_variant(
+    verifier: &FunctionVerifier<'_>,
+    br_table: &control_flow::BrTable,
+    succ: sonatina_ir::BlockId,
+) -> Option<(ValueId, EnumVariantRef)> {
+    let enum_get_tag = enum_get_tag_of_value(verifier, *br_table.scrutinee())?;
+    let object = *enum_get_tag.object();
+    let Type::EnumTag(enum_ty) = verifier.value_ty(*br_table.scrutinee())? else {
+        return None;
+    };
+
+    let mut matched_variant = None;
+    for &(case_value, dest) in br_table.table() {
+        if dest != succ {
+            continue;
+        }
+        let case_variant = enum_variant_for_tag_value(verifier, enum_ty, case_value)?;
+        if matched_variant.is_some_and(|matched| matched != case_variant) {
+            return None;
+        }
+        matched_variant = Some(case_variant);
+    }
+    if let Some(matched_variant) = matched_variant {
+        return Some((object, matched_variant));
+    }
+
+    if *br_table.default() != Some(succ) {
+        return None;
+    }
+
+    let remaining_variant = remaining_br_table_variant(verifier, enum_ty, br_table)?;
+    Some((object, remaining_variant))
+}
+
+fn remaining_br_table_variant(
+    verifier: &FunctionVerifier<'_>,
+    enum_ty: CompoundTypeRef,
+    br_table: &control_flow::BrTable,
+) -> Option<EnumVariantRef> {
+    let variant_count = verifier.ctx.with_ty_store(|store| {
+        let CompoundType::Enum(enum_data) = store.get_compound(enum_ty)? else {
+            return None;
+        };
+        Some(enum_data.variants.len())
+    })?;
+
+    let mut uncovered_variant = None;
+    for idx in 0..variant_count {
+        let variant = EnumVariantRef::new(
+            enum_ty,
+            u32::try_from(idx).expect("enum variant index overflow"),
+        );
+        let mut covered = false;
+        for &(case_value, _) in br_table.table() {
+            if enum_variant_for_tag_value(verifier, enum_ty, case_value) == Some(variant) {
+                covered = true;
+                break;
+            }
+        }
+        if covered {
+            continue;
+        }
+        if uncovered_variant.is_some() {
+            return None;
+        }
+        uncovered_variant = Some(variant);
+    }
+
+    uncovered_variant
+}
+
+fn enum_variant_for_tag_value(
+    verifier: &FunctionVerifier<'_>,
+    enum_ty: CompoundTypeRef,
+    value: ValueId,
+) -> Option<EnumVariantRef> {
+    let idx = verifier.value_imm(value)?.as_i256().to_u256().as_usize();
+    let variant_count = verifier.ctx.with_ty_store(|store| {
+        let CompoundType::Enum(enum_data) = store.get_compound(enum_ty)? else {
+            return None;
+        };
+        Some(enum_data.variants.len())
+    })?;
+    (idx < variant_count).then_some(EnumVariantRef::new(
+        enum_ty,
+        u32::try_from(idx).expect("enum variant index overflow"),
+    ))
+}
+
+fn enum_get_tag_of_value(
+    verifier: &FunctionVerifier<'_>,
+    value: ValueId,
+) -> Option<data::EnumGetTag> {
+    let inst = verifier.func.dfg.value_inst(value)?;
+    sonatina_ir::inst::downcast::<&data::EnumGetTag>(
+        verifier.ctx.inst_set,
+        verifier.func.dfg.inst(inst),
+    )
+    .cloned()
+}
+
 fn expect_objref_result(
     verifier: &mut FunctionVerifier<'_>,
     inst_id: InstId,
@@ -955,6 +1104,12 @@ impl VerifyInst for data::ObjLoad {
                 *enum_proj.variant(),
             )
             && !same_block_dominating_enum_assert_ref(
+                verifier,
+                inst_id,
+                *enum_proj.object(),
+                *enum_proj.variant(),
+            )
+            && !predecessor_edge_proves_enum_assert_ref(
                 verifier,
                 inst_id,
                 *enum_proj.object(),

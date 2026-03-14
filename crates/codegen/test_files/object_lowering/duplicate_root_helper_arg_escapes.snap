@@ -19,7 +19,7 @@ func private %touch_pair(v0.*@pair, v1.*@pair) {
 
 func private %driver() {
     block0:
-        v0.*@pair = evm_malloc 64.i256;
+        v0.*@pair = alloca @pair;
         call %touch_pair v0 v0;
         return;
 }
