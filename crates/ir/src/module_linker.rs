@@ -12,7 +12,7 @@ use crate::{
     GlobalVariableRef, Linkage, Module, Signature, Type, Value,
     builder::{BuilderError, ModuleBuilder},
     module::FuncRef,
-    types::{CompoundType, CompoundTypeRef, StructData},
+    types::{CompoundType, CompoundTypeRef, EnumData, StructData},
     visitor::VisitorMut,
 };
 
@@ -419,10 +419,15 @@ impl ModuleLinker {
                 return Ok(ty);
             }
 
-            let Type::Compound(cmpd_ref) = ty else {
-                unreachable!()
-            };
-            linker.link_cmpd(module_ref, cmpd_ref).map(Type::Compound)
+            match ty {
+                Type::Compound(cmpd_ref) => {
+                    linker.link_cmpd(module_ref, cmpd_ref).map(Type::Compound)
+                }
+                Type::EnumTag(cmpd_ref) => {
+                    linker.link_cmpd(module_ref, cmpd_ref).map(Type::EnumTag)
+                }
+                _ => unreachable!(),
+            }
         };
 
         let cmpd = self.modules[&module_ref]
@@ -512,6 +517,55 @@ impl ModuleLinker {
                 } else {
                     self.builder
                         .update_struct_fields(&s_data.name, &s_data.fields);
+                }
+
+                return Ok(linked_cmpd_ref);
+            }
+
+            CompoundType::Enum(mut e_data) => {
+                let (linked_cmpd_ref, linked_enum_data) =
+                    match self.builder.lookup_enum(&e_data.name) {
+                        Some(cmpd_ref) => {
+                            let CompoundType::Enum(e_data) = self
+                                .builder
+                                .ctx
+                                .with_ty_store(|store| store.resolve_compound(cmpd_ref).clone())
+                            else {
+                                unreachable!()
+                            };
+
+                            (cmpd_ref, Some(e_data))
+                        }
+                        None => {
+                            let e_data = EnumData {
+                                name: e_data.name.clone(),
+                                repr: e_data.repr,
+                                variants: vec![],
+                            };
+                            (self.builder.make_compound(CompoundType::Enum(e_data)), None)
+                        }
+                    };
+
+                self.module_ref_map
+                    .get_mut(&module_ref)
+                    .unwrap()
+                    .map_cmpd(cmpd_ref, linked_cmpd_ref);
+
+                for variant in &mut e_data.variants {
+                    for field in &mut variant.fields {
+                        *field = link_type(self, *field)?;
+                    }
+                }
+
+                if let Some(linked_e_data) = linked_enum_data {
+                    if e_data != linked_e_data {
+                        return Err(LinkError::InconsistentStructType {
+                            name: e_data.name.clone(),
+                        });
+                    }
+                } else {
+                    self.builder
+                        .update_enum_variants(&e_data.name, &e_data.variants, e_data.repr);
                 }
 
                 return Ok(linked_cmpd_ref);

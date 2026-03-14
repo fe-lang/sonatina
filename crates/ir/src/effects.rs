@@ -307,6 +307,31 @@ pub fn classify_inst_effects(dfg: &DataFlowGraph, inst_id: InstId) -> InstEffect
         };
     }
 
+    if <&data::EnumGetTag as InstDowncast>::downcast(is, inst).is_some() {
+        return InstEffects {
+            other: OtherEffects::OBSERVE,
+            ..InstEffects::default()
+        };
+    }
+
+    if <&data::EnumAssertVariant as InstDowncast>::downcast(is, inst).is_some()
+        || <&data::EnumAssertVariantRef as InstDowncast>::downcast(is, inst).is_some()
+    {
+        return InstEffects {
+            other: OtherEffects::OBSERVE | OtherEffects::CONTROL,
+            ..InstEffects::default()
+        };
+    }
+
+    if <&data::EnumSetTag as InstDowncast>::downcast(is, inst).is_some()
+        || <&data::EnumWriteVariant as InstDowncast>::downcast(is, inst).is_some()
+    {
+        return InstEffects {
+            other: OtherEffects::MUTATE,
+            ..InstEffects::default()
+        };
+    }
+
     if let Some(call) = dfg.call_info(inst_id) {
         return inst_effects_from_func_summary(&dfg.ctx.func_effects(call.callee()), spaces);
     }

@@ -134,6 +134,82 @@ func public %ok(v0.i32) -> i32 {
 }
 
 #[test]
+fn public_signature_with_enum_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func public %bad(v0.@OptionI256) -> @OptionI256 {
+block0:
+    return v0;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(
+        has_code(&report, "IR0610"),
+        "expected invalid signature, got {report}"
+    );
+}
+
+#[test]
+fn enum_extract_without_variant_proof_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %bad(v0.@OptionI256) -> i256 {
+block0:
+    v1.i256 = enum.extract v0 #Some 0.i8;
+    return v1;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(
+        has_code(&report, "IR0600"),
+        "expected enum.extract verification failure, got {report}"
+    );
+}
+
+#[test]
+fn enum_assert_variant_ref_proves_object_field_load() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %ok(v0.objref<@OptionI256>) -> i256 {
+block0:
+    enum.assert_variant_ref v0 #Some;
+    v1.objref<i256> = enum.proj v0 #Some 0.i8;
+    v2.i256 = obj.load v1;
+    return v2;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
 fn multi_return_functions_and_calls_verify() {
     let src = r#"
 target = "evm-ethereum-london"

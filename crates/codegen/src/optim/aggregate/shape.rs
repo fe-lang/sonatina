@@ -246,6 +246,9 @@ pub fn aggregate_slice_for_gep_path(
                 path.push(u32::try_from(idx).ok()?);
                 current_ty = elem;
             }
+            CompoundType::Enum(_) => {
+                return None;
+            }
             CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => {
                 return None;
             }
@@ -285,6 +288,9 @@ pub fn aggregate_slice_for_object_path(
                 path.push(u32::try_from(idx).ok()?);
                 current_ty = elem;
             }
+            CompoundType::Enum(_) => {
+                return None;
+            }
             CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => {
                 return None;
             }
@@ -299,6 +305,7 @@ pub fn aggregate_child_ty(module: &ModuleCtx, agg_ty: Type, idx: u32) -> Option<
     match agg_ty.resolve_compound(module)? {
         CompoundType::Struct(s) => (!s.packed).then_some(*s.fields.get(idx)?),
         CompoundType::Array { elem, len } => (idx < len).then_some(elem),
+        CompoundType::Enum(_) => None,
         CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => None,
     }
 }
@@ -307,6 +314,7 @@ pub fn aggregate_child_count(module: &ModuleCtx, agg_ty: Type) -> Option<usize> 
     match agg_ty.resolve_compound(module)? {
         CompoundType::Struct(s) => (!s.packed).then_some(s.fields.len()),
         CompoundType::Array { len, .. } => Some(len),
+        CompoundType::Enum(_) => None,
         CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => None,
     }
 }
@@ -324,14 +332,14 @@ pub fn struct_field_offset_bytes(
     let mut offset = 0u32;
 
     for &ty in fields.iter().take(idx) {
-        let align = u32::try_from(module.align_of_unchecked(ty)).ok()?;
+        let (_, align) = runtime_size_align_bytes(module, ty)?;
         offset = align_to(offset, align)?;
 
-        let size = u32::try_from(module.size_of_unchecked(ty)).ok()?;
+        let (size, _) = runtime_size_align_bytes(module, ty)?;
         offset = offset.checked_add(size)?;
     }
 
-    let align = u32::try_from(module.align_of_unchecked(field_ty)).ok()?;
+    let (_, align) = runtime_size_align_bytes(module, field_ty)?;
     offset = align_to(offset, align)?;
     Some((offset, field_ty))
 }
@@ -357,9 +365,62 @@ pub fn const_u32(dfg: &DataFlowGraph, value: ValueId) -> Option<u32> {
 
 pub fn is_supported_aggregate_ty(module: &ModuleCtx, ty: Type) -> bool {
     match ty.resolve_compound(module) {
-        Some(CompoundType::Struct(s)) => !s.packed,
-        Some(CompoundType::Array { .. }) => true,
+        Some(CompoundType::Struct(s)) => {
+            !s.packed
+                && s.fields
+                    .iter()
+                    .copied()
+                    .all(|field_ty| runtime_size_align_bytes(module, field_ty).is_some())
+        }
+        Some(CompoundType::Array { elem, .. }) => runtime_size_align_bytes(module, elem).is_some(),
         _ => false,
+    }
+}
+
+pub fn runtime_size_bytes(module: &ModuleCtx, ty: Type) -> Option<u32> {
+    runtime_size_align_bytes(module, ty).map(|(size, _)| size)
+}
+
+fn runtime_size_align_bytes(module: &ModuleCtx, ty: Type) -> Option<(u32, u32)> {
+    if ty.is_enum_tag() {
+        let word_ty = module.type_layout.pointer_repl();
+        let size = u32::try_from(module.size_of(word_ty).ok()?).ok()?;
+        let align = u32::try_from(module.align_of(word_ty).ok()?).ok()?;
+        return Some((size, align));
+    }
+
+    match ty.resolve_compound(module) {
+        Some(CompoundType::Struct(s)) => {
+            if s.packed {
+                return None;
+            }
+
+            let mut size = 0u32;
+            let mut align = 1u32;
+            for &field_ty in &s.fields {
+                let (field_size, field_align) = runtime_size_align_bytes(module, field_ty)?;
+                size = align_to(size, field_align)?;
+                size = size.checked_add(field_size)?;
+                align = align.max(field_align);
+            }
+            Some((size, align))
+        }
+        Some(CompoundType::Array { elem, len }) => {
+            let (elem_size, elem_align) = runtime_size_align_bytes(module, elem)?;
+            Some((elem_size.checked_mul(u32::try_from(len).ok()?)?, elem_align))
+        }
+        Some(CompoundType::Enum(_)) | Some(CompoundType::Func { .. }) => None,
+        Some(CompoundType::Ptr(_)) | Some(CompoundType::ObjRef(_)) => {
+            let word_ty = module.type_layout.pointer_repl();
+            let size = u32::try_from(module.size_of(word_ty).ok()?).ok()?;
+            let align = u32::try_from(module.align_of(word_ty).ok()?).ok()?;
+            Some((size, align))
+        }
+        None => {
+            let size = u32::try_from(module.size_of(ty).ok()?).ok()?;
+            let align = u32::try_from(module.align_of(ty).ok()?).ok()?;
+            Some((size, align))
+        }
     }
 }
 
@@ -408,6 +469,7 @@ fn aggregate_slice_info(
                 leaf_count,
             ))
         }
+        CompoundType::Enum(_) => None,
         CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => None,
     }
 }
@@ -478,6 +540,7 @@ fn aggregate_slice_for_leaf_range_impl(
             }
             None
         }
+        CompoundType::Enum(_) => None,
         CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => None,
     }
 }
@@ -498,6 +561,7 @@ fn flattened_leaf_count(module: &ModuleCtx, ty: Type) -> Option<usize> {
         Some(CompoundType::Array { elem, len }) => {
             flattened_leaf_count(module, elem)?.checked_mul(len)
         }
+        Some(CompoundType::Enum(_)) => None,
         Some(CompoundType::Func { .. }) => None,
         Some(CompoundType::Ptr(_)) | Some(CompoundType::ObjRef(_)) | None => Some(1),
     }
@@ -528,7 +592,7 @@ fn flatten_aggregate(
             Some(())
         }
         Some(CompoundType::Array { elem, len }) => {
-            let elem_size = u32::try_from(module.size_of_unchecked(elem)).ok()?;
+            let elem_size = runtime_size_bytes(module, elem)?;
             for idx in 0..len {
                 let offset = elem_size.checked_mul(u32::try_from(idx).ok()?)?;
                 let total_offset = base_offset.checked_add(offset)?;
@@ -538,8 +602,9 @@ fn flatten_aggregate(
             }
             Some(())
         }
+        Some(CompoundType::Enum(_)) => None,
         Some(CompoundType::Ptr(_)) | Some(CompoundType::ObjRef(_)) | None => {
-            let size = u32::try_from(module.size_of_unchecked(ty)).ok()?;
+            let size = runtime_size_bytes(module, ty)?;
             out.push(AggregateLeaf {
                 path: path.clone(),
                 ty,
@@ -555,7 +620,11 @@ fn flatten_aggregate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonatina_ir::{DataFlowGraph, Type, module::Module};
+    use sonatina_ir::{
+        DataFlowGraph, Type,
+        module::Module,
+        types::{EnumReprHint, VariantData},
+    };
     use sonatina_parser::parse_module;
 
     fn parse_test_module(src: &str) -> Module {
@@ -726,6 +795,66 @@ block0:
         assert_eq!(shape.leaves[1].ty, ptr_i8);
         assert_eq!(shape.leaves[1].offset_bytes, 32);
         assert_eq!(shape.leaves[1].size_bytes, 32);
+    }
+
+    #[test]
+    fn rejects_structs_with_enum_fields() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-london"
+
+func private %f() {
+block0:
+    return;
+}
+"#,
+        );
+        let holder = module.ctx.with_ty_store_mut(|s| {
+            let option = s.make_enum(
+                "option",
+                &[
+                    VariantData {
+                        name: "Some".to_string(),
+                        explicit_discriminant: None,
+                        fields: vec![Type::I256],
+                    },
+                    VariantData {
+                        name: "None".to_string(),
+                        explicit_discriminant: None,
+                        fields: vec![],
+                    },
+                ],
+                EnumReprHint::Default,
+            );
+            s.make_struct("holder", &[option, Type::I256], false)
+        });
+        assert!(!is_supported_aggregate_ty(&module.ctx, holder));
+        assert!(aggregate_shape(&module.ctx, holder).is_none());
+    }
+
+    #[test]
+    fn rejects_arrays_of_enums() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-london"
+
+type @option = enum {
+    #Some(i256),
+    #None,
+};
+
+func private %f() {
+block0:
+    return;
+}
+"#,
+        );
+        let option = module
+            .ctx
+            .with_ty_store(|s| Type::Compound(s.lookup_enum("option").unwrap()));
+        let options = module.ctx.with_ty_store_mut(|s| s.make_array(option, 2));
+        assert!(!is_supported_aggregate_ty(&module.ctx, options));
+        assert!(aggregate_shape(&module.ctx, options).is_none());
     }
 
     #[test]

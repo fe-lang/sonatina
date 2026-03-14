@@ -7,7 +7,7 @@ use sonatina_ir::{
         control_flow::{self},
         data, evm, logic,
     },
-    types::CompoundType,
+    types::{CompoundType, CompoundTypeRef, EnumVariantRef},
 };
 
 use crate::{
@@ -271,6 +271,14 @@ fn object_field_ty(
             };
             Some(field_ty)
         }
+        CompoundType::Enum(_) => {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "object projection requires struct or array object type; use enum.proj for enums",
+                location,
+            ));
+            None
+        }
         CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => {
             verifier.emit(Diagnostic::error(
                 DiagnosticCode::InstOperandTypeMismatch,
@@ -280,6 +288,280 @@ fn object_field_ty(
             None
         }
     }
+}
+
+fn enum_value_ty(
+    verifier: &mut FunctionVerifier<'_>,
+    ty: Type,
+    location: crate::diagnostic::Location,
+    opname: &str,
+) -> Option<CompoundTypeRef> {
+    let Type::Compound(cmpd_ref) = ty else {
+        verifier.emit(Diagnostic::error(
+            DiagnosticCode::InstOperandTypeMismatch,
+            format!("{opname} operand must have enum type"),
+            location,
+        ));
+        return None;
+    };
+
+    let Some(cmpd) = verifier
+        .ctx
+        .with_ty_store(|store| store.get_compound(cmpd_ref).cloned())
+    else {
+        verifier.emit(Diagnostic::error(
+            DiagnosticCode::InvalidTypeRef,
+            format!("{opname} references unknown enum type"),
+            location,
+        ));
+        return None;
+    };
+
+    if matches!(cmpd, CompoundType::Enum(_)) {
+        Some(cmpd_ref)
+    } else {
+        verifier.emit(Diagnostic::error(
+            DiagnosticCode::InstOperandTypeMismatch,
+            format!("{opname} operand must have enum type"),
+            location,
+        ));
+        None
+    }
+}
+
+fn enum_object_ty(
+    verifier: &mut FunctionVerifier<'_>,
+    object_ty: Type,
+    location: crate::diagnostic::Location,
+    opname: &str,
+) -> Option<CompoundTypeRef> {
+    let Some(enum_ty) = verifier.objref_ty(object_ty) else {
+        verifier.emit(Diagnostic::error(
+            DiagnosticCode::InstOperandTypeMismatch,
+            format!("{opname} operand must be an object reference to an enum"),
+            location,
+        ));
+        return None;
+    };
+    enum_value_ty(verifier, enum_ty, location, opname)
+}
+
+fn enum_variant_field_ty(
+    verifier: &mut FunctionVerifier<'_>,
+    enum_ty: CompoundTypeRef,
+    variant: EnumVariantRef,
+    field_value: ValueId,
+    location: crate::diagnostic::Location,
+    opname: &str,
+) -> Option<Type> {
+    if variant.enum_ty() != enum_ty {
+        verifier.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} variant does not belong to the operand enum type"),
+                location.clone(),
+            )
+            .with_note(format!(
+                "expected enum {}, found variant for enum {}",
+                enum_ty.as_u32(),
+                variant.enum_ty().as_u32()
+            )),
+        );
+        return None;
+    }
+
+    let Some(field_ty) = verifier.ctx.with_ty_store(|store| {
+        let idx = store.enum_variant_data(variant).and_then(|variant_data| {
+            let imm = verifier.value_imm(field_value)?;
+            if imm.is_negative() {
+                return None;
+            }
+            let index = imm.as_usize();
+            variant_data.fields.get(index).copied()
+        })?;
+        Some(idx)
+    }) else {
+        let index_ty = verifier.value_ty(field_value)?;
+        if !index_ty.is_integral() {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} field index must be integral"),
+                location,
+            ));
+            return None;
+        }
+
+        if let Some(imm) = verifier.value_imm(field_value)
+            && imm.is_negative()
+        {
+            verifier.emit(
+                Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    format!("{opname} field index must be non-negative"),
+                    location,
+                )
+                .with_note(format!("index immediate {:?}", imm)),
+            );
+            return None;
+        }
+
+        verifier.emit(Diagnostic::error(
+            DiagnosticCode::InstOperandTypeMismatch,
+            format!("{opname} field index is out of bounds for the selected variant"),
+            location,
+        ));
+        return None;
+    };
+
+    Some(field_ty)
+}
+
+fn variant_payload_tys(
+    verifier: &mut FunctionVerifier<'_>,
+    enum_ty: CompoundTypeRef,
+    variant: EnumVariantRef,
+    location: crate::diagnostic::Location,
+    opname: &str,
+) -> Option<Vec<Type>> {
+    if variant.enum_ty() != enum_ty {
+        verifier.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} variant does not belong to the operand enum type"),
+                location.clone(),
+            )
+            .with_note(format!(
+                "expected enum {}, found variant for enum {}",
+                enum_ty.as_u32(),
+                variant.enum_ty().as_u32()
+            )),
+        );
+        return None;
+    }
+
+    verifier.ctx.with_ty_store(|store| {
+        store
+            .enum_variant_data(variant)
+            .map(|variant_data| variant_data.fields.clone())
+    })
+}
+
+fn same_block_dominating_enum_assert(
+    verifier: &FunctionVerifier<'_>,
+    use_inst: InstId,
+    value: ValueId,
+    variant: EnumVariantRef,
+) -> bool {
+    let Some(block) = verifier.inst_to_block.get(&use_inst).copied() else {
+        return false;
+    };
+    let Some(insts) = verifier.block_to_insts.get(&block) else {
+        return false;
+    };
+
+    for &inst in insts {
+        if inst == use_inst {
+            break;
+        }
+        if let Some(assert_variant) = sonatina_ir::inst::downcast::<&data::EnumAssertVariant>(
+            verifier.ctx.inst_set,
+            verifier.func.dfg.inst(inst),
+        ) && *assert_variant.value() == value
+            && *assert_variant.variant() == variant
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn same_block_dominating_enum_write(
+    verifier: &FunctionVerifier<'_>,
+    use_inst: InstId,
+    object: ValueId,
+    variant: EnumVariantRef,
+) -> bool {
+    let Some(block) = verifier.inst_to_block.get(&use_inst).copied() else {
+        return false;
+    };
+    let Some(insts) = verifier.block_to_insts.get(&block) else {
+        return false;
+    };
+
+    for &inst in insts {
+        if inst == use_inst {
+            break;
+        }
+        if let Some(write_variant) = sonatina_ir::inst::downcast::<&data::EnumWriteVariant>(
+            verifier.ctx.inst_set,
+            verifier.func.dfg.inst(inst),
+        ) && *write_variant.object() == object
+            && *write_variant.variant() == variant
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn same_block_dominating_enum_assert_ref(
+    verifier: &FunctionVerifier<'_>,
+    use_inst: InstId,
+    object: ValueId,
+    variant: EnumVariantRef,
+) -> bool {
+    let Some(block) = verifier.inst_to_block.get(&use_inst).copied() else {
+        return false;
+    };
+    let Some(insts) = verifier.block_to_insts.get(&block) else {
+        return false;
+    };
+
+    for &inst in insts {
+        if inst == use_inst {
+            break;
+        }
+        if let Some(assert_variant_ref) = sonatina_ir::inst::downcast::<&data::EnumAssertVariantRef>(
+            verifier.ctx.inst_set,
+            verifier.func.dfg.inst(inst),
+        ) && *assert_variant_ref.object() == object
+            && *assert_variant_ref.variant() == variant
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn same_block_dominating_obj_store(
+    verifier: &FunctionVerifier<'_>,
+    use_inst: InstId,
+    object: ValueId,
+) -> bool {
+    let Some(block) = verifier.inst_to_block.get(&use_inst).copied() else {
+        return false;
+    };
+    let Some(insts) = verifier.block_to_insts.get(&block) else {
+        return false;
+    };
+
+    for &inst in insts {
+        if inst == use_inst {
+            break;
+        }
+        if let Some(store) = sonatina_ir::inst::downcast::<&data::ObjStore>(
+            verifier.ctx.inst_set,
+            verifier.func.dfg.inst(inst),
+        ) && *store.object() == object
+        {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn expect_objref_result(
@@ -661,6 +943,31 @@ impl VerifyInst for data::ObjLoad {
                 location.clone(),
             ));
         }
+        if let Some(proj_inst) = verifier.func.dfg.value_inst(*self.object())
+            && let Some(enum_proj) = sonatina_ir::inst::downcast::<&data::EnumProj>(
+                verifier.ctx.inst_set,
+                verifier.func.dfg.inst(proj_inst),
+            )
+            && !same_block_dominating_enum_write(
+                verifier,
+                inst_id,
+                *enum_proj.object(),
+                *enum_proj.variant(),
+            )
+            && !same_block_dominating_enum_assert_ref(
+                verifier,
+                inst_id,
+                *enum_proj.object(),
+                *enum_proj.variant(),
+            )
+            && !same_block_dominating_obj_store(verifier, inst_id, *self.object())
+        {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "obj.load from enum.proj requires a proven initialized active variant field",
+                location.clone(),
+            ));
+        }
         verifier.expect_result_ty(inst_id, value_ty, location);
     }
 }
@@ -699,6 +1006,317 @@ impl VerifyInst for data::ObjStore {
             );
         }
         verifier.expect_no_result(inst_id, location);
+    }
+}
+
+impl VerifyInst for data::EnumMake {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let Some(enum_ty) = enum_value_ty(verifier, *self.ty(), location.clone(), "enum.make")
+        else {
+            return;
+        };
+        let Some(payload_tys) = variant_payload_tys(
+            verifier,
+            enum_ty,
+            *self.variant(),
+            location.clone(),
+            "enum.make",
+        ) else {
+            return;
+        };
+
+        if payload_tys.len() != self.values().len() {
+            verifier.emit(
+                Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    "enum.make payload arity does not match variant payload",
+                    location.clone(),
+                )
+                .with_note(format!(
+                    "expected {}, found {}",
+                    payload_tys.len(),
+                    self.values().len()
+                )),
+            );
+        }
+
+        for (&value, &expected_ty) in self.values().iter().zip(payload_tys.iter()) {
+            let Some(actual_ty) = verifier.value_ty(value) else {
+                return;
+            };
+            if actual_ty != expected_ty {
+                verifier.emit(
+                    Diagnostic::error(
+                        DiagnosticCode::InstOperandTypeMismatch,
+                        "enum.make payload type does not match the selected variant field type",
+                        location.clone(),
+                    )
+                    .with_note(format!("expected {:?}, found {:?}", expected_ty, actual_ty)),
+                );
+            }
+        }
+
+        verifier.expect_result_ty(inst_id, *self.ty(), location);
+    }
+}
+
+impl VerifyInst for data::EnumTag {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let Some(value_ty) = verifier.value_ty(*self.value()) else {
+            return;
+        };
+        let Some(enum_ty) = enum_value_ty(verifier, value_ty, location.clone(), "enum.tag") else {
+            return;
+        };
+        verifier.expect_result_ty(inst_id, Type::EnumTag(enum_ty), location);
+    }
+}
+
+impl VerifyInst for data::EnumIsVariant {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let Some(value_ty) = verifier.value_ty(*self.value()) else {
+            return;
+        };
+        let Some(enum_ty) = enum_value_ty(verifier, value_ty, location.clone(), "enum.is_variant")
+        else {
+            return;
+        };
+        if variant_payload_tys(
+            verifier,
+            enum_ty,
+            *self.variant(),
+            location.clone(),
+            "enum.is_variant",
+        )
+        .is_none()
+        {
+            return;
+        }
+        verifier.expect_result_ty(inst_id, Type::I1, location);
+    }
+}
+
+impl VerifyInst for data::EnumAssertVariant {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let Some(value_ty) = verifier.value_ty(*self.value()) else {
+            return;
+        };
+        let Some(enum_ty) =
+            enum_value_ty(verifier, value_ty, location.clone(), "enum.assert_variant")
+        else {
+            return;
+        };
+        if variant_payload_tys(
+            verifier,
+            enum_ty,
+            *self.variant(),
+            location.clone(),
+            "enum.assert_variant",
+        )
+        .is_none()
+        {
+            return;
+        }
+        verifier.expect_no_result(inst_id, location);
+    }
+}
+
+impl VerifyInst for data::EnumExtract {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let Some(value_ty) = verifier.value_ty(*self.value()) else {
+            return;
+        };
+        let Some(enum_ty) = enum_value_ty(verifier, value_ty, location.clone(), "enum.extract")
+        else {
+            return;
+        };
+        let Some(field_ty) = enum_variant_field_ty(
+            verifier,
+            enum_ty,
+            *self.variant(),
+            *self.field(),
+            location.clone(),
+            "enum.extract",
+        ) else {
+            return;
+        };
+
+        let proven = verifier
+            .func
+            .dfg
+            .value_inst(*self.value())
+            .and_then(|def_inst| {
+                sonatina_ir::inst::downcast::<&data::EnumMake>(
+                    verifier.ctx.inst_set,
+                    verifier.func.dfg.inst(def_inst),
+                )
+                .map(|make| *make.variant() == *self.variant())
+            })
+            .unwrap_or(false)
+            || same_block_dominating_enum_assert(verifier, inst_id, *self.value(), *self.variant());
+
+        if !proven {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "enum.extract requires a proven active variant at the use site",
+                location.clone(),
+            ));
+        }
+
+        verifier.expect_result_ty(inst_id, field_ty, location);
+    }
+}
+
+impl VerifyInst for data::EnumAssertVariantRef {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let Some(object_ty) = verifier.value_ty(*self.object()) else {
+            return;
+        };
+        let Some(enum_ty) = enum_object_ty(
+            verifier,
+            object_ty,
+            location.clone(),
+            "enum.assert_variant_ref",
+        ) else {
+            return;
+        };
+        if variant_payload_tys(
+            verifier,
+            enum_ty,
+            *self.variant(),
+            location.clone(),
+            "enum.assert_variant_ref",
+        )
+        .is_none()
+        {
+            return;
+        }
+        verifier.expect_no_result(inst_id, location);
+    }
+}
+
+impl VerifyInst for data::EnumSetTag {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let Some(object_ty) = verifier.value_ty(*self.object()) else {
+            return;
+        };
+        let Some(enum_ty) = enum_object_ty(verifier, object_ty, location.clone(), "enum.set_tag")
+        else {
+            return;
+        };
+        if variant_payload_tys(
+            verifier,
+            enum_ty,
+            *self.variant(),
+            location.clone(),
+            "enum.set_tag",
+        )
+        .is_none()
+        {
+            return;
+        }
+        verifier.expect_no_result(inst_id, location);
+    }
+}
+
+impl VerifyInst for data::EnumWriteVariant {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let Some(object_ty) = verifier.value_ty(*self.object()) else {
+            return;
+        };
+        let Some(enum_ty) =
+            enum_object_ty(verifier, object_ty, location.clone(), "enum.write_variant")
+        else {
+            return;
+        };
+        let Some(payload_tys) = variant_payload_tys(
+            verifier,
+            enum_ty,
+            *self.variant(),
+            location.clone(),
+            "enum.write_variant",
+        ) else {
+            return;
+        };
+
+        if payload_tys.len() != self.values().len() {
+            verifier.emit(
+                Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    "enum.write_variant payload arity does not match variant payload",
+                    location.clone(),
+                )
+                .with_note(format!(
+                    "expected {}, found {}",
+                    payload_tys.len(),
+                    self.values().len()
+                )),
+            );
+        }
+
+        for (&value, &expected_ty) in self.values().iter().zip(payload_tys.iter()) {
+            let Some(actual_ty) = verifier.value_ty(value) else {
+                return;
+            };
+            if actual_ty != expected_ty {
+                verifier.emit(
+                    Diagnostic::error(
+                        DiagnosticCode::InstOperandTypeMismatch,
+                        "enum.write_variant payload type does not match the selected variant field type",
+                        location.clone(),
+                    )
+                    .with_note(format!("expected {:?}, found {:?}", expected_ty, actual_ty)),
+                );
+            }
+        }
+
+        verifier.expect_no_result(inst_id, location);
+    }
+}
+
+impl VerifyInst for data::EnumGetTag {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let Some(object_ty) = verifier.value_ty(*self.object()) else {
+            return;
+        };
+        let Some(enum_ty) = enum_object_ty(verifier, object_ty, location.clone(), "enum.get_tag")
+        else {
+            return;
+        };
+        verifier.expect_result_ty(inst_id, Type::EnumTag(enum_ty), location);
+    }
+}
+
+impl VerifyInst for data::EnumProj {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let Some(object_ty) = verifier.value_ty(*self.object()) else {
+            return;
+        };
+        let Some(enum_ty) = enum_object_ty(verifier, object_ty, location.clone(), "enum.proj")
+        else {
+            return;
+        };
+        let Some(field_ty) = enum_variant_field_ty(
+            verifier,
+            enum_ty,
+            *self.variant(),
+            *self.field(),
+            location.clone(),
+            "enum.proj",
+        ) else {
+            return;
+        };
+        expect_objref_result(verifier, inst_id, field_ty, location, "enum.proj");
     }
 }
 
@@ -1006,10 +1624,11 @@ impl VerifyInst for control_flow::BrTable {
             verifier.expect_no_result(inst_id, location);
             return;
         };
-        if !scrutinee_ty.is_integral() {
+        let enum_tag_scrutinee = scrutinee_ty.is_enum_tag();
+        if !enum_tag_scrutinee && !scrutinee_ty.is_integral() {
             verifier.emit(Diagnostic::error(
                 DiagnosticCode::InstOperandTypeMismatch,
-                "br_table scrutinee must be integral",
+                "br_table scrutinee must be integral or an enum tag",
                 location.clone(),
             ));
         }

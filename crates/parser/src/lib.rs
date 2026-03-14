@@ -70,6 +70,29 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
     }
 
     {
+        let _span = debug_span!("sonatina.parse.declare_enums").entered();
+        for enum_ in ast.enum_types {
+            let name = &enum_.name.0;
+            builder.declare_enum_type(name, &[], ir::types::EnumReprHint::Default);
+
+            let variants = enum_
+                .variants
+                .iter()
+                .map(|variant| ir::types::VariantData {
+                    name: variant.name.0.to_string(),
+                    explicit_discriminant: None,
+                    fields: variant
+                        .fields
+                        .iter()
+                        .map(|t| ctx.type_(&builder, t))
+                        .collect(),
+                })
+                .collect::<Vec<_>>();
+            builder.update_enum_variants(name, &variants, ir::types::EnumReprHint::Default);
+        }
+    }
+
+    {
         let _span = debug_span!("sonatina.parse.declare_globals").entered();
         for gv in ast.declared_gvs {
             ctx.declare_gv(&builder, &gv);
@@ -199,6 +222,32 @@ struct BuildCtx {
 }
 
 impl BuildCtx {
+    fn enum_variant(
+        &mut self,
+        mb: &ModuleBuilder,
+        enum_ty: ir::Type,
+        variant: &ast::VariantName,
+        span: Span,
+    ) -> ir::types::EnumVariantRef {
+        let ir::Type::Compound(cmpd_ref) = enum_ty else {
+            self.errors.push(Error::TypeError {
+                expected: "enum type".to_string(),
+                span,
+            });
+            return ir::types::EnumVariantRef::new(ir::types::CompoundTypeRef::from_u32(0), 0);
+        };
+
+        mb.ctx
+            .with_ty_store(|store| store.enum_variant_ref(cmpd_ref, &variant.0))
+            .unwrap_or_else(|| {
+                self.errors.push(Error::Undefined(
+                    UndefinedKind::Variant(variant.0.clone()),
+                    span,
+                ));
+                ir::types::EnumVariantRef::new(cmpd_ref, 0)
+            })
+    }
+
     fn build_func(
         &mut self,
         mut fb: FunctionBuilder<InstInserter>,
@@ -398,13 +447,23 @@ impl BuildCtx {
                 let t = self.type_(mb, t);
                 mb.objref_type(t)
             }
+            ast::TypeKind::EnumTag(name) => mb
+                .lookup_enum(&name.0)
+                .map(ir::Type::EnumTag)
+                .unwrap_or_else(|| {
+                    self.errors.push(Error::Undefined(
+                        UndefinedKind::Type(name.0.clone()),
+                        t.span,
+                    ));
+                    ir::Type::Unit
+                }),
             ast::TypeKind::Array(t, n) => {
                 let elem = self.type_(mb, t);
                 mb.declare_array_type(elem, *n)
             }
             ast::TypeKind::Unit => ir::Type::Unit,
-            ast::TypeKind::Struct(name) => mb
-                .lookup_struct(name)
+            ast::TypeKind::Named(name) => mb
+                .lookup_named_type(name)
                 .map(Type::Compound)
                 .unwrap_or_else(|| {
                     self.errors

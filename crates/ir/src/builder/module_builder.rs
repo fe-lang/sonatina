@@ -9,7 +9,7 @@ use crate::{
     Function, GlobalVariableData, GlobalVariableRef, InstSetBase, Module, Object, Signature, Type,
     func_cursor::{CursorLocation, FuncCursor},
     module::{FuncRef, FuncStore, ModuleCtx},
-    types::{CompoundType, CompoundTypeRef},
+    types::{CompoundType, CompoundTypeRef, EnumReprHint, VariantData},
 };
 
 #[derive(Clone)]
@@ -123,6 +123,16 @@ impl ModuleBuilder {
             .with_ty_store_mut(|s| s.make_struct(name, fields, packed))
     }
 
+    pub fn declare_enum_type(
+        &self,
+        name: &str,
+        variants: &[VariantData],
+        repr: EnumReprHint,
+    ) -> Type {
+        self.ctx
+            .with_ty_store_mut(|s| s.make_enum(name, variants, repr))
+    }
+
     pub fn declare_array_type(&self, elem: Type, len: usize) -> Type {
         self.ctx.with_ty_store_mut(|s| s.make_array(elem, len))
     }
@@ -141,6 +151,14 @@ impl ModuleBuilder {
 
     pub fn lookup_struct(&self, name: &str) -> Option<CompoundTypeRef> {
         self.ctx.with_ty_store(|s| s.lookup_struct(name))
+    }
+
+    pub fn lookup_enum(&self, name: &str) -> Option<CompoundTypeRef> {
+        self.ctx.with_ty_store(|s| s.lookup_enum(name))
+    }
+
+    pub fn lookup_named_type(&self, name: &str) -> Option<CompoundTypeRef> {
+        self.ctx.with_ty_store(|s| s.lookup_named_type(name))
     }
 
     pub fn sig<F, R>(&self, func_ref: FuncRef, f: F) -> R
@@ -163,6 +181,11 @@ impl ModuleBuilder {
     pub fn update_struct_fields(&self, name: &str, fields: &[Type]) {
         self.ctx
             .with_ty_store_mut(|s| s.update_struct_fields(name, fields));
+    }
+
+    pub fn update_enum_variants(&self, name: &str, variants: &[VariantData], repr: EnumReprHint) {
+        self.ctx
+            .with_ty_store_mut(|s| s.update_enum_variants(name, variants, repr));
     }
 
     #[doc(hidden)]

@@ -114,6 +114,7 @@ fn build_return(
                     ast::InstArgKind::Value(_) => "value",
                     ast::InstArgKind::MultiValue(_) => "(value, ...)",
                     ast::InstArgKind::Ty(_) => "type",
+                    ast::InstArgKind::Variant(_) => "variant name",
                     ast::InstArgKind::Block(_) => "block",
                     ast::InstArgKind::ValueBlockMap(_) => "(value, block)",
                     ast::InstArgKind::FuncRef(_) => "function name",

@@ -485,6 +485,28 @@ impl ObjRefTypeLowerer {
                 self.changed = true;
                 mapped
             }
+            CompoundType::Enum(data) => {
+                let new_variants: Vec<_> = data
+                    .variants
+                    .iter()
+                    .map(|variant| sonatina_ir::types::VariantData {
+                        name: variant.name.clone(),
+                        explicit_discriminant: variant.explicit_discriminant,
+                        fields: variant
+                            .fields
+                            .iter()
+                            .map(|&field| self.rewrite_type(ctx, field))
+                            .collect(),
+                    })
+                    .collect();
+                if new_variants != data.variants {
+                    ctx.with_ty_store_mut(|store| {
+                        store.update_enum_variants(&data.name, &new_variants, data.repr)
+                    });
+                    self.changed = true;
+                }
+                compound
+            }
             CompoundType::Func { args, ret_tys } => {
                 let args: Vec<_> = args
                     .iter()
@@ -582,6 +604,11 @@ mod tests {
                 CompoundType::Array { elem, .. } | CompoundType::Ptr(elem) => worklist.push(elem),
                 CompoundType::ObjRef(_) => return true,
                 CompoundType::Struct(data) => worklist.extend(data.fields),
+                CompoundType::Enum(data) => {
+                    for variant in data.variants {
+                        worklist.extend(variant.fields);
+                    }
+                }
                 CompoundType::Func { args, ret_tys } => {
                     worklist.extend(args);
                     worklist.extend(ret_tys);

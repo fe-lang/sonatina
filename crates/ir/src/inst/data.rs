@@ -7,6 +7,7 @@ use crate::{
     EmbedSymbol, GlobalVariableRef, Type, ValueId,
     ir_writer::IrWrite,
     module::{FuncRef, ModuleCtx},
+    types::EnumVariantRef,
     visitor::{Visitable, VisitableMut},
 };
 
@@ -125,6 +126,85 @@ pub struct ObjLoad {
 pub struct ObjStore {
     object: ValueId,
     value: ValueId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(arity(at_least(2)))]
+#[inst(text = "enum.make")]
+pub struct EnumMake {
+    ty: Type,
+    variant: EnumVariantRef,
+    values: SmallVec<[ValueId; 2]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(text = "enum.tag")]
+pub struct EnumTag {
+    value: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(text = "enum.is_variant")]
+pub struct EnumIsVariant {
+    value: ValueId,
+    variant: EnumVariantRef,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(super::SideEffect::Control))]
+#[inst(text = "enum.assert_variant")]
+pub struct EnumAssertVariant {
+    value: ValueId,
+    variant: EnumVariantRef,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(super::SideEffect::Control))]
+#[inst(text = "enum.assert_variant_ref")]
+pub struct EnumAssertVariantRef {
+    object: ValueId,
+    variant: EnumVariantRef,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(text = "enum.extract")]
+pub struct EnumExtract {
+    value: ValueId,
+    variant: EnumVariantRef,
+    field: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(super::SideEffect::Write))]
+#[inst(text = "enum.set_tag")]
+pub struct EnumSetTag {
+    object: ValueId,
+    variant: EnumVariantRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(arity(at_least(2)))]
+#[inst(side_effect(super::SideEffect::Write))]
+#[inst(text = "enum.write_variant")]
+pub struct EnumWriteVariant {
+    object: ValueId,
+    variant: EnumVariantRef,
+    values: SmallVec<[ValueId; 2]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(super::SideEffect::Read))]
+#[inst(text = "enum.get_tag")]
+pub struct EnumGetTag {
+    object: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(text = "enum.proj")]
+pub struct EnumProj {
+    object: ValueId,
+    variant: EnumVariantRef,
+    field: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]

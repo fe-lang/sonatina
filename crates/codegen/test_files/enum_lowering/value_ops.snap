@@ -1,0 +1,22 @@
+---
+source: crates/codegen/tests/enum_lowering.rs
+input_file: test_files/enum_lowering/value_ops.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @__enum_lowered_OptionI256_0 = {i1, i256};
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %use_value(v0.i256) -> i256 {
+    block0:
+        v9.@__enum_lowered_OptionI256_0 = insert_value undef.@__enum_lowered_OptionI256_0 0.i64 1.i1;
+        v11.@__enum_lowered_OptionI256_0 = insert_value v9 1.i64 v0;
+        v12.i1 = extract_value v11 0.i64;
+        v13.i1 = extract_value v11 0.i64;
+        v14.i1 = eq v13 1.i1;
+        v15.i256 = extract_value v11 1.i64;
+        return v15;
+}

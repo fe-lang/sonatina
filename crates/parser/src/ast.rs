@@ -43,6 +43,7 @@ pub struct Module {
     pub declared_functions: Vec<FuncDeclaration>,
     pub declared_gvs: Vec<GlobalVariable>,
     pub struct_types: Vec<Struct>,
+    pub enum_types: Vec<Enum>,
     pub functions: Vec<Func>,
     pub objects: Vec<ObjectDefinition>,
     pub comments: Vec<String>,
@@ -68,6 +69,7 @@ impl FromSyntax<Error> for Module {
         });
 
         let mut struct_types = vec![];
+        let mut enum_types = vec![];
         let mut declared_functions = vec![];
         let mut declared_gvs = vec![];
         let mut functions = vec![];
@@ -84,6 +86,8 @@ impl FromSyntax<Error> for Module {
 
             if let Some(struct_) = node.single_opt(Rule::struct_declaration) {
                 struct_types.push(struct_);
+            } else if let Some(enum_) = node.single_opt(Rule::enum_declaration) {
+                enum_types.push(enum_);
             } else if let Some(func) = node.single_opt(Rule::function_declaration) {
                 declared_functions.push(func);
             } else if let Some(gv) = node.single_opt(Rule::gv_declaration) {
@@ -110,6 +114,7 @@ impl FromSyntax<Error> for Module {
             declared_functions,
             declared_gvs,
             struct_types,
+            enum_types,
             functions,
             objects,
             comments: module_comments,
@@ -291,6 +296,47 @@ pub struct StructName(pub SmolStr);
 impl FromSyntax<Error> for StructName {
     fn from_syntax(node: &mut Node<Error>) -> Self {
         Self(node.single(Rule::struct_name))
+    }
+}
+
+#[derive(Debug)]
+pub struct Enum {
+    pub name: StructName,
+    pub variants: Vec<Variant>,
+}
+
+impl FromSyntax<Error> for Enum {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        Self {
+            name: node.single(Rule::struct_identifier),
+            variants: node.descend_into(Rule::enum_variant_list, |n| n.multi(Rule::enum_variant)),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Variant {
+    pub name: VariantName,
+    pub fields: Vec<Type>,
+}
+
+impl FromSyntax<Error> for Variant {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        Self {
+            name: node.single(Rule::variant_identifier),
+            fields: node
+                .descend_into_opt(Rule::enum_variant_fields, |n| n.multi(Rule::type_name))
+                .unwrap_or_default(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct VariantName(pub SmolStr);
+
+impl FromSyntax<Error> for VariantName {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        Self(node.single(Rule::variant_name))
     }
 }
 
@@ -559,6 +605,22 @@ impl<'a> TryFrom<&'a InstArg> for &'a FunctionName {
     }
 }
 
+impl<'a> TryFrom<&'a InstArg> for &'a VariantName {
+    type Error = Box<Error>;
+
+    fn try_from(arg: &'a InstArg) -> Result<Self, Self::Error> {
+        if let InstArgKind::Variant(name) = &arg.kind {
+            Ok(name)
+        } else {
+            Err(Box::new(Error::InstArgKindMismatch {
+                expected: "variant name".into(),
+                actual: arg.kind.discriminant_name().into(),
+                span: arg.span,
+            }))
+        }
+    }
+}
+
 impl FromSyntax<Error> for InstArg {
     fn from_syntax(node: &mut Node<Error>) -> Self {
         let kind = if let Some(value) = node.single_opt(Rule::value) {
@@ -569,6 +631,8 @@ impl FromSyntax<Error> for InstArg {
             InstArgKind::MultiValue(values)
         } else if let Some(ty) = node.single_opt(Rule::type_name) {
             InstArgKind::Ty(ty)
+        } else if let Some(variant) = node.single_opt(Rule::variant_identifier) {
+            InstArgKind::Variant(variant)
         } else if let Some(block) = node.single_opt(Rule::block_ident) {
             InstArgKind::Block(block)
         } else if let Some(vb_map) = node.single_opt(Rule::value_block_map) {
@@ -595,6 +659,7 @@ pub enum InstArgKind {
     Value(Value),
     MultiValue(Vec<Value>),
     Ty(Type),
+    Variant(VariantName),
     Block(BlockId),
     ValueBlockMap((Value, BlockId)),
     FuncRef(FunctionName),
@@ -608,6 +673,7 @@ impl InstArgKind {
             Self::Value(_) => "value",
             Self::MultiValue(_) => "(value, ...)",
             Self::Ty(_) => "type",
+            Self::Variant(_) => "variant name",
             Self::Block(_) => "block",
             Self::ValueBlockMap(_) => "(value, block)",
             Self::FuncRef(_) => "function name",
@@ -638,6 +704,7 @@ impl FromSyntax<Error> for Type {
             Rule::primitive_type => TypeKind::Int(IntType::from_str(node.txt).unwrap()),
             Rule::ptr_type => TypeKind::Ptr(Box::new(node.single(Rule::type_name))),
             Rule::objref_type => TypeKind::ObjRef(Box::new(node.single(Rule::type_name))),
+            Rule::enumtag_type => TypeKind::EnumTag(node.single(Rule::struct_identifier)),
             Rule::array_type => {
                 let Ok(size) = usize::from_str(node.get(Rule::array_size).as_str()) else {
                     node.error(Error::NumberOutOfBounds(node.span));
@@ -649,7 +716,7 @@ impl FromSyntax<Error> for Type {
                 TypeKind::Array(Box::new(node.single(Rule::type_name)), size)
             }
             Rule::unit_type => TypeKind::Unit,
-            Rule::struct_identifier => TypeKind::Struct(node.parse_str(Rule::struct_name)),
+            Rule::struct_identifier => TypeKind::Named(node.parse_str(Rule::struct_name)),
             Rule::function_type => {
                 let args = node.descend_into(Rule::function_type_arg, |n| n.multi(Rule::type_name));
                 let ret_tys =
@@ -670,8 +737,9 @@ pub enum TypeKind {
     Int(IntType),
     Ptr(Box<Type>),
     ObjRef(Box<Type>),
+    EnumTag(StructName),
     Array(Box<Type>, usize),
-    Struct(SmolStr),
+    Named(SmolStr),
     Func { args: Vec<Type>, ret_tys: Vec<Type> },
     Unit,
     Error,

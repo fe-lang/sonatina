@@ -37,7 +37,8 @@ use crate::{
     optim::{
         aggregate::{
             AggregateExpandAbi, AggregateLowerToMemoryLegalize, AggregateScalarize,
-            ObjectLowerToMemory, ObjectReturnOutParam, assert_aggregate_legalized, shape,
+            EnumLowerToProduct, ObjectLowerToMemory, ObjectReturnOutParam,
+            assert_aggregate_legalized, shape,
         },
         cfg_cleanup::CfgCleanup,
     },
@@ -1549,6 +1550,7 @@ fn type_is_legalized_evm(ctx: &ModuleCtx, ty: Type, seen: &mut FxHashSet<Compoun
     match ty {
         Type::I1 | Type::I256 | Type::Unit => true,
         Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 => false,
+        Type::EnumTag(_) => false,
         Type::Compound(compound) => {
             if !seen.insert(compound) {
                 return true;
@@ -1567,6 +1569,7 @@ fn type_is_legalized_evm(ctx: &ModuleCtx, ty: Type, seen: &mut FxHashSet<Compoun
                     .fields
                     .iter()
                     .all(|&field| type_is_legalized_evm(ctx, field, seen)),
+                CompoundType::Enum(_) => false,
             }
         }
     }
@@ -1746,6 +1749,7 @@ impl LowerBackend for EvmBackend {
 
         let _span =
             info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
+        EnumLowerToProduct.run(module);
         ObjectReturnOutParam.run(module);
         ObjectLowerToMemory.run(module);
         AggregateExpandAbi::default().run(module);
@@ -1985,9 +1989,10 @@ impl LowerBackend for EvmBackend {
         }
 
         let closure = collect_call_closure(module, std::slice::from_ref(&func));
-        AggregateExpandAbi::default().run(module);
+        EnumLowerToProduct.run(module);
         ObjectReturnOutParam.run(module);
         ObjectLowerToMemory.run(module);
+        AggregateExpandAbi::default().run(module);
         legalize_evm_section(module, &closure);
         for &callee in &closure {
             module.func_store.modify(callee, |function| {
@@ -2591,11 +2596,21 @@ impl LowerBackend for EvmBackend {
             | EvmInstKind::ObjIndex(_)
             | EvmInstKind::ObjLoad(_)
             | EvmInstKind::ObjStore(_)
+            | EvmInstKind::EnumMake(_)
+            | EvmInstKind::EnumTag(_)
+            | EvmInstKind::EnumIsVariant(_)
+            | EvmInstKind::EnumAssertVariant(_)
+            | EvmInstKind::EnumAssertVariantRef(_)
+            | EvmInstKind::EnumExtract(_)
+            | EvmInstKind::EnumSetTag(_)
+            | EvmInstKind::EnumWriteVariant(_)
+            | EvmInstKind::EnumGetTag(_)
+            | EvmInstKind::EnumProj(_)
             | EvmInstKind::ObjMaterializeStack(_)
             | EvmInstKind::ObjMaterializeHeap(_)
             | EvmInstKind::MemAllocDynamic(_) => {
                 panic!(
-                    "object lowering invariant violated: object-level instruction reached EVM lowering"
+                    "enum/object lowering invariant violated: high-level enum/object instruction reached EVM lowering"
                 )
             }
 
@@ -3161,6 +3176,9 @@ fn build_gep_lower_plan(ctx: &Lower<OpCode>, args: &[ValueId]) -> GepLowerPlan {
             CompoundType::Func { .. } => {
                 panic!("invalid gep: indexing into function type");
             }
+            CompoundType::Enum(_) => {
+                panic!("invalid gep: indexing into enum type");
+            }
             CompoundType::ObjRef(_) => {
                 panic!("invalid gep: indexing into object-reference type");
             }
@@ -3332,6 +3350,9 @@ fn perform_action(ctx: &mut Lower<OpCode>, action: Action, frame_size_slots: u32
                     Immediate::I64(v) => shrink_bytes(&v.to_be_bytes()),
                     Immediate::I128(v) => shrink_bytes(&v.to_be_bytes()),
                     Immediate::I256(v) => shrink_bytes(&v.to_u256().to_big_endian()),
+                    Immediate::EnumTag { value, .. } => {
+                        shrink_bytes(&value.to_u256().to_big_endian())
+                    }
                 };
                 push_bytes(ctx, &bytes);
 
@@ -3440,6 +3461,7 @@ fn scalar_bit_width(ty: Type, module: &sonatina_ir::module::ModuleCtx) -> Option
         Type::I64 => 64,
         Type::I128 => 128,
         Type::I256 => 256,
+        Type::EnumTag(_) => return None,
         Type::Unit => 0,
         Type::Compound(_) if ty.is_pointer(module) => 256,
         Type::Compound(_) => return None,

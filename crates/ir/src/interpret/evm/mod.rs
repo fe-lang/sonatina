@@ -12,6 +12,7 @@ fn bits_for_ty(ty: Type) -> u32 {
         Type::I64 => 64,
         Type::I128 => 128,
         Type::I256 => 256,
+        Type::EnumTag(_) => unreachable!(),
         Type::Compound(_) | Type::Unit => unreachable!(),
     }
 }

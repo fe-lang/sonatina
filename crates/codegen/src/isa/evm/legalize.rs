@@ -49,6 +49,9 @@ impl TypeLegalizer {
             Type::I1 => Type::I1,
             Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 => Type::I256,
             Type::I256 | Type::Unit => ty,
+            Type::EnumTag(_) => {
+                panic!("enum tags must be lowered before EVM type legalization");
+            }
             Type::Compound(compound) => Type::Compound(self.legalize_compound(ctx, compound)),
         }
     }
@@ -82,6 +85,9 @@ impl TypeLegalizer {
             }
             CompoundType::ObjRef(_) => {
                 panic!("object references must be lowered before EVM type legalization");
+            }
+            CompoundType::Enum(_) => {
+                panic!("enum types must be lowered before EVM type legalization");
             }
             CompoundType::Func { args, ret_tys } => {
                 let args: SmallVec<[Type; 8]> = args
@@ -121,6 +127,7 @@ fn scalar_width_for_type(ctx: &ModuleCtx, ty: Type) -> Option<ScalarWidth> {
         Type::I64 => Some(ScalarWidth::Narrow(64)),
         Type::I128 => Some(ScalarWidth::Narrow(128)),
         Type::I256 => Some(ScalarWidth::Full256),
+        Type::EnumTag(_) => None,
         Type::Compound(_) if ty.is_pointer(ctx) => Some(ScalarWidth::Full256),
         Type::Compound(_) | Type::Unit => None,
     }
@@ -131,6 +138,7 @@ fn legalize_immediate(imm: sonatina_ir::Immediate) -> sonatina_ir::Immediate {
         Type::I1 => imm,
         Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 => imm.zext(Type::I256),
         Type::I256 => imm,
+        Type::EnumTag(_) => unreachable!(),
         Type::Compound(_) | Type::Unit => unreachable!(),
     }
 }

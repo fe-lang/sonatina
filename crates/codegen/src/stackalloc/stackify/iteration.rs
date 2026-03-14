@@ -1018,5 +1018,6 @@ fn imm_push_data_len(imm: Immediate) -> usize {
         Immediate::I64(v) => shrink_len(&v.to_be_bytes()),
         Immediate::I128(v) => shrink_len(&v.to_be_bytes()),
         Immediate::I256(v) => shrink_len(&v.to_u256().to_big_endian()),
+        Immediate::EnumTag { value, .. } => shrink_len(&value.to_u256().to_big_endian()),
     }
 }

@@ -182,6 +182,27 @@ impl PrivateAbiTypeRewriter {
                 self.compound_map.insert(compound, mapped);
                 mapped
             }
+            CompoundType::Enum(data) => {
+                let new_variants: Vec<_> = data
+                    .variants
+                    .iter()
+                    .map(|variant| sonatina_ir::types::VariantData {
+                        name: variant.name.clone(),
+                        explicit_discriminant: variant.explicit_discriminant,
+                        fields: variant
+                            .fields
+                            .iter()
+                            .map(|&field| self.rewrite_type(ctx, field))
+                            .collect(),
+                    })
+                    .collect();
+                if new_variants != data.variants {
+                    ctx.with_ty_store_mut(|store| {
+                        store.update_enum_variants(&data.name, &new_variants, data.repr)
+                    });
+                }
+                compound
+            }
             CompoundType::Func { args, ret_tys } => {
                 let args: Vec<_> = args
                     .iter()
@@ -572,6 +593,11 @@ fn collect_nested_planned_func_types(
             | CompoundType::ObjRef(elem) => {
                 stack.push(elem);
             }
+            CompoundType::Enum(data) => stack.extend(
+                data.variants
+                    .into_iter()
+                    .flat_map(|variant| variant.fields.into_iter()),
+            ),
             CompoundType::Struct(data) => stack.extend(data.fields),
             CompoundType::Func { args, ret_tys } => {
                 stack.extend(args);

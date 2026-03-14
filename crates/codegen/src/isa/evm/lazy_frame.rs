@@ -929,6 +929,7 @@ fn scalar_bit_width(ty: Type, module: &sonatina_ir::module::ModuleCtx) -> Option
         Type::I64 => 64,
         Type::I128 => 128,
         Type::I256 => 256,
+        Type::EnumTag(_) => return None,
         Type::Unit => 0,
         Type::Compound(_) if ty.is_pointer(module) => 256,
         Type::Compound(_) => return None,

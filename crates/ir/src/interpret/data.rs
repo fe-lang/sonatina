@@ -51,6 +51,7 @@ impl Interpret for Gep {
                 | Type::I64
                 | Type::I128
                 | Type::I256
+                | Type::EnumTag(_)
                 | Type::Unit => {
                     panic!(
                         "Invalid GEP: indexing into a scalar type or unit with more indices remaining"
@@ -79,6 +80,10 @@ impl Interpret for Gep {
 
                 CompoundType::ObjRef(_) => {
                     panic!("Invalid GEP: indexing into an object reference");
+                }
+
+                CompoundType::Enum(_) => {
+                    panic!("Invalid GEP: indexing into an enum type");
                 }
 
                 CompoundType::Struct(s) => {
@@ -148,6 +153,7 @@ impl Interpret for InsertValue {
                 let len = match ty.resolve_compound(&state.dfg().ctx).unwrap() {
                     CompoundType::Array { len, .. } => len,
                     CompoundType::Struct(s) => s.fields.len(),
+                    CompoundType::Enum(_) => unreachable!(),
                     CompoundType::Ptr(_) => unreachable!(),
                     CompoundType::ObjRef(_) => unreachable!(),
                     CompoundType::Func { .. } => unreachable!(),

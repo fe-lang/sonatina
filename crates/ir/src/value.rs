@@ -8,6 +8,7 @@ use crate::{
     inst::InstId,
     ir_writer::{FuncWriteCtx, IrWrite},
     module::ModuleCtx,
+    types::CompoundTypeRef,
 };
 
 /// An opaque reference to [`Value`].
@@ -90,6 +91,10 @@ pub enum Immediate {
     I64(i64),
     I128(i128),
     I256(I256),
+    EnumTag {
+        enum_ty: CompoundTypeRef,
+        value: I256,
+    },
 }
 
 impl Immediate {
@@ -102,6 +107,7 @@ impl Immediate {
             Self::I64(..) => Type::I64,
             Self::I128(..) => Type::I128,
             Self::I256(..) => Type::I256,
+            Self::EnumTag { enum_ty, .. } => Type::EnumTag(*enum_ty),
         }
     }
 
@@ -168,6 +174,7 @@ impl Immediate {
             Self::I64(val) => (val as u64).into(),
             Self::I128(val) => (val as u128).into(),
             Self::I256(val) => val,
+            Self::EnumTag { value, .. } => value,
         };
 
         Self::from_i256(i256, ty)
@@ -342,6 +349,7 @@ impl Immediate {
             Self::I64(val) => val.into(),
             Self::I128(val) => val.into(),
             Self::I256(val) => val,
+            Self::EnumTag { value, .. } => value,
         }
     }
 
@@ -359,6 +367,10 @@ impl Immediate {
             Type::I64 => Self::I64(val.trunc_to_i64()),
             Type::I128 => Self::I128(val.trunc_to_i128()),
             Type::I256 => Self::I256(val),
+            Type::EnumTag(enum_ty) => Self::EnumTag {
+                enum_ty,
+                value: val,
+            },
             _ => unreachable!(),
         }
     }
@@ -410,7 +422,7 @@ impl Immediate {
             Type::I32 => 32,
             Type::I64 => 64,
             Type::I128 => 128,
-            Type::I256 => 256,
+            Type::I256 | Type::EnumTag(_) => 256,
             _ => unreachable!(),
         }
     }
@@ -579,6 +591,7 @@ where
             Self::I64(v) => write!(w, "{v}"),
             Self::I128(v) => write!(w, "{v}"),
             Self::I256(v) => write!(w, "{v}"),
+            Self::EnumTag { value, .. } => write!(w, "{value}"),
         }
     }
 }
@@ -599,6 +612,7 @@ impl fmt::Display for Immediate {
             Self::I64(v) => write!(f, "{v}"),
             Self::I128(v) => write!(f, "{v}"),
             Self::I256(v) => write!(f, "{v}"),
+            Self::EnumTag { value, .. } => write!(f, "{value}"),
         }
     }
 }

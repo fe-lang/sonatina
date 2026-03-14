@@ -1604,8 +1604,8 @@ impl AggregateScalarize {
             && from_leaf_tys.len() == to_leaf_tys.len()
             && (view_ty == slice.ty
                 || from_leaf_tys.len() == 1
-                    && module.size_of_unchecked(from_leaf_tys[0])
-                        == module.size_of_unchecked(to_leaf_tys[0])
+                    && shape::runtime_size_bytes(module, from_leaf_tys[0])
+                        == shape::runtime_size_bytes(module, to_leaf_tys[0])
                 || shape::is_supported_aggregate_ty(module, slice.ty)
                     && shape::is_supported_aggregate_ty(module, view_ty)
                     && self
@@ -1619,7 +1619,7 @@ impl AggregateScalarize {
         from_ty: Type,
         to_ty: Type,
     ) -> bool {
-        if module.size_of_unchecked(from_ty) != module.size_of_unchecked(to_ty) {
+        if shape::runtime_size_bytes(module, from_ty) != shape::runtime_size_bytes(module, to_ty) {
             return false;
         }
         let from_is_agg = shape::is_supported_aggregate_ty(module, from_ty);

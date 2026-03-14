@@ -231,6 +231,10 @@ impl State for Machine {
                 CompoundType::Func { .. } => {
                     panic!("function type can't be placed in memory");
                 }
+
+                CompoundType::Enum(_) => {
+                    panic!("enum values must be lowered before raw-memory loads");
+                }
             }
 
             return EvalValue::Aggregate { fields, ty };
@@ -296,6 +300,10 @@ impl State for Machine {
 
                 CompoundType::Func { .. } => {
                     panic!("Function can't be stored in memory");
+                }
+
+                CompoundType::Enum(_) => {
+                    panic!("enum values must be lowered before raw-memory stores");
                 }
             }
 

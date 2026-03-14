@@ -1,6 +1,7 @@
 pub mod abi;
 mod cleanup;
 pub mod combine;
+mod enum_lowering;
 pub mod legalize;
 mod object;
 mod object_abi;
@@ -13,6 +14,7 @@ pub mod shape;
 
 pub use abi::AggregateExpandAbi;
 pub use combine::AggregateCombine;
+pub use enum_lowering::EnumLowerToProduct;
 pub use legalize::{AggregateLowerToMemoryLegalize, assert_aggregate_legalized};
 pub use object::ObjectLowerToMemory;
 pub use object_abi::ObjectReturnOutParam;

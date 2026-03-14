@@ -28,6 +28,9 @@ fn imm_lt_u32(imm: Immediate, bound: u32) -> bool {
         Immediate::I64(val) => val >= 0 && (val as u64) < bound as u64,
         Immediate::I128(val) => val >= 0 && (val as u128) < bound as u128,
         Immediate::I256(val) => !val.is_negative() && val.to_u256() < U256::from(bound),
+        Immediate::EnumTag { value, .. } => {
+            !value.is_negative() && value.to_u256() < U256::from(bound)
+        }
     }
 }
 

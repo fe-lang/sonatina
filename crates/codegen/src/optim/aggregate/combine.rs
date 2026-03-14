@@ -1,7 +1,7 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    BlockId, Function, InstId, Type, Value, ValueId,
+    BlockId, Function, I256, Immediate, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{cast, control_flow, data, downcast},
 };
@@ -56,7 +56,13 @@ impl AggregateCombine {
         inst: InstId,
         definitely_non_undef: &SecondaryMap<ValueId, bool>,
     ) -> bool {
-        if downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+        if downcast::<&data::EnumTag>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+            self.try_rewrite_enum_tag(func, inst)
+        } else if downcast::<&data::EnumIsVariant>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+            self.try_rewrite_enum_is_variant(func, inst)
+        } else if downcast::<&data::EnumExtract>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+            self.try_rewrite_enum_extract(func, inst)
+        } else if downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst)).is_some() {
             self.try_rewrite_extract(func, inst)
         } else if downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst)).is_some() {
             self.try_rewrite_insert(func, inst, definitely_non_undef)
@@ -65,6 +71,75 @@ impl AggregateCombine {
         } else {
             false
         }
+    }
+
+    fn try_rewrite_enum_tag(&mut self, func: &mut Function, inst: InstId) -> bool {
+        let Some(enum_tag) = downcast::<&data::EnumTag>(func.inst_set(), func.dfg.inst(inst))
+        else {
+            return false;
+        };
+        let Some(result) = func.dfg.inst_result(inst) else {
+            return false;
+        };
+        let Some(enum_make) = enum_make_of_value(func, *enum_tag.value()) else {
+            return false;
+        };
+        let tag = func.dfg.make_imm_value(Immediate::EnumTag {
+            enum_ty: enum_make.variant().enum_ty(),
+            value: I256::from(u64::from(enum_make.variant().index())),
+        });
+        func.dfg.change_to_alias(result, tag);
+        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        true
+    }
+
+    fn try_rewrite_enum_is_variant(&mut self, func: &mut Function, inst: InstId) -> bool {
+        let Some(enum_is_variant) =
+            downcast::<&data::EnumIsVariant>(func.inst_set(), func.dfg.inst(inst))
+        else {
+            return false;
+        };
+        let Some(result) = func.dfg.inst_result(inst) else {
+            return false;
+        };
+        let Some(enum_make) = enum_make_of_value(func, *enum_is_variant.value()) else {
+            return false;
+        };
+        let folded = func
+            .dfg
+            .make_imm_value(*enum_make.variant() == *enum_is_variant.variant());
+        func.dfg.change_to_alias(result, folded);
+        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        true
+    }
+
+    fn try_rewrite_enum_extract(&mut self, func: &mut Function, inst: InstId) -> bool {
+        let Some(enum_extract) =
+            downcast::<&data::EnumExtract>(func.inst_set(), func.dfg.inst(inst))
+        else {
+            return false;
+        };
+        let Some(result) = func.dfg.inst_result(inst) else {
+            return false;
+        };
+        let Some(enum_make) = enum_make_of_value(func, *enum_extract.value()) else {
+            return false;
+        };
+        if *enum_make.variant() != *enum_extract.variant() {
+            return false;
+        }
+        let Some(field_idx) = shape::const_u32(&func.dfg, *enum_extract.field()) else {
+            return false;
+        };
+        let Some(&payload) = enum_make.values().get(field_idx as usize) else {
+            return false;
+        };
+        if func.dfg.value_ty(payload) != func.dfg.value_ty(result) {
+            return false;
+        }
+        func.dfg.change_to_alias(result, payload);
+        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        true
     }
 
     fn try_rewrite_extract(&mut self, func: &mut Function, inst: InstId) -> bool {
@@ -437,6 +512,11 @@ fn append_non_phi_after_phi_region<I: sonatina_ir::Inst>(
     value
 }
 
+fn enum_make_of_value(func: &Function, value: ValueId) -> Option<data::EnumMake> {
+    let inst = func.dfg.value_inst(value)?;
+    downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(inst)).cloned()
+}
+
 fn inst_const_index(func: &Function, v: ValueId) -> Option<u32> {
     shape::const_u32(&func.dfg, v)
 }
@@ -776,6 +856,60 @@ block0:
                 extract_count, 1,
                 "bitcasted nested extract chain should collapse"
             );
+        });
+    }
+
+    #[test]
+    fn combine_folds_enum_value_queries_from_enum_make() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %f(v0.i256) -> i256 {
+block0:
+    v1.@OptionI256 = enum.make @OptionI256 #Some (v0);
+    v2.enumtag(@OptionI256) = enum.tag v1;
+    v3.i1 = enum.is_variant v1 #Some;
+    v4.i256 = enum.extract v1 #Some 0.i8;
+    br v3 block1 block2;
+
+block1:
+    return v4;
+
+block2:
+    return 0.i256;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            assert!(AggregateCombine::default().run(func));
+        });
+
+        module.func_store.view(func_ref, |func| {
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    assert!(
+                        downcast::<&data::EnumTag>(func.inst_set(), func.dfg.inst(inst)).is_none()
+                            && downcast::<&data::EnumIsVariant>(
+                                func.inst_set(),
+                                func.dfg.inst(inst),
+                            )
+                            .is_none()
+                            && downcast::<&data::EnumExtract>(
+                                func.inst_set(),
+                                func.dfg.inst(inst),
+                            )
+                            .is_none(),
+                        "enum value query should fold away",
+                    );
+                }
+            }
         });
     }
 }
