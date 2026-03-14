@@ -10,7 +10,7 @@ object: Contract
   total: 9 bytes
 
 functions:
-  entry: ir_blocks=1 ir_insts=4 vcode_ops=10 fixups=0 imm_bytes=2
+  entry: ir_blocks=1 ir_insts=3 vcode_ops=7 fixups=0 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -22,10 +22,7 @@ evm:
 // func public %entry()
 entry:
   block0:
-    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
-    CALLDATALOAD
-    POP  // v1.i256 = evm_calldata_load 32.i256;
-    PUSH1 0x20 (32)
+    PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i256;
     CALLDATALOAD
     PUSH0  // mstore 0.i256 v1 i256;
     MSTORE

@@ -18,7 +18,7 @@ use crate::{
 
 use super::{
     adce::AdceSolver,
-    aggregate::{AggregateCombine, AggregateScalarize},
+    aggregate::{AggregateCombine, AggregateScalarize, ObjectLoadStore},
     cfg_cleanup::CfgCleanup,
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
     egraph::run_egraph_pass,
@@ -42,6 +42,8 @@ pub enum Pass {
     CfgCleanup,
     /// Local aggregate InstCombine rewrites.
     AggregateCombine,
+    /// Object-space load/store forwarding and dead-store elimination for fresh semantic objects.
+    ObjectLoadStore,
     /// Aggregate scalarization (SROA + closed SSA-web scalarization).
     AggregateScalarize,
     /// Per-space load/store forwarding and dead-store elimination.
@@ -69,6 +71,7 @@ impl Pass {
             Pass::LegalizeMultiResult => "legalize_multi_result",
             Pass::CfgCleanup => "cfg_cleanup",
             Pass::AggregateCombine => "aggregate_combine",
+            Pass::ObjectLoadStore => "object_load_store",
             Pass::AggregateScalarize => "aggregate_scalarize",
             Pass::LoadStore => "load_store",
             Pass::Sccp => "sccp",
@@ -127,6 +130,7 @@ pub struct Pipeline {
 const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
     Pass::AggregateCombine,
+    Pass::ObjectLoadStore,
     Pass::AggregateScalarize,
     Pass::LoadStore,
     Pass::Sccp,
@@ -142,6 +146,7 @@ const PRIMARY_FUNC_PASSES: &[Pass] = &[
 const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
     Pass::AggregateCombine,
+    Pass::ObjectLoadStore,
     Pass::AggregateScalarize,
     Pass::LoadStore,
     Pass::Sccp,
@@ -161,6 +166,7 @@ fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
         pass,
         Pass::CfgCleanup
             | Pass::AggregateCombine
+            | Pass::ObjectLoadStore
             | Pass::AggregateScalarize
             | Pass::LoadStore
             | Pass::Sccp
@@ -431,6 +437,10 @@ fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
         Pass::AggregateCombine => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_combine").entered();
             AggregateCombine::default().run(func);
+        }
+        Pass::ObjectLoadStore => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.object_load_store").entered();
+            ObjectLoadStore::default().run(func);
         }
         Pass::AggregateScalarize => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_scalarize").entered();

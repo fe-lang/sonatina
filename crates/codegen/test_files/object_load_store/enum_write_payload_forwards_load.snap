@@ -1,0 +1,16 @@
+---
+source: crates/codegen/tests/object_load_store.rs
+input_file: test_files/object_load_store/enum_write_payload_forwards_load.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @__enum_lowered_option_i256_0 = {i1, i256};
+type @option_i256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        return v0;
+}

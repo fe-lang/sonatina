@@ -1,0 +1,12 @@
+---
+source: crates/codegen/tests/object_load_store.rs
+input_file: test_files/object_load_store/store_load_scalar_eliminates_object_shell.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        return v0;
+}

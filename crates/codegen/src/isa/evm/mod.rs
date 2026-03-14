@@ -36,9 +36,9 @@ use crate::{
     module_analysis::{CallGraph, SccBuilder},
     optim::{
         aggregate::{
-            AggregateExpandAbi, AggregateLowerToMemoryLegalize, AggregateScalarize,
-            EnumLowerToProduct, ObjectLowerToMemory, ObjectReturnOutParam,
-            assert_aggregate_legalized, shape,
+            AggregateCombine, AggregateExpandAbi, AggregateLowerToMemoryLegalize,
+            AggregateScalarize, EnumLowerToProduct, ObjectLoadStore, ObjectLowerToMemory,
+            ObjectReturnOutParam, assert_aggregate_legalized, shape,
         },
         cfg_cleanup::CfgCleanup,
     },
@@ -1750,13 +1750,24 @@ impl LowerBackend for EvmBackend {
         let _span =
             info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
         EnumLowerToProduct.run(module);
+        for func_ref in module.funcs() {
+            module.func_store.modify(func_ref, |function| {
+                AggregateCombine::default().run(function)
+            });
+        }
         ObjectReturnOutParam.run(module);
+        for func_ref in module.funcs() {
+            module.func_store.modify(func_ref, |function| {
+                ObjectLoadStore::default().run(function)
+            });
+        }
         ObjectLowerToMemory.run(module);
         AggregateExpandAbi::default().run(module);
         legalize_evm_section(module, funcs);
         for &func in funcs {
             module.func_store.modify(func, |function| {
                 CfgCleanup::new(CleanupMode::Strict).run(function);
+                AggregateCombine::default().run(function);
                 AggregateScalarize::default().run(function);
             });
         }
@@ -1990,13 +2001,24 @@ impl LowerBackend for EvmBackend {
 
         let closure = collect_call_closure(module, std::slice::from_ref(&func));
         EnumLowerToProduct.run(module);
+        for func_ref in module.funcs() {
+            module.func_store.modify(func_ref, |function| {
+                AggregateCombine::default().run(function)
+            });
+        }
         ObjectReturnOutParam.run(module);
+        for func_ref in module.funcs() {
+            module.func_store.modify(func_ref, |function| {
+                ObjectLoadStore::default().run(function)
+            });
+        }
         ObjectLowerToMemory.run(module);
         AggregateExpandAbi::default().run(module);
         legalize_evm_section(module, &closure);
         for &callee in &closure {
             module.func_store.modify(callee, |function| {
                 CfgCleanup::new(CleanupMode::Strict).run(function);
+                AggregateCombine::default().run(function);
                 AggregateScalarize::default().run(function);
             });
         }
