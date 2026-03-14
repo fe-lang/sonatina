@@ -138,8 +138,14 @@ impl TypeLayout for EvmTypeLayout {
                         size
                     }
 
-                    CompoundType::Enum(_) => {
-                        return Err(TypeLayoutError::UnrepresentableType(ty));
+                    CompoundType::Enum(data) => {
+                        let mut size = 32;
+                        for variant in &data.variants {
+                            for &field in &variant.fields {
+                                size += self.size_of(field, ctx)?;
+                            }
+                        }
+                        size
                     }
 
                     CompoundType::Func { .. } => {

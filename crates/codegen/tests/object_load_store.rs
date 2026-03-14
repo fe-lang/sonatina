@@ -1,7 +1,7 @@
 mod common;
 
 use dir_test::{Fixture, dir_test};
-use sonatina_codegen::optim::aggregate::{EnumLowerToProduct, ObjectLoadStore};
+use sonatina_codegen::optim::aggregate::ObjectLoadStore;
 use sonatina_ir::ir_writer::ModuleWriter;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
@@ -21,7 +21,6 @@ fn test_object_load_store(fixture: Fixture<&str>) {
         "object/enum IR should verify before object load/store cleanup:\n{report}"
     );
 
-    EnumLowerToProduct.run(&parsed.module);
     for func_ref in parsed.module.funcs() {
         parsed
             .module

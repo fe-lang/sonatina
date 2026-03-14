@@ -4,7 +4,7 @@ use sonatina_ir::{
     Function, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{control_flow, data, downcast},
-    module::{FuncRef, Module},
+    module::{FuncRef, Module, ModuleCtx},
 };
 
 use super::{
@@ -26,6 +26,14 @@ struct FuncPlan {
     rets: Vec<TypeExpansion>,
     new_arg_tys: SmallVec<[Type; 8]>,
     new_ret_tys: SmallVec<[Type; 8]>,
+}
+
+#[derive(Clone, Copy)]
+struct AbiChildSlice {
+    idx: u32,
+    ty: Type,
+    first_leaf: usize,
+    leaf_count: usize,
 }
 
 impl PrivateAbiPlan for FuncPlan {
@@ -129,9 +137,8 @@ impl AggregateExpandAbi {
     fn expand_type(&mut self, module: &Module, ty: Type) -> TypeExpansion {
         let is_aggregate = shape::is_supported_aggregate_ty(&module.ctx, ty);
         let scalar_tys = if is_aggregate {
-            self.layout_cache
-                .runtime_leaves(&module.ctx, ty)
-                .expect("supported aggregate type should have shape")
+            abi_runtime_leaf_slices(&module.ctx, ty)
+                .expect("supported aggregate type should have ABI leaves")
                 .into_iter()
                 .map(|leaf| leaf.ty)
                 .collect()
@@ -345,18 +352,13 @@ impl AggregateExpandAbi {
             return SmallVec::new();
         }
 
-        let leaves = self
-            .layout_cache
-            .runtime_leaves(func.ctx(), expansion.original_ty)
-            .expect("aggregate expansion should have runtime leaves");
         let mut reconstructor = AggregateValueReconstructor::new(&mut self.layout_cache);
         let mut expanded = SmallVec::new();
-        for leaf in leaves {
-            let slice =
-                shape::aggregate_slice_for_path(func.ctx(), expansion.original_ty, &leaf.path)
-                    .expect("aggregate leaf path should be valid");
+        for slice in abi_runtime_leaf_slices(func.ctx(), expansion.original_ty)
+            .expect("aggregate expansion should have ABI leaves")
+        {
             let scalar = reconstructor
-                .rebuild_slice(func, inst, value, expansion.original_ty, slice, leaf.ty)
+                .rebuild_slice(func, inst, value, expansion.original_ty, slice, slice.ty)
                 .expect("aggregate leaf slice should rebuild");
             expanded.push(scalar);
         }
@@ -374,13 +376,10 @@ impl AggregateExpandAbi {
             return func.dfg.make_undef_value(agg_ty);
         }
 
-        let child_count = shape::aggregate_child_count(func.ctx(), agg_ty)
-            .expect("aggregate reconstruction requires struct or array type");
         let mut aggregate = func.dfg.make_undef_value(agg_ty);
-        for idx in 0..child_count {
-            let idx = u32::try_from(idx).expect("aggregate child index overflow");
-            let child = shape::aggregate_slice_for_index(func.ctx(), agg_ty, idx)
-                .expect("aggregate child slice should exist");
+        for child in abi_child_slices(func.ctx(), agg_ty)
+            .expect("aggregate reconstruction requires struct or array type")
+        {
             let child_value = if child.leaf_count == 0 {
                 func.dfg.make_undef_value(child.ty)
             } else if shape::is_supported_aggregate_ty(func.ctx(), child.ty) {
@@ -393,10 +392,90 @@ impl AggregateExpandAbi {
             } else {
                 scalar_leaves[child.first_leaf]
             };
-            aggregate = insert_value_before_inst(func, inst, aggregate, idx, child_value, agg_ty);
+            aggregate =
+                insert_value_before_inst(func, inst, aggregate, child.idx, child_value, agg_ty);
         }
         aggregate
     }
+}
+
+fn abi_runtime_leaf_slices(
+    module: &ModuleCtx,
+    agg_ty: Type,
+) -> Option<SmallVec<[shape::AggregateSlice; 4]>> {
+    if !shape::is_supported_aggregate_ty(module, agg_ty) {
+        return None;
+    }
+
+    let mut leaves = SmallVec::new();
+    let mut path = SmallVec::new();
+    collect_abi_runtime_leaf_slices(module, agg_ty, agg_ty, &mut path, &mut leaves)?;
+    Some(leaves)
+}
+
+fn collect_abi_runtime_leaf_slices(
+    module: &ModuleCtx,
+    root_ty: Type,
+    agg_ty: Type,
+    path: &mut SmallVec<[u32; 4]>,
+    leaves: &mut SmallVec<[shape::AggregateSlice; 4]>,
+) -> Option<()> {
+    let child_count = shape::aggregate_child_count(module, agg_ty)?;
+    for idx in 0..child_count {
+        let idx = u32::try_from(idx).ok()?;
+        path.push(idx);
+        let child = shape::aggregate_slice_for_path(module, root_ty, path)?;
+        if child.leaf_count == 0 || shape::runtime_size_bytes(module, child.ty)? == 0 {
+            path.pop();
+            continue;
+        }
+        if shape::is_supported_aggregate_ty(module, child.ty) {
+            collect_abi_runtime_leaf_slices(module, root_ty, child.ty, path, leaves)?;
+        } else {
+            leaves.push(child);
+        }
+        path.pop();
+    }
+    Some(())
+}
+
+fn abi_child_slices(module: &ModuleCtx, agg_ty: Type) -> Option<SmallVec<[AbiChildSlice; 4]>> {
+    if !shape::is_supported_aggregate_ty(module, agg_ty) {
+        return None;
+    }
+
+    let child_count = shape::aggregate_child_count(module, agg_ty)?;
+    let mut children = SmallVec::new();
+    let mut next_leaf = 0usize;
+    for idx in 0..child_count {
+        let idx = u32::try_from(idx).ok()?;
+        let ty = shape::aggregate_child_ty(module, agg_ty, idx)?;
+        let leaf_count = abi_leaf_count(module, ty)?;
+        children.push(AbiChildSlice {
+            idx,
+            ty,
+            first_leaf: next_leaf,
+            leaf_count,
+        });
+        next_leaf = next_leaf.checked_add(leaf_count)?;
+    }
+    Some(children)
+}
+
+fn abi_leaf_count(module: &ModuleCtx, ty: Type) -> Option<usize> {
+    if shape::runtime_size_bytes(module, ty)? == 0 {
+        return Some(0);
+    }
+    if !shape::is_supported_aggregate_ty(module, ty) {
+        return Some(1);
+    }
+
+    Some(
+        abi_child_slices(module, ty)?
+            .into_iter()
+            .map(|child| child.leaf_count)
+            .sum(),
+    )
 }
 
 fn insert_value_before_inst(
@@ -586,6 +665,110 @@ object @Contract {
         let sig = module.ctx.get_sig(swap).expect("signature should exist");
         assert_eq!(sig.args(), &[Type::I256, Type::I256]);
         assert_eq!(sig.ret_tys(), &[Type::I256, Type::I256]);
+    }
+
+    #[test]
+    fn expands_internal_enum_bearing_aggregate_abi_and_compiles_through_evm() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @option_i256 = enum {
+    #None,
+    #Some(i256),
+};
+
+type @wrapper = { @option_i256, i256 };
+
+func private %twist(v0.@wrapper) -> @wrapper {
+block0:
+    v1.@option_i256 = extract_value v0 0.i8;
+    v2.i256 = extract_value v0 1.i8;
+    v3.i1 = enum.is_variant v1 #Some;
+    br v3 block1 block2;
+
+block1:
+    enum.assert_variant v1 #Some;
+    v4.i256 = enum.extract v1 #Some 0.i8;
+    v5.i256 = add v4 v2;
+    v6.@option_i256 = enum.make @option_i256 #Some (v5);
+    jump block3;
+
+block2:
+    v7.@option_i256 = enum.make @option_i256 #None;
+    jump block3;
+
+block3:
+    v8.@option_i256 = phi (v6 block1) (v7 block2);
+    v9.@wrapper = insert_value undef.@wrapper 0.i8 v8;
+    v10.@wrapper = insert_value v9 1.i8 v2;
+    return v10;
+}
+
+func public %entry(v0.i256, v1.i1) -> i256 {
+block0:
+    br v1 block1 block2;
+
+block1:
+    v2.@option_i256 = enum.make @option_i256 #Some (v0);
+    jump block3;
+
+block2:
+    v3.@option_i256 = enum.make @option_i256 #None;
+    jump block3;
+
+block3:
+    v4.@option_i256 = phi (v2 block1) (v3 block2);
+    v5.@wrapper = insert_value undef.@wrapper 0.i8 v4;
+    v6.@wrapper = insert_value v5 1.i8 5.i256;
+    v7.@wrapper = call %twist v6;
+    v8.@option_i256 = extract_value v7 0.i8;
+    v9.i1 = enum.is_variant v8 #Some;
+    br v9 block4 block5;
+
+block4:
+    enum.assert_variant v8 #Some;
+    v10.i256 = enum.extract v8 #Some 0.i8;
+    return v10;
+
+block5:
+    return 0.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        );
+
+        AggregateExpandAbi::default().run(&module);
+
+        let report = verify_module(
+            &module,
+            &VerifierConfig::for_level(VerificationLevel::Standard),
+        );
+        assert!(
+            !report.has_errors(),
+            "enum-bearing aggregate ABI expansion should preserve verifier invariants:\n{report}"
+        );
+
+        let twist = lookup_func(&module, "twist");
+        let sig = module.ctx.get_sig(twist).expect("signature should exist");
+        let option_i256 = module
+            .ctx
+            .with_ty_store(|store| Type::Compound(store.lookup_enum("option_i256").unwrap()));
+        assert_eq!(sig.args(), &[option_i256, Type::I256]);
+        assert_eq!(sig.ret_tys(), &[option_i256, Type::I256]);
+
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::MinimalRelax,
+            emit_symtab: false,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
+        };
+        compile_all_objects(&module, &test_backend(), &opts).expect("compile should succeed");
     }
 
     #[test]

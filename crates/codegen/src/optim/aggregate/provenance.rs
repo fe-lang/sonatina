@@ -199,6 +199,10 @@ fn possible_root_transfer(
         return Some(possible_roots[*obj_index.object()].clone());
     }
 
+    if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
+        return Some(possible_roots[*enum_proj.object()].clone());
+    }
+
     downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).map(|phi| {
         phi.args()
             .iter()
@@ -297,6 +301,32 @@ fn derive_exact_state(
             base_projection.slice.ty,
             &[*obj_index.index()],
             &func.dfg,
+        ) else {
+            return ExactState::Blocked;
+        };
+        return ExactState::Exact(Projection {
+            root_value: base_projection.root_value,
+            slice: shape::AggregateSlice {
+                ty: sub.ty,
+                first_leaf: base_projection.slice.first_leaf + sub.first_leaf,
+                leaf_count: sub.leaf_count,
+            },
+        });
+    }
+
+    if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
+        let base = *enum_proj.object();
+        let Some(base_projection) = exact_projection_of(exact_states, base) else {
+            return pending_or_blocked(exact_states, base);
+        };
+        let Some(field_idx) = shape::const_u32(&func.dfg, *enum_proj.field()) else {
+            return ExactState::Blocked;
+        };
+        let Some(sub) = shape::enum_variant_field_slice(
+            module,
+            base_projection.slice.ty,
+            *enum_proj.variant(),
+            field_idx,
         ) else {
             return ExactState::Blocked;
         };
@@ -508,6 +538,10 @@ fn supported_value_deps(func: &Function, inst: InstId) -> Option<Vec<ValueId>> {
         return Some(vec![*obj_index.object()]);
     }
 
+    if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
+        return Some(vec![*enum_proj.object()]);
+    }
+
     downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
         .map(|phi| phi.args().iter().map(|(arg, _)| *arg).collect())
 }
@@ -601,8 +635,8 @@ fn projection_slice_can_view_as(
             || from_leaf_tys.len() == 1
                 && shape::runtime_size_bytes(module, from_leaf_tys[0])
                     == shape::runtime_size_bytes(module, to_leaf_tys[0])
-            || shape::is_supported_aggregate_ty(module, slice.ty)
-                && shape::is_supported_aggregate_ty(module, view_ty)
+            || shape::is_supported_scalar_shape_ty(module, slice.ty)
+                && shape::is_supported_scalar_shape_ty(module, view_ty)
                 && layout_cache
                     .compatible_bitcast_runtime_leaves(module, slice.ty, view_ty)
                     .is_some())
@@ -613,7 +647,7 @@ fn projection_view_leaf_tys(
     module: &ModuleCtx,
     ty: Type,
 ) -> Option<Vec<Type>> {
-    if shape::is_supported_aggregate_ty(module, ty) {
+    if shape::is_supported_scalar_shape_ty(module, ty) {
         return Some(
             layout_cache
                 .shape(module, ty)?

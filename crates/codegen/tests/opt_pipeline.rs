@@ -5,11 +5,7 @@ use sonatina_codegen::{
     domtree::DomTree,
     loop_analysis::LoopTree,
     optim::{
-        aggregate::{AggregateCombine, AggregateScalarize},
-        egraph::run_egraph_pass,
-        gvn::GvnSolver,
-        licm::LicmSolver,
-        pipeline::Pipeline,
+        Pass, Step, egraph::run_egraph_pass, gvn::GvnSolver, licm::LicmSolver, pipeline::Pipeline,
         sccp::SccpSolver,
     },
 };
@@ -223,7 +219,7 @@ func public %complex_loop() -> i8 {
 }
 
 #[test]
-fn optimization_pipeline_rejects_enum_bearing_product_scalarization_without_panicking() {
+fn function_passes_scalarize_enum_bearing_products_without_lowering_enums() {
     let (module, func_ref) = parse_test_module(
         r#"
 target = "evm-ethereum-osaka"
@@ -235,26 +231,42 @@ type @option_i256 = enum {
 
 type @wrapper = {@option_i256, i256};
 
-func private %entry(v0.@wrapper) -> i256 {
+func private %entry(v0.i256) -> i256 {
     block0:
-        v1.@option_i256 = extract_value v0 0.i8;
-        v2.enumtag(@option_i256) = enum.tag v1;
-        v3.i1 = enum.is_variant v1 #Some;
-        br v3 block1 block2;
+        v1.@option_i256 = enum.make @option_i256 #Some (v0);
+        v2.@wrapper = insert_value undef.@wrapper 0.i8 v1;
+        v3.@wrapper = insert_value v2 1.i8 1.i256;
+        v4.@option_i256 = extract_value v3 0.i8;
+        v5.i1 = enum.is_variant v4 #Some;
+        br v5 block1 block2;
 
     block1:
-        v4.i256 = extract_value v0 1.i8;
-        return v4;
+        v6.i256 = enum.extract v4 #Some 0.i8;
+        v7.i256 = extract_value v3 1.i8;
+        v8.i256 = add v6 v7;
+        return v8;
 
     block2:
         return 0.i256;
 }
 "#,
     );
-    module.func_store.modify(func_ref, |func| {
-        AggregateCombine::default().run(func);
-        AggregateScalarize::default().run(func);
+    let mut pipeline = Pipeline::new();
+    pipeline.add_step(Step::FuncPasses(vec![
+        Pass::CfgCleanup,
+        Pass::AggregateCombine,
+        Pass::AggregateScalarize,
+        Pass::CfgCleanup,
+    ]));
+    let mut module = module;
+    pipeline.run(&mut module);
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
     });
+    assert!(
+        !dumped.contains("@wrapper") && !dumped.contains("__enum_lowered"),
+        "enum-bearing product should scalarize without erasing enum semantics:\n{dumped}"
+    );
     assert_fast_verified(&module);
 }
 

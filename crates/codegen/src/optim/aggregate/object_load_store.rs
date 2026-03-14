@@ -1,7 +1,7 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, InstId, Type, ValueId,
+    BlockId, ControlFlowGraph, Function, I256, Immediate, InstId, Type, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{cast, control_flow, data, downcast},
     module::{FuncRef, ModuleCtx},
@@ -221,6 +221,37 @@ impl ObjectLoadStore {
                     }
                 }
 
+                if let Some(enum_get_tag) =
+                    downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst))
+                {
+                    for root in
+                        observed_roots(func, inst, possible_roots, &[*enum_get_tag.object()])
+                    {
+                        kill_root_available(&mut available, root);
+                    }
+                    if let Some(slice) = tracked[*enum_get_tag.object()]
+                        .as_ref()
+                        .copied()
+                        .and_then(TrackedObject::exact)
+                        .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
+                        && let Some(replacement) =
+                            self.replacement_for_load(func, inst, slice, &available)
+                        && let Some(result) = func.dfg.inst_result(inst)
+                    {
+                        func.dfg.change_to_alias(result, replacement);
+                        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+                        changed = true;
+                        continue;
+                    }
+                }
+
+                if let Some(enum_assert_ref) =
+                    downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
+                    && tracked[*enum_assert_ref.object()].is_some()
+                {
+                    continue;
+                }
+
                 if let Some(obj_store) =
                     downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst))
                 {
@@ -255,6 +286,103 @@ impl ObjectLoadStore {
                     available.push(StoredSlice {
                         slice,
                         value: *obj_store.value(),
+                    });
+                    continue;
+                }
+
+                if let Some(enum_set_tag) =
+                    downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
+                {
+                    for root in
+                        observed_roots(func, inst, possible_roots, &[*enum_set_tag.object()])
+                    {
+                        kill_root_available(&mut available, root);
+                    }
+                    let Some(tracked_object) = tracked[*enum_set_tag.object()].as_ref().copied()
+                    else {
+                        for &root in &possible_roots[*enum_set_tag.object()] {
+                            kill_root_available(&mut available, root);
+                        }
+                        continue;
+                    };
+                    let Some(slice) = tracked_object
+                        .exact()
+                        .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
+                    else {
+                        for &root in &possible_roots[*enum_set_tag.object()] {
+                            kill_root_available(&mut available, root);
+                        }
+                        continue;
+                    };
+                    let tag = func
+                        .dfg
+                        .make_imm_value(enum_variant_tag_imm(*enum_set_tag.variant(), slice.ty));
+                    if available
+                        .iter()
+                        .rev()
+                        .find(|entry| entry.slice == slice)
+                        .is_some_and(|entry| entry.value == tag)
+                    {
+                        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+                        changed = true;
+                        continue;
+                    }
+                    kill_overlapping_available(&mut available, slice);
+                    available.push(StoredSlice { slice, value: tag });
+                    continue;
+                }
+
+                if let Some(enum_write_variant) =
+                    downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst))
+                        .cloned()
+                {
+                    for root in
+                        observed_roots(func, inst, possible_roots, &[*enum_write_variant.object()])
+                    {
+                        kill_root_available(&mut available, root);
+                    }
+                    let Some(tracked_object) =
+                        tracked[*enum_write_variant.object()].as_ref().copied()
+                    else {
+                        for &root in &possible_roots[*enum_write_variant.object()] {
+                            kill_root_available(&mut available, root);
+                        }
+                        continue;
+                    };
+                    let Some(base_slice) = tracked_object.exact() else {
+                        for &root in &possible_roots[*enum_write_variant.object()] {
+                            kill_root_available(&mut available, root);
+                        }
+                        continue;
+                    };
+                    for (field_idx, &value) in enum_write_variant.values().iter().enumerate() {
+                        let Some(field_idx) = u32::try_from(field_idx).ok() else {
+                            continue;
+                        };
+                        let Some(field_slice) = enum_variant_field_object_slice(
+                            func.ctx(),
+                            base_slice,
+                            *enum_write_variant.variant(),
+                            field_idx,
+                        ) else {
+                            continue;
+                        };
+                        kill_overlapping_available(&mut available, field_slice);
+                        available.push(StoredSlice {
+                            slice: field_slice,
+                            value,
+                        });
+                    }
+                    let Some(tag_slice) = enum_tag_object_slice(func.ctx(), base_slice) else {
+                        continue;
+                    };
+                    kill_overlapping_available(&mut available, tag_slice);
+                    available.push(StoredSlice {
+                        slice: tag_slice,
+                        value: func.dfg.make_imm_value(enum_variant_tag_imm(
+                            *enum_write_variant.variant(),
+                            tag_slice.ty,
+                        )),
                     });
                     continue;
                 }
@@ -408,6 +536,8 @@ impl ObjectLoadStore {
                         downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)).is_some()
                             || downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst))
                                 .is_some()
+                            || downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst))
+                                .is_some()
                             || downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
                                 .is_some();
                     if !removable {
@@ -472,6 +602,7 @@ fn observed_roots(
         || downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)).is_some()
         || downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)).is_some()
         || downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)).is_some()
+        || downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)).is_some()
         || downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).is_some()
     {
         return Vec::new();
@@ -546,6 +677,103 @@ fn transfer_backward_live(
         return;
     }
 
+    if let Some(enum_get_tag) = downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst))
+    {
+        if let Some(tracked_object) = tracked[*enum_get_tag.object()].as_ref().copied() {
+            if let Some(slice) = tracked_object
+                .exact()
+                .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
+            {
+                mark_live(live, TrackedObject::Exact(slice));
+            } else {
+                mark_live(live, tracked_object);
+            }
+        } else {
+            for &root in &possible_roots[*enum_get_tag.object()] {
+                mark_root_live(live, root, root_total_leaves(tracked, root));
+            }
+        }
+        for root in observed_roots(func, inst, possible_roots, &[*enum_get_tag.object()]) {
+            mark_root_live(live, root, root_total_leaves(tracked, root));
+        }
+        return;
+    }
+
+    if let Some(enum_assert_ref) =
+        downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
+    {
+        if let Some(tracked_object) = tracked[*enum_assert_ref.object()].as_ref().copied() {
+            if let Some(slice) = tracked_object
+                .exact()
+                .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
+            {
+                mark_live(live, TrackedObject::Exact(slice));
+            } else {
+                mark_live(live, tracked_object);
+            }
+        }
+        return;
+    }
+
+    if let Some(enum_set_tag) = downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
+    {
+        for root in observed_roots(func, inst, possible_roots, &[*enum_set_tag.object()]) {
+            mark_root_live(live, root, root_total_leaves(tracked, root));
+        }
+        let Some(tracked_object) = tracked[*enum_set_tag.object()].as_ref().copied() else {
+            for &root in &possible_roots[*enum_set_tag.object()] {
+                mark_root_live(live, root, root_total_leaves(tracked, root));
+            }
+            return;
+        };
+        if let Some(slice) = tracked_object
+            .exact()
+            .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
+        {
+            clear_live_slice(live, slice);
+        } else {
+            for &root in &possible_roots[*enum_set_tag.object()] {
+                mark_root_live(live, root, root_total_leaves(tracked, root));
+            }
+        }
+        return;
+    }
+
+    if let Some(enum_write_variant) =
+        downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst))
+    {
+        for root in observed_roots(func, inst, possible_roots, &[*enum_write_variant.object()]) {
+            mark_root_live(live, root, root_total_leaves(tracked, root));
+        }
+        let Some(tracked_object) = tracked[*enum_write_variant.object()].as_ref().copied() else {
+            for &root in &possible_roots[*enum_write_variant.object()] {
+                mark_root_live(live, root, root_total_leaves(tracked, root));
+            }
+            return;
+        };
+        let Some(base_slice) = tracked_object.exact() else {
+            for &root in &possible_roots[*enum_write_variant.object()] {
+                mark_root_live(live, root, root_total_leaves(tracked, root));
+            }
+            return;
+        };
+        if let Some(tag_slice) = enum_tag_object_slice(func.ctx(), base_slice) {
+            clear_live_slice(live, tag_slice);
+        }
+        for field_idx in 0..enum_write_variant.values().len() {
+            let Some(field_slice) = enum_variant_field_object_slice(
+                func.ctx(),
+                base_slice,
+                *enum_write_variant.variant(),
+                u32::try_from(field_idx).ok().unwrap_or(u32::MAX),
+            ) else {
+                continue;
+            };
+            clear_live_slice(live, field_slice);
+        }
+        return;
+    }
+
     for root in observed_roots(func, inst, possible_roots, &[]) {
         mark_root_live(live, root, root_total_leaves(tracked, root));
     }
@@ -558,16 +786,64 @@ fn try_remove_dead_store(
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
     live: &FxHashMap<ValueId, FxHashSet<usize>>,
 ) -> bool {
-    let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)) else {
+    if let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)) {
+        let Some(tracked_object) = tracked[*obj_store.object()].as_ref().copied() else {
+            return false;
+        };
+        let needed = if let Some(slice) = tracked_object.exact() {
+            slice_has_live_leaf(live, slice)
+        } else {
+            possible_roots[*obj_store.object()]
+                .iter()
+                .copied()
+                .any(|root| root_has_live(live, root))
+        };
+        if needed {
+            return false;
+        }
+
+        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        return true;
+    }
+
+    if let Some(enum_set_tag) = downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
+    {
+        let Some(tracked_object) = tracked[*enum_set_tag.object()].as_ref().copied() else {
+            return false;
+        };
+        let needed = if let Some(slice) = tracked_object
+            .exact()
+            .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
+        {
+            slice_has_live_leaf(live, slice)
+        } else {
+            possible_roots[*enum_set_tag.object()]
+                .iter()
+                .copied()
+                .any(|root| root_has_live(live, root))
+        };
+        if needed {
+            return false;
+        }
+
+        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        return true;
+    }
+
+    let Some(enum_write_variant) =
+        downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst))
+    else {
         return false;
     };
-    let Some(tracked_object) = tracked[*obj_store.object()].as_ref().copied() else {
+    let Some(tracked_object) = tracked[*enum_write_variant.object()].as_ref().copied() else {
         return false;
     };
-    let needed = if let Some(slice) = tracked_object.exact() {
-        slice_has_live_leaf(live, slice)
+    let needed = if let Some(base_slice) = tracked_object.exact() {
+        enum_write_variant_slices(func.ctx(), base_slice, enum_write_variant)
+            .into_iter()
+            .any(|slice| slice_has_live_leaf(live, slice))
     } else {
-        possible_roots[*obj_store.object()]
+        possible_roots[*enum_write_variant.object()]
             .iter()
             .copied()
             .any(|root| root_has_live(live, root))
@@ -658,6 +934,65 @@ fn slice_is_covered_by(lhs: ObjectSlice, rhs: ObjectSlice) -> bool {
         && rhs.first_leaf + rhs.leaf_count <= lhs.first_leaf + lhs.leaf_count
 }
 
+fn enum_variant_tag_imm(variant: sonatina_ir::types::EnumVariantRef, ty: Type) -> Immediate {
+    match ty {
+        Type::EnumTag(enum_ty) => Immediate::EnumTag {
+            enum_ty,
+            value: I256::from(u64::from(variant.index())),
+        },
+        _ => Immediate::from_i256(I256::from(u64::from(variant.index())), ty),
+    }
+}
+
+fn enum_tag_object_slice(ctx: &ModuleCtx, base: ObjectSlice) -> Option<ObjectSlice> {
+    let tag_slice = shape::enum_tag_slice(ctx, base.ty)?;
+    Some(ObjectSlice {
+        root: base.root,
+        ty: tag_slice.ty,
+        first_leaf: base.first_leaf + tag_slice.first_leaf,
+        leaf_count: tag_slice.leaf_count,
+        total_leaves: base.total_leaves,
+    })
+}
+
+fn enum_variant_field_object_slice(
+    ctx: &ModuleCtx,
+    base: ObjectSlice,
+    variant: sonatina_ir::types::EnumVariantRef,
+    field: u32,
+) -> Option<ObjectSlice> {
+    let field_slice = shape::enum_variant_field_slice(ctx, base.ty, variant, field)?;
+    Some(ObjectSlice {
+        root: base.root,
+        ty: field_slice.ty,
+        first_leaf: base.first_leaf + field_slice.first_leaf,
+        leaf_count: field_slice.leaf_count,
+        total_leaves: base.total_leaves,
+    })
+}
+
+fn enum_write_variant_slices(
+    ctx: &ModuleCtx,
+    base: ObjectSlice,
+    enum_write_variant: &data::EnumWriteVariant,
+) -> Vec<ObjectSlice> {
+    let mut slices = Vec::new();
+    if let Some(tag_slice) = enum_tag_object_slice(ctx, base) {
+        slices.push(tag_slice);
+    }
+    for field_idx in 0..enum_write_variant.values().len() {
+        let Some(field_idx) = u32::try_from(field_idx).ok() else {
+            continue;
+        };
+        if let Some(field_slice) =
+            enum_variant_field_object_slice(ctx, base, *enum_write_variant.variant(), field_idx)
+        {
+            slices.push(field_slice);
+        }
+    }
+    slices
+}
+
 impl TrackedObject {
     fn exact(self) -> Option<ObjectSlice> {
         match self {
@@ -741,6 +1076,52 @@ func private %f(v0.objref<@pair>, v1.i256) -> i256 {
             assert!(
                 dumped.contains("return v1;"),
                 "forwarded local object arg result should return the stored scalar:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn forwards_local_object_arg_enum_field_store_then_load_without_lowering() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @option_i256 = enum {
+    #None,
+    #Some(i256),
+};
+
+type @wrapper = { @option_i256, i256 };
+
+func private %f(v0.objref<@wrapper>, v1.i256) -> @option_i256 {
+    block0:
+        v2.@option_i256 = enum.make @option_i256 #Some (v1);
+        v3.objref<@option_i256> = obj.proj v0 0.i8;
+        obj.store v3 v2;
+        v4.@option_i256 = obj.load v3;
+        return v4;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        let local_object_args = crate::optim::aggregate::collect_local_object_arg_info(&module);
+        module.func_store.modify(func_ref, |func| {
+            ObjectLoadStore::default().run_for_func(func_ref, func, &local_object_args);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains("obj.load"),
+                "enum field load should be forwarded without pre-lowering:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("obj.store v3 v2;"),
+                "enum field store must remain visible to the caller:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("return v2;"),
+                "forwarded enum field result should return the stored enum value:\n{dumped}"
             );
         });
     }

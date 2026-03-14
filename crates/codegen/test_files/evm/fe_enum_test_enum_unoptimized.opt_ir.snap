@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 414
 expression: opt_ir_snapshot
 input_file: test_files/evm/fe_enum_test_enum_unoptimized.sntn
 ---
@@ -37,8 +36,8 @@ func private %__EnumContract_runtime() {
 
     block8:
         v14.i256 = call %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at 0.i256 0.i256;
-        v16.i256 = shr 224.i256 v14;
-        v17.i32 = trunc v16 i32;
+        v47.i256 = shr 224.i256 v14;
+        v17.i32 = trunc v47 i32;
         v27.objref<@__fe_obj_SolDecoder_1> = obj.alloc @__fe_obj_SolDecoder_1;
         v30.objref<@__fe_obj_Cursor_0> = obj.proj v27 0.i256;
         v31.objref<i256> = obj.proj v30 0.i256;
@@ -47,74 +46,24 @@ func private %__EnumContract_runtime() {
         obj.store v35 4.i256;
         v36.objref<i256> = obj.proj v27 1.i256;
         obj.store v36 4.i256;
-        br_table v17 block1 (1817627404.i32 block2) (1163776883.i32 block17) (-722541534.i32 block4);
+        br_table v17 block1 (1817627404.i32 block2) (1163776883.i32 block3) (-722541534.i32 block4);
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
         v6.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v27;
-        v37.objref<@__fe_obj_MyOption_7> = obj.alloc @__fe_obj_MyOption_7;
-        enum.set_tag v37 #Some;
-        enum.assert_variant_ref v37 #Some;
-        v38.objref<i256> = enum.proj v37 #Some 0.i256;
-        obj.store v38 v6;
-        v39.enumtag(@__fe_obj_MyOption_7) = enum.get_tag v37;
-        br_table v39 block15 (1.enumtag(@__fe_obj_MyOption_7) block11) (0.enumtag(@__fe_obj_MyOption_7) block12);
-
-    block11:
-        enum.assert_variant_ref v37 #Some;
-        v43.i256 = obj.load v38;
-        jump block12;
-
-    block12:
-        v44.i256 = phi (v43 block11) (0.i256 block2);
-        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v44;
+        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v6;
         unreachable;
 
-    block15:
-        evm_invalid;
-
-    block17:
-        v47.objref<@__fe_obj_MyOption_7> = obj.alloc @__fe_obj_MyOption_7;
-        enum.set_tag v47 #None;
-        v48.enumtag(@__fe_obj_MyOption_7) = enum.get_tag v47;
-        br_table v48 block20 (1.enumtag(@__fe_obj_MyOption_7) block18) (0.enumtag(@__fe_obj_MyOption_7) block19);
-
-    block18:
-        enum.assert_variant_ref v47 #Some;
-        v49.objref<i256> = enum.proj v47 #Some 0.i256;
-        v50.i256 = obj.load v49;
-        jump block19;
-
-    block19:
-        v51.i256 = phi (v50 block18) (0.i256 block17);
-        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v51;
+    block3:
+        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256;
         unreachable;
-
-    block20:
-        evm_invalid;
 
     block4:
         v10.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v27;
-        v52.objref<@__fe_obj_MyOption_7> = obj.alloc @__fe_obj_MyOption_7;
-        enum.set_tag v52 #Some;
-        enum.assert_variant_ref v52 #Some;
-        v53.objref<i256> = enum.proj v52 #Some 0.i256;
-        obj.store v53 v10;
-        v54.enumtag(@__fe_obj_MyOption_7) = enum.get_tag v52;
-        br_table v54 block25 (1.enumtag(@__fe_obj_MyOption_7) block23) (0.enumtag(@__fe_obj_MyOption_7) block24);
-
-    block23:
-        v55.i256 = phi (1.i256 block4) (0.i256 block24);
-        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v55;
+        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 1.i256;
         unreachable;
-
-    block24:
-        jump block23;
-
-    block25:
-        evm_invalid;
 }
 
 func private %create2_stor_arg0_root_stor__Evm_hef0af3106e109414_EnumContract_h6e666fa7f768cfb2__f89d9f5d7e011a4c(v0.i256, v1.i256) -> i256 {

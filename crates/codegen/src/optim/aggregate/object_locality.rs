@@ -350,6 +350,16 @@ pub(crate) fn walk_object_root_uses<T>(
                 continue;
             }
 
+            if let Some(enum_proj) =
+                downcast::<&data::EnumProj>(function.inst_set(), function.dfg.inst(user))
+                && *enum_proj.object() == value
+            {
+                if let Some(result) = function.dfg.inst_result(user) {
+                    worklist.push(result);
+                }
+                continue;
+            }
+
             if let Some(load) =
                 downcast::<&data::ObjLoad>(function.inst_set(), function.dfg.inst(user))
                 && *load.object() == value
@@ -362,6 +372,41 @@ pub(crate) fn walk_object_root_uses<T>(
                 && *store.object() == value
             {
                 continue;
+            }
+
+            if let Some(enum_get_tag) =
+                downcast::<&data::EnumGetTag>(function.inst_set(), function.dfg.inst(user))
+                && *enum_get_tag.object() == value
+            {
+                continue;
+            }
+
+            if let Some(enum_assert_ref) = downcast::<&data::EnumAssertVariantRef>(
+                function.inst_set(),
+                function.dfg.inst(user),
+            ) && *enum_assert_ref.object() == value
+            {
+                continue;
+            }
+
+            if let Some(enum_set_tag) =
+                downcast::<&data::EnumSetTag>(function.inst_set(), function.dfg.inst(user))
+                && *enum_set_tag.object() == value
+            {
+                continue;
+            }
+
+            if let Some(enum_write_variant) =
+                downcast::<&data::EnumWriteVariant>(function.inst_set(), function.dfg.inst(user))
+            {
+                if enum_write_variant.values().contains(&value)
+                    && let ControlFlow::Break(result) = on_special(SpecialObjectUse::Unknown)
+                {
+                    return Some(result);
+                }
+                if *enum_write_variant.object() == value {
+                    continue;
+                }
             }
 
             if let Some(mat_stack) =
@@ -417,4 +462,138 @@ pub(crate) fn walk_object_root_uses<T>(
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sonatina_ir::module::Module;
+    use sonatina_parser::parse_module;
+
+    fn parse_test_module(src: &str) -> Module {
+        parse_module(src).expect("parse should succeed").module
+    }
+
+    fn lookup_func(module: &Module, name: &str) -> FuncRef {
+        module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
+            .expect("function should exist")
+    }
+
+    #[test]
+    fn collect_local_object_arg_info_allows_enum_object_ops() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @option_i256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %f(v0.objref<@option_i256>) {
+block0:
+    enum.write_variant v0 #Some (7.i256);
+    v1.enumtag(@option_i256) = enum.get_tag v0;
+    enum.assert_variant_ref v0 #Some;
+    v2.objref<i256> = enum.proj v0 #Some 0.i8;
+    v3.i256 = obj.load v2;
+    return;
+}
+"#,
+        );
+
+        let func = lookup_func(&module, "f");
+        let local = collect_local_object_arg_info(&module);
+        assert_eq!(
+            local.get(&func).and_then(|args| args.get(&0)),
+            Some(&LocalObjectArgInfo {
+                init: RootInit::LoadLiveIn,
+                fresh_result_out: false,
+            })
+        );
+    }
+
+    #[test]
+    fn object_root_stays_local_rejects_enum_write_variant_payload_escape() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256 };
+type @option_pair = enum {
+    #None,
+    #Some(objref<@pair>),
+};
+
+func private %f(v0.objref<@pair>, v1.objref<@option_pair>) {
+block0:
+    enum.write_variant v1 #Some (v0);
+    return;
+}
+"#,
+        );
+
+        let func = lookup_func(&module, "f");
+        let stays_local = module.func_store.view(func, |function| {
+            let root = function.arg_values[0];
+            object_root_stays_local(
+                function,
+                root,
+                function.dfg.value_ty(root),
+                &LocalObjectArgMap::default(),
+                false,
+            )
+        });
+        assert!(
+            !stays_local,
+            "enum.write_variant payload use should make the root non-local"
+        );
+    }
+
+    #[test]
+    fn object_root_stays_local_through_enum_proj_phi_web() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @inner = enum {
+    #Off,
+    #On(i256),
+};
+
+type @outer = enum {
+    #None,
+    #Some(objref<@inner>),
+};
+
+func private %f(v0.objref<@outer>, v1.i1) {
+block0:
+    enum.assert_variant_ref v0 #Some;
+    v2.objref<@inner> = enum.proj v0 #Some 0.i8;
+    br v1 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v3.objref<@inner> = phi (v2 block1) (v2 block2);
+    enum.set_tag v3 #Off;
+    return;
+}
+"#,
+        );
+
+        let func = lookup_func(&module, "f");
+        let local = collect_local_object_arg_info(&module);
+        assert!(
+            local.get(&func).is_some_and(|args| args.contains_key(&0)),
+            "enum.proj + phi + nested enum op should keep the outer enum root local"
+        );
+    }
 }
