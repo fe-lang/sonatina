@@ -6,11 +6,11 @@ input_file: test_files/evm/gvn_cross_block_uaddo_reuse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 55 bytes
-  total: 55 bytes
+  section runtime: 53 bytes
+  total: 53 bytes
 
 functions:
-  entry: ir_blocks=8 ir_insts=16 vcode_ops=46 fixups=4 imm_bytes=5
+  entry: ir_blocks=8 ir_insts=16 vcode_ops=44 fixups=4 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -69,22 +69,17 @@ evm:
       pre: [PUSH(32), PUSH(0)]
       evm_return [0, 32]
   block9 P=[] T=[]
-    inherited from block2: [v15x]
     // jump block6;
-    - stack=[v15x]
-      cleanup: [POP]
+    - stack=[]
       jump -> block6
   block7 P=[] T=[]
-    inherited from block1: [v15x]
     // evm_revert 0.i256 0.i256;
-    - stack=[v15x]
+    - stack=[]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
   block8 P=[] T=[]
-    inherited from block0: [v0x]
     // jump block6;
-    - stack=[v0x]
-      cleanup: [POP]
+    - stack=[]
       jump -> block6
   block6 P=[] T=[]
     // mstore 0.i256 0.i256 i256;
@@ -133,8 +128,7 @@ entry:
     RETURN
   block9:
     JUMPDEST
-    POP  // jump block6;
-    PUSH1 block6
+    PUSH1 block6  // jump block6;
     JUMP
   block7:
     JUMPDEST
@@ -143,7 +137,6 @@ entry:
     REVERT
   block8:
     JUMPDEST
-    POP  // jump block6;
   block6:
     JUMPDEST
     PUSH0  // mstore 0.i256 0.i256 i256;

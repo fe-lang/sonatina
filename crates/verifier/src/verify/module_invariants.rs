@@ -113,9 +113,11 @@ pub(super) fn collect_module_invariants(
             }
 
             for nested in iter_nested_types(cmpd) {
-                if let Type::Compound(nested_ref) = nested
-                    && type_store.get_compound(nested_ref).is_none()
-                {
+                let nested_ref = match nested {
+                    Type::Compound(nested_ref) | Type::EnumTag(nested_ref) => nested_ref,
+                    _ => continue,
+                };
+                if type_store.get_compound(nested_ref).is_none() {
                     report.push(
                         Diagnostic::error(
                             DiagnosticCode::InvalidTypeRef,
@@ -265,8 +267,37 @@ pub(super) fn collect_module_invariants(
                                 .with_note(format!("missing function ref: {}", func.as_u32())),
                                 cfg.max_diagnostics,
                             );
-                        } else if entry.is_none() {
-                            entry = Some(*func);
+                        } else {
+                            let sig = module
+                                .ctx
+                                .get_sig(*func)
+                                .expect("checked function signature should exist");
+                            if sig
+                                .args()
+                                .iter()
+                                .chain(sig.ret_tys().iter())
+                                .copied()
+                                .any(|ty| has_obj_ref_in_signature(&module.ctx, ty))
+                            {
+                                report.push(
+                                    Diagnostic::error(
+                                        DiagnosticCode::InvalidSignature,
+                                        "section entry signatures must not expose object references",
+                                        Location::Object {
+                                            name: object_name.clone(),
+                                            section: Some(section_name.clone()),
+                                        },
+                                    )
+                                    .with_note(format!(
+                                        "entry function `%{}` must not take or return objref values",
+                                        sig.name()
+                                    )),
+                                    cfg.max_diagnostics,
+                                );
+                            }
+                            if entry.is_none() {
+                                entry = Some(*func);
+                            }
                         }
                     }
                     Directive::Include(func) => {
@@ -507,6 +538,30 @@ fn verify_signature_type(
             Diagnostic::error(
                 DiagnosticCode::InvalidSignature,
                 "function signature contains a by-value function type",
+                location.clone(),
+            )
+            .with_note(usage.clone()),
+            cfg.max_diagnostics,
+        );
+    }
+
+    if !ctx.func_linkage(func_ref).is_private() && has_obj_ref_in_signature(ctx, ty) {
+        report.push(
+            Diagnostic::error(
+                DiagnosticCode::InvalidSignature,
+                "public and external signatures must not expose object references",
+                location.clone(),
+            )
+            .with_note(usage.clone()),
+            cfg.max_diagnostics,
+        );
+    }
+
+    if !ctx.func_linkage(func_ref).is_private() && has_enum_in_signature(ctx, ty) {
+        report.push(
+            Diagnostic::error(
+                DiagnosticCode::InvalidSignature,
+                "public and external signatures must not expose first-class enums or enum tags",
                 location,
             )
             .with_note(usage),
@@ -538,8 +593,20 @@ pub(crate) fn has_by_value_function_type_in_signature(ctx: &ModuleCtx, ty: Type)
             CompoundType::Ptr(elem) => {
                 stack.push((elem, true));
             }
+            CompoundType::ObjRef(elem) => {
+                stack.push((elem, true));
+            }
             CompoundType::Struct(s) => {
                 for field in s.fields {
+                    stack.push((field, behind_pointer));
+                }
+            }
+            CompoundType::Enum(data) => {
+                for field in data
+                    .variants
+                    .into_iter()
+                    .flat_map(|variant| variant.fields.into_iter())
+                {
                     stack.push((field, behind_pointer));
                 }
             }
@@ -553,6 +620,77 @@ pub(crate) fn has_by_value_function_type_in_signature(ctx: &ModuleCtx, ty: Type)
                 for ret_ty in ret_tys {
                     stack.push((ret_ty, false));
                 }
+            }
+        }
+    }
+
+    false
+}
+
+fn has_obj_ref_in_signature(ctx: &ModuleCtx, ty: Type) -> bool {
+    let mut visited = FxHashSet::default();
+    let mut stack = vec![ty];
+
+    while let Some(current_ty) = stack.pop() {
+        let Type::Compound(cmpd_ref) = current_ty else {
+            continue;
+        };
+        if !visited.insert(cmpd_ref) {
+            continue;
+        }
+
+        let Some(cmpd) = ctx.with_ty_store(|store| store.get_compound(cmpd_ref).cloned()) else {
+            continue;
+        };
+
+        match cmpd {
+            CompoundType::Array { elem, .. } | CompoundType::Ptr(elem) => stack.push(elem),
+            CompoundType::ObjRef(_) => return true,
+            CompoundType::Struct(s) => stack.extend(s.fields),
+            CompoundType::Enum(data) => stack.extend(
+                data.variants
+                    .into_iter()
+                    .flat_map(|variant| variant.fields.into_iter()),
+            ),
+            CompoundType::Func { args, ret_tys } => {
+                stack.extend(args);
+                stack.extend(ret_tys);
+            }
+        }
+    }
+
+    false
+}
+
+fn has_enum_in_signature(ctx: &ModuleCtx, ty: Type) -> bool {
+    let mut visited = FxHashSet::default();
+    let mut stack = vec![ty];
+
+    while let Some(current_ty) = stack.pop() {
+        let cmpd_ref = match current_ty {
+            Type::EnumTag(cmpd_ref) => {
+                return ctx.with_ty_store(|store| store.get_compound(cmpd_ref).is_some());
+            }
+            Type::Compound(cmpd_ref) => cmpd_ref,
+            _ => continue,
+        };
+        if !visited.insert(cmpd_ref) {
+            continue;
+        }
+
+        let Some(cmpd) = ctx.with_ty_store(|store| store.get_compound(cmpd_ref).cloned()) else {
+            continue;
+        };
+
+        match cmpd {
+            CompoundType::Array { elem, .. }
+            | CompoundType::Ptr(elem)
+            | CompoundType::ObjRef(elem) => stack.push(elem),
+            CompoundType::Struct(s) => stack.extend(s.fields),
+            CompoundType::Enum(_) => return true,
+            CompoundType::Func { args, ret_tys } => {
+                stack.extend(args);
+                stack.extend(ret_tys);
             }
         }
     }
@@ -584,6 +722,16 @@ fn validate_data_initializer_shape(
     if ty.is_pointer(ctx) {
         return Err(format!(
             "type {ty:?} is unsupported for object data (pointer type)"
+        ));
+    }
+    if ty.is_obj_ref(ctx) {
+        return Err(format!(
+            "type {ty:?} is unsupported for object data (object reference type)"
+        ));
+    }
+    if ty.is_enum_tag() {
+        return Err(format!(
+            "type {ty:?} is unsupported for object data (enum tag type)"
         ));
     }
 
@@ -647,8 +795,14 @@ fn validate_data_initializer_shape(
             }
             Ok(())
         }
+        CompoundType::Enum(_) => Err(format!(
+            "type {ty:?} is unsupported for object data (enum type)"
+        )),
         CompoundType::Ptr(_) => Err(format!(
             "type {ty:?} is unsupported for object data (pointer type)"
+        )),
+        CompoundType::ObjRef(_) => Err(format!(
+            "type {ty:?} is unsupported for object data (object reference type)"
         )),
         CompoundType::Func { .. } => Err(format!(
             "type {ty:?} is unsupported for object data (function type)"

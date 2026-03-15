@@ -40,9 +40,9 @@ entry:
     DUP2  // jump block5;
   block5:
     JUMPDEST
-    SWAP2  // v50.i256 = add v0 v1;
+    SWAP2  // v41.i256 = add v0 v1;
     ADD
-    ADD  // v4.i256 = add v50 v32;
+    ADD  // v4.i256 = add v41 v32;
     PUSH0  // mstore 0.i256 v4 i256;
     MSTORE
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;

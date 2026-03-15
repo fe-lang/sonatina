@@ -6,13 +6,13 @@ input_file: test_files/evm/vault.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 4847 bytes
-  total: 4847 bytes
+  section runtime: 4843 bytes
+  total: 4843 bytes
 
 object: Vault
-  section init: 954 bytes
-  section runtime: 783 bytes
-  total: 1737 bytes
+  section init: 952 bytes
+  section runtime: 781 bytes
+  total: 1733 bytes
 
 object: VaultUser
   section init: 1248 bytes
@@ -28,17 +28,17 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Vault_init: ir_blocks=3 ir_insts=22 vcode_ops=71 fixups=6 imm_bytes=11
     mem: scratch_words=0 stable_words=2 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=2
-  __Vault_runtime: ir_blocks=13 ir_insts=39 vcode_ops=133 fixups=27 imm_bytes=7
+  __Vault_runtime: ir_blocks=13 ir_insts=39 vcode_ops=131 fixups=27 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __VaultUser_init: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __VaultUser_runtime: ir_blocks=7 ir_insts=35 vcode_ops=143 fixups=28 imm_bytes=14
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8: ir_blocks=3 ir_insts=23 vcode_ops=85 fixups=6 imm_bytes=16
+  create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8: ir_blocks=3 ir_insts=23 vcode_ops=84 fixups=6 imm_bytes=16
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  create2_stor__Evm_hef0af3106e109414_VaultUser_hcb553b593515d281__151df09479dab12a: ir_blocks=3 ir_insts=23 vcode_ops=85 fixups=6 imm_bytes=16
+  create2_stor__Evm_hef0af3106e109414_VaultUser_hcb553b593515d281__151df09479dab12a: ir_blocks=3 ir_insts=23 vcode_ops=84 fixups=6 imm_bytes=16
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b: ir_blocks=3 ir_insts=26 vcode_ops=94 fixups=12 imm_bytes=13
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -96,7 +96,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=549972 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=528972
+  case ok: calldata_len=0 success reason=Return gas_used=549562 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=528562
 
 
 --------------- DEBUG ---------------
@@ -798,8 +798,7 @@ __Vault_runtime:
     PUSH1 block11
     JUMPI
   block5:
-    POP  // v26.i256 = evm_sload 0.i256;
-    PUSH0
+    PUSH0  // v26.i256 = evm_sload 0.i256;
     SLOAD
     PUSH0  // call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v26;
     PUSH1 FuncRef(41)
@@ -814,8 +813,7 @@ __Vault_runtime:
     PUSH1 block12
     JUMPI
   block6:
-    POP  // v28.i256 = evm_sload 1.i256;
-    PUSH1 0x1 (1)
+    PUSH1 0x1 (1)  // v28.i256 = evm_sload 1.i256;
     SLOAD
     PUSH0  // call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v28;
     PUSH1 FuncRef(41)
@@ -1076,8 +1074,7 @@ create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8:
     PUSH1 block2  // br v23 block1 block2;
     JUMPI
   block1:
-    POP  // v26.i256 = evm_return_data_size;
-    RETURNDATASIZE
+    RETURNDATASIZE  // v26.i256 = evm_return_data_size;
     DUP1  // v27.*i256 = evm_malloc v26;
     POP
     PUSH1 0x40 (64)
@@ -1179,8 +1176,7 @@ create2_stor__Evm_hef0af3106e109414_VaultUser_hcb553b593515d281__151df09479dab12
     PUSH1 block2  // br v23 block1 block2;
     JUMPI
   block1:
-    POP  // v26.i256 = evm_return_data_size;
-    RETURNDATASIZE
+    RETURNDATASIZE  // v26.i256 = evm_return_data_size;
     DUP1  // v27.*i256 = evm_malloc v26;
     POP
     PUSH1 0x40 (64)

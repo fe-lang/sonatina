@@ -1,0 +1,47 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/enum_bearing_products_and_arrays_generic_pipeline.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @Wrapper = {@OptionI256, i256};
+type @TwoEnums = {@OptionI256, @Flag};
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+type @Flag = enum {
+    #Off,
+    #On(i256),
+};
+
+func public %main() -> i256 {
+    block0:
+        v11.@OptionI256 = enum.make @OptionI256 #Some 7.i256;
+        enum.assert_variant v11 #Some;
+        enum.assert_variant v11 #Some;
+        v27.@Flag = enum.make @Flag #On 5.i256;
+        enum.assert_variant v11 #Some;
+        enum.assert_variant v27 #On;
+        return 27.i256;
+}
+
+func public %entry() {
+    block0:
+        v10.@OptionI256 = enum.make @OptionI256 #Some 7.i256;
+        enum.assert_variant v10 #Some;
+        enum.assert_variant v10 #Some;
+        v24.@Flag = enum.make @Flag #On 5.i256;
+        enum.assert_variant v10 #Some;
+        enum.assert_variant v24 #On;
+        mstore 0.i8 27.i256 i256;
+        evm_return 0.i8 32.i8;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

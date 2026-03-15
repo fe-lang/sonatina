@@ -1,0 +1,12 @@
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+type @wrapper = {objref<@pair>};
+
+func private %sum_wrapper(v0.@wrapper) -> i256 {
+    block0:
+        v1.objref<@pair> = extract_value v0 0.i8;
+        v2.objref<i256> = obj.proj v1 0.i8;
+        v3.i256 = obj.load v2;
+        return v3;
+}

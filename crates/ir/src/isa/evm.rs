@@ -117,13 +117,14 @@ impl TypeLayout for EvmTypeLayout {
             // EVM memory is word-addressed by the MLOAD/MSTORE family. For now we model all
             // scalar/pointer values as occupying one full 32-byte slot.
             Type::I1 | Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 | Type::I256 => 32,
+            Type::EnumTag(_) => return Err(TypeLayoutError::UnrepresentableType(ty)),
 
             Type::Compound(cmpd) => {
                 let cmpd_data = ctx.with_ty_store(|s| s.resolve_compound(cmpd).clone());
                 match cmpd_data {
                     CompoundType::Array { elem, len } => self.size_of(elem, ctx)? * len,
 
-                    CompoundType::Ptr(_) => 32,
+                    CompoundType::Ptr(_) | CompoundType::ObjRef(_) => 32,
 
                     CompoundType::Struct(s) => {
                         if s.packed {
@@ -134,6 +135,16 @@ impl TypeLayout for EvmTypeLayout {
                             size += self.size_of(field, ctx)?;
                         }
 
+                        size
+                    }
+
+                    CompoundType::Enum(data) => {
+                        let mut size = 32;
+                        for variant in &data.variants {
+                            for &field in &variant.fields {
+                                size += self.size_of(field, ctx)?;
+                            }
+                        }
                         size
                     }
 

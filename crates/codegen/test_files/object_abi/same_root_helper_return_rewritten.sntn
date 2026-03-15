@@ -1,0 +1,19 @@
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func private %id(v0.objref<@pair>) -> objref<@pair> {
+    block0:
+        return v0;
+}
+
+func private %make_pair(v0.i256, v1.i256) -> objref<@pair> {
+    block0:
+        v2.objref<@pair> = obj.alloc @pair;
+        v3.objref<i256> = obj.proj v2 0.i8;
+        obj.store v3 v0;
+        v4.objref<i256> = obj.proj v2 1.i8;
+        obj.store v4 v1;
+        v5.objref<@pair> = call %id v2;
+        return v5;
+}

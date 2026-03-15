@@ -29,6 +29,7 @@ mod slots;
 mod spill;
 mod sym_stack;
 mod templates;
+mod terminal_chain;
 mod trace;
 
 pub use alloc::StackifyAlloc;
@@ -49,6 +50,7 @@ const CONSUME_LAST_USE_MAX_SWAPS: usize = 4;
 mod tests {
     use super::StackifyBuilder;
     use crate::{
+        analysis::func_behavior::analyze_module,
         critical_edge::CriticalEdgeSplitter,
         domtree::DomTree,
         isa::evm::{EvmBackend, canonicalize_alias_value},
@@ -57,7 +59,10 @@ mod tests {
     };
     use cranelift_entity::SecondaryMap;
     use sonatina_ir::{
-        ValueId, cfg::ControlFlowGraph, inst::control_flow::BranchKind, isa::evm::Evm,
+        InstDowncast, ValueId,
+        cfg::ControlFlowGraph,
+        inst::{control_flow, control_flow::BranchKind, evm},
+        isa::evm::Evm,
     };
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
@@ -426,6 +431,234 @@ block3:
                 }),
                 "unexpected out-of-range DUP in merge repair: {:?}",
                 alloc.pre_actions
+            );
+        });
+    }
+
+    #[test]
+    fn terminal_jump_chain_to_shared_revert_sink_skips_fixups() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i256) {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    evm_revert 0.i256 0.i256;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let fref = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&f| parsed.module.ctx.func_sig(f, |sig| sig.name() == "f"))
+            .expect("missing f");
+
+        parsed.module.func_store.view(fref, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+
+            let mut liveness = Liveness::new();
+            liveness.compute(function, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let sink = function
+                .layout
+                .iter_block()
+                .find(|&block| {
+                    function.layout.last_inst_of(block).is_some_and(|inst| {
+                        <&evm::EvmRevert as InstDowncast>::downcast(
+                            function.inst_set(),
+                            function.dfg.inst(inst),
+                        )
+                        .is_some()
+                    })
+                })
+                .expect("revert sink exists");
+            let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute();
+
+            for pred in cfg.preds_of(sink).copied() {
+                let jump = function
+                    .layout
+                    .last_inst_of(pred)
+                    .expect("pred terminator exists");
+                let branch = function
+                    .dfg
+                    .branch_info(jump)
+                    .expect("pred terminator is control flow");
+                assert!(
+                    matches!(branch.branch_kind(), BranchKind::Jump(_)),
+                    "expected unconditional jump predecessor"
+                );
+                assert!(
+                    alloc.pre_actions[jump].is_empty(),
+                    "terminal jump chain should not normalize stack into revert sink: {:?}",
+                    alloc.pre_actions[jump]
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn terminal_jump_chain_to_noreturn_helper_sink_skips_fixups() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func private %halt() {
+block0:
+    evm_revert 0.i256 0.i256;
+}
+
+func public %f(v0.i1, v1.i256) {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    call %halt;
+    unreachable;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        analyze_module(&parsed.module);
+        let fref = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&f| parsed.module.ctx.func_sig(f, |sig| sig.name() == "f"))
+            .expect("missing f");
+
+        parsed.module.func_store.view(fref, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+
+            let mut liveness = Liveness::new();
+            liveness.compute(function, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let sink = function
+                .layout
+                .iter_block()
+                .find(|&block| {
+                    function.layout.last_inst_of(block).is_some_and(|inst| {
+                        <&control_flow::Unreachable as InstDowncast>::downcast(
+                            function.inst_set(),
+                            function.dfg.inst(inst),
+                        )
+                        .is_some()
+                    })
+                })
+                .expect("unreachable sink exists");
+            let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute();
+
+            for pred in cfg.preds_of(sink).copied() {
+                let jump = function
+                    .layout
+                    .last_inst_of(pred)
+                    .expect("pred terminator exists");
+                let branch = function
+                    .dfg
+                    .branch_info(jump)
+                    .expect("pred terminator is control flow");
+                assert!(
+                    matches!(branch.branch_kind(), BranchKind::Jump(_)),
+                    "expected unconditional jump predecessor"
+                );
+                assert!(
+                    alloc.pre_actions[jump].is_empty(),
+                    "terminal jump chain should not normalize stack into noreturn helper sink: {:?}",
+                    alloc.pre_actions[jump]
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn shared_terminal_sink_with_live_in_still_repairs_edges() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i256) {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v2.i256 = add 1.i256 2.i256;
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v3.i256 = add v1 1.i256;
+    evm_revert 0.i256 0.i256;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let fref = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&f| parsed.module.ctx.func_sig(f, |sig| sig.name() == "f"))
+            .expect("missing f");
+
+        parsed.module.func_store.view(fref, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+
+            let mut liveness = Liveness::new();
+            liveness.compute(function, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let sink = function
+                .layout
+                .iter_block()
+                .find(|&block| {
+                    function.layout.last_inst_of(block).is_some_and(|inst| {
+                        <&evm::EvmRevert as InstDowncast>::downcast(
+                            function.inst_set(),
+                            function.dfg.inst(inst),
+                        )
+                        .is_some()
+                    })
+                })
+                .expect("revert sink exists");
+            let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute();
+
+            assert!(
+                cfg.preds_of(sink).copied().any(|pred| {
+                    let jump = function
+                        .layout
+                        .last_inst_of(pred)
+                        .expect("pred terminator exists");
+                    alloc.pre_actions[jump]
+                        .iter()
+                        .any(|action| matches!(action, Action::Pop))
+                }),
+                "expected sink with a live-in to keep edge-repair pops on incoming jumps: {:?}",
+                alloc.pre_actions,
             );
         });
     }

@@ -1,0 +1,16 @@
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %use_value(v0.i256) -> i256 {
+block0:
+    v1.@OptionI256 = enum.make @OptionI256 #Some (v0);
+    v2.enumtag(@OptionI256) = enum.tag v1;
+    v3.i1 = enum.is_variant v1 #Some;
+    enum.assert_variant v1 #Some;
+    v4.i256 = enum.extract v1 #Some 0.i8;
+    return v4;
+}

@@ -1,0 +1,13 @@
+---
+source: crates/codegen/tests/object_load_store.rs
+input_file: test_files/object_load_store/whole_store_forwards_field_load.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func private %entry(v0.@pair) -> i256 {
+    block0:
+        v6.i256 = extract_value v0 1.i64;
+        return v6;
+}

@@ -1,6 +1,5 @@
 ---
 source: crates/parser/tests/syntax.rs
-assertion_line: 35
 input_file: test_files/syntax/module/simple.sntn
 ---
 Module {
@@ -104,6 +103,7 @@ Module {
             packed: true,
         },
     ],
+    enum_types: [],
     functions: [
         Func {
             signature: FuncSignature {
@@ -482,7 +482,7 @@ Module {
                             ..
                         },
                         Type {
-                            kind: Struct(
+                            kind: Named(
                                 "foo",
                             ),
                             ..
@@ -496,7 +496,7 @@ Module {
                         Type {
                             kind: Ptr(
                                 Type {
-                                    kind: Struct(
+                                    kind: Named(
                                         "foo",
                                     ),
                                     ..

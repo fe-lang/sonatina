@@ -9,6 +9,10 @@ use sonatina_ir::{
 
 use crate::module_analysis;
 
+use super::aggregate::{
+    collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
+};
+
 mod cost;
 mod full;
 mod rewrite;
@@ -44,12 +48,17 @@ pub struct InlinerConfig {
 
     pub always_inline_single_use: bool,
     pub multi_block_multi_use_penalty: i32,
+    pub max_multi_use_object_helper_blocks: usize,
+    pub max_multi_use_object_helper_insts: usize,
+    pub max_multi_use_object_helper_call_count: usize,
 
     pub inline_threshold: i32,
     pub inline_threshold_cold: i32,
     pub single_use_bonus: i32,
     pub leaf_bonus: i32,
     pub loop_penalty: i32,
+    pub object_scalarization_bonus_cap: i32,
+    pub object_helper_cluster_bonus: i32,
 }
 
 impl Default for InlinerConfig {
@@ -76,12 +85,17 @@ impl Default for InlinerConfig {
 
             always_inline_single_use: true,
             multi_block_multi_use_penalty: 12,
+            max_multi_use_object_helper_blocks: 2,
+            max_multi_use_object_helper_insts: 12,
+            max_multi_use_object_helper_call_count: 4,
 
             inline_threshold: 24,
             inline_threshold_cold: 12,
             single_use_bonus: 12,
             leaf_bonus: 4,
             loop_penalty: 20,
+            object_scalarization_bonus_cap: 10,
+            object_helper_cluster_bonus: 4,
         }
     }
 }
@@ -137,6 +151,13 @@ impl Inliner {
             let funcs = module.funcs();
             let (sites_by_caller, call_counts) = collect_iteration_call_data(module, &funcs);
             let analysis = module_analysis::analyze_module(module);
+            let object_effects = self
+                .config
+                .enable_full_inliner
+                .then(|| compute_object_effect_summaries(module));
+            let local_object_args = object_effects
+                .as_ref()
+                .map(|effects| collect_local_object_arg_info_with_effects(module, effects));
             let caller_order = caller_order_bottom_up_scc(&funcs, &analysis);
             let recursive_snapshots = collect_recursive_snapshots(module, &funcs, &analysis);
             let depth_at_iter_start = inline_depth_by_func.clone();
@@ -237,10 +258,14 @@ impl Inliner {
 
                     let decision = cost::decide_inline(
                         module,
-                        &analysis,
                         &mut inlinee_summaries,
                         snapshot_callee,
                         recursive_callsite,
+                        cost::InlineDecisionContext {
+                            module_info: &analysis,
+                            local_object_args: local_object_args.as_ref(),
+                            object_effects: object_effects.as_ref(),
+                        },
                         cost::InlineRequest {
                             callee_ref: site.callee,
                             callee_call_count: callee_calls,

@@ -6,11 +6,11 @@ input_file: test_files/evm/gvn_cross_block_tuple_call_reuse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 74 bytes
-  total: 74 bytes
+  section runtime: 73 bytes
+  total: 73 bytes
 
 functions:
-  entry: ir_blocks=8 ir_insts=24 vcode_ops=58 fixups=4 imm_bytes=12
+  entry: ir_blocks=8 ir_insts=24 vcode_ops=57 fixups=4 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -66,7 +66,6 @@ evm:
     - stack=[v7]
       br [v7] -> [block12, block15]
   block12 P=[] T=[]
-    inherited from block2: []
     // v29.*i256 = evm_malloc 64.i256;
     - stack=[]
       evm_malloc [] -> v29
@@ -96,21 +95,17 @@ evm:
       pre: [PUSH(32), PUSH(0)]
       evm_return [0, 32]
   block15 P=[] T=[]
-    inherited from block2: []
     // jump block8;
     - stack=[]
       jump -> block8
   block9 P=[] T=[]
-    inherited from block1: [v41x]
     // evm_revert 0.i256 0.i256;
-    - stack=[v41x]
+    - stack=[]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
   block14 P=[] T=[]
-    inherited from block0: [v2x]
     // jump block8;
-    - stack=[v2x]
-      cleanup: [POP]
+    - stack=[]
       jump -> block8
   block8 P=[] T=[]
     // mstore 0.i256 0.i256 i256;
@@ -181,7 +176,6 @@ entry:
     REVERT
   block14:
     JUMPDEST
-    POP  // jump block8;
   block8:
     JUMPDEST
     PUSH0  // mstore 0.i256 0.i256 i256;

@@ -25,6 +25,7 @@ use tracing::{debug_span, info_span, trace_span};
 
 use crate::{
     analysis::func_behavior,
+    cfg_edit::CleanupMode,
     critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
@@ -33,7 +34,15 @@ use crate::{
         vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
     },
     module_analysis::{CallGraph, SccBuilder},
-    optim::aggregate::{AggregateLowerToMemoryLegalize, assert_aggregate_legalized, shape},
+    optim::{
+        aggregate::{
+            AggregateCombine, AggregateExpandAbi, AggregateLowerToMemoryLegalize,
+            AggregateScalarize, EnumLowerToProduct, ObjectLoadStore, ObjectLowerToMemory,
+            ObjectReturnOutParam, assert_aggregate_legalized,
+            collect_local_object_arg_info_with_effects, compute_object_effect_summaries, shape,
+        },
+        cfg_cleanup::CfgCleanup,
+    },
     stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyBuilder},
 };
 use smallvec::{SmallVec, smallvec};
@@ -1542,6 +1551,7 @@ fn type_is_legalized_evm(ctx: &ModuleCtx, ty: Type, seen: &mut FxHashSet<Compoun
     match ty {
         Type::I1 | Type::I256 | Type::Unit => true,
         Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 => false,
+        Type::EnumTag(_) => false,
         Type::Compound(compound) => {
             if !seen.insert(compound) {
                 return true;
@@ -1551,6 +1561,7 @@ fn type_is_legalized_evm(ctx: &ModuleCtx, ty: Type, seen: &mut FxHashSet<Compoun
                 CompoundType::Array { elem, .. } | CompoundType::Ptr(elem) => {
                     type_is_legalized_evm(ctx, elem, seen)
                 }
+                CompoundType::ObjRef(_) => false,
                 CompoundType::Func { args, ret_tys } => args
                     .iter()
                     .chain(ret_tys.iter())
@@ -1559,6 +1570,7 @@ fn type_is_legalized_evm(ctx: &ModuleCtx, ty: Type, seen: &mut FxHashSet<Compoun
                     .fields
                     .iter()
                     .all(|&field| type_is_legalized_evm(ctx, field, seen)),
+                CompoundType::Enum(_) => false,
             }
         }
     }
@@ -1738,7 +1750,40 @@ impl LowerBackend for EvmBackend {
 
         let _span =
             info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
+        EnumLowerToProduct.run(module);
+        for func_ref in module.funcs() {
+            module.func_store.modify(func_ref, |function| {
+                AggregateCombine::default().run(function)
+            });
+        }
+        let synthetic_out_args = ObjectReturnOutParam.run_with_synthetic_out_args(module);
+        let object_effects = compute_object_effect_summaries(module);
+        let mut local_object_args =
+            collect_local_object_arg_info_with_effects(module, &object_effects);
+        crate::optim::aggregate::merge_local_object_arg_info(
+            &mut local_object_args,
+            &synthetic_out_args,
+        );
+        for func_ref in module.funcs() {
+            module.func_store.modify(func_ref, |function| {
+                ObjectLoadStore::default().run_for_func(
+                    func_ref,
+                    function,
+                    &local_object_args,
+                    &object_effects,
+                )
+            });
+        }
+        ObjectLowerToMemory.run(module);
+        AggregateExpandAbi::default().run(module);
         legalize_evm_section(module, funcs);
+        for &func in funcs {
+            module.func_store.modify(func, |function| {
+                CfgCleanup::new(CleanupMode::Strict).run(function);
+                AggregateCombine::default().run(function);
+                AggregateScalarize::default().run_for_func(func, function, &local_object_args);
+            });
+        }
         for &func in funcs {
             module.func_store.view(func, |function| {
                 assert_supported_lowering_ir(func, function)
@@ -1968,7 +2013,40 @@ impl LowerBackend for EvmBackend {
         }
 
         let closure = collect_call_closure(module, std::slice::from_ref(&func));
+        EnumLowerToProduct.run(module);
+        for func_ref in module.funcs() {
+            module.func_store.modify(func_ref, |function| {
+                AggregateCombine::default().run(function)
+            });
+        }
+        let synthetic_out_args = ObjectReturnOutParam.run_with_synthetic_out_args(module);
+        let object_effects = compute_object_effect_summaries(module);
+        let mut local_object_args =
+            collect_local_object_arg_info_with_effects(module, &object_effects);
+        crate::optim::aggregate::merge_local_object_arg_info(
+            &mut local_object_args,
+            &synthetic_out_args,
+        );
+        for func_ref in module.funcs() {
+            module.func_store.modify(func_ref, |function| {
+                ObjectLoadStore::default().run_for_func(
+                    func_ref,
+                    function,
+                    &local_object_args,
+                    &object_effects,
+                )
+            });
+        }
+        ObjectLowerToMemory.run(module);
+        AggregateExpandAbi::default().run(module);
         legalize_evm_section(module, &closure);
+        for &callee in &closure {
+            module.func_store.modify(callee, |function| {
+                CfgCleanup::new(CleanupMode::Strict).run(function);
+                AggregateCombine::default().run(function);
+                AggregateScalarize::default().run_for_func(callee, function, &local_object_args);
+            });
+        }
         module.func_store.view(func, |function| {
             assert_supported_lowering_ir(func, function)
         });
@@ -2560,6 +2638,28 @@ impl LowerBackend for EvmBackend {
 
                 emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
+            EvmInstKind::ObjAlloc(_)
+            | EvmInstKind::ObjProj(_)
+            | EvmInstKind::ObjIndex(_)
+            | EvmInstKind::ObjLoad(_)
+            | EvmInstKind::ObjStore(_)
+            | EvmInstKind::EnumMake(_)
+            | EvmInstKind::EnumTag(_)
+            | EvmInstKind::EnumIsVariant(_)
+            | EvmInstKind::EnumAssertVariant(_)
+            | EvmInstKind::EnumAssertVariantRef(_)
+            | EvmInstKind::EnumExtract(_)
+            | EvmInstKind::EnumSetTag(_)
+            | EvmInstKind::EnumWriteVariant(_)
+            | EvmInstKind::EnumGetTag(_)
+            | EvmInstKind::EnumProj(_)
+            | EvmInstKind::ObjMaterializeStack(_)
+            | EvmInstKind::ObjMaterializeHeap(_)
+            | EvmInstKind::MemAllocDynamic(_) => {
+                panic!(
+                    "enum/object lowering invariant violated: high-level enum/object instruction reached EVM lowering"
+                )
+            }
 
             EvmInstKind::EvmStop(_) => basic_op(ctx, &[OpCode::STOP]),
 
@@ -2625,7 +2725,6 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::EvmStaticCall(_) => basic_op(ctx, &[OpCode::STATICCALL]),
             EvmInstKind::EvmRevert(_) => basic_op(ctx, &[OpCode::REVERT]),
             EvmInstKind::EvmSelfDestruct(_) => basic_op(ctx, &[OpCode::SELFDESTRUCT]),
-
             EvmInstKind::EvmMalloc(_) => {
                 let needs_dyn_sp_clamp = self.current_malloc_needs_dyn_sp_clamp(insn);
                 let has_persistent_mallocs = self.section_has_persistent_mallocs();
@@ -3124,6 +3223,12 @@ fn build_gep_lower_plan(ctx: &Lower<OpCode>, args: &[ValueId]) -> GepLowerPlan {
             CompoundType::Func { .. } => {
                 panic!("invalid gep: indexing into function type");
             }
+            CompoundType::Enum(_) => {
+                panic!("invalid gep: indexing into enum type");
+            }
+            CompoundType::ObjRef(_) => {
+                panic!("invalid gep: indexing into object-reference type");
+            }
         }
     }
 
@@ -3292,6 +3397,9 @@ fn perform_action(ctx: &mut Lower<OpCode>, action: Action, frame_size_slots: u32
                     Immediate::I64(v) => shrink_bytes(&v.to_be_bytes()),
                     Immediate::I128(v) => shrink_bytes(&v.to_be_bytes()),
                     Immediate::I256(v) => shrink_bytes(&v.to_u256().to_big_endian()),
+                    Immediate::EnumTag { value, .. } => {
+                        shrink_bytes(&value.to_u256().to_big_endian())
+                    }
                 };
                 push_bytes(ctx, &bytes);
 
@@ -3400,6 +3508,7 @@ fn scalar_bit_width(ty: Type, module: &sonatina_ir::module::ModuleCtx) -> Option
         Type::I64 => 64,
         Type::I128 => 128,
         Type::I256 => 256,
+        Type::EnumTag(_) => return None,
         Type::Unit => 0,
         Type::Compound(_) if ty.is_pointer(module) => 256,
         Type::Compound(_) => return None,

@@ -1,0 +1,23 @@
+---
+source: crates/codegen/tests/opt_pipeline.rs
+input_file: test_files/opt_pipeline/enum_object_ops.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func public %entry(v0.i256) -> i256 {
+    block0:
+        v5.i256 = add 7.i256 v0;
+        return v5;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

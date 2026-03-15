@@ -9,7 +9,13 @@ pub(super) fn iter_nested_types(cmpd: &CompoundType) -> Vec<Type> {
     match cmpd {
         CompoundType::Array { elem, .. } => vec![*elem],
         CompoundType::Ptr(elem) => vec![*elem],
+        CompoundType::ObjRef(elem) => vec![*elem],
         CompoundType::Struct(data) => data.fields.clone(),
+        CompoundType::Enum(data) => data
+            .variants
+            .iter()
+            .flat_map(|variant| variant.fields.iter().copied())
+            .collect(),
         CompoundType::Func { args, ret_tys } => {
             let mut nested = args.to_vec();
             nested.extend(ret_tys.iter().copied());
@@ -49,8 +55,18 @@ pub(super) fn is_type_valid(ctx: &ModuleCtx, ty: Type) -> bool {
         match cmpd {
             CompoundType::Array { elem, .. } => push_nested(elem, true),
             CompoundType::Ptr(elem) => push_nested(elem, false),
+            CompoundType::ObjRef(elem) => push_nested(elem, false),
             CompoundType::Struct(data) => {
                 for field in data.fields {
+                    push_nested(field, true);
+                }
+            }
+            CompoundType::Enum(data) => {
+                for field in data
+                    .variants
+                    .into_iter()
+                    .flat_map(|variant| variant.fields.into_iter())
+                {
                     push_nested(field, true);
                 }
             }
@@ -113,6 +129,18 @@ pub(super) fn is_pointer_ty(ctx: &ModuleCtx, ty: Type) -> bool {
         store
             .get_compound(cmpd_ref)
             .is_some_and(|cmpd| matches!(cmpd, CompoundType::Ptr(_)))
+    })
+}
+
+pub(super) fn is_obj_ref_ty(ctx: &ModuleCtx, ty: Type) -> bool {
+    let Type::Compound(cmpd_ref) = ty else {
+        return false;
+    };
+
+    ctx.with_ty_store(|store| {
+        store
+            .get_compound(cmpd_ref)
+            .is_some_and(|cmpd| matches!(cmpd, CompoundType::ObjRef(_)))
     })
 }
 

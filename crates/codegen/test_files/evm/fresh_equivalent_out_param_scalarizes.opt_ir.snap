@@ -1,0 +1,38 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/fresh_equivalent_out_param_scalarizes.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func public %entry(v0.i1, v1.i256, v2.i256) -> i256 {
+    block0:
+        br v0 block3 block4;
+
+    block3:
+        v7.objref<@pair> = obj.alloc @pair;
+        v8.objref<i256> = obj.proj v7 0.i8;
+        obj.store v8 v1;
+        jump block5;
+
+    block4:
+        v9.objref<@pair> = obj.alloc @pair;
+        v10.objref<i256> = obj.proj v9 0.i8;
+        obj.store v10 v2;
+        jump block5;
+
+    block5:
+        v11.objref<@pair> = phi (v7 block3) (v9 block4);
+        v4.objref<i256> = obj.proj v11 0.i8;
+        v5.i256 = obj.load v4;
+        return v5;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

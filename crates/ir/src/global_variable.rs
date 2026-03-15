@@ -74,6 +74,10 @@ impl GlobalVariableStore {
         self.gv_data[gv_ref].initializer = initializer;
     }
 
+    pub fn update_ty(&mut self, gv_ref: GlobalVariableRef, ty: Type) {
+        self.gv_data[gv_ref].ty = ty;
+    }
+
     pub fn is_empty(&self) -> bool {
         self.gv_data.is_empty()
     }

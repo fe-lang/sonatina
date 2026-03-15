@@ -1,0 +1,20 @@
+---
+source: crates/codegen/tests/object_lowering.rs
+input_file: test_files/object_lowering/nonescaping_local_pair.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func private %sum_local(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.*@pair = alloca @pair;
+        v3.*i256 = gep v2 0.i64 0.i8;
+        mstore v3 v0 i256;
+        v4.*i256 = gep v2 0.i64 1.i8;
+        mstore v4 v1 i256;
+        v5.i256 = mload v3 i256;
+        v6.i256 = mload v4 i256;
+        v7.i256 = add v5 v6;
+        return v7;
+}

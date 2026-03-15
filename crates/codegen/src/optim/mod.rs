@@ -14,4 +14,4 @@ pub mod sccp;
 mod sccp_simplify;
 mod simplify_expr;
 
-pub use pipeline::{Pass, Pipeline, Step, run_func_passes};
+pub use pipeline::{Pass, Pipeline, Step};

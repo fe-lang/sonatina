@@ -38,6 +38,18 @@ impl SymStack {
         }
     }
 
+    pub(super) fn opaque_prefix_empty(has_internal_return: bool) -> Self {
+        let mut items = VecDeque::new();
+        let func_ret_index = has_internal_return.then_some(0);
+        if has_internal_return {
+            items.push_back(StackItem::FuncRetAddr);
+        }
+        Self {
+            items,
+            func_ret_index,
+        }
+    }
+
     pub(super) fn from_template(template: &BlockTemplate, has_internal_return: bool) -> Self {
         let mut items: VecDeque<StackItem> = template
             .params

@@ -1,0 +1,24 @@
+---
+source: crates/codegen/tests/object_abi.rs
+input_file: test_files/object_abi/escaped_root_not_rewritten.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func private %touch_pair(v0.objref<@pair>) {
+    block0:
+        v1.objref<i256> = obj.proj v0 0.i8;
+        obj.store v1 1.i256;
+        return;
+}
+
+func private %make_pair(v7.objref<@pair>, v0.i256, v1.i256) {
+    block0:
+        v3.objref<i256> = obj.proj v7 0.i8;
+        obj.store v3 v0;
+        call %touch_pair v7;
+        v4.objref<i256> = obj.proj v7 1.i8;
+        obj.store v4 v1;
+        return;
+}

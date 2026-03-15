@@ -2,13 +2,16 @@ use std::any::{Any, TypeId};
 
 use smallvec::SmallVec;
 
-use crate::{BlockId, Type, ValueId, module::FuncRef};
+use crate::{BlockId, Type, ValueId, module::FuncRef, types::EnumVariantRef};
 
 use super::{
     Inst,
     cast::{Bitcast, IntToPtr, PtrToInt, Sext, Trunc, Zext},
     control_flow::{Call, Phi},
-    data::{GetFunctionPtr, SymAddr, SymSize, SymbolRef},
+    data::{
+        EnumAssertVariant, EnumAssertVariantRef, EnumExtract, EnumIsVariant, EnumMake, EnumProj,
+        EnumSetTag, EnumWriteVariant, GetFunctionPtr, SymAddr, SymSize, SymbolRef,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -100,6 +103,7 @@ enum OpaqueInstData {
     GetFunctionPtr(FuncRef),
     SymAddr(SymbolRef),
     SymSize(SymbolRef),
+    EnumVariant(EnumVariantRef),
 }
 
 impl OwnedInstKey {
@@ -306,6 +310,30 @@ fn opaque_data(inst: &dyn Inst) -> Option<OpaqueInstData> {
     }
     if let Some(inst) = downcast_ref::<SymSize>(inst) {
         return Some(OpaqueInstData::SymSize(inst.sym().clone()));
+    }
+    if let Some(inst) = downcast_ref::<EnumMake>(inst) {
+        return Some(OpaqueInstData::EnumVariant(*inst.variant()));
+    }
+    if let Some(inst) = downcast_ref::<EnumIsVariant>(inst) {
+        return Some(OpaqueInstData::EnumVariant(*inst.variant()));
+    }
+    if let Some(inst) = downcast_ref::<EnumAssertVariant>(inst) {
+        return Some(OpaqueInstData::EnumVariant(*inst.variant()));
+    }
+    if let Some(inst) = downcast_ref::<EnumAssertVariantRef>(inst) {
+        return Some(OpaqueInstData::EnumVariant(*inst.variant()));
+    }
+    if let Some(inst) = downcast_ref::<EnumExtract>(inst) {
+        return Some(OpaqueInstData::EnumVariant(*inst.variant()));
+    }
+    if let Some(inst) = downcast_ref::<EnumSetTag>(inst) {
+        return Some(OpaqueInstData::EnumVariant(*inst.variant()));
+    }
+    if let Some(inst) = downcast_ref::<EnumWriteVariant>(inst) {
+        return Some(OpaqueInstData::EnumVariant(*inst.variant()));
+    }
+    if let Some(inst) = downcast_ref::<EnumProj>(inst) {
+        return Some(OpaqueInstData::EnumVariant(*inst.variant()));
     }
     None
 }

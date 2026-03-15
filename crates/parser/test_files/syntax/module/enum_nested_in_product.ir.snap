@@ -1,0 +1,11 @@
+---
+source: crates/parser/tests/syntax.rs
+input_file: test_files/syntax/module/enum_nested_in_product.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @wrapper = {@option_i256, i256};
+type @option_i256 = enum {
+    #None,
+    #Some(i256),
+};

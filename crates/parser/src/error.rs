@@ -47,6 +47,7 @@ pub enum UndefinedKind {
     Block(ir::BlockId),
     Func(SmolStr),
     Type(SmolStr),
+    Variant(SmolStr),
     Value(SmolStr),
     Inst(SmolStr),
 }
@@ -90,6 +91,7 @@ impl Error {
                 UndefinedKind::Block(id) => format!("undefined block: `block{}`", id.0),
                 UndefinedKind::Func(name) => format!("undefined function: `%{name}`"),
                 UndefinedKind::Type(name) => format!("undefined type: `@{name}`"),
+                UndefinedKind::Variant(name) => format!("undefined enum variant: `#{name}`"),
                 UndefinedKind::Value(name) => format!("undefined value: `{name}`"),
                 UndefinedKind::Inst(name) => format!("unknown inst: `{name}`"),
             },

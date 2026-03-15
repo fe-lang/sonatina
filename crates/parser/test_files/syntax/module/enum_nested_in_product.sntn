@@ -1,0 +1,8 @@
+target = "evm-ethereum-osaka"
+
+type @option_i256 = enum {
+    #None,
+    #Some(i256),
+};
+
+type @wrapper = { @option_i256, i256 };

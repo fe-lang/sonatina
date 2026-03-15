@@ -13,11 +13,17 @@ pub struct TypeStore {
     compounds: PrimaryMap<CompoundTypeRef, CompoundType>,
     rev_types: FxHashMap<CompoundType, CompoundTypeRef>,
     struct_types: IndexMap<String, CompoundTypeRef>,
+    enum_types: IndexMap<String, CompoundTypeRef>,
 }
 
 impl TypeStore {
     pub fn make_ptr(&mut self, ty: Type) -> Type {
         let ty = self.make_compound(CompoundType::Ptr(ty));
+        Type::Compound(ty)
+    }
+
+    pub fn make_obj_ref(&mut self, ty: Type) -> Type {
+        let ty = self.make_compound(CompoundType::ObjRef(ty));
         Type::Compound(ty)
     }
 
@@ -31,6 +37,17 @@ impl TypeStore {
             name: name.to_string(),
             fields: fields.to_vec(),
             packed,
+        });
+
+        let cmpd_ref = self.make_compound(compound_data);
+        Type::Compound(cmpd_ref)
+    }
+
+    pub fn make_enum(&mut self, name: &str, variants: &[VariantData], repr: EnumReprHint) -> Type {
+        let compound_data = CompoundType::Enum(EnumData {
+            name: name.to_string(),
+            repr,
+            variants: variants.to_vec(),
         });
 
         let cmpd_ref = self.make_compound(compound_data);
@@ -79,6 +96,14 @@ impl TypeStore {
         self.struct_types.get(name).copied()
     }
 
+    pub fn lookup_enum(&self, name: &str) -> Option<CompoundTypeRef> {
+        self.enum_types.get(name).copied()
+    }
+
+    pub fn lookup_named_type(&self, name: &str) -> Option<CompoundTypeRef> {
+        self.lookup_struct(name).or_else(|| self.lookup_enum(name))
+    }
+
     /// Update struct fields.
     /// The corresponding `CompoundTypeRef` is still valid after the update.
     ///
@@ -104,6 +129,28 @@ impl TypeStore {
         self.rev_types.insert(cmpd.clone(), cmpd_ref);
     }
 
+    pub fn update_enum_variants(
+        &mut self,
+        name: &str,
+        variants: &[VariantData],
+        repr: EnumReprHint,
+    ) {
+        let Some(cmpd_ref) = self.enum_types.get(name).cloned() else {
+            panic!("enum {name} is not found");
+        };
+
+        let cmpd = &mut self.compounds[cmpd_ref];
+        self.rev_types.remove(cmpd);
+
+        let CompoundType::Enum(e_data) = cmpd else {
+            return;
+        };
+
+        e_data.repr = repr;
+        e_data.variants = variants.to_vec();
+        self.rev_types.insert(cmpd.clone(), cmpd_ref);
+    }
+
     pub fn all_struct_data(&self) -> impl Iterator<Item = &StructData> {
         self.struct_types
             .values()
@@ -111,6 +158,46 @@ impl TypeStore {
                 CompoundType::Struct(ref def) => def,
                 _ => unreachable!(),
             })
+    }
+
+    pub fn all_enum_data(&self) -> impl Iterator<Item = &EnumData> {
+        self.enum_types
+            .values()
+            .map(|compound_type| match self.compounds[*compound_type] {
+                CompoundType::Enum(ref def) => def,
+                _ => unreachable!(),
+            })
+    }
+
+    pub fn enum_def(&self, ty: Type) -> Option<&EnumData> {
+        let Type::Compound(cmpd_ref) = ty else {
+            return None;
+        };
+        self.enum_data(cmpd_ref)
+    }
+
+    pub fn enum_data(&self, cmpd_ref: CompoundTypeRef) -> Option<&EnumData> {
+        match self.compounds.get(cmpd_ref)? {
+            CompoundType::Enum(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    pub fn enum_variant_ref(&self, enum_ty: CompoundTypeRef, name: &str) -> Option<EnumVariantRef> {
+        let data = self.enum_data(enum_ty)?;
+        let index = data
+            .variants
+            .iter()
+            .position(|variant| variant.name == name)?;
+        Some(EnumVariantRef::new(
+            enum_ty,
+            u32::try_from(index).expect("enum variant index overflow"),
+        ))
+    }
+
+    pub fn enum_variant_data(&self, variant: EnumVariantRef) -> Option<&VariantData> {
+        let index = usize::try_from(variant.index()).ok()?;
+        self.enum_data(variant.enum_ty())?.variants.get(index)
     }
 
     pub fn deref(&self, ptr: Type) -> Option<Type> {
@@ -137,6 +224,13 @@ impl TypeStore {
         }
     }
 
+    pub fn is_obj_ref(&self, ty: Type) -> bool {
+        match ty {
+            Type::Compound(cmpd_ref) => self.compounds[cmpd_ref].is_obj_ref(),
+            _ => false,
+        }
+    }
+
     pub fn is_array(&self, ty: Type) -> bool {
         match ty {
             Type::Compound(cmpd_ref) => self.compounds[cmpd_ref].is_array(),
@@ -147,6 +241,13 @@ impl TypeStore {
     pub fn is_struct(&self, ty: Type) -> bool {
         match ty {
             Type::Compound(cmpd_ref) => self.compounds[cmpd_ref].is_struct(),
+            _ => false,
+        }
+    }
+
+    pub fn is_enum(&self, ty: Type) -> bool {
+        match ty {
+            Type::Compound(cmpd_ref) => self.compounds[cmpd_ref].is_enum(),
             _ => false,
         }
     }
@@ -166,10 +267,19 @@ impl TypeStore {
                 if let CompoundType::Struct(s) = &data {
                     let name = &s.name;
                     assert!(
-                        !self.struct_types.contains_key(name),
-                        "struct {name} is already defined"
+                        !self.struct_types.contains_key(name)
+                            && !self.enum_types.contains_key(name),
+                        "type {name} is already defined"
                     );
                     self.struct_types.insert(name.to_string(), cmpd_ref);
+                } else if let CompoundType::Enum(e) = &data {
+                    let name = &e.name;
+                    assert!(
+                        !self.struct_types.contains_key(name)
+                            && !self.enum_types.contains_key(name),
+                        "type {name} is already defined"
+                    );
+                    self.enum_types.insert(name.to_string(), cmpd_ref);
                 }
 
                 self.rev_types.insert(data, cmpd_ref);
@@ -197,6 +307,7 @@ pub enum Type {
     I64,
     I128,
     I256,
+    EnumTag(CompoundTypeRef),
     Compound(CompoundTypeRef),
     #[default]
     Unit,
@@ -218,8 +329,16 @@ impl Type {
         matches!(self, Self::Unit)
     }
 
+    pub fn is_enum_tag(self) -> bool {
+        matches!(self, Self::EnumTag(_))
+    }
+
     pub fn is_pointer(self, ctx: &ModuleCtx) -> bool {
         ctx.with_ty_store(|store| store.is_ptr(self))
+    }
+
+    pub fn is_obj_ref(self, ctx: &ModuleCtx) -> bool {
+        ctx.with_ty_store(|store| store.is_obj_ref(self))
     }
 
     pub fn resolve_compound(self, ctx: &ModuleCtx) -> Option<CompoundType> {
@@ -232,6 +351,10 @@ impl Type {
 
     pub fn to_ptr(self, ctx: &ModuleCtx) -> Type {
         ctx.with_ty_store_mut(|s| s.make_ptr(self))
+    }
+
+    pub fn to_obj_ref(self, ctx: &ModuleCtx) -> Type {
+        ctx.with_ty_store_mut(|s| s.make_obj_ref(self))
     }
 }
 
@@ -281,6 +404,11 @@ where
             Type::I64 => write!(w, "i64"),
             Type::I128 => write!(w, "i128"),
             Type::I256 => write!(w, "i256"),
+            Type::EnumTag(enum_ty) => {
+                write!(w, "enumtag(")?;
+                enum_ty.write(w, ctx)?;
+                write!(w, ")")
+            }
             Type::Compound(cmpd_ty) => cmpd_ty.write(w, ctx),
             Type::Unit => write!(w, "unit"),
         }
@@ -291,6 +419,26 @@ where
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub struct CompoundTypeRef(u32);
 cranelift_entity::entity_impl!(CompoundTypeRef);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EnumVariantRef {
+    enum_ty: CompoundTypeRef,
+    index: u32,
+}
+
+impl EnumVariantRef {
+    pub const fn new(enum_ty: CompoundTypeRef, index: u32) -> Self {
+        Self { enum_ty, index }
+    }
+
+    pub const fn enum_ty(self) -> CompoundTypeRef {
+        self.enum_ty
+    }
+
+    pub const fn index(self) -> u32 {
+        self.index
+    }
+}
 
 impl<Ctx> IrWrite<Ctx> for CompoundTypeRef
 where
@@ -311,6 +459,11 @@ where
                     write!(w, "*")?;
                     ty.write(w, ctx)
                 }
+                CompoundType::ObjRef(ty) => {
+                    write!(w, "objref<")?;
+                    ty.write(w, ctx)?;
+                    write!(w, ">")
+                }
                 CompoundType::Struct(StructData { name, packed, .. }) => {
                     if *packed {
                         write!(w, "@<{name}>")
@@ -318,6 +471,7 @@ where
                         write!(w, "@{name}")
                     }
                 }
+                CompoundType::Enum(EnumData { name, .. }) => write!(w, "@{name}"),
 
                 CompoundType::Func { args, ret_tys } => {
                     write!(w, "(")?;
@@ -337,6 +491,26 @@ where
     }
 }
 
+impl<Ctx> IrWrite<Ctx> for EnumVariantRef
+where
+    Ctx: AsRef<ModuleCtx>,
+{
+    fn write<W>(&self, w: &mut W, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        let variant_name = ctx
+            .as_ref()
+            .with_ty_store(|store| {
+                store
+                    .enum_variant_data(*self)
+                    .map(|variant| variant.name.clone())
+            })
+            .expect("enum variant ref must point to an existing variant");
+        write!(w, "#{variant_name}")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CompoundType {
     Array {
@@ -344,7 +518,9 @@ pub enum CompoundType {
         len: usize,
     },
     Ptr(Type),
+    ObjRef(Type),
     Struct(StructData),
+    Enum(EnumData),
     Func {
         args: SmallVec<[Type; 8]>,
         ret_tys: SmallVec<[Type; 2]>,
@@ -356,6 +532,26 @@ pub struct StructData {
     pub name: String,
     pub fields: Vec<Type>,
     pub packed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EnumData {
+    pub name: String,
+    pub repr: EnumReprHint,
+    pub variants: Vec<VariantData>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct VariantData {
+    pub name: String,
+    pub explicit_discriminant: Option<u128>,
+    pub fields: Vec<Type>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum EnumReprHint {
+    #[default]
+    Default,
 }
 
 impl<Ctx> IrWrite<Ctx> for StructData
@@ -382,6 +578,28 @@ where
     }
 }
 
+impl<Ctx> IrWrite<Ctx> for EnumData
+where
+    Ctx: AsRef<ModuleCtx>,
+{
+    fn write<W>(&self, w: &mut W, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        writeln!(w, "type @{} = enum {{", self.name)?;
+        for variant in &self.variants {
+            write!(w, "    #{}", variant.name)?;
+            if !variant.fields.is_empty() {
+                write!(w, "(")?;
+                variant.fields.write_with_delim(w, ", ", ctx)?;
+                write!(w, ")")?;
+            }
+            writeln!(w, ",")?;
+        }
+        write!(w, "}};")
+    }
+}
+
 impl CompoundType {
     pub fn is_array(&self) -> bool {
         matches!(self, Self::Array { .. })
@@ -391,8 +609,16 @@ impl CompoundType {
         matches!(self, Self::Ptr(_))
     }
 
+    pub fn is_obj_ref(&self) -> bool {
+        matches!(self, Self::ObjRef(_))
+    }
+
     pub fn is_struct(&self) -> bool {
         matches!(self, Self::Struct(..))
+    }
+
+    pub fn is_enum(&self) -> bool {
+        matches!(self, Self::Enum(..))
     }
 
     pub fn is_func(&self) -> bool {
