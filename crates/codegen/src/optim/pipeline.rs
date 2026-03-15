@@ -24,6 +24,7 @@ use super::{
         collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
     },
     cfg_cleanup::CfgCleanup,
+    dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
     egraph::run_egraph_pass,
     gvn::GvnSolver,
@@ -92,13 +93,16 @@ impl Pass {
 ///
 /// Steps execute sequentially. [`Step::Inline`] operates on the whole module;
 /// [`Step::FuncPasses`] runs per-function passes in parallel across all
-/// functions; [`Step::DeadFuncElim`] prunes unreachable function definitions.
+/// functions; [`Step::DeadArgElim`] rewrites dead private formals; [`Step::DeadFuncElim`]
+/// prunes unreachable function definitions.
 #[derive(Debug, Clone)]
 pub enum Step {
     /// Run the inliner across the whole module (cross-function).
     Inline,
     /// Run per-function optimization passes in parallel across all functions.
     FuncPasses(Vec<Pass>),
+    /// Remove dead formal arguments from rewritable functions and update direct callsites.
+    DeadArgElim,
     /// Remove unreachable function definitions rooted at object `entry`/`include` directives.
     DeadFuncElim,
 }
@@ -108,6 +112,7 @@ impl Step {
         match self {
             Step::Inline => "inline",
             Step::FuncPasses(_) => "func_passes",
+            Step::DeadArgElim => "dead_arg_elim",
             Step::DeadFuncElim => "dead_func_elim",
         }
     }
@@ -156,6 +161,8 @@ const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::Gvn,
     Pass::CfgCleanup,
 ];
+
+const POST_DEAD_ARG_CLEANUP_PASSES: &[Pass] = &[Pass::CfgCleanup, Pass::Sccp, Pass::CfgCleanup];
 
 fn pass_needs_func_behavior(pass: Pass) -> bool {
     matches!(
@@ -243,6 +250,8 @@ impl Pipeline {
         p.add_step(Step::FuncPasses(PRIMARY_FUNC_PASSES.to_vec()));
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(SECONDARY_FUNC_PASSES.to_vec()));
+        p.add_step(Step::DeadArgElim);
+        p.add_step(Step::FuncPasses(POST_DEAD_ARG_CLEANUP_PASSES.to_vec()));
         p.add_step(Step::DeadFuncElim);
         p
     }
@@ -301,7 +310,12 @@ impl Pipeline {
     ///    - `Sccp`
     ///    - `Gvn`
     ///    - `CfgCleanup`
-    /// 5. `DeadFuncElim` — prune unreachable private definitions from object roots
+    /// 5. `DeadArgElim` — remove dead private formals and rewrite direct calls
+    /// 6. Per-function cleanup:
+    ///    - `CfgCleanup`
+    ///    - `Sccp`
+    ///    - `CfgCleanup`
+    /// 7. `DeadFuncElim` — prune unreachable private definitions from object roots
     pub fn default_pipeline() -> Self {
         Self::speed()
     }
@@ -372,6 +386,11 @@ impl Pipeline {
                             func_behavior_dirty = true;
                         }
                     }
+                }
+                Step::DeadArgElim => {
+                    let _span = debug_span!("sonatina.optim.pipeline.dead_arg_elim").entered();
+                    run_dead_arg_elim(module, DeadArgElimConfig::default());
+                    func_behavior_dirty = true;
                 }
                 Step::DeadFuncElim => {
                     let _span = debug_span!("sonatina.optim.pipeline.dead_func_elim").entered();
@@ -1715,7 +1734,9 @@ func private %entry(v0.i32, v1.i32) -> i32 {
         assert_eq!(size.steps.len(), speed.steps.len());
         for (size_step, speed_step) in size.steps.iter().zip(speed.steps.iter()) {
             match (size_step, speed_step) {
-                (Step::Inline, Step::Inline) | (Step::DeadFuncElim, Step::DeadFuncElim) => {}
+                (Step::Inline, Step::Inline)
+                | (Step::DeadArgElim, Step::DeadArgElim)
+                | (Step::DeadFuncElim, Step::DeadFuncElim) => {}
                 (Step::FuncPasses(size_passes), Step::FuncPasses(speed_passes)) => {
                     assert_eq!(size_passes, speed_passes);
                 }
@@ -1896,6 +1917,61 @@ func public %caller(v0.i1, v1.*i32, v2.i32) -> i32 {
             assert!(
                 dumped.contains("call %pure_after_cleanup"),
                 "helper splicing should leave the still-multi-block inner call in place:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn dead_arg_elim_step_is_followed_by_cleanup_that_erases_dead_actual_computation() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %sink(v0.i256) -> i256 {
+    block0:
+        return 7.i256;
+}
+
+func private %caller(v0.i256) -> i256 {
+    block0:
+        v1.i256 = add v0 1.i256;
+        v2.i256 = call %sink v1;
+        return v2;
+}
+
+func public %entry(v0.i256) -> i256 {
+    block0:
+        v1.i256 = call %caller v0;
+        return v1;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let caller = module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == "caller"))
+            .expect("caller function should exist");
+        let mut pipeline = Pipeline::new();
+        pipeline
+            .add_step(Step::DeadArgElim)
+            .add_step(Step::FuncPasses(POST_DEAD_ARG_CLEANUP_PASSES.to_vec()));
+
+        pipeline.run(&mut module);
+
+        let sig = module
+            .ctx
+            .get_sig(caller)
+            .expect("caller signature should exist");
+        assert!(sig.args().is_empty(), "caller arg should be eliminated");
+        module.func_store.view(caller, |func| {
+            let dumped = FuncWriter::new(caller, func).dump_string();
+            assert!(
+                !dumped.contains("add "),
+                "cleanup after dead-arg elim should remove dead actual computation:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("call %sink"),
+                "caller should still call sink after cleanup:\n{dumped}"
             );
         });
     }

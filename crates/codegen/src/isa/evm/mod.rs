@@ -42,6 +42,7 @@ use crate::{
             collect_local_object_arg_info_with_effects, compute_object_effect_summaries, shape,
         },
         cfg_cleanup::CfgCleanup,
+        dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
         load_store::LoadStoreSolver,
         sccp::SccpSolver,
     },
@@ -1855,6 +1856,13 @@ fn run_evm_post_legalize_cleanup(
             CfgCleanup::new(CleanupMode::Strict).run(function);
             AggregateCombine::default().run(function);
             AggregateScalarize::default().run_for_func(func, function, local_object_args);
+        });
+    }
+
+    run_dead_arg_elim(module, DeadArgElimConfig::default());
+    for &func in funcs {
+        module.func_store.modify(func, |function| {
+            CfgCleanup::new(CleanupMode::Strict).run(function);
         });
     }
 
@@ -5094,6 +5102,78 @@ object @Contract {
             !prepared.allocs[&names["f"]].uses_scratch_spills(),
             "recursive caller should treat self-call as a scratch barrier"
         );
+    }
+
+    #[test]
+    fn prepare_section_runs_late_dead_arg_elim_on_helpers() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %helper(v0.i256, v1.i256) -> i256 {
+block0:
+    return v1;
+}
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    v1.i256 = call %helper 0.i256 v0;
+    return v1;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let funcs = parsed.module.funcs();
+        let mut names: FxHashMap<String, FuncRef> = FxHashMap::default();
+        for &func in &funcs {
+            let name = parsed
+                .module
+                .ctx
+                .func_sig(func, |sig| sig.name().to_string());
+            names.insert(name, func);
+        }
+
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }))
+        .with_late_cleanup_optimizations(true);
+        let object = ObjectName::from("Contract");
+        let section = SectionName::from("runtime");
+        let embeds: Vec<EmbedSymbol> = Vec::new();
+        let section_ctx = SectionLoweringCtx {
+            object: &object,
+            section: &section,
+            embed_symbols: &embeds,
+        };
+
+        backend.prepare_section(&parsed.module, &funcs, &section_ctx);
+
+        let helper_sig = parsed
+            .module
+            .ctx
+            .get_sig(names["helper"])
+            .expect("helper signature should exist");
+        assert_eq!(
+            helper_sig.args().len(),
+            1,
+            "late cleanup should prune dead helper arg"
+        );
+        parsed.module.func_store.view(names["entry"], |function| {
+            let dumped = FuncWriter::new(names["entry"], function).dump_string();
+            assert!(
+                dumped.contains("v1.i256 = call %helper v0;"),
+                "entry callsite should be rewritten after late dead-arg elim:\n{dumped}"
+            );
+        });
     }
 
     #[test]

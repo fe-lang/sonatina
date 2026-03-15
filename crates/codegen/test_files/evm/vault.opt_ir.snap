@@ -19,17 +19,17 @@ type @__fe_SolDecoder_10 = {@__fe_Cursor_9, i256};
 
 func private %__Contract_runtime_entry() {
     block0:
-        v12.i256 = call %create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8 0.i256 0.i256 0.i256;
+        v12.i256 = call %create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8 0.i256 0.i256;
         v78.i1 = is_zero v12;
         v79.i1 = is_zero v78;
         v15.i256 = zext v79 i256;
         call %assert v15;
-        v16.i256 = call %create2_stor__Evm_hef0af3106e109414_VaultUser_hcb553b593515d281__151df09479dab12a 0.i256 0.i256 1.i256;
+        v16.i256 = call %create2_stor__Evm_hef0af3106e109414_VaultUser_hcb553b593515d281__151df09479dab12a 0.i256 1.i256;
         v81.i1 = is_zero v16;
         v82.i1 = is_zero v81;
         v19.i256 = zext v82 i256;
         call %assert v19;
-        v20.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b 0.i256 v12 100000.i256 0.i256 1000.i256;
+        v20.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b v12 100000.i256 0.i256 1000.i256;
         v83.i1 = eq 1000.i256 v20;
         v22.i256 = zext v83 i256;
         call %assert v22;
@@ -40,32 +40,32 @@ func private %__Contract_runtime_entry() {
         mstore v26 v12 i256;
         v28.*i256 = gep v84 0.i256 1.i256;
         mstore v28 1000.i256 i256;
-        v29.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyDeposit_he111d05e2ced69cd__69de45b2cdda8e37 0.i256 v16 200000.i256 0.i256 v24;
+        v29.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyDeposit_he111d05e2ced69cd__69de45b2cdda8e37 v16 200000.i256 0.i256 v24;
         v86.i1 = eq 1000.i256 v29;
         v31.i256 = zext v86 i256;
         call %assert v31;
-        v32.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184 0.i256 v12 100000.i256 0.i256;
+        v32.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184 v12 100000.i256 0.i256;
         v87.i1 = eq 2000.i256 v32;
         v34.i256 = zext v87 i256;
         call %assert v34;
-        v35.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672 0.i256 v12 100000.i256 0.i256;
+        v35.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672 v12 100000.i256 0.i256;
         v88.i1 = eq 2000.i256 v35;
         v37.i256 = zext v88 i256;
         call %assert v37;
-        call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h1b194739dad02c6e__f712b0a646b2bb64 0.i256 v12 100000.i256 0.i256 1000.i256;
-        v38.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d 0.i256 v12 100000.i256 0.i256 500.i256;
+        call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h1b194739dad02c6e__f712b0a646b2bb64 v12 100000.i256 0.i256 1000.i256;
+        v38.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d v12 100000.i256 0.i256 500.i256;
         v89.i1 = eq 750.i256 v38;
         v40.i256 = zext v89 i256;
         call %assert v40;
-        v41.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872 0.i256 v12 100000.i256 0.i256;
+        v41.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872 v12 100000.i256 0.i256;
         v90.i1 = eq 500.i256 v41;
         v43.i256 = zext v90 i256;
         call %assert v43;
-        v44.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyGetMyShares_h22fbe0bf58ab85ce__459f6c55c5a1059b 0.i256 v16 200000.i256 0.i256 v12;
+        v44.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyGetMyShares_h22fbe0bf58ab85ce__459f6c55c5a1059b v16 200000.i256 0.i256 v12;
         v91.i1 = eq 1000.i256 v44;
         v46.i256 = zext v91 i256;
         call %assert v46;
-        v47.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184 0.i256 v12 100000.i256 0.i256;
+        v47.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184 v12 100000.i256 0.i256;
         v92.i1 = eq 2250.i256 v47;
         v49.i256 = zext v92 i256;
         call %assert v49;
@@ -76,7 +76,7 @@ func private %__Contract_runtime_entry() {
         mstore v53 v12 i256;
         v55.*i256 = gep v93 0.i256 1.i256;
         mstore v55 9999.i256 i256;
-        v56.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72 0.i256 v16 200000.i256 0.i256 v51;
+        v56.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72 v16 200000.i256 0.i256 v51;
         v95.i1 = is_zero v56;
         v58.i256 = zext v95 i256;
         call %assert v58;
@@ -87,26 +87,26 @@ func private %__Contract_runtime_entry() {
         mstore v62 v12 i256;
         v64.*i256 = gep v96 0.i256 1.i256;
         mstore v64 1000.i256 i256;
-        v65.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72 0.i256 v16 200000.i256 0.i256 v60;
+        v65.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72 v16 200000.i256 0.i256 v60;
         v98.i1 = eq 1500.i256 v65;
         v67.i256 = zext v98 i256;
         call %assert v67;
-        v68.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d 0.i256 v12 100000.i256 0.i256 500.i256;
+        v68.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d v12 100000.i256 0.i256 500.i256;
         v99.i1 = eq 750.i256 v68;
         v70.i256 = zext v99 i256;
         call %assert v70;
-        v71.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184 0.i256 v12 100000.i256 0.i256;
+        v71.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184 v12 100000.i256 0.i256;
         v100.i1 = is_zero v71;
         v73.i256 = zext v100 i256;
         call %assert v73;
-        v74.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672 0.i256 v12 100000.i256 0.i256;
+        v74.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672 v12 100000.i256 0.i256;
         v101.i1 = is_zero v74;
         v76.i256 = zext v101 i256;
         call %assert v76;
         evm_return 0.i256 0.i256;
 }
 
-func private %__Vault_recv_0_0(v0.i256, v1.i256, v2.i256) -> i256 {
+func private %__Vault_recv_0_0(v0.i256, v1.i256) -> i256 {
     block0:
         v4.i1 = is_zero v0;
         br v4 block1 block2;
@@ -143,7 +143,7 @@ func private %__Vault_recv_0_0(v0.i256, v1.i256, v2.i256) -> i256 {
         return v23;
 }
 
-func private %__Vault_recv_0_1(v0.i256, v1.i256, v2.i256) -> i256 {
+func private %__Vault_recv_0_1(v0.i256, v1.i256) -> i256 {
     block0:
         v4.i1 = is_zero v0;
         br v4 block1 block2;
@@ -217,8 +217,8 @@ func private %__Vault_init() {
 
 func private %__Vault_runtime() {
     block0:
-        v2.i256 = call %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2 0.i256;
-        v3.i256 = call %runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2 0.i256;
+        v2.i256 = call %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2;
+        v3.i256 = call %runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2;
         v10.i1 = eq 1.i256 v2;
         br v10 block2 block8;
 
@@ -227,14 +227,14 @@ func private %__Vault_runtime() {
 
     block2:
         v17.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v3;
-        v19.i256 = call %__Vault_recv_0_0 v17 0.i256 0.i256;
-        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v19;
+        v19.i256 = call %__Vault_recv_0_0 v17 0.i256;
+        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v19;
         unreachable;
 
     block3:
         v21.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v3;
-        v23.i256 = call %__Vault_recv_0_1 v21 0.i256 0.i256;
-        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v23;
+        v23.i256 = call %__Vault_recv_0_1 v21 0.i256;
+        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v23;
         unreachable;
 
     block4:
@@ -246,19 +246,19 @@ func private %__Vault_runtime() {
 
     block5:
         v26.i256 = evm_sload 0.i256;
-        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v26;
+        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v26;
         unreachable;
 
     block6:
         v28.i256 = evm_sload 1.i256;
-        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v28;
+        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v28;
         unreachable;
 
     block7:
         v29.i256 = evm_caller;
         v30.i256 = call %storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29 v29 0.i256;
         v31.i256 = evm_sload v30;
-        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v31;
+        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v31;
         unreachable;
 
     block8:
@@ -292,8 +292,8 @@ func private %__VaultUser_init() {
 
 func private %__VaultUser_runtime() {
     block0:
-        v1.i256 = call %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2 0.i256;
-        v2.i256 = call %runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2 0.i256;
+        v1.i256 = call %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2;
+        v2.i256 = call %runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2;
         v6.i1 = eq 16.i256 v1;
         br v6 block2 block5;
 
@@ -309,8 +309,8 @@ func private %__VaultUser_runtime() {
         mstore v22 v17 i256;
         v24.*i256 = gep v50 0.i256 1.i256;
         mstore v24 v18 i256;
-        v32.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b 0.i256 v17 100000.i256 0.i256 v18;
-        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v32;
+        v32.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b v17 100000.i256 0.i256 v18;
+        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v32;
         unreachable;
 
     block3:
@@ -322,14 +322,14 @@ func private %__VaultUser_runtime() {
         mstore v38 v33 i256;
         v40.*i256 = gep v52 0.i256 1.i256;
         mstore v40 v34 i256;
-        v47.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d 0.i256 v33 100000.i256 0.i256 v34;
-        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v47;
+        v47.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d v33 100000.i256 0.i256 v34;
+        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v47;
         unreachable;
 
     block4:
         v16.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v2;
-        v17.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872 0.i256 v16 100000.i256 0.i256;
-        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v17;
+        v17.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872 v16 100000.i256 0.i256;
+        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v17;
         unreachable;
 
     block5:
@@ -341,7 +341,7 @@ func private %__VaultUser_runtime() {
         br v8 block4 block1;
 }
 
-func private %create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8(v0.i256, v1.i256, v2.i256) -> i256 {
+func private %create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8(v1.i256, v2.i256) -> i256 {
     block0:
         v29.i256 = sym_size &__Vault_init;
         v30.i256 = sym_addr &__Vault_init;
@@ -384,7 +384,7 @@ func public %assert(v0.i256) {
         return;
 }
 
-func private %create2_stor__Evm_hef0af3106e109414_VaultUser_hcb553b593515d281__151df09479dab12a(v0.i256, v1.i256, v2.i256) -> i256 {
+func private %create2_stor__Evm_hef0af3106e109414_VaultUser_hcb553b593515d281__151df09479dab12a(v1.i256, v2.i256) -> i256 {
     block0:
         v29.i256 = sym_size &__VaultUser_init;
         v30.i256 = sym_addr &__VaultUser_init;
@@ -415,7 +415,7 @@ func private %create2_stor__Evm_hef0af3106e109414_VaultUser_hcb553b593515d281__1
         return v31;
 }
 
-func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
+func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b(v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
     block0:
         v26.i256 = call %solencoder_h1b9228b90dad6928_new;
         v27.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v26 36.i256;
@@ -447,7 +447,7 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h1
         return v25;
 }
 
-func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyDeposit_he111d05e2ced69cd__69de45b2cdda8e37(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
+func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyDeposit_he111d05e2ced69cd__69de45b2cdda8e37(v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
     block0:
         v27.i256 = call %solencoder_h1b9228b90dad6928_new;
         v28.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v27 68.i256;
@@ -485,7 +485,7 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyDepos
         return v26;
 }
 
-func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
+func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184(v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
         v24.i256 = call %solencoder_h1b9228b90dad6928_new;
         v25.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v24 4.i256;
@@ -516,7 +516,7 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAs
         return v25;
 }
 
-func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
+func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672(v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
         v25.i256 = call %solencoder_h1b9228b90dad6928_new;
         v26.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v25 4.i256;
@@ -547,7 +547,7 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalSh
         return v25;
 }
 
-func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h1b194739dad02c6e__f712b0a646b2bb64(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
+func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h1b194739dad02c6e__f712b0a646b2bb64(v1.i256, v2.i256, v3.i256, v4.i256) {
     block0:
         v26.i256 = call %solencoder_h1b9228b90dad6928_new;
         v27.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v26 36.i256;
@@ -592,7 +592,7 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h
         return;
 }
 
-func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
+func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d(v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
     block0:
         v27.i256 = call %solencoder_h1b9228b90dad6928_new;
         v28.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v27 36.i256;
@@ -624,7 +624,7 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h
         return v26;
 }
 
-func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
+func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872(v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
         v25.i256 = call %solencoder_h1b9228b90dad6928_new;
         v26.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v25 4.i256;
@@ -655,7 +655,7 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShare
         return v25;
 }
 
-func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyGetMyShares_h22fbe0bf58ab85ce__459f6c55c5a1059b(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
+func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyGetMyShares_h22fbe0bf58ab85ce__459f6c55c5a1059b(v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
     block0:
         v27.i256 = call %solencoder_h1b9228b90dad6928_new;
         v28.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v27 36.i256;
@@ -687,7 +687,7 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyGetMy
         return v26;
 }
 
-func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
+func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72(v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
     block0:
         v27.i256 = call %solencoder_h1b9228b90dad6928_new;
         v28.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v27 68.i256;
@@ -739,7 +739,7 @@ func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Addr
         return;
 }
 
-func private %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(v0.i256) -> i256 {
+func private %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> i256 {
     block0:
         v10.i256 = evm_calldata_size;
         v5.i1 = lt v10 4.i256;
@@ -754,7 +754,7 @@ func private %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e
         return v16;
 }
 
-func private %runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(v0.i256) -> i256 {
+func private %runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> i256 {
     block0:
         v8.*i8 = evm_malloc 64.i256;
         v37.*@__fe_Cursor_9 = bitcast v8 *@__fe_Cursor_9;
@@ -780,7 +780,7 @@ func private %runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3
         return v24;
 }
 
-func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v0.i256, v1.i256) {
+func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v1.i256) {
     block0:
         v3.i256 = call %solencoder_h1b9228b90dad6928_new;
         v5.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v3 32.i256;
