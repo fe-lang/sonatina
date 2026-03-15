@@ -170,6 +170,7 @@ pub struct EvmBackend {
     isa: Evm,
     stackify_reach_depth: u8,
     arena_cost_model: ArenaCostModel,
+    enable_late_cleanup_optimizations: bool,
     section_state: RefCell<Option<PreparedSection>>,
     current_mem_plan: RefCell<Option<FuncMemPlan>>,
     current_frame_summary: RefCell<Option<FrameSummary>>,
@@ -190,6 +191,7 @@ impl EvmBackend {
             isa,
             stackify_reach_depth: 16,
             arena_cost_model: ArenaCostModel::default(),
+            enable_late_cleanup_optimizations: true,
             section_state: RefCell::new(None),
             current_mem_plan: RefCell::new(None),
             current_frame_summary: RefCell::new(None),
@@ -204,6 +206,11 @@ impl EvmBackend {
             "stackify reach_depth must be in 1..=16"
         );
         self.stackify_reach_depth = reach_depth;
+        self
+    }
+
+    pub fn with_late_cleanup_optimizations(mut self, enable: bool) -> Self {
+        self.enable_late_cleanup_optimizations = enable;
         self
     }
 
@@ -2008,7 +2015,9 @@ impl LowerBackend for EvmBackend {
             info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
         let local_object_args = run_evm_pre_memory_aggregate_pipeline(module);
         legalize_evm_section(module, funcs);
-        run_evm_post_legalize_cleanup(module, funcs, &local_object_args);
+        if self.enable_late_cleanup_optimizations {
+            run_evm_post_legalize_cleanup(module, funcs, &local_object_args);
+        }
         for &func in funcs {
             module.func_store.view(func, |function| {
                 assert_supported_lowering_ir(func, function)
@@ -2048,7 +2057,9 @@ impl LowerBackend for EvmBackend {
                 });
             }
         }
-        run_evm_post_memory_legalize_cleanup(module, funcs);
+        if self.enable_late_cleanup_optimizations {
+            run_evm_post_memory_legalize_cleanup(module, funcs);
+        }
 
         {
             let _span = debug_span!("sonatina.codegen.evm.func_behavior").entered();
@@ -2241,7 +2252,9 @@ impl LowerBackend for EvmBackend {
         let closure = collect_call_closure(module, std::slice::from_ref(&func));
         let local_object_args = run_evm_pre_memory_aggregate_pipeline(module);
         legalize_evm_section(module, &closure);
-        run_evm_post_legalize_cleanup(module, &closure, &local_object_args);
+        if self.enable_late_cleanup_optimizations {
+            run_evm_post_legalize_cleanup(module, &closure, &local_object_args);
+        }
         module.func_store.view(func, |function| {
             assert_supported_lowering_ir(func, function)
         });
@@ -2268,7 +2281,9 @@ impl LowerBackend for EvmBackend {
                 assert_aggregate_legalized(function, &module.ctx);
             });
         }
-        run_evm_post_memory_legalize_cleanup(module, std::slice::from_ref(&func));
+        if self.enable_late_cleanup_optimizations {
+            run_evm_post_memory_legalize_cleanup(module, std::slice::from_ref(&func));
+        }
 
         {
             let _span = trace_span!("sonatina.codegen.evm.lower_function.func_behavior").entered();

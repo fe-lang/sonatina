@@ -6,8 +6,8 @@ input_file: test_files/evm/malloc_call_arg_barrier.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 76 bytes
-  total: 76 bytes
+  section runtime: 83 bytes
+  total: 83 bytes
 
 functions:
   clobber_then_read: ir_blocks=1 ir_insts=4 vcode_ops=17 fixups=1 imm_bytes=4
@@ -18,4 +18,4 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21258 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=202
+  case ok: calldata_len=8 success reason=Return gas_used=21273 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=217

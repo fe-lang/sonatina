@@ -6,13 +6,13 @@ input_file: test_files/evm/mixed_frame_recursion_reach4.sntn
 evm.config: stack_reach=4 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 86 bytes
-  total: 86 bytes
+  section runtime: 113 bytes
+  total: 113 bytes
 
 functions:
-  b: ir_blocks=1 ir_insts=2 vcode_ops=5 fixups=0 imm_bytes=1
+  b: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=0 imm_bytes=1
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
-  d: ir_blocks=3 ir_insts=16 vcode_ops=43 fixups=5 imm_bytes=8
+  d: ir_blocks=3 ir_insts=23 vcode_ops=67 fixups=5 imm_bytes=8
     mem: scratch_words=1 stable_words=0 stable_mode=DynamicFrame entry_abs_words=1 abs_words_end=1
   a: ir_blocks=1 ir_insts=2 vcode_ops=9 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
@@ -20,4 +20,4 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21449 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=393
+  case ok: calldata_len=8 success reason=Return gas_used=21608 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=552

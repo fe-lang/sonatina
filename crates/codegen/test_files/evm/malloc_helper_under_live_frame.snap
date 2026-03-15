@@ -6,11 +6,11 @@ input_file: test_files/evm/malloc_helper_under_live_frame.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 136 bytes
-  total: 136 bytes
+  section runtime: 135 bytes
+  total: 135 bytes
 
 functions:
-  helper: ir_blocks=1 ir_insts=3 vcode_ops=27 fixups=2 imm_bytes=6
+  helper: ir_blocks=1 ir_insts=4 vcode_ops=27 fixups=2 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   ready: ir_blocks=3 ir_insts=12 vcode_ops=61 fixups=6 imm_bytes=11
     mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
@@ -48,10 +48,10 @@ helper:
     PUSH1 0xa0 (160)
     JUMPDEST
     PUSH1 0x6f (111)  // mstore v0 111.i256 i256;
-    SWAP1
+    DUP2
     MSTORE
-    PUSH1 0x6f (111)  // return 111.i256;
-    SWAP1
+    MLOAD  // v2.i256 = mload v0 i256;
+    SWAP1  // return v2;
     JUMP
 
 // func public %ready(v0.i256) -> i256

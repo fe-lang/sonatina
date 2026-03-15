@@ -10,7 +10,7 @@ object: Contract
   total: 50 bytes
 
 functions:
-  big: ir_blocks=1 ir_insts=2 vcode_ops=5 fixups=0 imm_bytes=2
+  big: ir_blocks=1 ir_insts=5 vcode_ops=9 fixups=0 imm_bytes=3
     mem: scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=8
   mk: ir_blocks=1 ir_insts=3 vcode_ops=21 fixups=1 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
@@ -29,9 +29,13 @@ evm:
 big:
   block0:
     PUSH1 0xa0 (160)  // v0.*@big = alloca @big;
-    POP  // return 999.i256;
-    PUSH2 0x3e7 (999)
-    SWAP1
+    POP  // v1.*i256 = gep v0 0.i256 0.i256;
+    PUSH1 0xa0 (160)
+    PUSH2 0x3e7 (999)  // mstore v1 999.i256 i256;
+    DUP2
+    MSTORE
+    MLOAD  // v2.i256 = mload v1 i256;
+    SWAP1  // return v2;
     JUMP
 
 // func public %mk() -> *i256

@@ -168,7 +168,8 @@ fn test_evm(fixture: Fixture<&str>) {
         vendor: Vendor::Ethereum,
         operating_system: OperatingSystem::Evm(sonatina_triple::EvmVersion::Osaka),
     }))
-    .with_stackify_reach_depth(stackify_reach_depth);
+    .with_stackify_reach_depth(stackify_reach_depth)
+    .with_late_cleanup_optimizations(opt_pipeline != EvmOptPipeline::None);
 
     let object_name = ObjectName::from("Contract");
     let section_name = SectionName::from("snapshot");

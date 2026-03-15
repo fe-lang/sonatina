@@ -6,14 +6,14 @@ input_file: test_files/evm/i1_cast_canonicalization.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 33 bytes
-  total: 33 bytes
+  section runtime: 39 bytes
+  total: 39 bytes
 
 functions:
-  main: ir_blocks=1 ir_insts=6 vcode_ops=16 fixups=0 imm_bytes=5
+  main: ir_blocks=1 ir_insts=13 vcode_ops=23 fixups=0 imm_bytes=4
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
   entry: ir_blocks=1 ir_insts=3 vcode_ops=9 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21080 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=80
+  case ok: calldata_len=0 success reason=Return gas_used=21113 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=113
