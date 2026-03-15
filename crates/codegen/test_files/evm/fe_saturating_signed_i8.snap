@@ -1,0 +1,407 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/fe_saturating_signed_i8.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=1
+
+object: Contract
+  section runtime: 429 bytes
+  total: 429 bytes
+
+functions:
+  assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  i8_h1bb527fe1af58754_saturatingadd_h7ca6e43aca8f23bb_saturating_add: ir_blocks=10 ir_insts=32 vcode_ops=69 fixups=6 imm_bytes=12
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub: ir_blocks=10 ir_insts=33 vcode_ops=70 fixups=6 imm_bytes=12
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul: ir_blocks=27 ir_insts=60 vcode_ops=137 fixups=15 imm_bytes=20
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  __fe_sonatina_entry: ir_blocks=1 ir_insts=10 vcode_ops=43 fixups=12 imm_bytes=9
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case ok: calldata_len=0 success reason=Stop gas_used=21928 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=928
+
+
+--------------- DEBUG ---------------
+
+// func private %assert(v0.i1)
+assert:
+  block0:
+    JUMPDEST
+    PUSH1 block2  // br v1 block1 block2;
+    JUMPI
+  block1:
+    PUSH0  // evm_revert 0.i256 0.i256;
+    PUSH0
+    REVERT
+  block2:
+    JUMPDEST
+    JUMP  // return;
+
+// func private %i8_h1bb527fe1af58754_saturatingadd_h7ca6e43aca8f23bb_saturating_add(v0.i256, v1.i256) -> i256
+i8_h1bb527fe1af58754_saturatingadd_h7ca6e43aca8f23bb_saturating_add:
+  block0:
+    JUMPDEST
+    DUP2  // v89.i256 = add v0 v1;
+    DUP2
+    ADD
+    PUSH1 0xff (255)  // v91.i256 = and v89 255.i256;
+    AND
+    SWAP1  // v93.i256 = shl 248.i256 v0;
+    PUSH1 0xf8 (248)
+    SHL
+    PUSH1 0xf8 (248)  // v94.i256 = sar 248.i256 v93;
+    SAR
+    PUSH1 0x80 (128)  // v44.i256 = and 128.i256 v94;
+    AND
+    PUSH0  // v45.i1 = eq v44 0.i256;
+    EQ
+    ISZERO  // v25.i1 = is_zero v45;
+    SWAP2  // v95.i256 = shl 248.i256 v1;
+    PUSH1 0xf8 (248)
+    SHL
+    PUSH1 0xf8 (248)  // v96.i256 = sar 248.i256 v95;
+    SAR
+    PUSH1 0x80 (128)  // v67.i256 = and 128.i256 v96;
+    AND
+    PUSH0  // v68.i1 = eq v67 0.i256;
+    EQ
+    ISZERO  // v69.i1 = is_zero v68;
+    DUP3  // v32.i1 = eq v25 v69;
+    EQ
+    ISZERO  // br v32 block3 block13;
+    PUSH1 block13
+    JUMPI
+  block3:
+    DUP1  // v97.i256 = shl 248.i256 v91;
+    PUSH1 0xf8 (248)
+    SHL
+    PUSH1 0xf8 (248)  // v98.i256 = sar 248.i256 v97;
+    SAR
+    PUSH1 0x80 (128)  // v81.i256 = and 128.i256 v98;
+    AND
+    PUSH0  // v82.i1 = eq v81 0.i256;
+    EQ
+    ISZERO  // v83.i1 = is_zero v82;
+    DUP3  // v88.i1 = eq v83 v25;
+    EQ
+    PUSH1 block15  // br v34 block1 block15;
+    JUMPI
+  block1:
+    POP  // br v25 block14 block9;
+    PUSH1 block14
+    JUMPI
+  block9:
+    PUSH1 0x7f (127)  // jump block6;
+    PUSH1 block6
+    JUMP
+  block14:
+    JUMPDEST
+    PUSH1 0x80 (128)  // jump block6;
+  block6:
+    JUMPDEST
+    PUSH1 block7  // jump block7;
+    JUMP
+  block15:
+    JUMPDEST
+    SWAP1  // jump block2;
+    POP
+    PUSH1 block7
+    JUMP
+  block13:
+    JUMPDEST
+    SWAP1  // jump block2;
+    POP
+  block7:
+    JUMPDEST
+    SWAP1  // return v27;
+    JUMP
+
+// func private %i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub(v0.i256, v1.i256) -> i256
+i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub:
+  block0:
+    JUMPDEST
+    DUP2  // v99.i256 = sub v0 v1;
+    DUP2
+    SUB
+    PUSH1 0xff (255)  // v101.i256 = and v99 255.i256;
+    AND
+    SWAP1  // v103.i256 = shl 248.i256 v0;
+    PUSH1 0xf8 (248)
+    SHL
+    PUSH1 0xf8 (248)  // v104.i256 = sar 248.i256 v103;
+    SAR
+    PUSH1 0x80 (128)  // v45.i256 = and 128.i256 v104;
+    AND
+    PUSH0  // v46.i1 = eq v45 0.i256;
+    EQ
+    ISZERO  // v25.i1 = is_zero v46;
+    SWAP2  // v105.i256 = shl 248.i256 v1;
+    PUSH1 0xf8 (248)
+    SHL
+    PUSH1 0xf8 (248)  // v106.i256 = sar 248.i256 v105;
+    SAR
+    PUSH1 0x80 (128)  // v76.i256 = and 128.i256 v106;
+    AND
+    PUSH0  // v77.i1 = eq v76 0.i256;
+    EQ
+    ISZERO  // v78.i1 = is_zero v77;
+    DUP3  // v79.i1 = eq v25 v78;
+    EQ
+    PUSH1 block13  // br v33 block3 block13;
+    JUMPI
+  block3:
+    DUP1  // v107.i256 = shl 248.i256 v101;
+    PUSH1 0xf8 (248)
+    SHL
+    PUSH1 0xf8 (248)  // v108.i256 = sar 248.i256 v107;
+    SAR
+    PUSH1 0x80 (128)  // v91.i256 = and 128.i256 v108;
+    AND
+    PUSH0  // v92.i1 = eq v91 0.i256;
+    EQ
+    ISZERO  // v93.i1 = is_zero v92;
+    DUP3  // v98.i1 = eq v93 v25;
+    EQ
+    PUSH1 block15  // br v35 block1 block15;
+    JUMPI
+  block1:
+    POP  // br v25 block14 block9;
+    PUSH1 block14
+    JUMPI
+  block9:
+    PUSH1 0x7f (127)  // jump block6;
+    PUSH1 block6
+    JUMP
+  block14:
+    JUMPDEST
+    PUSH1 0x80 (128)  // jump block6;
+  block6:
+    JUMPDEST
+    PUSH1 block7  // jump block7;
+    JUMP
+  block15:
+    JUMPDEST
+    SWAP1  // jump block2;
+    POP
+    PUSH1 block7
+    JUMP
+  block13:
+    JUMPDEST
+    SWAP1  // jump block2;
+    POP
+  block7:
+    JUMPDEST
+    SWAP1  // return v27;
+    JUMP
+
+// func private %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul(v0.i256, v1.i256) -> i256
+i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
+  block0:
+    JUMPDEST
+    PUSH0  // v34.i1 = eq v0 0.i256;
+    DUP2
+    EQ
+    PUSH1 block31  // br v34 block31 block3;
+    JUMPI
+  block3:
+    PUSH0  // v36.i1 = eq v1 0.i256;
+    DUP3
+    EQ
+    PUSH1 block33  // br v36 block33 block2;
+    JUMPI
+  block2:
+    PUSH1 0x80 (128)  // v35.i1 = eq v0 128.i256;
+    DUP2
+    EQ
+    ISZERO  // br v35 block7 block32;
+    PUSH1 block6
+    JUMPI
+  block7:
+    PUSH1 0xff (255)  // v38.i1 = eq v1 255.i256;
+    DUP3
+    EQ
+    ISZERO  // br v38 block35 block36;
+    PUSH1 block6
+    JUMPI
+  block35:
+    POP  // jump block4;
+    POP
+    PUSH1 block4
+    JUMP
+  block6:
+    JUMPDEST
+    PUSH1 0x80 (128)  // v37.i1 = eq v1 128.i256;
+    DUP3
+    EQ
+    ISZERO  // br v37 block8 block34;
+    PUSH1 block5
+    JUMPI
+  block8:
+    PUSH1 0xff (255)  // v39.i1 = eq v0 255.i256;
+    DUP2
+    EQ
+    ISZERO  // br v39 block37 block38;
+    PUSH1 block5
+    JUMPI
+  block37:
+    POP  // jump block4;
+    POP
+  block4:
+    JUMPDEST
+    PUSH1 0x7f (127)  // jump block15;
+    PUSH1 block15
+    JUMP
+  block5:
+    JUMPDEST
+    DUP2  // v51.i256 = mul v0 v1;
+    DUP2
+    MUL
+    PUSH1 0xff (255)  // v52.i256 = and v51 255.i256;
+    AND
+    DUP1  // v54.i256 = shl 248.i256 v52;
+    PUSH1 0xf8 (248)
+    SHL
+    PUSH1 0xf8 (248)  // v55.i256 = sar 248.i256 v54;
+    SAR
+    DUP3  // v56.i256 = shl 248.i256 v0;
+    PUSH1 0xf8 (248)
+    SHL
+    PUSH1 0xf8 (248)  // v57.i256 = sar 248.i256 v56;
+    SAR
+    SWAP1  // v58.i256 = evm_sdiv v55 v57;
+    SDIV
+    PUSH1 0xff (255)  // v59.i256 = and v58 255.i256;
+    AND
+    PUSH0  // v60.i1 = eq v0 0.i256;
+    DUP4
+    EQ
+    PUSH1 0x80 (128)  // v61.i1 = eq v52 128.i256;
+    DUP4
+    EQ
+    PUSH1 0xff (255)  // v62.i1 = eq v0 255.i256;
+    DUP6
+    EQ
+    AND  // v63.i1 = and v61 v62;
+    OR  // v64.i1 = or v60 v63;
+    ISZERO  // br v64 block17 block19;
+    PUSH1 block19
+    JUMPI
+  block17:
+    PUSH0  // evm_revert 0.i256 0.i256;
+    PUSH0
+    REVERT
+  block19:
+    JUMPDEST
+    DUP4  // v44.i1 = eq v59 v1;
+    EQ
+    PUSH1 block40  // br v45 block9 block40;
+    JUMPI
+  block9:
+    POP  // v65.i256 = shl 248.i256 v0;
+    PUSH1 0xf8 (248)
+    SHL
+    PUSH1 0xf8 (248)  // v66.i256 = sar 248.i256 v65;
+    SAR
+    SWAP1  // v67.i256 = shl 248.i256 v1;
+    PUSH1 0xf8 (248)
+    SHL
+    PUSH1 0xf8 (248)  // v68.i256 = sar 248.i256 v67;
+    SAR
+    XOR  // v34.i256 = xor v66 v68;
+    PUSH1 0x80 (128)  // v35.i256 = and v34 128.i256;
+    AND
+    PUSH0  // v42.i1 = eq v35 0.i256;
+    EQ
+    ISZERO  // v43.i1 = is_zero v42;
+    PUSH1 block39  // br v43 block39 block20;
+    JUMPI
+  block20:
+    PUSH1 0x7f (127)  // jump block13;
+    PUSH1 block13
+    JUMP
+  block39:
+    JUMPDEST
+    PUSH1 0x80 (128)  // jump block13;
+  block13:
+    JUMPDEST
+    PUSH1 block14  // jump block14;
+    JUMP
+  block40:
+    JUMPDEST
+    SWAP2  // jump block14;
+    POP
+    POP
+  block14:
+    JUMPDEST
+  block15:
+    JUMPDEST
+    PUSH1 block16  // jump block16;
+    JUMP
+  block33:
+    JUMPDEST
+    POP  // jump block1;
+    POP
+    PUSH1 block1
+    JUMP
+  block31:
+    JUMPDEST
+    POP  // jump block1;
+    POP
+  block1:
+    JUMPDEST
+    PUSH0  // jump block16;
+  block16:
+    JUMPDEST
+    SWAP1  // return v45;
+    JUMP
+
+// func private %__fe_sonatina_entry()
+__fe_sonatina_entry:
+  block0:
+    PUSH1 0x7f (127)  // v5.i256 = call %i8_h1bb527fe1af58754_saturatingadd_h7ca6e43aca8f23bb_saturating_add 127.i256 1.i256;
+    PUSH1 0x1 (1)
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(16)
+    JUMP
+    JUMPDEST
+    PUSH1 0x7f (127)  // v6.i1 = eq 127.i256 v5;
+    EQ
+    PUSH1 `pc + (4)`  // call %assert v6;
+    SWAP1
+    PUSH1 FuncRef(6)
+    JUMP
+    JUMPDEST
+    PUSH1 0x80 (128)  // v7.i256 = call %i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub 128.i256 1.i256;
+    PUSH1 0x1 (1)
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(17)
+    JUMP
+    JUMPDEST
+    PUSH1 0x80 (128)  // v8.i1 = eq 128.i256 v7;
+    EQ
+    PUSH1 `pc + (4)`  // call %assert v8;
+    SWAP1
+    PUSH1 FuncRef(6)
+    JUMP
+    JUMPDEST
+    PUSH1 0x40 (64)  // v9.i256 = call %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul 64.i256 4.i256;
+    PUSH1 0x4 (4)
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(18)
+    JUMP
+    JUMPDEST
+    PUSH1 0x7f (127)  // v10.i1 = eq 127.i256 v9;
+    EQ
+    PUSH1 `pc + (4)`  // call %assert v10;
+    SWAP1
+    PUSH1 FuncRef(6)
+    JUMP
+    JUMPDEST
+    STOP  // evm_stop;
