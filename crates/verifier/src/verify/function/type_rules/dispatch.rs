@@ -476,92 +476,10 @@ fn same_block_dominating_enum_assert(
     false
 }
 
-fn same_block_dominating_enum_write(
-    verifier: &FunctionVerifier<'_>,
-    use_inst: InstId,
-    object: ValueId,
-    variant: EnumVariantRef,
-) -> bool {
-    let Some(block) = verifier.inst_to_block.get(&use_inst).copied() else {
-        return false;
-    };
-    let Some(insts) = verifier.block_to_insts.get(&block) else {
-        return false;
-    };
-
-    for &inst in insts {
-        if inst == use_inst {
-            break;
-        }
-        if let Some(write_variant) = sonatina_ir::inst::downcast::<&data::EnumWriteVariant>(
-            verifier.ctx.inst_set,
-            verifier.func.dfg.inst(inst),
-        ) && *write_variant.object() == object
-            && *write_variant.variant() == variant
-        {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn same_block_dominating_enum_assert_ref(
-    verifier: &FunctionVerifier<'_>,
-    use_inst: InstId,
-    object: ValueId,
-    variant: EnumVariantRef,
-) -> bool {
-    let Some(block) = verifier.inst_to_block.get(&use_inst).copied() else {
-        return false;
-    };
-    let Some(insts) = verifier.block_to_insts.get(&block) else {
-        return false;
-    };
-
-    for &inst in insts {
-        if inst == use_inst {
-            break;
-        }
-        if let Some(assert_variant_ref) = sonatina_ir::inst::downcast::<&data::EnumAssertVariantRef>(
-            verifier.ctx.inst_set,
-            verifier.func.dfg.inst(inst),
-        ) && *assert_variant_ref.object() == object
-            && *assert_variant_ref.variant() == variant
-        {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn same_block_dominating_obj_store(
-    verifier: &FunctionVerifier<'_>,
-    use_inst: InstId,
-    object: ValueId,
-) -> bool {
-    let Some(block) = verifier.inst_to_block.get(&use_inst).copied() else {
-        return false;
-    };
-    let Some(insts) = verifier.block_to_insts.get(&block) else {
-        return false;
-    };
-
-    for &inst in insts {
-        if inst == use_inst {
-            break;
-        }
-        if let Some(store) = sonatina_ir::inst::downcast::<&data::ObjStore>(
-            verifier.ctx.inst_set,
-            verifier.func.dfg.inst(inst),
-        ) && *store.object() == object
-        {
-            return true;
-        }
-    }
-
-    false
+#[derive(Clone, Copy, Debug, Default)]
+struct EnumFieldLoadProof {
+    active_variant: bool,
+    field_initialized: bool,
 }
 
 fn predecessor_edge_proves_enum_assert_ref(
@@ -589,6 +507,83 @@ fn predecessor_edge_proves_enum_assert_ref(
     }
 
     saw_reachable_pred
+}
+
+fn same_block_enum_field_load_proof(
+    verifier: &FunctionVerifier<'_>,
+    use_inst: InstId,
+    root_object: ValueId,
+    field_object: ValueId,
+    variant: EnumVariantRef,
+) -> EnumFieldLoadProof {
+    let pred_proof =
+        predecessor_edge_proves_enum_assert_ref(verifier, use_inst, root_object, variant);
+    let mut proof = EnumFieldLoadProof {
+        active_variant: pred_proof,
+        field_initialized: pred_proof,
+    };
+    let Some(block) = verifier.inst_to_block.get(&use_inst).copied() else {
+        return proof;
+    };
+    let Some(insts) = verifier.block_to_insts.get(&block) else {
+        return proof;
+    };
+
+    for &inst in insts {
+        if inst == use_inst {
+            break;
+        }
+        let inst_data = verifier.func.dfg.inst(inst);
+        if let Some(assert_variant_ref) = sonatina_ir::inst::downcast::<&data::EnumAssertVariantRef>(
+            verifier.ctx.inst_set,
+            inst_data,
+        ) && *assert_variant_ref.object() == root_object
+        {
+            if *assert_variant_ref.variant() == variant {
+                proof.active_variant = true;
+                proof.field_initialized = true;
+            } else {
+                proof = EnumFieldLoadProof::default();
+            }
+            continue;
+        }
+        if let Some(set_tag) =
+            sonatina_ir::inst::downcast::<&data::EnumSetTag>(verifier.ctx.inst_set, inst_data)
+            && *set_tag.object() == root_object
+        {
+            if *set_tag.variant() == variant {
+                proof.active_variant = true;
+            } else {
+                proof = EnumFieldLoadProof::default();
+            }
+            continue;
+        }
+        if let Some(write_variant) =
+            sonatina_ir::inst::downcast::<&data::EnumWriteVariant>(verifier.ctx.inst_set, inst_data)
+            && *write_variant.object() == root_object
+        {
+            if *write_variant.variant() == variant {
+                proof.active_variant = true;
+                proof.field_initialized = true;
+            } else {
+                proof = EnumFieldLoadProof::default();
+            }
+            continue;
+        }
+        if let Some(store) =
+            sonatina_ir::inst::downcast::<&data::ObjStore>(verifier.ctx.inst_set, inst_data)
+        {
+            if *store.object() == root_object {
+                proof = EnumFieldLoadProof::default();
+                continue;
+            }
+            if *store.object() == field_object {
+                proof.field_initialized = true;
+            }
+        }
+    }
+
+    proof
 }
 
 fn br_table_edge_proves_enum_variant(
@@ -1097,31 +1092,21 @@ impl VerifyInst for data::ObjLoad {
                 verifier.ctx.inst_set,
                 verifier.func.dfg.inst(proj_inst),
             )
-            && !same_block_dominating_enum_write(
-                verifier,
-                inst_id,
-                *enum_proj.object(),
-                *enum_proj.variant(),
-            )
-            && !same_block_dominating_enum_assert_ref(
-                verifier,
-                inst_id,
-                *enum_proj.object(),
-                *enum_proj.variant(),
-            )
-            && !predecessor_edge_proves_enum_assert_ref(
-                verifier,
-                inst_id,
-                *enum_proj.object(),
-                *enum_proj.variant(),
-            )
-            && !same_block_dominating_obj_store(verifier, inst_id, *self.object())
         {
-            verifier.emit(Diagnostic::error(
-                DiagnosticCode::InstOperandTypeMismatch,
-                "obj.load from enum.proj requires a proven initialized active variant field",
-                location.clone(),
-            ));
+            let proof = same_block_enum_field_load_proof(
+                verifier,
+                inst_id,
+                *enum_proj.object(),
+                *self.object(),
+                *enum_proj.variant(),
+            );
+            if !proof.active_variant || !proof.field_initialized {
+                verifier.emit(Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    "obj.load from enum.proj requires a proven initialized active variant field",
+                    location.clone(),
+                ));
+            }
         }
         verifier.expect_result_ty(inst_id, value_ty, location);
     }

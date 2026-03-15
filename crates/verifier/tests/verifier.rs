@@ -241,6 +241,61 @@ block2:
 }
 
 #[test]
+fn enum_assert_variant_ref_is_invalidated_by_later_tag_write() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %bad(v0.objref<@OptionI256>) -> i256 {
+block0:
+    enum.assert_variant_ref v0 #Some;
+    enum.set_tag v0 #None;
+    v1.objref<i256> = enum.proj v0 #Some 0.i8;
+    v2.i256 = obj.load v1;
+    return v2;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(
+        has_code(&report, "IR0600"),
+        "expected enum payload load verification failure after tag write, got {report}"
+    );
+}
+
+#[test]
+fn same_block_tag_write_and_field_store_prove_enum_field_load() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %ok(v0.objref<@OptionI256>, v1.i256) -> i256 {
+block0:
+    enum.set_tag v0 #Some;
+    v2.objref<i256> = enum.proj v0 #Some 0.i8;
+    obj.store v2 v1;
+    v3.i256 = obj.load v2;
+    return v3;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
 fn multi_return_functions_and_calls_verify() {
     let src = r#"
 target = "evm-ethereum-london"
