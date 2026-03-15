@@ -6,15 +6,13 @@ target = "evm-ethereum-osaka"
 
 type @pair = {i256, i256};
 
-func private %choose(v0.i1) -> objref<@pair> {
+func private %choose(v3.objref<@pair>, v0.i1) {
     block0:
         br v0 block1 block2;
 
     block1:
-        v1.objref<@pair> = obj.alloc @pair;
-        return v1;
+        return;
 
     block2:
-        v2.objref<@pair> = obj.alloc @pair;
-        return v2;
+        return;
 }

@@ -1,7 +1,8 @@
-use rustc_hash::FxHashMap;
-use smallvec::SmallVec;
+use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    Function, InstId, Module, Type, Value, ValueId,
+    BlockId, Function, InstId, Module, Type, Value, ValueId,
+    cfg::ControlFlowGraph,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{control_flow, data, downcast},
     module::{FuncRef, ModuleCtx},
@@ -14,13 +15,19 @@ use super::{
     private_abi::{self, PrivateAbiPlan},
     shape,
 };
+use crate::cfg_scc::CfgSccAnalysis;
+
+#[derive(Clone)]
+struct RewriteRoot {
+    alloc_inst: InstId,
+    value: ValueId,
+}
 
 #[derive(Clone)]
 struct FuncPlan {
     out_ty: Type,
     out_elem_ty: Type,
-    root_alloc_inst: InstId,
-    root_value: ValueId,
+    roots: SmallVec<[RewriteRoot; 4]>,
     new_arg_tys: SmallVec<[Type; 8]>,
     new_ret_tys: SmallVec<[Type; 2]>,
 }
@@ -106,7 +113,7 @@ impl ObjectReturnOutParam {
                 continue;
             };
 
-            let Some((root_alloc_inst, root_value)) = module.func_store.view(func, |function| {
+            let Some(roots) = module.func_store.view(func, |function| {
                 self.analyze_return_root(function, out_ty, out_elem_ty, object_effects)
             }) else {
                 continue;
@@ -121,8 +128,7 @@ impl ObjectReturnOutParam {
                 FuncPlan {
                     out_ty,
                     out_elem_ty,
-                    root_alloc_inst,
-                    root_value,
+                    roots,
                     new_arg_tys,
                     new_ret_tys,
                 },
@@ -138,7 +144,7 @@ impl ObjectReturnOutParam {
         out_ty: Type,
         out_elem_ty: Type,
         object_effects: &ObjectEffectSummaryMap,
-    ) -> Option<(InstId, ValueId)> {
+    ) -> Option<SmallVec<[RewriteRoot; 4]>> {
         let root_slices = self.collect_return_root_slices(function, out_elem_ty, object_effects);
         if root_slices.is_empty() {
             return None;
@@ -151,7 +157,9 @@ impl ObjectReturnOutParam {
             &mut layout_cache,
             Some(object_effects),
         );
-        let mut return_root = None;
+        let root_slice = whole_object_slice(&mut layout_cache, function.ctx(), out_elem_ty);
+        let mut return_roots = SmallVec::<[ValueId; 4]>::new();
+        let mut seen_roots = FxHashSet::default();
         let mut saw_return = false;
 
         for block in function.layout.iter_block() {
@@ -171,71 +179,173 @@ impl ObjectReturnOutParam {
                     return None;
                 }
 
-                let projection = provenance.exact_projection(root)?;
-                if root_slices.get(&projection.root_value) != Some(&projection.slice) {
-                    return None;
-                }
-
-                if let Some(existing) = return_root {
-                    if existing != projection.root_value {
-                        return None;
+                for root in
+                    self.returned_whole_roots(root, root_slice, &root_slices, &provenance)?
+                {
+                    if !seen_roots.insert(root) {
+                        continue;
                     }
-                } else {
-                    return_root = Some(projection.root_value);
+                    return_roots.push(root);
                 }
             }
         }
 
-        if !saw_return {
+        if !saw_return || return_roots.is_empty() {
             return None;
         }
 
-        let root_value = return_root?;
-        let root_alloc_inst = function.dfg.value_inst(root_value)?;
-        if !function.layout.is_inst_inserted(root_alloc_inst)
-            || downcast::<&data::ObjAlloc>(function.inst_set(), function.dfg.inst(root_alloc_inst))
+        return_roots.sort_unstable_by_key(|root| root.as_u32());
+        if !self.return_roots_are_rewritable(function, &return_roots) {
+            return None;
+        }
+
+        let allowed_roots: FxHashSet<_> = return_roots.iter().copied().collect();
+        let mut roots = SmallVec::with_capacity(return_roots.len());
+        for root in return_roots {
+            let root_alloc_inst = function.dfg.value_inst(root)?;
+            if !function.layout.is_inst_inserted(root_alloc_inst)
+                || downcast::<&data::ObjAlloc>(
+                    function.inst_set(),
+                    function.dfg.inst(root_alloc_inst),
+                )
                 .is_none()
-            || !self.root_is_rewritable(
-                function,
-                root_value,
-                out_ty,
-                &root_slices,
-                &provenance,
-                object_effects,
-            )
-        {
-            return None;
+                || !self.root_is_rewritable(
+                    function,
+                    root,
+                    &root_slices,
+                    &provenance,
+                    object_effects,
+                    &allowed_roots,
+                )
+            {
+                return None;
+            }
+            roots.push(RewriteRoot {
+                alloc_inst: root_alloc_inst,
+                value: root,
+            });
         }
 
-        Some((root_alloc_inst, root_value))
+        Some(roots)
+    }
+
+    fn returned_whole_roots(
+        &self,
+        value: ValueId,
+        root_slice: shape::AggregateSlice,
+        root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
+        provenance: &super::provenance::RootProvenanceMap,
+    ) -> Option<SmallVec<[ValueId; 4]>> {
+        if let Some(projection) = provenance.exact_projection(value) {
+            return (root_slices.get(&projection.root_value) == Some(&projection.slice)
+                && projection.slice == root_slice)
+                .then_some(smallvec![projection.root_value]);
+        }
+
+        match provenance.provenance(value) {
+            super::RootProvenance::SameRoot(root) => {
+                (root_slices.get(&root) == Some(&root_slice)).then_some(smallvec![root])
+            }
+            super::RootProvenance::Maybe(roots) => {
+                let mut returned_roots = SmallVec::<[ValueId; 4]>::new();
+                for root in roots {
+                    if root_slices.get(&root) != Some(&root_slice) {
+                        return None;
+                    }
+                    returned_roots.push(root);
+                }
+                returned_roots.sort_unstable_by_key(|root| root.as_u32());
+                (!returned_roots.is_empty()).then_some(returned_roots)
+            }
+            super::RootProvenance::Exact(_) | super::RootProvenance::Unknown => None,
+        }
+    }
+
+    fn return_roots_are_rewritable(&self, function: &Function, roots: &[ValueId]) -> bool {
+        fresh_root_blocks_are_pairwise_unreachable(function, roots)
+    }
+
+    fn root_value_is_allowed(
+        &self,
+        function: &Function,
+        value: ValueId,
+        root: ValueId,
+        root_slice: shape::AggregateSlice,
+        provenance: &super::provenance::RootProvenanceMap,
+        allowed_roots: &FxHashSet<ValueId>,
+    ) -> bool {
+        if provenance
+            .exact_projection(value)
+            .is_some_and(|projection| {
+                projection.root_value == root && projection.slice == root_slice
+            })
+        {
+            return true;
+        }
+
+        if function.dfg.value_ty(value) != function.dfg.value_ty(root) {
+            return false;
+        }
+
+        match provenance.provenance(value) {
+            super::RootProvenance::SameRoot(provenance_root) => provenance_root == root,
+            super::RootProvenance::Maybe(roots) => {
+                roots.contains(&root)
+                    && roots
+                        .iter()
+                        .all(|candidate| allowed_roots.contains(candidate))
+            }
+            super::RootProvenance::Exact(projection) => {
+                projection.root_value == root && projection.slice == root_slice
+            }
+            super::RootProvenance::Unknown => false,
+        }
     }
 
     fn root_is_rewritable(
         &self,
         function: &Function,
         root: ValueId,
-        root_ty: Type,
         root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
         provenance: &super::provenance::RootProvenanceMap,
         object_effects: &ObjectEffectSummaryMap,
+        allowed_roots: &FxHashSet<ValueId>,
     ) -> bool {
         let Some(&root_slice) = root_slices.get(&root) else {
             return false;
         };
+        let root_ty = function.dfg.value_ty(root);
         object_locality::object_root_stays_local_with_effects(
             function,
             root,
             root_ty,
             object_effects,
             |value| {
-                provenance
-                    .exact_projection(value)
-                    .is_some_and(|projection| {
-                        projection.root_value == root && projection.slice == root_slice
-                    })
+                self.root_value_is_allowed(
+                    function,
+                    value,
+                    root,
+                    root_slice,
+                    provenance,
+                    allowed_roots,
+                )
             },
             true,
         )
+    }
+
+    fn rewrite_function(&self, function: &mut Function, plan: &FuncPlan) {
+        self.prepend_out_arg(function, plan.out_ty);
+        for root in &plan.roots {
+            function
+                .dfg
+                .change_to_alias(root.value, function.arg_values[0]);
+        }
+        for root in &plan.roots {
+            function.layout.remove_inst(root.alloc_inst);
+            function.erase_inst(root.alloc_inst);
+        }
+        self.rewrite_returns(function);
     }
 
     fn collect_return_root_slices(
@@ -266,16 +376,6 @@ impl ObjectReturnOutParam {
 
         let _ = object_effects;
         root_slices
-    }
-
-    fn rewrite_function(&self, function: &mut Function, plan: &FuncPlan) {
-        self.prepend_out_arg(function, plan.out_ty);
-        function
-            .dfg
-            .change_to_alias(plan.root_value, function.arg_values[0]);
-        function.layout.remove_inst(plan.root_alloc_inst);
-        function.erase_inst(plan.root_alloc_inst);
-        self.rewrite_returns(function);
     }
 
     fn prepend_out_arg(&self, function: &mut Function, out_ty: Type) {
@@ -410,4 +510,65 @@ fn whole_object_slice(
         first_leaf: 0,
         leaf_count,
     }
+}
+
+fn fresh_root_blocks_are_pairwise_unreachable(function: &Function, roots: &[ValueId]) -> bool {
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(function);
+    let mut scc = CfgSccAnalysis::new();
+    scc.compute(&cfg);
+
+    let mut root_blocks = SmallVec::<[BlockId; 4]>::new();
+    for &root in roots {
+        let Some(inst) = function.dfg.value_inst(root) else {
+            return false;
+        };
+        let block = function.layout.inst_block(inst);
+        let Some(block_scc) = scc.scc_of(block) else {
+            return false;
+        };
+        if scc.scc_data(block_scc).is_cycle {
+            return false;
+        }
+        if root_blocks.contains(&block) {
+            return false;
+        }
+        root_blocks.push(block);
+    }
+
+    for idx in 0..root_blocks.len() {
+        for &other in &root_blocks[idx + 1..] {
+            if block_reaches(&cfg, root_blocks[idx], other)
+                || block_reaches(&cfg, other, root_blocks[idx])
+            {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+fn block_reaches(cfg: &ControlFlowGraph, from: BlockId, to: BlockId) -> bool {
+    if from == to {
+        return true;
+    }
+
+    let mut worklist = vec![from];
+    let mut seen = FxHashSet::default();
+    while let Some(block) = worklist.pop() {
+        if !seen.insert(block) {
+            continue;
+        }
+        for succ in cfg.succs_as_slice(block).iter().copied() {
+            if succ == to {
+                return true;
+            }
+            if !seen.contains(&succ) {
+                worklist.push(succ);
+            }
+        }
+    }
+
+    false
 }

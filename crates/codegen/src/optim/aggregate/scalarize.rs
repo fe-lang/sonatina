@@ -3032,6 +3032,65 @@ func private %make(v0.i256) -> objref<@one> {
     }
 
     #[test]
+    fn scalarize_promotes_fresh_equivalent_synthetic_out_arg() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %choose_pair(v0.i1, v1.i256, v2.i256) -> objref<@pair> {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v3.objref<@pair> = obj.alloc @pair;
+        v4.objref<i256> = obj.proj v3 0.i8;
+        obj.store v4 v1;
+        jump block3;
+
+    block2:
+        v5.objref<@pair> = obj.alloc @pair;
+        v6.objref<i256> = obj.proj v5 0.i8;
+        obj.store v6 v2;
+        jump block3;
+
+    block3:
+        v7.objref<@pair> = phi (v3 block1) (v5 block2);
+        return v7;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "choose_pair");
+        let mut local_object_args = crate::optim::aggregate::collect_local_object_arg_info(&module);
+        let synthetic_out_args =
+            crate::optim::aggregate::ObjectReturnOutParam.run_with_synthetic_out_args(&module);
+        crate::optim::aggregate::merge_local_object_arg_info(
+            &mut local_object_args,
+            &synthetic_out_args,
+        );
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run_for_func(func_ref, func, &local_object_args);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains("obj.alloc"),
+                "fresh-equivalent synthetic out-arg scalarization should remove both branch allocs:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("obj.store"),
+                "fresh-equivalent synthetic out-arg should still write back leaves:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("obj.load"),
+                "fresh-equivalent synthetic out-arg should not seed from entry loads:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn aggregate_object_passes_use_precomputed_local_args_inside_modify() {
         let module = parse_test_module(
             r#"
