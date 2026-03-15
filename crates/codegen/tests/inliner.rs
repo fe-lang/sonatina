@@ -1317,6 +1317,138 @@ func public %caller(v0.i32, v1.i32) -> i32 {
 }
 
 #[test]
+fn full_inliner_multi_use_object_helper_uses_object_helper_budget() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+type @triple = { i256, i256, i256 };
+
+func private %write(v0.objref<@triple>, v1.i256, v2.i256, v3.i256) {
+    block0:
+        v4.objref<i256> = obj.proj v0 0.i8;
+        v5.objref<i256> = obj.proj v0 1.i8;
+        v6.objref<i256> = obj.proj v0 2.i8;
+        obj.store v4 v1;
+        obj.store v5 v2;
+        obj.store v6 v3;
+        return;
+}
+
+func private %caller(v0.objref<@triple>, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256) {
+    block0:
+        call %write v0 v1 v2 v3;
+        call %write v0 v4 v5 v6;
+        return;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(object_aware_full_inliner_test_config());
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %write"),
+        "object helper should inline through the dedicated multi-use budget:\n{dumped}"
+    );
+    assert!(stats.full_calls_inlined >= 2);
+}
+
+#[test]
+fn full_inliner_multi_use_non_object_helper_does_not_get_object_budget() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %calc(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 v1;
+        v4.i256 = mul v3 v2;
+        v5.i256 = sub v4 1.i256;
+        v6.i256 = add v5 v1;
+        v7.i256 = xor v6 v0;
+        v8.i256 = add v7 v2;
+        return v8;
+}
+
+func public %caller(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) -> i256 {
+    block0:
+        v6.i256 = call %calc v0 v1 v2;
+        v7.i256 = call %calc v3 v4 v5;
+        v8.i256 = add v6 v7;
+        return v8;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(object_aware_full_inliner_test_config());
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        dumped.contains("call %calc"),
+        "non-object helper should still respect the generic multi-use cap:\n{dumped}"
+    );
+    assert_eq!(stats.full_calls_inlined, 0);
+    assert!(stats.skipped_budget > 0);
+}
+
+#[test]
+fn full_inliner_object_helper_budget_respects_multi_use_call_count_guard() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+type @triple = { i256, i256, i256 };
+
+func private %write(v0.objref<@triple>, v1.i256, v2.i256, v3.i256) {
+    block0:
+        v4.objref<i256> = obj.proj v0 0.i8;
+        v5.objref<i256> = obj.proj v0 1.i8;
+        v6.objref<i256> = obj.proj v0 2.i8;
+        obj.store v4 v1;
+        obj.store v5 v2;
+        obj.store v6 v3;
+        return;
+}
+
+func private %caller(v0.objref<@triple>, v1.i256, v2.i256, v3.i256) {
+    block0:
+        call %write v0 v1 v2 v3;
+        call %write v0 v1 v2 v3;
+        call %write v0 v1 v2 v3;
+        call %write v0 v1 v2 v3;
+        call %write v0 v1 v2 v3;
+        return;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let mut cfg = object_aware_full_inliner_test_config();
+    cfg.max_multi_use_object_helper_call_count = 3;
+    let mut inliner = Inliner::new(cfg);
+    let stats = inliner.run(module);
+    assert_module_verified(module);
+
+    let dumped = dump_module(module);
+    assert!(
+        dumped.contains("call %write"),
+        "widely shared helper should stay outlined once the object-helper call-count guard trips:\n{dumped}"
+    );
+    assert_eq!(stats.full_calls_inlined, 0);
+    assert!(stats.skipped_budget > 0);
+}
+
+#[test]
 fn full_inliner_growth_cap_blocks_full_flattening() {
     let source = r#"
 target = "evm-ethereum-london"
@@ -1639,6 +1771,31 @@ fn full_only_inliner_test_config() -> InlinerConfig {
         max_total_growth: 1 << 20,
         inline_threshold: 1000,
         inline_threshold_cold: 1000,
+        ..Default::default()
+    }
+}
+
+fn object_aware_full_inliner_test_config() -> InlinerConfig {
+    InlinerConfig {
+        enable_noop: false,
+        enable_return_alias: false,
+        enable_wrapper_rewrite: false,
+        enable_single_block_splice: false,
+        enable_full_inliner: true,
+        always_inline_single_use: false,
+        max_inlinee_blocks: 64,
+        max_inlinee_insts: 1024,
+        max_multi_use_inlinee_blocks: 1,
+        max_multi_use_inlinee_insts: 6,
+        max_multi_use_object_helper_blocks: 1,
+        max_multi_use_object_helper_insts: 8,
+        max_multi_use_object_helper_call_count: 3,
+        max_growth_per_caller: 4096,
+        max_total_growth: 1 << 20,
+        inline_threshold: 1000,
+        inline_threshold_cold: 4,
+        object_scalarization_bonus_cap: 10,
+        object_helper_cluster_bonus: 4,
         ..Default::default()
     }
 }

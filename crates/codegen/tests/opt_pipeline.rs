@@ -327,6 +327,56 @@ func private %entry(v0.i256) -> i256 {
 }
 
 #[test]
+fn pipeline_inlines_multi_use_object_helper_family_before_object_cleanup() {
+    let mut parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+type @triple = { i256, i256, i256 };
+
+func private %write(v0.objref<@triple>, v1.i256, v2.i256, v3.i256) {
+    block0:
+        v4.objref<i256> = obj.proj v0 0.i8;
+        v5.objref<i256> = obj.proj v0 1.i8;
+        v6.objref<i256> = obj.proj v0 2.i8;
+        obj.store v4 v1;
+        obj.store v5 v2;
+        obj.store v6 v3;
+        return;
+}
+
+func public %entry(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) -> i256 {
+    block0:
+        v6.objref<@triple> = obj.alloc @triple;
+        call %write v6 v0 v1 v2;
+        call %write v6 v3 v4 v5;
+        v7.objref<i256> = obj.proj v6 0.i8;
+        v8.i256 = obj.load v7;
+        return v8;
+}
+"#,
+    )
+    .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let entry = find_func_by_name(&parsed.module, "entry");
+
+    Pipeline::size().run(&mut parsed.module);
+
+    let dumped = parsed
+        .module
+        .func_store
+        .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+    assert!(
+        !dumped.contains("call %write"),
+        "object-aware inline budget should inline the multi-use helper:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("return v3;"),
+        "later object cleanup should forward the final stored value:\n{dumped}"
+    );
+    assert_fast_verified(&parsed.module);
+}
+
+#[test]
 fn sccp_deletes_unreachable_region_with_cross_block_uses() {
     let (module, func_ref) = parse_test_module(
         r#"
