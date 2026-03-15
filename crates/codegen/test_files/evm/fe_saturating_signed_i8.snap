@@ -6,23 +6,23 @@ input_file: test_files/evm/fe_saturating_signed_i8.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 429 bytes
-  total: 429 bytes
+  section runtime: 426 bytes
+  total: 426 bytes
 
 functions:
   assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  i8_h1bb527fe1af58754_saturatingadd_h7ca6e43aca8f23bb_saturating_add: ir_blocks=10 ir_insts=32 vcode_ops=69 fixups=6 imm_bytes=12
+  i8_h1bb527fe1af58754_saturatingadd_h7ca6e43aca8f23bb_saturating_add: ir_blocks=8 ir_insts=29 vcode_ops=68 fixups=6 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub: ir_blocks=10 ir_insts=33 vcode_ops=70 fixups=6 imm_bytes=12
+  i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub: ir_blocks=8 ir_insts=30 vcode_ops=69 fixups=6 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul: ir_blocks=27 ir_insts=60 vcode_ops=137 fixups=15 imm_bytes=20
+  i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul: ir_blocks=22 ir_insts=52 vcode_ops=134 fixups=15 imm_bytes=21
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __fe_sonatina_entry: ir_blocks=1 ir_insts=10 vcode_ops=43 fixups=12 imm_bytes=9
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Stop gas_used=21928 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=928
+  case ok: calldata_len=0 success reason=Stop gas_used=21890 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=890
 
 
 --------------- DEBUG ---------------
@@ -95,25 +95,23 @@ i8_h1bb527fe1af58754_saturatingadd_h7ca6e43aca8f23bb_saturating_add:
     PUSH1 block14
     JUMPI
   block9:
-    PUSH1 0x7f (127)  // jump block6;
-    PUSH1 block6
+    PUSH1 0x7f (127)  // jump block7;
+    PUSH1 block7
     JUMP
   block14:
     JUMPDEST
-    PUSH1 0x80 (128)  // jump block6;
-  block6:
-    JUMPDEST
-    PUSH1 block7  // jump block7;
+    PUSH1 0x80 (128)  // jump block7;
+    PUSH1 block7
     JUMP
   block15:
     JUMPDEST
-    SWAP1  // jump block2;
+    SWAP1  // jump block7;
     POP
     PUSH1 block7
     JUMP
   block13:
     JUMPDEST
-    SWAP1  // jump block2;
+    SWAP1  // jump block7;
     POP
   block7:
     JUMPDEST
@@ -173,25 +171,23 @@ i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub:
     PUSH1 block14
     JUMPI
   block9:
-    PUSH1 0x7f (127)  // jump block6;
-    PUSH1 block6
+    PUSH1 0x7f (127)  // jump block7;
+    PUSH1 block7
     JUMP
   block14:
     JUMPDEST
-    PUSH1 0x80 (128)  // jump block6;
-  block6:
-    JUMPDEST
-    PUSH1 block7  // jump block7;
+    PUSH1 0x80 (128)  // jump block7;
+    PUSH1 block7
     JUMP
   block15:
     JUMPDEST
-    SWAP1  // jump block2;
+    SWAP1  // jump block7;
     POP
     PUSH1 block7
     JUMP
   block13:
     JUMPDEST
-    SWAP1  // jump block2;
+    SWAP1  // jump block7;
     POP
   block7:
     JUMPDEST
@@ -224,13 +220,14 @@ i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
     PUSH1 0xff (255)  // v38.i1 = eq v1 255.i256;
     DUP3
     EQ
-    ISZERO  // br v38 block35 block36;
+    ISZERO  // br v38 block36 block35;
     PUSH1 block6
     JUMPI
-  block35:
-    POP  // jump block4;
+  block36:
+    POP  // jump block16;
     POP
-    PUSH1 block4
+    PUSH1 0x7f (127)
+    PUSH1 block16
     JUMP
   block6:
     JUMPDEST
@@ -244,16 +241,14 @@ i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
     PUSH1 0xff (255)  // v39.i1 = eq v0 255.i256;
     DUP2
     EQ
-    ISZERO  // br v39 block37 block38;
+    ISZERO  // br v39 block38 block37;
     PUSH1 block5
     JUMPI
-  block37:
-    POP  // jump block4;
+  block38:
+    POP  // jump block16;
     POP
-  block4:
-    JUMPDEST
-    PUSH1 0x7f (127)  // jump block15;
-    PUSH1 block15
+    PUSH1 0x7f (127)
+    PUSH1 block16
     JUMP
   block5:
     JUMPDEST
@@ -320,40 +315,33 @@ i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
     PUSH1 block39  // br v43 block39 block20;
     JUMPI
   block20:
-    PUSH1 0x7f (127)  // jump block13;
-    PUSH1 block13
+    PUSH1 0x7f (127)  // jump block16;
+    PUSH1 block16
     JUMP
   block39:
     JUMPDEST
-    PUSH1 0x80 (128)  // jump block13;
-  block13:
-    JUMPDEST
-    PUSH1 block14  // jump block14;
+    PUSH1 0x80 (128)  // jump block16;
+    PUSH1 block16
     JUMP
   block40:
     JUMPDEST
-    SWAP2  // jump block14;
+    SWAP2  // jump block16;
     POP
     POP
-  block14:
-    JUMPDEST
-  block15:
-    JUMPDEST
-    PUSH1 block16  // jump block16;
+    PUSH1 block16
     JUMP
   block33:
     JUMPDEST
-    POP  // jump block1;
+    POP  // jump block16;
     POP
-    PUSH1 block1
+    PUSH0
+    PUSH1 block16
     JUMP
   block31:
     JUMPDEST
-    POP  // jump block1;
+    POP  // jump block16;
     POP
-  block1:
-    JUMPDEST
-    PUSH0  // jump block16;
+    PUSH0
   block16:
     JUMPDEST
     SWAP1  // return v45;

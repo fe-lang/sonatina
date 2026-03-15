@@ -105,3 +105,94 @@ func public %prune_phi_incomings_and_fold_trivial_phi() -> i8 {
         v0.i8 = phi (1.i8 block0) (2.i8 block1);
         return v0;
 }
+
+#! Assert multi-predecessor jump-only bridge blocks are forwarded into their successor.
+# sameln: func public %forward_jump_only_bridge(v0.i1, v1.i8) -> i8 {
+# nextln:     block0:
+# nextln:         return v1;
+# nextln: }
+func public %forward_jump_only_bridge(v0.i1, v1.i8) -> i8 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        jump block4;
+
+    block4:
+        return v1;
+}
+
+#! Assert phi-only bridge blocks compose their incoming values into successor phis.
+# sameln: func public %forward_phi_bridge(v0.i1, v1.i1, v2.i8) -> i8 {
+# nextln:     block0:
+# nextln:         br v0 block5 block2;
+# nextln: 
+# nextln:     block2:
+# nextln:         br v1 block5 block4;
+# nextln: 
+# nextln:     block4:
+# nextln:         jump block5;
+# nextln: 
+# nextln:     block5:
+# nextln:         v4.i8 = phi (v2 block4) (1.i8 block0) (2.i8 block2);
+# nextln:         return v4;
+# nextln: }
+func public %forward_phi_bridge(v0.i1, v1.i1, v2.i8) -> i8 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        br v1 block3 block4;
+
+    block3:
+        v3.i8 = phi (1.i8 block1) (2.i8 block2);
+        jump block5;
+
+    block4:
+        jump block5;
+
+    block5:
+        v4.i8 = phi (v3 block3) (v2 block4);
+        return v4;
+}
+
+#! Assert bridge forwarding stays conservative when a bridge phi feeds a non-phi user.
+# sameln: func public %preserve_phi_bridge_with_non_phi_use(v0.i1) -> i32 {
+# nextln:     block0:
+# nextln:         br v0 block3 block2;
+# nextln: 
+# nextln:     block2:
+# nextln:         jump block3;
+# nextln: 
+# nextln:     block3:
+# nextln:         v1.i32 = phi (1.i32 block0) (2.i32 block2);
+# nextln:         v2.i32 = add v1 1.i32;
+# nextln:         return v2;
+# nextln: }
+func public %preserve_phi_bridge_with_non_phi_use(v0.i1) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i32 = phi (1.i32 block1) (2.i32 block2);
+        jump block4;
+
+    block4:
+        v2.i32 = add v1 1.i32;
+        return v2;
+}

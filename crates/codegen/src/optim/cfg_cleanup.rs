@@ -78,7 +78,10 @@ fn merge_linear_blocks(editor: &mut CfgEditor) -> bool {
             if !editor.func().layout.is_block_inserted(block) {
                 continue;
             }
-            if editor.fold_trampoline_block(block) || editor.merge_linear_successor(block) {
+            if editor.fold_trampoline_block(block)
+                || editor.forward_bridge_block(block)
+                || editor.merge_linear_successor(block)
+            {
                 merged = true;
                 changed = true;
                 break;
