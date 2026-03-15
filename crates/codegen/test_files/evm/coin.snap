@@ -37,7 +37,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__TotalSupply_h7bb395110a25abc2__8d4065b5d6bedb33: ir_blocks=3 ir_insts=25 vcode_ops=86 fixups=10 imm_bytes=13
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  alloc: ir_blocks=7 ir_insts=15 vcode_ops=32 fixups=4 imm_bytes=4
+  alloc: ir_blocks=7 ir_insts=15 vcode_ops=26 fixups=2 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f: ir_blocks=1 ir_insts=10 vcode_ops=34 fixups=8 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -3421,30 +3421,22 @@ alloc:
     PUSH1 0x40 (64)  // v3.i256 = mload 64.i256 i256;
     MLOAD
     DUP1  // v4.i1 = is_zero v3;
-    PUSH1 block5  // br v4 block1 block5;
+    PUSH1 block2  // br v4 block1 block5;
     JUMPI
   block1:
     POP  // v7.i256 = evm_msize;
     MSIZE
-    PUSH1 block2  // jump block2;
-    JUMP
-  block5:
-    JUMPDEST
   block2:
     JUMPDEST
     PUSH2 0x2000 (8192)  // v10.i1 = lt v8 8192.i256;
     DUP2
     LT
     ISZERO  // br v10 block3 block6;
-    PUSH1 block6
+    PUSH1 block4
     JUMPI
   block3:
     POP  // jump block4;
     PUSH2 0x2000 (8192)
-    PUSH1 block4
-    JUMP
-  block6:
-    JUMPDEST
   block4:
     JUMPDEST
     DUP1  // v15.i256 = add v0 v13;

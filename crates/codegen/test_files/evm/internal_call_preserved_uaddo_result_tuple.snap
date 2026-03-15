@@ -6,11 +6,11 @@ input_file: test_files/evm/internal_call_preserved_uaddo_result_tuple.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 171 bytes
-  total: 171 bytes
+  section runtime: 166 bytes
+  total: 166 bytes
 
 functions:
-  entry: ir_blocks=14 ir_insts=48 vcode_ops=132 fixups=11 imm_bytes=26
+  entry: ir_blocks=14 ir_insts=48 vcode_ops=128 fixups=10 imm_bytes=26
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -259,7 +259,7 @@ entry:
     PUSH0  // jump block10;
   block10:
     JUMPDEST
-    PUSH1 block19  // br v25 block19 block2;
+    PUSH1 block8  // br v25 block19 block2;
     JUMPI
   block2:
     SWAP1  // v26.i256 = mload v7 i256;
@@ -325,7 +325,7 @@ entry:
     PUSH1 0x1 (1)  // v11.i1 = eq v10 1.i256;
     EQ
     ISZERO  // br v11 block3 block20;
-    PUSH1 block20
+    PUSH1 block8
     JUMPI
   block3:
     PUSH1 0x20 (32)  // v12.*i256 = gep v43 0.i256 1.i256;
@@ -336,12 +336,6 @@ entry:
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
     RETURN
-  block20:
-    JUMPDEST
-    PUSH1 block8  // jump block8;
-    JUMP
-  block19:
-    JUMPDEST
   block8:
     JUMPDEST
     PUSH0  // mstore 0.i256 0.i256 i256;

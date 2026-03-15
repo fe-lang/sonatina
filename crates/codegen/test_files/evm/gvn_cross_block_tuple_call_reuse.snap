@@ -6,11 +6,11 @@ input_file: test_files/evm/gvn_cross_block_tuple_call_reuse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 73 bytes
-  total: 73 bytes
+  section runtime: 68 bytes
+  total: 68 bytes
 
 functions:
-  entry: ir_blocks=8 ir_insts=24 vcode_ops=57 fixups=4 imm_bytes=12
+  entry: ir_blocks=8 ir_insts=24 vcode_ops=53 fixups=3 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -132,7 +132,7 @@ entry:
     PUSH0  // v4.i1 = eq v3 0.i256;
     EQ
     ISZERO  // br v4 block1 block14;
-    PUSH1 block14
+    PUSH1 block8
     JUMPI
   block1:
     PUSH1 0x1 (1)  // v41.i256 = add v2 1.i256;
@@ -147,7 +147,7 @@ entry:
     PUSH1 0x5 (5)  // v7.i1 = eq v41 5.i256;
     EQ
     ISZERO  // br v7 block12 block15;
-    PUSH1 block15
+    PUSH1 block8
     JUMPI
   block12:
     PUSH1 0xa0 (160)  // v29.*i256 = evm_malloc 64.i256;
@@ -165,17 +165,11 @@ entry:
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
     RETURN
-  block15:
-    JUMPDEST
-    PUSH1 block8  // jump block8;
-    JUMP
   block9:
     JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
-  block14:
-    JUMPDEST
   block8:
     JUMPDEST
     PUSH0  // mstore 0.i256 0.i256 i256;

@@ -45,8 +45,11 @@ pub(super) fn compute_terminal_chain_blocks(
                     .is_some_and(|_| unreachable_stays_terminating(ctx.func, block, term))
                 || ctx.func.dfg.branch_info(term).is_some_and(|branch| {
                     match branch.branch_kind() {
-                        BranchKind::Jump(jump) => terminal_chain_blocks[*jump.dest()],
-                        _ => false,
+                        BranchKind::Jump(_) | BranchKind::Br(_) | BranchKind::BrTable(_) => branch
+                            .dests()
+                            .iter()
+                            .copied()
+                            .all(|dest| terminal_chain_blocks[dest]),
                     }
                 });
     }

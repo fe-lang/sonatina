@@ -6,11 +6,11 @@ input_file: test_files/evm/gvn_cross_block_uaddo_call_arg_reuse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 53 bytes
-  total: 53 bytes
+  section runtime: 48 bytes
+  total: 48 bytes
 
 functions:
-  entry: ir_blocks=8 ir_insts=16 vcode_ops=44 fixups=4 imm_bytes=5
+  entry: ir_blocks=8 ir_insts=16 vcode_ops=40 fixups=3 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -102,7 +102,7 @@ entry:
     PUSH0  // v2.i1 = eq v1 0.i256;
     EQ
     ISZERO  // br v2 block1 block8;
-    PUSH1 block8
+    PUSH1 block6
     JUMPI
   block1:
     PUSH1 0x1 (1)  // v16.i256 = add v0 1.i256;
@@ -118,7 +118,7 @@ entry:
     DUP2
     EQ
     ISZERO  // br v5 block4 block9;
-    PUSH1 block9
+    PUSH1 block6
     JUMPI
   block4:
     PUSH0  // mstore 0.i256 v16 i256;
@@ -126,17 +126,11 @@ entry:
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
     RETURN
-  block9:
-    JUMPDEST
-    PUSH1 block6  // jump block6;
-    JUMP
   block7:
     JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
-  block8:
-    JUMPDEST
   block6:
     JUMPDEST
     PUSH0  // mstore 0.i256 0.i256 i256;

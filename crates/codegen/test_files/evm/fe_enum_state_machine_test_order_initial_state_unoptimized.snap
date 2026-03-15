@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_enum_state_machine_test_order_initial_state_unopti
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 1245 bytes
-  total: 1245 bytes
+  section runtime: 1239 bytes
+  total: 1239 bytes
 
 object: Order
   section init: 549 bytes
@@ -43,7 +43,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish: ir_blocks=3 ir_insts=13 vcode_ops=30 fixups=1 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=0
-  soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=10 ir_insts=26 vcode_ops=64 fixups=5 imm_bytes=3
+  soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=10 ir_insts=26 vcode_ops=60 fixups=4 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -951,13 +951,13 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBy
     DUP2  // v35.i1 = lt v39 v9;
     DUP2
     LT
-    PUSH1 block11  // br v35 block11 block3;
+    PUSH1 block1  // br v35 block11 block3;
     JUMPI
   block3:
     SWAP4  // v34.i1 = gt v39 v28;
     DUP5
     GT
-    PUSH1 block10  // br v34 block10 block2;
+    PUSH1 block1  // br v34 block10 block2;
     JUMPI
   block2:
     SWAP2  // v29.*i256 = gep v4 0.i256 0.i256;
@@ -984,12 +984,6 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBy
     MSTORE
     SWAP1  // return v33;
     JUMP
-  block10:
-    JUMPDEST
-    PUSH1 block1  // jump block1;
-    JUMP
-  block11:
-    JUMPDEST
   block1:
     JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;

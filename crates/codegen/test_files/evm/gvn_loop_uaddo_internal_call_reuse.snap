@@ -6,15 +6,15 @@ input_file: test_files/evm/gvn_loop_uaddo_internal_call_reuse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 182 bytes
-  total: 182 bytes
+  section runtime: 177 bytes
+  total: 177 bytes
 
 functions:
-  entry: ir_blocks=15 ir_insts=53 vcode_ops=138 fixups=12 imm_bytes=29
+  entry: ir_blocks=15 ir_insts=53 vcode_ops=134 fixups=11 imm_bytes=29
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21494 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=494
+  case ok: calldata_len=0 success reason=Return gas_used=21493 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=493
 
 
 --------------- DEBUG ---------------
@@ -277,7 +277,7 @@ entry:
     PUSH0  // jump block10;
   block10:
     JUMPDEST
-    PUSH1 block19  // br v30 block19 block4;
+    PUSH1 block8  // br v30 block19 block4;
     JUMPI
   block4:
     PUSH2 0x200 (512)  // v40.i256 = mload 512.i256 i256;
@@ -349,7 +349,7 @@ entry:
     PUSH1 0x1 (1)  // v11.i1 = eq v10 1.i256;
     EQ
     ISZERO  // br v11 block5 block20;
-    PUSH1 block20
+    PUSH1 block8
     JUMPI
   block5:
     PUSH1 0x20 (32)  // v12.*i256 = gep v48 0.i256 1.i256;
@@ -361,12 +361,6 @@ entry:
     ADD
     PUSH1 block1  // jump block1;
     JUMP
-  block20:
-    JUMPDEST
-    PUSH1 block8  // jump block8;
-    JUMP
-  block19:
-    JUMPDEST
   block8:
     JUMPDEST
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;

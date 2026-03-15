@@ -49,7 +49,7 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, Immediate, InstId, InstSetExt, Module, Type, U256, ValueId,
     cfg::ControlFlowGraph,
-    inst::{data::SymbolRef, evm::inst_set::EvmInstKind},
+    inst::{control_flow::BranchKind, data::SymbolRef, evm::inst_set::EvmInstKind},
     ir_writer::{FuncWriter, IrWrite},
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
@@ -172,6 +172,7 @@ pub struct EvmBackend {
     current_mem_plan: RefCell<Option<FuncMemPlan>>,
     current_frame_summary: RefCell<Option<FrameSummary>>,
     current_dyn_sp_plan: RefCell<Option<FuncDynSpPlan>>,
+    current_block_aliases: RefCell<Option<FxHashMap<BlockId, BlockId>>>,
 }
 impl EvmBackend {
     pub fn new(isa: Evm) -> Self {
@@ -191,6 +192,7 @@ impl EvmBackend {
             current_mem_plan: RefCell::new(None),
             current_frame_summary: RefCell::new(None),
             current_dyn_sp_plan: RefCell::new(None),
+            current_block_aliases: RefCell::new(None),
         }
     }
 
@@ -636,6 +638,21 @@ impl EvmBackend {
             .unwrap_or(true)
     }
 
+    fn canonical_block_target(&self, block: BlockId) -> BlockId {
+        self.current_block_aliases
+            .borrow()
+            .as_ref()
+            .and_then(|aliases| aliases.get(&block).copied())
+            .unwrap_or(block)
+    }
+
+    fn is_elided_block(&self, block: BlockId) -> bool {
+        self.current_block_aliases
+            .borrow()
+            .as_ref()
+            .is_some_and(|aliases| aliases.contains_key(&block))
+    }
+
     fn emit_lazy_frame_enter_if_site_matches(
         &self,
         ctx: &mut Lower<OpCode>,
@@ -734,6 +751,11 @@ impl EvmBackend {
             blocks = block_order.len()
         )
         .entered();
+        let alias_plan = module.func_store.view(func, |function| {
+            compute_late_block_alias_plan(function, &alloc, &frame_summary, &block_order)
+        });
+        let emitted_block_order = alias_plan.emitted_block_order;
+        let block_aliases = alias_plan.aliases;
         module.func_store.view(func, |function| {
             assert_aggregate_legalized(function, &module.ctx);
         });
@@ -748,8 +770,12 @@ impl EvmBackend {
                 );
                 let _dyn_sp_plan_guard =
                     CurrentDynSpPlanGuard::new(&self.current_dyn_sp_plan, dyn_sp_plan.clone());
+                let _block_alias_guard = CurrentBlockAliasesGuard::new(
+                    &self.current_block_aliases,
+                    block_aliases.clone(),
+                );
                 let mut alloc = FinalAlloc::new(alloc, mem_plan);
-                let lower = Lower::new(&module.ctx, function, &block_order);
+                let lower = Lower::new(&module.ctx, function, &emitted_block_order);
                 lower.lower(self, &mut alloc).map_err(|e| format!("{e:?}"))
             })?
         };
@@ -757,18 +783,26 @@ impl EvmBackend {
             let _span =
                 trace_span!("sonatina.codegen.evm.lower_prepared_function.prune_redundant_opcodes")
                     .entered();
-            prune_redundant_opcode_sequences(&mut vcode, &block_order);
+            prune_redundant_opcode_sequences(&mut vcode, &emitted_block_order);
         }
         {
             let _span =
                 trace_span!("sonatina.codegen.evm.lower_prepared_function.materialize_jumpdests")
                     .entered();
             module.func_store.view(func, |function| {
-                materialize_jumpdests(&mut vcode, function, &block_order, function_entry_jumpdest);
+                materialize_jumpdests(
+                    &mut vcode,
+                    function,
+                    &emitted_block_order,
+                    function_entry_jumpdest,
+                );
             });
         }
 
-        Ok(LoweredFunction { vcode, block_order })
+        Ok(LoweredFunction {
+            vcode,
+            block_order: emitted_block_order,
+        })
     }
 
     fn try_fold_gep_static_arena_addr(
@@ -920,6 +954,133 @@ fn materialize_jumpdests(
             ensure_block_starts_with_jumpdest(vcode, block);
         }
     }
+}
+
+#[derive(Default)]
+struct LateBlockAliasPlan {
+    aliases: FxHashMap<BlockId, BlockId>,
+    emitted_block_order: Vec<BlockId>,
+}
+
+fn compute_late_block_alias_plan(
+    function: &Function,
+    alloc: &StackifyAlloc,
+    frame_summary: &FrameSummary,
+    block_order: &[BlockId],
+) -> LateBlockAliasPlan {
+    let mut raw_alias_targets: SecondaryMap<BlockId, Option<BlockId>> = SecondaryMap::new();
+    let entry = function.layout.entry_block();
+
+    for &block in block_order {
+        let Some(term) = block_trampoline_jump_inst(function, block) else {
+            continue;
+        };
+
+        if Some(block) == entry
+            || !alloc.read(term, &[]).is_empty()
+            || !alloc.write(term, &[]).is_empty()
+            || lazy_frame_mentions_trampoline_site(frame_summary, block, term)
+        {
+            continue;
+        }
+
+        let dest = match function
+            .dfg
+            .branch_info(term)
+            .expect("trampoline jump missing branch info")
+            .branch_kind()
+        {
+            BranchKind::Jump(jump) => *jump.dest(),
+            BranchKind::Br(_) | BranchKind::BrTable(_) => unreachable!("non-jump trampoline"),
+        };
+        raw_alias_targets[block] = Some(dest);
+    }
+
+    let mut aliases = FxHashMap::default();
+    for &block in block_order {
+        if raw_alias_targets[block].is_none() {
+            continue;
+        }
+
+        let mut seen = FxHashSet::default();
+        let mut cur = block;
+        let canonical = loop {
+            if !seen.insert(cur) {
+                break None;
+            }
+
+            match raw_alias_targets[cur] {
+                Some(next) => cur = next,
+                None => break Some(cur),
+            }
+        };
+
+        if let Some(canonical) = canonical
+            && canonical != block
+        {
+            aliases.insert(block, canonical);
+        }
+    }
+
+    let emitted_block_order = block_order
+        .iter()
+        .copied()
+        .filter(|block| !aliases.contains_key(block))
+        .collect();
+
+    LateBlockAliasPlan {
+        aliases,
+        emitted_block_order,
+    }
+}
+
+fn block_trampoline_jump_inst(function: &Function, block: BlockId) -> Option<InstId> {
+    let term = function.layout.last_inst_of(block)?;
+    if !matches!(
+        function.dfg.branch_info(term)?.branch_kind(),
+        BranchKind::Jump(_)
+    ) {
+        return None;
+    }
+    if function
+        .layout
+        .iter_inst(block)
+        .any(|inst| function.dfg.is_phi(inst))
+    {
+        return None;
+    }
+    if function
+        .layout
+        .iter_inst(block)
+        .filter(|&inst| !function.dfg.is_phi(inst))
+        .count()
+        != 1
+    {
+        return None;
+    }
+
+    Some(term)
+}
+
+fn lazy_frame_mentions_trampoline_site(
+    frame_summary: &FrameSummary,
+    block: BlockId,
+    term: InstId,
+) -> bool {
+    let Some(plan) = frame_summary.lowering.as_ref() else {
+        return false;
+    };
+
+    [
+        FrameSite::BlockEntry(block),
+        FrameSite::PreInst(term),
+        FrameSite::Inst(term),
+        FrameSite::PostInst(term),
+    ]
+    .into_iter()
+    .any(|site| {
+        plan.enter_before_site(site) || plan.exit_before_site(site) || plan.exit_after_site(site)
+    })
 }
 
 fn compute_return_escape_caller_clamp_words(
@@ -1542,6 +1703,26 @@ impl<'a> CurrentDynSpPlanGuard<'a> {
 }
 
 impl Drop for CurrentDynSpPlanGuard<'_> {
+    fn drop(&mut self) {
+        *self.slot.borrow_mut() = None;
+    }
+}
+
+struct CurrentBlockAliasesGuard<'a> {
+    slot: &'a RefCell<Option<FxHashMap<BlockId, BlockId>>>,
+}
+
+impl<'a> CurrentBlockAliasesGuard<'a> {
+    fn new(
+        slot: &'a RefCell<Option<FxHashMap<BlockId, BlockId>>>,
+        aliases: FxHashMap<BlockId, BlockId>,
+    ) -> Self {
+        *slot.borrow_mut() = Some(aliases);
+        Self { slot }
+    }
+}
+
+impl Drop for CurrentBlockAliasesGuard<'_> {
     fn drop(&mut self) {
         *self.slot.borrow_mut() = None;
     }
@@ -2199,6 +2380,10 @@ impl LowerBackend for EvmBackend {
         _alloc: &mut dyn Allocator,
         block: BlockId,
     ) {
+        if self.is_elided_block(block) {
+            return;
+        }
+
         self.emit_lazy_frame_enter_if_site_matches(
             ctx,
             _alloc.frame_size_slots(),
@@ -2212,6 +2397,10 @@ impl LowerBackend for EvmBackend {
     }
 
     fn lower(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, insn: InstId) {
+        if self.is_elided_block(ctx.insn_block(insn)) {
+            return;
+        }
+
         let frame_size_slots = alloc.frame_size_slots();
         let emit_pre_actions = |ctx: &mut Lower<Self::MInst>, actions: &[Action]| {
             self.emit_actions_for_site(ctx, actions, frame_size_slots, FrameSite::PreInst(insn))
@@ -2357,7 +2546,7 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::Xor(_) => basic_op(ctx, &[OpCode::XOR]),
 
             EvmInstKind::Jump(jump) => {
-                let dest = *jump.dest();
+                let dest = self.canonical_block_target(*jump.dest());
                 emit_pre_actions(ctx, &alloc.read(insn, &[]));
 
                 if !ctx.is_next_block(dest) {
@@ -2367,8 +2556,8 @@ impl LowerBackend for EvmBackend {
                 }
             }
             EvmInstKind::Br(br) => {
-                let nz_dest = *br.nz_dest();
-                let z_dest = *br.z_dest();
+                let nz_dest = self.canonical_block_target(*br.nz_dest());
+                let z_dest = self.canonical_block_target(*br.z_dest());
 
                 // JUMPI: dest is top of stack, bool val is next
                 emit_pre_actions(ctx, &alloc.read(insn, &args));
@@ -2397,7 +2586,7 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::BrTable(br) => {
                 let table = br.table().clone();
                 let scrutinee = *br.scrutinee();
-                let default = *br.default();
+                let default = (*br.default()).map(|dest| self.canonical_block_target(dest));
 
                 // TODO: sanitize br_table ops
                 assert!(!table.is_empty(), "empty br_table");
@@ -2408,6 +2597,7 @@ impl LowerBackend for EvmBackend {
                 );
 
                 for (case_val, dest) in table.iter() {
+                    let dest = self.canonical_block_target(*dest);
                     self.emit_actions_for_site(
                         ctx,
                         &alloc.read(insn, &[scrutinee, *case_val]),
@@ -2416,7 +2606,7 @@ impl LowerBackend for EvmBackend {
                     );
                     ctx.push(OpCode::EQ);
 
-                    ctx.push_jump_target(OpCode::PUSH1, Label::Block(*dest));
+                    ctx.push_jump_target(OpCode::PUSH1, Label::Block(dest));
                     ctx.push(OpCode::JUMPI);
                 }
 
@@ -5065,6 +5255,87 @@ block1:
                 "entry block should remain unpadded without function-entry targeting"
             );
         });
+    }
+
+    #[test]
+    fn lowering_elides_pure_jump_alias_blocks() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i1) {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    v1.i256 = add 1.i256 2.i256;
+    jump block3;
+
+block3:
+    evm_revert 0.i256 0.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %main;
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let func = parsed.module.funcs()[0];
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }));
+        let object = ObjectName::from("Contract");
+        let section = SectionName::from("runtime");
+        let embeds: Vec<EmbedSymbol> = Vec::new();
+        let section_ctx = SectionLoweringCtx {
+            object: &object,
+            section: &section,
+            embed_symbols: &embeds,
+        };
+
+        backend.prepare_section(&parsed.module, &[func], &section_ctx);
+        let lowered = backend
+            .lower_function(&parsed.module, func, &section_ctx)
+            .expect("main lowers");
+
+        assert!(
+            lowered.block_order.iter().all(|block| block.0 != 1),
+            "pure trampoline block should be omitted from final block order"
+        );
+        assert!(
+            lowered
+                .vcode
+                .blocks
+                .get(BlockId(1))
+                .is_none_or(|block| block.is_empty()),
+            "late alias block should not lower any instructions"
+        );
+        assert!(
+            lowered.block_order.iter().all(|block| {
+                let insts: Vec<_> = lowered.vcode.block_insns(*block).collect();
+                !matches!(
+                    insts.as_slice(),
+                    [jumpdest, push, jump]
+                        if (lowered.vcode.insts[*jumpdest] as u8) == (OpCode::JUMPDEST as u8)
+                            && is_push_opcode(lowered.vcode.insts[*push])
+                            && matches!(
+                                lowered.vcode.fixups.get(*push),
+                                Some((_, VCodeFixup::Label(_)))
+                            )
+                            && (lowered.vcode.insts[*jump] as u8) == (OpCode::JUMP as u8)
+                )
+            }),
+            "late lowering should not leave pure jump trampoline blocks behind"
+        );
     }
 
     #[test]

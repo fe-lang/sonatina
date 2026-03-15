@@ -593,6 +593,87 @@ block3:
     }
 
     #[test]
+    fn terminal_branch_region_skips_fixups() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i256) {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v2.i1 = eq 0.i1 0.i1;
+    br v2 block4 block5;
+
+block4:
+    evm_revert 0.i256 0.i256;
+
+block5:
+    evm_stop;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let fref = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&f| parsed.module.ctx.func_sig(f, |sig| sig.name() == "f"))
+            .expect("missing f");
+
+        parsed.module.func_store.view(fref, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+
+            let mut liveness = Liveness::new();
+            liveness.compute(function, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let region = function
+                .layout
+                .iter_block()
+                .find(|&block| {
+                    function.layout.last_inst_of(block).is_some_and(|inst| {
+                        function
+                            .dfg
+                            .branch_info(inst)
+                            .is_some_and(|branch| matches!(branch.branch_kind(), BranchKind::Br(_)))
+                    })
+                })
+                .expect("terminal branching region exists");
+            let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute();
+
+            for pred in cfg.preds_of(region).copied() {
+                let jump = function
+                    .layout
+                    .last_inst_of(pred)
+                    .expect("pred terminator exists");
+                let branch = function
+                    .dfg
+                    .branch_info(jump)
+                    .expect("pred terminator is control flow");
+                assert!(
+                    matches!(branch.branch_kind(), BranchKind::Jump(_)),
+                    "expected unconditional jump predecessor"
+                );
+                assert!(
+                    alloc.pre_actions[jump].is_empty(),
+                    "terminal branching region should not normalize stack on incoming jumps: {:?}",
+                    alloc.pre_actions[jump]
+                );
+            }
+        });
+    }
+
+    #[test]
     fn shared_terminal_sink_with_live_in_still_repairs_edges() {
         const SRC: &str = r#"
 target = "evm-ethereum-osaka"

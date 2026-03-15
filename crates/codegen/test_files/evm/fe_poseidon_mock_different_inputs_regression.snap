@@ -1,25 +1,24 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fe_poseidon_mock_different_inputs_regression.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 2703 bytes
-  total: 2703 bytes
+  section runtime: 2661 bytes
+  total: 2661 bytes
 
 functions:
-  ark: ir_blocks=12 ir_insts=54 vcode_ops=157 fixups=14 imm_bytes=26
+  ark: ir_blocks=12 ir_insts=54 vcode_ops=144 fixups=10 imm_bytes=26
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=0
   sigma_full: ir_blocks=1 ir_insts=22 vcode_ops=62 fixups=0 imm_bytes=13
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=0
   mix: ir_blocks=7 ir_insts=33 vcode_ops=108 fixups=10 imm_bytes=22
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=0
-  poseidon_mock: ir_blocks=16 ir_insts=63 vcode_ops=201 fixups=28 imm_bytes=27
+  poseidon_mock: ir_blocks=16 ir_insts=63 vcode_ops=191 fixups=25 imm_bytes=27
     mem: scratch_words=0 stable_words=7 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=7
-  range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5: ir_blocks=4 ir_insts=8 vcode_ops=15 fixups=2 imm_bytes=0
+  range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5: ir_blocks=4 ir_insts=8 vcode_ops=13 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=0
   assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -27,7 +26,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=49772 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=28772
+  case ok: calldata_len=0 success reason=Return gas_used=49768 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=28768
 
 
 --------------- DEBUG ---------------
@@ -66,7 +65,7 @@ ark:
     DUP9
     LT
     ISZERO  // v12.i1 = is_zero v11;
-    PUSH1 block7  // br v12 block7 block2;
+    PUSH1 block1  // br v12 block7 block2;
     JUMPI
   block2:
     DUP8  // v13.*i256 = gep v5 0.i256 v1;
@@ -101,14 +100,14 @@ ark:
     DUP9  // v79.i1 = lt v78 v1;
     DUP2
     LT
-    PUSH1 block8  // br v79 block8 block3;
+    PUSH1 block1  // br v79 block8 block3;
     JUMPI
   block3:
     PUSH1 0x18 (24)  // v31.i1 = lt v78 24.i256;
     DUP2
     LT
     ISZERO  // v32.i1 = is_zero v31;
-    PUSH1 block9  // br v32 block9 block4;
+    PUSH1 block1  // br v32 block9 block4;
     JUMPI
   block4:
     SWAP1  // v33.*i256 = gep v22 0.i256 v78;
@@ -142,14 +141,14 @@ ark:
     SWAP6  // v81.i1 = lt v80 v1;
     DUP7
     LT
-    PUSH1 block10  // br v81 block10 block5;
+    PUSH1 block1  // br v81 block10 block5;
     JUMPI
   block5:
     PUSH1 0x18 (24)  // v50.i1 = lt v80 24.i256;
     DUP7
     LT
     ISZERO  // v51.i1 = is_zero v50;
-    PUSH1 block11  // br v51 block11 block6;
+    PUSH1 block1  // br v51 block11 block6;
     JUMPI
   block6:
     SWAP5  // v52.*i256 = gep v41 0.i256 v80;
@@ -180,24 +179,6 @@ ark:
     ADD
     MSTORE  // mstore v61 v55 i256;
     JUMP  // return;
-  block11:
-    JUMPDEST
-    PUSH1 block1  // jump block1;
-    JUMP
-  block10:
-    JUMPDEST
-    PUSH1 block1  // jump block1;
-    JUMP
-  block9:
-    JUMPDEST
-    PUSH1 block1  // jump block1;
-    JUMP
-  block8:
-    JUMPDEST
-    PUSH1 block1  // jump block1;
-    JUMP
-  block7:
-    JUMPDEST
   block1:
     JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
@@ -401,7 +382,7 @@ poseidon_mock:
     PUSH0  // v60.i1 = eq 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256 0.i256;
     PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)
     EQ
-    PUSH1 block16  // br v60 block16 block10;
+    PUSH1 block9  // br v60 block16 block10;
     JUMPI
   block10:
     PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v65.i256 = evm_umod v1 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
@@ -411,7 +392,7 @@ poseidon_mock:
     PUSH0  // v66.i1 = eq 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256 0.i256;
     PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)
     EQ
-    PUSH1 block19  // br v66 block19 block11;
+    PUSH1 block9  // br v66 block19 block11;
     JUMPI
   block11:
     PUSH1 0x40 (64)  // v9.*[i256; 3] = evm_malloc 96.i256;
@@ -499,7 +480,7 @@ poseidon_mock:
     SWAP2  // v62.i1 = lt v61 v63;
     DUP3
     LT
-    PUSH1 block17  // br v62 block17 block3;
+    PUSH1 block9  // br v62 block17 block3;
     JUMPI
   block3:
     SWAP2  // v36.i256 = add v22 1.i256;
@@ -508,10 +489,6 @@ poseidon_mock:
     SWAP2  // jump block1;
     SWAP1
     PUSH1 block1
-    JUMP
-  block17:
-    JUMPDEST
-    PUSH1 block9  // jump block9;
     JUMP
   block14:
     JUMPDEST
@@ -570,7 +547,7 @@ poseidon_mock:
     SWAP2  // v64.i1 = lt v63 v73;
     DUP3
     LT
-    PUSH1 block18  // br v64 block18 block7;
+    PUSH1 block9  // br v64 block18 block7;
     JUMPI
   block7:
     SWAP2  // v55.i256 = add v42 1.i256;
@@ -579,10 +556,6 @@ poseidon_mock:
     SWAP2  // jump block5;
     SWAP1
     PUSH1 block5
-    JUMP
-  block18:
-    JUMPDEST
-    PUSH1 block9  // jump block9;
     JUMP
   block8:
     JUMPDEST
@@ -596,12 +569,6 @@ poseidon_mock:
     MSTORE
     SWAP1  // return v58;
     JUMP
-  block19:
-    JUMPDEST
-    PUSH1 block9  // jump block9;
-    JUMP
-  block16:
-    JUMPDEST
   block9:
     JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
@@ -616,13 +583,10 @@ range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_le
     PUSH0  // v11.i1 = lt v26 0.i256;
     DUP2
     LT
-    PUSH1 block6  // br v11 block6 block2;
+    ISZERO  // br v11 block6 block2;
+    PUSH1 block3
     JUMPI
-  block2:
-    PUSH1 block3  // jump block3;
-    JUMP
   block6:
-    JUMPDEST
     POP  // jump block3;
     PUSH0
   block3:
