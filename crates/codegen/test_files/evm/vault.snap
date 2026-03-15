@@ -6,13 +6,13 @@ input_file: test_files/evm/vault.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 4714 bytes
-  total: 4714 bytes
+  section runtime: 4717 bytes
+  total: 4717 bytes
 
 object: Vault
-  section init: 952 bytes
-  section runtime: 781 bytes
-  total: 1733 bytes
+  section init: 955 bytes
+  section runtime: 784 bytes
+  total: 1739 bytes
 
 object: VaultUser
   section init: 1224 bytes
@@ -22,9 +22,9 @@ object: VaultUser
 functions:
   __Contract_runtime_entry: ir_blocks=1 ir_insts=85 vcode_ops=328 fixups=65 imm_bytes=50
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __Vault_recv_0_0: ir_blocks=6 ir_insts=27 vcode_ops=79 fixups=7 imm_bytes=1
+  __Vault_recv_0_0: ir_blocks=6 ir_insts=26 vcode_ops=79 fixups=7 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __Vault_recv_0_1: ir_blocks=7 ir_insts=28 vcode_ops=95 fixups=7 imm_bytes=1
+  __Vault_recv_0_1: ir_blocks=7 ir_insts=26 vcode_ops=98 fixups=7 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Vault_init: ir_blocks=3 ir_insts=22 vcode_ops=71 fixups=6 imm_bytes=11
     mem: scratch_words=0 stable_words=2 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=2
@@ -96,7 +96,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=544340 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=523340
+  case ok: calldata_len=0 success reason=Return gas_used=544277 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=523277
 
 
 --------------- DEBUG ---------------
@@ -454,15 +454,14 @@ __Vault_recv_0_0:
     ADD
     DUP1  // v10.i256 = evm_sload v9;
     SLOAD
-    ISZERO  // v11.i1 = is_zero v10;
+    DUP1  // v11.i1 = is_zero v10;
+    ISZERO
     PUSH1 block8  // br v11 block8 block4;
     JUMPI
   block4:
-    DUP1  // v18.i256 = evm_sload v9;
-    SLOAD
     DUP4  // v19.i256 = evm_sload v1;
     SLOAD
-    SWAP1  // v34.i256 = mul v0 v18;
+    SWAP1  // v34.i256 = mul v0 v10;
     DUP4
     MUL
     DIV  // v22.i256 = evm_udiv v34 v19;
@@ -475,7 +474,8 @@ __Vault_recv_0_0:
     JUMP
   block8:
     JUMPDEST
-    DUP2  // jump block5;
+    POP  // jump block5;
+    DUP2
     SWAP3
     SWAP4
     POP
@@ -540,10 +540,12 @@ __Vault_recv_0_1:
     ADD
     DUP1  // v10.i256 = evm_sload v9;
     SLOAD
+    DUP1  // v11.i1 = is_zero v10;
     PUSH1 block4  // br v11 block3 block4;
     JUMPI
   block3:
     POP  // return 0.i256;
+    POP
     POP
     POP
     POP
@@ -562,7 +564,7 @@ __Vault_recv_0_1:
     JUMPDEST
     SLOAD  // v31.i256 = evm_sload v30;
     DUP1  // v18.i1 = gt v0 v31;
-    DUP5
+    DUP6
     GT
     ISZERO  // br v18 block5 block6;
     PUSH1 block6
@@ -574,30 +576,29 @@ __Vault_recv_0_1:
     POP
     POP
     POP
+    POP
     PUSH0
     SWAP1
     JUMP
   block6:
     JUMPDEST
-    DUP5  // v22.i256 = evm_sload v1;
+    DUP6  // v22.i256 = evm_sload v1;
     SLOAD
-    DUP4  // v24.i256 = evm_sload v9;
-    SLOAD
-    SWAP1  // v35.i256 = mul v0 v22;
-    DUP6
+    DUP6  // v35.i256 = mul v0 v22;
     MUL
-    DIV  // v27.i256 = evm_udiv v35 v24;
-    DUP4  // v29.i256 = evm_sload v9;
-    SLOAD
-    DUP6  // v30.i256 = sub v29 v0;
+    DUP4  // v27.i256 = evm_udiv v35 v10;
     SWAP1
+    DIV
+    DUP6  // v30.i256 = sub v10 v0;
+    SWAP1
+    SWAP4
     SUB
     SWAP1  // evm_sstore v9 v30;
     SWAP4
     SSTORE
     DUP5  // v32.i256 = evm_sload v1;
     SLOAD
-    DUP4  // v33.i256 = sub v32 v27;
+    DUP3  // v33.i256 = sub v32 v27;
     SWAP1
     SUB
     SWAP1  // evm_sstore v1 v33;
@@ -605,16 +606,18 @@ __Vault_recv_0_1:
     SSTORE
     SWAP2  // v36.i256 = sub v31 v0;
     SWAP1
-    SWAP3
     SUB
-    SWAP1  // v32.i256 = call %storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29 v14 0.i256;
+    SWAP2  // v32.i256 = call %storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29 v14 0.i256;
     PUSH0
     PUSH1 `pc + (4)`
     SWAP2
     PUSH1 FuncRef(95)
     JUMP
     JUMPDEST
-    SSTORE  // evm_sstore v32 v36;
+    SWAP1  // evm_sstore v32 v36;
+    SWAP2
+    SWAP1
+    SSTORE
     SWAP1  // return v27;
     POP
     SWAP1

@@ -20,9 +20,9 @@ object: VaultUser
   total: 2377 bytes
 
 functions:
-  __Vault_recv_0_0: ir_blocks=17 ir_insts=46 vcode_ops=115 fixups=12 imm_bytes=1
+  __Vault_recv_0_0: ir_blocks=17 ir_insts=45 vcode_ops=115 fixups=12 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
-  __Vault_recv_0_1: ir_blocks=18 ir_insts=47 vcode_ops=135 fixups=12 imm_bytes=1
+  __Vault_recv_0_1: ir_blocks=18 ir_insts=45 vcode_ops=135 fixups=12 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
   __Vault_init: ir_blocks=1 ir_insts=6 vcode_ops=14 fixups=2 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -86,7 +86,7 @@ functions:
     mem: scratch_words=0 stable_words=2 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=2
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=562622 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=541622
+  case ok: calldata_len=0 success reason=Return gas_used=561932 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=540932
 
 
 --------------- DEBUG ---------------
@@ -115,20 +115,19 @@ __Vault_recv_0_0:
     DUP1  // v8.i256 = evm_sload v7;
     SLOAD
     PUSH0  // v29.i1 = eq v8 0.i256;
+    DUP2
     EQ
     PUSH1 block19  // br v29 block19 block4;
     JUMPI
   block4:
-    DUP1  // v13.i256 = evm_sload v7;
-    SLOAD
-    DUP1  // v35.i256 = mul v0 v13;
+    DUP1  // v35.i256 = mul v0 v8;
     DUP4
     MUL
-    PUSH0  // v36.i1 = ne v13 0.i256;
+    PUSH0  // v36.i1 = ne v8 0.i256;
     DUP3
     EQ
     ISZERO
-    SWAP2  // v37.i256 = evm_udiv v35 v13;
+    SWAP2  // v37.i256 = evm_udiv v35 v8;
     DUP2
     DIV
     DUP5  // v38.i1 = ne v37 v0;
@@ -154,7 +153,8 @@ __Vault_recv_0_0:
     JUMP
   block19:
     JUMPDEST
-    DUP2  // jump block5;
+    POP  // jump block5;
+    DUP2
   block5:
     JUMPDEST
     DUP4  // v23.i256 = evm_sload v1;
@@ -244,12 +244,14 @@ __Vault_recv_0_1:
     DUP1  // v8.i256 = evm_sload v7;
     SLOAD
     PUSH0  // v29.i1 = eq v8 0.i256;
+    DUP2
     EQ
     ISZERO  // br v29 block3 block4;
     PUSH1 block4
     JUMPI
   block3:
     POP  // return 0.i256;
+    POP
     POP
     POP
     PUSH0
@@ -267,7 +269,7 @@ __Vault_recv_0_1:
     JUMPDEST
     SLOAD  // v31.i256 = evm_sload v30;
     DUP1  // v32.i1 = gt v0 v31;
-    DUP5
+    DUP6
     GT
     ISZERO  // br v32 block5 block6;
     PUSH1 block6
@@ -278,15 +280,16 @@ __Vault_recv_0_1:
     POP
     POP
     POP
+    POP
     PUSH0
     SWAP1
     JUMP
   block6:
     JUMPDEST
-    DUP5  // v15.i256 = evm_sload v1;
+    DUP6  // v15.i256 = evm_sload v1;
     SLOAD
     DUP1  // v36.i256 = mul v0 v15;
-    DUP6
+    DUP7
     MUL
     PUSH0  // v37.i1 = ne v15 0.i256;
     DUP3
@@ -295,7 +298,7 @@ __Vault_recv_0_1:
     SWAP2  // v38.i256 = evm_udiv v36 v15;
     DUP2
     DIV
-    DUP7  // v39.i1 = ne v38 v0;
+    DUP8  // v39.i1 = ne v38 v0;
     EQ
     ISZERO
     SWAP1  // v40.i1 = and v37 v39;
@@ -304,38 +307,35 @@ __Vault_recv_0_1:
     PUSH1 block7  // br v40 block18 block8;
     JUMPI
   block8:
-    DUP4  // v21.i256 = evm_sload v7;
-    SLOAD
-    DUP1  // v41.i256 = evm_udiv v36 v21;
-    SWAP2
+    DUP4  // v41.i256 = evm_udiv v36 v8;
+    SWAP1
     DIV
-    SWAP1  // v42.i1 = eq v21 0.i256;
-    PUSH0
+    PUSH0  // v42.i1 = eq v8 0.i256;
+    DUP5
     EQ
     PUSH1 block7  // br v42 block19 block9;
     JUMPI
   block9:
-    DUP4  // v26.i256 = evm_sload v7;
-    SLOAD
-    DUP6  // v43.i256 = sub v26 v0;
-    DUP2
+    DUP6  // v43.i256 = sub v8 v0;
+    DUP5
     SUB
-    DUP7  // v44.i1 = lt v26 v0;
+    DUP7  // v44.i1 = lt v8 v0;
     SWAP1
-    SWAP2
+    SWAP5
     LT
     PUSH1 block7  // br v44 block20 block10;
     JUMPI
   block10:
-    SWAP1  // evm_sstore v7 v43;
+    SWAP3  // evm_sstore v7 v43;
+    SWAP1
     SWAP4
     SSTORE
     DUP5  // v32.i256 = evm_sload v1;
     SLOAD
-    DUP4  // v45.i256 = sub v32 v41;
+    DUP3  // v45.i256 = sub v32 v41;
     DUP2
     SUB
-    DUP5  // v46.i1 = lt v32 v41;
+    DUP4  // v46.i1 = lt v32 v41;
     SWAP1
     SWAP2
     LT
@@ -346,11 +346,11 @@ __Vault_recv_0_1:
     SWAP5
     SSTORE
     DUP3  // v47.i256 = sub v31 v0;
-    DUP5
+    DUP3
     SUB
     SWAP3  // v48.i1 = lt v31 v0;
     SWAP1
-    SWAP4
+    SWAP2
     LT
     PUSH1 block7  // br v48 block22 block12;
     JUMPI

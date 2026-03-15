@@ -521,8 +521,8 @@ impl MemoryAccessAnalysis {
     fn trackable_value_key(&self, func: &Function, value: ValueId) -> Option<ValueKey> {
         match func.dfg.value(value) {
             Value::Immediate { imm, .. } => Some(ValueKey::Imm(*imm)),
-            Value::Arg { .. } => Some(ValueKey::Value(value)),
-            Value::Global { .. } | Value::Inst { .. } | Value::Undef { .. } => None,
+            Value::Arg { .. } | Value::Inst { .. } => Some(ValueKey::Value(value)),
+            Value::Global { .. } | Value::Undef { .. } => None,
         }
     }
 
@@ -823,7 +823,7 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_keyed_access_is_not_trackable() {
+    fn dynamic_keyed_access_reuses_same_ssa_key() {
         let mb = test_module_builder();
         let (evm, mut builder) = test_func_builder(&mb, &[Type::I256, Type::I256], Type::Unit);
         let is = evm.inst_set();
@@ -834,13 +834,47 @@ mod tests {
         let lhs = builder.args()[0];
         let rhs = builder.args()[1];
         let key = builder.insert_inst_with(|| Add::new(is, lhs, rhs), Type::I256);
-        let load = builder.insert_inst_with(|| EvmSload::new(is, key), Type::I256);
-        let _ = load;
+        let load0 = builder.insert_inst_with(|| EvmSload::new(is, key), Type::I256);
+        let load1 = builder.insert_inst_with(|| EvmSload::new(is, key), Type::I256);
+        let _ = (load0, load1);
         builder.insert_inst_no_result_with(|| Return::new_unit(is));
         builder.seal_all();
 
         let insts: Vec<_> = builder.func.layout.iter_inst(block).collect();
-        assert!(maybe_single_key(&builder.func, insts[1]).is_none());
+        let key0 = single_key(&builder.func, insts[1]);
+        let key1 = single_key(&builder.func, insts[2]);
+        let analysis = MemoryAccessAnalysis::new();
+
+        assert_eq!(analysis.alias(&key0, &key1), AliasResult::MustAlias);
+    }
+
+    #[test]
+    fn distinct_dynamic_keyed_accesses_stay_may_alias() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I256, Type::I256], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let lhs = builder.args()[0];
+        let rhs = builder.args()[1];
+        let key0 = builder.insert_inst_with(|| Add::new(is, lhs, rhs), Type::I256);
+        let key1 = builder.insert_inst_with(|| Add::new(is, lhs, rhs), Type::I256);
+        let load0 = builder.insert_inst_with(|| EvmSload::new(is, key0), Type::I256);
+        let load1 = builder.insert_inst_with(|| EvmSload::new(is, key1), Type::I256);
+        let _ = (load0, load1);
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let insts: Vec<_> = builder.func.layout.iter_inst(block).collect();
+        let key0 = single_key(&builder.func, insts[2]);
+        let key1 = single_key(&builder.func, insts[3]);
+
+        assert_eq!(
+            MemoryAccessAnalysis::new().alias(&key0, &key1),
+            AliasResult::MayAlias
+        );
     }
 
     #[test]

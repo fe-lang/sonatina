@@ -121,9 +121,8 @@ func private %__Vault_recv_0_0(v0.i256, v1.i256, v2.i256) -> i256 {
         br v11 block5 block4;
 
     block4:
-        v18.i256 = evm_sload v9;
         v19.i256 = evm_sload v1;
-        v34.i256 = mul v0 v18;
+        v34.i256 = mul v0 v10;
         v22.i256 = evm_udiv v34 v19;
         jump block5;
 
@@ -173,11 +172,9 @@ func private %__Vault_recv_0_1(v0.i256, v1.i256, v2.i256) -> i256 {
 
     block6:
         v22.i256 = evm_sload v1;
-        v24.i256 = evm_sload v9;
         v35.i256 = mul v0 v22;
-        v27.i256 = evm_udiv v35 v24;
-        v29.i256 = evm_sload v9;
-        v30.i256 = sub v29 v0;
+        v27.i256 = evm_udiv v35 v10;
+        v30.i256 = sub v10 v0;
         evm_sstore v9 v30;
         v32.i256 = evm_sload v1;
         v33.i256 = sub v32 v27;

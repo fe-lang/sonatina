@@ -153,8 +153,7 @@ func private %__Coin_recv_0_1(v0.i256, v1.i256) -> i256 {
         return 1.i256;
 
     block6:
-        v37.i256 = evm_sload v21;
-        v39.i256 = sub v37 v9;
+        v39.i256 = sub v22 v9;
         evm_sstore v21 v39;
         v41.i256 = evm_sload v1;
         v42.i256 = add v9 v41;

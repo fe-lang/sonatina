@@ -6,20 +6,20 @@ input_file: test_files/evm/coin.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Coin
-  section init: 904 bytes
-  section runtime: 710 bytes
-  total: 1614 bytes
+  section init: 903 bytes
+  section runtime: 709 bytes
+  total: 1612 bytes
 
 object: Contract
-  section runtime: 2355 bytes
-  total: 2355 bytes
+  section runtime: 2354 bytes
+  total: 2354 bytes
 
 functions:
   __Contract_runtime_entry: ir_blocks=1 ir_insts=62 vcode_ops=232 fixups=36 imm_bytes=44
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Coin_recv_0_0: ir_blocks=3 ir_insts=26 vcode_ops=54 fixups=1 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __Coin_recv_0_1: ir_blocks=7 ir_insts=30 vcode_ops=79 fixups=3 imm_bytes=5
+  __Coin_recv_0_1: ir_blocks=7 ir_insts=29 vcode_ops=78 fixups=3 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Coin_init: ir_blocks=3 ir_insts=24 vcode_ops=88 fixups=7 imm_bytes=16
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -67,7 +67,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=282304 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=261304
+  case ok: calldata_len=0 success reason=Return gas_used=282106 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=261106
 
 
 --------------- DEBUG ---------------
@@ -487,29 +487,25 @@ evm:
       pre: [DUP1]
       evm_sload [v15] -> v16
     // v17.i1 = lt v16 v7;
-    - stack=[v16, v15, v7, v1, <RET>], last_use=[v16]
-      pre: [DUP3, SWAP1]
+    - stack=[v16, v15, v7, v1, <RET>]
+      pre: [DUP3, DUP2]
       lt [v16, v7] -> v17
     // br v17 block5 block6;
-    - stack=[v17, v15, v7, v1, <RET>]
+    - stack=[v17, v16, v15, v7, v1, <RET>]
       br [v17] -> [block5, block6]
   block5 P=[] T=[]
-    inherited from block2: [v15x, v7x, v1x, <RET>]
+    inherited from block2: [v16x, v15x, v7x, v1x, <RET>]
     // return 1.i256;
-    - stack=[v15x, v7x, v1x, <RET>]
-      cleanup: [POP, POP, POP]
+    - stack=[v16x, v15x, v7x, v1x, <RET>]
+      cleanup: [POP, POP, POP, POP]
       return: [PUSH(1)]
       return [1]
-  block6 P=[] T=[v15, v7, v1]
-    inherited from block2: [v15, v7, v1, <RET>]
-    // v27.i256 = evm_sload v15;
-    - stack=[v15, v7, v1, <RET>]
-      pre: [DUP1]
-      evm_sload [v15] -> v27
-    // v28.i256 = sub v27 v7;
-    - stack=[v27, v15, v7, v1, <RET>], last_use=[v27]
+  block6 P=[] T=[v16, v15, v7, v1]
+    inherited from block2: [v16, v15, v7, v1, <RET>]
+    // v28.i256 = sub v16 v7;
+    - stack=[v16, v15, v7, v1, <RET>], last_use=[v16]
       pre: [DUP3, SWAP1]
-      sub [v27, v7] -> v28
+      sub [v16, v7] -> v28
     // evm_sstore v15 v28;
     - stack=[v28, v15, v7, v1, <RET>], last_use=[v15, v28]
       pre: [SWAP1]
@@ -2586,7 +2582,7 @@ __Coin_recv_0_1:
     DUP1  // v22.i256 = evm_sload v21;
     SLOAD
     DUP3  // v24.i1 = lt v22 v9;
-    SWAP1
+    DUP2
     LT
     ISZERO  // br v24 block5 block6;
     PUSH1 block6
@@ -2595,14 +2591,13 @@ __Coin_recv_0_1:
     POP  // return 1.i256;
     POP
     POP
+    POP
     PUSH1 0x1 (1)
     SWAP1
     JUMP
   block6:
     JUMPDEST
-    DUP1  // v37.i256 = evm_sload v21;
-    SLOAD
-    DUP3  // v39.i256 = sub v37 v9;
+    DUP3  // v39.i256 = sub v22 v9;
     SWAP1
     SUB
     SWAP1  // evm_sstore v21 v39;

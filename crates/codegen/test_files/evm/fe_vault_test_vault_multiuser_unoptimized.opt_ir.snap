@@ -30,8 +30,7 @@ func private %__Vault_recv_0_0(v0.i256, v1.i256) -> i256 {
         br v29 block5 block4;
 
     block4:
-        v13.i256 = evm_sload v7;
-        (v15.i256, v16.i1) = umulo v0 v13;
+        (v15.i256, v16.i1) = umulo v0 v8;
         br v16 block6 block7;
 
     block5:
@@ -104,13 +103,11 @@ func private %__Vault_recv_0_1(v0.i256, v1.i256) -> i256 {
         evm_revert 0.i256 0.i256;
 
     block8:
-        v21.i256 = evm_sload v7;
-        (v22.i256, v23.i1) = evm_udivo v17 v21;
+        (v22.i256, v23.i1) = evm_udivo v17 v8;
         br v23 block7 block9;
 
     block9:
-        v26.i256 = evm_sload v7;
-        (v28.i256, v29.i1) = usubo v26 v0;
+        (v28.i256, v29.i1) = usubo v8 v0;
         br v29 block7 block10;
 
     block10:
