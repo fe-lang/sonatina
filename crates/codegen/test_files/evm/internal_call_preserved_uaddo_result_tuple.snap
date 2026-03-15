@@ -10,7 +10,7 @@ object: Contract
   total: 166 bytes
 
 functions:
-  entry: ir_blocks=14 ir_insts=48 vcode_ops=128 fixups=10 imm_bytes=26
+  entry: ir_blocks=14 ir_insts=48 vcode_ops=129 fixups=10 imm_bytes=26
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -61,25 +61,25 @@ evm:
     - stack=[v45, v0]
       pre: [PUSH(10), DUP2]
       lt [v45, 10] -> v22
-    // br v22 block18 block13;
+    // br v22 block18 block21;
     - stack=[v22, v45, v0]
-      br [v22] -> [block18, block13]
-  block13 P=[] T=[v45, v0]
-    inherited from block11: [v45, v0]
-    // jump block10;
-    - stack=[v45, v0]
-      exit(block10): [PUSH(true)]
-      jump -> block10
+      br [v22] -> [block18, block21]
   block18 P=[] T=[v45, v0]
     inherited from block11: [v45, v0]
     // jump block10;
     - stack=[v45, v0]
       exit(block10): [PUSH(false)]
       jump -> block10
+  block21 P=[] T=[v45, v0]
+    inherited from block11: [v45, v0]
+    // jump block10;
+    - stack=[v45, v0]
+      exit(block10): [PUSH(true)]
+      jump -> block10
   block10 P=[v25] T=[v45, v0]
-    // br v25 block19 block2;
+    // br v25 block22 block2;
     - stack=[v25, v45, v0]
-      br [v25] -> [block19, block2]
+      br [v25] -> [block22, block2]
   block2 P=[] T=[v45, v0]
     inherited from block10: [v45, v0]
     // v8.*i256 = bitcast v2 *i256;
@@ -165,9 +165,9 @@ evm:
     - stack=[v11, v43], last_use=[v11]
       pre: [PUSH(1)]
       eq [1, v11] -> v12
-    // br v12 block3 block20;
+    // br v12 block3 block23;
     - stack=[v12, v43]
-      br [v12] -> [block3, block20]
+      br [v12] -> [block3, block23]
   block3 P=[] T=[v43]
     inherited from block14: [v43]
     // v13.*i256 = gep v43 0.i256 1.i256;
@@ -184,11 +184,11 @@ evm:
     - stack=[]
       pre: [PUSH(32), PUSH(0)]
       evm_return [0, 32]
-  block20 P=[] T=[]
+  block23 P=[] T=[]
     // jump block8;
     - stack=[]
       jump -> block8
-  block19 P=[] T=[]
+  block22 P=[] T=[]
     // jump block8;
     - stack=[]
       jump -> block8
@@ -246,20 +246,21 @@ entry:
     PUSH1 0xa (10)  // v22.i1 = lt v45 10.i256;
     DUP2
     LT
-    PUSH1 block18  // br v22 block18 block13;
+    ISZERO  // br v22 block18 block21;
+    PUSH1 block21
     JUMPI
-  block13:
+  block18:
+    PUSH0  // jump block10;
+    PUSH1 block10
+    JUMP
+  block21:
+    JUMPDEST
     PUSH1 0x1 (1)  // jump block10;
     PUSH0
     SIGNEXTEND
-    PUSH1 block10
-    JUMP
-  block18:
-    JUMPDEST
-    PUSH0  // jump block10;
   block10:
     JUMPDEST
-    PUSH1 block8  // br v25 block19 block2;
+    PUSH1 block8  // br v25 block22 block2;
     JUMPI
   block2:
     SWAP1  // v26.i256 = mload v7 i256;
@@ -324,7 +325,7 @@ entry:
     MLOAD  // v10.i256 = mload v44 i256;
     PUSH1 0x1 (1)  // v11.i1 = eq v10 1.i256;
     EQ
-    ISZERO  // br v11 block3 block20;
+    ISZERO  // br v11 block3 block23;
     PUSH1 block8
     JUMPI
   block3:

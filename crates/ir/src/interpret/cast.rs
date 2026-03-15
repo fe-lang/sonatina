@@ -36,7 +36,11 @@ impl Interpret for Trunc {
 impl Interpret for Bitcast {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
-        single_result(state.lookup_val(*self.from()))
+        single_result(
+            state
+                .lookup_val(*self.from())
+                .with_imm(|value| value.bitcast(*self.ty())),
+        )
     }
 }
 
@@ -44,11 +48,11 @@ impl Interpret for IntToPtr {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
         let value = state.lookup_val(*self.from());
-        let ty = self.ty();
+        let from_ty = state.dfg().value_ty(*self.from());
 
         single_result(value.with_imm(|value| {
             let ptr_repr = state.dfg().ctx.type_layout.pointer_repl();
-            if *ty > ptr_repr {
+            if from_ty > ptr_repr {
                 value.trunc(ptr_repr)
             } else {
                 value.zext(ptr_repr)

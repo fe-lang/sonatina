@@ -6,11 +6,11 @@ input_file: test_files/evm/fresh_equivalent_out_param_scalarizes.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 35 bytes
-  total: 35 bytes
+  section runtime: 25 bytes
+  total: 25 bytes
 
 functions:
-  entry: ir_blocks=4 ir_insts=13 vcode_ops=29 fixups=2 imm_bytes=4
+  entry: ir_blocks=4 ir_insts=13 vcode_ops=21 fixups=2 imm_bytes=2
     mem: scratch_words=4 stable_words=0 stable_mode=None entry_abs_words=4 abs_words_end=4
 
 evm:
@@ -29,12 +29,8 @@ entry:
     SWAP1  // v7.*@pair = alloca @pair;
     POP
     PUSH1 0xa0 (160)
-    DUP1  // v8.*i256 = gep v7 0.i256 0.i256;
-    POP
-    PUSH1 0xa0 (160)
     SWAP1  // mstore v8 v1 i256;
-    SWAP2
-    SWAP1
+    DUP2
     MSTORE
     PUSH1 block5  // jump block5;
     JUMP
@@ -42,12 +38,8 @@ entry:
     JUMPDEST
     POP  // v9.*@pair = alloca @pair;
     PUSH1 0xe0 (224)
-    DUP1  // v10.*i256 = gep v9 0.i256 0.i256;
-    POP
-    PUSH1 0xe0 (224)
     SWAP1  // mstore v10 v2 i256;
-    SWAP2
-    SWAP1
+    DUP2
     MSTORE
   block5:
     JUMPDEST

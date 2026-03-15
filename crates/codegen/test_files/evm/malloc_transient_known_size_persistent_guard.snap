@@ -1,19 +1,18 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/malloc_transient_known_size_persistent_guard.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 82 bytes
-  total: 82 bytes
+  section runtime: 83 bytes
+  total: 83 bytes
 
 functions:
   mk: ir_blocks=1 ir_insts=3 vcode_ops=21 fixups=1 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  scratch: ir_blocks=1 ir_insts=4 vcode_ops=17 fixups=1 imm_bytes=4
+  scratch: ir_blocks=1 ir_insts=3 vcode_ops=17 fixups=1 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   main: ir_blocks=1 ir_insts=6 vcode_ops=16 fixups=4 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -66,10 +65,10 @@ scratch:
     PUSH1 0xa0 (160)
     JUMPDEST
     PUSH1 0x6f (111)  // mstore v0 111.i256 i256;
-    DUP2
+    SWAP1
     MSTORE
-    MLOAD  // v2.i256 = mload v0 i256;
-    SWAP1  // return v2;
+    PUSH1 0x6f (111)  // return 111.i256;
+    SWAP1
     JUMP
 
 // func public %main() -> i256

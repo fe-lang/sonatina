@@ -6,18 +6,18 @@ input_file: test_files/evm/multi_return_call.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 62 bytes
-  total: 62 bytes
+  section runtime: 52 bytes
+  total: 52 bytes
 
 functions:
-  entry: ir_blocks=3 ir_insts=12 vcode_ops=36 fixups=3 imm_bytes=6
-    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0xc0) entry_abs_words=1 abs_words_end=2
-  pair_add: ir_blocks=1 ir_insts=6 vcode_ops=16 fixups=0 imm_bytes=1
-    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=1
+  entry: ir_blocks=3 ir_insts=10 vcode_ops=29 fixups=3 imm_bytes=6
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
+  pair_add: ir_blocks=1 ir_insts=4 vcode_ops=13 fixups=0 imm_bytes=1
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
 
 evm:
-  case no_overflow: calldata_len=64 success reason=Return gas_used=21444 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=164
-  case overflow: calldata_len=64 success reason=Return gas_used=21818 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=166
+  case no_overflow: calldata_len=64 success reason=Return gas_used=21394 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=114
+  case overflow: calldata_len=64 success reason=Return gas_used=21768 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=116
 
 
 --------------- DEBUG ---------------
@@ -35,22 +35,15 @@ evm:
     // v2.*i256 = alloca i256;
     - stack=[v1, v0]
       alloca [] -> v2
-    // mstore v2 7.i256 i256;
-    - stack=[v2, v1, v0]
-      pre: [PUSH(7), DUP2]
-      mstore [v2, 7]
     // (v3.i256, v4.i1) = call %pair_add v0 v1;
-    - stack=[v2, v1, v0], last_use=[v0, v1]
-      pre: [SWAP2, SWAP1, PUSH_CONT, SWAP2]
+    - stack=[v2x, v1, v0], last_use=[v0, v1]
+      cleanup: [POP]
+      pre: [PUSH_CONT, SWAP2]
       call [v1, v0] -> [v3, v4]
-    // v5.i256 = mload v2 i256;
-    - stack=[v3, v4, v2], last_use=[v2]
-      pre: [SWAP2]
-      mload [v2] -> v5
-    // v6.i256 = add v3 v5;
-    - stack=[v5, v4, v3], last_use=[v3, v5]
-      pre: [SWAP1, SWAP2]
-      add [v3, v5] -> v6
+    // v6.i256 = add v3 7.i256;
+    - stack=[v3, v4], last_use=[v3]
+      pre: [PUSH(7)]
+      add [7, v3] -> v6
     // br v4 block1 block2;
     - stack=[v6, v4]
       pre: [SWAP1]
@@ -80,21 +73,15 @@ evm:
     // v2.*i256 = alloca i256;
     - stack=[v0, v1, <RET>]
       alloca [] -> v2
-    // mstore v2 v0 i256;
-    - stack=[v2, v0, v1, <RET>], last_use=[v0]
+    // v4.i256 = add v0 v1;
+    - stack=[v2x, v0, v1, <RET>], last_use=[v1]
+      cleanup: [POP]
       pre: [SWAP1, DUP2]
-      mstore [v2, v0]
-    // v3.i256 = mload v2 i256;
-    - stack=[v2, v1, <RET>], last_use=[v2]
-      mload [v2] -> v3
-    // v4.i256 = add v3 v1;
-    - stack=[v3, v1, <RET>], last_use=[v1]
+      add [v0, v1] -> v4
+    // v5.i1 = lt v4 v0;
+    - stack=[v4, v0, <RET>], last_use=[v0]
       pre: [SWAP1, DUP2]
-      add [v3, v1] -> v4
-    // v5.i1 = lt v4 v3;
-    - stack=[v4, v3, <RET>], last_use=[v3]
-      pre: [SWAP1, DUP2]
-      lt [v4, v3] -> v5
+      lt [v4, v0] -> v5
     // return (v4, v5);
     - stack=[v5, v4, <RET>]
       return: [SWAP1]
@@ -107,21 +94,14 @@ entry:
     CALLDATALOAD
     PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i256;
     CALLDATALOAD
-    PUSH1 0xc0 (192)  // v2.*i256 = alloca i256;
-    PUSH1 0x7 (7)  // mstore v2 7.i256 i256;
-    DUP2
-    MSTORE
-    SWAP2  // (v3.i256, v4.i1) = call %pair_add v0 v1;
-    SWAP1
+    PUSH1 0xa0 (160)  // v2.*i256 = alloca i256;
+    POP  // (v3.i256, v4.i1) = call %pair_add v0 v1;
     PUSH1 `pc + (4)`
     SWAP2
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    SWAP2  // v5.i256 = mload v2 i256;
-    MLOAD
-    SWAP1  // v6.i256 = add v3 v5;
-    SWAP2
+    PUSH1 0x7 (7)  // v6.i256 = add v3 7.i256;
     ADD
     SWAP1  // br v4 block1 block2;
     ISZERO
@@ -147,14 +127,11 @@ pair_add:
   block0:
     JUMPDEST
     PUSH1 0xa0 (160)  // v2.*i256 = alloca i256;
-    SWAP1  // mstore v2 v0 i256;
-    DUP2
-    MSTORE
-    MLOAD  // v3.i256 = mload v2 i256;
-    SWAP1  // v4.i256 = add v3 v1;
+    POP  // v4.i256 = add v0 v1;
+    SWAP1
     DUP2
     ADD
-    SWAP1  // v5.i1 = lt v4 v3;
+    SWAP1  // v5.i1 = lt v4 v0;
     DUP2
     LT
     SWAP1  // return (v4, v5);

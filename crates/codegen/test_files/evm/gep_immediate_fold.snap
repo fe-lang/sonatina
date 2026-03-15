@@ -6,13 +6,13 @@ input_file: test_files/evm/gep_immediate_fold.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 60 bytes
-  total: 60 bytes
+  section runtime: 55 bytes
+  total: 55 bytes
 
 functions:
   fold_simple: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
-  fold_nested: ir_blocks=1 ir_insts=6 vcode_ops=12 fixups=0 imm_bytes=4
+  fold_nested: ir_blocks=1 ir_insts=2 vcode_ops=6 fixups=0 imm_bytes=2
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
   dynamic_index: ir_blocks=1 ir_insts=5 vcode_ops=12 fixups=0 imm_bytes=3
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
@@ -20,7 +20,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  case folded_and_fallback: calldata_len=8 success reason=Return gas_used=21233 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=177
+  case folded_and_fallback: calldata_len=8 success reason=Return gas_used=21218 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=162
 
 
 --------------- DEBUG ---------------
@@ -37,12 +37,10 @@ fold_simple:
 fold_nested:
   block0:
     JUMPDEST
-    PUSH1 0xe0 (224)  // v2.*i256 = gep v1 2.i256;
-    PUSH1 0x9 (9)  // mstore v2 9.i256 i256;
-    DUP2
-    MSTORE
-    MLOAD  // v3.i256 = mload v2 i256;
-    SWAP1  // return v3;
+    PUSH1 0xa0 (160)  // v0.*@triple = alloca @triple;
+    POP  // return 9.i256;
+    PUSH1 0x9 (9)
+    SWAP1
     JUMP
 
 // func public %dynamic_index(v0.i256) -> i256

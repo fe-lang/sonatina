@@ -37,11 +37,13 @@ use crate::{
     optim::{
         aggregate::{
             AggregateCombine, AggregateExpandAbi, AggregateLowerToMemoryLegalize,
-            AggregateScalarize, EnumLowerToProduct, ObjectLoadStore, ObjectLowerToMemory,
-            ObjectReturnOutParam, assert_aggregate_legalized,
+            AggregateScalarize, EnumLowerToProduct, LocalObjectArgMap, ObjectLoadStore,
+            ObjectLowerToMemory, ObjectReturnOutParam, assert_aggregate_legalized,
             collect_local_object_arg_info_with_effects, compute_object_effect_summaries, shape,
         },
         cfg_cleanup::CfgCleanup,
+        load_store::LoadStoreSolver,
+        sccp::SccpSolver,
     },
     stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyBuilder},
 };
@@ -1807,6 +1809,79 @@ fn collect_call_closure(module: &Module, roots: &[FuncRef]) -> Vec<FuncRef> {
     closure
 }
 
+fn run_evm_pre_memory_aggregate_pipeline(module: &Module) -> LocalObjectArgMap {
+    EnumLowerToProduct.run(module);
+    for func_ref in module.funcs() {
+        module.func_store.modify(func_ref, |function| {
+            AggregateCombine::default().run(function)
+        });
+    }
+    let synthetic_out_args = ObjectReturnOutParam.run_with_synthetic_out_args(module);
+    let object_effects = compute_object_effect_summaries(module);
+    let mut local_object_args = collect_local_object_arg_info_with_effects(module, &object_effects);
+    crate::optim::aggregate::merge_local_object_arg_info(
+        &mut local_object_args,
+        &synthetic_out_args,
+    );
+    for func_ref in module.funcs() {
+        module.func_store.modify(func_ref, |function| {
+            ObjectLoadStore::default().run_for_func(
+                func_ref,
+                function,
+                &local_object_args,
+                &object_effects,
+            )
+        });
+    }
+    ObjectLowerToMemory.run(module);
+    AggregateExpandAbi::default().run(module);
+    local_object_args
+}
+
+fn run_evm_post_legalize_cleanup(
+    module: &Module,
+    funcs: &[FuncRef],
+    local_object_args: &LocalObjectArgMap,
+) {
+    for &func in funcs {
+        module.func_store.modify(func, |function| {
+            CfgCleanup::new(CleanupMode::Strict).run(function);
+            AggregateCombine::default().run(function);
+            AggregateScalarize::default().run_for_func(func, function, local_object_args);
+        });
+    }
+
+    func_behavior::analyze_module(module);
+    for &func in funcs {
+        module.func_store.modify(func, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+            LoadStoreSolver::new().run(function, &mut cfg);
+            cfg.compute(function);
+            SccpSolver::new().run(function, &mut cfg);
+        });
+    }
+}
+
+fn run_evm_post_memory_legalize_cleanup(module: &Module, funcs: &[FuncRef]) {
+    for &func in funcs {
+        module.func_store.modify(func, |function| {
+            CfgCleanup::new(CleanupMode::Strict).run(function);
+        });
+    }
+
+    func_behavior::analyze_module(module);
+    for &func in funcs {
+        module.func_store.modify(func, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+            LoadStoreSolver::new().run(function, &mut cfg);
+            cfg.compute(function);
+            SccpSolver::new().run(function, &mut cfg);
+        });
+    }
+}
+
 fn assert_supported_lowering_ir(func_ref: FuncRef, func: &Function) {
     if let Some(sig) = func.ctx().get_sig(func_ref) {
         for &arg in sig.args() {
@@ -1931,40 +2006,9 @@ impl LowerBackend for EvmBackend {
 
         let _span =
             info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
-        EnumLowerToProduct.run(module);
-        for func_ref in module.funcs() {
-            module.func_store.modify(func_ref, |function| {
-                AggregateCombine::default().run(function)
-            });
-        }
-        let synthetic_out_args = ObjectReturnOutParam.run_with_synthetic_out_args(module);
-        let object_effects = compute_object_effect_summaries(module);
-        let mut local_object_args =
-            collect_local_object_arg_info_with_effects(module, &object_effects);
-        crate::optim::aggregate::merge_local_object_arg_info(
-            &mut local_object_args,
-            &synthetic_out_args,
-        );
-        for func_ref in module.funcs() {
-            module.func_store.modify(func_ref, |function| {
-                ObjectLoadStore::default().run_for_func(
-                    func_ref,
-                    function,
-                    &local_object_args,
-                    &object_effects,
-                )
-            });
-        }
-        ObjectLowerToMemory.run(module);
-        AggregateExpandAbi::default().run(module);
+        let local_object_args = run_evm_pre_memory_aggregate_pipeline(module);
         legalize_evm_section(module, funcs);
-        for &func in funcs {
-            module.func_store.modify(func, |function| {
-                CfgCleanup::new(CleanupMode::Strict).run(function);
-                AggregateCombine::default().run(function);
-                AggregateScalarize::default().run_for_func(func, function, &local_object_args);
-            });
-        }
+        run_evm_post_legalize_cleanup(module, funcs, &local_object_args);
         for &func in funcs {
             module.func_store.view(func, |function| {
                 assert_supported_lowering_ir(func, function)
@@ -2004,6 +2048,7 @@ impl LowerBackend for EvmBackend {
                 });
             }
         }
+        run_evm_post_memory_legalize_cleanup(module, funcs);
 
         {
             let _span = debug_span!("sonatina.codegen.evm.func_behavior").entered();
@@ -2194,40 +2239,9 @@ impl LowerBackend for EvmBackend {
         }
 
         let closure = collect_call_closure(module, std::slice::from_ref(&func));
-        EnumLowerToProduct.run(module);
-        for func_ref in module.funcs() {
-            module.func_store.modify(func_ref, |function| {
-                AggregateCombine::default().run(function)
-            });
-        }
-        let synthetic_out_args = ObjectReturnOutParam.run_with_synthetic_out_args(module);
-        let object_effects = compute_object_effect_summaries(module);
-        let mut local_object_args =
-            collect_local_object_arg_info_with_effects(module, &object_effects);
-        crate::optim::aggregate::merge_local_object_arg_info(
-            &mut local_object_args,
-            &synthetic_out_args,
-        );
-        for func_ref in module.funcs() {
-            module.func_store.modify(func_ref, |function| {
-                ObjectLoadStore::default().run_for_func(
-                    func_ref,
-                    function,
-                    &local_object_args,
-                    &object_effects,
-                )
-            });
-        }
-        ObjectLowerToMemory.run(module);
-        AggregateExpandAbi::default().run(module);
+        let local_object_args = run_evm_pre_memory_aggregate_pipeline(module);
         legalize_evm_section(module, &closure);
-        for &callee in &closure {
-            module.func_store.modify(callee, |function| {
-                CfgCleanup::new(CleanupMode::Strict).run(function);
-                AggregateCombine::default().run(function);
-                AggregateScalarize::default().run_for_func(callee, function, &local_object_args);
-            });
-        }
+        run_evm_post_legalize_cleanup(module, &closure, &local_object_args);
         module.func_store.view(func, |function| {
             assert_supported_lowering_ir(func, function)
         });
@@ -2254,6 +2268,7 @@ impl LowerBackend for EvmBackend {
                 assert_aggregate_legalized(function, &module.ctx);
             });
         }
+        run_evm_post_memory_legalize_cleanup(module, std::slice::from_ref(&func));
 
         {
             let _span = trace_span!("sonatina.codegen.evm.lower_function.func_behavior").entered();

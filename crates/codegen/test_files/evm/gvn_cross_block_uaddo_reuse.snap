@@ -33,9 +33,9 @@ evm:
     - stack=[v1, v0], last_use=[v1]
       pre: [PUSH(0)]
       eq [0, v1] -> v2
-    // br v2 block1 block8;
+    // br v2 block1 block10;
     - stack=[v2, v0]
-      br [v2] -> [block1, block8]
+      br [v2] -> [block1, block10]
   block1 P=[] T=[v0]
     inherited from block0: [v0]
     // v15.i256 = add v0 1.i256;
@@ -55,9 +55,9 @@ evm:
     - stack=[v15]
       pre: [PUSH(5), DUP2]
       eq [v15, 5] -> v5
-    // br v5 block4 block9;
+    // br v5 block4 block11;
     - stack=[v5, v15]
-      br [v5] -> [block4, block9]
+      br [v5] -> [block4, block11]
   block4 P=[] T=[v15]
     inherited from block2: [v15]
     // mstore 0.i256 v15 i256;
@@ -68,7 +68,7 @@ evm:
     - stack=[]
       pre: [PUSH(32), PUSH(0)]
       evm_return [0, 32]
-  block9 P=[] T=[]
+  block11 P=[] T=[]
     // jump block6;
     - stack=[]
       jump -> block6
@@ -77,7 +77,7 @@ evm:
     - stack=[]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
-  block8 P=[] T=[]
+  block10 P=[] T=[]
     // jump block6;
     - stack=[]
       jump -> block6
@@ -101,7 +101,7 @@ entry:
     AND
     PUSH0  // v2.i1 = eq v1 0.i256;
     EQ
-    ISZERO  // br v2 block1 block8;
+    ISZERO  // br v2 block1 block10;
     PUSH1 block6
     JUMPI
   block1:
@@ -117,7 +117,7 @@ entry:
     PUSH1 0x5 (5)  // v5.i1 = eq v15 5.i256;
     DUP2
     EQ
-    ISZERO  // br v5 block4 block9;
+    ISZERO  // br v5 block4 block11;
     PUSH1 block6
     JUMPI
   block4:

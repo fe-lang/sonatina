@@ -186,6 +186,10 @@ impl Immediate {
         Self::from_i256(self.as_i256(), ty)
     }
 
+    pub fn bitcast(self, ty: Type) -> Self {
+        Self::from_i256(I256::from(self.unsigned_value()), ty)
+    }
+
     pub fn imm_eq(self, rhs: Self) -> Self {
         debug_assert_eq!(self.ty(), rhs.ty());
 

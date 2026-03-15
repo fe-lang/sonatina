@@ -6,8 +6,8 @@ input_file: test_files/evm/vault.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 4843 bytes
-  total: 4843 bytes
+  section runtime: 4714 bytes
+  total: 4714 bytes
 
 object: Vault
   section init: 952 bytes
@@ -15,9 +15,9 @@ object: Vault
   total: 1733 bytes
 
 object: VaultUser
-  section init: 1248 bytes
-  section runtime: 1237 bytes
-  total: 2485 bytes
+  section init: 1224 bytes
+  section runtime: 1213 bytes
+  total: 2437 bytes
 
 functions:
   __Contract_runtime_entry: ir_blocks=1 ir_insts=85 vcode_ops=328 fixups=65 imm_bytes=50
@@ -96,7 +96,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=549562 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=528562
+  case ok: calldata_len=0 success reason=Return gas_used=544340 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=523340
 
 
 --------------- DEBUG ---------------
@@ -455,7 +455,7 @@ __Vault_recv_0_0:
     DUP1  // v10.i256 = evm_sload v9;
     SLOAD
     ISZERO  // v11.i1 = is_zero v10;
-    PUSH1 block7  // br v11 block7 block4;
+    PUSH1 block8  // br v11 block8 block4;
     JUMPI
   block4:
     DUP1  // v18.i256 = evm_sload v9;
@@ -473,7 +473,7 @@ __Vault_recv_0_0:
     SWAP3
     PUSH1 block5
     JUMP
-  block7:
+  block8:
     JUMPDEST
     DUP2  // jump block5;
     SWAP3
@@ -2384,7 +2384,7 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     JUMPDEST
     DUP1  // v5.i256 = mload v4 i256;
     MLOAD
-    PUSH1 block3  // br v6 block1 block3;
+    PUSH1 block4  // br v6 block1 block4;
     JUMPI
   block1:
     DUP2  // v10.*i256 = evm_malloc v1;
@@ -2426,7 +2426,7 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     MSTORE  // mstore v21 v18 i256;
     PUSH1 block2  // jump block2;
     JUMP
-  block3:
+  block4:
     JUMPDEST
     SWAP1  // jump block2;
     POP

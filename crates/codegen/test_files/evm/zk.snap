@@ -190,16 +190,16 @@ evm:
     - stack=[v0], last_use=[v0]
       pre: [PUSH(1)]
       eq [1, v0] -> v1
-    // br v1 block5 block4;
+    // br v1 block6 block4;
     - stack=[v1]
-      br [v1] -> [block5, block4]
+      br [v1] -> [block6, block4]
   block4 P=[] T=[]
     inherited from block0: []
     // jump block3;
     - stack=[]
       exit(block3): [PUSH(0)]
       jump -> block3
-  block5 P=[] T=[]
+  block6 P=[] T=[]
     inherited from block0: []
     // jump block3;
     - stack=[]
@@ -221,15 +221,15 @@ evm:
     - stack=[v0, v1, v2, v3, <RET>]
       pre: [PUSH(32), DUP4]
       gt [v2, 32] -> v4
-    // br v4 block1 block9;
+    // br v4 block1 block10;
     - stack=[v4, v0, v1, v2, v3, <RET>]
-      br [v4] -> [block1, block9]
+      br [v4] -> [block1, block10]
   block1 P=[] T=[]
     // evm_revert 0.i256 0.i256;
     - stack=[<RET>]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
-  block9 P=[] T=[v0, v1, v2, v3]
+  block10 P=[] T=[v0, v1, v2, v3]
     inherited from block0: [v0, v1, v2, v3, <RET>]
     // jump block3;
     - stack=[v0, v1, v2, v3, <RET>]
@@ -325,15 +325,15 @@ evm:
     - stack=[v0, v1, v2, v3, v4, v5, <RET>]
       pre: [PUSH(32), DUP6]
       gt [v4, 32] -> v6
-    // br v6 block1 block11;
+    // br v6 block1 block12;
     - stack=[v6, v0, v1, v2, v3, v4, v5, <RET>]
-      br [v6] -> [block1, block11]
+      br [v6] -> [block1, block12]
   block1 P=[] T=[]
     // evm_revert 0.i256 0.i256;
     - stack=[<RET>]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
-  block11 P=[] T=[v0, v1, v2, v3, v4, v5]
+  block12 P=[] T=[v0, v1, v2, v3, v4, v5]
     inherited from block0: [v0, v1, v2, v3, v4, v5, <RET>]
     // jump block3;
     - stack=[v0, v1, v2, v3, v4, v5, <RET>]
@@ -465,9 +465,9 @@ evm:
     - stack=[v0, v1, v2, v3, <RET>]
       pre: [DUP3, PUSH(4294967295)]
       eq [4294967295, v2] -> v4
-    // br v4 block18 block2;
+    // br v4 block20 block2;
     - stack=[v4, v0, v1, v2, v3, <RET>]
-      br [v4] -> [block18, block2]
+      br [v4] -> [block20, block2]
   block2 P=[] T=[v0, v1, v2, v3]
     inherited from block0: [v0, v1, v2, v3, <RET>]
     // call %smt_store_zero_table;
@@ -508,10 +508,10 @@ evm:
     - stack=[v29, v28, v19, v20, v21, v22, v27, v24, <RET>], last_use=[v22]
       pre: [SWAP5, PUSH(32)]
       add [32, v22] -> v30
-    // br v27 block12 block19;
+    // br v27 block12 block21;
     - stack=[v30, v28, v19, v20, v21, v29, v27, v24, <RET>]
       pre: [SWAP6]
-      br [v27] -> [block12, block19]
+      br [v27] -> [block12, block21]
   block12 P=[] T=[v28, v19, v20, v21, v30, v24]
     inherited from block10: [v28, v19, v20, v21, v29x, v30, v24, <RET>]
     prologue: [SWAP4, POP, SWAP1, SWAP2, SWAP3]
@@ -527,7 +527,7 @@ evm:
     - stack=[v32, v28, v19, v31, v21, v30, v24, <RET>]
       exit(block14): [SWAP1, SWAP2, SWAP3, SWAP1]
       jump -> block14
-  block19 P=[] T=[v28, v19, v20, v21, v29, v30, v24]
+  block21 P=[] T=[v28, v19, v20, v21, v29, v30, v24]
     inherited from block10: [v28, v19, v20, v21, v29, v30, v24, <RET>]
     // jump block14;
     - stack=[v28, v19, v20, v21, v29, v30, v24, <RET>]
@@ -599,7 +599,7 @@ evm:
     - stack=[v19x, v20x, v21, v22x, v23x, v24x, <RET>]
       cleanup: [POP, POP, SWAP3, POP, POP, POP]
       return [v21]
-  block18 P=[] T=[v0, v1, v3]
+  block20 P=[] T=[v0, v1, v3]
     inherited from block0: [v0, v1, v2x, v3, <RET>]
     // jump block3;
     - stack=[v0, v1, v2x, v3, <RET>]
@@ -695,9 +695,9 @@ evm:
     - stack=[v0, v1, v2, v3, v4, v5, <RET>]
       pre: [DUP5, PUSH(4294967295)]
       eq [4294967295, v4] -> v6
-    // br v6 block22 block2;
+    // br v6 block24 block2;
     - stack=[v6, v0, v1, v2, v3, v4, v5, <RET>]
-      br [v6] -> [block22, block2]
+      br [v6] -> [block24, block2]
   block2 P=[] T=[v0, v1, v2, v3, v4, v5]
     inherited from block0: [v0, v1, v2, v3, v4, v5, <RET>]
     // call %smt_store_zero_table;
@@ -738,10 +738,10 @@ evm:
     - stack=[v38, v37, v27, v28, v29, v30, v31, v36, v33, v0, <RET>], last_use=[v31]
       pre: [SWAP6, PUSH(32)]
       add [32, v31] -> v39
-    // br v36 block14 block23;
+    // br v36 block14 block25;
     - stack=[v39, v37, v27, v28, v29, v30, v38, v36, v33, v0, <RET>]
       pre: [SWAP7]
-      br [v36] -> [block14, block23]
+      br [v36] -> [block14, block25]
   block14 P=[] T=[v37, v27, v28, v29, v30, v39, v33, v0]
     inherited from block12: [v37, v27, v28, v29, v30, v38x, v39, v33, v0, <RET>]
     prologue: [SWAP5, POP, SWAP1, SWAP2, SWAP3, SWAP4]
@@ -757,7 +757,7 @@ evm:
     - stack=[v43, v37, v27, v28, v42, v30, v39, v33, v0, <RET>]
       exit(block16): [SWAP1, SWAP2, SWAP3, SWAP4, SWAP1]
       jump -> block16
-  block23 P=[] T=[v37, v27, v28, v29, v30, v38, v39, v33, v0]
+  block25 P=[] T=[v37, v27, v28, v29, v30, v38, v39, v33, v0]
     inherited from block12: [v37, v27, v28, v29, v30, v38, v39, v33, v0, <RET>]
     // jump block16;
     - stack=[v37, v27, v28, v29, v30, v38, v39, v33, v0, <RET>]
@@ -865,7 +865,7 @@ evm:
     // return v27;
     - stack=[v27, <RET>]
       return [v27]
-  block22 P=[] T=[v0, v1, v2, v3, v5]
+  block24 P=[] T=[v0, v1, v2, v3, v5]
     inherited from block0: [v0, v1, v2, v3, v4x, v5, <RET>]
     // jump block3;
     - stack=[v0, v1, v2, v3, v4x, v5, <RET>]
@@ -1417,13 +1417,13 @@ abi_return_bool:
     JUMPDEST
     PUSH1 0x1 (1)  // v3.i1 = eq 1.i256 v0;
     EQ
-    PUSH1 block5  // br v3 block5 block4;
+    PUSH1 block6  // br v3 block6 block4;
     JUMPI
   block4:
     PUSH0  // jump block3;
     PUSH1 block3
     JUMP
-  block5:
+  block6:
     JUMPDEST
     PUSH1 0x1 (1)  // jump block3;
   block3:
@@ -1441,14 +1441,14 @@ leanimt_root_from_calldata:
     PUSH1 0x20 (32)  // v6.i1 = gt v2 32.i256;
     DUP4
     GT
-    ISZERO  // br v6 block1 block9;
-    PUSH1 block9
+    ISZERO  // br v6 block1 block10;
+    PUSH1 block10
     JUMPI
   block1:
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
-  block9:
+  block10:
     JUMPDEST
     SWAP3  // jump block3;
     SWAP1
@@ -1528,14 +1528,14 @@ leanimt_update_root_from_calldata:
     PUSH1 0x20 (32)  // v8.i1 = gt v4 32.i256;
     DUP6
     GT
-    ISZERO  // br v8 block1 block11;
-    PUSH1 block11
+    ISZERO  // br v8 block1 block12;
+    PUSH1 block12
     JUMPI
   block1:
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
-  block11:
+  block12:
     JUMPDEST
     SWAP5  // jump block3;
     SWAP3
@@ -1638,7 +1638,7 @@ smt_root_from_calldata:
     DUP3  // v6.i1 = eq 4294967295.i256 v2;
     PUSH4 0xffffffff (4294967295)
     EQ
-    PUSH1 block18  // br v6 block18 block2;
+    PUSH1 block20  // br v6 block20 block2;
     JUMPI
   block2:
     PUSH1 `pc + (3)`  // call %smt_store_zero_table;
@@ -1671,9 +1671,9 @@ smt_root_from_calldata:
     SWAP5  // v50.i256 = add 32.i256 v88;
     PUSH1 0x20 (32)
     ADD
-    SWAP6  // br v45 block12 block19;
+    SWAP6  // br v45 block12 block21;
     ISZERO
-    PUSH1 block19
+    PUSH1 block21
     JUMPI
   block12:
     SWAP4  // v55.i256 = evm_calldata_load v92;
@@ -1692,7 +1692,7 @@ smt_root_from_calldata:
     SWAP1
     PUSH1 block14
     JUMP
-  block19:
+  block21:
     JUMPDEST
     SWAP2  // jump block14;
     SWAP1
@@ -1758,7 +1758,7 @@ smt_root_from_calldata:
     POP
     SWAP1
     JUMP
-  block18:
+  block20:
     JUMPDEST
     PUSH0  // jump block3;
     SWAP4
@@ -1836,7 +1836,7 @@ smt_update_root_from_calldata:
     DUP5  // v8.i1 = eq 4294967295.i256 v4;
     PUSH4 0xffffffff (4294967295)
     EQ
-    PUSH1 block22  // br v8 block22 block2;
+    PUSH1 block24  // br v8 block24 block2;
     JUMPI
   block2:
     PUSH1 `pc + (3)`  // call %smt_store_zero_table;
@@ -1871,9 +1871,9 @@ smt_update_root_from_calldata:
     SWAP6  // v62.i256 = add 32.i256 v115;
     PUSH1 0x20 (32)
     ADD
-    SWAP7  // br v57 block14 block23;
+    SWAP7  // br v57 block14 block25;
     ISZERO
-    PUSH1 block23
+    PUSH1 block25
     JUMPI
   block14:
     SWAP5  // v72.i256 = evm_calldata_load v121;
@@ -1894,7 +1894,7 @@ smt_update_root_from_calldata:
     SWAP1
     PUSH1 block16
     JUMP
-  block23:
+  block25:
     JUMPDEST
     SWAP2  // jump block16;
     SWAP4
@@ -1991,7 +1991,7 @@ smt_update_root_from_calldata:
     JUMPDEST
     SWAP1  // return v137;
     JUMP
-  block22:
+  block24:
     JUMPDEST
     PUSH0  // jump block3;
     SWAP5

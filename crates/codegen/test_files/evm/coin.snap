@@ -11,8 +11,8 @@ object: Coin
   total: 1614 bytes
 
 object: Contract
-  section runtime: 2392 bytes
-  total: 2392 bytes
+  section runtime: 2355 bytes
+  total: 2355 bytes
 
 functions:
   __Contract_runtime_entry: ir_blocks=1 ir_insts=62 vcode_ops=232 fixups=36 imm_bytes=44
@@ -67,7 +67,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=282507 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=261507
+  case ok: calldata_len=0 success reason=Return gas_used=282304 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=261304
 
 
 --------------- DEBUG ---------------
@@ -1438,9 +1438,9 @@ evm:
     - stack=[v1, v0, <RET>]
       pre: [DUP1]
       is_zero [v1] -> v2
-    // br v2 block1 block5;
+    // br v2 block1 block7;
     - stack=[v2, v1, v0, <RET>]
-      br [v2] -> [block1, block5]
+      br [v2] -> [block1, block7]
   block1 P=[] T=[v0]
     inherited from block0: [v1x, v0, <RET>]
     // v5.i256 = evm_msize;
@@ -1450,7 +1450,7 @@ evm:
     // jump block2;
     - stack=[v5, v0, <RET>]
       jump -> block2
-  block5 P=[] T=[v1, v0]
+  block7 P=[] T=[v1, v0]
     inherited from block0: [v1, v0, <RET>]
     // jump block2;
     - stack=[v1, v0, <RET>]
@@ -1460,20 +1460,20 @@ evm:
     - stack=[v6, v0, <RET>]
       pre: [PUSH(8192), DUP2]
       lt [v6, 8192] -> v7
-    // br v7 block3 block6;
+    // br v7 block8 block6;
     - stack=[v7, v6, v0, <RET>]
-      br [v7] -> [block3, block6]
-  block3 P=[] T=[v0]
+      br [v7] -> [block8, block6]
+  block6 P=[] T=[v6, v0]
+    inherited from block2: [v6, v0, <RET>]
+    // jump block4;
+    - stack=[v6, v0, <RET>]
+      jump -> block4
+  block8 P=[] T=[v0]
     inherited from block2: [v6x, v0, <RET>]
     // jump block4;
     - stack=[v6x, v0, <RET>]
       cleanup: [POP]
       exit(block4): [PUSH(8192)]
-      jump -> block4
-  block6 P=[] T=[v6, v0]
-    inherited from block2: [v6, v0, <RET>]
-    // jump block4;
-    - stack=[v6, v0, <RET>]
       jump -> block4
   block4 P=[v10] T=[v0]
     // v11.i256 = add v0 v10;
@@ -1696,9 +1696,9 @@ evm:
     // v5.i1 = is_zero v4;
     - stack=[v4, v0, v1, <RET>], last_use=[v4]
       is_zero [v4] -> v5
-    // br v5 block1 block3;
+    // br v5 block1 block4;
     - stack=[v5, v0, v1, <RET>]
-      br [v5] -> [block1, block3]
+      br [v5] -> [block1, block4]
   block1 P=[] T=[v0, v1]
     inherited from block0: [v0, v1, <RET>]
     // v8.*i256 = evm_malloc v1;
@@ -1734,7 +1734,7 @@ evm:
     // jump block2;
     - stack=[v0, <RET>]
       jump -> block2
-  block3 P=[] T=[v0]
+  block4 P=[] T=[v0]
     inherited from block0: [v0, v1x, <RET>]
     // jump block2;
     - stack=[v0, v1x, <RET>]
@@ -3421,7 +3421,7 @@ alloc:
     PUSH1 0x40 (64)  // v3.i256 = mload 64.i256 i256;
     MLOAD
     DUP1  // v4.i1 = is_zero v3;
-    PUSH1 block2  // br v4 block1 block5;
+    PUSH1 block2  // br v4 block1 block7;
     JUMPI
   block1:
     POP  // v7.i256 = evm_msize;
@@ -3431,10 +3431,10 @@ alloc:
     PUSH2 0x2000 (8192)  // v10.i1 = lt v8 8192.i256;
     DUP2
     LT
-    ISZERO  // br v10 block3 block6;
+    ISZERO  // br v10 block8 block6;
     PUSH1 block4
     JUMPI
-  block3:
+  block8:
     POP  // jump block4;
     PUSH2 0x2000 (8192)
   block4:
@@ -3622,7 +3622,7 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     JUMPDEST
     DUP1  // v5.i256 = mload v4 i256;
     MLOAD
-    PUSH1 block3  // br v6 block1 block3;
+    PUSH1 block4  // br v6 block1 block4;
     JUMPI
   block1:
     DUP2  // v10.*i256 = evm_malloc v1;
@@ -3664,7 +3664,7 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     MSTORE  // mstore v21 v18 i256;
     PUSH1 block2  // jump block2;
     JUMP
-  block3:
+  block4:
     JUMPDEST
     SWAP1  // jump block2;
     POP

@@ -1071,7 +1071,8 @@ impl GvnSolver {
                 CastInstKind::Sext => value.sext(ty),
                 CastInstKind::Zext => value.zext(ty),
                 CastInstKind::Trunc => value.trunc(ty),
-                CastInstKind::Bitcast | CastInstKind::IntToPtr | CastInstKind::PtrToInt => {
+                CastInstKind::Bitcast => value.bitcast(ty),
+                CastInstKind::IntToPtr | CastInstKind::PtrToInt => {
                     Immediate::from_i256(value.as_i256(), ty)
                 }
             }
@@ -2805,7 +2806,7 @@ mod tests {
         inst_to_gvn_key,
     };
     use crate::domtree::DomTree;
-    use sonatina_ir::{ControlFlowGraph, Immediate, ValueId};
+    use sonatina_ir::{ControlFlowGraph, Immediate, Type, ValueId};
     use sonatina_parser::parse_module;
 
     #[test]
@@ -3069,6 +3070,41 @@ func private %entry() -> i8 {
                 .perform_constant_folding(func, &key, 0)
                 .expect("sar constant folding should succeed");
             assert_eq!(func.dfg.value_imm(folded), Some(Immediate::I8(-4)));
+        });
+    }
+
+    #[test]
+    fn constant_folding_bitcast_preserves_raw_bits() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %entry() -> i256 {
+    block0:
+        v0.i256 = bitcast 1.i1 i256;
+        return v0;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let bitcast_inst = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find(|&inst| {
+                    matches!(
+                        inst_to_gvn_key(func, inst).kind(),
+                        InstClassKind::Cast(sonatina_ir::inst::CastInstKind::Bitcast)
+                    )
+                })
+                .expect("test function should contain a bitcast instruction");
+            let key = inst_to_gvn_key(func, bitcast_inst);
+            let mut solver = GvnSolver::new();
+            let folded = solver
+                .perform_constant_folding(func, &key, 0)
+                .expect("bitcast constant folding should succeed");
+            assert_eq!(func.dfg.value_imm(folded), Some(Immediate::one(Type::I256)));
         });
     }
 }
