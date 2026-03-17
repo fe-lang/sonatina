@@ -668,9 +668,7 @@ fn has_enum_in_signature(ctx: &ModuleCtx, ty: Type) -> bool {
 
     while let Some(current_ty) = stack.pop() {
         let cmpd_ref = match current_ty {
-            Type::EnumTag(cmpd_ref) => {
-                return ctx.with_ty_store(|store| store.get_compound(cmpd_ref).is_some());
-            }
+            Type::EnumTag(_) => return true,
             Type::Compound(cmpd_ref) => cmpd_ref,
             _ => continue,
         };

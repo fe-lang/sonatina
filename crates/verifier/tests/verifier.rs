@@ -4,12 +4,13 @@ use sonatina_ir::{
     inst::{arith::Add, control_flow::BrTable, data::Gep},
     isa::evm::Evm,
     module::ModuleCtx,
+    types::CompoundTypeRef,
 };
 use sonatina_parser::parse_module;
 use sonatina_triple::TargetTriple;
 use sonatina_verifier::{
     ModuleBuilderVerifyExt, ParseVerifyError, VerificationLevel, VerifierConfig, build_and_verify,
-    parse_and_verify_module, verify_module,
+    parse_and_verify_module, verify_module, verify_module_invariants,
 };
 
 fn has_code(report: &sonatina_verifier::VerificationReport, code: &str) -> bool {
@@ -1448,6 +1449,48 @@ declare external %takes(@node) -> unit;
     let report = verify_module(&module, &cfg);
 
     assert!(has_code(&report, "IR0004"), "expected IR0004, got {report}");
+}
+
+#[test]
+fn dangling_enum_tag_in_public_signature_is_still_rejected() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+declare external %bad(enumtag(@OptionI256)) -> unit;
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let module = parsed.module;
+    let func_ref = module.funcs()[0];
+    let missing_enum_ref = module.ctx.with_ty_store(|store| {
+        let next_ref = store
+            .all_compound_refs()
+            .map(|cmpd_ref| cmpd_ref.as_u32())
+            .max()
+            .expect("enum type must exist")
+            + 1;
+        CompoundTypeRef::from_u32(next_ref)
+    });
+
+    module.ctx.declared_funcs.insert(
+        func_ref,
+        Signature::new(
+            "bad",
+            Linkage::External,
+            &[Type::EnumTag(missing_enum_ref)],
+            &[],
+        ),
+    );
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module_invariants(&module, &cfg);
+
+    assert!(has_code(&report, "IR0610"), "expected IR0610, got {report}");
 }
 
 #[test]
