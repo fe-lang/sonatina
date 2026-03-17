@@ -335,10 +335,15 @@ fn rewrite_inst(
     }
 
     if downcast::<&data::EnumAssertVariant>(function.inst_set(), function.dfg.inst(inst)).is_some()
-        || downcast::<&data::EnumAssertVariantRef>(function.inst_set(), function.dfg.inst(inst))
-            .is_some()
     {
         alias_and_remove_inst(function, inst, None);
+        return true;
+    }
+
+    if let Some(enum_assert_ref) =
+        downcast::<&data::EnumAssertVariantRef>(function.inst_set(), function.dfg.inst(inst))
+    {
+        alias_and_remove_inst(function, inst, Some(*enum_assert_ref.object()));
         return true;
     }
 

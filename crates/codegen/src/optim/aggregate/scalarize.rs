@@ -631,10 +631,10 @@ impl AggregateScalarize {
                     downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(user))
                     && *enum_assert_ref.object() == ptr
                 {
-                    if matches!(
-                        projection.slice.ty.resolve_compound(module),
-                        Some(sonatina_ir::types::CompoundType::Enum(_))
-                    ) {
+                    let Some(result) = func.dfg.inst_result(user) else {
+                        return false;
+                    };
+                    if provenance.exact_projection(result) == Some(projection) {
                         continue;
                     }
                     return false;
@@ -850,6 +850,12 @@ impl AggregateScalarize {
                     downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(user))
                     && *enum_assert_ref.object() == ptr
                 {
+                    let Some(result) = func.dfg.inst_result(user) else {
+                        return false;
+                    };
+                    if !scalarizable[result] {
+                        return false;
+                    }
                     continue;
                 }
                 if let Some(enum_set_tag) =

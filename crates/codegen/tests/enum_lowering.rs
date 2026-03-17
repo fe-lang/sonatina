@@ -72,10 +72,10 @@ block0:
 func public %entry(v0.i256) -> i256 {
 block0:
     v1.objref<@OptionI256> = call %make_some v0;
-    enum.assert_variant_ref v1 #Some;
-    v2.objref<i256> = enum.proj v1 #Some 0.i8;
-    v3.i256 = obj.load v2;
-    return v3;
+    v2.objref<@OptionI256> = enum.assert_variant_ref v1 #Some;
+    v3.objref<i256> = enum.proj v2 #Some 0.i8;
+    v4.i256 = obj.load v3;
+    return v4;
 }
 
 object @Contract {
@@ -137,10 +137,10 @@ func private %entry(v0.i256) -> i256 {
 block0:
     v1.objref<@OptionI256> = obj.alloc @OptionI256;
     enum.write_variant v1 #Some (v0);
-    enum.assert_variant_ref v1 #Some;
-    v2.objref<i256> = enum.proj v1 #Some 0.i8;
-    v3.i256 = obj.load v2;
-    return v3;
+    v2.objref<@OptionI256> = enum.assert_variant_ref v1 #Some;
+    v3.objref<i256> = enum.proj v2 #Some 0.i8;
+    v4.i256 = obj.load v3;
+    return v4;
 }
 
 object @Contract {
@@ -186,9 +186,9 @@ block0:
     br_table v1 block2 (1.enumtag(@Outer) block1) (0.enumtag(@Outer) block2);
 
 block1:
-    enum.assert_variant_ref v0 #Some;
-    v2.objref<@Inner> = enum.proj v0 #Some 0.i8;
-    v3.@Inner = obj.load v2;
+    v2.objref<@Outer> = enum.assert_variant_ref v0 #Some;
+    v3.objref<@Inner> = enum.proj v2 #Some 0.i8;
+    v4.@Inner = obj.load v3;
     return 0.i256;
 
 block2:
@@ -281,9 +281,12 @@ fn enum_tag_br_table_cases_compile_through_evm_codegen() {
         ));
 
         fb.switch_to_block(some_block);
-        fb.insert_inst_no_result(EnumAssertVariantRef::new(is, option, some_variant));
+        let asserted = fb.insert_inst(
+            EnumAssertVariantRef::new(is, option, some_variant),
+            option_objref_ty,
+        );
         let field = fb.insert_inst(
-            EnumProj::new(is, option, some_variant, field_idx),
+            EnumProj::new(is, asserted, some_variant, field_idx),
             builder.objref_type(Type::I256),
         );
         let loaded = fb.insert_inst(ObjLoad::new(is, field), Type::I256);

@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 429
 expression: opt_ir_snapshot
 input_file: test_files/evm/fe_enum_test_enum_unoptimized.sntn
 ---
@@ -94,8 +95,8 @@ func private %__EnumContract_runtime() {
 
     block8:
         v14.i256 = call %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at 0.i256 0.i256;
-        v47.i256 = shr 224.i256 v14;
-        v17.i32 = trunc v47 i32;
+        v49.i256 = shr 224.i256 v14;
+        v17.i32 = trunc v49 i32;
         v27.objref<@__fe_obj_SolDecoder_1> = obj.alloc @__fe_obj_SolDecoder_1;
         v30.objref<@__fe_obj_Cursor_0> = obj.proj v27 0.i256;
         v31.objref<i256> = obj.proj v30 0.i256;

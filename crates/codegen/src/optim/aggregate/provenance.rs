@@ -213,6 +213,12 @@ fn possible_root_transfer(
         return Some(possible_roots[*enum_proj.object()].clone());
     }
 
+    if let Some(enum_assert_ref) =
+        downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
+    {
+        return Some(possible_roots[*enum_assert_ref.object()].clone());
+    }
+
     if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
         return call_return_root_transfer(func, inst, call, possible_roots, object_effects);
     }
@@ -353,6 +359,16 @@ fn derive_exact_state(
                 leaf_count: sub.leaf_count,
             },
         });
+    }
+
+    if let Some(enum_assert_ref) =
+        downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
+    {
+        let base = *enum_assert_ref.object();
+        let Some(base_projection) = exact_projection_of(exact_states, base) else {
+            return pending_or_blocked(exact_states, base);
+        };
+        return ExactState::Exact(base_projection);
     }
 
     if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
@@ -567,6 +583,12 @@ fn supported_value_deps(func: &Function, inst: InstId) -> Option<Vec<ValueId>> {
 
     if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
         return Some(vec![*enum_proj.object()]);
+    }
+
+    if let Some(enum_assert_ref) =
+        downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
+    {
+        return Some(vec![*enum_assert_ref.object()]);
     }
 
     if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {

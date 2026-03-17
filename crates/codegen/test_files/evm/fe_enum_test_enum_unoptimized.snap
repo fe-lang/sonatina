@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 427
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fe_enum_test_enum_unoptimized.sntn
 ---
@@ -272,9 +273,9 @@ __EnumContract_runtime:
     PUSH1 FuncRef(30)
     JUMP
     JUMPDEST
-    PUSH1 0xe0 (224)  // v47.i256 = shr 224.i256 v14;
+    PUSH1 0xe0 (224)  // v49.i256 = shr 224.i256 v14;
     SHR
-    PUSH4 0xffffffff (4294967295)  // v51.i256 = and v47 4294967295.i256;
+    PUSH4 0xffffffff (4294967295)  // v55.i256 = and v49 4294967295.i256;
     AND
     PUSH1 0xa0 (160)  // v27.*@__fe_obj_SolDecoder_1 = alloca @__fe_obj_SolDecoder_1;
     PUSH0  // mstore v31 0.i256 i256;
@@ -286,7 +287,7 @@ __EnumContract_runtime:
     PUSH1 0x4 (4)  // mstore v35 4.i256 i256;
     SWAP1
     MSTORE
-    PUSH4 0x6c56cb0c (1817627404)  // br_table v51 block1 (1817627404.i256 block2) (1163776883.i256 block3) (3572425762.i256 block4);
+    PUSH4 0x6c56cb0c (1817627404)  // br_table v55 block1 (1817627404.i256 block2) (1163776883.i256 block3) (3572425762.i256 block4);
     DUP3
     EQ
     PUSH1 block2

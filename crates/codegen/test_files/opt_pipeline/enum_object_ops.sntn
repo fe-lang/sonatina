@@ -9,10 +9,10 @@ func private %write_then_read(v0.i256) -> i256 {
 block0:
     v1.objref<@OptionI256> = obj.alloc @OptionI256;
     enum.write_variant v1 #Some (v0);
-    enum.assert_variant_ref v1 #Some;
-    v2.objref<i256> = enum.proj v1 #Some 0.i8;
-    v3.i256 = obj.load v2;
-    return v3;
+    v2.objref<@OptionI256> = enum.assert_variant_ref v1 #Some;
+    v3.objref<i256> = enum.proj v2 #Some 0.i8;
+    v4.i256 = obj.load v3;
+    return v4;
 }
 
 func private %tag_overwrite(v0.objref<@OptionI256>) -> enumtag(@OptionI256) {
@@ -29,11 +29,11 @@ block0:
     br_table v1 block2 (1.enumtag(@OptionI256) block1) (0.enumtag(@OptionI256) block2);
 
 block1:
-    enum.assert_variant_ref v0 #Some;
-    v2.objref<i256> = enum.proj v0 #Some 0.i8;
-    obj.store v2 7.i256;
-    v3.i256 = obj.load v2;
-    return v3;
+    v2.objref<@OptionI256> = enum.assert_variant_ref v0 #Some;
+    v3.objref<i256> = enum.proj v2 #Some 0.i8;
+    obj.store v3 7.i256;
+    v4.i256 = obj.load v3;
+    return v4;
 
 block2:
     return 0.i256;
