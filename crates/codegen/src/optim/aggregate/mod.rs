@@ -9,6 +9,7 @@ mod object_effects;
 mod object_load_store;
 mod object_locality;
 mod object_memory;
+mod object_tracking;
 mod private_abi;
 pub mod promotion;
 mod provenance;

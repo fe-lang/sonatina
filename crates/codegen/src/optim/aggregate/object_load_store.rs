@@ -4,29 +4,21 @@ use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, I256, Immediate, InstId, Type, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{cast, control_flow, data, downcast},
-    module::{FuncRef, ModuleCtx},
+    module::FuncRef,
 };
 
 use super::{
-    LocalObjectArgInfo, LocalObjectArgMap, ObjectEffectSummaryMap, RootProvenance, SliceSet,
-    cleanup::DeadPureInstCleanup, collect_root_provenance,
-    reconstruct::AggregateValueReconstructor, shape,
+    LocalObjectArgInfo, LocalObjectArgMap, ObjectEffectSummaryMap, SliceSet,
+    cleanup::DeadPureInstCleanup,
+    collect_root_provenance,
+    object_tracking::{
+        ObjectSlice, TrackedObject, collect_root_slices, collect_tracked_objects,
+        enum_tag_object_slice, enum_variant_field_object_slice, object_slice_overlaps_effect,
+        slice_is_covered_by, slices_overlap,
+    },
+    reconstruct::AggregateValueReconstructor,
+    shape,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct ObjectSlice {
-    root: ValueId,
-    ty: Type,
-    first_leaf: usize,
-    leaf_count: usize,
-    total_leaves: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TrackedObject {
-    Exact(ObjectSlice),
-    RootUnknown { root: ValueId, total_leaves: usize },
-}
 
 type AvailableMap = FxHashMap<ObjectSlice, ValueId>;
 
@@ -64,7 +56,7 @@ impl ObjectLoadStore {
 
         loop {
             func.rebuild_users();
-            let root_slices = self.collect_root_slices(func, local_object_args);
+            let root_slices = collect_root_slices(func, local_object_args, &mut self.layout_cache);
             let provenance = collect_root_provenance(
                 func,
                 func.ctx(),
@@ -72,7 +64,7 @@ impl ObjectLoadStore {
                 &mut self.layout_cache,
                 object_effects,
             );
-            let tracked = self.collect_tracked_objects(func, &provenance);
+            let tracked = collect_tracked_objects(func, &provenance, &mut self.layout_cache);
             let possible_roots = provenance.into_possible_roots();
             let live_out_roots = self.collect_live_out_roots(&tracked, func, local_object_args);
 
@@ -99,101 +91,6 @@ impl ObjectLoadStore {
                 return self.changed;
             }
         }
-    }
-
-    fn collect_tracked_objects(
-        &mut self,
-        func: &Function,
-        provenance: &super::provenance::RootProvenanceMap,
-    ) -> SecondaryMap<ValueId, Option<TrackedObject>> {
-        let mut tracked = SecondaryMap::default();
-
-        for value in func.dfg.value_ids() {
-            if objref_element_ty(func.ctx(), func.dfg.value_ty(value)).is_none() {
-                continue;
-            }
-            tracked[value] =
-                self.tracked_object_from_provenance(func, provenance.provenance(value));
-        }
-
-        tracked
-    }
-
-    fn collect_root_slices(
-        &mut self,
-        func: &Function,
-        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
-    ) -> FxHashMap<ValueId, shape::AggregateSlice> {
-        let mut root_slices = FxHashMap::default();
-
-        if let Some(local_object_args) = local_object_args {
-            for &idx in local_object_args.keys() {
-                if let Some(&root) = func.arg_values.get(idx)
-                    && let Some(root_ty) = objref_element_ty(func.ctx(), func.dfg.value_ty(root))
-                {
-                    root_slices.insert(root, self.whole_root_slice(func.ctx(), root_ty));
-                }
-            }
-        }
-
-        for block in func.layout.iter_block() {
-            for inst in func.layout.iter_inst(block) {
-                if let Some(obj_alloc) =
-                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
-                    && let Some(result) = func.dfg.inst_result(inst)
-                    && objref_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
-                {
-                    root_slices.insert(result, self.whole_root_slice(func.ctx(), *obj_alloc.ty()));
-                }
-            }
-        }
-
-        root_slices
-    }
-
-    fn tracked_object_from_provenance(
-        &mut self,
-        func: &Function,
-        provenance: RootProvenance,
-    ) -> Option<TrackedObject> {
-        match provenance {
-            RootProvenance::Exact(projection) => Some(TrackedObject::Exact(ObjectSlice {
-                root: projection.root_value,
-                ty: projection.slice.ty,
-                first_leaf: projection.slice.first_leaf,
-                leaf_count: projection.slice.leaf_count,
-                total_leaves: self.root_total_leaves_for_value(func, projection.root_value)?,
-            })),
-            RootProvenance::SameRoot(root) => Some(TrackedObject::RootUnknown {
-                root,
-                total_leaves: self.root_total_leaves_for_value(func, root)?,
-            }),
-            RootProvenance::Maybe(_) | RootProvenance::Unknown => None,
-        }
-    }
-
-    fn whole_root_slice(&mut self, ctx: &ModuleCtx, pointee_ty: Type) -> shape::AggregateSlice {
-        shape::AggregateSlice {
-            ty: pointee_ty,
-            first_leaf: 0,
-            leaf_count: self.root_leaf_count(ctx, pointee_ty),
-        }
-    }
-
-    fn root_total_leaves_for_value(&mut self, func: &Function, root: ValueId) -> Option<usize> {
-        Some(self.root_leaf_count(
-            func.ctx(),
-            objref_element_ty(func.ctx(), func.dfg.value_ty(root))?,
-        ))
-    }
-
-    fn root_leaf_count(&mut self, ctx: &ModuleCtx, ty: Type) -> usize {
-        if ty == Type::Unit {
-            return 0;
-        }
-        self.layout_cache
-            .shape(ctx, ty)
-            .map_or(1, |shape| shape.leaves.len())
     }
 
     fn run_forward(
@@ -777,20 +674,6 @@ fn kill_available_slice_set(
     available.retain(|slice, _| !object_slice_overlaps_effect(*slice, base_slice, leaves));
 }
 
-fn object_slice_overlaps_effect(
-    slice: ObjectSlice,
-    base_slice: ObjectSlice,
-    effect_leaves: &FxHashSet<usize>,
-) -> bool {
-    if slice.root != base_slice.root {
-        return false;
-    }
-    effect_leaves.iter().copied().any(|leaf| {
-        let leaf = base_slice.first_leaf + leaf;
-        leaf >= slice.first_leaf && leaf < slice.first_leaf + slice.leaf_count
-    })
-}
-
 fn handle_call_backward(
     func: &Function,
     inst: InstId,
@@ -1222,18 +1105,6 @@ fn root_has_live(live: &FxHashMap<ValueId, FxHashSet<usize>>, root: ValueId) -> 
     live.get(&root).is_some_and(|entry| !entry.is_empty())
 }
 
-fn slices_overlap(lhs: ObjectSlice, rhs: ObjectSlice) -> bool {
-    lhs.root == rhs.root
-        && lhs.first_leaf < rhs.first_leaf + rhs.leaf_count
-        && rhs.first_leaf < lhs.first_leaf + lhs.leaf_count
-}
-
-fn slice_is_covered_by(lhs: ObjectSlice, rhs: ObjectSlice) -> bool {
-    lhs.root == rhs.root
-        && lhs.first_leaf <= rhs.first_leaf
-        && rhs.first_leaf + rhs.leaf_count <= lhs.first_leaf + lhs.leaf_count
-}
-
 fn enum_variant_tag_imm(variant: sonatina_ir::types::EnumVariantRef, ty: Type) -> Immediate {
     match ty {
         Type::EnumTag(enum_ty) => Immediate::EnumTag {
@@ -1244,35 +1115,8 @@ fn enum_variant_tag_imm(variant: sonatina_ir::types::EnumVariantRef, ty: Type) -
     }
 }
 
-fn enum_tag_object_slice(ctx: &ModuleCtx, base: ObjectSlice) -> Option<ObjectSlice> {
-    let tag_slice = shape::enum_tag_slice(ctx, base.ty)?;
-    Some(ObjectSlice {
-        root: base.root,
-        ty: tag_slice.ty,
-        first_leaf: base.first_leaf + tag_slice.first_leaf,
-        leaf_count: tag_slice.leaf_count,
-        total_leaves: base.total_leaves,
-    })
-}
-
-fn enum_variant_field_object_slice(
-    ctx: &ModuleCtx,
-    base: ObjectSlice,
-    variant: sonatina_ir::types::EnumVariantRef,
-    field: u32,
-) -> Option<ObjectSlice> {
-    let field_slice = shape::enum_variant_field_slice(ctx, base.ty, variant, field)?;
-    Some(ObjectSlice {
-        root: base.root,
-        ty: field_slice.ty,
-        first_leaf: base.first_leaf + field_slice.first_leaf,
-        leaf_count: field_slice.leaf_count,
-        total_leaves: base.total_leaves,
-    })
-}
-
 fn enum_write_variant_slices(
-    ctx: &ModuleCtx,
+    ctx: &sonatina_ir::module::ModuleCtx,
     base: ObjectSlice,
     enum_write_variant: &data::EnumWriteVariant,
 ) -> Vec<ObjectSlice> {
@@ -1291,29 +1135,6 @@ fn enum_write_variant_slices(
         }
     }
     slices
-}
-
-impl TrackedObject {
-    fn exact(self) -> Option<ObjectSlice> {
-        match self {
-            Self::Exact(slice) => Some(slice),
-            Self::RootUnknown { .. } => None,
-        }
-    }
-
-    fn total_leaves(self) -> usize {
-        match self {
-            Self::Exact(slice) => slice.total_leaves,
-            Self::RootUnknown { total_leaves, .. } => total_leaves,
-        }
-    }
-}
-
-fn objref_element_ty(ctx: &ModuleCtx, ty: Type) -> Option<Type> {
-    let sonatina_ir::types::CompoundType::ObjRef(elem) = ty.resolve_compound(ctx)? else {
-        return None;
-    };
-    Some(elem)
 }
 
 fn ends_with_return(func: &Function, block: BlockId) -> bool {
