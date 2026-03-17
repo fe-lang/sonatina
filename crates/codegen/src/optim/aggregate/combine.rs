@@ -133,9 +133,10 @@ impl AggregateCombine {
             downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst)).cloned()
         {
             let object = *enum_assert_ref.object();
-            let redundant = enum_facts
-                .get(&object)
-                .is_some_and(|state| state.variant == *enum_assert_ref.variant());
+            let redundant = enum_facts.get(&object).is_some_and(|state| {
+                state.variant == *enum_assert_ref.variant()
+                    && state.payloads.iter().all(Option::is_some)
+            });
             pending_enum_writes.remove(&object);
             update_enum_assert_fact(func, enum_facts, object, *enum_assert_ref.variant());
 

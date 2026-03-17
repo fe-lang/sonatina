@@ -165,6 +165,52 @@ object @Contract {
 }
 
 #[test]
+fn optimization_pipeline_preserves_branch_proven_nested_enum_payload_loads() {
+    let mut parsed = sonatina_parser::parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+type @Inner = enum {
+    #None,
+    #Some(i256),
+};
+
+type @Outer = enum {
+    #None,
+    #Some(@Inner),
+};
+
+func private %entry(v0.objref<@Outer>) -> i256 {
+block0:
+    v1.enumtag(@Outer) = enum.get_tag v0;
+    br_table v1 block2 (1.enumtag(@Outer) block1) (0.enumtag(@Outer) block2);
+
+block1:
+    enum.assert_variant_ref v0 #Some;
+    v2.objref<@Inner> = enum.proj v0 #Some 0.i8;
+    v3.@Inner = obj.load v2;
+    return 0.i256;
+
+block2:
+    return 0.i256;
+}
+"#,
+    )
+    .expect("module should parse");
+
+    Pipeline::speed().run(&mut parsed.module);
+
+    let report = verify_module(
+        &parsed.module,
+        &VerifierConfig::for_level(VerificationLevel::Full),
+    );
+    assert!(
+        !report.has_errors(),
+        "optimization pipeline must preserve branch-proven nested enum payload loads:\n{report}"
+    );
+}
+
+#[test]
 fn enum_tag_br_table_cases_compile_through_evm_codegen() {
     let triple = TargetTriple::new(
         Architecture::Evm,
